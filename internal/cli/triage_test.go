@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -111,6 +112,157 @@ func TestTriageUsageSaysWhatBoundsEachDecision(t *testing.T) {
 	for _, want := range []string{
 		"once", "intake hold", "--reason", "no free developer",
 		"triage.repair_grant_attempts", "supersedes the blocker", "same developer session",
+	} {
+		if !strings.Contains(usage.String(), want) {
+			t.Fatalf("usage does not mention %q:\n%s", want, usage.String())
+		}
+	}
+}
+
+// An override names one item, and the ceiling it puts in force is stated rather
+// than inferred. Both refusals happen before anything is read or written, so a
+// mistyped command costs nothing.
+func TestTriageOverrideRequiresTheItemAndACeiling(t *testing.T) {
+	t.Parallel()
+
+	for _, refused := range []struct {
+		name string
+		args []string
+		says string
+	}{
+		{
+			name: "with no item named",
+			args: []string{"triage", "override", "--cap", "8", "--by", "mason", "--reason", "REBUILD"},
+			says: "exactly one work item identifier",
+		},
+		{
+			name: "with neither a ceiling nor a clearing",
+			args: []string{"triage", "override", "--by", "mason", "--reason", "REBUILD", "yoyodyne-ifd.143"},
+			says: "requires --cap <n> or --clear",
+		},
+		{
+			name: "with both a ceiling and a clearing",
+			args: []string{"triage", "override", "--cap", "8", "--clear", "--by", "mason", "--reason", "REBUILD", "yoyodyne-ifd.143"},
+			says: "give one of --cap or --clear",
+		},
+	} {
+		t.Run(refused.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			if code := Run(refused.args, &stdout, &stderr, "test"); code != 2 {
+				t.Fatalf("Run() code = %d, want 2; stderr = %q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), refused.says) {
+				t.Fatalf("stderr = %q, want it to say %q", stderr.String(), refused.says)
+			}
+		})
+	}
+}
+
+// A recorded override says what it changed, who decided it, and what the item now
+// stands under -- and says plainly that it started nothing, because an operator
+// who reads "override recorded" and expects a run is an operator who never asks
+// for one.
+func TestTriageOverrideReportsWhatItChangedAndThatItStartedNothing(t *testing.T) {
+	t.Parallel()
+
+	decided := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	override := runstate.TriageOverride{
+		Budget:    runstate.TriageReviewRoundBudget,
+		Cap:       8,
+		DecidedBy: "mason",
+		DecidedAt: decided,
+		Reason:    "REBUILD: the rounds were spent against a base that had moved",
+	}
+	recorded := triageOverrideResult{
+		WorkItemID: "yoyodyne-ifd.143",
+		Recorded:   override,
+		Caps:       runstate.TriageCaps{ReviewRounds: 8, RepairGrants: 1, Reruns: 1, MergeRearms: 2},
+		Counters: runstate.TriageCounters{
+			WorkItemID:   "yoyodyne-ifd.143",
+			ReviewRounds: 5,
+			Overrides:    []runstate.TriageOverride{override},
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := reportTriageOverride(&stdout, &stderr, false, recorded, nil); code != 0 {
+		t.Fatalf("reportTriageOverride() code = %d; stderr = %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"yoyodyne-ifd.143", "raised the review round cap to 8", "decided by mason",
+		"5 spent across every run of this item, under the cap of 8",
+		"nothing was started, granted, or spent",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, is missing %q", stdout.String(), want)
+		}
+	}
+}
+
+// A refusal says nothing was recorded, because an operator who believes a cap was
+// crossed and then finds the next decision refused is back in the deadlock this
+// verb exists to end.
+func TestTriageOverrideReportsARefusalAsHavingRecordedNothing(t *testing.T) {
+	t.Parallel()
+
+	refusal := runstate.TriageOverrideError{
+		Budget:     runstate.TriageReviewRoundBudget,
+		WorkItemID: "yoyodyne-ifd.143",
+		Standing:   8,
+		Asked:      8,
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := reportTriageOverride(&stdout, &stderr, false,
+		triageOverrideResult{WorkItemID: "yoyodyne-ifd.143"}, refusal)
+	if code != 1 {
+		t.Fatalf("reportTriageOverride() code = %d, want a refusal reported as one", code)
+	}
+	for _, want := range []string{"nothing was recorded", "already stands at 8", "yoyo status"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, is missing %q", stderr.String(), want)
+		}
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want a refusal to report nothing as done", stdout.String())
+	}
+}
+
+// A refused override carries the refusal where a script reads it and no override
+// beside it, exactly as a refused re-run does.
+func TestTriageOverrideReportsARefusalAsJSON(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := reportTriageOverride(&stdout, &stderr, true,
+		triageOverrideResult{WorkItemID: "yoyodyne-ifd.143"}, errors.New("refused"))
+	if code != 1 {
+		t.Fatalf("reportTriageOverride() code = %d, want 1", code)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal() error = %v; stdout = %q", err, stdout.String())
+	}
+	if result["error"] == nil || result["override"] != nil {
+		t.Fatalf("result = %v, want the refusal and no override", result)
+	}
+}
+
+// The usage says the three things about the override an operator gets wrong: it
+// is theirs and nobody else's, it only ever gives more room, and it starts
+// nothing.
+func TestTriageUsageSaysWhatAnOverrideIsAndIsNot(t *testing.T) {
+	t.Parallel()
+
+	var usage bytes.Buffer
+	printTriageUsage(&usage)
+	for _, want := range []string{
+		"triage override", "--by", "--clear", "--budget",
+		"only thing that does", "never lowers", "carries nothing out",
 	} {
 		if !strings.Contains(usage.String(), want) {
 			t.Fatalf("usage does not mention %q:\n%s", want, usage.String())

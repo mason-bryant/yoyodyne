@@ -910,10 +910,14 @@ stoppage at all.
 Four of the six the harness holds to more than a note. **A repair, a re-run, and
 a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names the budget, which is the evidence for
-escalating instead. A repair and a re-run are each once per item — a second of
+escalating instead, and says that nothing in the conversation crosses that cap.
+A repair and a re-run are each once per item — a second of
 either is an escalation rather than a larger budget — and past the
 [review-round cap](configuration.md#what-one-work-item-has-been-given) even
-the first is refused. A merge re-arm is bounded per item by the
+the first is refused. What you can do about that is
+[record an override of the cap](configuration.md#crossing-a-cap-the-operator-decides-to-cross),
+in your name and with your reason, after which asking for the same decision again
+records it: the caps refuse the machine and not your ruling on it. A merge re-arm is bounded per item by the
 integration-retry budget rather than the rounds, because it buys no round at
 all; the design's stricter rule — once per publication — arrives with the
 re-arm action itself, whose counter will be keyed to the publication it

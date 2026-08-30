@@ -29,6 +29,7 @@ package triage
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,6 +37,12 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
+
+// CapCleared is the ceiling a budget an operator cleared stands at. It is the
+// same figure the durable record uses and is declared here for the reason the
+// vocabulary beside it is: an entry's shape is what a development manager reads,
+// and it must not change because the harness's own schema was refactored.
+const CapCleared = math.MaxInt
 
 // SchemaVersion is versioned independently of run state, and of the collected
 // reports beside it, for the same reason each of those is: an entry outlives
@@ -216,6 +223,29 @@ type Counters struct {
 	RerunsCarriedOut int `json:"reruns_carried_out"`
 }
 
+// Override is one operator decision to cross this item's caps, as the durable
+// triage record has it. It is declared here rather than imported from that record
+// for the reason Finding is: what reaches a development manager must not change
+// shape because the harness's own schema was refactored.
+type Override struct {
+	Budget    string    `json:"budget"`
+	Cap       int       `json:"cap,omitempty"`
+	Cleared   bool      `json:"cleared,omitempty"`
+	DecidedBy string    `json:"decided_by"`
+	DecidedAt time.Time `json:"decided_at"`
+	Reason    string    `json:"reason"`
+}
+
+// Describe says what one override did, the way the entry that carries it reads.
+func (o Override) Describe() string {
+	crossed := fmt.Sprintf("raised the %s cap to %d", o.Budget, o.Cap)
+	if o.Cleared {
+		crossed = fmt.Sprintf("cleared the %s cap", o.Budget)
+	}
+	return fmt.Sprintf("%s, decided by %s at %s: %s",
+		crossed, strings.TrimSpace(o.DecidedBy), o.DecidedAt.UTC().Format(time.RFC3339), strings.TrimSpace(o.Reason))
+}
+
 // Decided reports triage having recorded a re-run of this item that the harness
 // has not carried out. It is the state that most needs saying out loud: the
 // decision is already spent, so deciding a second is a second decision rather
@@ -307,6 +337,18 @@ type Entry struct {
 	// every decision about it is made afterwards, so a claim frozen into the
 	// entry could only ever be absent.
 	Rerun *Rerun `json:"rerun,omitempty"`
+	// Overrides are the operator's own recorded decisions to cross this item's
+	// caps. Every cap in Counters is already the configured one as these leave it,
+	// so they are not arithmetic a reader has to do — they are the account of why a
+	// budget is larger than the project configured, and who is answerable for it. A
+	// development manager that saw the room and not the decision would read an
+	// override as a cap they had misremembered.
+	//
+	// Like the re-run beside it, it is joined to the entry where the docket is read
+	// rather than written into the log, and for a sharper version of the same
+	// reason: an override answers the escalation this entry produced, so one frozen
+	// into the entry could only ever be absent.
+	Overrides []Override `json:"overrides,omitempty"`
 	// CountersProblem is why the item's durable triage record could not be read
 	// for this entry. It is stated rather than left to zeros, which would read as
 	// an item nothing has been decided about — the one reading that turns an
@@ -476,8 +518,8 @@ func (e Entry) Render() string {
 	if e.Publication != nil {
 		rendered.WriteString(e.renderPublication())
 	}
-	fmt.Fprintf(&rendered, "      Triage counters: %d of %d review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
-		e.Counters.ReviewRounds, e.Counters.ReviewRoundsCap, roundsNote(e.Counters),
+	fmt.Fprintf(&rendered, "      Triage counters: %d of %s review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
+		e.Counters.ReviewRounds, capFigure(e.Counters.ReviewRoundsCap), roundsNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
 	rendered.WriteString(e.renderDecisions())
 	return rendered.String()
@@ -494,14 +536,44 @@ func (e Entry) renderDecisions() string {
 			e.CountersProblem+"\nThis says nothing about what has been decided: read the record before deciding anything that spends a budget.")
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "      Triage decisions recorded: %d of %d repair grant(s)%s; %d of %d re-run(s), %d carried out; %d of %d merge re-arm(s)\n",
-		e.Counters.RepairGrants, e.Counters.RepairGrantsCap, grantedNote(e.Counters),
-		e.Counters.Reruns, e.Counters.RerunsCap, e.Counters.RerunsCarriedOut,
-		e.Counters.MergeRearms, e.Counters.MergeRearmsCap)
+	fmt.Fprintf(&rendered, "      Triage decisions recorded: %d of %s repair grant(s)%s; %d of %s re-run(s), %d carried out; %d of %s merge re-arm(s)\n",
+		e.Counters.RepairGrants, capFigure(e.Counters.RepairGrantsCap), grantedNote(e.Counters),
+		e.Counters.Reruns, capFigure(e.Counters.RerunsCap), e.Counters.RerunsCarriedOut,
+		e.Counters.MergeRearms, capFigure(e.Counters.MergeRearmsCap))
+	rendered.WriteString(e.renderOverrides())
 	rendered.WriteString(e.renderGrantStanding())
 	rendered.WriteString(e.renderRerunStanding())
 	rendered.WriteString(e.renderRearmStanding())
 	return rendered.String()
+}
+
+// renderOverrides says which of this item's caps an operator crossed, and who
+// crossed them. The budgets above are already stated as the overrides leave them,
+// which is exactly why this cannot be left out: a development manager reading
+// room the configured cap does not have, with nothing saying where it came from,
+// is a development manager deciding whether to trust the number.
+//
+// It is silent on the ordinary item, which is every item. An override is an
+// operator answering an escalation by hand, and a line announcing that nobody has
+// had to is one every reader learns to skip.
+func (e Entry) renderOverrides() string {
+	var rendered strings.Builder
+	for _, override := range e.Overrides {
+		fmt.Fprintf(&rendered, "      Operator override: %s\n", override.Describe())
+	}
+	return rendered.String()
+}
+
+// capFigure is one ceiling as a reader reads it. A cleared cap stands at a number
+// nothing this harness counts comes near, so printing the number would be a line
+// a development manager has to decode before they can act on it. Who cleared it
+// is not repeated here: the override line beside these figures says so, and every
+// budget on the entry would otherwise carry the same clause.
+func capFigure(limit int) string {
+	if limit == CapCleared {
+		return "no cap"
+	}
+	return strconv.Itoa(limit)
 }
 
 // renderGrantStanding says where this item stands with the repair grants triage
@@ -636,12 +708,12 @@ func roundsNote(counters Counters) string {
 	committed := counters.Committed()
 	switch {
 	case counters.Exhausted() && counters.GrantOutstanding():
-		return fmt.Sprintf(" (%d of %d are committed by a grant not yet spent, so the cap is reached: another repair is not triage's to grant)",
-			committed, counters.ReviewRoundsCap)
+		return fmt.Sprintf(" (%d of %s are committed by a grant not yet spent, so the cap is reached: another repair is not triage's to grant)",
+			committed, capFigure(counters.ReviewRoundsCap))
 	case counters.Exhausted():
 		return " (the cap is reached: another repair is not triage's to grant)"
 	case counters.GrantOutstanding():
-		return fmt.Sprintf(" (%d of %d are committed by a grant not yet spent)", committed, counters.ReviewRoundsCap)
+		return fmt.Sprintf(" (%d of %s are committed by a grant not yet spent)", committed, capFigure(counters.ReviewRoundsCap))
 	default:
 		return ""
 	}

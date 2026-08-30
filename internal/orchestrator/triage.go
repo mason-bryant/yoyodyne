@@ -213,6 +213,10 @@ func (d Docketer) joinDecisions(entries []triage.Entry) []error {
 		// rather than a figure any guard reads.
 		entry.Counters = d.counters(decisions.counters, entry.Counters.RepairAttempts, len(decisions.claimed))
 		entry.Rerun = rerunOf(*entry, decisions.claimed)
+		// Joined here and never written, exactly as the re-run above is: an override
+		// answers the escalation this entry produced, so it is always made after the
+		// entry exists.
+		entry.Overrides = docketedOverrides(decisions.counters.Overrides)
 	}
 	return problems
 }
@@ -473,23 +477,56 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 // took: the rounds a grant came to, whether the cap cut it, and what it stands
 // committed to are all of them detail the harness reported as it recorded the
 // grant, and all of them were missing from the entry it was recorded against.
+//
+// The caps it reports are the configured ones as the item's own recorded
+// overrides leave them, which is what the guards refuse against. An operator has
+// crossed a cap precisely when a development manager was refused past it, so an
+// entry stating the configured figure would refuse in its reader's head exactly
+// the decision the operator sat down to make possible. The overrides themselves
+// are on the entry rather than in here — a budget larger than the project
+// configured and no account of why is a number a reader has to decide whether to
+// trust, and they are joined where the docket is read for the reason the re-run
+// beside them is.
 func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerunsCarriedOut int) triage.Counters {
+	permitted := d.Caps.Overridden(ledger.Overrides)
 	return triage.Counters{
 		ReviewRounds:        ledger.ReviewRounds,
-		ReviewRoundsCap:     d.Caps.ReviewRounds,
+		ReviewRoundsCap:     permitted.ReviewRounds,
 		RepairAttempts:      repairAttempts,
 		RepairGrantAttempts: d.Triage.RepairGrantAttempts,
 		RepairGrants:        ledger.RepairGrants,
-		RepairGrantsCap:     d.Caps.RepairGrants,
+		RepairGrantsCap:     permitted.RepairGrants,
 		GrantedRounds:       ledger.GrantedRounds,
 		TruncatedGrants:     ledger.TruncatedGrants,
 		CommittedRounds:     ledger.CommittedRounds,
 		Reruns:              ledger.Reruns,
-		RerunsCap:           d.Caps.Reruns,
+		RerunsCap:           permitted.Reruns,
 		MergeRearms:         ledger.MergeRearms,
-		MergeRearmsCap:      d.Caps.MergeRearms,
+		MergeRearmsCap:      permitted.MergeRearms,
 		RerunsCarriedOut:    rerunsCarriedOut,
 	}
+}
+
+// docketedOverrides carries the operator's recorded cap decisions onto an entry.
+// It is a copy rather than the record's own type for the reason every other
+// figure here is copied: what reaches a development manager must not change shape
+// because the durable schema was refactored.
+func docketedOverrides(recorded []runstate.TriageOverride) []triage.Override {
+	if len(recorded) == 0 {
+		return nil
+	}
+	carried := make([]triage.Override, 0, len(recorded))
+	for _, override := range recorded {
+		carried = append(carried, triage.Override{
+			Budget:    override.Budget,
+			Cap:       override.Cap,
+			Cleared:   override.Cleared,
+			DecidedBy: override.DecidedBy,
+			DecidedAt: override.DecidedAt,
+			Reason:    override.Reason,
+		})
+	}
+	return carried
 }
 
 // recordedCounters are the counters an entry is written with: the item's triage

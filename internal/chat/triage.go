@@ -243,7 +243,7 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 	}
 	spent, err := s.spendTriageBudget(ctx, id, decision)
 	if err != nil {
-		outcome.fail(err)
+		outcome.fail(refusedPastCap(err))
 		return
 	}
 	note := s.trackerProvenance(triageVerbs[decision]+", on the stopped work of run "+run, action.Reason)
@@ -298,6 +298,23 @@ func (s *Session) refuseTransposedStoppage(ctx context.Context, workItemID, runI
 			runID, stopped, workItemID)
 	}
 	return nil
+}
+
+// refusedPastCap says what a cap refusal leaves available, and leaves every other
+// failure exactly as it was.
+//
+// A refusal is the gate working. It was also, until an operator could cross a
+// cap, the end of the road: the decision could not be recorded, so nothing could
+// carry it out, and escalating recorded nothing either — which left a
+// cap-exhausted item unrunnable by every path the harness keeps a record of. A
+// cap is crossable now, by the operator and by nobody else, so the refusal says
+// so. A development manager who escalates without knowing the remedy exists
+// escalates into the same silence the escalation is meant to break.
+func refusedPastCap(err error) error {
+	if !errors.Is(err, runstate.ErrTriageCapReached) {
+		return err
+	}
+	return fmt.Errorf("%w. Nothing in this conversation crosses that cap: escalate, and the operator can record an override of it against the item — after which asking for this same decision again records it", err)
 }
 
 // spendTriageBudget spends what the decision costs and says what it came to, or

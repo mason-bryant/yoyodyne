@@ -153,8 +153,15 @@ type TriageCounters struct {
 	// repeated after some other round of the same item had been counted would be a
 	// second run judging an attempt of the first, which is not a thing the harness
 	// can produce.
-	LastRound string    `json:"last_round,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	LastRound string `json:"last_round,omitempty"`
+	// Overrides are the operator's recorded decisions to cross this item's caps,
+	// in the order they were recorded. They are the one thing that gets past a cap
+	// and they are kept here rather than beside the counters, so a guard reading
+	// what an item has spent reads what it is permitted in the same breath and
+	// under the same lock. An item nobody has decided anything like this about
+	// carries none, which is every item. See triageoverride.go.
+	Overrides []TriageOverride `json:"overrides,omitempty"`
+	UpdatedAt time.Time        `json:"updated_at"`
 }
 
 // Validate reports every contract violation in the record at once.
@@ -205,6 +212,7 @@ func (c TriageCounters) Validate() error {
 	if c.LastRound != "" && c.ReviewRounds == 0 {
 		problems = append(problems, errors.New("a counted round requires the round count that includes it"))
 	}
+	problems = append(problems, validateTriageOverrides(c.Overrides)...)
 	if c.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("updated at is required"))
 	}
@@ -283,6 +291,12 @@ func (c TriageCounters) committed() int {
 // own. Each action also has a bound of its own, because the rounds bound what an
 // item costs rather than how often triage may decide the same thing about it,
 // and an item whose runs never reach a reviewer costs no rounds at all.
+//
+// What is passed in is the configured ceiling, and every guard below refuses
+// against these as one item's recorded overrides leave them — Overridden is what
+// applies them. An override is the operator's own decision to cross a cap, and it
+// is the only thing that does; nothing an agent records reaches one. See
+// triageoverride.go.
 type TriageCaps struct {
 	// ReviewRounds is the ceiling on the rounds one item may accumulate across
 	// every run of it: `triage.review_rounds_cap`. It is what a repair grant is
@@ -476,17 +490,23 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 	}
 	granted := RepairGrant{Requested: rounds}
 	counters, err := s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+		// The caps as the operator's own recorded decisions leave them. Every
+		// refusal below is against these rather than against what the project
+		// configured, which is the whole of what makes an override executable: the
+		// operator crosses the cap once, in a record, and the guard that refused
+		// their decision permits it without anybody going round it.
+		permitted := caps.Overridden(counters.Overrides)
 		// The grant's own budget is asked first, because it is the bound that
 		// answers on an item the rounds say nothing about: a run that stopped
 		// before it was ever reviewed spent no round, and the round budget would
 		// hand that item back for ever.
-		if counters.RepairGrants >= caps.RepairGrants {
+		if counters.RepairGrants >= permitted.RepairGrants {
 			return TriageCapError{
 				Action:     TriageRepairGrant,
 				Budget:     TriageRepairGrantBudget,
 				WorkItemID: counters.WorkItemID,
 				Spent:      counters.RepairGrants,
-				Cap:        caps.RepairGrants,
+				Cap:        permitted.RepairGrants,
 			}
 		}
 		// The room is what the cap has beyond what the item stands committed to,
@@ -494,7 +514,7 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 		// out has already promised its rounds, and a second one truncated against
 		// the same room is how the rounds granted overshoot the cap without any
 		// single grant doing so.
-		remaining := counters.RoundsUncommitted(caps.ReviewRounds)
+		remaining := counters.RoundsUncommitted(permitted.ReviewRounds)
 		if remaining == 0 {
 			return TriageCapError{
 				Action:     TriageRepairGrant,
@@ -504,7 +524,7 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 				// reported: naming the rounds counted would leave a reader looking for
 				// room the cap does not have.
 				Spent: counters.committed(),
-				Cap:   caps.ReviewRounds,
+				Cap:   permitted.ReviewRounds,
 			}
 		}
 		granted.Rounds = rounds
@@ -547,28 +567,32 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at tim
 		return TriageCounters{}, err
 	}
 	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+		// The caps as the operator's own recorded decisions leave them, for the
+		// reason a grant's are: this refusal is the one that deadlocked the
+		// escalation protocol, and an override is what crosses it.
+		permitted := caps.Overridden(counters.Overrides)
 		// Its own budget first, and for the same reason a grant's is: a re-run
 		// buys a whole fresh run and spends no round itself, so on an item whose
 		// runs keep stopping before review the round budget refuses nothing.
-		if counters.Reruns >= caps.Reruns {
+		if counters.Reruns >= permitted.Reruns {
 			return TriageCapError{
 				Action:     TriageRerun,
 				Budget:     TriageRerunBudget,
 				WorkItemID: counters.WorkItemID,
 				Spent:      counters.Reruns,
-				Cap:        caps.Reruns,
+				Cap:        permitted.Reruns,
 			}
 		}
 		// Against what the item is committed to, for the reason a grant is: a re-run
 		// whose only remaining round is one an outstanding grant has already
 		// promised overshoots the cap exactly as a second grant would.
-		if counters.RoundsUncommitted(caps.ReviewRounds) == 0 {
+		if counters.RoundsUncommitted(permitted.ReviewRounds) == 0 {
 			return TriageCapError{
 				Action:     TriageRerun,
 				Budget:     TriageReviewRoundBudget,
 				WorkItemID: counters.WorkItemID,
 				Spent:      counters.committed(),
-				Cap:        caps.ReviewRounds,
+				Cap:        permitted.ReviewRounds,
 			}
 		}
 		counters.Reruns++
@@ -595,13 +619,14 @@ func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, a
 		return TriageCounters{}, err
 	}
 	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
-		if counters.MergeRearms >= caps.MergeRearms {
+		permitted := caps.Overridden(counters.Overrides)
+		if counters.MergeRearms >= permitted.MergeRearms {
 			return TriageCapError{
 				Action:     TriageMergeRearm,
 				Budget:     TriageMergeRearmBudget,
 				WorkItemID: counters.WorkItemID,
 				Spent:      counters.MergeRearms,
-				Cap:        caps.MergeRearms,
+				Cap:        permitted.MergeRearms,
 			}
 		}
 		counters.MergeRearms++

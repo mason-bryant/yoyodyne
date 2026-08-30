@@ -2550,6 +2550,9 @@ total — across repairs, across runs — past which triage may no longer hand i
 back for another repair. Past the cap triage still has both of its other
 actions: escalate the item, or re-scope it. `0` is a choice somebody can mean and
 is accepted as one: an item that reaches triage at all is never repaired again.
+The one thing that crosses it for a single item is
+[an operator's recorded override](#crossing-a-cap-the-operator-decides-to-cross),
+which is what makes an escalation answerable rather than only sayable.
 
 `repair_grant_attempts` is how many repair attempts triage hands an item when it
 decides the work is worth another go. Leave it out and it follows
@@ -2665,6 +2668,57 @@ A merge re-arm buys no round at all, which is exactly why it needs a bound of
 its own: an action that costs nothing to take is the one that can be taken
 forever. It follows the integration retries a single run is already permitted,
 which is the same judgement about the same thing one level up.
+
+#### Crossing a cap the operator decides to cross
+
+**A cap refuses the answer to an escalation as readily as it refuses a machine,
+and one thing crosses it: the operator, in a record.** Every cap above stops
+triage handing an item back again, which is what they are for — but they stopped
+the recording as well as the carrying out. A development manager past the round
+cap could not record a re-run of the item; `yoyo triage rerun` refuses without
+that record; and escalating recorded neither. So a cap-exhausted item was
+unrunnable by every path the harness keeps a record of, and an operator who read
+the escalation and ruled that the work should be run again had that ruling
+carried out by admitting fresh work in its place.
+
+```bash
+yoyo triage override --budget "review round" --cap 8 \
+  --by "mason" --reason "REBUILD: the rounds went on a base that had moved" yoyodyne-ifd.143
+yoyo triage override --budget "re-run" --clear --by "mason" --reason "driven by hand until it lands" yoyodyne-ifd.143
+```
+
+`--budget` names the budget in the words a refusal uses — `review round`,
+`repair grant`, `re-run`, or `merge re-arm` — and `--cap` raises it while
+`--clear` lifts it entirely. `--by` and `--reason` are required, because an
+override nobody is named for is the thing this record exists to replace; the
+override is kept on the item's own triage record, and `yoyo status <beads-id>`
+and every docket entry for the item report it beside the budgets it changed.
+
+**It clears or raises and never lowers.** An override that would leave a budget no
+larger than it already stands is refused and nothing is recorded, so an item's
+overrides are a monotonic account of who gave it more room and why. Lowering a cap
+is a judgement about the project's pace rather than a decision about one item, and
+`review_rounds_cap` above is where that is made.
+
+That holds after the configuration moves, too. The ceiling in force for an item is
+the larger of the configured cap and its override, not the override — so raising
+`review_rounds_cap` from 4 to 10 over an item carrying an override to 8 gives that
+item 10 like every other, rather than pinning it to the 8 somebody once gave it. An
+override only ever adds room.
+
+**It is yours and nobody else's.** No role has a word for it: the development
+manager's triage vocabulary cannot produce one, and the actions that carry
+decisions out read overrides rather than write them. It is a terminal command for
+the reason `yoyo release` is one — the switch that answers an escalation has to
+work with no conversation open.
+
+**It carries nothing out.** Recording an override changes what the guards will
+permit and nothing else. The development manager then records the decision the
+escalation was about, which spends the item's budget exactly as it always did, and
+`yoyo triage rerun` or `yoyo triage repair` carries that decision out under every
+condition either already asks — the intake hold, the stoppage being over, the item
+being one a run may start on, a free developer slot. Crossing a cap and spending
+it are two decisions and stay two.
 
 **These budgets are per machine.** Two collaborators running their own harnesses
 against one repository each hold a full set for the same item, so a cap of one is

@@ -13,8 +13,13 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// TriageCaps is the ceiling on what triage may spend on one work item across
-// every run of it.
+// TriageCaps is the configured ceiling on what triage may spend on one work item
+// across every run of it.
+//
+// It is the project's number and not one item's. What one item stands under is
+// this as that item's own recorded operator overrides leave it, which every guard
+// and every view derives by calling Overridden with the item's counters — so
+// there is exactly one place a cap is crossed, and it is not here.
 //
 // Two of the three actions — another repair, another whole run — buy review
 // rounds, and `triage.review_rounds_cap` is what an operator states about those:
