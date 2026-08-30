@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,7 +151,10 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 			Watch:    watched,
 		}
 		if counters != nil {
-			recorded := caps
+			// The caps as this item's own recorded overrides leave them, which is what
+			// the guards refuse against. Reporting the configured pair instead would
+			// tell an operator who crossed a cap that they had not.
+			recorded := caps.Overridden(counters.Overrides)
 			output.TriageCaps = &recorded
 		}
 		output.TriageError = triageFailure
@@ -160,7 +164,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	printWatch(stdout, watched)
 	printRunHistory(stdout, history, workItemID, *failedOnly)
 	if counters != nil {
-		printItemTriage(stdout, *counters, caps)
+		printItemTriage(stdout, *counters, caps.Overridden(counters.Overrides))
 	}
 	if triageFailure != "" {
 		fmt.Fprintln(stderr, triageFailure)
@@ -270,6 +274,10 @@ func printWatch(writer io.Writer, watched *runstate.WatchTransition) {
 // whether anybody has looked at stopped work is looking at the item, and the
 // line points them there rather than letting these zeroes answer a question they
 // were never counting.
+// The caps it is given are the effective ones — the configured ceilings as this
+// item's own recorded overrides leave them — because they are what refuses the
+// next decision. An operator who crossed a cap and is then shown the configured
+// figure has been told their decision did not take.
 func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps runstate.TriageCaps) {
 	fmt.Fprintf(writer, "triage of %s: %s\n", counters.WorkItemID, describeTriagePasses(counters))
 	// The rounds line states the rounds and nothing else. Every conclusion it
@@ -277,10 +285,17 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 	// budget refuses repairs the rounds would allow, and a re-arm ignores the
 	// rounds entirely — so what may still happen is said by the budget lines
 	// below, each beside the numbers that decide it.
-	if counters.RoundsRemaining(caps.ReviewRounds) == 0 {
+	// A cleared cap is its own line rather than a figure in either of the other
+	// two: neither of them reads as a sentence with "no cap" substituted into the
+	// place a number goes, and this is the line an operator checks first.
+	switch {
+	case caps.ReviewRounds == runstate.TriageCapCleared:
+		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item, under no cap at all — the operator cleared it\n",
+			counters.ReviewRounds)
+	case counters.RoundsRemaining(caps.ReviewRounds) == 0:
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item — at or past the cap of %d, so no decision that buys a round remains\n",
 			counters.ReviewRounds, caps.ReviewRounds)
-	} else {
+	default:
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item, under the cap of %d\n",
 			counters.ReviewRounds, caps.ReviewRounds)
 	}
@@ -289,9 +304,9 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 	// which bounds how often triage may decide the same thing about it. An
 	// operator told only about the rounds would read an item refused a second
 	// re-run with rounds to spare as a bug.
-	fmt.Fprintf(writer, "  repair grants: %d of %d permitted; re-runs: %d of %d; each is refused by its own budget or once no round remains\n",
-		counters.RepairGrants, caps.RepairGrants, counters.Reruns, caps.Reruns)
-	fmt.Fprintf(writer, "  merge re-arms: %d of %d permitted\n", counters.MergeRearms, caps.MergeRearms)
+	fmt.Fprintf(writer, "  repair grants: %d of %s permitted; re-runs: %d of %s; each is refused by its own budget or once no round remains\n",
+		counters.RepairGrants, triageCapFigure(caps.RepairGrants), counters.Reruns, triageCapFigure(caps.Reruns))
+	fmt.Fprintf(writer, "  merge re-arms: %d of %s permitted\n", counters.MergeRearms, triageCapFigure(caps.MergeRearms))
 	// A grant that was cut is said out loud, because it is the fact that says the
 	// item is at the end of what it will be given: the next grant has nothing left
 	// to truncate to and is refused outright.
@@ -299,7 +314,25 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 		fmt.Fprintf(writer, "  %d grant(s) were cut down to the rounds the cap still had room for; %d round(s) were granted in total\n",
 			counters.TruncatedGrants, counters.GrantedRounds)
 	}
+	// A cap somebody crossed is said out loud, with who crossed it and why. Every
+	// figure above is one of these caps, so an operator reading a budget larger
+	// than the project configured and finding no account of it here would have to
+	// go looking in the state directory for the reason.
+	for _, override := range counters.Overrides {
+		fmt.Fprintf(writer, "  operator override: %s\n", override.Describe())
+	}
 	fmt.Fprintln(writer, "  waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say")
+}
+
+// triageCapFigure is one ceiling as a reader reads it. A cleared cap is a number
+// no count comes near rather than a number anybody means, so printing it would be
+// a line an operator has to decode. Who cleared it is not repeated on every
+// budget: the override line beneath these figures says so once.
+func triageCapFigure(limit int) string {
+	if limit == runstate.TriageCapCleared {
+		return "no cap"
+	}
+	return strconv.Itoa(limit)
 }
 
 // describeTriagePasses says how many times triage has spent something on an

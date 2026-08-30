@@ -15,21 +15,48 @@ package cli
 // stoppage gets and starting a fresh run, or spending the item's repair grant,
 // superseding the blocker, and continuing the run that stopped.
 
+// The third verb here is not one of those and carries nothing out. Both of them
+// require a decision recorded against the item's durable triage budget, and the
+// caps that bound those budgets refused the recording as well as the carrying
+// out -- so an item at the end of its rounds was unrunnable by every recorded
+// path, escalation included, and the operator's ruling on one had to be executed
+// by admitting fresh work instead. `yoyo triage override` is the recorded path
+// that was missing: the operator crosses one of the item's caps, in their own
+// name and with their reason, and the guards that refused the decision then
+// permit it. It is the operator's hand and nothing else's, which is why it is a
+// terminal command rather than a word in any role's vocabulary.
+
 import (
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 type triageOutput struct {
-	Rerun  *orchestrator.RerunResult          `json:"rerun,omitempty"`
-	Repair *orchestrator.RepairContinueResult `json:"repair,omitempty"`
-	Error  string                             `json:"error,omitempty"`
+	Rerun    *orchestrator.RerunResult          `json:"rerun,omitempty"`
+	Repair   *orchestrator.RepairContinueResult `json:"repair,omitempty"`
+	Override *triageOverrideResult              `json:"override,omitempty"`
+	Error    string                             `json:"error,omitempty"`
+}
+
+// triageOverrideResult is what an override came to: the decision as it was
+// recorded, the item's counters with it on them, and the ceilings the item now
+// stands under. The caps are reported beside the record rather than left to be
+// worked out from it, because what an operator wants to see is what the guards
+// will now permit -- which is the configured caps as every override on the item
+// leaves them, not only the one just typed.
+type triageOverrideResult struct {
+	WorkItemID string                  `json:"work_item_id"`
+	Recorded   runstate.TriageOverride `json:"recorded"`
+	Caps       runstate.TriageCaps     `json:"caps"`
+	Counters   runstate.TriageCounters `json:"counters"`
 }
 
 func runTriage(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -42,6 +69,8 @@ func runTriage(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return rerunStoppage(ctx, args[1:], stdout, stderr)
 	case "repair":
 		return repairStoppage(ctx, args[1:], stdout, stderr)
+	case "override":
+		return overrideTriageCap(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown triage command %q\n\n", args[0])
 		printTriageUsage(stderr)
@@ -95,6 +124,119 @@ func repairStoppage(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	result, err := continuer.Continue(ctx, orchestrator.RepairContinueRequest{Run: positional[0], Reason: *reason})
 	return reportRepair(stdout, stderr, *jsonOutput, result, err)
+}
+
+// overrideTriageCap records the operator's decision to cross one of a work
+// item's triage caps.
+//
+// It carries nothing out and starts nothing, which is deliberate and is what
+// keeps the caps meaning what they say. What it changes is what the guards will
+// permit next: the development manager can then record the decision their
+// escalation was about, and `yoyo triage rerun` or `yoyo triage repair` carries
+// that decision out under every condition either of them already asks. An
+// operator who wanted a run started still has to say so afterwards, which is one
+// more step and the right one -- crossing a cap and spending it are two decisions.
+func overrideTriageCap(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("triage override", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
+	budget := flags.String("budget", runstate.TriageReviewRoundBudget,
+		"the budget to cross: "+strings.Join(runstate.TriageOverrideBudgets(), ", "))
+	ceiling := flags.Int("cap", -1, "the ceiling to raise the budget to")
+	cleared := flags.Bool("clear", false, "lift the budget entirely rather than raising it to a number")
+	by := flags.String("by", "", "the operator deciding this")
+	reason := flags.String("reason", "", "why this item's cap is being crossed")
+	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	positional, err := parseArguments(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(positional) != 1 {
+		fmt.Fprintln(stderr, "triage override requires exactly one work item identifier, the item whose cap is being crossed")
+		printTriageUsage(stderr)
+		return 2
+	}
+	// A cleared budget has no number and a raised one has nothing else, so the two
+	// are refused together rather than one being quietly preferred: a record
+	// carrying both would leave its next reader to guess which the guards obey.
+	switch {
+	case *cleared && *ceiling >= 0:
+		fmt.Fprintln(stderr, "give one of --cap or --clear: a cleared budget states no ceiling, and an override carrying both says two different things about what the guards permit")
+		return 2
+	case !*cleared && *ceiling < 0:
+		fmt.Fprintln(stderr, "triage override requires --cap <n> or --clear: an override that names no new ceiling gives the item no more room and would change nothing")
+		return 2
+	}
+
+	parts, err := buildComponents(*configPath)
+	if err != nil {
+		return reportTriageOverride(stdout, stderr, *jsonOutput, triageOverrideResult{}, err)
+	}
+	workItemID := positional[0]
+	caps := orchestrator.TriageCaps(parts.config.Execution, parts.config.Triage)
+	// The budget is trimmed here as well as where it is recorded, because it is
+	// also what this reads the written override back by: a name the store trimmed
+	// and this did not would find nothing and report an override as unrecorded.
+	recorded := runstate.TriageOverride{
+		Budget:    strings.TrimSpace(*budget),
+		Cleared:   *cleared,
+		DecidedBy: *by,
+		Reason:    *reason,
+	}
+	if !*cleared {
+		recorded.Cap = *ceiling
+	}
+	counters, err := parts.store.Triage().Override(ctx, workItemID, recorded, time.Now().UTC(), caps)
+	if err != nil {
+		return reportTriageOverride(stdout, stderr, *jsonOutput, triageOverrideResult{WorkItemID: workItemID}, err)
+	}
+	// What the item now stands under is read back off the record that was just
+	// written rather than assembled from what was typed, so the figures reported
+	// and the figures the guards will read are one thing.
+	result := triageOverrideResult{
+		WorkItemID: workItemID,
+		Caps:       caps.Overridden(counters.Overrides),
+		Counters:   counters,
+	}
+	if latest, found := counters.OverrideOf(recorded.Budget); found {
+		result.Recorded = latest
+	}
+	return reportTriageOverride(stdout, stderr, *jsonOutput, result, nil)
+}
+
+// reportTriageOverride describes what the override did. A refusal is reported as
+// one and says nothing was recorded, because an operator who thinks a cap was
+// crossed and finds the next decision refused is back in the deadlock this verb
+// exists to end.
+func reportTriageOverride(stdout, stderr io.Writer, jsonOutput bool, result triageOverrideResult, err error) int {
+	if jsonOutput {
+		output := triageOutput{}
+		if result.WorkItemID != "" && err == nil {
+			output.Override = &result
+		}
+		if err != nil {
+			output.Error = err.Error()
+		}
+		if code := writeJSON(stdout, stderr, output); code != 0 {
+			return code
+		}
+		if err != nil {
+			return 1
+		}
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "the override was refused and nothing was recorded: %v\n", err)
+		if errors.Is(err, runstate.ErrTriageOverrideNotARaise) {
+			fmt.Fprintln(stderr, "`yoyo status <beads-id>` says what the item's budgets already stand at, overrides included")
+		}
+		return 1
+	}
+	fmt.Fprintf(stdout, "recorded an operator override on %s: %s\n", result.WorkItemID, result.Recorded.Describe())
+	printItemTriage(stdout, result.Counters, result.Caps)
+	fmt.Fprintln(stdout, "nothing was started, granted, or spent: an override changes what the guards permit, not what has happened")
+	fmt.Fprintln(stdout, "the development manager can now record the decision the escalation was about, and `yoyo triage rerun` or `yoyo triage repair` carries it out under every condition it already asks")
+	return 0
 }
 
 // buildRepairContinuer wires the repair-continue action over the same parts the
@@ -274,11 +416,16 @@ func reportRerun(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.
 }
 
 func printTriageUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo triage rerun  [options] <run-id>
-       yoyo triage repair [options] <run-id>
+	fmt.Fprintln(writer, `Usage: yoyo triage rerun    [options] <run-id>
+       yoyo triage repair   [options] <run-id>
+       yoyo triage override [options] <beads-id>
 
-Both carry out a decision the development manager recorded about a docketed
-stoppage, and they are opposites. "rerun" starts a fresh run of the item, which
+"rerun" and "repair" carry out a decision the development manager recorded about
+a docketed stoppage. "override" is yours rather than theirs: it crosses one of a
+work item's triage caps so that a decision they could not record becomes one they
+can.
+
+The first two are opposites. "rerun" starts a fresh run of the item, which
 is what a correct change whose ground moved needs. "repair" continues the run
 that stopped -- same branch, same worktree, same developer session, the
 reviewer's findings handed back exactly as they were written -- under a grant of
@@ -303,8 +450,33 @@ A harness with no free developer is not a refusal at all: nothing is claimed or
 granted, the decision stands, and asking again once a slot frees carries out the
 same one.
 
+"override" crosses one of a work item's caps, and is the only thing that does.
+The caps stop machines looping, so they refuse a development manager past them --
+but they refused the recording of your answer to the escalation as well, which
+left an item at the end of its rounds unrunnable by every recorded path. This is
+that answer as a record: it names the budget, what you raised it to or that you
+cleared it, who you are, and why, and it is kept on the item's own triage record
+where every guard and every reading of the item finds it.
+
+It clears or raises and never lowers -- an override that would give the item no
+more room than it already has is refused. Lowering a cap is a judgement about the
+project's pace rather than about one item, and triage.review_rounds_cap is where
+that is made.
+
+It carries nothing out. Recording it changes what the guards permit and nothing
+else: the development manager then records the decision the escalation was about,
+which spends the item's budget as it always did, and "rerun" or "repair" carries
+that decision out under every condition either already asks. Crossing a cap and
+spending it are two decisions and stay two.
+
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
-  --reason <text>   the development manager's recorded reasoning (required)
+  --reason <text>   rerun/repair: the development manager's recorded reasoning
+                    (required); override: why the cap is being crossed (required)
+  --budget <name>   override: which cap to cross -- "review round" (the default),
+                    "repair grant", "re-run", or "merge re-arm"
+  --cap <n>         override: the ceiling to raise that budget to
+  --clear           override: lift that budget entirely instead
+  --by <name>       override: the operator deciding it (required)
   --json            emit machine-readable JSON`)
 }

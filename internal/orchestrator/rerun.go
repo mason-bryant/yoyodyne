@@ -420,20 +420,26 @@ func stoppageIsOver(prior runstate.State) error {
 // the reservation rather than by this: the second run of one item is refused
 // where it is reserved, so the loser spends a claim rather than putting a second
 // developer on the work.
-func (r Rerunner) decided(entry triage.Entry) (decided, taken int, err error) {
+//
+// What it returns is the whole record rather than the one counter, because the
+// reason this run records has to be able to say what the decision stands on: an
+// item whose caps an operator crossed was re-run past a bound the harness would
+// otherwise have refused, and the run's own selection reason is where that
+// survives the conversation it was decided in.
+func (r Rerunner) decided(entry triage.Entry) (decided runstate.TriageCounters, taken int, err error) {
 	workItemID := entry.WorkItemID
 	counters, err := r.Decisions.Counters(workItemID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("read what triage has recorded about %s: %w", workItemID, err)
+		return runstate.TriageCounters{}, 0, fmt.Errorf("read what triage has recorded about %s: %w", workItemID, err)
 	}
 	if counters.Reruns < 1 {
-		return 0, 0, fmt.Errorf(
+		return runstate.TriageCounters{}, 0, fmt.Errorf(
 			"triage has recorded no re-run of %s, so there is no decision here to carry out: the development manager records the decision, which spends the item's re-run budget, before the harness starts anything on it",
 			workItemID)
 	}
 	claimed, err := r.Reruns.Claimed(workItemID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("read the re-runs already taken of %s: %w", workItemID, err)
+		return runstate.TriageCounters{}, 0, fmt.Errorf("read the re-runs already taken of %s: %w", workItemID, err)
 	}
 	// This stoppage having been re-run already is the more particular answer, and
 	// the one whose refusal can say what became of it, so it is given rather than
@@ -441,15 +447,15 @@ func (r Rerunner) decided(entry triage.Entry) (decided, taken int, err error) {
 	// makes the refusal name the run the first re-run started.
 	for _, existing := range claimed {
 		if existing.DocketKey == entry.Key {
-			return 0, 0, runstate.RerunTakenError{Existing: existing}
+			return runstate.TriageCounters{}, 0, runstate.RerunTakenError{Existing: existing}
 		}
 	}
 	if len(claimed) >= counters.Reruns {
-		return 0, 0, fmt.Errorf(
+		return runstate.TriageCounters{}, 0, fmt.Errorf(
 			"triage has decided %d re-run(s) of %s and the harness has carried out %d, so this stoppage has no decision of its own to act on: a further stoppage of an item that has already been run again needs a further decision, which past the cap is an escalation rather than a larger budget",
 			counters.Reruns, entry.WorkItemID, len(claimed))
 	}
-	return counters.Reruns, len(claimed), nil
+	return counters, len(claimed), nil
 }
 
 // itemCanBeRun reports the work item being in a state a fresh run may start on,
@@ -717,15 +723,54 @@ func preservedOf(prior runstate.State) runstate.PreservedArtifacts {
 // decision out, and is attributed to that rather than quoted as the development
 // manager's own words — a reason nobody can check must not read as one somebody
 // verified.
-func rerunReason(entry triage.Entry, decided, taken int, reasoning string) string {
+func rerunReason(entry triage.Entry, decided runstate.TriageCounters, taken int, reasoning string) string {
 	reason := fmt.Sprintf(
-		"the development manager's triage decided a re-run of %s — %d recorded against the item's durable triage budget, %d of them already carried out — and the harness started this run to carry out the one left, on the stopped work of run %s. The reasoning given to the harness when it was asked to: ",
-		entry.WorkItemID, decided, taken, entry.RunID)
+		"the development manager's triage decided a re-run of %s — %d recorded against the item's durable triage budget, %d of them already carried out — and the harness started this run to carry out the one left, on the stopped work of run %s.%s The reasoning given to the harness when it was asked to: ",
+		entry.WorkItemID, decided.Reruns, taken, entry.RunID, crossedCaps(decided))
 	// The reasoning is folded to what the run's recorded selection will hold,
 	// rather than refused: losing the end of a long argument is better than
-	// refusing to carry out a decision because of its length.
-	return reason + singleLine(reasoning, runstate.MaxSelectionReasonBytes-len(reason))
+	// refusing to carry out a decision because of its length. The room is never
+	// negative, so a reason that filled the record on its own truncates the
+	// argument to nothing rather than indexing past the end of it.
+	room := runstate.MaxSelectionReasonBytes - len(reason)
+	if room < 0 {
+		room = 0
+	}
+	return reason + singleLine(reasoning, room)
 }
+
+// crossedCaps names the operator overrides this decision stands on, and says
+// nothing on the ordinary item.
+//
+// A re-run recorded past a cap exists because a person crossed that cap, and the
+// run's selection reason is where that has to survive: the record it was read
+// from is a live one that the next override rewrites, and the conversation it was
+// argued in is gone. It names the two budgets a re-run is refused against and
+// only those, because the reason is a sentence somebody reads rather than a dump
+// of the item's record — and it names who and when rather than why, because the
+// argument for crossing the cap is on the override itself, at whatever length the
+// operator wrote it.
+func crossedCaps(counters runstate.TriageCounters) string {
+	var crossed []string
+	for _, budget := range []string{runstate.TriageRerunBudget, runstate.TriageReviewRoundBudget} {
+		override, found := counters.OverrideOf(budget)
+		if !found {
+			continue
+		}
+		crossed = append(crossed, fmt.Sprintf("the %s cap, by %s at %s",
+			budget, singleLine(override.DecidedBy, maxCrossedCapAttributionBytes), override.DecidedAt.UTC().Format(time.RFC3339)))
+	}
+	if len(crossed) == 0 {
+		return ""
+	}
+	return " It stands on a recorded operator override of " + strings.Join(crossed, ", and of ") + "."
+}
+
+// maxCrossedCapAttributionBytes bounds how much of an operator's name the run's
+// reason carries. The record keeps whatever they gave; this is a clause inside a
+// sentence, and a bounded one is what keeps the argument the reason exists for
+// from being crowded out by the attribution.
+const maxCrossedCapAttributionBytes = 64
 
 func (r Rerunner) validate() error {
 	var problems []error
