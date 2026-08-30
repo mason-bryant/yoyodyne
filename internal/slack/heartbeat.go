@@ -78,6 +78,19 @@ type waiting struct {
 	// mark names this state durably, so a cursor can say which one it is standing
 	// on and a different one re-arms rather than inheriting the last one's clock.
 	mark string
+	// options are what an operator can answer when they are asked about this
+	// state, in the order they are offered and numbered by that order.
+	//
+	// They are derived here, beside the state itself, rather than wherever a
+	// message happens to be composed. A surface that decided for itself what the
+	// answers to a held line were would be a second opinion about the line, and
+	// the one thing worse than not being asked is being asked two different
+	// questions about the same thing.
+	//
+	// Every state also takes an answer in the operator's own words, so this is
+	// the shortcuts rather than the whole of what may be said, and it is
+	// deliberately never exhaustive.
+	options []string
 }
 
 // heartbeatDeliveries says a line that is choosing nothing over ready work, again
@@ -94,9 +107,17 @@ type waiting struct {
 // happened, and a second message a moment later would be the sink repeating what
 // the channel already has. What this adds is the hour after that, and every hour
 // after that.
-func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, held switches, sessions []runstate.WatchTransition, inFlight int, streams map[string]struct{}) ([]Delivery, error) {
+//
+// It reports the ask beside the message, for the state that is worth saying at
+// all. They are the same derivation deliberately: what is said in the channel
+// and what the operators are asked in a direct message are one reading of one
+// line, so the two can never come to disagree about whether it is stopped or
+// about what would unstop it. The ask is produced whenever the message is, and
+// which operators have already been asked about this state is the sink's to
+// remember — this is the reading, not the record of who was told.
+func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, held switches, sessions []runstate.WatchTransition, inFlight int, streams map[string]struct{}) ([]Delivery, *Ask, error) {
 	if f.Backlog == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	streams[heartbeatStream] = struct{}{}
 
@@ -106,17 +127,17 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		// itself, as the release, the resumption, or the run it started — and the
 		// cursor forgets it so the next state to stand is armed afresh.
 		if cursor.Standing != "" {
-			return []Delivery{{Stream: heartbeatStream, Cursor: Cursor{}}}, nil
+			return []Delivery{{Stream: heartbeatStream, Cursor: Cursor{}}}, nil, nil
 		}
-		return nil, nil
+		return nil, nil, nil
 	}
 	now := f.now()
 	armed := Cursor{Standing: state.mark, Said: now}
 	if cursor.Standing != state.mark {
-		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
+		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil, nil
 	}
 	if now.Sub(cursor.Said) < f.heartbeat() {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	ready, err := f.Backlog.Ready(ctx)
@@ -129,20 +150,32 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		// next interval rather than at the next poll.
 		f.say("what is ready to pull could not be read, so nothing was said about a line that has been stopped since %s: %v",
 			state.since.UTC().Format(time.RFC3339), err)
-		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
+		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil, nil
 	}
 	if ready == 0 {
 		// Idle with nothing ready is the healthy quiet the operator asked to keep,
 		// so it is silent. The clock is still reset, because what a poll costs is a
 		// tracker read and there is no reason to spend one every fifteen seconds on
 		// a machine that is behaving.
-		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
+		//
+		// Nobody is asked either, and for the same reason: a line with nothing to
+		// pull is not waiting on anybody, so a decision put to an operator about it
+		// would be the harness inventing a question.
+		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil, nil
 	}
-	return []Delivery{{
+	said := Delivery{
 		Stream:       heartbeatStream,
 		Cursor:       armed,
 		Notification: notify.FromLine(notify.Line{Stopped: state.stopped, Since: state.since, Ready: ready}, now),
-	}}, nil
+	}
+	asking := Ask{
+		Mark:    state.mark,
+		Stopped: state.stopped,
+		Since:   state.since,
+		Ready:   ready,
+		Options: state.options,
+	}
+	return []Delivery{said}, &asking, nil
 }
 
 // waitingLine derives what has stopped the line, in the order an operator would
@@ -163,6 +196,10 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 			stopped: "the operator is holding all harness activity",
 			since:   held.operator.HeldAt,
 			mark:    "hold:" + stamp(held.operator.HeldAt),
+			options: []string{
+				"lift the hold and let the harness start work again",
+				"keep everything held; this is deliberate and I will lift it myself",
+			},
 		}, true
 	}
 	if held.intakeHeld {
@@ -174,6 +211,10 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 			stopped: stopped,
 			since:   held.intake.HeldAt,
 			mark:    "intake:" + stamp(held.intake.HeldAt),
+			options: []string{
+				"release intake so admitted work can be chosen again",
+				"keep intake held; let what is running finish and choose nothing new",
+			},
 		}, true
 	}
 	return choosing(sessions)
@@ -224,12 +265,20 @@ func choosing(sessions []runstate.WatchTransition) (waiting, bool) {
 			stopped: "the watch session has found nothing it can start",
 			since:   idle.At,
 			mark:    "idle:" + stamp(idle.At),
+			options: []string{
+				"what is ready is blocked on something; look at the queue before anything else is admitted",
+				"nothing is wrong; the ready work is not meant to be started yet",
+			},
 		}, true
 	}
 	return waiting{
 		stopped: "no watch session is running",
 		since:   stopped.At,
 		mark:    "stopped:" + stamp(stopped.At),
+		options: []string{
+			"a watch session should be running; it stopped and nobody meant it to",
+			"leave the line stopped; work is being started by name rather than watched",
+		},
 	}, true
 }
 

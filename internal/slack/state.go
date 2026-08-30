@@ -36,13 +36,15 @@ const (
 	// ThreadMapSchemaVersion and CursorsSchemaVersion are versioned separately
 	// from run state because they describe neither a run nor a conversation, and
 	// a sink is free to be upgraded without every other record moving with it.
-	ThreadMapSchemaVersion = 1
-	CursorsSchemaVersion   = 1
-	SteerMapSchemaVersion  = 1
+	ThreadMapSchemaVersion   = 1
+	CursorsSchemaVersion     = 1
+	SteerMapSchemaVersion    = 1
+	DecisionMapSchemaVersion = 1
 	// maxRecordBytes bounds any of them. A thread map is one line per topic, a
-	// cursor set one line per stream, and a steer map one line per directive
-	// somebody typed into a thread, so anything near this bound is a file
-	// something other than the sink has written.
+	// cursor set one line per stream, a steer map one line per directive somebody
+	// typed into a thread, and a decision map one line per operator asked about
+	// one stopped line, so anything near this bound is a file something other
+	// than the sink has written.
 	maxRecordBytes = 4 << 20
 )
 
@@ -261,6 +263,121 @@ func (m *SteerMap) Record(directiveID string, steer Steer) {
 	m.Steers[directiveID] = steer
 }
 
+// Decision is one ask this sink put to one operator in a direct message: which
+// standing state it was about, where it was said, and what it offered.
+//
+// It is kept for two reasons, and the second is the one that matters. The first
+// is so an operator is asked once about a state rather than every hour it
+// stands. The second is that a reply arriving on the connection carries a
+// channel and a thread and nothing else: this is the only thing that says that
+// thread was an ask at all, which state it was about, and what the numbers in it
+// meant — so without it a reply naming option 2 is a sentence nobody can read.
+type Decision struct {
+	// Mark is the standing state this asked about, in the same words the
+	// heartbeat's cursor names it by. It is what makes one state one ask: the
+	// state that replaces it is a different mark and is asked afresh, and the
+	// same one standing for a week is asked once.
+	Mark string `json:"mark"`
+	// Member is the Slack member id this was asked of. Every operator is asked
+	// separately, because a decision addressed to a room is one each of them can
+	// reasonably assume somebody else is making.
+	Member string `json:"member"`
+	// Channel and ThreadTS are the direct message and the thread inside it, which
+	// together are what an inbound reply is correlated back through.
+	Channel  string `json:"channel"`
+	ThreadTS string `json:"thread_ts"`
+	// Stopped is what had stopped the line, kept in the words the ask used so the
+	// directive a reply records says what it was answering rather than only which
+	// number was typed.
+	Stopped string `json:"stopped"`
+	// Options are the answers that were offered, in the order they were numbered.
+	// The numbering is this list's index, so a reply naming option 2 means the
+	// second of these and not the second of whatever the harness would offer
+	// today — an ask answered after an upgrade still means what it said.
+	Options []string  `json:"options,omitempty"`
+	AskedAt time.Time `json:"asked_at"`
+}
+
+// DecisionMap is every ask this sink has put to an operator, as it is stored.
+//
+// It is written by the delivery pass alone and read by the connection, which is
+// the division the thread map is held to and the opposite of the steer map's. A
+// reply is answered in the thread it arrived in and records a directive, and
+// neither of those writes anything here: the ask is what the pass put out, and
+// the connection reading it is reading what was said rather than revising it.
+type DecisionMap struct {
+	SchemaVersion int                 `json:"schema_version"`
+	Decisions     map[string]Decision `json:"decisions"`
+}
+
+// LoadDecisions reads the asks. A product whose line has never stopped has been
+// asked nothing rather than having a broken record, so an absent file is an
+// empty map.
+func (s *Store) LoadDecisions() (DecisionMap, error) {
+	var stored DecisionMap
+	found, err := readJSON(s.decisionPath(), "slack decision map", &stored)
+	if err != nil {
+		return DecisionMap{}, err
+	}
+	if !found {
+		return DecisionMap{SchemaVersion: DecisionMapSchemaVersion, Decisions: map[string]Decision{}}, nil
+	}
+	if stored.SchemaVersion != DecisionMapSchemaVersion {
+		return DecisionMap{}, fmt.Errorf("slack decision map schema version %d is not supported", stored.SchemaVersion)
+	}
+	if stored.Decisions == nil {
+		stored.Decisions = map[string]Decision{}
+	}
+	return stored, nil
+}
+
+// SaveDecisions replaces the asks durably.
+func (s *Store) SaveDecisions(decisions DecisionMap) error {
+	decisions.SchemaVersion = DecisionMapSchemaVersion
+	if decisions.Decisions == nil {
+		decisions.Decisions = map[string]Decision{}
+	}
+	return s.write(s.decisionPath(), "slack decision map", decisions)
+}
+
+// Lookup reports the ask one direct message thread carries. A thread this sink
+// asked nothing in is not in the map, which is every thread somebody starts
+// themselves.
+func (m DecisionMap) Lookup(channel, threadTS string) (Decision, bool) {
+	asked, found := m.Decisions[decisionKey(channel, threadTS)]
+	if !found || strings.TrimSpace(asked.Mark) == "" {
+		return Decision{}, false
+	}
+	return asked, true
+}
+
+// AskedOf reports one operator already having been asked about one state. It is
+// what keeps a state that stands all night to one message per person: the
+// heartbeat says it again in the channel every hour, and this is asked once.
+func (m DecisionMap) AskedOf(mark, member string) bool {
+	for _, asked := range m.Decisions {
+		if asked.Mark == mark && asked.Member == member {
+			return true
+		}
+	}
+	return false
+}
+
+// Record remembers one ask.
+func (m *DecisionMap) Record(asked Decision) {
+	if m.Decisions == nil {
+		m.Decisions = map[string]Decision{}
+	}
+	m.Decisions[decisionKey(asked.Channel, asked.ThreadTS)] = asked
+}
+
+// decisionKey is one ask's identity: the thread it was said in, qualified by the
+// conversation, for the reason a thread map's entries are — a thread timestamp
+// only means anything inside the conversation it was posted in.
+func decisionKey(channel, threadTS string) string {
+	return channel + ":" + threadTS
+}
+
 // Cursor is how far the sink has read one durable stream, and the streams are
 // read four ways because they are four shapes.
 //
@@ -416,9 +533,10 @@ func (c *Cursors) Keep(streams map[string]struct{}) bool {
 	return dropped
 }
 
-func (s *Store) threadPath() string { return filepath.Join(s.root, "threads.json") }
-func (s *Store) cursorPath() string { return filepath.Join(s.root, "cursors.json") }
-func (s *Store) steerPath() string  { return filepath.Join(s.root, "steers.json") }
+func (s *Store) threadPath() string   { return filepath.Join(s.root, "threads.json") }
+func (s *Store) cursorPath() string   { return filepath.Join(s.root, "cursors.json") }
+func (s *Store) steerPath() string    { return filepath.Join(s.root, "steers.json") }
+func (s *Store) decisionPath() string { return filepath.Join(s.root, "decisions.json") }
 
 // write replaces one record atomically: a sink killed mid-write leaves the
 // previous file rather than half of the new one, which for the thread map is the
