@@ -126,8 +126,8 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Seven things keep an item out of a pass, and the pass accounts for them at two
-different grains. Four are named against the item, because nothing else would
+Eight things keep an item out of a pass, and the pass accounts for them at two
+different grains. Five are named against the item, because nothing else would
 report that this particular item was passed over. An **unresolved directive** is
 named with the directive's own words, because it needs a person. An item
 whose **unfinished children already carry its execution** is skipped with those
@@ -139,9 +139,10 @@ blocked, or already claimed by a run in flight, and the container becomes
 ordinary work again once its last unfinished child leaves the backlog. An
 item that **would race work already in flight** is sequenced behind it rather
 than started beside it, with the run it would have raced and what the two share
-both named. And an item whose **executor is a persona conversation** rather than
+both named. An item whose **executor is a persona conversation** rather than
 a developer run is passed over with what carries it named, which the paragraph
-after next is about. The other
+after next is about. And an item the product manager has **parked** is passed
+over with the parking reason named, which the paragraph after that is about. The other
 three — the tracker not reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them
@@ -154,7 +155,7 @@ stopped before reading the queue at all, because you were holding intake or the
 machine was already full, says nothing about the backlog rather than reporting
 zeroes it never looked up.
 
-Sequencing is the one of those four that is a wait rather than a refusal. Two
+Sequencing is the one of those five that is a wait rather than a refusal. Two
 items race when they are siblings of one epic, when one is the epic the other was
 broken out of, or when the files they will change overlap. An item says which
 files those are by naming them after `conflict-surface:` on a line of its own, in
@@ -207,7 +208,33 @@ infers it — no reading of an item tells a conversation from a diff — so brin
 an existing queue under the guard means marking its conversation-executed items,
 one `update` each, in the product manager's conversation.
 
-An eighth thing deliberately keeps nothing out: an item whose goal was amended
+**Parked work is out of reach until somebody puts it back.** Some admitted work
+is work you still want and do not want started: deferred by a scope decision,
+waiting on something outside the harness, held back until a design settles. That
+is not a priority, and expressing it as one is what this exists to stop. A
+priority says what comes before what among the work that is to be done, so the
+bottom of the order is the last thing pulled and not the thing that is never
+pulled — and `--watch` drains queues as a matter of routine. On 2026-08-27 one
+did: it reached work a scope decision had put off the critical path, started it,
+and the run failed having cost $34.38. Nothing about the selection was wrong. The
+deferral lived in a convention nothing that selects work could read.
+
+So the product manager parks it, with `park`, and the reason is the action's own
+reason. A parked item keeps its place in the order, is listed as parked wherever
+the queue is shown, says why it is parked when you read it, and is never selected
+however far the queue drains. It is not a wait: nothing clears, and what moves it
+is `unpark`. Work can also be admitted already parked, with `parked` on the
+creation, because the identifier a creation assigns does not come back until the
+next turn and the item is pullable in between. Neither action works on closed
+work, which has left the backlog and was not going to be selected anyway.
+
+Naming a parked item yourself is unaffected, exactly as with the executor:
+`yoyo run <id>` is you deciding, and parking steers what the harness chooses
+rather than what you may ask for. And parking is not retroactive either — it
+covers exactly the items that carry it, so a queue parked by convention stays
+selectable until each of those items is parked in fact, one `park` each.
+
+A ninth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.
@@ -237,7 +264,7 @@ interval and asks no provider anything. Holding intake brakes a watching session
 in place rather than stopping it — it keeps polling, chooses nothing, and resumes
 when you release it.
 
-Three things guard a loop that no longer ends. A session does not start the same
+Four things guard a loop that no longer ends. A session does not start the same
 item twice unless the item has changed — what it says, what it is for, its
 priority, its status, what it depends on, its notes — so a start the harness
 cannot get past is not retried every minute forever, and a blocker you release is
@@ -245,9 +272,31 @@ picked up because releasing it changed the item. Runs blocking one after another
 with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
 whole backlog through a failed run overnight. And the session records what it is
-doing — watching, idle, braked, resumed, stopped — where `yoyo status` and the
-Slack sink read it, because an idle session and a dead one are otherwise the same
-silence.
+doing — watching, idle, braked, blocked, resumed, stopped — where `yoyo status`
+and the Slack sink read it, because an idle session and a dead one are otherwise
+the same silence.
+
+The fourth is what the first three made necessary. A refusal that is the
+*machine's* rather than the work's — uncommitted changes in your primary
+checkout, above all — refuses every item in the queue exactly as completely, and
+the first guard would faithfully mark each one as tried and then idle over a
+backlog that is entirely ready. So the checkout's readiness is read at every
+pull, before anything is chosen; a session that cannot start work says
+`runs cannot start: uncommitted changes in the primary checkout (<file>); commit
+or stash to release` rather than reporting a queue it cannot get past; and no
+refusal of the machine's is ever remembered as an item having been tried. Commit
+or stash and the work is pulled at the next poll, with nothing to restart.
+
+That last part holds beyond the checkout, and it has to: a sandbox that will not
+spawn a shell, a state store that will not open, an invariants directory that
+will not read all leave the repository spotless, so a readiness check answers yes
+and the refusal would look exactly like the item failing. Each of those steps
+marks its own refusal as the machine's instead, and the session reports whichever
+condition it was in that step's words. Such a start costs the item one poll
+interval — the wait that keeps a retry from becoming a tight loop — and never
+counts toward `execution.blocked_runs_before_intake_hold`, because nothing about
+the work failed and holding intake over an already-stopped machine only leaves a
+second thing to undo.
 
 `--budget <usd>` caps what one session spends, and fails closed: a pass that
 cannot price itself is refused before it starts, and a session that meets a run

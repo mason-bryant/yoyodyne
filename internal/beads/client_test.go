@@ -811,6 +811,130 @@ func TestAnUnrecognizedExecutorIsRefusedOnAWriteAndSurvivesARead(t *testing.T) {
 	}
 }
 
+// A parking is written where selection can read it, for the reason the executor
+// beside it is: the convention it replaces lived in a priority and in whoever
+// remembered setting it, and a queue that drains reads neither. Releasing it
+// writes the same key with nothing in it, so both directions are one shape.
+func TestAParkingIsWrittenWhereSelectionCanReadItAndReleasedTheSameWay(t *testing.T) {
+	t.Parallel()
+
+	const reason = "off the critical path by the scope decision"
+	created := `{"id":"yoyodyne-ifd.6","title":"The thin Codex backend","description":"d",
+	             "status":"open","priority":4,"issue_type":"task","metadata":{"yoyodyne_parked":"` + reason + `"}}`
+	runner := &fakeRunner{responses: []string{created}}
+	item, err := (Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}).Create(context.Background(), NewWorkItem{
+		Title: "The thin Codex backend", Description: "d", Type: "task", Parking: reason,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if !slices.Contains(runner.args[0], `--metadata={"yoyodyne_parked":"`+reason+`"}`) {
+		t.Fatalf("the creation carried no parking: %#v", runner.args[0])
+	}
+	if !item.Parking.Parked() || item.Parking.Reason() != reason {
+		t.Fatalf("Create() parking = %q, want the reason read back", item.Parking)
+	}
+
+	// The queue is older than the marker, so work already admitted acquires one by
+	// an update. That is how the set parked by convention gets parked in fact.
+	parked := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-ifd.6","title":"t","status":"open","priority":4,"issue_type":"task","metadata":{"yoyodyne_parked":"` + reason + `"}}]`,
+	}}
+	parking := domain.WorkItemParking(reason)
+	if _, err := (Client{Runner: parked}).Update(context.Background(), "yoyodyne-ifd.6", WorkItemChange{Parking: &parking}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if !slices.Contains(parked.args[0], "--set-metadata=yoyodyne_parked="+reason) {
+		t.Fatalf("the update carried no parking: %#v", parked.args[0])
+	}
+
+	// Releasing sets the same key to nothing, and an item whose key is empty reads
+	// exactly like one nobody ever parked.
+	released := domain.WorkItemParking("")
+	freeing := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-ifd.6","title":"t","status":"open","priority":4,"issue_type":"task","metadata":{"yoyodyne_parked":""}}]`,
+	}}
+	back, err := (Client{Runner: freeing}).Update(context.Background(), "yoyodyne-ifd.6", WorkItemChange{Parking: &released})
+	if err != nil {
+		t.Fatalf("Update() releasing error = %v", err)
+	}
+	if !slices.Contains(freeing.args[0], "--set-metadata=yoyodyne_parked=") {
+		t.Fatalf("the release carried no parking: %#v", freeing.args[0])
+	}
+	if back.Parking.Parked() {
+		t.Fatalf("Update() parking = %q after a release, want it unparked", back.Parking)
+	}
+
+	// A creation that says nothing about parking writes no metadata at all, so
+	// ordinary work is unaffected.
+	ordinary := &fakeRunner{responses: []string{`{"id":"yoyodyne-1","title":"t","status":"open","priority":1,"issue_type":"task"}`}}
+	plain, err := (Client{Runner: ordinary}).Create(context.Background(), NewWorkItem{Title: "t", Description: "d", Type: "task"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if plain.Parking.Parked() {
+		t.Fatalf("Create() parking = %q, want ordinary work unparked", plain.Parking)
+	}
+}
+
+// Both directions are verified against what bd echoed back, because both have
+// something resting on them. A parking that did not take leaves work the
+// operator was told is parked sitting pullable in a queue that drains; a release
+// that did not take leaves work nobody can start and nothing saying why.
+func TestAParkingBdDidNotStoreIsAFailureInBothDirections(t *testing.T) {
+	t.Parallel()
+
+	parking := domain.WorkItemParking("deferred by the scope decision")
+	unstored := &fakeRunner{responses: []string{`[{"id":"yoyodyne-ifd.6","title":"t","status":"open","priority":4,"issue_type":"task"}]`}}
+	if _, err := (Client{Runner: unstored}).Update(context.Background(), "yoyodyne-ifd.6", WorkItemChange{Parking: &parking}); err == nil {
+		t.Fatal("Update() with a parking bd did not store = nil error, want a failure")
+	}
+	unmarked := &fakeRunner{responses: []string{`{"id":"yoyodyne-ifd.6","title":"t","status":"open","priority":4,"issue_type":"task"}`}}
+	if _, err := (Client{Runner: unmarked}).Create(context.Background(), NewWorkItem{
+		Title: "t", Description: "d", Type: "task", Parking: parking,
+	}); err == nil {
+		t.Fatal("Create() with a parking bd did not store = nil error, want a failure")
+	}
+
+	released := domain.WorkItemParking("")
+	stuck := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-ifd.6","title":"t","status":"open","priority":4,"issue_type":"task","metadata":{"yoyodyne_parked":"deferred by the scope decision"}}]`,
+	}}
+	_, err := (Client{Runner: stuck}).Update(context.Background(), "yoyodyne-ifd.6", WorkItemChange{Parking: &released})
+	if err == nil || !strings.Contains(err.Error(), "still parked") {
+		t.Fatalf("Update() releasing work bd left parked = %v, want it reported as still parked", err)
+	}
+
+	// A reason the tracker could not hold as one value on one line is refused
+	// before anything is written, rather than stored as half a decision.
+	client := Client{Runner: &fakeRunner{}}
+	wrapped := domain.WorkItemParking("deferred\nuntil team mode is scoped")
+	if _, err := client.Update(context.Background(), "yoyodyne-1", WorkItemChange{Parking: &wrapped}); err == nil ||
+		!strings.Contains(err.Error(), "cannot span lines") {
+		t.Fatalf("Update() with a multi-line parking = %v, want it refused", err)
+	}
+	long := domain.WorkItemParking(strings.Repeat("a", domain.MaxWorkItemParkingBytes+1))
+	if _, err := client.Create(context.Background(), NewWorkItem{
+		Title: "t", Description: "d", Type: "task", Parking: long,
+	}); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Create() with an oversized parking = %v, want it refused", err)
+	}
+}
+
+// An update that only releases a parking is an update: it changes something, and
+// refusing it as empty would leave parked work with no way back into the queue.
+func TestReleasingAParkingIsAChangeAnUpdateAccepts(t *testing.T) {
+	t.Parallel()
+
+	released := domain.WorkItemParking("")
+	if err := (WorkItemChange{Parking: &released}).validate(); err != nil {
+		t.Fatalf("a release was refused as an empty update: %v", err)
+	}
+	if err := (WorkItemChange{}).validate(); err == nil {
+		t.Fatal("an update changing nothing was accepted")
+	}
+}
+
 type fakeRunner struct {
 	responses []string
 	results   []execution.ProcessResult

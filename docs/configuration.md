@@ -1702,6 +1702,33 @@ An item this session has already run and that nothing has touched since is
 therefore left alone for the life of the session. Restarting the session, or
 touching the item, is what asks for another attempt.
 
+That memory is of the work, and only of the work. A start the *machine* refused —
+uncommitted changes sitting in your primary checkout, the last free slot taken by
+another process, a sandbox that will not spawn a shell, a state store or an
+invariants directory that will not read — is never remembered as the item having
+been tried, because the same condition refuses every other item in the queue
+exactly as completely and nothing anybody edits will release them. Such a start
+costs the item one poll interval and nothing else, never counts toward
+`blocked_runs_before_intake_hold`, and the session says which condition it is
+rather than reporting a queue it cannot get past. Before this, one uncommitted
+file would have the session mark every ready item as tried and then idle over a
+full backlog, which reads exactly like a drained queue and was diagnosed by hand
+three times before it was a state.
+
+The classification does not rest on inspecting the repository, because most of
+that list leaves the repository perfectly healthy. Each step that can refuse a
+start before the work is attempted marks its own failure as the machine's; the
+readiness check is asked only where nothing marked anything.
+
+The readiness of the primary checkout is read at every pull, before anything is
+chosen, for the same reason the intake hold is: nothing is started under a
+condition that would refuse it. A session that meets one says
+`runs cannot start: uncommitted changes in the primary checkout (<file>); commit
+or stash to release`, in `yoyo status`, in the watch log, and in the Slack
+channel, and picks the work back up at the first pull after you commit or stash —
+with nothing to restart. A drain meets the same condition and stops on it rather
+than reporting an empty queue.
+
 `blocked_runs_before_intake_hold` is the failure-storm brake, and it is a
 different thing from that cooldown: it is aimed at a broken machine rather than a
 broken item. That many runs blocking one after another, with nothing landing
@@ -1710,9 +1737,12 @@ until you release it, with `yoyo release` or the conversation's `/release`. Any 
 brake off entirely, leaving you as the only thing that holds intake.
 
 And the session says what it is doing, because an idle session and a dead one are
-otherwise the same silence. Each transition — watching, idle, braked, resumed,
-stopped — is recorded once, where `yoyo status` prints it and the Slack sink
-posts it. A session idling all night writes one line rather than one a minute.
+otherwise the same silence. Each transition — watching, idle, braked, blocked,
+resumed, stopped — is recorded once, where `yoyo status` prints it and the Slack
+sink posts it. A session idling all night writes one line rather than one a
+minute. Idle and blocked are deliberately separate: idle is a queue with nothing
+in it and waits on the product manager, blocked is a queue with work in it and
+waits on you.
 
 **`--budget <usd>`** caps what one session spends, from the same recorded run
 evidence `yoyo cost` prices items from. It is checked between pulls, never during

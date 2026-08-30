@@ -153,6 +153,93 @@ func TestExecutorMetadataConformance(t *testing.T) {
 	}
 }
 
+// TestParkingMetadataConformance checks the one assumption a scripted runner
+// cannot restate: that bd accepts a metadata value set to nothing, and gives the
+// key back as empty rather than as the value it held before.
+//
+// The release rests entirely on it. Parking and releasing are one write with one
+// shape — the same key set to the reason or to nothing — and if bd refused an
+// empty value or kept the old one, releasing parked work would fail loudly at
+// the read-back check and there would be no way to put a parked item back into
+// the queue from the conversation at all.
+//
+// It is skipped where bd is not installed, which is a statement about the
+// machine running the tests rather than about the check being optional.
+func TestParkingMetadataConformance(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("bd"); err != nil {
+		t.Skipf("bd is not installed: %v", err)
+	}
+
+	project := filepath.Join(t.TempDir(), "tracker")
+	runCommand(t, t.TempDir(), "git", "init", "-q", "-b", "main", project)
+	runCommand(t, project, "git", "config", "user.email", "yoyodyne@example.invalid")
+	runCommand(t, project, "git", "config", "user.name", "Yoyodyne Test")
+	runCommand(t, project, "bd", "init")
+
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	const reason = "off the critical path by the scope decision"
+	created, err := client.Create(ctx, NewWorkItem{
+		Title:       "The thin Codex backend",
+		Description: "A second provider, deferred.",
+		Type:        "task",
+		Parking:     reason,
+	})
+	if err != nil {
+		t.Fatalf("Create() with a parking error = %v", err)
+	}
+	if created.Parking.Reason() != reason {
+		t.Fatalf("Create() parking = %q, want bd to echo the reason it stored", created.Parking)
+	}
+	// It survives a separate read, which is what selection does.
+	shown, err := client.Show(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if shown.Parking.Reason() != reason {
+		t.Fatalf("Show() parking = %q, want the stored reason", shown.Parking)
+	}
+
+	// The other spelling, and the way the queue that provoked this gets parked:
+	// one key set on an item that already exists.
+	ordinary, err := client.Create(ctx, NewWorkItem{Title: "Ordinary work", Description: "A run carries it.", Type: "task"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if ordinary.Parking.Parked() {
+		t.Fatalf("Create() parking = %q, want ordinary work to carry none", ordinary.Parking)
+	}
+	parking := domain.WorkItemParking(reason)
+	parked, err := client.Update(ctx, ordinary.ID, WorkItemChange{Parking: &parking})
+	if err != nil {
+		t.Fatalf("Update() with a parking error = %v", err)
+	}
+	if parked.Parking.Reason() != reason {
+		t.Fatalf("Update() parking = %q, want bd to echo the reason it set", parked.Parking)
+	}
+
+	// The assertion this whole test exists for: the same key set to nothing puts
+	// the work back, and reads back as unparked rather than as what it was.
+	released := domain.WorkItemParking("")
+	back, err := client.Update(ctx, ordinary.ID, WorkItemChange{Parking: &released})
+	if err != nil {
+		t.Fatalf("Update() releasing a parking error = %v", err)
+	}
+	if back.Parking.Parked() {
+		t.Fatalf("Update() parking = %q after a release, want bd to have cleared it", back.Parking)
+	}
+	reread, err := client.Show(ctx, ordinary.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if reread.Parking.Parked() {
+		t.Fatalf("Show() parking = %q after a release, want released work to read as unparked", reread.Parking)
+	}
+}
+
 func runCommand(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
 

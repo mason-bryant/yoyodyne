@@ -100,8 +100,8 @@ var authorities = map[domain.AgentRole]Authority{
 		Contract: productManagerContract,
 		TrackerActions: []string{
 			actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate,
-			actionReparent, actionReprioritize, actionLink, actionUnlink,
-			actionClose, actionRetire, actionHandle,
+			actionReparent, actionReprioritize, actionPark, actionUnpark,
+			actionLink, actionUnlink, actionClose, actionRetire, actionHandle,
 		},
 		Proposals:   true,
 		Concerns:    true,

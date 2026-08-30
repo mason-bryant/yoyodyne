@@ -187,9 +187,14 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 // from as one that nobody is pulling from.
 //
 // A session choosing work settles it whatever else is in the log. Otherwise a
-// session polling an idle queue is the state, and if every session there has ever
-// been has ended, there is nobody choosing at all — which is the state the
-// overnight was in and the one nothing else says.
+// session refused by the machine is the state, then one polling an idle queue,
+// and if every session there has ever been has ended, there is nobody choosing at
+// all — which is the state the overnight was in and the one nothing else says.
+//
+// Blocked is read ahead of idle because it is the more specific fact and the only
+// one of the two anybody can act on. A session that can start nothing says so in
+// its own words, which carry the file and the move that releases the line; a
+// session with nothing to start has no such words and does not need them.
 func choosing(sessions []runstate.WatchTransition) (waiting, bool) {
 	// A product nobody has ever watched is not a line that stopped. Nothing was
 	// choosing work here, so nothing is failing to; an operator who runs items by
@@ -202,9 +207,13 @@ func choosing(sessions []runstate.WatchTransition) (waiting, bool) {
 	for _, transition := range sessions {
 		last[transition.SessionID] = transition
 	}
-	var idle, stopped runstate.WatchTransition
+	var blocked, idle, stopped runstate.WatchTransition
 	for _, transition := range last {
 		switch transition.State {
+		case runstate.WatchBlocked:
+			if transition.At.After(blocked.At) {
+				blocked = transition
+			}
 		case runstate.WatchIdle:
 			if transition.At.After(idle.At) {
 				idle = transition
@@ -218,6 +227,19 @@ func choosing(sessions []runstate.WatchTransition) (waiting, bool) {
 			// or stopped by a hold, which was read before this.
 			return waiting{}, false
 		}
+	}
+	// The session's own reason is the message here rather than a sentence written
+	// in this file, and it is the only state where that is true. Every other line
+	// is a condition this package can name completely; what refuses a run is a
+	// condition only the session that met it can name, down to the file somebody
+	// has to commit — and a heartbeat that generalized it back to "the machine
+	// refuses runs" would restore the exact silence it is repeating itself to end.
+	if !blocked.At.IsZero() {
+		return waiting{
+			stopped: singleLine(blocked.Reason, maxStoppedReasonBytes),
+			since:   blocked.At,
+			mark:    "blocked:" + stamp(blocked.At),
+		}, true
 	}
 	if !idle.At.IsZero() {
 		return waiting{

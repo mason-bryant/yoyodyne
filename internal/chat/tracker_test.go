@@ -353,6 +353,147 @@ func TestRetiringWorkIsRecordedAsWithdrawnRatherThanFinished(t *testing.T) {
 	}
 }
 
+// Parking is how work the product manager still wants stops being pulled without
+// leaving the backlog, and it is neither a retirement nor a priority. The
+// priority is what it replaces: putting deferred work at the bottom of the order
+// meant "parked" to the product manager and "last" to everything that pulls, and
+// a queue that drained to the bottom spent $34.38 on a run of it.
+func TestParkingTakesWorkOutOfReachWithoutTakingItOutOfTheBacklog(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.6": {ID: "yoyodyne-ifd.6", Title: "The thin Codex backend", Status: "open", Priority: 4},
+		"yoyodyne-ifd.77": {
+			ID: "yoyodyne-ifd.77", Title: "External configuration", Status: "open", Priority: 4,
+			Parking: "deferred until team mode is scoped",
+		},
+	}}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Parking the one and releasing the other.",
+			`{"action":"park","id":"yoyodyne-ifd.6","reason":"off the critical path by the scope decision; released when a second backend is wanted"}`,
+			`{"action":"unpark","id":"yoyodyne-ifd.77","reason":"team mode is scoped, so it can be pulled again"}`)},
+		{SessionID: "session-1", FinalText: "One is out of reach and the other is back."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Is the Codex backend still meant to be picked up?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	if len(tracker.updates) != 2 {
+		t.Fatalf("updates = %#v, want the park and the release", tracker.updates)
+	}
+	// The parking reason is the marker selection reads, and it is appended to the
+	// notes as well: a decision that only exists in a conversation transcript is
+	// what parking-by-priority already was.
+	parked := tracker.updates[0]
+	if parked.id != "yoyodyne-ifd.6" || parked.change.Parking == nil || !parked.change.Parking.Parked() {
+		t.Fatalf("park recorded %#v", parked)
+	}
+	if !strings.Contains(parked.change.Parking.Reason(), "off the critical path by the scope decision") {
+		t.Fatalf("park reason = %q, want the action's reason stored as the parking", parked.change.Parking.Reason())
+	}
+	for _, required := range []string{"Parked", "by the product manager in conversation", "off the critical path"} {
+		if !strings.Contains(parked.change.AppendNotes, required) {
+			t.Fatalf("park notes = %q, want them to contain %q", parked.change.AppendNotes, required)
+		}
+	}
+	// Parking never closes anything: the work is still admitted, in the order the
+	// product manager put it in.
+	if len(tracker.closed) != 0 {
+		t.Fatalf("parking took work out of the backlog: %#v", tracker.closed)
+	}
+
+	released := tracker.updates[1]
+	if released.id != "yoyodyne-ifd.77" || released.change.Parking == nil || released.change.Parking.Parked() {
+		t.Fatalf("unpark recorded %#v, want the parking cleared", released)
+	}
+
+	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
+	for _, required := range []string{
+		"parked yoyodyne-ifd.6, so nothing selects it until it is released",
+		"released yoyodyne-ifd.77 back into the queue",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered outcomes = %q, want it to contain %q", rendered, required)
+		}
+	}
+}
+
+// Neither action means anything on work that has left the backlog, and the
+// release is the more misleading of the two to carry out: it would report work
+// put back into a queue it is not in, and the product manager would go on
+// expecting it to be pulled.
+func TestParkingAndReleasingClosedWorkIsRefusedRatherThanRecorded(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.6": {ID: "yoyodyne-ifd.6", Title: "The thin Codex backend", Status: "closed"},
+	}}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Parking it.",
+			`{"action":"park","id":"yoyodyne-ifd.6","reason":"off the critical path"}`,
+			`{"action":"unpark","id":"yoyodyne-ifd.6","reason":"back on it"}`)},
+		{SessionID: "session-1", FinalText: "It is closed."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Park the Codex backend.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(tracker.updates) != 0 {
+		t.Fatalf("a closed item was parked or released: %#v", tracker.updates)
+	}
+	for _, outcome := range reply.Actions {
+		if outcome.Applied {
+			t.Fatalf("an action on closed work was reported as applied: %#v", outcome)
+		}
+		if !strings.Contains(outcome.Failure, "closed") {
+			t.Fatalf("failure = %q, want the closure named", outcome.Failure)
+		}
+	}
+}
+
+// Work can be admitted already parked, because the identifier a creation assigns
+// does not reach the product manager until the next turn: admitting it now and
+// parking it then leaves the item pullable across the whole gap between them,
+// which is exactly the window the marker exists to close.
+func TestWorkCanBeAdmittedAlreadyParked(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting it parked.",
+			`{"action":"create","title":"Fork-based publishing","description":"Push run branches to a fork.","goal":"Run development nearly autonomously.","priority":2,"parked":"deferred until somebody needs a fork","reason":"the operator asked for it to be recorded, not started"}`)},
+		{SessionID: "session-1", FinalText: "It is in the backlog and parked."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Goals = recordedGoals("Run development nearly autonomously.")
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Record fork publishing but do not start it.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(tracker.created) != 1 || !tracker.created[0].Parking.Parked() {
+		t.Fatalf("created work items = %#v, want the parking carried by the admission itself", tracker.created)
+	}
+	if tracker.created[0].Parking.Reason() != "deferred until somebody needs a fork" {
+		t.Fatalf("created parking = %q", tracker.created[0].Parking)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
+	if !strings.Contains(rendered, "parked so nothing selects it until it is released: deferred until somebody needs a fork") {
+		t.Fatalf("rendered outcomes = %q, want the admission to say the work will not be pulled", rendered)
+	}
+}
+
 func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
 	t.Parallel()
 

@@ -64,6 +64,12 @@ type Entry struct {
 	// decides what to pull: an item nobody can run has to say so where the order
 	// is read, not only where the item is opened.
 	Executor domain.WorkItemExecutor `json:"executor,omitempty"`
+	// Parking is why this item is deliberately not to be pulled, and is empty for
+	// the ordinary work that is. It is on the entry for the reason the executor
+	// is, and against a failure that has already happened once: a parking that is
+	// not in the queue is a parking the queue's readers do not share, and what
+	// they do instead is pull the work.
+	Parking domain.WorkItemParking `json:"parking,omitempty"`
 	// Ready reports that nothing is holding this item back, which is what
 	// separates the next item to pull from the next item in the order.
 	Ready bool `json:"ready"`
@@ -104,11 +110,14 @@ type Queue struct {
 // back for a blocker that finished long ago. The tracker answers this from its
 // own dependency graph; this only asks.
 //
-// What the tracker is not asked is what could carry the work. An item whose
-// executor is a persona conversation is admitted work in the order like any
-// other and is never the next thing to pull, because there is no run that could
-// take it — and the tracker, which knows about dependencies and not about the
-// harness's roles, would report it as ready forever.
+// What the tracker is not asked is what could carry the work, or whether the
+// work is to be started at all. An item whose executor is a persona conversation
+// is admitted work in the order like any other and is never the next thing to
+// pull, because there is no run that could take it. An item somebody parked is
+// admitted work in the order too, and is never the next thing to pull because
+// somebody decided it is not to be started yet. The tracker answers neither: it
+// knows about dependencies, and not about the harness's roles or the product
+// manager's deferrals, so it reports both as ready forever.
 func Order(items []beads.WorkItem, ready []string) Queue {
 	pullable := make(map[string]struct{}, len(ready))
 	for _, id := range ready {
@@ -139,14 +148,17 @@ func Order(items []beads.WorkItem, ready []string) Queue {
 			Priority: item.Priority,
 			Status:   item.Status,
 			Executor: item.Executor,
+			Parking:  item.Parking,
 			// An item whose execution is not a developer run is never the next thing
-			// to pull, however clean the tracker's answer about it is. That is a
-			// different axis from the readiness taken above rather than a second
-			// opinion on it: the tracker answers whether anything is waiting on
-			// anything, and it has never had an opinion about what could carry the
-			// work. Deciding it here is what keeps the answer the same everywhere the
-			// order is read, instead of one for each thing that reads it.
-			Ready:     reportedReady && item.Status == statusOpen && item.Executor.DeveloperRun(),
+			// to pull, however clean the tracker's answer about it is, and neither is
+			// one somebody parked. Both are a different axis from the readiness taken
+			// above rather than a second opinion on it: the tracker answers whether
+			// anything is waiting on anything, and it has never had an opinion about
+			// what could carry the work or about whether the work is wanted now.
+			// Deciding both here is what keeps the answer the same everywhere the
+			// order is read, instead of one for each thing that reads it — which is
+			// exactly what parking-by-priority was, and what it cost.
+			Ready:     reportedReady && item.Status == statusOpen && item.Executor.DeveloperRun() && !item.Parking.Parked(),
 			WaitingOn: waitingOn(item, unfinished),
 		})
 	}
@@ -189,6 +201,21 @@ func (q Queue) Ready() int {
 	return ready
 }
 
+// Parked counts the entries somebody has deliberately taken out of reach. It is
+// counted apart from the unready rest because it is the one kind of unready that
+// is a decision rather than a wait: an operator reading that nothing is pullable
+// needs to know how much of that is work somebody parked, and how much is work
+// waiting on something that will clear on its own.
+func (q Queue) Parked() int {
+	parked := 0
+	for _, entry := range q.Entries {
+		if entry.Parking.Parked() {
+			parked++
+		}
+	}
+	return parked
+}
+
 // Render describes the backlog for an operator: the order the product manager
 // set, what is holding each unready item back, and what would be pulled next. An
 // empty backlog is stated rather than printed as nothing at all, because "there
@@ -198,13 +225,28 @@ func (q Queue) Render() string {
 		return "backlog: nothing is admitted.\n"
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "backlog (%d admitted, %d ready to pull):\n", len(q.Entries), q.Ready())
+	fmt.Fprintf(&rendered, "backlog (%d admitted, %d ready to pull", len(q.Entries), q.Ready())
+	// Parked work is counted in the header rather than left to be inferred from
+	// the entries, because the whole point of parking is that it is a decision
+	// somebody can see they made. A backlog with none says nothing, which keeps
+	// the line about the queue rather than about a state most queues are not in.
+	if parked := q.Parked(); parked > 0 {
+		fmt.Fprintf(&rendered, ", %d parked", parked)
+	}
+	rendered.WriteString("):\n")
 	listed := q.Entries
 	if len(listed) > maxRenderedEntries {
 		listed = listed[:maxRenderedEntries]
 	}
 	for _, entry := range listed {
-		fmt.Fprintf(&rendered, "  %d. [%s] p%d %s\n", entry.Position, entry.ID, entry.Priority,
+		// A parked entry is marked on its own line rather than only explained
+		// underneath, so parking is visible as parking while the list is being
+		// skimmed. Reading it off the priority is exactly what stopped working.
+		parked := ""
+		if entry.Parking.Parked() {
+			parked = " parked"
+		}
+		fmt.Fprintf(&rendered, "  %d. [%s] p%d%s %s\n", entry.Position, entry.ID, entry.Priority, parked,
 			singleLine(entry.Title, maxRenderedTitleBytes))
 		if entry.Ready {
 			continue
@@ -222,20 +264,25 @@ func (q Queue) Render() string {
 	return rendered.String()
 }
 
-// hold says what is keeping an unready entry from being pulled. The four
-// answers are different things to act on: an executor no run can be, named work
-// it waits for, a blocker recorded on the item itself, and the tracker simply
-// not offering it, which is what a dependency the listing did not carry looks
-// like from here.
+// hold says what is keeping an unready entry from being pulled. The five
+// answers are different things to act on: an executor no run can be, a parking
+// somebody decided, named work it waits for, a blocker recorded on the item
+// itself, and the tracker simply not offering it, which is what a dependency the
+// listing did not carry looks like from here.
 //
-// The executor answers first because it is the only one of the four that is not
-// waiting for anything. The other three are an item that will be pulled once
-// something clears; this one never will be, and reading "waiting on" against it
-// would send somebody looking for the blocker to release.
+// The executor and the parking answer first because they are the two that are
+// not waiting for anything. The other three are an item that will be pulled once
+// something clears; these two never will be until a person acts, and reading
+// "waiting on" against either would send somebody looking for a blocker to
+// release. Between the two, the executor answers first: an item that is both is
+// one no run could take even after the parking is lifted, so naming the parking
+// there would offer a release that changes nothing.
 func (e Entry) hold() string {
 	switch {
 	case !e.Executor.DeveloperRun():
 		return fmt.Sprintf("its executor is %q rather than a developer run, so no run carries it out; the item says which conversation does", e.Executor)
+	case e.Parking.Parked():
+		return "parked, so no pull selects it however far the queue drains: " + e.Parking.Reason()
 	case len(e.WaitingOn) > 0:
 		return "waiting on " + strings.Join(e.WaitingOn, ", ")
 	case e.Status == statusBlocked:

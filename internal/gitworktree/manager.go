@@ -487,6 +487,27 @@ func (m *Manager) CurrentBranch(ctx context.Context) (string, error) {
 	return branch, nil
 }
 
+// PrimaryDirtyError is a refusal to start work because somebody's uncommitted
+// changes are sitting in the primary checkout. It is a type rather than a
+// sentence so a caller can tell it from a failure of whatever it was starting:
+// the same condition refuses every other piece of work exactly as completely,
+// and the item that happened to be chosen when it was met has nothing wrong with
+// it.
+//
+// The paths travel with it because they are the whole of what somebody does
+// about it. "The checkout is dirty" sends a person to `git status`; naming the
+// file is the difference between a message that reports the stall and a message
+// that ends it.
+type PrimaryDirtyError struct {
+	// Paths are the uncommitted changes, repository-relative, as Git reported
+	// them and in the order it reported them.
+	Paths []string
+}
+
+func (e PrimaryDirtyError) Error() string {
+	return "primary repository has uncommitted changes: " + strings.Join(e.Paths, ", ")
+}
+
 func (m *Manager) ValidateReady(ctx context.Context) error {
 	if err := m.validateRepository(ctx); err != nil {
 		return err
@@ -496,7 +517,7 @@ func (m *Manager) ValidateReady(ctx context.Context) error {
 		return err
 	}
 	if len(unexpected) > 0 {
-		return fmt.Errorf("primary repository has uncommitted changes: %s", strings.Join(unexpected, ", "))
+		return PrimaryDirtyError{Paths: unexpected}
 	}
 	return nil
 }
