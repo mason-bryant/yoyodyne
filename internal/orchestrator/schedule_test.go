@@ -1417,18 +1417,17 @@ func TestWatchingNamesADirtyPrimaryCheckoutRatherThanIdlingOverIt(t *testing.T) 
 	}
 
 	const blocked = "runs cannot start: uncommitted changes in the primary checkout (docs/notes.md); commit or stash to release"
-	// The state is named on the schedule, and it is the sentence somebody acts on
-	// rather than a diagnosis they have to make.
-	if schedule.Blocked != blocked {
-		t.Fatalf("blocked = %q, want %q", schedule.Blocked, blocked)
+	// The schedule reads as of the last pull, like the capacity and the queue
+	// counts beside it, so it carries nothing here: the operator committed and the
+	// state is over. What outlives it is the session's own log, which is the whole
+	// point — a state that stood for three polls in the night has to be readable
+	// afterwards by somebody who was never at the terminal.
+	if schedule.Blocked != "" {
+		t.Fatalf("blocked = %q, want a state that has cleared to read as cleared", schedule.Blocked)
 	}
-	if !strings.Contains(schedule.Render(), blocked) {
-		t.Fatalf("render = %q, want the stalled line named in it", schedule.Render())
-	}
-	// And it is the state the session recorded, where a reader who is not at its
-	// terminal finds it. Blocked while it stood rather than idle, said once across
-	// the three polls it stood for, and idle only afterwards — over a queue that
-	// really was empty by then, which is the one time that word is true.
+	// Blocked while it stood rather than idle, said once across the three polls it
+	// stood for, and idle only afterwards — over a queue that really was empty by
+	// then, which is the one time that word is true.
 	want := []runstate.WatchState{
 		runstate.WatchWatching, runstate.WatchBlocked, runstate.WatchResumed,
 		runstate.WatchIdle, runstate.WatchStopped,
@@ -1463,8 +1462,15 @@ func TestDrainingStopsOnADirtyPrimaryCheckoutRatherThanReportingAnEmptyQueue(t *
 	if schedule.Stopped != ScheduleBlocked {
 		t.Fatalf("stopped = %q, want the pass stopped on what refuses every run", schedule.Stopped)
 	}
-	if !strings.Contains(schedule.Blocked, "docs/notes.md, internal/thing.go") {
-		t.Fatalf("blocked = %q, want every path in the way named", schedule.Blocked)
+	// The state still stands when this pass returns, so the schedule carries it —
+	// and carries it as the sentence somebody acts on rather than as a diagnosis
+	// they have to make, with every path in the way named.
+	const blocked = "runs cannot start: uncommitted changes in the primary checkout (docs/notes.md, internal/thing.go); commit or stash to release"
+	if schedule.Blocked != blocked {
+		t.Fatalf("blocked = %q, want %q", schedule.Blocked, blocked)
+	}
+	if !strings.Contains(schedule.Render(), blocked) {
+		t.Fatalf("render = %q, want the stalled line named in it", schedule.Render())
 	}
 	if len(schedule.Started) != 0 {
 		t.Fatalf("started = %#v, want nothing started under a machine that refuses every run", schedule.Started)
