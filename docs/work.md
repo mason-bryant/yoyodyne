@@ -287,6 +287,17 @@ or stash to release` rather than reporting a queue it cannot get past; and no
 refusal of the machine's is ever remembered as an item having been tried. Commit
 or stash and the work is pulled at the next poll, with nothing to restart.
 
+That last part holds beyond the checkout, and it has to: a sandbox that will not
+spawn a shell, a state store that will not open, an invariants directory that
+will not read all leave the repository spotless, so a readiness check answers yes
+and the refusal would look exactly like the item failing. Each of those steps
+marks its own refusal as the machine's instead, and the session reports whichever
+condition it was in that step's words. Such a start costs the item one poll
+interval — the wait that keeps a retry from becoming a tight loop — and never
+counts toward `execution.blocked_runs_before_intake_hold`, because nothing about
+the work failed and holding intake over an already-stopped machine only leaves a
+second thing to undo.
+
 `--budget <usd>` caps what one session spends, and fails closed: a pass that
 cannot price itself is refused before it starts, and a session that meets a run
 whose evidence will not price stops and names it rather than counting it as free.

@@ -104,6 +104,15 @@ package orchestrator
 // it, and no refusal of the machine's is ever remembered as an item having been
 // tried. That last one is the general rule: a memory of what this session tried
 // is worth having only where it is a memory of the work.
+//
+// The rule is general because it is answered two ways rather than one. A step
+// that refuses before the work is ever attempted marks its failure as the
+// machine's, which is the only way the classes nothing here can observe get
+// covered — a sandbox that will not spawn a shell leaves a spotless checkout, and
+// asking the repository about it answers yes. Where nothing declared anything,
+// the machine is asked, which covers a refusal raised somewhere this package does
+// not reach. Either answer costs the item one poll interval and nothing more; see
+// refusedByTheMachine and attempt.
 
 import (
 	"context"
@@ -1061,32 +1070,59 @@ func (s Scheduler) cooling(tried map[string]attempt, item beads.WorkItem) bool {
 	if !attempted {
 		return false
 	}
-	return !s.Watching || recorded.fingerprint == fingerprint(item)
+	if !s.Watching {
+		return true
+	}
+	// A start the machine refused cools whatever the item says, because the item
+	// is not what would release it: nothing about the work was wrong, so its own
+	// text changing would mean nothing, and comparing against it would let the
+	// same refusal be retried on the next pull with no wait in between. What
+	// releases this one is an interval passing, which is forget's job.
+	if recorded.environmental {
+		return true
+	}
+	return recorded.fingerprint == fingerprint(item)
 }
 
 // refusedByTheMachine reports a failed start that the machine refused rather
 // than the work failing, and says what refused it.
 //
-// It asks the machine rather than reading the error, and that is the whole of the
-// design. A list of refusal types is a list that goes stale the first time
-// somebody adds a way for a machine to be unusable — a shell that will not spawn,
-// a checkout that will not read — and every kind such a list misses becomes an
-// item remembered as tried when nothing about that item was ever attempted. What
-// is asked here is right by construction instead: if the machine refuses work
-// now, the start that just failed was refused by that same machine. It costs one
-// readiness read on a path that has already failed.
+// It answers two ways, and it needs both. The first is what the refusal itself
+// says: a step that refuses before the work is ever attempted marks its failure
+// as the machine's, and that mark travels with the error. This is the half that
+// covers what nothing here can see — a shell the sandbox will not spawn, a state
+// store that will not open, an invariants directory that will not read — because
+// the site that met the condition is the only place that knows the condition was
+// not about the item. The second is asking the machine: where nothing declared
+// anything, a start that failed over a checkout that is still refusing work was
+// refused by that checkout, whatever else it looked like.
+//
+// Neither alone is the rule. A readiness read is blind to every way a machine can
+// be unusable that leaves the repository clean, and it was the whole of this
+// function once — which had a sandbox refusal recorded as the item's own failure,
+// held out until somebody edited work that was never the problem, and counted
+// toward a brake that then held intake over it. A declaration alone would miss a
+// refusal raised outside the pipeline, which is why the probe stayed.
 //
 // A start that got as far as reserving is the item's own attempt whatever the
-// machine does afterwards, so it is not asked about: everything past that point
-// is the work — its checks, its review, its promotion — and a machine that breaks
-// under a running attempt is that attempt's failure to report.
+// machine does afterwards, so neither question is asked: everything past that
+// point is the work — its checks, its review, its promotion — and a machine that
+// breaks under a running attempt is that attempt's failure to report, on an item
+// whose notes that attempt has already moved.
 //
 // A session that has been stopped is not asked at all. Every run it started sees
 // the same cancellation, so a readiness read taken while it is unwinding reports
 // the stop rather than the machine — and a session's last recorded line must not
 // be an invented account of why it could not work.
 func refusedByTheMachine(ctx context.Context, environment ScheduleEnvironment, done completed) (string, bool) {
-	if environment == nil || done.err == nil || ctx.Err() != nil || strings.TrimSpace(done.outcome.RunID) != "" {
+	if done.err == nil || ctx.Err() != nil || strings.TrimSpace(done.outcome.RunID) != "" {
+		return "", false
+	}
+	var refused EnvironmentRefusedError
+	if errors.As(done.err, &refused) {
+		return blockedReason(done.err), true
+	}
+	if environment == nil {
 		return "", false
 	}
 	err := environment.ValidateReady(ctx)
@@ -1116,14 +1152,21 @@ func (p Pull) blocked(ctx context.Context) string {
 // the reader exactly where the silence did.
 //
 // The dirty checkout has its own sentence because it is the one this was written
-// for and because the file is the whole of the remedy. Everything else is carried
-// in the machine's own words, which is more useful than a paraphrase and is the
-// only honest thing to say about a refusal nothing here anticipated.
+// for and because the file is the whole of the remedy. It is looked for first and
+// through whatever wrapped it, so the sentence an operator acts on is the same
+// whether the refusal was declared by a pipeline step or found by the readiness
+// read. Everything else is carried in the words of whatever refused — the
+// condition it named where it named one — which is more useful than a paraphrase
+// and is the only honest thing to say about a refusal nothing here anticipated.
 func blockedReason(err error) string {
 	var dirty gitworktree.PrimaryDirtyError
 	if errors.As(err, &dirty) {
 		return fmt.Sprintf("runs cannot start: uncommitted changes in the primary checkout (%s); commit or stash to release",
 			singleLine(strings.Join(dirty.Paths, ", "), maxBlockedDetailBytes))
+	}
+	var refused EnvironmentRefusedError
+	if errors.As(err, &refused) {
+		return "runs cannot start: " + singleLine(refused.describe(), maxBlockedDetailBytes)
 	}
 	return "runs cannot start: " + singleLine(err.Error(), maxBlockedDetailBytes)
 }

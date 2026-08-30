@@ -486,6 +486,59 @@ func (e ExistingRunError) Error() string {
 	return fmt.Sprintf("work item %s already has incomplete run %s in status %s", e.State.WorkItemID, e.State.RunID, e.State.Status)
 }
 
+// EnvironmentRefusedError is a start the machine refused before the work was
+// ever attempted: the checkout, the state store, the invariants directory, the
+// shell — something that would have refused whatever item was chosen, exactly as
+// completely. It says nothing about the item it happened to fall on.
+//
+// It is declared here, by the step that refused, rather than inferred by
+// whatever collects the failure. A collector can only ask questions it already
+// knows to ask, and the classes it does not know to ask about are precisely the
+// ones that arrive later — a sandbox that will not spawn a process is not
+// something a repository readiness read has any way to see. What the scheduler
+// does with the distinction is remember the item or not, and getting it wrong in
+// this direction is what turns one broken machine into a backlog that reads as
+// exhausted. So the answer comes from the site that has it.
+//
+// Condition is the operator-facing phrase — what cannot happen, not the stack it
+// happened in. Error delegates to the wrapped failure verbatim, so wrapping a
+// refusal in this changes what the harness knows about it and never changes what
+// it says.
+type EnvironmentRefusedError struct {
+	Condition string
+	Err       error
+}
+
+// Error and describe both tolerate a marker carrying no wrapped failure. It is
+// not a shape any caller here builds, but this is read on the path where
+// something has already gone wrong, and a panic while reporting a refusal would
+// lose the refusal.
+func (e EnvironmentRefusedError) Error() string {
+	if e.Err == nil {
+		return strings.TrimSpace(e.Condition)
+	}
+	return e.Err.Error()
+}
+
+func (e EnvironmentRefusedError) Unwrap() error { return e.Err }
+
+// describe is the refusal in one operator-facing line: the condition, and the
+// machine's own words for it where they add anything.
+func (e EnvironmentRefusedError) describe() string {
+	condition := strings.TrimSpace(e.Condition)
+	if condition == "" || e.Err == nil {
+		return e.Error()
+	}
+	return condition + ": " + e.Err.Error()
+}
+
+// refusedByEnvironment marks a failure as the machine's. It is a helper rather
+// than a literal at each site so that adding a refusal to the pre-reservation
+// path is one call rather than a decision somebody has to remember to make.
+func refusedByEnvironment(condition string, err error) error {
+	return EnvironmentRefusedError{Condition: condition, Err: err}
+}
+
 func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err := p.validate(); err != nil {
 		return Outcome{}, err
@@ -600,7 +653,8 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		if errors.As(err, &existing) {
 			return Outcome{}, ExistingRunError{State: existing.State}
 		}
-		return Outcome{}, fmt.Errorf("adopt run in flight: %w", err)
+		return Outcome{}, refusedByEnvironment("what is already in flight could not be read",
+			fmt.Errorf("adopt run in flight: %w", err))
 	}
 	// Nothing is in flight for this item, so what follows would start something
 	// new — which is the one thing an intake hold stops. It is asked here rather
@@ -630,10 +684,11 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	// that has none.
 	invariants, err := p.loadInvariants()
 	if err != nil {
-		return Outcome{}, err
+		return Outcome{}, refusedByEnvironment("the repository's invariants could not be read", err)
 	}
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
-		return Outcome{}, fmt.Errorf("repository is not ready for an isolated run: %w", err)
+		return Outcome{}, refusedByEnvironment("the repository is not ready for an isolated run",
+			fmt.Errorf("repository is not ready for an isolated run: %w", err))
 	}
 	// An automatic run is written against exactly the branch it will be promoted
 	// into, so the integration target is fixed before any work starts and never
@@ -645,13 +700,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if p.automatic() || publishing {
 		targetBranch, err = p.Worktrees.CurrentBranch(ctx)
 		if err != nil {
-			return Outcome{}, fmt.Errorf("resolve integration target: %w", err)
+			return Outcome{}, refusedByEnvironment("the branch work would be promoted into could not be resolved",
+				fmt.Errorf("resolve integration target: %w", err))
 		}
 		baseRef = targetBranch
 	}
 	runID, err := p.NewRunID()
 	if err != nil {
-		return Outcome{}, err
+		return Outcome{}, refusedByEnvironment("a run identifier could not be generated", err)
 	}
 	now := p.clock().Now()
 	state := runstate.State{
@@ -690,7 +746,8 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		if errors.As(err, &existing) {
 			return Outcome{}, ExistingRunError{State: existing.State}
 		}
-		return Outcome{}, fmt.Errorf("reserve developer run: %w", err)
+		return Outcome{}, refusedByEnvironment("the run could not be reserved in durable state",
+			fmt.Errorf("reserve developer run: %w", err))
 	}
 	defer reservation.Release()
 	run := &activeRun{
@@ -765,14 +822,15 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// process left it, still resumable, rather than spending an attempt on work
 	// that could not be integrated afterwards anyway.
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
-		return Outcome{}, fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID, err)
+		return Outcome{}, refusedByEnvironment("the repository is not ready to resume a run",
+			fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID, err))
 	}
 	// The invariants are re-read rather than carried in run state: they are the
 	// repository's current constraints, and a resumed attempt must be held to what
 	// holds now rather than to what held when the interrupted process started.
 	invariants, err := p.loadInvariants()
 	if err != nil {
-		return Outcome{}, err
+		return Outcome{}, refusedByEnvironment("the repository's invariants could not be read", err)
 	}
 	// A run reserved before either was recorded acquires them as it is picked up,
 	// which is the best either can be: the account is the one this process is

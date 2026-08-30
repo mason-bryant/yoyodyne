@@ -1704,14 +1704,21 @@ touching the item, is what asks for another attempt.
 
 That memory is of the work, and only of the work. A start the *machine* refused —
 uncommitted changes sitting in your primary checkout, the last free slot taken by
-another process — is never remembered as the item having been tried, because the
-same condition refuses every other item in the queue exactly as completely and
-nothing anybody edits will release them. Such a start costs the item one poll
-interval and nothing else, and the session says which condition it is rather than
-reporting a queue it cannot get past. Before this, one uncommitted file would
-have the session mark every ready item as tried and then idle over a full
-backlog, which reads exactly like a drained queue and was diagnosed by hand three
-times before it was a state.
+another process, a sandbox that will not spawn a shell, a state store or an
+invariants directory that will not read — is never remembered as the item having
+been tried, because the same condition refuses every other item in the queue
+exactly as completely and nothing anybody edits will release them. Such a start
+costs the item one poll interval and nothing else, never counts toward
+`blocked_runs_before_intake_hold`, and the session says which condition it is
+rather than reporting a queue it cannot get past. Before this, one uncommitted
+file would have the session mark every ready item as tried and then idle over a
+full backlog, which reads exactly like a drained queue and was diagnosed by hand
+three times before it was a state.
+
+The classification does not rest on inspecting the repository, because most of
+that list leaves the repository perfectly healthy. Each step that can refuse a
+start before the work is attempted marks its own failure as the machine's; the
+readiness check is asked only where nothing marked anything.
 
 The readiness of the primary checkout is read at every pull, before anything is
 chosen, for the same reason the intake hold is: nothing is started under a

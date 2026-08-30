@@ -1477,11 +1477,12 @@ func TestDrainingStopsOnADirtyPrimaryCheckoutRatherThanReportingAnEmptyQueue(t *
 	}
 }
 
-// The general rule, and the one the readiness gate above does not cover on its
-// own: a start the machine refused is never remembered as the item having been
-// tried. Here the checkout goes dirty under a run that had already begun, so the
-// refusal arrives as that run's failure — and the item is still pulled again
-// after the operator commits, without anybody editing it.
+// The general rule, one half of it: a start the machine refused is never
+// remembered as the item having been tried, even where nothing declared the
+// refusal. Here the checkout goes dirty under a run that had already begun, so
+// the refusal arrives as that run's failure with no mark on it and is recognized
+// by asking the machine — and the item is still pulled again after the operator
+// commits, without anybody editing it.
 func TestAStartTheMachineRefusedIsNotRememberedAsTheItemHavingBeenTried(t *testing.T) {
 	t.Parallel()
 
@@ -1516,6 +1517,61 @@ func TestAStartTheMachineRefusedIsNotRememberedAsTheItemHavingBeenTried(t *testi
 	// Nothing about the work failed, so the failure-storm brake counted nothing.
 	if schedule.BlockedInARow != 0 || schedule.Braked != nil {
 		t.Fatalf("blocked in a row = %d, braked = %#v, want a machine refusal to count as neither", schedule.BlockedInARow, schedule.Braked)
+	}
+}
+
+// The other half, and the one asking the machine cannot reach. A sandbox that
+// will not spawn a process leaves the checkout spotless, so a readiness read
+// answers yes and the refusal would read as the item's own failure — which is
+// how the E2BIG shell failure the item names would have been recorded: written
+// into tried-memory with a fingerprint, held out until somebody edited work that
+// was never the problem, and counted toward the brake that then holds intake
+// over a machine already unable to start anything.
+//
+// The step that meets such a condition marks it, and the mark is what is read
+// here. Nothing about the item changes in this test and nothing about the
+// checkout is ever wrong: the item is pulled again at the next interval anyway.
+func TestAStartRefusedByTheExecutionEnvironmentIsRetriedWithoutTheItemChanging(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	// The brake is armed at a single blocked run, so a machine refusal counted as
+	// one would hold intake here and the session would never pull anything again.
+	harness.blockedRuns = 1
+	harness.run = func(*scheduleHarness, string) (Outcome, error) {
+		return Outcome{}, refusedByEnvironment("the sandbox refused to start a process",
+			errors.New("fork/exec /bin/zsh: argument list too long"))
+	}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 1 {
+			h.run = func(h *scheduleHarness, id string) (Outcome, error) { return h.complete(id), nil }
+		}
+		return sleeps < 3
+	}
+	sessions := &recordedSessions{}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if starts := len(harness.pullOrder()); starts != 2 {
+		t.Fatalf("the item was started %d time(s) (%v), want it tried again at the next interval with nothing about it edited", starts, harness.pullOrder())
+	}
+	if len(schedule.Started) != 2 || schedule.Started[1].Failure != "" {
+		t.Fatalf("started = %#v, want the second attempt to have run", schedule.Started)
+	}
+	// Nothing about the work failed, so the storm the brake counts neither grew
+	// nor tripped, however tightly it was wound.
+	if schedule.BlockedInARow != 0 || schedule.Braked != nil || schedule.BrakeProblem != "" {
+		t.Fatalf("blocked in a row = %d, braked = %#v, brake problem = %q, want a machine refusal to feed none of them",
+			schedule.BlockedInARow, schedule.Braked, schedule.BrakeProblem)
+	}
+	// And the session names the condition in the words of the step that met it,
+	// rather than in a sentence about a repository that was never the problem.
+	const blocked = "runs cannot start: the sandbox refused to start a process: fork/exec /bin/zsh: argument list too long"
+	if reason := sessions.said(runstate.WatchBlocked); reason != blocked {
+		t.Fatalf("blocked reason = %q, want %q", reason, blocked)
 	}
 }
 
