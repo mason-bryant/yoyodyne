@@ -180,6 +180,41 @@ func (a *API) Post(ctx context.Context, message Message) (string, error) {
 	return response.TS, nil
 }
 
+// openConversationRequest is the wire shape of conversations.open. It names the
+// members the conversation is with, which for a direct message is one person.
+type openConversationRequest struct {
+	Users string `json:"users"`
+}
+
+// OpenConversation opens the direct conversation between this app and one member
+// and reports the channel to post into.
+//
+// It is a call of its own rather than a member id handed to chat.postMessage as
+// though it were a channel. That shortcut works today and is not what Slack
+// documents: the documented flow for a bot holding im:write is to open the
+// conversation and post to the channel it returns, and an escalation that exists
+// precisely because nobody is watching the channel is the last place to rely on
+// undocumented behaviour.
+func (a *API) OpenConversation(ctx context.Context, member string) (string, error) {
+	trimmed := strings.TrimSpace(member)
+	if trimmed == "" {
+		return "", errors.New("a member is required to open a direct conversation")
+	}
+	var response struct {
+		apiResponse
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	if err := a.call(ctx, "conversations.open", a.botToken, openConversationRequest{Users: trimmed}, &response); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(response.Channel.ID) == "" {
+		return "", errors.New("conversations.open returned no channel, so there is nowhere to post")
+	}
+	return response.Channel.ID, nil
+}
+
 // reactionRequest is the wire shape of reactions.add and reactions.remove. Both
 // take the same three fields, because both name one reaction on one message.
 type reactionRequest struct {

@@ -137,6 +137,14 @@ const (
 	// is still true hours later. Silence has to mean nothing to do, so a state
 	// that means waiting-on-you says so periodically until it clears.
 	KindLineWaiting Kind = "line.waiting"
+	// A session that is choosing work while running a binary the harness has moved
+	// on from. Like the line above it this is a state said again while it stands
+	// rather than a transition, and for a sharper reason: nothing in the record
+	// says it at all. A stale session goes on pulling work and the runs it starts
+	// go on looking ordinary, so the only visible symptom is rounds spent against
+	// bugs that were fixed on the main line hours earlier — which reads as an agent
+	// failing rather than as a process nobody restarted.
+	KindResidentStale Kind = "resident.stale"
 	// What one topic gathered while nothing was posting it. Every kind above is
 	// something the record says happened; this one is what a surface does with a
 	// backlog it cannot say one message at a time — a long gap replayed in full
@@ -192,6 +200,7 @@ func Kinds() []Kind {
 		KindWatchResumed,
 		KindWatchStopped,
 		KindLineWaiting,
+		KindResidentStale,
 		KindCatchUpDigest,
 	}
 }
@@ -212,7 +221,7 @@ func (k Kind) Valid() bool {
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
-		KindLineWaiting, KindCatchUpDigest:
+		KindLineWaiting, KindResidentStale, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -483,8 +492,18 @@ type Detail struct {
 	Findings int `json:"findings,omitempty"`
 	// TargetBranch and Commit are where a promotion put the change, read by
 	// KindPromoted.
+	//
+	// Commit is read a second time by KindResidentStale, where it is the revision
+	// a running session's binary was built from: the same kind of fact — a place
+	// in the repository's history — said about a process rather than about a
+	// change, and a reader who has both is a reader who can check the count.
 	TargetBranch string `json:"target_branch,omitempty"`
 	Commit       string `json:"commit,omitempty"`
+	// Behind is how many harness changes have landed since a running session's
+	// binary was built, read by KindResidentStale. It is the count rather than the
+	// elapsed time because what matters is what the session is missing, and an
+	// afternoon with nothing merged in it costs nobody anything.
+	Behind int `json:"behind,omitempty"`
 	// PullRequest is how the published request is named to a reader, read by the
 	// three publication kinds.
 	PullRequest string `json:"pull_request,omitempty"`

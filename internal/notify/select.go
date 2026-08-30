@@ -320,6 +320,48 @@ func FromLine(line Line, at time.Time) Notification {
 	})
 }
 
+// Resident is the binary a live watch session is running: the revision it was
+// built from, and how many harness changes the repository has taken on since.
+//
+// It is the second thing here that is a state rather than a crossing, and it is
+// the only one no durable record says on its own. A held line is at least
+// derivable from the hold that stopped it; a session running a binary the
+// harness has moved past leaves no trace anywhere — it goes on choosing work,
+// and every run it starts looks exactly like a run started by a current one.
+// What it actually produces is rounds spent against defects that were fixed on
+// the main line hours before, which reads as agents failing rather than as a
+// process nobody restarted, and on 2026-08-30 that reading cost three review
+// rounds against a bug that had already been dead for a day.
+type Resident struct {
+	// Build is the revision the session's binary was built from, carried so a
+	// reader can check the count rather than take it.
+	Build string
+	// Behind is how many harness changes have landed since. It is never said at
+	// zero: a session running what is deployed is the ordinary state, and the
+	// whole discipline here is that silence keeps meaning nothing to do.
+	Behind int
+}
+
+// FromResident says that the session choosing work is running a build the
+// harness has moved past. It is addressed to the product and spoken by the
+// harness for the reason the line and the holds are: which binary a session is
+// executing is about every item rather than any one of them, and it is nobody's
+// judgement to narrate.
+//
+// The severity is the caller's rather than derived here, because how loud this
+// is is a question about a threshold and a threshold is the reporting surface's
+// to hold: the same two facts are a note worth reading beside the heartbeat and,
+// far enough past that threshold, a degraded system somebody has to be told
+// about directly.
+func FromResident(resident Resident, severity report.Severity, at time.Time) Notification {
+	notification := productNotification(KindResidentStale, at, Detail{
+		Commit: strings.TrimSpace(resident.Build),
+		Behind: resident.Behind,
+	})
+	notification.Event.Severity = severity
+	return notification
+}
+
 // Accumulation is what one topic gathered while nothing was posting its events:
 // how many there were, the first and last of them, and the most attention any
 // one of them asked for.

@@ -147,6 +147,51 @@ func TestAPostCarriesItsThreadAndItsSpeaker(t *testing.T) {
 	}
 }
 
+// A direct message is two calls, which is what Slack documents: the conversation
+// with the member is opened, and the id it answers with is what is posted to.
+// That id is not the member's own, so a client that skipped the open and posted
+// to the member id would be relying on undocumented behaviour for the one message
+// that exists because nobody is watching the channel.
+func TestADirectConversationIsOpenedBeforeAnythingIsSaidInIt(t *testing.T) {
+	t.Parallel()
+
+	var opened openConversationRequest
+	api := newTestAPI(t, func(writer http.ResponseWriter, incoming *http.Request) {
+		body, _ := io.ReadAll(incoming.Body)
+		if err := json.Unmarshal(body, &opened); err != nil {
+			t.Errorf("Unmarshal() error = %v", err)
+		}
+		writeJSON(writer, map[string]any{"ok": true, "channel": map[string]any{"id": "D0OPERATOR"}})
+	})
+
+	conversation, err := api.OpenConversation(context.Background(), "U0OPERATOR")
+	if err != nil {
+		t.Fatalf("OpenConversation() error = %v", err)
+	}
+	if conversation != "D0OPERATOR" {
+		t.Fatalf("OpenConversation() = %q, want the channel Slack answered with", conversation)
+	}
+	if opened.Users != "U0OPERATOR" {
+		t.Fatalf("opened = %#v, want the member the conversation is with", opened)
+	}
+	if _, err := api.OpenConversation(context.Background(), " "); err == nil {
+		t.Fatal("OpenConversation() with no member accepted, want a conversation with nobody refused")
+	}
+}
+
+// A workspace that answers the open without a channel has given the caller
+// nowhere to post, which must not read as a conversation that was opened.
+func TestAnOpenThatNamesNoChannelIsNotAConversation(t *testing.T) {
+	t.Parallel()
+
+	api := newTestAPI(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writeJSON(writer, map[string]any{"ok": true})
+	})
+	if _, err := api.OpenConversation(context.Background(), "U0OPERATOR"); err == nil {
+		t.Fatal("OpenConversation() = nil, want an answer with nowhere to post reported")
+	}
+}
+
 // Slack refuses with HTTP 200 and `ok: false`. A client that read the status
 // code alone would record every refusal as a message that was posted.
 func TestARefusalIsNotASuccessfulPost(t *testing.T) {

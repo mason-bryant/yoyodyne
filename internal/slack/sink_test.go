@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1053,6 +1054,102 @@ func outcome(position uint64, member, replyTS string) Delivery {
 	}
 }
 
+// The harness being degraded is the one thing a channel is the wrong place for:
+// a channel is somewhere somebody chooses to look, and a resident running a
+// binary from before the fix is exactly what nobody thinks to look for. So it
+// goes to each operator directly as well, carrying the same account rather than a
+// summary of it, and the channel keeps its copy.
+//
+// It reaches them the way Slack documents: the conversation is opened and the
+// message goes to the channel that comes back, which is a different id from the
+// member's own.
+func TestADegradedHarnessReachesEachOperatorAsWellAsTheChannel(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	feed := &fixedFeed{deliveries: []Delivery{degraded(1)}}
+	sink := newTestSink(t, t.TempDir(), feed, posts)
+	sink.operators = []string{"U0FIRST", "U0SECOND"}
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if !slices.Equal(posts.opened, sink.operators) {
+		t.Fatalf("opened %#v, want a conversation with each operator", posts.opened)
+	}
+	if len(posts.requests) != 3 {
+		t.Fatalf("posts = %#v, want the channel and both operators", posts.requests)
+	}
+	if channel := posts.requests[0]; channel.Channel != "C1" {
+		t.Fatalf("first post = %#v, want the channel to keep its copy", channel)
+	}
+	for index, member := range sink.operators {
+		said := posts.requests[index+1]
+		if said.Channel != "D"+member {
+			t.Fatalf("post %d went to %q, want the conversation opened with %s", index+1, said.Channel, member)
+		}
+		if said.ThreadTS != "" {
+			t.Fatalf("post %d = %#v, want a direct message rather than a reply", index+1, said)
+		}
+		if said.Text != posts.requests[0].Text {
+			t.Fatalf("post %d said %q, want the account the channel got", index+1, said.Text)
+		}
+	}
+}
+
+// A workspace that will not open a direct conversation — an app installed before
+// the manifest asked for `im:write` — costs the escalation and not the record.
+// The channel already has the account and its cursor is written either way, so
+// the pass carries on and the refusal is said in the sink's own log.
+func TestAWorkspaceThatRefusesADirectMessageStillGetsTheChannelsCopy(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{refuseDirect: "missing_scope"}
+	feed := &fixedFeed{deliveries: []Delivery{degraded(1)}}
+	sink := newTestSink(t, t.TempDir(), feed, posts)
+	sink.operators = []string{"U0FIRST"}
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v, want a refused direct message to cost the pass nothing", err)
+	}
+	if len(posts.requests) != 1 {
+		t.Fatalf("posts = %#v, want the channel's copy alone", posts.requests)
+	}
+}
+
+// A product that has named nobody is told nothing directly, which is the answer
+// it already gets for steering: a workspace changes nothing about how this
+// behaves until an operator names themselves.
+func TestAProductThatNamedNobodyIsToldNothingDirectly(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	feed := &fixedFeed{deliveries: []Delivery{degraded(1)}}
+	if err := newTestSink(t, t.TempDir(), feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 1 {
+		t.Fatalf("posts = %#v, want the channel alone", posts.requests)
+	}
+	if len(posts.opened) != 0 {
+		t.Fatalf("opened %#v, want no conversation opened at all", posts.opened)
+	}
+}
+
+// degraded is what the feed hands the sink when the session choosing work has
+// fallen far enough behind the deployed harness to be a degraded system rather
+// than a line worth reading: said in the channel, and said to the operators.
+func degraded(position uint64) Delivery {
+	return Delivery{
+		Stream: residentStream,
+		Cursor: Cursor{Position: position},
+		Direct: true,
+		Notification: notify.FromResident(
+			notify.Resident{Build: strings.Repeat("a", 40), Behind: 31},
+			report.SeverityWarning, moment),
+	}
+}
+
 func wantMarks(t *testing.T, got []mark, want ...mark) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -1119,6 +1216,11 @@ type recordedPosts struct {
 	// an app installed before the manifest asked for the scope, which is what
 	// every workspace looks like the first time it runs a sink that marks.
 	refuseMarks string
+	// opened is every member a direct conversation was opened with, in order, and
+	// refuseDirect is the error every such call is refused with — a workspace
+	// installed before the manifest asked for `im:write`.
+	opened       []string
+	refuseDirect string
 	// allow, when set, is how many posts this workspace accepts before it
 	// starts refusing — which is how a test puts an outage exactly where it
 	// matters. It has to refuse every attempt rather than one, because a
@@ -1137,7 +1239,25 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	body, _ := io.ReadAll(request.Body)
-	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; strings.HasPrefix(method, "reactions.") {
+	method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]
+	if method == "conversations.open" {
+		var opened openConversationRequest
+		if err := json.Unmarshal(body, &opened); err != nil {
+			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})
+			return
+		}
+		if r.refuseDirect != "" {
+			writeJSON(writer, map[string]any{"ok": false, "error": r.refuseDirect})
+			return
+		}
+		r.opened = append(r.opened, opened.Users)
+		// Slack answers with the conversation, and its id is not the member id:
+		// posting to the one is not posting to the other, which is the whole reason
+		// this call exists.
+		writeJSON(writer, map[string]any{"ok": true, "channel": map[string]any{"id": "D" + opened.Users}})
+		return
+	}
+	if strings.HasPrefix(method, "reactions.") {
 		var reaction reactionRequest
 		if err := json.Unmarshal(body, &reaction); err != nil {
 			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})

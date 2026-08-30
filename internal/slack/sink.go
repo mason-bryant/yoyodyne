@@ -183,6 +183,12 @@ type Sink struct {
 	// reads or writes it: an acknowledgment is a message rather than a mark.
 	marking string
 	log     func(format string, args ...any)
+	// operators is the Slack member ids this project granted direct-work, held
+	// here as well as inside the steering so a sink assembled without a directive
+	// record can still reach them. They are who a reply is authorized against, and
+	// they are also who is told directly when the harness itself is degraded: the
+	// same people either way, named once by the configuration.
+	operators []string
 	// steering is the inbound half, nil on a sink that was given nowhere to record
 	// a directive. It is held as well as handed to the connection so the sink can
 	// say at startup whether replies steer anything and who may send them.
@@ -241,6 +247,10 @@ func New(options Options) (*Sink, error) {
 		identity: options.Identity,
 		refusal:  refusalBackoff,
 		now:      options.Now,
+		// A product that named nobody is told nothing directly, which is the same
+		// answer it gets for steering: the workspace changes nothing about how this
+		// behaves until an operator names themselves.
+		operators: options.Operators,
 		pace: &pacer{
 			every: DefaultPostInterval,
 			now:   time.Now,
@@ -463,6 +473,13 @@ func (s *Sink) pass(ctx context.Context) error {
 			// which is said to them by name: it is set per delivery rather than per
 			// poster because the poster is one and the deliveries are many.
 			into.mention = delivery.Mention
+			// The one class of message that is about the harness being degraded
+			// rather than about any work goes to the operators as well as to the
+			// channel, because a channel is somewhere somebody chooses to look.
+			into.direct = nil
+			if delivery.Direct {
+				into.direct = s.operators
+			}
 			if err := notification.Notify(ctx, notifier); err != nil {
 				if into.reached {
 					return err
@@ -722,6 +739,16 @@ type poster struct {
 	// shape: who a message is about is the record's, and how a workspace pokes
 	// somebody is this surface's.
 	mention string
+	// direct is the member ids this message is also said to privately, empty for
+	// every message that is only for the channel. It is set on what is about the
+	// harness being degraded rather than about any work: the channel still carries
+	// the account, and this is what puts it where somebody will see it at three in
+	// the morning.
+	//
+	// It is carried here rather than in the envelope for the reason the mention
+	// is. What is worth telling somebody about is the record's; how a workspace
+	// reaches a person is this surface's.
+	direct []string
 	// reached records that a message got as far as the workspace. It is what lets
 	// the pass tell a record nothing could be said about — which it reads past —
 	// from a workspace that refused it, which it retries. Without it the two are
@@ -785,7 +812,64 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	// one that has quietly stopped working, and somebody following the setup
 	// document needs to see that the first message actually went.
 	sink.log("posted %s about %s", message.Kind, label(topic))
+	p.deliver(ctx, message, emoji, url)
 	return nil
+}
+
+// deliver says the same message privately to each operator this delivery is for,
+// after the channel already has it.
+//
+// It reports no error, which is the same judgement the status marks are made
+// under and for a stronger reason: the account is already posted and its cursor
+// is about to be written, so failing here would repeat the channel message on the
+// next pass in exchange for a direct message that will fail again. A workspace
+// that will not open a direct message — a missing scope, somebody who has left —
+// costs the escalation and not the record, and the refusal is said in the sink's
+// own log where an operator setting this up is looking.
+//
+// It is two calls per operator, which is what Slack documents: the conversation
+// is opened and the message goes to the channel that comes back. Both go through
+// the pacer, because what a workspace counts is calls and it does not care which
+// of them were the interesting ones.
+func (p *poster) deliver(ctx context.Context, message notify.Message, emoji, url string) {
+	sink := p.sink
+	for _, member := range p.direct {
+		member = strings.TrimSpace(member)
+		if member == "" {
+			continue
+		}
+		conversation, err := sink.openConversation(ctx, member)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			sink.log("a direct conversation with %s could not be opened, so %s stands in the channel alone: %v", member, message.Kind, err)
+			continue
+		}
+		if _, err := sink.post(ctx, Message{
+			Channel:   conversation,
+			Text:      renderText(message),
+			Username:  message.Identity.Name,
+			IconEmoji: emoji,
+			IconURL:   url,
+		}); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			sink.log("%s could not be said to %s directly, so it stands in the channel alone: %v", message.Kind, member, err)
+			continue
+		}
+		sink.log("said %s to %s directly", message.Kind, member)
+	}
+}
+
+// openConversation asks the workspace for the direct conversation with one
+// member, at the pace the workspace sustains.
+func (s *Sink) openConversation(ctx context.Context, member string) (string, error) {
+	if err := s.pace.wait(ctx); err != nil {
+		return "", err
+	}
+	return s.api.OpenConversation(ctx, member)
 }
 
 // openThread posts the message a topic's thread hangs from. It names the topic

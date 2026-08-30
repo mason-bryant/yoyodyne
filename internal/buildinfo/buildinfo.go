@@ -18,6 +18,33 @@ func Resolve(stamped string) string {
 	return resolve(stamped, debug.ReadBuildInfo)
 }
 
+// Commit names the repository revision this binary was built from, which is a
+// different question from which release it is: a version answers "what is this",
+// and a revision is what a count of changes since can be measured against. Go
+// stamps it into anything built from a checkout, which is every binary a
+// long-running process is started from here.
+//
+// A binary from the module cache — "go install <module>@<tag>" — carries none,
+// and so does one built with the stamping turned off. The absence is reported as
+// one rather than guessed at from the version: a comparison nobody can make is
+// an answer, and a comparison made against the wrong commit is not.
+func Commit() string {
+	return commit(debug.ReadBuildInfo)
+}
+
+func commit(read func() (*debug.BuildInfo, bool)) string {
+	info, ok := read()
+	if !ok {
+		return ""
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.revision" {
+			return setting.Value
+		}
+	}
+	return ""
+}
+
 func resolve(stamped string, read func() (*debug.BuildInfo, bool)) string {
 	if stamped != "" && stamped != Development {
 		return stamped

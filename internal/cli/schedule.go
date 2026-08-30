@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
@@ -114,7 +115,17 @@ func openWatchSession(configPath string) (orchestrator.WatchSessions, error) {
 	if err != nil {
 		return nil, err
 	}
-	return watchSessionLog{store: parts.watch, productID: parts.config.Product.ID, sessionID: sessionID}, nil
+	return watchSessionLog{
+		store:     parts.watch,
+		productID: parts.config.Product.ID,
+		sessionID: sessionID,
+		// What this session is actually running, read once as it opens rather than
+		// on every transition: a process does not change binary while it lives, and
+		// that is exactly the problem — it goes on running what it was started with
+		// while the harness moves on underneath it. A binary that recorded no
+		// revision leaves this empty, which reads as a comparison nobody can make.
+		build: buildinfo.Commit(),
+	}, nil
 }
 
 // watchSessionLog is the scheduler's account of itself, written into the
@@ -124,6 +135,10 @@ type watchSessionLog struct {
 	store     *runstate.WatchStore
 	productID domain.ProductID
 	sessionID string
+	// build is the revision this process was built from, carried on every
+	// transition so a reader who arrives mid-session finds it on the entry the
+	// session happened to write last.
+	build string
 }
 
 func (w watchSessionLog) Record(state runstate.WatchState, at time.Time, reason string) error {
@@ -134,6 +149,7 @@ func (w watchSessionLog) Record(state runstate.WatchState, at time.Time, reason 
 		State:         state,
 		At:            at,
 		Reason:        reason,
+		Build:         w.build,
 	})
 }
 

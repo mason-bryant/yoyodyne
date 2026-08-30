@@ -53,6 +53,12 @@ const maxEncodedWatchBytes = 16 << 10
 
 var watchSessionIDPattern = regexp.MustCompile(`^watch-[a-f0-9]{32}$`)
 
+// watchBuildPattern is what a recorded build revision may look like. It is held
+// to being a Git object name because that is the only thing it ever is and
+// because a reader measures the session's age by handing it to Git: a field that
+// could carry anything is a field that could carry an option.
+var watchBuildPattern = regexp.MustCompile(`^[a-f0-9]{7,64}$`)
+
 // WatchState is what a session is doing between one transition and the next.
 type WatchState string
 
@@ -101,6 +107,21 @@ type WatchTransition struct {
 	State     WatchState `json:"state"`
 	At        time.Time  `json:"at"`
 	Reason    string     `json:"reason,omitempty"`
+	// Build is the repository revision the session's binary was built from. It is
+	// here rather than only on the transition that opened the session because a
+	// reader arriving in the middle of a night reads the entry the session
+	// happened to write last, and a field only the first entry carried would be a
+	// field that answers nothing for the sessions that most need it answered.
+	//
+	// A session that stays open runs whatever it was started with, so a fix that
+	// landed after it started is not in it until somebody restarts it — which is
+	// invisible from every other thing the record says, because the session goes
+	// on choosing work and the runs it starts go on looking ordinary. This is what
+	// makes that measurable.
+	//
+	// It is empty where the binary recorded no revision, which is a comparison
+	// nobody can make rather than a session that is current.
+	Build string `json:"build,omitempty"`
 }
 
 func (t WatchTransition) Validate() error {
@@ -122,6 +143,12 @@ func (t WatchTransition) Validate() error {
 	}
 	if len(t.Reason) > MaxWatchReasonBytes {
 		problems = append(problems, fmt.Errorf("watch transition reason is %d bytes, which exceeds the %d byte bound", len(t.Reason), MaxWatchReasonBytes))
+	}
+	// A session recorded before the build was written down carries none, and that
+	// is not a malformed entry: what it costs is the one comparison, which is
+	// reported as unmakeable where it is read.
+	if t.Build != "" && !watchBuildPattern.MatchString(t.Build) {
+		problems = append(problems, fmt.Errorf("watch transition build %q is not a revision", t.Build))
 	}
 	return errors.Join(problems...)
 }
