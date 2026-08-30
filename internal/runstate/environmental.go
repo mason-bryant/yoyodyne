@@ -130,6 +130,26 @@ type EnvironmentalRefusal struct {
 	// it.
 	Detail     string    `json:"detail,omitempty"`
 	RecordedAt time.Time `json:"recorded_at"`
+	// NothingRan says the refusal happened before anything this round would have
+	// delivered could exist: no agent of this round was ever invoked, or the
+	// invocation was never started by the machine. It is written by the site that
+	// refuses, because that is the only place that knows.
+	//
+	// It is what makes the emptiness question answerable on a continued run. A
+	// round of a repair grant runs in a worktree that already holds the change
+	// earlier rounds left, so asking whether that worktree differs from the base
+	// commit answers "did this run ever deliver anything" rather than "did this
+	// round". On a round nothing ran, the second answer is no whatever the first
+	// is — and the harness knows it without reading anything, because there was
+	// nothing to read it from.
+	//
+	// It is deliberately not derived from the cause. The same cause arrives at
+	// different points: a checkout the harness does not own refuses a worktree
+	// before a round starts and refuses a promotion long after one delivered, and
+	// a process the machine will not start can be the developer this round is made
+	// of or a check run against work that developer already wrote. Only the site
+	// can tell those apart, so only the site sets this.
+	NothingRan bool `json:"nothing_ran,omitempty"`
 	// Settled says the round this cause belongs to has ended and the class was
 	// decided on it. It is what makes the settle one-shot: a cause recorded on a
 	// round the harness turned away without charging it is settled there and then,

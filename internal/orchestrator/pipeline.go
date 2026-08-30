@@ -1733,27 +1733,39 @@ func (a *activeRun) blockOnMissingPreservedChange(cause error) error {
 	// the settle give back what the round would otherwise have spent. It is
 	// recorded before the block, so the terminal write that carries the blocker
 	// carries the cause with it.
-	a.recordEnvironmentalRefusal(runstate.CauseHandbackMissingChange, cause.Error())
+	a.recordEnvironmentalRefusal(runstate.CauseHandbackMissingChange, cause.Error(), nothingRan)
 	if err := a.block(renderMissingPreservedChangeNotes(a.outcome, blocked.Error())); err != nil {
 		return errors.Join(blocked, fmt.Errorf("record the missing preserved change as a blocker: %w", err))
 	}
 	return blocked
 }
 
+// nothingRan says a refusal happened before anything this round would have
+// delivered could exist, and ranAnyway that it did not. They are named rather
+// than passed as bare booleans, because which one a site says is the whole of
+// what makes the emptiness question answerable on a run whose worktree already
+// holds an earlier round's work.
+const (
+	nothingRan = true
+	ranAnyway  = false
+)
+
 // recordEnvironmentalRefusal notes on the run that the environment, rather than
 // the work, is why this round has nothing to show. It is written where the
 // refusal is decided, because that is the only place that knows which cause it
-// was; what the record is worth is decided at settle, which is the first point
-// the other half of the definition can be asked.
+// was and whether anything of the round ran; what the record is worth is decided
+// at settle, which is the first point the other half of the definition can be
+// asked.
 //
 // Nothing here is saved on its own. Every caller is a step away from the
 // terminal write that ends the run, and a second write would be one more chance
 // for the record and the item to disagree about what stopped it — which is the
 // reason the blocker is not saved here either.
-func (a *activeRun) recordEnvironmentalRefusal(cause runstate.EnvironmentalCause, detail string) {
+func (a *activeRun) recordEnvironmentalRefusal(cause runstate.EnvironmentalCause, detail string, nothingOfItRan bool) {
 	refusal := &runstate.EnvironmentalRefusal{
 		Cause:      cause,
 		Detail:     singleLine(detail, runstate.MaxEnvironmentalDetailBytes),
+		NothingRan: nothingOfItRan,
 		RecordedAt: a.pipeline.clock().Now().UTC(),
 	}
 	a.state.Environmental = refusal
@@ -1789,7 +1801,7 @@ func (a *activeRun) settleEnvironmentalRound() {
 	refusal.Settled = true
 	settleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	delivered, err := a.roundDelivered(settleCtx)
+	delivered, err := a.roundDelivered(settleCtx, refusal)
 	if err != nil {
 		// A round whose delivery cannot be read is left spent. That is the
 		// direction this must fail in: an item charged a round it should have kept
@@ -1822,12 +1834,28 @@ func (a *activeRun) settleEnvironmentalRound() {
 	a.outcome.Environmental = refusal
 }
 
-// roundDelivered reports the round having left a change behind. It asks the
-// worktree rather than the run's recorded summary, because a summary is written
-// by the steps a refused round never reached — and it asks it through the run's
-// own durable record, which is the same worktree the handback gate asked about
-// and the only account of it that survives the process that made it.
-func (a *activeRun) roundDelivered(ctx context.Context) (bool, error) {
+// roundDelivered reports this round having left a change behind.
+//
+// A refusal that says nothing of this round ran answers it without reading
+// anything, and that is the case the worktree cannot answer. A round of a repair
+// grant runs in the worktree earlier rounds already filled, so what is in it
+// answers "did this run ever deliver anything" rather than "did this round" —
+// and a granted round whose developer the machine never started would read as a
+// delivery, spend the grant on work no agent did, and be described on every
+// surface as a round that delivered a change. Where the refusal knows nothing
+// ran, this round added nothing whatever the worktree holds.
+//
+// Everything else is measured against the worktree rather than trusted: a cause
+// recorded from the error that ended a run can belong to a round that ran and
+// delivered, and the conjunction the class is defined by is what stops one
+// excusing the other. It asks the worktree rather than the run's recorded
+// summary, because a summary is written by steps a refused round never reached,
+// and it asks it through the run's own durable record, which is the only account
+// of that worktree surviving the process that made it.
+func (a *activeRun) roundDelivered(ctx context.Context, refusal *runstate.EnvironmentalRefusal) (bool, error) {
+	if refusal.NothingRan {
+		return false, nil
+	}
 	// A run with no worktree recorded delivered nothing, and that is proved rather
 	// than assumed: the harness never gave it anywhere to deliver to. It is the
 	// state a run refused before its worktree could be cut is in, which is exactly
@@ -1885,7 +1913,7 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 // in place of it: the refusal stands either way, and the run is untouched.
 func (p Pipeline) refuseDispatchEnvironmentally(state runstate.State, cause runstate.EnvironmentalCause, detail string) error {
 	turned := &activeRun{pipeline: p, state: state}
-	turned.recordEnvironmentalRefusal(cause, detail)
+	turned.recordEnvironmentalRefusal(cause, detail, nothingRan)
 	turned.state.Environmental.Settled = true
 	turned.state.Environmental.Refused = true
 	turned.state.UpdatedAt = p.clock().Now()
@@ -1958,6 +1986,17 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 				return a.blockOnSpentRelaunchBudget(ctx, transient, recorded)
 			}
 			if recorded != nil {
+				// The developer invocation is what this round delivers with, so an
+				// invocation the machine never started is a round that added nothing —
+				// and it is said here because here is the only place that knows which
+				// invocation it was. The same failure from a check would be a round
+				// whose developer had already written a change, and this is what keeps
+				// the two apart. The settle needs it: on a granted repair the worktree
+				// holds what earlier rounds left, so nothing else could tell that this
+				// round delivered nothing.
+				if errors.Is(recorded, execution.ErrProcessNotStarted) {
+					a.recordEnvironmentalRefusal(runstate.CauseSandboxSpawnFailure, recorded.Error(), nothingRan)
+				}
 				return recorded
 			}
 			// The attempt that just finished is what publishes. Doing it here
@@ -3599,15 +3638,21 @@ func (a *activeRun) pauseForOperatorHold(paused operatorHoldPause) (Outcome, err
 func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	p := a.pipeline
 	// A failure that names an environmental cause is recorded as one here, which
-	// is where the causes with no refusal site of their own reach the record: a
-	// worktree that could not be cut from the primary checkout, a provider
-	// invocation the machine never started. A refusal site that already recorded
-	// one knew more than the error does and is left alone; a settled record
-	// belongs to a round that has already ended, so it does not stand in the way
-	// of this one.
+	// is where a cause with no refusal site of its own reaches the record: a
+	// worktree that could not be cut from the primary checkout, a check the
+	// machine would not start. A refusal site that already recorded one knew more
+	// than the error does and is left alone; a settled record belongs to a round
+	// that has already ended, so it does not stand in the way of this one.
+	//
+	// What is recorded here is never "nothing ran", because the error alone cannot
+	// say so. The same sentinels arrive both before a round could deliver anything
+	// and long after one did — a checkout the harness does not own refuses a
+	// promotion as well as a worktree — so a round classified from here is measured
+	// against the worktree like any other. The sites that do know say so
+	// themselves.
 	if a.state.Environmental == nil || a.state.Environmental.Settled {
 		if named, environmental := environmentalCauseOf(cause); environmental {
-			a.recordEnvironmentalRefusal(named, cause.Error())
+			a.recordEnvironmentalRefusal(named, cause.Error(), ranAnyway)
 		}
 	}
 	// This is where a round settles, so it is where the environment refusing one

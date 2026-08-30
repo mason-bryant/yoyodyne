@@ -83,7 +83,13 @@ carried out again once somebody puts the change back, and no sequence of these
 walks an item toward an escalation it never earned. Both halves of that are
 required. A cause on its own excuses nothing — a round that recorded one and
 delivered a change anyway spends as any round does — and an empty delivery with
-no cause recorded spends too, so laziness cannot hide in the class. Where it
+no cause recorded spends too, so laziness cannot hide in the class. The diff that
+has to be empty is what **that round** added, which is not the same question as
+whether the worktree differs from the base commit: a round of a repair grant runs
+in the worktree earlier rounds already filled. Where the harness refused before
+anything that round would have delivered could exist — no agent invoked, or an
+invocation the machine never started — the round added nothing whatever the
+worktree holds, and the refusal says so rather than the worktree being asked. Where it
 applies, the run's record, the docket entry, and the thread all say so beside the
 counters, because a stoppage whose last round was refused means something
 different about how close the item is to its cap — including the one case where

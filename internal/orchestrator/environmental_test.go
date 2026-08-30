@@ -8,16 +8,16 @@ package orchestrator
 // its cap, and the escalation that followed reads afterwards as work nobody could
 // finish.
 //
-// Each test asserts a different part of the class. The first is that sequence
-// with the accounting asserted: the run refuses, the round is classified
-// environmental, and the item stands exactly where it stood before it. The second
-// is the same failure repeated past what the round budget has room for, which is
-// the bound the item asks for rather than one case of it. The third is the
-// conjunction from the other side — an empty delivery with no environmental
-// cause still spends. The last three are the two causes the harness recognizes
-// from the failure alone rather than from a refusal site of its own, and the
-// guarantee that a round turned away never lends its classification to the round
-// that follows it.
+// Each test asserts a different part of the class. That sequence with the
+// accounting asserted: the run refuses, the round is classified environmental,
+// and the item stands exactly where it stood before it. The same failure
+// repeated past what the round budget has room for, which is the bound the item
+// asks for rather than one case of it. The conjunction from the other side — an
+// empty delivery with no environmental cause still spends. Each cause the
+// harness recognizes from the failure alone rather than from a refusal site of
+// its own. A granted round that never ran, whose worktree is full of what
+// earlier rounds delivered and which is refused all the same. And the guarantee
+// that a round turned away never lends its classification to the round after it.
 
 import (
 	"context"
@@ -335,6 +335,61 @@ func TestAProviderInvocationTheMachineNeverStartedIsRefusedEnvironmentally(t *te
 	}
 	if counters.ReviewRounds != 0 {
 		t.Fatalf("review rounds = %d, want an item charged nothing for an invocation that never ran", counters.ReviewRounds)
+	}
+}
+
+// The case the worktree cannot answer, and the one a granted repair is most
+// exposed to. A continued round runs in the worktree earlier rounds already
+// filled, so "is the diff empty" asks whether the run ever delivered anything
+// rather than whether this round did — and a round whose developer the machine
+// never started would read as a delivery, spend the grant on work no agent did,
+// and be described everywhere as a round that delivered a change.
+func TestAGrantedRoundThatNeverRanIsRefusedThoughItsWorktreeHoldsTheChange(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, 2, docketedNow, environmentalCaps); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	// The grant carried out onto the change it was granted to repair. Nothing is
+	// emptied here: the worktree holds all ten files, which is the whole point.
+	continueOnGrant(t, store, tracker, stopped.RunID)
+	if present := presentHandbackFiles(stopped.WorktreePath); len(present) != len(handbackFiles) {
+		t.Fatalf("the continued worktree holds %d of the change's %d file(s), so this is not the case the test is about", len(present), len(handbackFiles))
+	}
+
+	provider := roleBackend(func(backend.RunRequest) error {
+		return fmt.Errorf("%w: start %q: operation not permitted", execution.ErrProcessNotStarted, "claude")
+	}, approveVerdict)
+	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
+
+	outcome, err := continuing.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() finished a granted round whose developer the machine never started")
+	}
+	if outcome.Environmental == nil || outcome.Environmental.Cause != runstate.CauseSandboxSpawnFailure {
+		t.Fatalf("environmental = %#v, want the granted round classified by the invocation that never started", outcome.Environmental)
+	}
+	if !outcome.Environmental.Settled || !outcome.Environmental.Refused {
+		t.Fatalf("environmental = %#v, want a round that added nothing refused though its worktree is full", outcome.Environmental)
+	}
+	// The grant is what this round would otherwise have burned, and it is back.
+	if !outcome.Environmental.GrantReturned {
+		t.Fatal("the granted repair round was not returned, so the grant was spent on a round no agent ever ran")
+	}
+	refused, err := store.Load(stopped.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if carried := refused.CarriedOutRepairAttempts(); carried != 0 {
+		t.Fatalf("carried-out repair attempts = %d, want the grant untouched", carried)
+	}
+	// And the change is still there: nothing about refusing the round touched what
+	// the earlier rounds delivered.
+	if present := presentHandbackFiles(stopped.WorktreePath); len(present) != len(handbackFiles) {
+		t.Fatalf("the refusal left %d of the change's %d file(s)", len(present), len(handbackFiles))
 	}
 }
 
