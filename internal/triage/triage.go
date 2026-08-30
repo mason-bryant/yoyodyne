@@ -221,13 +221,6 @@ type Counters struct {
 	// everything triage decided about it carried out, and the counter alone
 	// cannot tell that from a decision still waiting to be acted on.
 	RerunsCarriedOut int `json:"reruns_carried_out"`
-	// Overrides are the operator's own recorded decisions to cross this item's
-	// caps. Every cap above is already the configured one as these leave it, so
-	// they are not arithmetic the reader has to do — they are the account of why a
-	// budget is larger than the project configured, and who is answerable for it.
-	// A development manager that saw the room and not the decision would read an
-	// override as a cap they had misremembered.
-	Overrides []Override `json:"overrides,omitempty"`
 }
 
 // Override is one operator decision to cross this item's caps, as the durable
@@ -344,6 +337,18 @@ type Entry struct {
 	// every decision about it is made afterwards, so a claim frozen into the
 	// entry could only ever be absent.
 	Rerun *Rerun `json:"rerun,omitempty"`
+	// Overrides are the operator's own recorded decisions to cross this item's
+	// caps. Every cap in Counters is already the configured one as these leave it,
+	// so they are not arithmetic a reader has to do — they are the account of why a
+	// budget is larger than the project configured, and who is answerable for it. A
+	// development manager that saw the room and not the decision would read an
+	// override as a cap they had misremembered.
+	//
+	// Like the re-run beside it, it is joined to the entry where the docket is read
+	// rather than written into the log, and for a sharper version of the same
+	// reason: an override answers the escalation this entry produced, so one frozen
+	// into the entry could only ever be absent.
+	Overrides []Override `json:"overrides,omitempty"`
 	// CountersProblem is why the item's durable triage record could not be read
 	// for this entry. It is stated rather than left to zeros, which would read as
 	// an item nothing has been decided about — the one reading that turns an
@@ -553,7 +558,7 @@ func (e Entry) renderDecisions() string {
 // had to is one every reader learns to skip.
 func (e Entry) renderOverrides() string {
 	var rendered strings.Builder
-	for _, override := range e.Counters.Overrides {
+	for _, override := range e.Overrides {
 		fmt.Fprintf(&rendered, "      Operator override: %s\n", override.Describe())
 	}
 	return rendered.String()

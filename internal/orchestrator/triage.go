@@ -213,6 +213,10 @@ func (d Docketer) joinDecisions(entries []triage.Entry) []error {
 		// rather than a figure any guard reads.
 		entry.Counters = d.counters(decisions.counters, entry.Counters.RepairAttempts, len(decisions.claimed))
 		entry.Rerun = rerunOf(*entry, decisions.claimed)
+		// Joined here and never written, exactly as the re-run above is: an override
+		// answers the escalation this entry produced, so it is always made after the
+		// entry exists.
+		entry.Overrides = docketedOverrides(decisions.counters.Overrides)
 	}
 	return problems
 }
@@ -478,9 +482,11 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 // overrides leave them, which is what the guards refuse against. An operator has
 // crossed a cap precisely when a development manager was refused past it, so an
 // entry stating the configured figure would refuse in its reader's head exactly
-// the decision the operator sat down to make possible — and the overrides travel
-// with it, because a budget larger than the project configured and no account of
-// why is a number a reader has to decide whether to trust.
+// the decision the operator sat down to make possible. The overrides themselves
+// are on the entry rather than in here — a budget larger than the project
+// configured and no account of why is a number a reader has to decide whether to
+// trust, and they are joined where the docket is read for the reason the re-run
+// beside them is.
 func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerunsCarriedOut int) triage.Counters {
 	permitted := d.Caps.Overridden(ledger.Overrides)
 	return triage.Counters{
@@ -498,7 +504,6 @@ func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerun
 		MergeRearms:         ledger.MergeRearms,
 		MergeRearmsCap:      permitted.MergeRearms,
 		RerunsCarriedOut:    rerunsCarriedOut,
-		Overrides:           docketedOverrides(ledger.Overrides),
 	}
 }
 
