@@ -38,6 +38,7 @@ const (
 	watchStream      = "watch"
 	usageLimitStream = "usage-limits"
 	heartbeatStream  = "heartbeat"
+	residentStream   = "resident"
 	directiveStream  = "directives"
 )
 
@@ -55,6 +56,14 @@ const (
 	// asked for in a thread. It names the directive, because a directive is
 	// settled once and what settled it is said once.
 	outcomeMark = "outcome:"
+	// buildMark names the build a running session is standing on, so a restart
+	// onto a different binary re-arms rather than inheriting the last one's clock.
+	buildMark = "build:"
+	// escalatedMark records having told the operators directly about the build
+	// this cursor is standing on. It carries no name of its own because the build
+	// is already the cursor's standing state: a different build is a different
+	// cursor, and the mark goes with it.
+	escalatedMark = "escalated"
 )
 
 // Delivery is one step of one stream: what to say, and the cursor that records
@@ -80,6 +89,16 @@ type Delivery struct {
 	// on: it has worn the thinking face since it arrived, and saying what became
 	// of the directive is the moment that stops being true.
 	Reply string
+	// Direct asks for this delivery to reach the operators where they will see it
+	// at three in the morning, as well as in the channel. It is set on the one
+	// class of message that is about the harness itself being degraded rather than
+	// about any work, because a channel is a place somebody chooses to look and a
+	// degraded harness is exactly what they will not think to look for.
+	//
+	// It names nobody. Who the operators are is the surface's — the same member
+	// ids a reply is authorized against — and a feed that named them would be a
+	// reading of the durable records holding an opinion about a workspace.
+	Direct bool
 }
 
 // Silent reports a delivery that advances a cursor and posts nothing.
@@ -156,6 +175,18 @@ type HarnessFeed struct {
 	// answer somebody about from one typed at a terminal, which has no thread and
 	// nobody to tag, and it is read here and written only by the connection.
 	Steers *Store
+	// Deployments is how far the product's repository has moved past the build a
+	// live watch session is running, read for one thing: telling a session that is
+	// executing what is deployed from one that is executing a binary from before
+	// the fixes it is about to spend rounds rediscovering. It is optional, and a
+	// feed assembled without one says everything else and never says a session is
+	// stale — which is the silence this exists to end, so every sink the harness
+	// builds is given one.
+	Deployments Deployments
+	// StaleBuildThreshold is how far behind a session has to be before the
+	// operators are told directly rather than in the channel alone. Zero takes
+	// DefaultStaleBuildThreshold.
+	StaleBuildThreshold int
 	// Heartbeat is how often a line that is choosing nothing over ready work says
 	// so again. Zero takes DefaultHeartbeat. It is a cadence rather than a switch:
 	// there is deliberately no way to turn it off, because what it would buy is
@@ -295,6 +326,16 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, beat...)
+
+	// The session's own age, from the same reading of the watch log. It is a
+	// separate stream from the heartbeat above because the two are true at
+	// opposite times: the line is said when nothing is being chosen, and a session
+	// running an old binary is at its most expensive while it is busy.
+	resident, err := f.residentDeliveries(ctx, cursors.Streams[residentStream], sessions, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, resident...)
 	return batch, nil
 }
 

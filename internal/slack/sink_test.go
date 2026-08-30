@@ -1053,6 +1053,72 @@ func outcome(position uint64, member, replyTS string) Delivery {
 	}
 }
 
+// The harness being degraded is the one thing a channel is the wrong place for:
+// a channel is somewhere somebody chooses to look, and a resident running a
+// binary from before the fix is exactly what nobody thinks to look for. So it
+// goes to each operator directly as well, carrying the same account rather than a
+// summary of it, and the channel keeps its copy.
+func TestADegradedHarnessReachesEachOperatorAsWellAsTheChannel(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	feed := &fixedFeed{deliveries: []Delivery{degraded(1)}}
+	sink := newTestSink(t, t.TempDir(), feed, posts)
+	sink.operators = []string{"U0FIRST", "U0SECOND"}
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 3 {
+		t.Fatalf("posts = %#v, want the channel and both operators", posts.requests)
+	}
+	if channel := posts.requests[0]; channel.Channel != "C1" {
+		t.Fatalf("first post = %#v, want the channel to keep its copy", channel)
+	}
+	for index, member := range sink.operators {
+		said := posts.requests[index+1]
+		if said.Channel != member {
+			t.Fatalf("post %d went to %q, want %q", index+1, said.Channel, member)
+		}
+		if said.ThreadTS != "" {
+			t.Fatalf("post %d = %#v, want a direct message rather than a reply", index+1, said)
+		}
+		if said.Text != posts.requests[0].Text {
+			t.Fatalf("post %d said %q, want the account the channel got", index+1, said.Text)
+		}
+	}
+}
+
+// A product that has named nobody is told nothing directly, which is the answer
+// it already gets for steering: a workspace changes nothing about how this
+// behaves until an operator names themselves.
+func TestAProductThatNamedNobodyIsToldNothingDirectly(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	feed := &fixedFeed{deliveries: []Delivery{degraded(1)}}
+	if err := newTestSink(t, t.TempDir(), feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 1 {
+		t.Fatalf("posts = %#v, want the channel alone", posts.requests)
+	}
+}
+
+// degraded is what the feed hands the sink when the session choosing work has
+// fallen far enough behind the deployed harness to be a degraded system rather
+// than a line worth reading: said in the channel, and said to the operators.
+func degraded(position uint64) Delivery {
+	return Delivery{
+		Stream: residentStream,
+		Cursor: Cursor{Position: position},
+		Direct: true,
+		Notification: notify.FromResident(
+			notify.Resident{Build: strings.Repeat("a", 40), Behind: 31},
+			report.SeverityWarning, moment),
+	}
+}
+
 func wantMarks(t *testing.T, got []mark, want ...mark) {
 	t.Helper()
 	if len(got) != len(want) {

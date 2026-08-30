@@ -93,6 +93,10 @@ who would rather not steer from Slack at all can delete those two scopes and the
 two `message.*` events beside them: everything else in this document still works,
 and replies simply never arrive.
 
+`im:write` is used for one message and only that one: the harness reporting itself
+degraded, sent directly to whoever step 4 grants `direct-work`. Removing it costs
+that direct message and nothing else — the same account is still in the channel.
+
 ## 2. Install it and take the two tokens
 
 1. *Basic Information* → **App-Level Tokens** → **Generate Token and Scopes**.
@@ -683,6 +687,7 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
 | `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
 | `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
+| `<kind> could not be said to <member> directly` | Usually `chat.postMessage: channel_not_found` on an app installed before the manifest asked for `im:write`, or a member who has left the workspace. The one message this affects is the harness reporting itself degraded, and it is in the channel either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |

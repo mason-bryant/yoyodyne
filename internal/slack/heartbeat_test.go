@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -207,10 +208,261 @@ func TestASessionEndingBesideOneStillWatchingIsNotAStoppedLine(t *testing.T) {
 	harness.poll(t, cursors, notify.KindLineWaiting)
 }
 
+// The night this exists for, replayed. The repair-handback fix merged the day
+// before, the watch session's binary predated it, and three granted repair rounds
+// executed against clean worktrees and delivered empty diffs. Every one of those
+// rounds was a run in flight, so the waiting heartbeat above was correctly silent
+// through the whole of it: the session's age is what nothing was saying.
+//
+// It is said the first time it is seen rather than armed silently, because unlike
+// a hold there is no record that said it as it happened — and being told after
+// the first round has been spent is being told too late.
+func TestAStaleResidentSaysSoWhileTheRoundsAreBeingSpent(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.deployed(3)
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
+	harness.record(t, harness.run(t, runstate.StatusRunning))
+
+	cursors := harness.poll(t, harness.start(),
+		notify.KindRunStarted, notify.KindWatchStarted, notify.KindResidentStale)
+	// The repository is asked at the cadence rather than at every poll, so a
+	// fifteen-second pass a moment later spawns nothing and says nothing.
+	harness.now = harness.now.Add(30 * time.Minute)
+	cursors = harness.poll(t, cursors)
+	// And again the hour after that, for as long as the session runs that binary.
+	harness.now = harness.now.Add(31 * time.Minute)
+	harness.poll(t, cursors, notify.KindResidentStale)
+}
+
+// What it says is what somebody has to act on: how far behind the session is,
+// which build it is on, and that a restart is the thing that fixes it.
+func TestTheResidentLineNamesTheCountAndTheWayOutOfIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(1)
+	harness.deployed(7)
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindResidentStale)
+	harness.now = harness.now.Add(time.Hour)
+	said := harness.say(t, cursors, notify.KindResidentStale)
+	for _, fact := range []string{"7 harness changes", staleResidentBuild[:12], "Restarting it"} {
+		if !strings.Contains(said.Body, fact) {
+			t.Fatalf("body %q does not carry %q", said.Body, fact)
+		}
+	}
+}
+
+// A session running what is deployed is the ordinary state, and silence has to
+// keep meaning nothing to do. The clock is still reset, so the repository is read
+// once an hour rather than every fifteen seconds on a machine that is behaving.
+func TestASessionRunningWhatIsDeployedStaysSilent(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(3)
+	harness.deployed(0)
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	for hour := 0; hour < 4; hour++ {
+		harness.now = harness.now.Add(time.Hour)
+		cursors = harness.poll(t, cursors)
+	}
+}
+
+// Far enough past the threshold the session has missed too much for what it is
+// doing to be trusted to be about the work, so the operators are told where they
+// will see it rather than in a channel nobody is reading at three in the morning.
+// Once, because the hourly line is already carrying the state and a second
+// channel repeating it is a channel somebody mutes.
+func TestCrossingTheThresholdReachesTheOperatorsOnce(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(1)
+	harness.deployed(4)
+	harness.feed.StaleBuildThreshold = 4
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
+
+	crossed := harness.resident(t, harness.start())
+	if !crossed.Direct {
+		t.Fatal("the threshold was crossed and nothing was said to the operators directly")
+	}
+	if severity := crossed.Notification.Event.Severity; severity != report.SeverityWarning {
+		t.Fatalf("severity = %q, want a degraded harness said louder than a note", severity)
+	}
+	cursors := harness.start()
+	cursors.Streams[residentStream] = crossed.Cursor
+
+	harness.now = harness.now.Add(time.Hour)
+	again := harness.resident(t, cursors)
+	if again.Direct {
+		t.Fatal("the operators were told a second time about the same build")
+	}
+	if again.Notification.Event.Kind != notify.KindResidentStale {
+		t.Fatalf("said %q, want the channel to keep carrying the state", again.Notification.Event.Kind)
+	}
+}
+
+// Below the threshold this is worth reading beside the heartbeat and not worth
+// interrupting somebody for.
+func TestAResidentShortOfTheThresholdIsSaidInTheChannelAlone(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(1)
+	harness.deployed(3)
+	harness.feed.StaleBuildThreshold = 4
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
+
+	said := harness.resident(t, harness.start())
+	if said.Direct {
+		t.Fatal("the operators were interrupted for a session that is three changes behind")
+	}
+	if severity := said.Notification.Event.Severity; severity != report.SeverityNote {
+		t.Fatalf("severity = %q, want a note", severity)
+	}
+}
+
+// A session restarted onto a binary that is still behind is a different build,
+// and being told about the last one is not being told about this one. The
+// escalation is remembered per build so it re-arms rather than being swallowed by
+// a mark about a binary nobody is running any more.
+func TestARestartOntoAStillStaleBuildIsEscalatedAfresh(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(1)
+	harness.deployed(9)
+	harness.feed.StaleBuildThreshold = 2
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
+
+	cursors := harness.start()
+	cursors.Streams[residentStream] = harness.resident(t, cursors).Cursor
+
+	// The operator restarts, and what comes back is newer and still not current.
+	harness.watchedAs(t, "watch-0123456789abcdef0123456789abcdef", runstate.WatchStopped, "the operator stopped it", harness.now)
+	harness.now = harness.now.Add(time.Minute)
+	harness.watchedBuildAs(t, "watch-fedcba9876543210fedcba9876543210", runstate.WatchWatching,
+		"watching the backlog until stopped", harness.now, newerResidentBuild)
+
+	restarted := harness.resident(t, cursors)
+	if !restarted.Direct {
+		t.Fatal("a restart onto a binary that is still behind said nothing to the operators")
+	}
+}
+
+// A session that has stopped is not a resident, and one whose binary recorded no
+// revision is a comparison nobody can make. Neither is worth an hourly message:
+// the first is already said where sessions are said, and the second is a fact
+// about how somebody built the binary rather than news about this product.
+func TestASessionWithNothingToCompareIsNotReportedAsStale(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.deployed(40)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	harness.now = harness.now.Add(2 * time.Hour)
+	cursors = harness.poll(t, cursors)
+
+	// A session that did record one, and then ended.
+	harness.watchedBuildAs(t, "watch-fedcba9876543210fedcba9876543210", runstate.WatchStopped,
+		"the session spent the budget it was given", harness.now, staleResidentBuild)
+	cursors = harness.poll(t, cursors, notify.KindWatchStopped)
+	harness.now = harness.now.Add(2 * time.Hour)
+	harness.poll(t, cursors)
+}
+
+// A repository that cannot be read leaves the sink unable to tell a session
+// running what is deployed from one running a binary from before the fix. It must
+// not guess in either direction, so it is said once where the sink says everything
+// about itself, and asked again at the next interval rather than at the next poll.
+func TestARepositoryThatCannotBeReadIsSaidRatherThanGuessedAt(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(1)
+	var said []string
+	harness.feed.Log = func(format string, args ...any) { said = append(said, format) }
+	harness.feed.Deployments = brokenDeployments{}
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	if len(said) != 1 {
+		t.Fatalf("the sink said %v about a repository it could not read, want it said once", said)
+	}
+	harness.poll(t, cursors)
+	if len(said) != 1 {
+		t.Fatalf("the sink said %v, want the retry held to the heartbeat interval", said)
+	}
+}
+
+// The builds a session can be running: one the harness has moved past, and the
+// newer one a restart puts it on that is still not current.
+const (
+	staleResidentBuild = "4c1f2b3a9d8e7f6a5b4c3d2e1f0099887766554433221100aabbccddeeff0011"
+	newerResidentBuild = "aa11bb22cc33dd44ee55ff6677889900112233445566778899aabbccddeeff00"
+)
+
 // ready gives the feed a tracker that reports this many items ready to pull, and
 // the hourly cadence the sink ships with.
 func (h *testHarness) ready(count int) {
 	h.feed.Backlog = countedBacklog{count: count}
+}
+
+// deployed gives the feed a repository that has taken on this many changes since
+// whatever build it is asked about.
+func (h *testHarness) deployed(behind int) {
+	h.feed.Deployments = countedDeployments{behind: behind}
+}
+
+// watchedBuild records a transition of a session that says which binary it is
+// running, which is what every session started by a build that stamped a revision
+// records.
+func (h *testHarness) watchedBuild(t *testing.T, state runstate.WatchState, reason string, at time.Time, build string) {
+	t.Helper()
+	h.watchedBuildAs(t, "watch-0123456789abcdef0123456789abcdef", state, reason, at, build)
+}
+
+func (h *testHarness) watchedBuildAs(t *testing.T, sessionID string, state runstate.WatchState, reason string, at time.Time, build string) {
+	t.Helper()
+	if err := h.watch.Record(runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     sessionID,
+		State:         state,
+		At:            at,
+		Reason:        reason,
+		Build:         build,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+}
+
+// resident makes one pass and returns the delivery the resident stream produced,
+// which is where a test reads the parts of it a rendered message does not carry:
+// whether the operators were told directly, and the cursor that records it.
+func (h *testHarness) resident(t *testing.T, cursors Cursors) Delivery {
+	t.Helper()
+	batch, err := h.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	for _, delivery := range batch.Deliveries {
+		if delivery.Stream == residentStream && !delivery.Silent() {
+			return delivery
+		}
+	}
+	t.Fatal("nothing was said about the session's build")
+	return Delivery{}
 }
 
 func (h *testHarness) hold(t *testing.T, reason string, at time.Time) {
@@ -256,4 +508,16 @@ type brokenBacklog struct{}
 
 func (brokenBacklog) Ready(context.Context) (int, error) {
 	return 0, errors.New("bd: executable file not found in $PATH")
+}
+
+type countedDeployments struct {
+	behind int
+}
+
+func (d countedDeployments) Behind(context.Context, string) (int, error) { return d.behind, nil }
+
+type brokenDeployments struct{}
+
+func (brokenDeployments) Behind(context.Context, string) (int, error) {
+	return 0, errors.New("git rev-list failed: bad revision")
 }

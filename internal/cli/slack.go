@@ -18,6 +18,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -222,7 +225,17 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// A held or idle line with work ready to pull says so again while it
 			// stands, because the message that said it began is hours stale by the
 			// time somebody reads it and silence has to keep meaning nothing to do.
-			Backlog:   readyBacklog{tracker: tracker},
+			Backlog: readyBacklog{tracker: tracker},
+			// How far the binary a live watch session is running is behind what has
+			// landed. A session that stays open runs whatever it was started with,
+			// so a fix merged after it started is not in it until somebody restarts
+			// it — and nothing else in the record says so while it goes on choosing
+			// work and spending rounds against defects that are already dead.
+			Deployments: repositoryDeployments{
+				repository: repository,
+				runner:     execution.OSProcessRunner{},
+				timeout:    chatTrackerTimeout,
+			},
 			Heartbeat: heartbeat,
 			// What became of a directive somebody asked for in a thread, said in
 			// that thread and addressed to them. The same records the inbound half
@@ -280,6 +293,52 @@ func (b readyBacklog) Ready(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return len(items), nil
+}
+
+// repositoryDeployments answers how far the repository has moved past one build,
+// which is what says whether the session choosing work is executing the harness
+// that is deployed or one from before the last few fixes landed.
+//
+// It counts against the recorded revision rather than against a time, for the
+// reason a conversation's freshness does: the question is what the repository
+// holds that the build did not, and a commit's own date answers a different one.
+// It is asked at most once per heartbeat and never on the path of anything.
+type repositoryDeployments struct {
+	repository string
+	runner     execution.ProcessRunner
+	timeout    time.Duration
+}
+
+// buildRevision is what a build a session recorded may look like before it is
+// handed to Git.
+var buildRevision = regexp.MustCompile(`^[a-f0-9]{7,64}$`)
+
+func (d repositoryDeployments) Behind(ctx context.Context, build string) (int, error) {
+	// The revision is a Git object name or nothing at all: the record it comes
+	// from holds it to that, and this is the other side of the same boundary
+	// rather than a second opinion about it. A record written by something that
+	// did not is a comparison that is refused rather than an argument handed to
+	// Git.
+	if !buildRevision.MatchString(build) {
+		return 0, fmt.Errorf("%q is not a revision the repository could be asked about", build)
+	}
+	result, err := d.runner.Run(ctx, execution.Command{
+		Name:    "git",
+		Args:    []string{"rev-list", "--count", build + "..HEAD"},
+		Dir:     d.repository,
+		Timeout: d.timeout,
+	}, nil)
+	if err != nil {
+		return 0, fmt.Errorf("run Git command: %w", err)
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return 0, fmt.Errorf("git rev-list failed: %s", singleLine(firstNonEmpty(result.Stderr, result.Stdout)))
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(result.Stdout))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list did not answer with a count: %s", singleLine(result.Stdout))
+	}
+	return count, nil
 }
 
 // slackAPI reads the two tokens. A missing one is refused here, before anything

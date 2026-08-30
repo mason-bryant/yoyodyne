@@ -529,6 +529,30 @@ It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
 
+Beside it is the **session's own age**, which is the same shape of message about
+the opposite situation. A `yoyo work --watch` session runs whatever binary it was
+started with, so a fix that lands after it started is not in it until somebody
+restarts it — and nothing else says so, because the session goes on choosing work
+and the runs it starts go on looking ordinary. What it actually produces is rounds
+spent against defects that were fixed on the main line hours earlier, which reads
+as agents failing rather than as a process nobody restarted. So the session
+records the revision it was built from, and while the repository has moved past it
+the channel says so every `--heartbeat`: how many changes have landed since, which
+build it is on, and that restarting deploys them. Unlike the waiting line it is
+said the first time it is seen rather than armed silently — nothing else said it
+as it happened, and being told after the first round has been spent is being told
+too late. It is silent on a session running what is deployed, and on one whose
+binary recorded no revision at all, which is a comparison nobody can make rather
+than a session that is current.
+
+Far enough behind — twenty changes — it stops being a line worth reading and
+becomes a degraded harness, said as a warning and sent as a direct message to each
+person the project granted direct-work, once per build. That needs the `im:write`
+scope the checked-in manifest asks for; a workspace that refuses it costs the
+direct message and not the channel's copy. This is interim visibility: it is the
+bridge until a supervised resident restarts on deploy by itself, and it retires
+when that does.
+
 Every message ends by saying whose move follows it. A thread is a narrative and a
 narrative goes quiet — a run takes an hour, an item sits in the queue overnight,
 work routed to a role waits on somebody opening a conversation — and the silence

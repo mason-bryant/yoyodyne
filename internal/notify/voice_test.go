@@ -63,6 +63,7 @@ func fullyRecorded(kind Kind) Event {
 			Reason:          "reordering the backlog first",
 			Since:           moment.Add(-3 * time.Hour),
 			Ready:           4,
+			Behind:          12,
 			Accumulated:     37,
 		},
 		Text: "the developer's own words, carried through",

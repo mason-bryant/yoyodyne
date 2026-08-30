@@ -34,6 +34,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -50,12 +51,38 @@ const DefaultHeartbeat = time.Hour
 // stay a line.
 const maxStoppedReasonBytes = 200
 
+// DefaultStaleBuildThreshold is how far behind the deployed harness a running
+// session may be before its staleness stops being a line beside the heartbeat
+// and becomes something the operators are told directly.
+//
+// It is a count of changes rather than a length of time, because an afternoon
+// with nothing merged in it costs nobody anything and an hour with a fix in it
+// costs a night. Twenty is several items' worth of landed work: below it the odds
+// that one of them is the bug a session is about to burn a granted round against
+// are genuinely small, and above it they stop being. The number is the sink's,
+// changeable in one place, and deliberately not a configuration key — an operator
+// who could raise it would be buying back the silence this exists to end.
+const DefaultStaleBuildThreshold = 20
+
 // Backlog is how much admitted work the tracker itself reports as ready. It is a
 // count rather than the items because a count is the whole of what a heartbeat
 // says, and because the sink has no business holding an opinion about which items
 // they are — that is the scheduler's, and it reads the tracker itself.
 type Backlog interface {
 	Ready(ctx context.Context) (int, error)
+}
+
+// Deployments is how far the repository has moved past one build. It is a count
+// rather than the changes themselves for the reason the backlog is a count: the
+// count is the whole of what a heartbeat says, and which changes they were is a
+// question for the repository rather than for a reporting process.
+//
+// A comparison that cannot be made is an error rather than a zero. A session
+// reported as current because the repository would not answer is exactly the
+// false all-clear this exists to end, so the caller says so and asks again at the
+// next interval.
+type Deployments interface {
+	Behind(ctx context.Context, build string) (int, error)
 }
 
 // switches is the operator's two holds as one reading. They are read once per
@@ -143,6 +170,150 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		Cursor:       armed,
 		Notification: notify.FromLine(notify.Line{Stopped: state.stopped, Since: state.since, Ready: ready}, now),
 	}}, nil
+}
+
+// residentDeliveries says that the session choosing work is running a binary the
+// harness has moved past, again while it stands.
+//
+// It is beside the waiting line rather than part of it because the two are true
+// at opposite times. The line is said only when nothing is being chosen, and a
+// stale session is at its most expensive when it is busiest: the overnight that
+// asked for this had three granted repair rounds executing against a bug that was
+// fixed and merged the day before, which is a line the waiting heartbeat would
+// have been silent through from end to end.
+//
+// It differs from the line in one other way, and deliberately. A state the line
+// has just started seeing is armed silently, because the record that made it — the
+// hold, the session stopping — already said it as it happened. Nothing anywhere
+// says a session is running an old binary, so there is nothing for a first message
+// to repeat: this one is said the first time it is seen, which is what puts it in
+// front of somebody before the first granted round is spent against a dead bug.
+//
+// The cost is the same shape as the line's. What is due is decided from the watch
+// log this pass has already read, and only once something is actually due does the
+// repository get asked anything, so an idle sink polling every fifteen seconds
+// spawns no process at all and a stale one spawns one an hour.
+func (f *HarnessFeed) residentDeliveries(ctx context.Context, cursor Cursor, sessions []runstate.WatchTransition, streams map[string]struct{}) ([]Delivery, error) {
+	if f.Deployments == nil {
+		return nil, nil
+	}
+	streams[residentStream] = struct{}{}
+
+	build, running := residentBuild(sessions)
+	if !running {
+		// Either nothing is watching this product, or what is watching it was
+		// started by a binary that recorded no revision. Both are comparisons
+		// nobody can make rather than sessions that are current, and neither is
+		// worth an hourly message: a stopped session is already said where sessions
+		// are said, and a binary that stamped nothing is a fact about how somebody
+		// built it rather than news about this product.
+		if cursor.Standing != "" {
+			return []Delivery{{Stream: residentStream, Cursor: Cursor{}}}, nil
+		}
+		return nil, nil
+	}
+	now := f.now()
+	mark := buildMark + build
+	if cursor.Standing == mark && now.Sub(cursor.Said) < f.heartbeat() {
+		return nil, nil
+	}
+	// A build the sink has not measured yet keeps nothing from the last one. The
+	// escalation is remembered per build, so a session restarted onto a binary
+	// that is still behind is told about afresh rather than inheriting a mark
+	// saying somebody was already warned about a different one.
+	armed := Cursor{Standing: mark, Said: now}
+	if cursor.Standing == mark {
+		armed.Delivered = cursor.Delivered
+	}
+
+	behind, err := f.Deployments.Behind(ctx, build)
+	if err != nil {
+		// A repository that cannot be read leaves the sink unable to tell a session
+		// running what is deployed from one running a binary from before the fix,
+		// and it must not guess in either direction. So it is said where the sink
+		// says everything else about itself, and asked again at the next interval.
+		f.say("how far the session's build %s is behind could not be read, so nothing was said about it: %v", shortBuild(build), err)
+		return []Delivery{{Stream: residentStream, Cursor: armed}}, nil
+	}
+	if behind <= 0 {
+		// The session is running what is deployed, which is the ordinary state and
+		// is silent. The clock is still reset, because what a poll costs is a
+		// repository read and there is no reason to spend one every fifteen seconds
+		// on a machine that is behaving.
+		return []Delivery{{Stream: residentStream, Cursor: armed}}, nil
+	}
+
+	// Below the threshold this is a note said beside the heartbeat: worth reading,
+	// and not worth interrupting somebody for. Past it the session has missed
+	// enough that what it is doing can no longer be trusted to be about the work,
+	// so it is a degraded system — which is said louder, and said to the operators
+	// where they will actually see it rather than in a channel nobody is reading at
+	// three in the morning. That direct word is said once per build, because the
+	// hourly line is already carrying the state and a second channel repeating it
+	// is a channel somebody mutes.
+	severity := report.SeverityNote
+	direct := false
+	if behind >= f.staleBuildThreshold() {
+		severity = report.SeverityWarning
+		if !armed.Has(escalatedMark) {
+			armed = armed.With(escalatedMark)
+			direct = true
+		}
+	}
+	return []Delivery{{
+		Stream:       residentStream,
+		Cursor:       armed,
+		Direct:       direct,
+		Notification: notify.FromResident(notify.Resident{Build: build, Behind: behind}, severity, now),
+	}}, nil
+}
+
+// residentBuild is the build the session choosing work is running, and it reads
+// the log per session for the reason choosing() does: one log holds every session
+// a product has had, and its last entry can be a session stopping while another
+// carries on watching. Taking that at face value would report the build of a
+// process that is not running.
+//
+// Where two sessions are alive, the one that acted most recently is the one
+// reported. That is a reading rather than a resolution — two residents on one
+// product is a state nothing else here has an answer for either — and the honest
+// half of it is that a stale session is still named as stale whichever of them it
+// is.
+func residentBuild(sessions []runstate.WatchTransition) (string, bool) {
+	last := make(map[string]runstate.WatchTransition, len(sessions))
+	for _, transition := range sessions {
+		last[transition.SessionID] = transition
+	}
+	var live runstate.WatchTransition
+	for _, transition := range last {
+		if transition.State == runstate.WatchStopped {
+			continue
+		}
+		if transition.At.After(live.At) {
+			live = transition
+		}
+	}
+	build := strings.TrimSpace(live.Build)
+	return build, build != ""
+}
+
+// staleBuildThreshold is how far behind a session has to be before the operators
+// are told directly.
+func (f *HarnessFeed) staleBuildThreshold() int {
+	if f.StaleBuildThreshold > 0 {
+		return f.StaleBuildThreshold
+	}
+	return DefaultStaleBuildThreshold
+}
+
+// shortBuild names a revision the way somebody quoting one does. It is the
+// sink's own log rather than a message, so it is cut here rather than by the
+// voice that renders the message.
+func shortBuild(build string) string {
+	if len(build) <= 12 {
+		return build
+	}
+	return build[:12]
 }
 
 // waitingLine derives what has stopped the line, in the order an operator would
