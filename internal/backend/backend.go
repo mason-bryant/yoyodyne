@@ -41,6 +41,26 @@ type RunRequest struct {
 	Model            string
 	PermissionMode   string
 	AllowedTools     []string
+	// AccountAlias is the provider account this invocation is made under, and
+	// AccountConfigDir is where that account's authentication lives on this
+	// machine. The alias is the name a record says the invocation by; the
+	// directory is how the provider is actually reached, and an empty one is the
+	// machine's own provider home — which is what a single-account installation
+	// has always used and still does.
+	//
+	// They are on the request rather than on the backend value because the
+	// account belongs to the run rather than to the adapter: one process serves
+	// runs affined to different accounts, and a backend built for one of them
+	// would have to be rebuilt to serve the next. Nothing here is a credential —
+	// the directory names where the provider keeps its own, and the harness never
+	// reads what is in it.
+	//
+	// An adapter that has no way to be pointed at one account's authentication
+	// ignores both, which is the honest answer for a provider whose credentials
+	// are not per-directory. What the record says is still the alias, because
+	// attribution is the harness's and not the provider's.
+	AccountAlias     string
+	AccountConfigDir string
 	// Timeout is the total budget for the invocation and IdleTimeout is how long
 	// it may go without emitting an event. They answer different questions -- is
 	// this run worth continuing, and is it doing anything at all -- so a backend

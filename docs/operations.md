@@ -662,10 +662,10 @@ as a reason you had already looked at rather than as one nobody wrote.
 
 The `ran under` line beneath it is the same shape of fact and is printed for the
 same reason: which provider account the run spent, and the revision of the
-configuration that set it up. Yoyodyne runs one account today, so the line
-usually reads `ran under default` — the point of recording it now is that every
-run made before there is a second account can still be attributed to the one it
-actually spent. The revision is a digest of the effective configuration, so two
+configuration that set it up. A project with one account reads `ran under
+default`; a pooled one reads whichever account the pool served that run, which
+is what makes a rotation something you can see rather than infer. The revision is
+a digest of the effective configuration, so two
 runs carrying the same one were configured identically and a run whose
 configuration was edited under it is distinguishable from one that was not;
 `yoyo config show` prints the revision in force. A run recorded before either was

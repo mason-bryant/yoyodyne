@@ -112,6 +112,14 @@ type Request struct {
 	// together: a review with nowhere to record what it spent has nothing to
 	// attribute.
 	Spend spend.Attribution
+	// AccountAlias and AccountConfigDir are the provider account this review is
+	// made under. They are the caller's rather than the reviewer's because a
+	// review belongs to the run it judges: the run is affined to the account it
+	// recorded, and a reviewer that chose its own would put half of one run's
+	// spend on somebody else's subscription. Empty is the machine's own provider
+	// home, which is what an installation with one account has always used.
+	AccountAlias     string
+	AccountConfigDir string
 }
 
 // Result is one completed review: the resolved verdict plus the provider and
@@ -251,6 +259,8 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		LastSequence:     sequence.Last(),
 		RedactValues:     request.RedactValues,
 		EventSink:        backendEventSink,
+		AccountAlias:     request.AccountAlias,
+		AccountConfigDir: request.AccountConfigDir,
 	})
 	if err != nil {
 		return Result{

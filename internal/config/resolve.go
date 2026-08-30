@@ -474,9 +474,10 @@ func (r *resolution) finish(sources []string) (Resolved, error) {
 		// An agent that names no account runs on the project's single one, read
 		// after every layer has had its say so it follows the mapping that will
 		// actually be in force rather than one some layer underneath declared. A
-		// configuration declaring more than one account assigns nothing here, which
-		// keeps the refusal that follows about the accounts rather than about every
-		// agent that did not choose between them.
+		// pooled configuration assigns nothing here, deliberately: which account
+		// serves a run is the pool's to decide as the run starts, and an assignment
+		// written now would be this file answering a question it does not have the
+		// evidence for.
 		if _, supplied := agent.origins["account"]; !supplied {
 			if alias := effective.AccountAlias(); alias != "" {
 				effectiveAgent.Account = alias

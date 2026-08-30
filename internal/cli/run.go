@@ -356,8 +356,15 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// prompt for the same reason the directives are: what has stopped moving
 		// is a fact the harness records, and the role that decides about it is not
 		// the one that stopped.
-		Docket:       docketerFrom(parts),
-		NewRunID:     runstate.NewRunID,
+		Docket:   docketerFrom(parts),
+		NewRunID: runstate.NewRunID,
+		// Which of the configured accounts serves a fresh run. It is wired from
+		// here rather than held by the pipeline because choosing needs the run
+		// records as well as the configuration, and this is where both are in
+		// hand. A project with one account has nothing to choose between and gets
+		// the same answer the configuration alone would have given.
+		Accounts:     accountPool{config: cfg, stateRoot: parts.stateRoot, runs: parts.store},
+		StateRoot:    parts.stateRoot,
 		Repository:   parts.repository,
 		Config:       cfg,
 		RedactValues: redactValues,

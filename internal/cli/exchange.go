@@ -175,8 +175,13 @@ type exchangeVoice struct {
 	// failure rather than a nil handed on, so the type is the interface for
 	// uniformity rather than for safety: one hazard guarded at three sites and not
 	// the fourth is a hazard nobody can reason about.
-	spend        spend.Log
-	productID    domain.ProductID
+	spend     spend.Log
+	productID domain.ProductID
+	// stateRoot is where the answering account's provider home is found. A voice
+	// built without one answers where the machine is already signed in, which is
+	// the single-account arrangement and is what a test wiring the voice directly
+	// gets.
+	stateRoot    string
 	redactValues []string
 }
 
@@ -191,9 +196,21 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 			question.Role, name, agent.Backend)
 	}
 	prompt := execution.NewRedactor(v.redactValues...).Redact(renderQuestion(question))
+	// The round is answered under the account the answering agent is configured
+	// for, which is the account its conversation is held under: an exchange is
+	// that role speaking, and what it costs belongs on that role's subscription.
+	account, err := v.config.Endpoint(v.stateRoot, v.config.AgentAccountAlias(name))
+	if err != nil {
+		return exchange.Spoken{}, fmt.Errorf("resolve the account the %s agent %s answers under: %w", question.Role, name, err)
+	}
 	// The round goes through the meter, so what it spends is one line in the cost
 	// log beside every other provider invocation the harness makes, charged to
 	// the exchange because that is the only record it belongs to.
+	//
+	// The alias the line is charged to is the one the round was actually answered
+	// under, rather than the configuration's single account: under a pool there is
+	// no single account, and a cost line naming none is a line nothing can
+	// attribute.
 	provider := spend.Metered{
 		Provider: v.provider,
 		Log:      v.spend,
@@ -201,7 +218,7 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 			ProductID:      v.productID,
 			Agent:          name,
 			Phase:          runstate.SpendPhaseExchange,
-			AccountAlias:   v.config.AccountAlias(),
+			AccountAlias:   account.Alias,
 			ConfigRevision: v.config.Revision(),
 			Backend:        agent.Backend,
 			ExchangeID:     question.ExchangeID,
@@ -220,10 +237,12 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 		Model:            agent.Model,
 		// No tools at all, exactly as a conversation gets none. What separates this
 		// from a conversation is only that there is no authority behind it either.
-		PermissionMode: "plan",
-		AllowedTools:   []string{},
-		Timeout:        exchangeAnswerTimeout,
-		RedactValues:   v.redactValues,
+		PermissionMode:   "plan",
+		AllowedTools:     []string{},
+		Timeout:          exchangeAnswerTimeout,
+		RedactValues:     v.redactValues,
+		AccountAlias:     account.Alias,
+		AccountConfigDir: account.Directory,
 	})
 	spoken := exchange.Spoken{Agent: name, SessionID: result.SessionID, CostUSD: result.CostUSD}
 	// The refusal is recorded before the round is failed, because it is a fact
@@ -327,6 +346,7 @@ func conversationExchanges(parts components, role domain.AgentRole, provider cha
 			usageLimits:  parts.usageLimits,
 			spend:        parts.spend,
 			productID:    parts.config.Product.ID,
+			stateRoot:    parts.stateRoot,
 			redactValues: parts.redactValues,
 		},
 		Reports:      parts.reports,

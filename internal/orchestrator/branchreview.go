@@ -89,6 +89,12 @@ type BranchReviewer struct {
 	NewReviewID func() (string, error)
 	Repository  string
 	Config      config.Config
+	// StateRoot is where a pooled account's provider home is found. A branch
+	// review has no run to be affined to, so it is made under the reviewer
+	// agent's own account — the same one that agent's conversation is held under
+	// — rather than under whichever account the rotation is at. Empty is the
+	// machine's own provider home, which is what a project with one account has.
+	StateRoot string
 	// Limits bounds the described change. A zero value takes the branch-scope
 	// defaults, which are larger than a work item's because an accumulated
 	// change is many work items by construction.
@@ -194,6 +200,7 @@ func (b BranchReviewer) Review(ctx context.Context, request BranchReviewRequest)
 	}
 	outcome.Invariants = invariants.IDs()
 
+	account := b.account()
 	result, reviewErr := b.Reviewer.Review(ctx, review.Request{
 		RunID:      reviewID,
 		Scope:      review.ScopeBranch,
@@ -216,6 +223,11 @@ func (b BranchReviewer) Review(ctx context.Context, request BranchReviewRequest)
 		// other: the review is what it belongs to, since there is no run and no
 		// work item behind it.
 		Spend: b.spendAttribution(reviewID),
+		// Under the reviewer agent's own account, which is what the cost line
+		// above is charged to. A review invoked on one account and billed to
+		// another is exactly the disagreement the alias exists to prevent.
+		AccountAlias:     account.Alias,
+		AccountConfigDir: account.Directory,
 	})
 	outcome.SessionID = result.SessionID
 	outcome.Model = result.RequestedModel
@@ -427,4 +439,21 @@ func (b BranchReviewer) noteReportProblem(outcome *BranchReviewOutcome, cause er
 // report says which agent made it and not only which contract it worked under.
 func (b BranchReviewer) agentName() string {
 	return Pipeline{Config: b.Config}.agentNameForRole(domain.RoleReviewer)
+}
+
+// account is where this branch review is made. A branch review has no run to be
+// affined to, so it is the reviewer agent's own account rather than a rotation's
+// current position — the same account that agent's conversation is held under,
+// and for the same reason: what has no run behind it has an agent behind it.
+//
+// An alias the configuration will not resolve leaves the review made where the
+// machine is already signed in rather than refused. A branch review judges what
+// is already on the branch and is not worth stopping over a mapping edited
+// underneath it; the alias it records is still the one it was made under.
+func (b BranchReviewer) account() config.AccountEndpoint {
+	alias := b.Config.AgentAccountAlias(b.agentName())
+	if endpoint, err := b.Config.Endpoint(b.StateRoot, alias); err == nil {
+		return endpoint
+	}
+	return config.AccountEndpoint{Alias: alias}
 }

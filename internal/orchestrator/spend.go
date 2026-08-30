@@ -60,11 +60,14 @@ func (a *activeRun) developmentPhase() runstate.SpendPhase {
 // so a line that carried its identifier as a run id would read as evidence
 // about a run nothing ever made.
 func (b BranchReviewer) spendAttribution(reviewID string) spend.Attribution {
+	// The account is the reviewer agent's own rather than the configuration's
+	// single one, because a pooled configuration has no single one and a cost line
+	// naming none is a line nothing can attribute.
 	return spend.Attribution{
 		ProductID:      b.Config.Product.ID,
 		Agent:          b.agentName(),
 		Phase:          runstate.SpendPhaseReview,
-		AccountAlias:   b.Config.AccountAlias(),
+		AccountAlias:   b.account().Alias,
 		ConfigRevision: b.Config.Revision(),
 		Backend:        Pipeline{Config: b.Config}.agentForRole(domain.RoleReviewer).Backend,
 		BranchReviewID: reviewID,
