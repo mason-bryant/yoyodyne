@@ -208,8 +208,7 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		"Working (1 conversation):\n",
 		"  product-manager — product-manager, a turn in flight for 40s after 270 recorded turns\n",
 		"Not startable (2 of 3 admitted items):\n",
-		"  yoyodyne-ifd.200 — intake is held — the overnight looked wrong, " +
-			"since 2026-08-30T10:00:00Z; `yoyo release` lifts it\n",
+		"  yoyodyne-ifd.200 — intake is held — the overnight looked wrong; `yoyo release` lifts it\n",
 		"  yoyodyne-ifd.201 — blocked; the item says what by\n",
 		"Needs a human (1):\n",
 		"intake is held, since 2026-08-30T10:00:00Z: the overnight looked wrong — the operator's",

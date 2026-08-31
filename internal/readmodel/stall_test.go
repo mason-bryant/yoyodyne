@@ -229,6 +229,16 @@ func TestAStallHoldingNothingBackIsNotAttention(t *testing.T) {
 	if len(standing.NeedsHuman) != 1 || standing.NeedsHuman[0].Whose != ReasonNoWatchSession.Whose() {
 		t.Fatalf("needs a human = %+v", standing.NeedsHuman)
 	}
+	// Since-when is said once, on the line whose job it is. The attention line
+	// carries it beside whose move it is, and the refusal beside the item does not
+	// repeat it: one timestamp twice in four lines is what stops them being read at
+	// a glance.
+	if !strings.Contains(standing.NeedsHuman[0].What, "since "+moment.Add(-time.Hour).Format(time.RFC3339)) {
+		t.Fatalf("needs a human = %q, want it to say since when", standing.NeedsHuman[0].What)
+	}
+	if len(standing.NotStartable) != 1 || strings.Contains(standing.NotStartable[0].Reason, "since ") {
+		t.Fatalf("not startable = %+v, want the refusal without a timestamp", standing.NotStartable)
+	}
 }
 
 // What the stall could not read is said even when the queue is empty. It is a

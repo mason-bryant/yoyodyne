@@ -65,6 +65,12 @@ var backlogStatuses = []string{"open", "blocked"}
 // maxRefusalBytes bounds one refusal as this renders it. A parking reason and a
 // directive are prose somebody wrote at whatever length they wanted, and this is
 // a status line.
+//
+// It binds every surface, and the strictest requirement on it is not this one's.
+// A terminal prints a refusal when somebody asks for it; the channel heartbeat
+// says the same words again every hour while a state stands, which is a line
+// that has to stay a line or become the thing people mute. Raising this would
+// lengthen that message too, so it is raised for both surfaces or for neither.
 const maxRefusalBytes = 160
 
 // Runs is the durable run state the standing status reads. It reads and never

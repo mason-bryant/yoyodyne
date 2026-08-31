@@ -154,22 +154,28 @@ type Stall struct {
 func (s Stall) Stopped() bool { return s.Reason != "" }
 
 // Refusal is the stall as the one line a status prints against an item nothing
-// will pull: what stopped it, how long it has been that way, and what lifts it.
+// will pull: what stopped it, and what lifts it.
+//
+// It says nothing about how long the state has stood, and that is a division of
+// labour rather than an omission. Every stall that is waiting on a person is on
+// the attention line as well — the switches in their own right, the two session
+// states through Waiting below — and that line already carries since-when beside
+// whose move it is. A refusal that repeated it would say one timestamp twice in
+// one reading of four lines whose whole value is that they are read at a glance.
 func (s Stall) Refusal() string {
 	if !s.Stopped() {
 		return ""
 	}
-	refusal := s.Says
-	if !s.Since.IsZero() {
-		refusal += ", since " + s.Since.UTC().Format(time.RFC3339)
+	if s.Clears == "" {
+		return s.Says
 	}
-	if s.Clears != "" {
-		refusal += "; " + s.Clears
-	}
-	return refusal
+	return s.Says + "; " + s.Clears
 }
 
-// Waiting is the stall as one thing waiting on a person, where it is one.
+// Waiting is the stall as one thing waiting on a person, where it is one. It
+// carries since-when, in the shape the attention line's other entries already
+// say it: how long something has been waiting on somebody is half of what makes
+// it worth acting on.
 //
 // Two reasons are excluded and neither is an oversight. The switches are already
 // on the attention line in their own right — a hold waits on the operator whether
@@ -181,7 +187,11 @@ func (s Stall) Refusal() string {
 func (s Stall) Waiting() (Attention, bool) {
 	switch s.Reason {
 	case ReasonSessionIdle, ReasonNoWatchSession:
-		return Attention{What: s.Refusal(), Whose: s.Reason.Whose()}, true
+		what := s.Says
+		if !s.Since.IsZero() {
+			what += ", since " + s.Since.UTC().Format(time.RFC3339)
+		}
+		return Attention{What: what, Whose: s.Reason.Whose()}, true
 	default:
 		return Attention{}, false
 	}
