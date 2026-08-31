@@ -343,6 +343,81 @@ func TestAnOperatorRecordsAndSettlesADirectiveFromTheConversation(t *testing.T) 
 	}
 }
 
+// The operator takes a directive back from the conversation they gave it in,
+// which is where a miscategorized one is noticed: they see it in /directives,
+// recognize the question they asked, and end it there.
+//
+// It ends the directive and settles nothing. The listing stops showing it as
+// live direction and keeps the record itself, so what was said is still readable
+// under what is no longer in force.
+func TestAnOperatorWithdrawsADirectiveFromTheConversation(t *testing.T) {
+	t.Parallel()
+
+	directives := &fakeDirectives{}
+	session := directiveSession(t, directives, &fakeWork{})
+
+	var out strings.Builder
+	input := strings.NewReader(strings.Join([]string{
+		"/directive Is this still running?",
+		"/exit",
+		"",
+	}, "\n"))
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	if len(directives.recorded) != 1 {
+		t.Fatalf("recorded = %#v, want the one directive the operator gave", directives.recorded)
+	}
+	recorded := directives.recorded[0]
+
+	var withdrawn strings.Builder
+	withdraw := strings.NewReader(strings.Join([]string{
+		"/withdraw " + recorded.ID + " recorded in error: that was a question, not an instruction",
+		"/directives",
+		"/exit",
+		"",
+	}, "\n"))
+	if err := session.Converse(context.Background(), testConsole(withdraw, &withdrawn)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	transcript := withdrawn.String()
+	for _, want := range []string{
+		"no longer in force",
+		"nothing was deleted",
+		"recorded in error: that was a question, not an instruction",
+		"Is this still running?",
+	} {
+		if !strings.Contains(transcript, want) {
+			t.Fatalf("transcript = %q, want it to mention %q", transcript, want)
+		}
+	}
+	settled := directives.recorded[0]
+	if !settled.Withdrawn() || settled.InForce() {
+		t.Fatalf("directive = %#v, want it withdrawn and out of force", settled)
+	}
+	// Withdrawing is not settling: nothing claims the operator's question was
+	// answered or acted on.
+	if settled.Resolved() {
+		t.Fatalf("directive = %#v, want withdrawing it to record no disposition", settled)
+	}
+	// Who withdrew it is the conversation it was withdrawn from, because a
+	// standing instruction ending with nobody named is one nobody can be asked
+	// about.
+	if !strings.Contains(settled.WithdrawnBy, "the operator") {
+		t.Fatalf("withdrawn by = %q, want the operator and where they did it", settled.WithdrawnBy)
+	}
+	// And the listing has nothing left in force, with the record itself under
+	// what is over rather than gone from the page.
+	listing := transcript[strings.LastIndex(transcript, "in force: none"):]
+	if !strings.Contains(listing, "in force: none") {
+		t.Fatalf("transcript = %q, want the listing to show nothing still in force", transcript)
+	}
+	_, over, found := strings.Cut(listing, "no longer in force (1)")
+	if !found || !strings.Contains(over, recorded.ID) {
+		t.Fatalf("listing = %q, want the withdrawn directive listed as no longer in force", listing)
+	}
+}
+
 // The founding case, in the one place the link is actually made: work admitted
 // because somebody directed it names the directive, and the directive's own
 // record is told which item it became. Without both halves an operational
@@ -558,6 +633,12 @@ func (f *fakeDirectives) Resolve(_ context.Context, reference, resolution string
 func (f *fakeDirectives) CarryOut(_ context.Context, reference, outcome string) (directive.Directive, error) {
 	return f.settle(reference, func(candidate directive.Directive) (directive.Directive, error) {
 		return candidate.CarryOut(outcome, settledAt)
+	})
+}
+
+func (f *fakeDirectives) Withdraw(_ context.Context, reference, by, reason string) (directive.Directive, error) {
+	return f.settle(reference, func(candidate directive.Directive) (directive.Directive, error) {
+		return candidate.Withdraw(by, reason, settledAt)
 	})
 }
 

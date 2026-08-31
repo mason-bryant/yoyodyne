@@ -270,6 +270,129 @@ func TestTheDefaultDirectiveListingKeepsAStandingInstructionAfterItIsCarriedOut(
 	}
 }
 
+// Withdrawing is the operator taking a directive back, and it is the only thing
+// that ends one that pauses nothing. This is the case it was built for: a
+// question the inbound machinery read as an instruction, in force from the
+// moment it was written down, listed as live direction and met by every run that
+// read it, with no verb anywhere that could take it out again.
+//
+// What it must do is end it without deleting it. An operator who withdrew a
+// directive and found their own words gone would have no way to explain the runs
+// that were held or judged while it stood.
+func TestWithdrawingADirectiveFromTheCommandLineEndsItWithoutDeletingIt(t *testing.T) {
+	// Not parallel: the state root the commands resolve is set here.
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	configPath := writeConfig(t, validConfig)
+
+	miscategorized := recordFromCommandLine(t, configPath, "--scope", "yoyodyne-ifd.194", "Is this still running?")
+	if listed := runDirectiveOK(t, configPath, "list"); !strings.Contains(listed, miscategorized) {
+		t.Fatalf("listing = %q, want the recorded directive in force before it is withdrawn", listed)
+	}
+
+	// By a prefix, which is how anybody names one out of a listing.
+	withdrawn := runDirectiveOK(t, configPath, "withdraw",
+		"--reason", "recorded in error: this was a question about a run, not an instruction",
+		miscategorized[:len("directive-")+6])
+	for _, wanted := range []string{
+		"withdrawn",
+		"no longer in force",
+		"the operator, at a command line",
+		"recorded in error: this was a question about a run, not an instruction",
+		"nothing was deleted",
+	} {
+		if !strings.Contains(withdrawn, wanted) {
+			t.Fatalf("withdrawal = %q, want it to mention %q", withdrawn, wanted)
+		}
+	}
+
+	// Out of what still applies, which is the listing the operator reads to find
+	// out what the harness is holding itself to.
+	after := runDirectiveOK(t, configPath, "list")
+	if strings.Contains(after, miscategorized) || !strings.Contains(after, "no directives are in force") {
+		t.Fatalf("listing = %q, want a withdrawn directive out of what is in force", after)
+	}
+	// And still there in full, reading as withdrawn rather than as a record
+	// somebody removed.
+	everything := runDirectiveOK(t, configPath, "list", "--all")
+	for _, wanted := range []string{miscategorized, "Is this still running?", "withdrawn"} {
+		if !strings.Contains(everything, wanted) {
+			t.Fatalf("listing = %q, want the withdrawn directive kept in full and marked withdrawn", everything)
+		}
+	}
+}
+
+// What the command line will not withdraw. Each of these would leave the record
+// unable to say why a directive stopped applying, or would take back something
+// that has already ended.
+func TestWithdrawRefusesWhatWouldLeaveTheRecordUnanswerable(t *testing.T) {
+	// Not parallel: the state root the commands resolve is set here.
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	configPath := writeConfig(t, validConfig)
+
+	standing := recordFromCommandLine(t, configPath, "stop opening pull requests for documentation-only changes")
+	pausing := recordFromCommandLine(t, configPath,
+		"--kind", "ambiguous",
+		"--unresolved", "which of the two publishing behaviours was meant",
+		"do publishing differently")
+	runDirectiveOK(t, configPath, "resolve", "--resolution", "the second behaviour", pausing)
+
+	tests := []struct {
+		name string
+		args []string
+		code int
+		want string
+	}{
+		{
+			name: "withdrawing without saying why",
+			args: []string{"withdraw", "--reason", "", standing},
+			code: 1,
+			want: "say why the directive is withdrawn",
+		},
+		{
+			name: "withdrawing with nobody withdrawing it",
+			args: []string{"withdraw", "--reason", "we do it the other way now", "--by", "", standing},
+			code: 1,
+			want: "say who withdrew the directive",
+		},
+		{
+			name: "withdrawing a directive nobody recorded",
+			args: []string{"withdraw", "--reason", "recorded in error", "directive-" + strings.Repeat("0", 32)},
+			code: 1,
+			want: "no directive is recorded under that reference",
+		},
+		{
+			name: "withdrawing nothing in particular",
+			args: []string{"withdraw", "--reason", "recorded in error"},
+			code: 2,
+			want: "requires exactly one directive id",
+		},
+		{
+			// The pause is already lifted and the work it held has already carried
+			// on, on the strength of the answer.
+			name: "withdrawing a directive that has already ended",
+			args: []string{"withdraw", "--reason", "never mind", pausing},
+			code: 1,
+			want: "no longer in force",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			code := runDirective(append(test.args, "--config", configPath), &stdout, &stderr)
+			if code != test.code {
+				t.Fatalf("exited %d, want %d; stdout=%q stderr=%q", code, test.code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("stderr = %q, want it to say %q", stderr.String(), test.want)
+			}
+		})
+	}
+	// Every refusal above wrote nothing: the standing instruction is untouched.
+	if listed := runDirectiveOK(t, configPath, "list"); !strings.Contains(listed, standing) {
+		t.Fatalf("listing = %q, want the refused withdrawals to have changed nothing", listed)
+	}
+}
+
 // runDirectiveOK runs one directive command that is expected to succeed and
 // returns what it printed, failing with what the command said when it does not.
 func runDirectiveOK(t *testing.T, configPath string, args ...string) string {

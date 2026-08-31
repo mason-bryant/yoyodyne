@@ -126,6 +126,14 @@ func (d conversationDirectives) CarryOut(_ context.Context, reference, outcome s
 	return d.store.CarryOut(reference, outcome, time.Now())
 }
 
+// Withdraw takes a directive out of force in the same product-scoped store, for
+// the same reason: whether the operator still means a directive is a fact about
+// the product, and one withdrawn in a conversation has to stop reaching the runs
+// every other process makes.
+func (d conversationDirectives) Withdraw(_ context.Context, reference, by, reason string) (directive.Directive, error) {
+	return d.store.Withdraw(reference, by, reason, time.Now())
+}
+
 // Survey reads what the harness has in flight from durable run state and what
 // the work looks like from the tracker. The two are separate questions: a run
 // another process is executing is in the state whether or not the tracker has

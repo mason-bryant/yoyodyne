@@ -43,6 +43,8 @@ func runDirective(args []string, stdout, stderr io.Writer) int {
 		return recordDirective(args[1:], stdout, stderr)
 	case "resolve":
 		return resolveDirective(args[1:], stdout, stderr)
+	case "withdraw":
+		return withdrawDirective(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown directive command %q\n\n", args[0])
 		printDirectiveUsage(stderr)
@@ -176,6 +178,48 @@ func resolveDirective(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// withdrawDirective takes a directive out of force. It is the operator's own
+// act and the only one that ends an operational directive, so who is recorded as
+// having done it is the operator: this runs where they run it, exactly as an
+// artifact approval does, and the surface it came from is what the record names.
+func withdrawDirective(args []string, stdout, stderr io.Writer) int {
+	flags := newDirectiveFlags("directive withdraw", stderr)
+	reason := flags.set.String("reason", "",
+		"why you no longer mean it; required, because the record keeps what was said and this is what says why it stopped applying")
+	by := flags.set.String("by", operatorAtACommandLine, "who is withdrawing it")
+	if code, ok := flags.parse(args, 1); !ok {
+		return code
+	}
+	store, code := flags.store(stderr)
+	if code != 0 {
+		return code
+	}
+	withdrawn, err := store.Withdraw(flags.argument(), *by, *reason, time.Now())
+	if err != nil {
+		return reportDirectiveError(stdout, stderr, *flags.jsonOutput, err)
+	}
+	if *flags.jsonOutput {
+		return writeJSON(stdout, stderr, directiveOutput{Directives: []directive.Directive{withdrawn}})
+	}
+	fmt.Fprint(stdout, withdrawn.Render())
+	// Said every time, because the one way a withdrawal could quietly become
+	// something else is somebody reading it as the record being cleaned up. It is
+	// not: the directive is still there, still says what the operator said, and is
+	// listed by `directive list --all` as withdrawn.
+	fmt.Fprintln(stdout, "this directive is no longer in force; nothing is enforced against it and no run is held by it from now.")
+	fmt.Fprintln(stdout, "nothing was deleted: what it said is kept, and `yoyo directive list --all` shows it as withdrawn.")
+	if withdrawn.Kind.Pauses() && !withdrawn.Resolved() {
+		fmt.Fprintln(stdout, "the work it paused can carry on, without what it was waiting for having been answered.")
+	}
+	return 0
+}
+
+// operatorAtACommandLine is who a withdrawal made from a terminal is recorded
+// as having been made by. A command line is the operator's, in the same way an
+// artifact approval typed at one is, and naming the surface is what keeps this
+// honest: it is the strongest claim about who this process can actually make.
+const operatorAtACommandLine = "the operator, at a command line"
+
 // directiveFlags is the flag set every directive command shares: which
 // configuration to read the product from, and how to report the result.
 type directiveFlags struct {
@@ -259,7 +303,7 @@ func reportDirectiveError(stdout, stderr io.Writer, jsonOutput bool, err error) 
 }
 
 func printDirectiveUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo directive <list|record|resolve> [options]
+	fmt.Fprintln(writer, `Usage: yoyo directive <list|record|resolve|withdraw> [options]
 
 A directive is something you told an agent to do. It is recorded for the product
 rather than for the agent that heard it, so it reaches the work it affects
@@ -280,10 +324,18 @@ and it continues from where it stopped once the directive is resolved.
   list [--all]                         the directives in force, or every one
   record [options] <what you said>     record one, pausing what it affects
   resolve --resolution <how> <id>      settle one and release the work it paused
+  withdraw --reason <why> <id>         take one back; it stops being in force
 
 A directive that pauses work stops being in force when it is resolved. An
 operational one is in force from the moment it is recorded and stays there:
 recording what came of it says what it produced, and does not withdraw it.
+
+Withdrawing is what ends a directive of any kind, and it is the only thing that
+ends an operational one. It records who took it back and when, and it deletes
+nothing: what you said is kept, list --all shows it as withdrawn, and from then
+on nothing is enforced against it. Withdrawing one that pauses work lifts
+that pause without answering what it was waiting for, which is what taking back
+a question means.
 
 An id may be shortened to any prefix that names exactly one directive.
 
@@ -296,5 +348,9 @@ record options:
   --received-by <role>  the role you said it to (default: product-manager)
   --artifact <name>     the governed artifact an artifact directive changes
   --unresolved <what>   what has to be settled; required on the two pausing kinds
-  --scope <items>       comma-separated work items (default: every item)`)
+  --scope <items>       comma-separated work items (default: every item)
+
+withdraw options:
+  --reason <why>        why you no longer mean it; required
+  --by <who>            who is withdrawing it (default: the operator, at a command line)`)
 }

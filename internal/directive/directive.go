@@ -41,18 +41,20 @@ import (
 
 // SchemaVersion is versioned independently of run, conversation, and report
 // state. A directive is none of those: it outlives every run it pauses, it is
-// revised exactly once when somebody settles it, and it belongs to the product
+// revised only by the acts that settle or end it, and it belongs to the product
 // rather than to any invocation.
 const SchemaVersion = 1
 
 const (
 	// MaxTextBytes bounds what the operator said, MaxUnresolvedBytes bounds what
-	// has to be settled about it, and MaxResolutionBytes bounds how it was
-	// settled. All three are generous for the paragraph each actually is and
-	// small enough that nothing can push a document into the record.
+	// has to be settled about it, MaxResolutionBytes bounds how it was settled,
+	// and MaxWithdrawalBytes bounds why it was taken back. All four are generous
+	// for the paragraph each actually is and small enough that nothing can push a
+	// document into the record.
 	MaxTextBytes       = 4 << 10
 	MaxUnresolvedBytes = 4 << 10
 	MaxResolutionBytes = 4 << 10
+	MaxWithdrawalBytes = 4 << 10
 	// maxLineBytes bounds the values that are read as one line: the artifact a
 	// directive changes, and each work item in its scope.
 	maxLineBytes = 200
@@ -164,6 +166,20 @@ type Directive struct {
 	// operational directive was acted on rather than filed.
 	Resolution string     `json:"resolution,omitempty"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	// Withdrawal is why the operator took the directive back, WithdrawnBy is who
+	// took it back, and WithdrawnAt is when. They are written together and only
+	// once, and they are what ends a directive rather than what accounts for it: a
+	// settlement says what became of a directive that still stands, and a
+	// withdrawal says the operator no longer means it.
+	//
+	// Nothing about what the directive said is removed by them. A withdrawn
+	// record keeps the operator's words, what it was waiting for, and whatever
+	// disposition it had already collected, so what was directed and acted on
+	// while it stood stays readable — the record has to be able to say that a
+	// directive once applied and does not now, which deleting it could not.
+	Withdrawal  string     `json:"withdrawal,omitempty"`
+	WithdrawnBy string     `json:"withdrawn_by,omitempty"`
+	WithdrawnAt *time.Time `json:"withdrawn_at,omitempty"`
 }
 
 var (
@@ -247,6 +263,18 @@ func (d Directive) Validate() error {
 	case strings.TrimSpace(d.Resolution) != "":
 		problems = append(problems, errors.New("resolution requires the time it was resolved"))
 	}
+	// A withdrawal, who made it, and when it was made are one fact for the same
+	// reason. A record that says a directive no longer applies without saying who
+	// decided that is one nobody can ask about it.
+	switch {
+	case d.WithdrawnAt != nil && d.WithdrawnAt.IsZero():
+		problems = append(problems, errors.New("withdrawn_at cannot be the zero time"))
+	case d.WithdrawnAt != nil:
+		problems = append(problems, boundedText("withdrawal", d.Withdrawal, MaxWithdrawalBytes, true))
+		problems = append(problems, boundedLine("withdrawn by", d.WithdrawnBy, true))
+	case strings.TrimSpace(d.Withdrawal) != "" || strings.TrimSpace(d.WithdrawnBy) != "":
+		problems = append(problems, errors.New("a withdrawal requires who withdrew it and the time they did"))
+	}
 	if err := errors.Join(problems...); err != nil {
 		return fmt.Errorf("invalid directive: %w", err)
 	}
@@ -278,6 +306,16 @@ func (d Directive) Resolved() bool {
 	return d.ResolvedAt != nil
 }
 
+// Withdrawn reports a directive the operator has taken back. It is the other
+// half of Resolved and not a kind of it: settling a directive says what became
+// of something the operator still means, and withdrawing one says they no longer
+// mean it. A directive can be both — a standing instruction carried out months
+// ago and withdrawn today — and reading either off the other would lose the
+// difference.
+func (d Directive) Withdrawn() bool {
+	return d.WithdrawnAt != nil
+}
+
 // InForce reports a directive that still constrains work, which is the question
 // enforcement and every listing of live direction asks.
 //
@@ -289,12 +327,17 @@ func (d Directive) Resolved() bool {
 // changes" is still the instruction after the item it prompted is admitted, and
 // after that item ships.
 //
-// Nothing ends an operational directive today. Superseding and retiring are what
-// the design says end one, and neither is built, so this returns true for every
-// operational directive rather than pretending to a lifecycle the record cannot
-// express. That is the honest answer and the safe one: the failure this package
-// exists to end is direction that stops reaching the work.
+// What ends a directive of any kind is the operator withdrawing it, which is the
+// one act that reaches a standing instruction: an operational directive is in
+// force from the moment it was recorded, and until withdrawal existed nothing
+// could ever take one out again, so a record that had collected a directive
+// could only ever grow the set of things it said were in force. A directive
+// recorded in error stayed in force forever, and every listing of live direction
+// was that much less believable for it.
 func (d Directive) InForce() bool {
+	if d.Withdrawn() {
+		return false
+	}
 	if d.Kind.Pauses() {
 		return !d.Resolved()
 	}
@@ -313,12 +356,13 @@ func (d Directive) Settlement() string {
 	return "carried out"
 }
 
-// Pauses reports a directive that stops the work it affects. Only an unresolved
-// one does: settling it is exactly what lets the work resume, so a resolved
-// directive is a record of something that happened rather than a live
-// constraint.
+// Pauses reports a directive that stops the work it affects. Only one that is
+// still in force does: settling it is exactly what lets the work resume, and
+// withdrawing it takes back the thing the work was waiting on, so a directive
+// that is no longer in force is a record of something that happened rather than
+// a live constraint.
 func (d Directive) Pauses() bool {
-	return d.Kind.Pauses() && !d.Resolved()
+	return d.Kind.Pauses() && d.InForce()
 }
 
 // Affects reports whether this directive reaches one work item. An unscoped
@@ -340,6 +384,9 @@ func (d Directive) Affects(workItemID string) bool {
 // refuses to re-resolve one: a second resolution would overwrite the account of
 // why the work resumed the first time, and the work has already resumed.
 func (d Directive) Resolve(resolution string, at time.Time) (Directive, error) {
+	if d.Withdrawn() {
+		return Directive{}, d.alreadyWithdrawn()
+	}
 	if d.Resolved() {
 		return Directive{}, d.alreadySettled()
 	}
@@ -366,6 +413,9 @@ func (d Directive) Resolve(resolution string, at time.Time) (Directive, error) {
 // whoever remembered. That is what an outcome is for, and it is why the outcome
 // is worth naming the work it became rather than only saying it was done.
 func (d Directive) CarryOut(outcome string, at time.Time) (Directive, error) {
+	if d.Withdrawn() {
+		return Directive{}, d.alreadyWithdrawn()
+	}
 	if d.Resolved() {
 		return Directive{}, d.alreadySettled()
 	}
@@ -378,7 +428,53 @@ func (d Directive) CarryOut(outcome string, at time.Time) (Directive, error) {
 	return d.settle(outcome, at)
 }
 
-// settle writes the one revision a directive ever takes. Both acts reach it,
+// Withdraw takes a directive back, returning the withdrawn copy. It is what the
+// operator reaches for when they no longer mean what they said, or when what was
+// recorded as a directive never was one — a question read as an instruction, and
+// then in force forever because nothing could ever end it.
+//
+// It is not a settlement and not a deletion. A settlement says what became of a
+// directive that still stands, so writing one here would say the operator's
+// instruction was carried out when what actually happened is that they took it
+// back; and deleting the record would take the operator's own words with it,
+// leaving the work that was done while it stood answering nothing anybody can
+// read. What withdrawal changes is exactly one thing: the directive stops being
+// in force, so nothing is enforced against it and no listing of live direction
+// shows it as live.
+//
+// Any kind can be withdrawn. On one that pauses work, withdrawal lifts the pause
+// without answering what it was waiting for — which is the honest record of "I
+// take it back" and the only one that fits, because there is no answer to a
+// question the operator no longer means to have asked.
+func (d Directive) Withdraw(by, reason string, at time.Time) (Directive, error) {
+	if d.Withdrawn() {
+		return Directive{}, d.alreadyWithdrawn()
+	}
+	if !d.InForce() {
+		// A pausing directive somebody resolved is already out of force, and
+		// withdrawing it would be taking back something that has already ended —
+		// after the work it held has resumed on the strength of the answer.
+		return Directive{}, fmt.Errorf("%s was already %s at %s and is no longer in force; there is nothing left to withdraw",
+			d.ID, d.Settlement(), d.ResolvedAt.UTC().Format(time.RFC3339))
+	}
+	if strings.TrimSpace(by) == "" {
+		return Directive{}, errors.New("say who withdrew the directive; a directive that stopped applying because of nobody is one nobody can be asked about")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return Directive{}, errors.New("say why the directive is withdrawn; the record keeps what was said, and without this it cannot say why it stopped applying")
+	}
+	withdrawnAt := at.UTC()
+	withdrawn := d
+	withdrawn.Withdrawal = strings.TrimSpace(reason)
+	withdrawn.WithdrawnBy = strings.TrimSpace(by)
+	withdrawn.WithdrawnAt = &withdrawnAt
+	if err := withdrawn.Validate(); err != nil {
+		return Directive{}, err
+	}
+	return withdrawn, nil
+}
+
+// settle writes the one disposition a directive ever takes. Both acts reach it,
 // having each refused the kinds they are not for, so a disposition on a record
 // always means what that record's kind says it means.
 func (d Directive) settle(disposition string, at time.Time) (Directive, error) {
@@ -397,6 +493,15 @@ func (d Directive) settle(disposition string, at time.Time) (Directive, error) {
 // the first one is the one anything downstream has already reported.
 func (d Directive) alreadySettled() error {
 	return fmt.Errorf("%s was already %s at %s", d.ID, d.Settlement(), d.ResolvedAt.UTC().Format(time.RFC3339))
+}
+
+// alreadyWithdrawn refuses anything written onto a directive the operator has
+// taken back. Settling one would say what became of an instruction nobody means
+// any more, and withdrawing it twice would overwrite the account of who ended it
+// and why.
+func (d Directive) alreadyWithdrawn() error {
+	return fmt.Errorf("%s was withdrawn at %s by %s and is no longer in force",
+		d.ID, d.WithdrawnAt.UTC().Format(time.RFC3339), d.WithdrawnBy)
 }
 
 // Pausing selects the unresolved directives that pause one work item. It is the
@@ -445,6 +550,15 @@ func (d Directive) Render() string {
 	rendered.WriteString("  affects: " + d.scope() + "\n")
 	if d.Resolved() {
 		fmt.Fprintf(&rendered, "  %s %s: %s\n", d.Settlement(), d.ResolvedAt.UTC().Format(time.RFC3339), indented(d.Resolution))
+	}
+	// A withdrawal is printed last because it is the last thing that happened to
+	// the record and the thing that ends it. Everything above it stays on the
+	// page: what the operator said, and whatever the directive collected while it
+	// stood, are what make a withdrawn directive readable as withdrawn rather
+	// than as a record somebody deleted the middle of.
+	if d.Withdrawn() {
+		fmt.Fprintf(&rendered, "  withdrawn %s by %s, and no longer in force: %s\n",
+			d.WithdrawnAt.UTC().Format(time.RFC3339), d.WithdrawnBy, indented(d.Withdrawal))
 	}
 	return rendered.String()
 }

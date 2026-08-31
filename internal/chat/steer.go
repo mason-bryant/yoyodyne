@@ -48,6 +48,8 @@ const commandHelp = `Commands the harness carries out for you:
                               record one that changes a governed artifact; it pauses too
   /resolve <directive-id> <how it was settled>
                               settle a directive and let the work it paused carry on
+  /withdraw <directive-id> <why you no longer mean it>
+                              take a directive out of force, keeping what it said
   /help                       this list
   /exit                       end the conversation, stopping anything it is running
 
@@ -119,6 +121,7 @@ var singleMessage = map[string]singleMessageRule{
 	"/directives":      {},
 	"/directive":       {},
 	"/resolve":         {},
+	"/withdraw":        {},
 	"/exit":            {why: "ends a conversation, and a single message is not one"},
 	"/quit":            {why: "ends a conversation, and a single message is not one"},
 	"/work":            {why: "runs a work item in the background of the conversation that started it, and this process exits before such a run could finish; `yoyo run <beads-id>` runs one from a command line"},
@@ -380,6 +383,19 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		id, resolution, _ := strings.Cut(argument, " ")
 		resolved, err := s.ResolveDirective(ctx, id, resolution)
 		fmt.Fprint(out, resolved.Render())
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out)
+		return false, nil
+	case "/withdraw":
+		id, reason, _ := strings.Cut(argument, " ")
+		// A withdrawal is durable the moment it is written, so what it achieved is
+		// printed before any failure that followed, for the same reason recording a
+		// directive is: an operator told their withdrawal failed would go and make
+		// it a second time, against a directive that is already out of force.
+		withdrawn, err := s.WithdrawDirective(ctx, id, reason)
+		fmt.Fprint(out, withdrawn.Render())
 		if err != nil {
 			return false, err
 		}

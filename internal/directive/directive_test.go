@@ -296,6 +296,216 @@ func TestSummaryNamesTheDirectiveAndWhatIsUnresolved(t *testing.T) {
 	}
 }
 
+// Withdrawing is the only thing that ends an operational directive, and it ends
+// it without claiming anything was done about it. Before it existed the record
+// could only ever grow the set of things it said were in force: a question read
+// as an instruction was in force from the moment it was written down and stayed
+// there, listed as live direction and met by every run that read it, with no
+// verb anywhere that could take it out.
+func TestWithdrawingAnOperationalDirectiveTakesItOutOfForce(t *testing.T) {
+	t.Parallel()
+
+	recorded := operational()
+	withdrawn, err := recorded.Withdraw("the operator, at a command line",
+		"recorded in error: this was a question about a run, not an instruction", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	if withdrawn.InForce() {
+		t.Fatalf("withdrawn = %#v, want a withdrawn directive to stop constraining work", withdrawn)
+	}
+	// It was taken back rather than acted on, so nothing about it reads as a
+	// disposition: an operator scanning what came of their directives must not
+	// find this one among the things somebody did.
+	if withdrawn.Resolved() {
+		t.Fatalf("withdrawn = %#v, want withdrawing it to settle nothing", withdrawn)
+	}
+	if !withdrawn.Withdrawn() {
+		t.Fatalf("withdrawn = %#v, want the record to say it was withdrawn", withdrawn)
+	}
+}
+
+// A withdrawn directive reads as withdrawn rather than as a record somebody
+// deleted. Everything it ever said is still on it, and it has gained who ended
+// it and when — which is what lets a run that was held or judged while it stood
+// still be explicable afterwards.
+func TestAWithdrawnDirectiveKeepsWhatItSaidAndSaysWhoEndedIt(t *testing.T) {
+	t.Parallel()
+
+	carried, err := operational().CarryOut("admitted yoyodyne-ifd.170 to the backlog", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("CarryOut() error = %v", err)
+	}
+	withdrawn, err := carried.Withdraw("the operator, at a command line",
+		"we open small documentation pull requests again", recordedAt.Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	// A standing instruction that was acted on and later taken back is both
+	// things, and the record says both: what it produced, and that it no longer
+	// applies.
+	if !withdrawn.Resolved() || withdrawn.InForce() {
+		t.Fatalf("withdrawn = %#v, want an acted-on instruction that is no longer in force", withdrawn)
+	}
+	rendered := withdrawn.Render()
+	for _, wanted := range []string{
+		withdrawn.Text,
+		"carried out",
+		"yoyodyne-ifd.170",
+		"withdrawn",
+		"no longer in force",
+		"the operator, at a command line",
+		"we open small documentation pull requests again",
+	} {
+		if !strings.Contains(rendered, wanted) {
+			t.Fatalf("Render() = %q, want it to mention %q", rendered, wanted)
+		}
+	}
+}
+
+// Withdrawing a directive that pauses work lifts the pause without answering
+// what it was waiting for. That is what taking back a question means: there is
+// no answer to one the operator no longer means to have asked, and leaving the
+// work held would be enforcing something nobody means.
+func TestWithdrawingAPausingDirectiveLiftsThePauseUnanswered(t *testing.T) {
+	t.Parallel()
+
+	pausing := operational()
+	pausing.Kind = KindAmbiguous
+	pausing.Unresolved = "which of the two readings was meant"
+	pausing.Scope = []string{"yoyodyne-ifd.1"}
+	withdrawn, err := pausing.Withdraw("the operator, at a command line",
+		"never mind: the work went the other way and the question no longer arises", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	if withdrawn.Pauses() {
+		t.Fatalf("withdrawn = %#v, want a withdrawn directive to hold no work", withdrawn)
+	}
+	if held := Pausing([]Directive{withdrawn}, "yoyodyne-ifd.1"); len(held) != 0 {
+		t.Fatalf("Pausing() = %#v, want a withdrawn directive to pause nothing", held)
+	}
+	if withdrawn.Resolved() {
+		t.Fatalf("withdrawn = %#v, want the pause lifted without an answer being claimed", withdrawn)
+	}
+}
+
+// A withdrawal says who and why, once. Without who it is a directive that
+// stopped applying because of nobody; without why the record keeps the
+// operator's words and cannot say what happened to them; and a second one would
+// overwrite the account of who ended it.
+func TestWithdrawalRefusesWhatWouldLeaveTheRecordUnanswerable(t *testing.T) {
+	t.Parallel()
+
+	recorded := operational()
+	if _, err := recorded.Withdraw("", "recorded in error", recordedAt.Add(time.Hour)); err == nil {
+		t.Fatal("Withdraw() with nobody withdrawing it error = nil, want a refusal")
+	}
+	if _, err := recorded.Withdraw("the operator, at a command line", "  ", recordedAt.Add(time.Hour)); err == nil {
+		t.Fatal("Withdraw() with no reason error = nil, want a refusal")
+	}
+	withdrawn, err := recorded.Withdraw("the operator, at a command line", "recorded in error", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	if _, err := withdrawn.Withdraw("the operator, at a command line", "again", recordedAt.Add(2*time.Hour)); err == nil {
+		t.Fatal("Withdraw() on a withdrawn directive error = nil, want a refusal")
+	}
+	// Nothing is written onto a directive nobody means any more: an outcome on it
+	// would say a withdrawn instruction was carried out.
+	if _, err := withdrawn.CarryOut("admitted yoyodyne-ifd.170 to the backlog", recordedAt.Add(2*time.Hour)); err == nil {
+		t.Fatal("CarryOut() on a withdrawn directive error = nil, want a refusal")
+	}
+}
+
+// A pausing directive somebody resolved has already ended, and the work it held
+// has already resumed on the strength of the answer. Withdrawing it afterwards
+// would be taking back something that is over.
+func TestWithdrawalRefusesADirectiveThatHasAlreadyEnded(t *testing.T) {
+	t.Parallel()
+
+	pausing := operational()
+	pausing.Kind = KindAmbiguous
+	pausing.Unresolved = "which of the two readings was meant"
+	resolved, err := pausing.Resolve("the second reading", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if _, err := resolved.Withdraw("the operator, at a command line", "never mind", recordedAt.Add(2*time.Hour)); err == nil {
+		t.Fatal("Withdraw() on a resolved directive error = nil, want a refusal")
+	}
+	if _, err := resolved.Resolve("again", recordedAt.Add(2*time.Hour)); err == nil {
+		t.Fatal("Resolve() on a resolved directive error = nil, want a refusal")
+	}
+}
+
+// A withdrawal, who made it, and when it was made are one fact. Half of it
+// describes a directive that stopped applying because of nobody, or at no time,
+// which is not a state anything can act on or anybody can ask about.
+func TestValidateHoldsAWithdrawalToWhoAndWhen(t *testing.T) {
+	t.Parallel()
+
+	withdrawnAt := recordedAt.Add(time.Hour)
+	tests := []struct {
+		name    string
+		mutate  func(*Directive)
+		wantErr string
+	}{
+		{
+			name:    "a reason with nobody and no time is refused",
+			mutate:  func(d *Directive) { d.Withdrawal = "recorded in error" },
+			wantErr: "requires who withdrew it",
+		},
+		{
+			name:    "somebody withdrawing it at no time is refused",
+			mutate:  func(d *Directive) { d.WithdrawnBy = "the operator, at a command line" },
+			wantErr: "requires who withdrew it",
+		},
+		{
+			name: "a withdrawal with nobody named is refused",
+			mutate: func(d *Directive) {
+				d.Withdrawal = "recorded in error"
+				d.WithdrawnAt = &withdrawnAt
+			},
+			wantErr: "withdrawn by is required",
+		},
+		{
+			name: "a withdrawal with no reason is refused",
+			mutate: func(d *Directive) {
+				d.WithdrawnBy = "the operator, at a command line"
+				d.WithdrawnAt = &withdrawnAt
+			},
+			wantErr: "withdrawal is required",
+		},
+		{
+			name: "all three together are valid",
+			mutate: func(d *Directive) {
+				d.Withdrawal = "recorded in error"
+				d.WithdrawnBy = "the operator, at a command line"
+				d.WithdrawnAt = &withdrawnAt
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			recorded := operational()
+			test.mutate(&recorded)
+			err := recorded.Validate()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want none", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Validate() error = %v, want it to mention %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func operational() Directive {
 	return Directive{
 		SchemaVersion: SchemaVersion,

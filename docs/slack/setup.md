@@ -620,6 +620,11 @@ The check mark says you have an answer, not that your instruction has lapsed.
 An operational directive is in force from the moment it is recorded and stays
 there; carrying it out records what it produced and withdraws nothing, so it is
 still listed by `yoyo directive list` as in force, with what it became under it.
+What ends one is you withdrawing it — `yoyo directive withdraw --reason <why>
+<id>`, or `/withdraw` in a conversation — which takes it out of force without
+deleting it. There is no way to do that from a thread: the reply that recorded a
+directive keeps its check mark, and the listing is where a withdrawn one reads as
+withdrawn.
 
 Four things are refused, visibly:
 

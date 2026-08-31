@@ -71,6 +71,74 @@ func TestResolvingADirectiveStopsItPausingWork(t *testing.T) {
 	}
 }
 
+// Withdrawing is what takes a directive out of force, and it has to be visible
+// to the next process that asks rather than only to the one that did it: a
+// standing instruction the operator no longer means is otherwise still enforced
+// by every run reading these records from somewhere else.
+//
+// It is proved over a second store built on the same root, and by reading the
+// record back off disk, because a withdrawal that only lived in memory or that
+// the decoder refused would leave exactly the directive it was meant to end.
+func TestWithdrawingADirectiveTakesItOutOfForceForEveryProcess(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newDirectives(t, root)
+	standing := operationalDirective(t, "stop opening pull requests for documentation-only changes")
+	if err := store.Record(standing); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	withdrawn, err := store.Withdraw(standing.ID, "the operator, at a command line",
+		"recorded in error: this was a question, not an instruction", time.Now())
+	if err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	if withdrawn.InForce() || !withdrawn.Withdrawn() {
+		t.Fatalf("Withdraw() = %#v, want a directive that is recorded as withdrawn and no longer in force", withdrawn)
+	}
+
+	reader := newDirectives(t, root)
+	loaded, err := reader.Load(standing.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.InForce() {
+		t.Fatalf("loaded = %#v, want the withdrawal to reach the next process that reads it", loaded)
+	}
+	// Nothing was deleted: what the operator said, and who ended it, are both on
+	// the record another process reads.
+	if loaded.Text != standing.Text || loaded.WithdrawnBy != "the operator, at a command line" {
+		t.Fatalf("loaded = %#v, want the operator's words kept and who withdrew it recorded", loaded)
+	}
+	if _, err := reader.Withdraw(standing.ID, "the operator, at a command line", "again", time.Now()); err == nil {
+		t.Fatal("Withdraw() on a withdrawn directive error = nil, want a refusal")
+	}
+}
+
+// A withdrawn directive that paused work stops pausing it, in whichever process
+// next consults the records — which is where the pause was ever enforced.
+func TestWithdrawingAPausingDirectiveStopsItHoldingWork(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newDirectives(t, root)
+	recorded := ambiguousDirective(t, "which of the two readings was meant", nil)
+	if err := store.Record(recorded); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	if _, err := store.Withdraw(recorded.ID, "the operator, at a command line",
+		"never mind: the question no longer arises", time.Now()); err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	pausing, err := newDirectives(t, root).Pausing("yoyodyne-anything")
+	if err != nil {
+		t.Fatalf("Pausing() error = %v", err)
+	}
+	if len(pausing) != 0 {
+		t.Fatalf("Pausing() = %#v, want nothing pausing once the directive is withdrawn", pausing)
+	}
+}
+
 // An identifier is thirty-two hex digits and nobody types thirty-two hex digits,
 // so a prefix is an answer where it names exactly one directive and is reported
 // as ambiguous where it does not. Resolving the wrong directive because a prefix
@@ -155,6 +223,15 @@ func newDirectives(t *testing.T, root string) *DirectiveStore {
 		t.Fatalf("NewDirectiveStore() error = %v", err)
 	}
 	return store
+}
+
+func operationalDirective(t *testing.T, text string) directive.Directive {
+	t.Helper()
+	recorded := ambiguousDirective(t, "", nil)
+	recorded.Kind = directive.KindOperational
+	recorded.Text = text
+	recorded.Unresolved = ""
+	return recorded
 }
 
 func ambiguousDirective(t *testing.T, unresolved string, scope []string) directive.Directive {
