@@ -3,10 +3,12 @@
 Work item: yoyodyne-ifd.84, lever 5 of the token-efficiency brainstorm.
 Audit performed 2026-08-23 against the tree at that date.
 
-**Status: the change is landed, the instrument is landed, the measurement has
-been taken, and it is a null result. By this document's own clause the change is
-to be reverted.** The numbers, the windows they were taken over, and what they
-do and do not establish are in [The measurement](#the-measurement) below.
+**Status: concluded and reverted.** The change landed, the instrument landed, the
+measurement was taken, and it is a null result; by this document's own clause the
+change was reverted, and nothing of the reordering remains in the tree. The
+numbers, the windows they were taken over, and what they do and do not establish
+are in [The measurement](#the-measurement) below; the revert and the commit that
+made it are in [The revert](#the-revert).
 
 The criterion had no tooling behind it until yoyodyne-ifd.171, which is why this
 sat undecided for four days: a null result was supposed to trigger a revert and
@@ -60,13 +62,15 @@ outside the contracts.
 
 ## What changed
 
+This is what the experiment did; [The revert](#the-revert) is what became of it.
+
 The count moved below the set it describes, beside the omissions and the
 unreadable files that were already rendered there. Nothing was removed: every
-delivery still states how much of the repository's set it is, and still says the
+delivery still stated how much of the repository's set it is, and still said the
 set is not the whole set. The framing paragraph plus every repository-wide
-invariant is now byte-identical across work items.
+invariant was byte-identical across work items.
 
-Three tests hold it, and each of them also holds the guard — that a prefix made
+Three tests held it, and each of them also held the guard — that a prefix made
 stable has not quietly become a prompt that stopped carrying the work:
 
 - `internal/invariant`: `TestDeliveredTextKeepsWhatAppliesEverywhereOnAByteStablePrefix`
@@ -100,8 +104,9 @@ cannot answer, and the report says so rather than reporting a share of nought.
 **Harm.** Compare a window of roughly 20 runs before and after on first-pass
 approval rate, repair attempts per landed item, and cost per landed item, all of
 which are already in the run records. The specific harm to watch for is
-staleness: the completeness statement now arrives after the invariants rather
-than before them, so a role could read a selected set as the whole set. That
+staleness: while the change was in force the completeness statement arrived after
+the invariants rather than before them, so a role could read a selected set as
+the whole set. That
 would surface as review findings citing repository-state mismatches that were
 not real.
 
@@ -151,8 +156,8 @@ The whole after window is 633 million across thirty-one runs. Six more can move
 the size of this result; they cannot turn it around.
 
 **The share did not rise. It fell, by 0.55 points.** By the clause above that is
-a null result, the change failed at its purpose, and it is to be reverted. The
-revert is a separate change and is named as work rather than made here.
+a null result, the change failed at its purpose, and it was reverted. The revert
+is a separate change and is recorded under [The revert](#the-revert) below.
 
 ### Why the number is what it is, and what it does not establish
 
@@ -196,6 +201,31 @@ because it was specified at a resolution the effect could not reach. Both belong
 in the record. The second is the precedent — a measurement-based revert clause
 has to be specified so that the measure can resolve the effect, and stating the
 metric is not the same as establishing that it discriminates.
+
+## The revert
+
+Executed 2026-08-30 by yoyodyne-ifd.204 — the commit whose subject carries that
+work item, which is how a change is identified in this repository. It undoes
+`ee9d8841`'s code exactly and keeps the documents that record it, so what remains
+of the experiment is the record rather than the reordering.
+
+`invariant.Delivery.Text()` writes the completeness statement between the framing
+paragraph and the invariants again, as it did before `ee9d8841`, and the
+`completeness` method the reordering split out is gone with it. The three tests
+listed under [What changed](#what-changed) are gone too: each one asserted that
+the per-item count stays off the shared prefix, which is the property being given
+up, and a test that pins a reverted change is a test that fails or lies. Nothing
+else in the four prompt sites is touched, because nothing else was moved.
+
+The three days between the decision and the revert are the gap this document
+opened by naming the revert as work without anything queuing it. That part is
+closed: the item was admitted, and this section is what it produced.
+
+Reverting is not a verdict on the lever. The measurement could not resolve an
+effect this size, and the reason reviews read no shared prefix at all was found
+afterwards by yoyodyne-ifd.205; a future change that wants the invariant
+delivery's prefix stable is arguing against nothing here except a criterion that
+could not see it.
 
 ## What the audit found and did not act on
 

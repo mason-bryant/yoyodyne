@@ -421,17 +421,6 @@ func scopeMatches(scope []string, loweredEvidence string) bool {
 // the set is are the same facts for a developer and a reviewer, and what each of
 // them must do about one belongs in that role's own immutable contract rather
 // than in evidence.
-//
-// The order is chosen so the section can be cached by a provider rather than
-// re-read for every run. What varies between one work item's delivery and the
-// next — how many invariants matched, which scoped ones did, what was left out
-// or unreadable — is written after the invariants themselves, and the
-// repository-wide ones are sorted first by Select. So the framing above plus
-// every constraint that applies to every change is byte-for-byte the same text
-// in every prompt this repository assembles, and a provider's prefix cache can
-// hold it. Nothing is left out to achieve that: the completeness statement is
-// still here, below the set it describes, beside the omissions and the gaps
-// that were already written there.
 func (d Delivery) Text() string {
 	if d.Empty() {
 		return ""
@@ -448,10 +437,20 @@ something outside its scope. Each one is a constraint on this change, not
 advice, and it holds even where the work item says nothing about it.
 
 `, d.Directory)
+	if len(d.Selected) == 0 {
+		// A delivery reaches here only because something is missing from it, so it
+		// says that rather than presenting an empty set as the constraints in force.
+		fmt.Fprintf(&rendered, "None of the %d active invariant(s) recorded here matched, and what is named\nbelow was not read at all. Treat the set as unknown rather than as empty.\n\n", d.Considered)
+	} else {
+		fmt.Fprintf(&rendered, "%d of the %d active invariant(s) recorded here were selected as relevant.\n", len(d.Selected), d.Considered)
+		rendered.WriteString(`Only the ones that matched are below, so this is not the whole set: an
+invariant scoped to code nothing here named still holds, and is not shown.
+
+`)
+	}
 	for _, delivered := range d.Selected {
 		rendered.WriteString(renderInvariant(delivered))
 	}
-	rendered.WriteString(d.completeness())
 	if len(d.Omitted) > 0 {
 		rendered.WriteString("\n## Invariants omitted for size\n\n")
 		for _, id := range d.Omitted {
@@ -471,23 +470,6 @@ they need the architect.
 `)
 	}
 	return rendered.String()
-}
-
-// completeness says how much of the repository's set is above it. It is the one
-// part of the framing that depends on which work item this delivery was made
-// for, which is why it is written below the invariants rather than in front of
-// them, and it is never omitted: a selected set presented as the whole set is
-// how a role comes to report the invariants as satisfied.
-func (d Delivery) completeness() string {
-	if len(d.Selected) == 0 {
-		// A delivery reaches here only because something is missing from it, so it
-		// says that rather than presenting an empty set as the constraints in force.
-		return fmt.Sprintf("None of the %d active invariant(s) recorded here matched, and what is named\nbelow was not read at all. Treat the set as unknown rather than as empty.\n\n", d.Considered)
-	}
-	return fmt.Sprintf(`%d of the %d active invariant(s) recorded here were selected as relevant.
-Only the ones that matched are above, so this is not the whole set: an
-invariant scoped to code nothing here named still holds, and is not shown.
-`, len(d.Selected), d.Considered)
 }
 
 // renderInvariant renders one invariant for a prompt. The scope is stated even
