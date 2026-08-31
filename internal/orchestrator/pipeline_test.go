@@ -19,11 +19,9 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
-	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
-	"github.com/mason-bryant/yoyodyne/internal/invariant"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -906,105 +904,6 @@ func TestDeveloperPromptKeepsTheHarnessContractAboveAnyPersona(t *testing.T) {
 	if strings.Contains(plain, "# Architectural invariants") {
 		t.Errorf("a repository with no invariants produced an invariants section:\n%s", plain)
 	}
-}
-
-// TestDeveloperPromptsShareAStablePrefixAndStillCarryWhatIsDynamic pins both
-// halves of yoyodyne-ifd.84. A provider only charges the cheaper cached rate for
-// a prefix it has seen byte for byte before, so the harness contract, the
-// configured persona, and the constraints that apply to every change have to
-// come before anything that varies with the work item. The other half is the
-// guard on that: a prompt whose prefix is stable because it stopped carrying the
-// item would be worse than an expensive one, so what is dynamic is required to
-// still be there.
-func TestDeveloperPromptsShareAStablePrefixAndStillCarryWhatIsDynamic(t *testing.T) {
-	t.Parallel()
-
-	repository := t.TempDir()
-	persona := "# Developer persona\n\nPrefer the smallest change that satisfies the criteria.\n"
-	set := invariant.Set{
-		Directory: "docs/decisions/invariants",
-		Active: []invariant.Invariant{
-			{
-				ID: "harness-owns-git", Title: "Only the harness commits, pushes, and integrates",
-				EstablishedBy: []string{"yoyodyne-ifd.1"},
-				Statement:     "No agent commits, pushes, or merges; the harness does all three.",
-				Rationale:     "The roles that authorize an integration must not be able to perform one.",
-			},
-			{
-				ID: "one-writer-per-item", Title: "One process at a time acts on an in-flight work item",
-				Scope: []string{"internal/runstate"}, EstablishedBy: []string{"yoyodyne-ifd.2"},
-				Statement: "Every path into an in-flight run reserves it through the state store.",
-				Rationale: "The reservation is the only thing keeping two developers off one item.",
-			},
-		},
-	}
-	items := []beads.WorkItem{
-		{ID: "yoyodyne-prefix", Title: "Audit prompt assembly", Status: "in_progress",
-			Description: "Nothing volatile may precede the stable prefix."},
-		{ID: "yoyodyne-reserve", Title: "Reserve before work", Status: "open",
-			Description: "The claim happens in internal/runstate rather than in the caller."},
-	}
-
-	prompts := make([]string, 0, len(items))
-	for _, item := range items {
-		bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: repository, WorkItem: item})
-		if err != nil {
-			t.Fatalf("assemble the context for %s: %v", item.ID, err)
-		}
-		prompts = append(prompts, developerPrompt(persona, set.Select(workItemEvidence(item)...).Text(), bundle.Text))
-	}
-
-	shared := commonPrefix(prompts[0], prompts[1])
-	if !strings.HasPrefix(shared, developerContract) {
-		t.Fatalf("the harness contract is not on the shared prefix:\n%s", shared)
-	}
-	for _, want := range []string{
-		"Prefer the smallest change that satisfies the criteria.",
-		"# Architectural invariants",
-		// The constraint that binds every change, whole: its statement and the
-		// reasoning a developer is meant to weigh it by.
-		"## harness-owns-git: Only the harness commits, pushes, and integrates",
-		"No agent commits, pushes, or merges; the harness does all three.",
-		"The roles that authorize an integration must not be able to perform one.",
-	} {
-		if !strings.Contains(shared, want) {
-			t.Errorf("the shared prefix is missing %q:\n%s", want, shared)
-		}
-	}
-	// Nothing that identifies one run or one item may sit in front of that, or
-	// none of it is shared at all.
-	for _, unwanted := range []string{"yoyodyne-prefix", "yoyodyne-reserve", "# Assigned work item", repository, pipelineRunID} {
-		if strings.Contains(shared, unwanted) {
-			t.Errorf("the shared prefix carries %q, which varies between runs:\n%s", unwanted, shared)
-		}
-	}
-
-	// The guard: a stable prefix must not have become a frozen prompt. Each
-	// prompt still carries its own work item, its description, and the invariants
-	// its own evidence selected.
-	for index, item := range items {
-		for _, want := range []string{"# Assigned work item", item.ID, item.Title, item.Description} {
-			if !strings.Contains(prompts[index], want) {
-				t.Errorf("the prompt for %s lost %q:\n%s", item.ID, want, prompts[index])
-			}
-		}
-	}
-	if strings.Contains(prompts[0], "one-writer-per-item") {
-		t.Errorf("an invariant scoped elsewhere reached the first prompt:\n%s", prompts[0])
-	}
-	if !strings.Contains(prompts[1], "one-writer-per-item") {
-		t.Errorf("the invariant the second item's evidence named did not reach it:\n%s", prompts[1])
-	}
-}
-
-// commonPrefix is the leading bytes two prompts share, which is the most a
-// provider's prefix cache can hold across both of them.
-func commonPrefix(first, second string) string {
-	shared := 0
-	for shared < len(first) && shared < len(second) && first[shared] == second[shared] {
-		shared++
-	}
-	return first[:shared]
 }
 
 func TestPipelineSkipsReviewAndIntegrationWhenChecksFail(t *testing.T) {

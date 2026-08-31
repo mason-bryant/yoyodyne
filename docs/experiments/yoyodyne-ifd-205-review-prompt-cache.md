@@ -38,9 +38,12 @@ the review contract, the reviewer persona, and every other byte identical across
 reviews sit behind it, off the shared prefix. The first byte that varies ends the
 prefix, so a single unique line at the top costs the whole block.
 
-That is the same class of defect ifd.84 fixed inside the invariant delivery, one
+That is the same class of defect ifd.84 found inside the invariant delivery, one
 layer further out: there, a per-item count sat in front of the repository-wide
-invariants; here, a per-run directory sits in front of everything.
+invariants; here, a per-run directory sits in front of everything. ifd.84's fix
+has since been reverted by yoyodyne-ifd.204 on its own null result, which says
+nothing about the class of defect and everything about the resolution of the
+measure it was judged by — the count sits in front of the invariants again.
 
 The developer never had this problem despite running in the same worktree,
 because it is not reading a cross-run prefix at all. It resumes its own session
