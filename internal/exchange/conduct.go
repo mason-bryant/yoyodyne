@@ -83,6 +83,17 @@ type Spoken struct {
 	// CostUSD is what the provider charged for this invocation, as it reported
 	// it. Nothing here works any of it out.
 	CostUSD float64
+	// What served the invocation, carried back so the round can be pinned to it:
+	// the backend, the selector that was asked for and the model the provider
+	// reported serving it, the account it was answered on, and the configuration
+	// revision in force while it was. A voice reports them whether or not it got
+	// an answer, because they are facts about the invocation rather than about
+	// what came back, and the durable record needs them either way.
+	Backend        domain.Backend
+	Model          string
+	ResolvedModel  string
+	AccountAlias   string
+	ConfigRevision string
 }
 
 // ErrRoundsSpent is what a refusal past an exchange's cap unwraps to, so a
@@ -207,6 +218,14 @@ func (c Conductor) Put(ctx context.Context, ask Ask, asker Party) (Exchange, err
 	answered := c.now()
 	round.AnsweredAt = &answered
 	round.CostUSD = spoken.CostUSD
+	// What served the round is pinned beside what it cost, and for the same reason
+	// it is: both are facts about an invocation that happened, so a round the
+	// provider failed records them exactly as one that answered does.
+	round.Backend = spoken.Backend
+	round.Model = spoken.Model
+	round.ResolvedModel = spoken.ResolvedModel
+	round.AccountAlias = spoken.AccountAlias
+	round.ConfigRevision = spoken.ConfigRevision
 	recorded.UpdatedAt = answered
 	if spoken.SessionID != "" {
 		recorded.AnswererSessionID = spoken.SessionID

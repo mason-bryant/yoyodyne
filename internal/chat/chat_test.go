@@ -157,6 +157,46 @@ func TestSendGivesTheProductManagerNoToolsAndBriefsItOnce(t *testing.T) {
 	}
 }
 
+// A conversation turn is a provider invocation, so the durable record of it says
+// what served it: the backend, the requested and resolved models, the provider
+// account it was answered on, and the configuration in force while it was. That
+// is what the durable-state-is-provider-independent invariant asks of every
+// provider invocation, and it is what makes the record still attributable once
+// the provider session behind it is gone. Under a pool it stops being
+// bookkeeping — the account answering this conversation is the agent's own
+// rather than the machine's default, and the alias is the only thing that says
+// whose subscription paid for the turn.
+func TestATurnPinsTheAccountAndConfigurationThatServedIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Noted."},
+	}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.AccountAlias = "research"
+	options.ConfigRevision = "cfg-0123456789ab"
+	if _, err := openTestSession(t, options).Send(context.Background(), "What is missing from the brief?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// A second store over the same root is what anything reading this afterwards
+	// sees, which is the only copy that matters.
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{
+		Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.AccountAlias != "research" || recorded.ConfigRevision != "cfg-0123456789ab" {
+		t.Fatalf("recorded attribution = %#v, want the account and configuration that served the turn", recorded)
+	}
+	if recorded.Backend != domain.BackendClaudeCode || recorded.ProviderModel != "opus" ||
+		recorded.ProviderResolvedModel != "claude-opus-5-20260514" {
+		t.Fatalf("recorded evidence = %#v, want the backend and the models that served the turn", recorded)
+	}
+}
+
 func TestConversationResumesAcrossProcessRestarts(t *testing.T) {
 	t.Parallel()
 

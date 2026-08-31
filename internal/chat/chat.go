@@ -967,6 +967,14 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	}
 	s.state.ProviderModel = s.options.Model
 	s.state.ProviderResolvedModel = result.ResolvedModel
+	// And what served it besides the model: the account the turn was answered on
+	// and the configuration in force while it was. They are recorded beside the
+	// selectors rather than only on the turn's cost line, because the record of
+	// the conversation is what survives when the provider session does not, and
+	// the durable-state-is-provider-independent invariant asks the same four
+	// things of a conversation turn that it asks of a run's invocation.
+	s.state.AccountAlias = s.options.AccountAlias
+	s.state.ConfigRevision = s.options.ConfigRevision
 	s.state.Turns++
 	// The activity and the results were carried into the prompt this turn
 	// answered, so neither is pending any more. A turn that failed keeps them,

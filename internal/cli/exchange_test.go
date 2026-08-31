@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -186,6 +187,88 @@ func TestTheAnsweringRoundIsDispatchedWithNoToolsAndNoAuthority(t *testing.T) {
 		if !strings.Contains(request.Prompt, wanted) {
 			t.Fatalf("prompt is missing %q: %q", wanted, request.Prompt)
 		}
+	}
+}
+
+// The voice reports what served the round back to the conductor, which pins it
+// on the exchange record. An answering round is the one provider invocation with
+// no run and no conversation behind it, so the exchange record is the only place
+// the durable-state-is-provider-independent invariant's four things can be
+// recorded — and they are reported whether or not the provider answered, because
+// a round it failed was still answered on somebody's account and still charged
+// for.
+func TestTheAnsweringVoiceReportsWhatServedTheRound(t *testing.T) {
+	t.Parallel()
+
+	// The same project with a second account, and the architect answering on its
+	// own rather than on whichever the machine is signed in to.
+	pooled := answeringConfig()
+	pooled.Accounts = map[string]config.Account{"personal": {}, "research": {}}
+	architect := pooled.Agents["architect"]
+	architect.Account = "research"
+	pooled.Agents["architect"] = architect
+
+	for _, test := range []struct {
+		name      string
+		config    config.Config
+		provider  *capturingBackend
+		wantAlias string
+	}{
+		{
+			name:   "answered",
+			config: answeringConfig(),
+			provider: &capturingBackend{result: backend.RunResult{
+				SessionID:     "session-2",
+				ResolvedModel: "claude-opus-5-20260514",
+				FinalText:     "More than the ordering assumes.",
+			}},
+			wantAlias: config.DefaultAccountAlias,
+		},
+		{
+			name:      "unanswered",
+			config:    answeringConfig(),
+			provider:  &capturingBackend{err: errors.New("the provider went away")},
+			wantAlias: config.DefaultAccountAlias,
+		},
+		{
+			// Under a pool there is no configuration-wide account, so the alias is
+			// the answering agent's own. This is the case the pinning exists for: two
+			// accounts serving one product, and a record that named neither.
+			name:      "pooled",
+			config:    pooled,
+			provider:  &capturingBackend{result: backend.RunResult{SessionID: "session-2", FinalText: "Twice."}},
+			wantAlias: "research",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			voice := exchangeVoice{
+				config:     test.config,
+				provider:   test.provider,
+				repository: t.TempDir(),
+				stateRoot:  t.TempDir(),
+				productID:  "yoyodyne",
+			}
+			spoken, _ := voice.Answer(context.Background(), exchange.Question{
+				ExchangeID: "exchange-" + strings.Repeat("a", 32),
+				Role:       domain.RoleArchitect,
+				Asker:      domain.RoleProductManager,
+				Round:      1,
+				MaxRounds:  10,
+				Question:   "what does this goal cost, and what am I missing?",
+			})
+			if spoken.Backend != domain.BackendClaudeCode || spoken.Model != "opus-architect" {
+				t.Errorf("spoken = %+v, want the backend and selector the answering agent is configured for", spoken)
+			}
+			// The alias is the one the round was actually answered under, which is
+			// the answering agent's own account rather than a configuration-wide one
+			// there may be none of, and the same alias the round's cost line carries.
+			if spoken.AccountAlias != test.wantAlias || spoken.ConfigRevision != test.config.Revision() {
+				t.Errorf("spoken = %+v, want account %q and the configuration that served the round",
+					spoken, test.wantAlias)
+			}
+		})
 	}
 }
 

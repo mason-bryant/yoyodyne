@@ -147,6 +147,27 @@ type Round struct {
 	CostUSD    float64    `json:"cost_usd,omitempty"`
 	AskedAt    time.Time  `json:"asked_at"`
 	AnsweredAt *time.Time `json:"answered_at,omitempty"`
+	// What served the answering invocation: the backend it went to, the selector
+	// it asked for and the model the provider reported serving it, the provider
+	// account it was answered on, and the configuration revision in force while it
+	// was. Together they are what the durable-state-is-provider-independent
+	// invariant asks of every provider invocation, and an answering round is the
+	// invocation with no run and no conversation behind it — so without this the
+	// exchange record would name a provider session and nothing that outlives it.
+	//
+	// They are on the round rather than on the exchange because a thread can span
+	// a configuration edit or a change of account, and what is being pinned is what
+	// served each round rather than what serves the thread. They are recorded
+	// whichever way the round went, since a round the provider failed was answered
+	// on an account and charged for like any other.
+	//
+	// All five are empty on a round recorded before the harness wrote them down,
+	// and on one no voice with a provider behind it ever took.
+	Backend        domain.Backend `json:"backend,omitempty"`
+	Model          string         `json:"model,omitempty"`
+	ResolvedModel  string         `json:"resolved_model,omitempty"`
+	AccountAlias   string         `json:"account_alias,omitempty"`
+	ConfigRevision string         `json:"config_revision,omitempty"`
 }
 
 // Exchange is one durable ask thread.
@@ -183,6 +204,16 @@ type Exchange struct {
 }
 
 var idPattern = regexp.MustCompile(`^exchange-[a-f0-9]{32}$`)
+
+// The shape of the two things a round records about how it was served. They are
+// stated here rather than imported from the configuration package for the reason
+// the run record states its own: the durable schema stays independent of the code
+// that produces what it stores, so a record is checked against what a record may
+// hold rather than against what this version of the harness happens to write.
+var (
+	accountAliasPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+	configRevisionPattern = regexp.MustCompile(`^cfg-[a-f0-9]{8,}$`)
+)
 
 func NewID() (string, error) {
 	bytes := make([]byte, 16)
@@ -260,6 +291,20 @@ func (e Exchange) Validate() error {
 		}
 		if round.CostUSD < 0 {
 			problems = append(problems, fmt.Errorf("rounds[%d] cost cannot be negative", i))
+		}
+		// What served the round is absent from every round recorded before it was
+		// carried, so what is checked is the shape of what is there rather than
+		// that it is there: an exchange written by an older build must still load,
+		// and a round naming an account or a configuration nothing could have
+		// produced says less than one naming neither, because it reads as evidence.
+		if round.Backend != "" && !round.Backend.Valid() {
+			problems = append(problems, fmt.Errorf("rounds[%d] backend %q is not a backend identifier", i, round.Backend))
+		}
+		if round.AccountAlias != "" && !accountAliasPattern.MatchString(round.AccountAlias) {
+			problems = append(problems, fmt.Errorf("rounds[%d] account alias %q is not an account alias", i, round.AccountAlias))
+		}
+		if round.ConfigRevision != "" && !configRevisionPattern.MatchString(round.ConfigRevision) {
+			problems = append(problems, fmt.Errorf("rounds[%d] config revision %q is not a configuration revision", i, round.ConfigRevision))
 		}
 	}
 	if e.Outcome != "" && !e.Outcome.Valid() {
