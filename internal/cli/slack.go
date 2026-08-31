@@ -181,6 +181,24 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	// the path of anything: how much work is ready, and what an item nothing named
 	// is called.
 	tracker := beads.Client{Runner: execution.OSProcessRunner{}, Dir: repository}
+	// The four lines, from the same derivation `yoyo status` prints them from,
+	// assembled once and read by both halves of the sink: the heartbeat says them
+	// while the line is stopped, and the inbound half says them to whoever asks
+	// for them in the channel. Assembling them twice would be two readings of one
+	// standing that could differ, which is the disagreement only the operator
+	// could adjudicate. Every store here is one this sink already holds.
+	standing := &readmodel.Sources{
+		Runs:           runs,
+		Conversations:  conversations,
+		Tracker:        tracker,
+		Directives:     directives,
+		Amendments:     proposals,
+		OperatorHolds:  holds,
+		IntakeHolds:    intake,
+		Sessions:       watch,
+		Capacity:       resolved.Config.Execution.MaxConcurrentDevelopers,
+		TrackerTimeout: chatTrackerTimeout,
+	}
 	sink, err := slack.New(slack.Options{
 		Channel: settings.Channel,
 		// What the project configured is the picture beside each name and nothing
@@ -252,18 +270,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// that choosing had stopped and nothing whatever about what the machine
 			// was doing instead. Every store here is one this sink already holds,
 			// wired into the read model rather than read a second way.
-			Standing: &readmodel.Sources{
-				Runs:           runs,
-				Conversations:  conversations,
-				Tracker:        tracker,
-				Directives:     directives,
-				Amendments:     proposals,
-				OperatorHolds:  holds,
-				IntakeHolds:    intake,
-				Sessions:       watch,
-				Capacity:       resolved.Config.Execution.MaxConcurrentDevelopers,
-				TrackerTimeout: chatTrackerTimeout,
-			},
+			Standing: standing,
 			// What became of a directive somebody asked for in a thread, said in
 			// that thread and addressed to them. The same records the inbound half
 			// writes and reads: the product's directives, and the sink's own note of
@@ -279,8 +286,12 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		// acknowledges every reply and acts on none.
 		Directives: directives,
 		Operators:  resolved.Config.SlackOperators(),
-		Poll:       poll,
-		Log:        log,
+		// Where things stand, for the other half of the same question: a message
+		// that addresses this app at the top of the channel is answered with the
+		// four lines rather than with silence.
+		Standing: standing,
+		Poll:     poll,
+		Log:      log,
 	})
 	if err != nil {
 		return nil, "", err

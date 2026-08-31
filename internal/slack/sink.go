@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
@@ -98,6 +99,16 @@ type Options struct {
 	// assembled without one reports and does not steer, and every reply on its
 	// connection is acknowledged to Slack and read no further.
 	Directives Directives
+	// Standing is where the harness stands, as the read model derives it. The
+	// sink reads it for one thing the feed does not: answering somebody who
+	// asked, in the channel, where things stand. It is the same value the feed is
+	// given rather than a second assembly of one, because a channel and a terminal
+	// disagreeing about one standing is a disagreement only the operator could
+	// adjudicate.
+	//
+	// It is optional, and a sink assembled without one says so when it is asked
+	// rather than answering with an empty standing.
+	Standing *readmodel.Sources
 	// Operators is the allow-list of Slack member ids whose replies are acted on,
 	// derived by the configuration from the humans it granted direct-work. It
 	// defaults to empty, which is a product nobody may steer from a thread — so a
@@ -169,6 +180,11 @@ type Sink struct {
 	refusal time.Duration
 	// now is the clock the watermark is taken from, injected for the same reason.
 	now func() time.Time
+	// sources is where the four lines are read from when somebody asks for them
+	// in the channel. It is read and never written, from either goroutine, which
+	// is what makes it safe to sit above the divide with the rest of what New
+	// wrote once.
+	sources *readmodel.Sources
 	// pace is what keeps a catch-up from being posted faster than Slack will
 	// carry it. Every post goes through it, including the message that opens a
 	// thread: what the workspace counts is messages, not what they are for.
@@ -247,6 +263,7 @@ func New(options Options) (*Sink, error) {
 		identity: options.Identity,
 		refusal:  refusalBackoff,
 		now:      options.Now,
+		sources:  options.Standing,
 		// A product that named nobody is told nothing directly, which is the same
 		// answer it gets for steering: the workspace changes nothing about how this
 		// behaves until an operator names themselves.
@@ -300,6 +317,14 @@ func (s *Sink) Run(ctx context.Context) error {
 		s.log("Slack did not confirm this app's identity: %v", err)
 	} else {
 		presence.Team, presence.TeamID = identity.Team, identity.TeamID
+		// The same answer says which member id a message has to name to be
+		// addressed to this app. It is handed over here so the ordinary running
+		// sink never spends a second call on it; a sink whose call was refused asks
+		// again the first time somebody mentions anybody, because being answered is
+		// the one thing that must not be lost to a call that failed at startup.
+		if s.steering != nil {
+			s.steering.learn(identity.UserID)
+		}
 		s.log("reporting to %s as %s in workspace %s", s.channel, identity.User, identity.Team)
 	}
 	// What this sink is is recorded for whoever asks later, and a sink that could

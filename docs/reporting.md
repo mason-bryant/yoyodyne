@@ -626,3 +626,17 @@ settled, that is said in the same thread, tagged the same way, and the mark on
 the reply moves with it. A project that has granted nobody is steered by nobody.
 What a reply may say is in
 [`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).
+
+Outside those threads the sink is silent, with one exception: **a message that
+@-mentions the app is always answered**, wherever it can see one — at the top of
+the channel or in a thread it never opened. A question about where things stand
+is answered with the same four lines `yoyo status` prints, read from the same
+place rather than assembled a second way; anything else gets one sentence saying
+that is the only question it answers here yet and where the work is driven from
+instead. No directive is recorded from one and nothing about the work changes,
+because a message at the top of the channel names no item to scope a directive
+to — but every message addressed to the app goes into the sink's own log, with
+what was asked in it and before the answer is posted, so being heard does not
+depend on the workspace carrying the answer. It exists because the alternative
+was silence, and a reporting process that answers nothing is indistinguishable
+from one that has died.

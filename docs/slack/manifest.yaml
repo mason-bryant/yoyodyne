@@ -37,15 +37,20 @@
 #                          is exactly what nobody thinks to look for at three in
 #                          the morning. Without it the message is still in the
 #                          channel and the refusal is said in the sink's log.
-#   channels:history       read replies in the thread the sink opened, in public
-#                          channels. It is what carries a reply back to the
-#                          machine the harness runs on: a reply from somebody the
-#                          project authorized by name is recorded as a directive
+#   channels:history       read what is typed in the channel, in public channels.
+#                          It is what carries a message back to the machine the
+#                          harness runs on, and two things are done with one: a
+#                          reply in a thread the sink opened, from somebody the
+#                          project authorized by name, is recorded as a directive
 #                          against that thread's work item, and anybody else's is
-#                          answered saying it was not acted on. An operator who
-#                          does not want the harness steered from Slack at all
+#                          answered saying it was not acted on; and a message
+#                          anywhere else that @-mentions the app is answered
+#                          where it was said and noted, with what was asked, in
+#                          the sink's own log — it records no directive and moves
+#                          no work, because a question the app never answers
+#                          reads as a dead sink. An operator who wants neither
 #                          can remove it and the two message events below, and
-#                          replies then never arrive.
+#                          nothing typed in the channel then arrives.
 #   groups:history         the same, for a private channel.
 #
 # Socket Mode is on and there is no request URL, which is the point: the harness
