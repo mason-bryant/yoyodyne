@@ -14,14 +14,17 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // testStateRoot is where a pooled account's provider home would be. Nothing is
@@ -171,6 +174,140 @@ func TestAnUnpooledRunNamesItsAccountAndImposesNoProviderHome(t *testing.T) {
 			t.Fatalf("a single-account run was pointed at %q, want the machine's own provider home", request.AccountConfigDir)
 		}
 	}
+}
+
+// Simultaneous starts are the arrangement pooling exists for, so the pool must
+// not double-serve under it. The cursor is read from the run records and moved
+// by the record a start reserves, and until those were one step two runs
+// beginning in the same moment read the same cursor and were both sent to the
+// same account.
+//
+// Three starts rather than two, because the third is what catches a rotation
+// that serializes the choosing and then dates the records in a different order:
+// with the cursor on a run somebody has already rotated past, the account behind
+// it is handed out twice.
+func TestSimultaneousStartsAreServedByDistinctAccounts(t *testing.T) {
+	t.Parallel()
+
+	const starts = 3
+	stateRoot := t.TempDir()
+	cfg := config.Config{
+		Accounts: map[string]config.Account{"one": {}, "two": {}, "three": {}},
+		// Every one of these starts reserves a run and none of them ends, so the
+		// capacity has to admit all of them or the pool would be exonerated by a
+		// refusal rather than by choosing well.
+		Execution: config.Execution{MaxConcurrentDevelopers: starts},
+	}
+
+	// Each start gets a store of its own over the same durable records, which is
+	// what a second process holds.
+	pipelines := make([]Pipeline, starts)
+	for index := range pipelines {
+		store, err := runstate.NewStore(stateRoot, "yoyodyne")
+		if err != nil {
+			t.Fatalf("runstate.NewStore() error = %v", err)
+		}
+		pipelines[index] = Pipeline{Store: store, Config: cfg, StateRoot: testStateRoot,
+			Accounts: rotatingPool{config: cfg, stateRoot: testStateRoot, runs: store}}
+	}
+
+	aliases := make([]string, starts)
+	leases := make([]*runstate.Lease, starts)
+	failures := make([]error, starts)
+	t.Cleanup(func() {
+		for _, lease := range leases {
+			lease.Release()
+		}
+	})
+	// The starts are released together so they are contending rather than merely
+	// consecutive: what is under test is what happens when the cursor is read by
+	// more than one of them before any of them has written it.
+	begin := make(chan struct{})
+	var done sync.WaitGroup
+	done.Add(starts)
+	for index := range starts {
+		go func(index int) {
+			defer done.Done()
+			<-begin
+			recorded, lease, err := pipelines[index].reserveRun(context.Background(), pendingRun(index))
+			if err != nil {
+				failures[index] = err
+				return
+			}
+			aliases[index], leases[index] = recorded.AccountAlias, lease
+		}(index)
+	}
+	close(begin)
+	done.Wait()
+	for index, err := range failures {
+		if err != nil {
+			t.Fatalf("start %d: %v", index, err)
+		}
+	}
+
+	served := make(map[string]int, starts)
+	for _, alias := range aliases {
+		served[alias]++
+	}
+	if len(served) != starts {
+		t.Fatalf("%d simultaneous starts were served by %v, want one account each from a pool that has %d", starts, served, starts)
+	}
+	// And the record each of them reserved names the account it was served by,
+	// because the cursor the next start reads is that record and nothing else.
+	records, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	for index, alias := range aliases {
+		recorded, err := records.Load(runIDFor(index))
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if recorded.AccountAlias != alias {
+			t.Fatalf("start %d was served by %q and its record says %q", index, alias, recorded.AccountAlias)
+		}
+	}
+}
+
+// pendingRun is one start's run as it has been built and before the reservation
+// dates it and names the account it spends, which is exactly the state
+// reserveRun is handed. Each start is a different work item, because two runs of
+// one item is what a reservation refuses whatever the pool decided.
+func pendingRun(index int) runstate.State {
+	return runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		// The run ids are derived from the index rather than generated so a record
+		// can be read back by the start that reserved it; what they are is
+		// otherwise immaterial.
+		RunID:         runIDFor(index),
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    fmt.Sprintf("yoyodyne-task-%d", index),
+		WorkItemTitle: "Work",
+		Backend:       domain.BackendClaudeCode,
+		Status:        runstate.StatusPending,
+	}
+}
+
+func runIDFor(index int) string { return fmt.Sprintf("run-%032x", index+1) }
+
+// rotatingPool is the join the harness wires: the configuration says which
+// accounts there are and the run records say which one was served last. What the
+// real pool adds to it — the weekly budgets, and the week of spend they are read
+// against — is tested where it is implemented, and adds nothing to the cursor
+// this is about.
+type rotatingPool struct {
+	config    config.Config
+	stateRoot string
+	runs      *runstate.Store
+}
+
+func (p rotatingPool) ChooseAccount() (config.AccountEndpoint, error) {
+	lastServed, err := p.runs.LastAccountAlias()
+	if err != nil {
+		return config.AccountEndpoint{}, err
+	}
+	return p.config.ChooseAccount(p.stateRoot, lastServed, nil)
 }
 
 // pooled turns a test pipeline into one whose project runs across two accounts,

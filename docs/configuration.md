@@ -2937,14 +2937,17 @@ run recorded. Nothing else is kept, which is why the rotation survives a crash, 
 second process, and a machine that was off for a week.
 
 The cursor is read when a run starts and written when that run's record is
-reserved, and those are not one step. Two runs starting in the same moment can
-therefore read the same cursor and be served by the same account, and the
-rotation resumes from whichever of them recorded last. It is a rotation over
-time rather than a strict alternation, so with several developers running
-concurrently expect the split across a day to be even and any individual pair of
-simultaneous starts not to be. Nothing is lost when it happens: both runs are
-attributed to the account they actually spent, and a budget that account has
-already exhausted still excludes it, because that is read at the same moment.
+reserved, and those are one step. A start holds the pool's rotation lease across
+both, so runs beginning in the same moment queue for the choosing and are served
+by different accounts rather than all by the same one — which is the case pooling
+exists for. The lease is a file lock in the run state directory, held for the
+choosing alone and dropped the moment the record exists, so a start whose process
+dies leaves nothing for anybody to clear. A start that never reaches the front of
+that queue within two minutes is refused rather than held forever.
+
+The lease is only taken by a project with more than one account. A project with
+one account is not rotating anything and starts exactly as it did before pooling
+existed.
 
 **A run is affined to the account it started on.** The account is chosen once,
 before the work item is claimed, and recorded on the run. Every invocation that

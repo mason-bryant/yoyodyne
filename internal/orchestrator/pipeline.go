@@ -127,6 +127,12 @@ type StateStore interface {
 	// and integration is serial, and this is what makes the second half true
 	// across processes rather than only within one.
 	LeasePromotion(ctx context.Context, targetBranch string) (*runstate.Lease, error)
+	// LeaseRotation admits this start to choose the account it will be served by
+	// and to record the run that spends it, waiting its turn behind whichever
+	// start is choosing now. The pool's cursor is the run records, so the choice
+	// and the reservation that moves the cursor are one step or they are a race
+	// every simultaneous start can lose.
+	LeaseRotation(ctx context.Context) (*runstate.Lease, error)
 	Save(state runstate.State) error
 	AppendEvent(event execution.Event) error
 	// ReleasedWait reports whether the operator has said that a run's recorded
@@ -343,6 +349,59 @@ func (p Pipeline) chooseAccount() (config.AccountEndpoint, error) {
 		return p.Accounts.ChooseAccount()
 	}
 	return p.Config.Endpoint(p.StateRoot, p.Config.AccountAlias())
+}
+
+// reserveRun settles which account serves this run and records the run that will
+// spend it, with the pool's rotation lease held across both. It answers with the
+// state as it was recorded, because the alias and the moment are settled here
+// rather than by the caller that built the rest of it.
+//
+// Holding the two together is the whole point. The pool reads its cursor out of
+// the run records and the reservation is what writes the record that moves it,
+// so two starts that read before either wrote would be served by the same
+// account — a pool double-serving under exactly the concurrency it exists for.
+// The lease is released the moment the record exists, which is as soon as the
+// next start could read it: a run is affined to its account for its whole
+// length, but the rotation only has to be exclusive for the choosing.
+//
+// When the run started is read inside the lease rather than before it, because
+// the cursor is the account the latest-started run recorded and that is only the
+// account chosen last if the two orders agree. Three starts that queued in one
+// order and were dated in another would leave the cursor on a run somebody had
+// already rotated past, and the account behind it would be handed out twice —
+// the same race the lease closes, arriving through the dates instead.
+//
+// A project with one account is not rotating anything, so it takes no lease and
+// starts exactly as it did before pooling existed.
+func (p Pipeline) reserveRun(ctx context.Context, state runstate.State) (runstate.State, *runstate.Lease, error) {
+	if p.Config.Pooled() {
+		rotation, err := p.Store.LeaseRotation(ctx)
+		if err != nil {
+			return state, nil, err
+		}
+		defer rotation.Release()
+	}
+	now := p.clock().Now()
+	state.StartedAt, state.UpdatedAt = now, now
+	// Why this item was chosen is written with the run and never rewritten, dated
+	// from the moment the run was reserved — which is when the choice took effect.
+	// A caller that said nothing records nothing, which is reported afterwards as
+	// a run nothing accounted for rather than as a run whose reason was empty.
+	if selection, stated := p.Selection.Stamped(now); stated {
+		state.Selection = &selection
+	}
+	account, err := p.chooseAccount()
+	if err != nil {
+		return state, nil, fmt.Errorf("choose the provider account for this run: %w", err)
+	}
+	state.AccountAlias = account.Alias
+	lease, err := p.Store.Reserve(ctx, state, p.Config.Execution.MaxConcurrentDevelopers)
+	if err != nil {
+		// The wrapping is the reservation's own, so that what a caller reports about
+		// a run it could not start still says which of the two steps refused it.
+		return state, nil, fmt.Errorf("reserve developer run: %w", err)
+	}
+	return state, lease, nil
 }
 
 // accountFor is where an alias a run already recorded authenticates. An alias
@@ -735,14 +794,6 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	// Which account will serve this run is settled before anything is claimed, so
-	// a pool with nothing left to spend refuses here rather than after a work item
-	// has been taken and a worktree cut for it.
-	account, err := p.chooseAccount()
-	if err != nil {
-		return Outcome{}, fmt.Errorf("choose the provider account for this run: %w", err)
-	}
-	now := p.clock().Now()
 	state := runstate.State{
 		SchemaVersion: runstate.StateSchemaVersion,
 		RunID:         runID,
@@ -755,33 +806,29 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		// say the work by.
 		WorkItemTitle: item.Title,
 		Backend:       domain.BackendClaudeCode,
-		// Which account this run spends and which configuration set it up are
-		// written with the run for the reason the title is: this is where the
-		// answer is in hand. Everything that reads the record afterwards reads only
-		// the record, and neither can be recovered from it later — a configuration
-		// is edited, and an account nobody recorded is an account nobody can bill
-		// the run to. Under a pool it is also what the run is affined to: every
-		// invocation this run goes on to make reads the alias back off the record
-		// rather than asking the pool a second time.
-		AccountAlias:   account.Alias,
+		// Which configuration set this run up is written with the run for the reason
+		// the title is: this is where the answer is in hand, everything that reads
+		// the record afterwards reads only the record, and a configuration is
+		// edited. Which account it spends is written here too, by the reservation
+		// below rather than by this literal, because the choice and the record that
+		// moves the pool's cursor have to be one step. Under a pool that alias is
+		// also what the run is affined to: every invocation this run goes on to make
+		// reads it back off the record rather than asking the pool a second time.
 		ConfigRevision: p.Config.Revision(),
 		Status:         runstate.StatusPending,
-		StartedAt:      now,
-		UpdatedAt:      now,
 	}
-	// Why this item was chosen is written with the run and never rewritten. A
-	// caller that said nothing records nothing, which is reported afterwards as a
-	// run nothing accounted for rather than as a run whose reason was empty.
-	if selection, stated := p.Selection.Stamped(now); stated {
-		state.Selection = &selection
-	}
-	reservation, err := p.Store.Reserve(ctx, state, p.Config.Execution.MaxConcurrentDevelopers)
+	// Which account will serve this run is settled here, before anything is
+	// claimed, so a pool with nothing left to spend refuses before a work item has
+	// been taken and a worktree cut for it. When the run started, why it was
+	// chosen, and which account it spends are all dated from inside the same step,
+	// which is what the reservation is.
+	state, reservation, err := p.reserveRun(ctx, state)
 	if err != nil {
 		var existing runstate.ExistingWorkItemError
 		if errors.As(err, &existing) {
 			return Outcome{}, ExistingRunError{State: existing.State}
 		}
-		return Outcome{}, fmt.Errorf("reserve developer run: %w", err)
+		return Outcome{}, err
 	}
 	defer reservation.Release()
 	run := &activeRun{
