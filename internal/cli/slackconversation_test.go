@@ -158,18 +158,18 @@ func TestAFailedTurnStillCarriesBackWhatItManagedToSay(t *testing.T) {
 // command again — and saying one to a role that cannot carry it out is the
 // defect `yoyo chat --message` already had once: a confused answer bought with a
 // turn the operator paid for.
+// It is settled before the conversation is opened, which is the other half of
+// the rule. The conversation admits one holder, so a command decided after
+// opening would be answered "held by another client" whenever a `yoyo chat` is
+// open — the wrong answer, reached by making a command contend for the
+// operator's own lease to get it.
 func TestACommandFromSlackIsRefusedRatherThanSaidToTheProductManager(t *testing.T) {
 	t.Parallel()
 
 	for _, command := range []string{"/backlog", "/work yoyodyne-ifd.70", "/refresh", "  /stop  "} {
-		provider := &recordingChatBackend{}
-		session := openTestChatSession(t, t.TempDir(), provider, &recordingChatTracker{})
-		answer, err := sayToConversation(context.Background(), session, command, discardLog)
-		if err != nil {
-			t.Fatalf("sayToConversation(%q) error = %v", command, err)
-		}
-		if provider.turns != 0 {
-			t.Fatalf("%q was said to the product manager %d time(s); it is a command", command, provider.turns)
+		answer, refused := refuseCommand(command)
+		if !refused {
+			t.Fatalf("refuseCommand(%q) = false, want a command refused before anything is opened", command)
 		}
 		if !answer.Harness {
 			t.Fatalf("%q = %#v, want the refusal to read as the harness's own rather than as something said", command, answer)
@@ -177,8 +177,17 @@ func TestACommandFromSlackIsRefusedRatherThanSaidToTheProductManager(t *testing.
 		if !strings.Contains(answer.Text, "commands are not carried out from here") {
 			t.Fatalf("%q answered %q, want it refused with where to type it instead", command, answer.Text)
 		}
-		if answer.ConversationID == "" {
-			t.Fatalf("%q = %#v, want the conversation named even where nothing was said to it", command, answer)
+		// Nothing was opened, so there is no conversation to name. Reporting one
+		// would be inventing the only evidence this door carries.
+		if answer.ConversationID != "" {
+			t.Fatalf("%q = %#v, want no conversation named by an answer that opened none", command, answer)
+		}
+	}
+	// And what is not a command is left for the conversation to answer, so the
+	// refusal above cannot swallow ordinary speech.
+	for _, said := range []string{"what is missing from the brief?", "y", "put the installer epic first", ""} {
+		if _, refused := refuseCommand(said); refused {
+			t.Fatalf("refuseCommand(%q) = true, want everything that is not a command left alone", said)
 		}
 	}
 }

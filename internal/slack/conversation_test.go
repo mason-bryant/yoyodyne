@@ -123,7 +123,7 @@ func TestASinkWithNoConversationStillSaysSomething(t *testing.T) {
 func TestAConversationThatDoesNotAnswerInTimeIsSaidRatherThanWaitedOnForever(t *testing.T) {
 	t.Parallel()
 
-	talker := &scriptedConversation{block: true}
+	talker := &scriptedConversation{block: true, stopped: make(chan struct{})}
 	sink, posts := newConversingSink(t, talker)
 	sink.steering.deadline = 20 * time.Millisecond
 	say(sink, topLevel(testOperator, "<@"+testApp+"> what should we build next?", "1750000001.000100"))
@@ -135,10 +135,102 @@ func TestAConversationThatDoesNotAnswerInTimeIsSaidRatherThanWaitedOnForever(t *
 	if !strings.Contains(answer.Text, "yoyo chat") {
 		t.Fatalf("answer = %q, want it to name where the same conversation carries on", answer.Text)
 	}
-	// The deadline is the client's own and is passed to the conversation, so what
-	// it is waiting on stops rather than being abandoned still running.
-	if !talker.cancelled() {
-		t.Fatalf("the turn was left running after the client stopped waiting on it")
+	// The deadline is passed to the conversation as well as kept here, so a callee
+	// that does observe cancellation is stopped by it rather than left running.
+	//
+	// It is waited for rather than read: the thread is answered the moment the
+	// wait runs out and the sink does not hold that answer back for the call, so
+	// a bare read here would be racing the goroutine it is asking about. That
+	// gap is the mechanism working, and this is the assertion catching up with
+	// it.
+	select {
+	case <-talker.stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the turn was left running after the client stopped waiting on it")
+	}
+}
+
+// The bound holds against a callee that never learns it was cancelled.
+//
+// This is the case the deadline actually exists for and the one a context alone
+// does not cover: a context is a request to stop, and a provider sleeping out a
+// usage limit, a subprocess wait, or any loop written without a select simply
+// does not hear it. The conversation call here looks at its context not once and
+// returns only when this test lets it. The thread must still be answered, and the
+// sink must still be able to shut down, because the alternative is the hang the
+// item's caller-deadline note recorded: hours of silence in a channel where a
+// slow answer and a dead sink read the same.
+func TestTheWaitIsBoundedEvenWhenTheConversationNeverObservesCancellation(t *testing.T) {
+	t.Parallel()
+
+	deaf := make(chan struct{})
+	// Released at the end rather than deferred to the goroutine, so the call is
+	// genuinely still running for every assertion below.
+	defer close(deaf)
+
+	talker := &scriptedConversation{text: "answered far too late", deaf: deaf, running: make(chan struct{})}
+	sink, posts := newConversingSink(t, talker)
+	sink.steering.deadline = 20 * time.Millisecond
+	sink.steering.handle(context.Background(),
+		topLevel(testOperator, "<@"+testApp+"> what should we build next?", "1750000001.000100"))
+	<-talker.running
+
+	// settle() is what the sink's own shutdown waits on. It has to return while
+	// the call underneath is still going, or a sink cannot be stopped by anything
+	// short of killing it.
+	settled := make(chan struct{})
+	go func() {
+		defer close(settled)
+		sink.steering.settle()
+	}()
+	select {
+	case <-settled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("settle() did not return while the conversation was still running, so the sink cannot shut down")
+	}
+
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "I waited") {
+		t.Fatalf("answer = %q, want the wait running out said in the thread", answer.Text)
+	}
+	if !strings.Contains(answer.Text, "yoyo chat") {
+		t.Fatalf("answer = %q, want it to name where the same conversation carries on", answer.Text)
+	}
+	// The call really is still running, so what was answered was the bound rather
+	// than a callee that quietly returned.
+	if talker.cancelled() {
+		t.Fatalf("the conversation observed its cancellation, so this proves nothing about a callee that does not")
+	}
+}
+
+// A turn abandoned by the wait keeps the door shut behind it. It is still
+// holding the durable conversation, so a message arriving in the meantime is
+// told the product manager is busy rather than sent to contend for a lease it
+// cannot win.
+func TestAMessageArrivingWhileAnAbandonedTurnRunsIsToldItIsBusy(t *testing.T) {
+	t.Parallel()
+
+	deaf := make(chan struct{})
+	defer close(deaf)
+
+	talker := &scriptedConversation{text: "late", deaf: deaf, running: make(chan struct{})}
+	sink, posts := newConversingSink(t, talker)
+	sink.steering.deadline = 20 * time.Millisecond
+	sink.steering.handle(context.Background(),
+		topLevel(testOperator, "<@"+testApp+"> what should we build next?", "1750000001.000100"))
+	<-talker.running
+	sink.steering.settle()
+
+	say(sink, topLevel(testOperator, "<@"+testApp+"> and what after that?", "1750000002.000100"))
+
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %#v, want the wait running out and then the second message answered", posts.requests)
+	}
+	if !strings.Contains(posts.requests[1].Text, conversationBusy) {
+		t.Fatalf("answer = %q, want the second asker told the product manager is still answering", posts.requests[1].Text)
+	}
+	if talker.turns() != 1 {
+		t.Fatalf("the conversation was called %d time(s), want the abandoned turn to keep the door shut", talker.turns())
 	}
 }
 
@@ -320,9 +412,16 @@ type scriptedConversation struct {
 	text    string
 	harness bool
 	err     error
-	// block is a turn that waits for its context to end, which is what the
-	// deadline is tested against.
-	block bool
+	// block is a turn that waits for its context to end, which is a callee that
+	// cooperates with cancellation, and stopped is closed once it has noticed.
+	block   bool
+	stopped chan struct{}
+	// deaf is a turn that does not look at its context at all and returns only
+	// when this channel is closed — a provider sleeping out a usage limit, a
+	// subprocess wait, anything written without a select. It is the case the
+	// bound has to hold against, because a bound that needs the callee's help is
+	// not a bound.
+	deaf chan struct{}
 	// hold is a turn that waits to be let go, and running is closed as it starts,
 	// so a second message arrives while this one is genuinely still under way
 	// rather than after a sleep somebody guessed at.
@@ -347,7 +446,16 @@ func (c *scriptedConversation) Say(ctx context.Context, said string) (Answer, er
 		c.mu.Lock()
 		c.stops++
 		c.mu.Unlock()
+		// Closed after the stop is recorded, so a test can wait for this call to
+		// have noticed rather than race the goroutine it is asking about.
+		if c.stopped != nil {
+			close(c.stopped)
+		}
 		return Answer{ConversationID: testConversation}, ctx.Err()
+	case c.deaf != nil:
+		// Deliberately not a select on ctx.Done(): this callee never learns it was
+		// cancelled, which is the whole of what it is here to be.
+		<-c.deaf
 	case c.hold != nil:
 		<-c.hold
 	}

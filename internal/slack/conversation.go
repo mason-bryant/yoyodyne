@@ -26,13 +26,30 @@ package slack
 // grant they are missing; a stranger is stranger.go's, and neither is answered
 // with silence.
 //
-// The wait is bounded, and bounded here rather than trusted to the callee. A
+// The wait is bounded, and bounded here rather than asked of the callee. A
 // conversation turn can take many minutes, and steering work from inside one can
 // wait on a provider's usage limit for hours — which is right at a terminal,
 // where somebody chose to wait, and wrong in a channel, where the only thing
 // distinguishable from a slow answer is a dead sink. So one turn gets
 // DefaultConversationDeadline and then the thread is told what happened, whether
 // that is capacity, the conversation being held elsewhere, or anything else.
+//
+// The shape of that bound is the point, and a deadline on a context is not it. A
+// context is a request to stop, and a callee that does not answer one — a
+// blocking read, a sleep somebody wrote without a select, a subprocess wait —
+// leaves the caller waiting exactly as long as it would have anyway. So the call
+// runs beside the wait rather than inside it: the turn is answered when the
+// deadline passes whether or not anything underneath has returned, which is what
+// makes this a bound on what the operator waits for rather than a hope about
+// somebody else's code.
+//
+// What that costs is stated rather than hidden. A call nobody is listening to
+// any more is still running and still holding the durable conversation, so the
+// turn's own guard is given back by the call when it finishes rather than by the
+// wait when it gives up — a message arriving in between is told the product
+// manager is still answering, which is true, instead of being sent to contend
+// for a lease it cannot win. The abandoned call is deliberately not something
+// the sink's shutdown waits on: waiting on it is the hang this exists to remove.
 //
 // One turn at a time, said out loud. The durable conversation admits one holder,
 // so a second turn started while one is running would be refused by the lease
@@ -114,7 +131,7 @@ const (
 	// yet land because that is true: the deadline stops this client waiting, and
 	// what the conversation recorded of the turn before it was cut is in the
 	// record either way.
-	conversationOverdue = "I waited %s for the product manager and it had not answered, so I stopped waiting rather than leave you with nothing. `yoyo chat` continues the same conversation and will show where it got to."
+	conversationOverdue = "I waited %s for the product manager and it had not answered, so I stopped waiting rather than leave you with nothing. It may still be working: `yoyo chat` continues the same conversation and shows where it got to."
 	// conversationFailed carries the reason rather than summarizing it. A
 	// provider out of capacity says so in its own words, and the durable record it
 	// leaves is reported to this channel at warning severity by the feed, so this
@@ -142,16 +159,25 @@ func (s *steering) converse(ctx context.Context, message inboundMessage, said st
 	}
 	s.sink.log("this app was addressed by %s outside its own threads, saying %q, and is taking it to the product manager",
 		message.user, singleLine(message.text, maxAskedBytes))
+	// Only the wait is counted here. What the sink's shutdown waits for is the
+	// thread being answered, which always happens; the call underneath may still
+	// be running, and waiting on that is the hang this whole bound exists to
+	// remove.
 	s.turns.Add(1)
 	go func() {
 		defer s.turns.Done()
-		defer s.finish()
 		s.take(ctx, message, said)
 	}()
 }
 
-// take is one turn: the thinking face while it runs, and then whatever came back
-// posted in the product manager's own voice.
+// spoken is one finished call, carried back from the goroutine that made it.
+type spoken struct {
+	answer Answer
+	err    error
+}
+
+// take is one turn: the thinking face while it runs, the answer when it lands,
+// and the deadline when it does not.
 func (s *steering) take(ctx context.Context, message inboundMessage, said string) {
 	// The mark goes on before the turn starts, because the minutes between
 	// somebody typing and an answer landing are exactly where silence reads as
@@ -159,24 +185,82 @@ func (s *steering) take(ctx context.Context, message inboundMessage, said string
 	// costs the message its mark and nothing else.
 	s.mark(ctx, message.ts, notify.ReceiptUnderConsideration)
 	bounded, stop := context.WithTimeout(ctx, s.deadline)
-	defer stop()
-	answer, err := s.conversation.Say(bounded, said)
+	// The call goes beside the wait rather than inside it, so what the operator
+	// waits for is this function's own deadline and not the callee's willingness
+	// to observe a cancelled context. The channel holds one so a call that comes
+	// back after nobody is listening still finishes rather than blocking on the
+	// send for as long as the process lives.
+	spoke := make(chan spoken, 1)
+	go func() {
+		// Both of these belong to the call rather than to the wait: the context is
+		// released when the call it bounds is actually over, and the turn's guard
+		// is given back then too, so a message arriving while an abandoned call is
+		// still running is told the product manager is busy instead of being sent
+		// to contend for a conversation it cannot have.
+		defer stop()
+		defer s.finish()
+		answer, err := s.conversation.Say(bounded, said)
+		spoke <- spoken{answer: answer, err: err}
+	}()
+	select {
+	case came := <-spoke:
+		s.came(ctx, message, bounded, came)
+	case <-bounded.Done():
+		// An answer that landed in the same instant the wait ran out is still an
+		// answer, and a select between two ready cases picks at random. So the call
+		// is asked once more before the thread is told nothing came.
+		select {
+		case came := <-spoke:
+			s.came(ctx, message, bounded, came)
+		default:
+			s.gaveUp(ctx, message, bounded)
+		}
+	}
+}
+
+// came reports one call that finished: what it said, and what stopped it.
+func (s *steering) came(ctx context.Context, message inboundMessage, bounded context.Context, came spoken) {
 	// What the turn managed to say before it failed is worth reading, so it goes
 	// into the thread ahead of the account of the failure rather than behind it.
-	if text := strings.TrimSpace(answer.Text); text != "" {
-		s.reply(ctx, message, answer, text)
+	if text := strings.TrimSpace(came.answer.Text); text != "" {
+		s.reply(ctx, message, came.answer, text)
 	}
-	if err != nil {
-		s.failed(ctx, message, bounded, err)
+	if came.err != nil {
+		s.failed(ctx, message, bounded, came.err)
 		return
 	}
-	if strings.TrimSpace(answer.Text) == "" {
+	if strings.TrimSpace(came.answer.Text) == "" {
 		s.answerOnce(ctx, message, conversationSilent, "a turn that said nothing")
 		return
 	}
-	s.sink.log("%s was answered from conversation %s, which stands at %d turn(s)",
-		message.user, answer.ConversationID, answer.Turns)
+	s.sink.log("%s was answered %s", message.user, from(came.answer))
 	s.mark(ctx, message.ts, notify.ReceiptSettled)
+}
+
+// gaveUp says in the thread that this client stopped waiting, and is the one
+// path here that runs while something underneath may still be going.
+//
+// A sink being shut down is not a wait running out, and the two are told apart
+// because only one of them is worth a message: a workspace call made with a dead
+// context cannot land anyway, so the stopping case is put in the log where
+// whoever is watching this process will see it.
+func (s *steering) gaveUp(ctx context.Context, message inboundMessage, bounded context.Context) {
+	if !errors.Is(bounded.Err(), context.DeadlineExceeded) {
+		s.sink.log("the sink stopped while the product manager was answering %s, so the answer will not be posted; `yoyo chat` continues the conversation and shows where it got to", message.user)
+		return
+	}
+	s.answerOnce(ctx, message, fmt.Sprintf(conversationOverdue, s.deadline), "the wait running out")
+	s.mark(ctx, message.ts, notify.ReceiptRefused)
+}
+
+// from names the conversation an answer came out of, for a log line. A command
+// this client refused opened no conversation, so there is none to name and
+// saying so beats printing an empty one.
+func from(answer Answer) string {
+	if answer.ConversationID == "" {
+		return "without anything being said to the product manager"
+	}
+	return fmt.Sprintf("from conversation %s, which stands at %d turn(s)", answer.ConversationID, answer.Turns)
 }
 
 // reply posts what came back, in the product manager's own name and face where
@@ -193,8 +277,8 @@ func (s *steering) reply(ctx context.Context, message inboundMessage, answer Ans
 		// The turn happened and is recorded whichever way this went, so what failed
 		// is the account of it rather than the act. The line below is what points
 		// whoever is watching this log at where the answer actually is.
-		s.sink.log("%s was answered and the answer could not be posted, so it reads as silence there; `yoyo chat` continues conversation %s: %v",
-			message.user, answer.ConversationID, err)
+		s.sink.log("%s was answered %s and the answer could not be posted, so it reads as silence there; `yoyo chat` continues the conversation: %v",
+			message.user, from(answer), err)
 	}
 }
 

@@ -1126,6 +1126,12 @@ that limit in its own words. A turn that steers work can wait on capacity for
 hours, and that is a thing you choose at a terminal rather than something a
 channel does to you while you watch a thread.
 
+That bound is on your wait rather than on the turn: a turn the channel stopped
+waiting for may still be running, since a provider sleeping out a usage limit
+never hears a cancellation. It still holds the conversation while it does, so the
+next thing you say from the channel is answered with the product manager being
+busy, and `yoyo chat` shows where the turn itself got to.
+
 Two things do not go to the product manager from there. Where things stand is
 answered without a turn: `@yoyodyne status` is the read model's own four lines
 rather than something the product manager was asked for. And the commands above

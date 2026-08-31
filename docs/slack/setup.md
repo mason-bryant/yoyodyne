@@ -766,6 +766,13 @@ own words. Nothing hangs silently; a run steered from a conversation can wait on
 capacity for hours, and that is a choice you make at a terminal rather than
 something a channel does to you.
 
+It is a bound on what *you* wait for rather than a stop signal the turn obeys, so
+a turn the channel gave up on may still be working — a provider sleeping out a
+usage limit does not hear a cancellation. `yoyo chat` continues the same
+conversation and shows where it actually got to, and until that turn finishes it
+still holds the conversation, so a message you send in the meantime is answered
+with the product manager being busy rather than left waiting behind it.
+
 **Who may.** Talking to the product manager admits work, reorders the queue, and
 spends your money, so it is held to the same `direct-work` grant a thread reply
 is. Somebody your mapping names and granted nothing still gets the four lines —
