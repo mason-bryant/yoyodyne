@@ -47,12 +47,6 @@ import (
 // somebody reads.
 const DefaultHeartbeat = time.Hour
 
-// maxStoppedReasonBytes bounds the part of a heartbeat that came from an
-// operator's own words. The reason a hold carries is bounded generously, because
-// it is written once and read carefully; this is said again every hour and has to
-// stay a line.
-const maxStoppedReasonBytes = 200
-
 // DefaultStaleBuildThreshold is how far behind the deployed harness a running
 // session may be before its staleness stops being a line beside the heartbeat
 // and becomes something the operators are told directly.
@@ -113,18 +107,6 @@ type switches struct {
 	operatorHeld bool
 }
 
-// waiting is a line with nothing being chosen from it, as the sink derived it.
-type waiting struct {
-	// stopped is what has stopped the choosing, in the words the message will use.
-	stopped string
-	// since is when it became that way, which is the whole of what makes the state
-	// worth saying again: the state does not change and its age does.
-	since time.Time
-	// mark names this state durably, so a cursor can say which one it is standing
-	// on and a different one re-arms rather than inheriting the last one's clock.
-	mark string
-}
-
 // heartbeatDeliveries says a line that is choosing nothing over ready work, again
 // while it stands.
 //
@@ -145,8 +127,8 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 	}
 	streams[heartbeatStream] = struct{}{}
 
-	state, stalled := waitingLine(held, sessions, inFlight)
-	if !stalled {
+	state := waitingLine(held, sessions, inFlight)
+	if !state.Stopped() {
 		// The state cleared. Nothing is said about that — what cleared it said so
 		// itself, as the release, the resumption, or the run it started — and the
 		// cursor forgets it so the next state to stand is armed afresh.
@@ -156,8 +138,9 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		return nil, nil
 	}
 	now := f.now()
-	armed := Cursor{Standing: state.mark, Said: now}
-	if cursor.Standing != state.mark {
+	mark := state.Mark()
+	armed := Cursor{Standing: mark, Said: now}
+	if cursor.Standing != mark {
 		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
 	}
 	if now.Sub(cursor.Said) < f.heartbeat() {
@@ -173,7 +156,7 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		// where the sink says everything else about itself, and asked again at the
 		// next interval rather than at the next poll.
 		f.say("what is ready to pull could not be read, so nothing was said about a line that has been stopped since %s: %v",
-			state.since.UTC().Format(time.RFC3339), err)
+			state.Since.UTC().Format(time.RFC3339), err)
 		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
 	}
 	if ready == 0 {
@@ -193,8 +176,8 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		Stream: heartbeatStream,
 		Cursor: armed,
 		Notification: notify.FromLine(notify.Line{
-			Stopped:  state.stopped,
-			Since:    state.since,
+			Stopped:  state.Says,
+			Since:    state.Since,
 			Ready:    ready,
 			Standing: f.standing(ctx),
 		}, now),
@@ -388,85 +371,43 @@ func shortBuild(build string) string {
 	return build[:12]
 }
 
-// waitingLine derives what has stopped the line, in the order an operator would
-// act on it: the switch that stops everything, then the one that stops the
-// choosing, then the sessions that do the choosing or are not there to do it.
+// waitingLine is what has stopped the line, as the read model derives it and
+// with the two states this surface does not speak about removed.
 //
-// A run in flight is not a stalled line whatever else is true. Work is visibly
+// Nothing here works out what stopped the choosing. That derivation is the read
+// model's, because the same question is answered in a terminal by `yoyo status`
+// and here in a channel, and a machine that says one thing in one place and
+// another in the other is a disagreement only the operator can settle — which
+// they had to, when this package's own version told them to start a watch
+// session that was already running and sitting idle.
+//
+// What stays here is what this surface says, which is a different question. A
+// run in flight is not a stalled line whatever else is true: work is visibly
 // moving, the channel is carrying it, and a message saying nothing is being
 // chosen while a run posts its way through a review would be false in the way
 // that teaches people to stop reading. When those runs end the state is still
-// whatever it was, and the heartbeat picks it up then.
-func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight int) (waiting, bool) {
+// whatever it was, and the heartbeat picks it up then. And a product nobody has
+// ever watched is not a line that stopped either — nothing was choosing work
+// here, so nothing is failing to, and an hourly message about a queue somebody
+// keeps by choice is the nagging this is written to avoid.
+func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight int) readmodel.Stall {
 	if inFlight > 0 {
-		return waiting{}, false
+		return readmodel.Stall{}
 	}
-	if held.operatorHeld {
-		return waiting{
-			stopped: "the operator is holding all harness activity",
-			since:   held.operator.HeldAt,
-			mark:    "hold:" + stamp(held.operator.HeldAt),
-		}, true
+	// Capacity is left unstated. This surface has already decided that a machine
+	// with a run in flight is not a stalled line, which is the whole of what the
+	// read model's capacity reason would tell it.
+	stall := readmodel.WhyNothingStarts(readmodel.Conditions{
+		OperatorHold: held.operator,
+		OperatorHeld: held.operatorHeld,
+		IntakeHold:   held.intake,
+		IntakeHeld:   held.intakeHeld,
+		Sessions:     func() ([]runstate.WatchTransition, error) { return sessions, nil },
+	})
+	if stall.Reason == readmodel.ReasonUnwatched {
+		return readmodel.Stall{}
 	}
-	if held.intakeHeld {
-		stopped := "intake is held"
-		if reason := singleLine(held.intake.Reason, maxStoppedReasonBytes); reason != "" {
-			stopped += " — " + reason
-		}
-		return waiting{
-			stopped: stopped,
-			since:   held.intake.HeldAt,
-			mark:    "intake:" + stamp(held.intake.HeldAt),
-		}, true
-	}
-	return choosing(sessions)
-}
-
-// choosing derives the line from what the watch sessions are doing. Which
-// sessions are still alive is the read model's fold rather than one of this
-// package's: a log read two ways is two answers to whether anything is pulling
-// the queue, and that is the one question the whole heartbeat turns on.
-//
-// A session choosing work settles it whatever else is in the log. Otherwise a
-// session polling an idle queue is the state, and if every session there has ever
-// been has ended, there is nobody choosing at all — which is the state the
-// overnight was in and the one nothing else says.
-func choosing(sessions []runstate.WatchTransition) (waiting, bool) {
-	// A product nobody has ever watched is not a line that stopped. Nothing was
-	// choosing work here, so nothing is failing to; an operator who runs items by
-	// name has a queue by choice, and an hourly message about it would be the
-	// nagging this is written to avoid.
-	if len(sessions) == 0 {
-		return waiting{}, false
-	}
-	// Live is newest first, so the first idle session it holds is the latest one.
-	live := readmodel.Live(sessions)
-	for _, transition := range live {
-		if transition.State != runstate.WatchIdle {
-			// Watching, braked, or resumed: a session is alive and either choosing
-			// or stopped by a hold, which was read before this.
-			return waiting{}, false
-		}
-	}
-	if len(live) > 0 {
-		idle := live[0]
-		return waiting{
-			stopped: "the watch session has found nothing it can start",
-			since:   idle.At,
-			mark:    "idle:" + stamp(idle.At),
-		}, true
-	}
-	var stopped runstate.WatchTransition
-	for _, transition := range sessions {
-		if transition.State == runstate.WatchStopped && transition.At.After(stopped.At) {
-			stopped = transition
-		}
-	}
-	return waiting{
-		stopped: "no watch session is running",
-		since:   stopped.At,
-		mark:    "stopped:" + stamp(stopped.At),
-	}, true
+	return stall
 }
 
 // heartbeat is how often a standing state is said again.

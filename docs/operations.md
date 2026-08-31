@@ -625,15 +625,23 @@ Needs a human (1):
 - **Not startable** is each admitted item nothing will pull, with the refusal
   that stops it — the queue's own account where the queue has one, the directive
   where a directive pauses the work, and otherwise what has stopped the harness
-  choosing at all: a switch, a full machine, or no session choosing work. It
-  never comes from a watch session's memory of what it has already tried, which
-  is a fact about one process rather than about the product. Work that is
+  choosing at all. That last one comes from a closed set of named reasons, each
+  of which says whose move it is: the operator's hold, a held intake, every
+  developer slot taken, a live watch session that has found nothing it can
+  start, no watch session running any more, and a product no session has ever
+  watched. An idle session and no session are named apart on purpose — telling
+  you to start a session you are already running sends you to the wrong place.
+  It never comes from a watch session's memory of what it has already tried,
+  which is a fact about one process rather than about the product. Work that is
   admitted and would be started next is not listed here at all; the count of
   admitted items beside the heading is where it shows.
 - **Needs a human** is always present, and says either `nothing` or the list with
   whose move each one is: the operator's two switches, an unresolved directive, a
-  proposed change nobody has decided, a run that ended still owing a step, and
-  work marked for a conversation rather than for a run.
+  proposed change nobody has decided, a run that ended still owing a step, work
+  marked for a conversation rather than for a run, and a queue nothing is pulling
+  from — a session sitting idle over it, or no session at all — while admitted
+  work waits behind that. A stall over an empty queue is not listed: it is a
+  state of the machine rather than something waiting on you.
 
 A line with nothing in it says `nothing` in words, and a line whose records could
 not be read says that instead — never `nothing`, which would be a confident

@@ -208,7 +208,8 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		"Working (1 conversation):\n",
 		"  product-manager — product-manager, a turn in flight for 40s after 270 recorded turns\n",
 		"Not startable (2 of 3 admitted items):\n",
-		"  yoyodyne-ifd.200 — intake is held — the overnight looked wrong; `yoyo release` lifts it\n",
+		"  yoyodyne-ifd.200 — intake is held — the overnight looked wrong, " +
+			"since 2026-08-30T10:00:00Z; `yoyo release` lifts it\n",
 		"  yoyodyne-ifd.201 — blocked; the item says what by\n",
 		"Needs a human (1):\n",
 		"intake is held, since 2026-08-30T10:00:00Z: the overnight looked wrong — the operator's",
@@ -334,8 +335,13 @@ func TestNoSessionChoosingIsARefusal(t *testing.T) {
 		ready:    []beads.WorkItem{{ID: "item-1"}},
 	}}
 	standing := ReadStanding(context.Background(), sources)
-	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "no session is choosing work") {
+	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "no watch session is running") {
 		t.Fatalf("not startable = %+v", standing.NotStartable)
+	}
+	// It is also waiting on somebody. A queue nobody is pulling from will wait
+	// forever without a person, and the attention line is where a person looks.
+	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose, "`yoyo work --watch`") {
+		t.Fatalf("needs a human = %+v", standing.NeedsHuman)
 	}
 }
 

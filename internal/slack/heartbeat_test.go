@@ -694,6 +694,40 @@ func TestTheHeartbeatCarriesTheFourLines(t *testing.T) {
 	}
 }
 
+// What the channel says a state is, is what the read model says it is. This sink
+// used to derive it a second time, and the two derivations disagreed exactly
+// where it costs somebody a trip: a live session sitting idle over a queue it
+// would not touch was reported here as no session running at all, which sends an
+// operator to start the session they already have.
+func TestTheHeartbeatSaysTheStateTheReadModelDerived(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(3)
+	idle := harness.now
+	harness.watched(t, runstate.WatchIdle, "nothing it could start", idle)
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchIdle)
+	harness.now = idle.Add(2 * time.Hour)
+	said := harness.say(t, cursors, notify.KindLineWaiting)
+
+	stall := readmodel.WhyNothingStarts(readmodel.Conditions{
+		Sessions: func() ([]runstate.WatchTransition, error) {
+			return []runstate.WatchTransition{{
+				SessionID: "watch-0123456789abcdef0123456789abcdef",
+				State:     runstate.WatchIdle,
+				At:        idle,
+			}}, nil
+		},
+	})
+	if !strings.Contains(said.Body, stall.Says) {
+		t.Fatalf("body %q does not say the read model's %q", said.Body, stall.Says)
+	}
+	if strings.Contains(said.Body, "yoyo work --watch") {
+		t.Fatalf("an idle session was told to start a session: %q", said.Body)
+	}
+}
+
 // A sink assembled without a way to read the four lines says so, rather than
 // leaving them out. A message that simply lacked them would be indistinguishable
 // from a harness with nothing in any of them.
