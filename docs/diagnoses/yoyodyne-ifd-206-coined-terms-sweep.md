@@ -13,6 +13,11 @@ item's grants, so the counts and the wordings quoted here are as measured on
 2026-08-30 and no longer describe the documents. The tracker half has not been
 applied, and [What remains](#what-remains) is what is still owed.
 
+**The governed-document counts here are a floor, and the current ones are in
+[the yoyodyne-ifd.220 re-run](#the-yoyodyne-ifd220-re-run).** The scan looked for
+one spelling of each term, over a tree that has since moved, so two occurrences
+it records as absent are not.
+
 Records read at 2026-08-30, against the live tracker export
 (`/Users/mbryant/github/yoyodyne/.beads/issues.jsonl`, 309 rows, latest
 `updated_at` 2026-08-31T03:54:33Z) and the working tree of
@@ -81,6 +86,68 @@ the proposals in
 carrying Category 1 wording now describe edits already made, and are worth
 deciding rather than leaving open.
 
+## The yoyodyne-ifd.220 re-run
+
+**2026-08-31, yoyodyne-ifd.220.** The reviewer on ifd.216's run found that the
+governed-document headline below was being read as an inventory — by
+[the register](../terms.md) and by `internal/terms` both — when it is a floor,
+and named two occurrences to prove it. Both are real, and only one of them is an
+error in the scan:
+
+- **`soak` ×1 in `designs/configurable-workflows.md`.**
+  [Category 1](#category-1-decoration-to-be-replaced-outright) records no
+  governed occurrence of `soak`, and against the tree this document measured that
+  is correct: `configurable-workflows.md` was promoted after the scan ran. The
+  row is right about 2026-08-30 and wrong as an inventory, which is the whole of
+  the point — a count taken once is not a count that stays true.
+- **`minute-zero` in
+  `decisions/invariants/developer-verifies-before-submitting.md:16`.** The scan
+  looks for `minute zero`, so the hyphenated spelling went past it, and past
+  `internal/terms`, whose match was the same string. That invariant was also
+  written after the scan ran, so both causes land on one file: the count would
+  have missed the occurrence even if it had been taken a day later.
+
+The homes were therefore measured again on 2026-08-31, over the working tree at
+that date, with each term matched however its parts are spaced — hyphenated,
+spaced, closed up, or broken by a line wrap. **These figures replace the headline
+below as the current count.** The headline stands as what was true on 2026-08-30.
+
+| Scan | Occurrences | Terms |
+|---|---|---|
+| 2026-08-30, as [measured below](#how-this-was-measured) | 32 | 8 |
+| 2026-08-31 re-run, whole files, variant-tolerant | 27 | 7 |
+| 2026-08-31 re-run, the prose `internal/terms` reads | 25 | 6 |
+
+Nothing in the re-run is undefined: every term below has a row in the register,
+so the check passes over the homes as they stand. The two figures for the re-run
+differ by what the check deliberately does not read — the frontmatter, which
+holds one `minute zero` in the invariant's title and the surviving `re-arm`.
+
+| Term | Occurrences | Where |
+|---|---|---|
+| `sink` | 18 | `slack-reporting-design.md` ×15, `management-and-supervision.md`, `observability-and-dashboard.md`, `v1-harness-design.md` |
+| `docket` | 2 | `configurable-workflows.md`, `management-and-supervision.md` |
+| `minute zero` | 3 | `developer-verifies-before-submitting.md` — the frontmatter title, the hyphenated `minute-zero` at :16, and :20 |
+| `in force` | 1 | `invariants/README.md` |
+| `posture` | 1 | `harness-is-the-only-role-invoker.md` |
+| `steer` | 1 | `slack-reporting-design.md` |
+| `re-arm` | 1 | `v1-harness-design.md` frontmatter, inside a recorded amendment reason |
+
+Two things the re-run settles about the floor. Re-measured variant-tolerantly
+over the same tree this document scanned, the figure is **32 of 8, unchanged** —
+the strict patterns cost nothing on 2026-08-30, because both escapes are in
+documents that did not exist yet. So the floor was a floor because the homes
+moved, and the strict patterns are what would have let the next one through
+silently. And of the difference between 32 and 27, all of it is the nine
+Category 1 replacements ifd.216 made plus the two documents promoted since;
+none of it is a term that stopped being counted.
+
+The check no longer has the hole. `internal/terms` matches each term however its
+parts are spaced, so `minute-zero` fails where `minute zero` would, and a row in
+the register permits every spelling of its term rather than the one written in
+the row. The re-run's patterns are [in the scans below](#how-this-was-measured),
+beside the strict ones they replace.
+
 ## Summary
 
 Measured on 2026-08-30, before the changes above.
@@ -133,6 +200,13 @@ find-and-replace over them would produce prose that is literal and wrong.
 | `starving` | 1 — ifd.68.7 (title) | — | **stopping**. Title: `tolerates additive schema changes instead of starving on them` → `tolerates additive schema changes instead of stopping on them`. |
 | `whose-move` | 1 — ifd.187 | — | **waiting on the operator**. `whose-move the operator's` → `and it is waiting on the operator`. |
 | `supersession pile` | 1 — ifd.121.6 | — | **the list of superseded pull requests**. |
+
+The `Governed docs` column is what was there on 2026-08-30 and is not an
+inventory. Both `soak` and `minute zero` read `—` here and neither is a term the
+homes have been free of since: `soak` reached `configurable-workflows.md` and was
+replaced, and `minute zero` is written three times in
+`developer-verifies-before-submitting.md`, once of them hyphenated. Read the
+column against [the re-run](#the-yoyodyne-ifd220-re-run).
 
 Two of these are not new judgments by this sweep. The operator has already
 objected to `in force` in a thread — recorded on ifd.68.23, where he asked *What
@@ -438,6 +512,36 @@ for name, terms in (("CAT1", cat1), ("CAT2", cat2)):
                     n = len(re.findall(re.escape(t), txt))
                     if n: g[t] += n
     print(name, sum(g.values()), len(g), dict(g))
+PY
+```
+
+Those two term lists are plain substrings, which is what made the headline a
+floor: `minute zero` there does not find `minute-zero`. **The 2026-08-31 re-run**
+is the same walk with each term's parts allowed any spacing, run over the working
+tree at that date. It is what produced the 27 and the 25 in
+[the re-run](#the-yoyodyne-ifd220-re-run) — the first figure over whole files,
+the second over the prose alone, dropping the frontmatter and the fenced blocks
+the way `internal/terms` does.
+
+```bash
+python3 - <<'PY'
+import os, re, collections
+terms = ["tranche","seam","posture","re-arm","sidecar","wedge","in force",
+         "minute zero","soak","pane of glass","starv","whose-move",
+         "supersession pile","docket","brake","heartbeat","sink","steer","handback"]
+def pattern(term):
+    parts = [re.escape(p) for p in re.split(r'[-\s]+', term)]
+    return re.compile(r'\b' + r'[-\s]*'.join(parts), re.I)
+g = collections.Counter()
+for root in ['docs/product', 'docs/designs', 'docs/decisions']:
+    for dp, _, fns in os.walk(root):
+        for fn in fns:
+            if not fn.endswith('.md'): continue
+            txt = open(os.path.join(dp, fn)).read()
+            for t in terms:
+                n = len(pattern(t).findall(txt))
+                if n: g[t] += n
+print(sum(g.values()), len(g), dict(g))
 PY
 ```
 
