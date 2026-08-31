@@ -39,21 +39,35 @@ which holds every one of them. That item was admitted with
 [What remains](#what-remains) — and a run applied the governed-document half
 under them. What it did, against this document's own measurements:
 
-- **[The register](../terms.md) exists**, seeded from the inventory below. Eight
+- **[The register](../terms.md) exists**, seeded from the inventory below. Nine
   entries: the six mechanism names of
   [Category 2](#category-2-mechanism-names-where-the-architects-ruling-was-requested),
-  plus `in force` and `minute zero` and `posture` — decoration by this
-  document's reading, registered rather than replaced because each survives only
-  in the invariants home, whose wording this document says is the architect's
-  alone. Each entry retires if she takes the rewording.
-- **Eleven of the twelve Category 1 governed-document occurrences were
-  replaced**, in `goals/README.md`, `claude-execution-and-account-routing.md`,
-  `claude-only-v1-execution.md`, `v1-harness-design.md` and
-  `configurable-workflows.md`. The twelfth, `invariants/README.md:10`, was left
-  exactly as this document directs and registered instead. One occurrence in
-  `v1-harness-design.md`'s frontmatter — `re-arm` in a recorded amendment reason
-  — was also left: a revision's reason is what the architect decided in her own
-  words on a date, and rewriting one falsifies a record.
+  plus `in force`, `minute zero` and `posture` — decoration by this document's
+  reading, registered rather than replaced because each survives only in the
+  invariants home, whose wording this document says is the architect's alone.
+  Each of those three retires if she takes the rewording.
+- **Nine of the twelve Category 1 governed-document occurrences were replaced**:
+  `seam` ×2 in `claude-only-v1-execution.md` and
+  `claude-execution-and-account-routing.md`, `in force` ×2 in `goals/README.md`
+  and `claude-execution-and-account-routing.md`, and `posture` ×1, `re-arm` ×3
+  and `wedged` ×1 in `v1-harness-design.md`.
+- **Three of the twelve were left**, each for a reason this document already
+  states or a reason it would accept:
+  - `harness-is-the-only-role-invoker.md:20` (`posture`) — the text of an active
+    invariant. Registered instead.
+  - `invariants/README.md:10` (`in force`) — the prose governing how invariants
+    are amended, which this document says is nobody's to replace but the
+    architect's. Registered instead.
+  - `v1-harness-design.md:32` (`re-arm`) — inside a recorded amendment reason in
+    the frontmatter. A revision's reason is what the architect decided in her own
+    words on a date, and rewriting one falsifies a record rather than clarifying
+    a sentence. The check does not read frontmatter, for the same reason.
+- **Two occurrences outside the twelve** were found by rescanning the homes on
+  2026-08-31, in documents that did not carry them when this was measured:
+  `soak` ×1 in `configurable-workflows.md`, replaced; and `minute zero` ×2 in
+  `developer-verifies-before-submitting.md`, registered, being invariant text.
+  Neither is in the Category 1 table below, which records no governed-document
+  occurrence of either term.
 - **`internal/terms` is a declared check.** It reads the three artifact homes
   for the terms below and fails on one the register does not define, so nothing
   swept out here can come back undefined without a check going red. The reviewer
@@ -351,7 +365,7 @@ below are this document's own, restated against what is true after
 | Done condition | State |
 |---|---|
 | The sweep has run over open items and governed documents | **Met.** Both scans are complete and recorded here. |
-| Decorative coinages are gone | **Met in the governed documents, not in the tracker.** Eleven of the 12 governed occurrences were replaced on 2026-08-31; the twelfth, `invariants/README.md:10`, is registered rather than replaced because its wording is the architect's. The 54 occurrences in open items are untouched — the tracker is still outside a developer run's sandbox. |
+| Decorative coinages are gone | **Met in the governed documents, not in the tracker.** Nine of the 12 governed occurrences were replaced on 2026-08-31 and three were registered or left, each named in [What has landed](#what-has-landed): two are invariants-home wording that is the architect's, and one is inside a recorded amendment reason. The 54 occurrences in open items are untouched — the tracker is still outside a developer run's sandbox. |
 | Every surviving mechanism term has an architect ruling, and a plain-words first-use definition where kept | **Superseded.** The operator's amendment replaced the rename-or-define-at-first-use choice with registration: all six mechanism names are kept and defined once, in [the register](../terms.md). `amendment-19d55188…` and `amendment-1af49513…` are still undecided, and a ruling to rename any of them would now be a rename plus a retired entry. |
 | The item lists what was changed | **Met here rather than there.** The tracker was unreachable from the run that made the changes, so the account is [What has landed](#what-has-landed) above. |
 

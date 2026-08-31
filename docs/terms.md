@@ -46,15 +46,16 @@ to `in force` by name, so these three are the entries most worth losing.
 ## Replaced rather than registered
 
 These were decoration: each named nothing a reader can point at, and each had an
-ordinary word that said the same thing. Where one was written in a governed
-document it was replaced rather than given an entry; several were only ever in
-the tracker's own items, which are the product manager's to reword. Either way
-the check below refuses any of them coming back into a governed document without
-an entry.
+ordinary word that said the same thing. The second column is the wording to
+write instead, rather than a claim that every occurrence has been changed: where
+one of these was written in a governed document it was replaced, and the rest
+are still in places outside this sweep — mostly the tracker's own items, which
+are the product manager's to reword. Either way the check below refuses any of
+them coming back into a governed document without an entry.
 
-| Term | What replaced it |
+| Term | Write instead |
 | --- | --- |
-| `cadence` | how often it repeats |
+| `cadence` | how often it repeats — still in the `yoyo slack` refusal *heartbeat must be positive; it is a cadence rather than a switch*, which is a shipped string rather than a document |
 | `one pane of glass` | one window |
 | `re-arm` | repeat the merge request |
 | `seam` | the boundary, named for what attaches to what |
