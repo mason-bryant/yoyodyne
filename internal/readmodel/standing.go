@@ -30,18 +30,19 @@
 //
 // Each line reads the truest record for it and nothing else. The runs come from
 // durable run state, the conversations from the conversation records and the
-// advisory lease that is the only thing that actually knows a turn is in
-// flight, the refusals from the queue's own account of what holds each entry
-// back, and the attention conditions from the switches, directives, proposals,
-// and unsettled runs the harness records as it goes. Nothing is read from a
-// session's memory of what it has already tried: that is a fact about one
-// process rather than about the product, and an item passed over because a
-// watch session remembers failing at it is an item this says nothing about.
+// advisory hold that is the only thing that actually knows a turn is in flight
+// — observed rather than taken, so that reading the status never costs the
+// operator the conversation it describes — the refusals from the queue's own
+// account of what holds each entry back, and the attention conditions from the
+// switches, directives, proposals, and unsettled runs the harness records as it
+// goes. Nothing is read from a session's memory of what it has already tried:
+// that is a fact about one process rather than about the product, and an item
+// passed over because a watch session remembers failing at it is an item this
+// says nothing about.
 package readmodel
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -77,15 +78,21 @@ type Runs interface {
 	Price(workItemID string) (runstate.ItemPrice, error)
 }
 
-// Conversations is the durable conversation state, and the lease that says
-// whether a turn is in flight. Both are needed and neither is enough: the record
-// says what the conversation is and how many turns it has had, and only the
-// lease says whether one is happening right now.
+// Conversations is the durable conversation state, and the observation that
+// says whether a turn is in flight. Both are needed and neither is enough: the
+// record says what the conversation is and how many turns it has had, and only
+// the hold says whether one is happening right now.
+//
+// The hold is observed rather than taken. A reading of the standing status must
+// leave every conversation exactly as free as it found it, because this is
+// asked of every conversation on every reading and hourly by the heartbeat, and
+// a probe that acquired would be refusing the operator their own chat for the
+// instant it held.
 //
 // It is satisfied by *runstate.ConversationStore.
 type Conversations interface {
 	Recorded() ([]runstate.Conversation, error)
-	Hold(runstate.ConversationIdentity) (*runstate.Lease, error)
+	InFlight(runstate.ConversationIdentity) (bool, error)
 }
 
 // Tracker is the admitted work and the tracker's own account of what can be
@@ -362,31 +369,20 @@ func readWorking(sources Sources, now time.Time) ([]WorkingTurn, string) {
 }
 
 // InFlight reports whether a process is holding one agent's conversation right
-// now, and why the question could not be answered when it could not. It answers
-// by taking the same lease a conversation would and letting it go again
-// immediately: an advisory lock is the only thing that actually decides this, so
-// asking it is the only answer that is not a guess.
+// now, and why the question could not be answered when it could not. It
+// observes the hold and acquires nothing, so asking costs the conversation
+// nothing: every surface asks this of every conversation, and the answer must
+// never be the reason the next question is answered differently.
 //
 // A failure to ask is not an answer. Reporting one as in flight would say every
 // agent at once was mid-turn whenever the state directory could not be opened,
 // which is both wrong and the opposite of what anybody would do about it.
 func InFlight(conversations Conversations, identity runstate.ConversationIdentity) (bool, string) {
-	lease, err := conversations.Hold(identity)
-	switch {
-	case errors.Is(err, runstate.ErrConversationHeld):
-		return true, ""
-	case err != nil:
+	inFlight, err := conversations.InFlight(identity)
+	if err != nil {
 		return false, err.Error()
 	}
-	// A release that could not be taken is another failure to ask, not an answer.
-	// The lease drops its lock before it closes, so what is left is a descriptor
-	// rather than a held conversation — but a release this process could not
-	// complete is exactly the state in which its own answers about this
-	// conversation stop being trustworthy.
-	if err := lease.Release(); err != nil {
-		return false, err.Error()
-	}
-	return false, ""
+	return inFlight, ""
 }
 
 // switches is what has stopped the harness choosing work, read once for both the

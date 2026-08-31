@@ -329,7 +329,7 @@ func readAgents(parts components) ([]agentReport, error) {
 		}
 		// Whether a turn is in flight is asked of the read model rather than
 		// answered again here: the standing status counts the same conversations
-		// from the same lease, and two surfaces asking that question their own way
+		// from the same hold, and two surfaces asking that question their own way
 		// is how they come to give an operator two answers.
 		inUse, problem := readmodel.InFlight(store, identity)
 		report.InUse = inUse
