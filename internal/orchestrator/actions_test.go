@@ -18,6 +18,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -164,6 +165,36 @@ func TestAStepDeclaresWhatTheStepsInsideItRequire(t *testing.T) {
 						step.action.Name, inner.Name, required, inner.Name)
 				}
 			}
+		}
+	}
+}
+
+// TestEveryCapabilityTheseActionsRequireHasAHolder joins the two registries the
+// authority workstream builds: what an action requires, and who holds it.
+//
+// Nothing checks one against the other at run time yet — a definition is compiled
+// under a grant its caller assembled, not under any role's bundle — so this is the
+// claim that the join will be possible at all. A capability a step requires and no
+// role holds is authority nothing could ever satisfy, and the two capabilities the
+// promotion needs are held by the harness rather than by a role, which is the
+// answer the invariant demands rather than a hole in the table.
+func TestEveryCapabilityTheseActionsRequireHasAHolder(t *testing.T) {
+	t.Parallel()
+
+	holders, err := rolecapability.Default()
+	if err != nil {
+		t.Fatalf("rolecapability.Default() error = %v", err)
+	}
+	for _, step := range deliverySteps() {
+		for _, required := range step.action.Capabilities {
+			if len(holders.RolesHolding(required)) > 0 {
+				continue
+			}
+			if _, harness := holders.HarnessHolds(required); harness {
+				continue
+			}
+			t.Errorf("%q requires %q and nothing holds it: no role's bundle carries it and it is not recorded as the harness's own",
+				step.action.Name, required)
 		}
 	}
 }

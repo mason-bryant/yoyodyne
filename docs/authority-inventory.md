@@ -47,6 +47,24 @@ grant marker, the promotion under lease — are listed and pinned without the
 sweep finding them, because listing is what makes them reviewable and pinning is
 what stops them moving silently.
 
+## What re-expresses it
+
+[`internal/rolecapability`](../internal/rolecapability/rolecapability.go) is this
+document said once more, in capabilities rather than in role names: five bundles,
+one per role, built from the vocabulary
+[`internal/capability`](../internal/capability/capability.go) declares. Nothing
+reads it yet — no authorization site below has changed — and it is held to the
+inventory all the same, by a table that answers every row here with the capability
+question that row becomes, or with the reason there is not one. A row added below
+and left unanswered fails that check, which is what stops the re-expression
+quietly falling behind the thing it re-expresses.
+
+Two capabilities belong to no role. The promotion lease and the branch it admits a
+move onto are the harness's, as the three rows binding *the harness* below already
+say and as
+[`one-promotion-per-target-branch`](decisions/invariants/one-promotion-per-target-branch.md)
+requires: no agent performs a promotion, so no role's bundle confers one.
+
 ## The inventory
 
 | Check | Binds | File | Declaration | Refuses |
@@ -110,6 +128,9 @@ what stops them moving silently.
 | run.integrate-under-lease | the harness | `internal/orchestrator/pipeline.go` | `(*activeRun).integrate` | Moving a target branch without first holding that branch's promotion lease. |
 | converge.catch-up-under-lease | the harness | `internal/orchestrator/converge.go` | `(Reconciler).catchUp` | The reconciler moving a target branch outside the same lease, so a catch-up and a promotion never read one branch and then both move it. |
 | capability.known | every role | `internal/capability/capability.go` | `(Capability).Known` | Answers what the two rows below refuse on: the vocabulary an action declares its authority in is a closed list in Go, so a name nothing here declares is not one anything can require. |
+| rolecapability.role-bundles | every role | `internal/rolecapability/bundles.go` | `bundles` | Nothing, by itself: it is the statement of what each of the five roles holds, derived from the rows above and written in Go so that configuration cannot widen it. It is listed because it is the other half of this document, and a change to it is a change to what the harness says a role may do. |
+| rolecapability.bundles-closed | every role | `internal/rolecapability/rolecapability.go` | `New` | A bundle for a role the harness does not have, two bundles for one role, a role no bundle describes, a bundle holding nothing or holding a capability nothing declares, and a declared capability that neither a role nor the harness holds. All of it at construction, from a literal table. |
+| rolecapability.harness-held | the harness | `internal/rolecapability/bundles.go` | `harnessHeld` | A role bundle conferring the promotion. The lease and the branch move it admits are recorded as the harness's own, each with the reason no role holds it, and a bundle claiming one is refused where the registry is built. |
 | action.registry-closed | every role | `internal/action/action.go` | `New` | An action requiring a capability nothing declares, declaring no capabilities at all, or naming no trusted function it wraps. Configuration selects sequence; code grants capability. |
 | workflow.catalog-closed | every role | `internal/workflow/validate.go` | `NewCatalog` | A catalog entry naming a capability the repository does not declare, which would be a claim about authority nothing grants. |
 | workflow.compiled-under-grant | every role | `internal/workflow/compile.go` | `Grant` | A definition selecting an action that requires a capability the grant it is compiled under does not confer, and a compile under a grant that confers nothing at all. It is refused before an instance exists and before any work is claimed, so a definition never widens the authority it was bound with. The refusal is made by the loader's `Compile`, whose generic receiver this inventory cannot name, so the row pins the grant it is made against. |
