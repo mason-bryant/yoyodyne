@@ -163,28 +163,70 @@ func TestAnAnswerNamesAnAttemptThatWasMade(t *testing.T) {
 	assertRefused(t, request.Validate(), "response names attempt 4")
 }
 
-// What served the answer is checked for shape rather than for presence: a
-// record written before the harness carried these must still load, and one
-// naming an account nothing could have issued says less than one naming none,
+// This record is the only durable copy of the invocation that produced the
+// answer, so what served it is required rather than optional. An answer pinned
+// to nothing is one nobody can attribute or reconstruct once the provider
+// session behind it is gone.
+func TestAnAnswerNamesWhatServedIt(t *testing.T) {
+	t.Parallel()
+
+	moment := time.Date(2026, 8, 22, 9, 30, 0, 0, time.UTC)
+	answered := testRequest(1)
+	answered.Attempts = []Attempt{testFinishedAttempt(1, "harness-a", moment, "")}
+	answered.Outcome = OutcomeAnswered
+	answered.SettledAt = &moment
+
+	bare := answered
+	bare.Response = &Response{Text: "It costs a design revision.", At: moment, Attempt: 1}
+	for _, want := range []string{
+		"records no backend",
+		"response model is required",
+		"records no account alias",
+		"records no configuration revision",
+	} {
+		assertRefused(t, bare.Validate(), want)
+	}
+
+	// The two that are recorded where they are known: a provider that does not
+	// say which model it served, and a binary built without the stamping, each
+	// leave a comparison nobody can make rather than an answer served by nothing.
+	served := *testAnswer(1, moment)
+	served.ResolvedModel, served.Build = "", ""
+	unstamped := answered
+	unstamped.Response = &served
+	if err := unstamped.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want the resolved model and build optional", err)
+	}
+}
+
+// Shape is checked as well as presence: a record naming an account or a
+// configuration nothing could have issued is worse than one naming none,
 // because it reads as evidence.
 func TestWhatServedTheAnswerIsCheckedForShape(t *testing.T) {
 	t.Parallel()
 
 	moment := time.Date(2026, 8, 22, 9, 30, 0, 0, time.UTC)
-	bare := testRequest(1)
-	bare.Attempts = []Attempt{testFinishedAttempt(1, "harness-a", moment, "")}
-	bare.Response = &Response{Text: "It costs a design revision.", At: moment, Attempt: 1}
-	bare.Outcome = OutcomeAnswered
-	bare.SettledAt = &moment
-	if err := bare.Validate(); err != nil {
-		t.Fatalf("Validate() error = %v, want a response from an older build accepted", err)
-	}
+	request := testRequest(1)
+	request.Attempts = []Attempt{testFinishedAttempt(1, "harness-a", moment, "")}
+	request.Outcome = OutcomeAnswered
+	request.SettledAt = &moment
 
-	invented := bare
-	response := *bare.Response
-	response.AccountAlias = "Work Account"
-	invented.Response = &response
-	assertRefused(t, invented.Validate(), "is not an account alias")
+	for _, invented := range []struct {
+		what string
+		with func(*Response)
+		want string
+	}{
+		{"backend", func(r *Response) { r.Backend = "Claude Code" }, "is not a backend identifier"},
+		{"account", func(r *Response) { r.AccountAlias = "Work Account" }, "is not an account alias"},
+		{"configuration", func(r *Response) { r.ConfigRevision = "revision-two" }, "is not a configuration revision"},
+		{"build", func(r *Response) { r.Build = "not-a-revision" }, "is not a revision"},
+	} {
+		response := *testAnswer(1, moment)
+		invented.with(&response)
+		claimed := request
+		claimed.Response = &response
+		assertRefused(t, claimed.Validate(), invented.want)
+	}
 }
 
 // A judgment or a request that names fifty documents is one that will be stale

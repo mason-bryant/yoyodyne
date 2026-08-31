@@ -247,8 +247,17 @@ func Survey(state State) Plan {
 	if len(state.Revisions) == 0 {
 		return plan
 	}
+	// A request this reading has just settled is over, whatever its own record
+	// still says: its outcome is empty only because the harness has not written
+	// the ending yet. Reporting that its answer will be read against something
+	// that has moved would be degraded state nobody can act on, which is the one
+	// thing that makes the list unreadable.
+	settling := make(map[string]bool, len(plan.Settle))
+	for _, settlement := range plan.Settle {
+		settling[settlement.RequestID] = true
+	}
 	for _, request := range requests {
-		if !request.Open() {
+		if !request.Open() || settling[request.ID] {
 			continue
 		}
 		for _, changed := range request.Moved(state.Revisions) {

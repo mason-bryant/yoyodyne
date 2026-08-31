@@ -19,8 +19,18 @@ package runstate
 // exchange is: a request is one thing that changes as it goes rather than a
 // stream of events about one, and a process that dies mid-write leaves the
 // previous state rather than a truncated file nothing can read.
+//
+// Every write goes through the shared safe-write primitive with this product's
+// supervision directory declared as the root it is confined to. Checking the
+// identifier against its own pattern is a lexical check, and the
+// repository-writes-are-physically-confined invariant records lexical checks as
+// proven insufficient: a directory under the state root can be replaced by a
+// symlink at any time, and a path string never proves where the bytes land.
+// The primitive resolves every component against the filesystem immediately
+// before it writes and refuses anything that leaves.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +40,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/supervision"
 )
 
@@ -74,11 +85,10 @@ func (s *SupervisionStore) SaveRequest(recorded supervision.Request) error {
 	if err := s.validateRequest(recorded); err != nil {
 		return err
 	}
-	path, err := s.requestPath(recorded.ID)
-	if err != nil {
-		return err
+	if !supervision.ValidRequestID(recorded.ID) {
+		return fmt.Errorf("request id %q is invalid", recorded.ID)
 	}
-	return replaceRecord(s.RequestsRoot(), path, "request", recorded)
+	return s.write("requests/"+recorded.ID+".json", "request", recorded)
 }
 
 // LoadRequest reads one request by its full identifier.
@@ -133,11 +143,10 @@ func (s *SupervisionStore) SaveReadiness(recorded supervision.Readiness) error {
 	if err := s.validateReadiness(recorded); err != nil {
 		return err
 	}
-	path, err := s.readinessPath(recorded.ID)
-	if err != nil {
-		return err
+	if !supervision.ValidReadinessID(recorded.ID) {
+		return fmt.Errorf("readiness id %q is invalid", recorded.ID)
 	}
-	return replaceRecord(s.ReadinessRoot(), path, "readiness", recorded)
+	return s.write("readiness/"+recorded.ID+".json", "readiness", recorded)
 }
 
 // LoadReadiness reads one judgment by its full identifier.
@@ -178,6 +187,22 @@ func (s *SupervisionStore) Readiness() ([]supervision.Readiness, error) {
 	return records, nil
 }
 
+// HoldRequest takes the exclusive lease on one request without waiting,
+// reporting whether it got it.
+//
+// This is what tells a delivery in flight from one whose process is gone, and
+// it is an advisory file lock for the reason every other lease here is: the
+// operating system drops it when its holder exits, so a killed harness leaves
+// nothing for anybody to clear and the next pass simply finds the request free.
+// Asking whether somebody holds it and taking it afterwards would leave a window
+// between the two, so taking it is the question.
+func (s *SupervisionStore) HoldRequest(requestID string) (*Lease, bool, error) {
+	if !supervision.ValidRequestID(requestID) {
+		return nil, false, fmt.Errorf("request id %q is invalid", requestID)
+	}
+	return TryLeasePath(filepath.Join(s.root, "leases", requestID+".lease"), "request "+requestID)
+}
+
 func (s *SupervisionStore) validateRequest(recorded supervision.Request) error {
 	if recorded.ProductID != s.productID {
 		return fmt.Errorf("request product %q does not match store product %q", recorded.ProductID, s.productID)
@@ -208,32 +233,51 @@ func (s *SupervisionStore) readinessPath(id string) (string, error) {
 	return filepath.Join(s.ReadinessRoot(), id+".json"), nil
 }
 
-// replaceRecord writes one record durably, as a temporary file and a rename.
-func replaceRecord(directory, path, label string, value any) error {
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create %s directory: %w", label, err)
-	}
-	temporary, err := os.CreateTemp(directory, "."+label+"-*.tmp")
+// write puts one record where the supervision-relative path names, through the
+// primitive that decides confinement against the filesystem rather than against
+// the path string.
+//
+// The root has to exist before it can be resolved, so it is created here with
+// the permissions the rest of the state root carries. That is the one directory
+// this makes itself, and it is the same thing every other caller of the
+// primitive does with the root it declares. What it buys is that the records
+// below it are owner-only whatever permissions the primitive gives the files
+// themselves, since these are runtime state rather than documents committed
+// beside the code.
+func (s *SupervisionStore) write(relative, label string, value any) error {
+	encoded, err := encodeRecord(label, value)
 	if err != nil {
-		return fmt.Errorf("create temporary %s: %w", label, err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return fmt.Errorf("secure temporary %s: %w", label, err)
-	}
-	if err := writeJSONFile(temporary, label, value); err != nil {
-		temporary.Close()
 		return err
 	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary %s: %w", label, err)
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return fmt.Errorf("create the %s directory: %w", label, err)
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace %s: %w", label, err)
+	root, err := repowrite.NewRoot(s.root)
+	if err != nil {
+		return fmt.Errorf("resolve the %s root: %w", label, err)
 	}
-	return syncDirectory(directory)
+	written, err := root.WriteFile(relative, encoded)
+	if err != nil {
+		return fmt.Errorf("write %s: %w", label, err)
+	}
+	return syncDirectory(filepath.Dir(written))
+}
+
+// encodeRecord renders one record as the bytes that will be written, and holds
+// it to the same size limit every other record in this store is held to: what
+// was written has to be readable back, and the reader stops at that limit.
+func encodeRecord(label string, value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return nil, fmt.Errorf("encode %s: %w", label, err)
+	}
+	if buffer.Len() > maxEncodedStateBytes {
+		return nil, fmt.Errorf("encoded %s is %d bytes, limit is %d", label, buffer.Len(), maxEncodedStateBytes)
+	}
+	return buffer.Bytes(), nil
 }
 
 // readRecord decodes one record strictly: an unknown field or trailing content

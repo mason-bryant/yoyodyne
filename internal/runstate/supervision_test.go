@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/supervision"
 )
 
@@ -64,7 +65,13 @@ func TestARestartReadsBackWhatEachInterruptedRequestNeeds(t *testing.T) {
 		Number: 1, Holder: "harness-a", StartedAt: answered.OpenedAt,
 	}}
 	answered.Response = &supervision.Response{
-		Text: "It costs a design revision.", At: answered.OpenedAt.Add(time.Minute), Attempt: 1,
+		Text:           "It costs a design revision.",
+		At:             answered.OpenedAt.Add(time.Minute),
+		Attempt:        1,
+		Backend:        "claudecode",
+		Model:          "opus",
+		AccountAlias:   "work",
+		ConfigRevision: "cfg-0a1b2c3d",
 	}
 
 	// One had spent its last attempt, so nothing will finish it.
@@ -266,6 +273,39 @@ func TestJudgingAnItemAgainKeepsBothRecords(t *testing.T) {
 	current := supervision.Current(records)
 	if len(current) != 1 || current[0].ID != second.ID {
 		t.Fatalf("Current() = %#v, want the later judgment standing", current)
+	}
+}
+
+// Confinement is decided against the filesystem rather than against the path
+// string. The identifier pattern is a lexical check, and a directory under the
+// state root can be replaced by a symlink at any time — so a write aimed
+// through one is refused rather than landing outside the root it declared.
+func TestAWriteThroughASymlinkOutOfTheRootIsRefused(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	elsewhere := t.TempDir()
+	store := newTestSupervisionStore(t, root)
+
+	// The requests directory is replaced by a link out of the state root, which
+	// is exactly what a lexical check cannot see.
+	if err := os.MkdirAll(store.Root(), 0o700); err != nil {
+		t.Fatalf("create the supervision root: %v", err)
+	}
+	if err := os.Symlink(elsewhere, store.RequestsRoot()); err != nil {
+		t.Fatalf("plant the symlink: %v", err)
+	}
+
+	err := store.SaveRequest(testStoredRequest(1))
+	if err == nil {
+		t.Fatalf("SaveRequest() wrote through a symlink out of the state root")
+	}
+	var escape *repowrite.EscapeError
+	if !errors.As(err, &escape) {
+		t.Fatalf("SaveRequest() error = %v, want the escape named", err)
+	}
+	if entries, readErr := os.ReadDir(elsewhere); readErr != nil || len(entries) != 0 {
+		t.Fatalf("the write landed outside the root: %v, %v", entries, readErr)
 	}
 }
 

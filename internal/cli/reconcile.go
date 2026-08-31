@@ -25,8 +25,14 @@ type reconcileOutput struct {
 	// It is a count rather than the entries because the docket is read where it
 	// is acted on, which is the development manager's conversation; what this
 	// command reports is that the sweep found something, not what it found.
-	Docketed int    `json:"docketed"`
-	Error    string `json:"error,omitempty"`
+	Docketed int `json:"docketed"`
+	// Supervision is what this sweep made of the requests the roles have put to
+	// each other: the ones whose carrier is gone, the answers a dead process
+	// recorded and never closed, and the ones that ran out of attempts. It is
+	// reported beside the runs because it is the same recovery — a process died
+	// holding something — over a different kind of record.
+	Supervision []orchestrator.SupervisionResult `json:"supervision"`
+	Error       string                           `json:"error,omitempty"`
 }
 
 // reconcileRuns settles every run an interrupted process left outstanding and
@@ -50,7 +56,7 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 
 	parts, err := buildComponents(*configPath)
 	if err != nil {
-		return reportReconcileResult(stdout, stderr, *jsonOutput, nil, nil, orchestrator.Convergence{}, 0, err)
+		return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{}, err)
 	}
 	reconciler := reconcilerFrom(parts)
 	results, err := reconciler.Reconcile(ctx)
@@ -75,10 +81,46 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if docketErr != nil {
 		err = errors.Join(err, docketErr)
 	}
-	return reportReconcileResult(stdout, stderr, *jsonOutput, results, publications, convergence, docketed.Added, err)
+	// The requests the roles have put to each other are recovered here for the
+	// same reason the runs are: a process died holding something, and this is the
+	// sweep that finds out. It takes each request's own lease, so one running
+	// beside this sweep is left to the process carrying it, and it invokes
+	// nothing.
+	supervision, supervisionErr := sweepSupervision(ctx, parts)
+	err = errors.Join(err, supervisionErr)
+	return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{
+		Runs:         results,
+		Publications: publications,
+		Convergence:  convergence,
+		Docketed:     docketed.Added,
+		Supervision:  supervision,
+	}, err)
 }
 
-func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []orchestrator.Reconciliation, publications []orchestrator.PublicationRefresh, convergence orchestrator.Convergence, docketed int, err error) int {
+// sweepSupervision takes one voice-less pass of the management loop. A product
+// whose roles have never asked each other anything has nothing here, which is
+// not a failure to sweep.
+func sweepSupervision(ctx context.Context, parts components) ([]orchestrator.SupervisionResult, error) {
+	loop, err := supervisionLoopFrom(parts)
+	if err != nil {
+		return nil, err
+	}
+	pass, err := loop.Run(ctx)
+	return pass.Results, err
+}
+
+// reconcileSweep is everything one sweep found, gathered so the reporting takes
+// the sweep rather than a growing list of positional arguments.
+type reconcileSweep struct {
+	Runs         []orchestrator.Reconciliation
+	Publications []orchestrator.PublicationRefresh
+	Convergence  orchestrator.Convergence
+	Docketed     int
+	Supervision  []orchestrator.SupervisionResult
+}
+
+func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reconcileSweep, err error) int {
+	results, publications, convergence, docketed := sweep.Runs, sweep.Publications, sweep.Convergence, sweep.Docketed
 	// A run reconciliation could not settle stays outstanding, so the command
 	// reports failure rather than folding it into the settled results. A branch
 	// the sweep could not remove is the same kind of fact.
@@ -113,9 +155,18 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 	}
 	if jsonOutput {
-		output := reconcileOutput{Runs: results, Publications: publications, Convergence: convergence, Docketed: docketed}
+		output := reconcileOutput{
+			Runs:         results,
+			Publications: publications,
+			Convergence:  convergence,
+			Docketed:     docketed,
+			Supervision:  sweep.Supervision,
+		}
 		if results == nil {
 			output.Runs = []orchestrator.Reconciliation{}
+		}
+		if output.Supervision == nil {
+			output.Supervision = []orchestrator.SupervisionResult{}
 		}
 		if output.Publications == nil {
 			output.Publications = []orchestrator.PublicationRefresh{}
@@ -179,6 +230,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 		printPublications(stdout, stderr, publications)
 		printConvergence(stdout, stderr, convergence)
+		printSupervision(stdout, sweep.Supervision)
 	}
 	if failed {
 		return 1
@@ -271,6 +323,19 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 	}
 }
 
+// printSupervision reports what the sweep did with the requests the roles have
+// put to each other, and says nothing where it did nothing — which is nearly
+// every sweep, since a request being carried by a live process is the ordinary
+// state and a line about it every time is a line nobody reads.
+func printSupervision(stdout io.Writer, results []orchestrator.SupervisionResult) {
+	for _, result := range results {
+		fmt.Fprintf(stdout, "%s: %s\n", result.RequestID, result.Outcome)
+		if result.Detail != "" {
+			fmt.Fprintf(stdout, "  %s\n", result.Detail)
+		}
+	}
+}
+
 func printReconcileUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo reconcile [options]
 
@@ -301,6 +366,14 @@ It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development
 manager reads them. Docketing is keyed to what stopped, so sweeping twice
 dockets nothing twice.
+
+It also recovers the requests the roles have put to each other. Each one is
+taken under its own lease, so one a live process is carrying is left alone: an
+answer a dead process recorded and never got to close is closed rather than
+asked for again, and a request that ran out of attempts is ended and reported
+where the rest of what the harness noticed is read. Nothing is put in front of a
+role here — recovering from a lost process is never a reason to start an
+invocation nobody asked for.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

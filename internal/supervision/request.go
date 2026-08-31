@@ -195,24 +195,34 @@ func (a Attempt) Open() bool { return a.FinishedAt == nil }
 // Response is what the target role said, and what served the invocation that
 // produced it.
 //
-// The six fields naming the provider are what the
+// Four of the fields naming the provider are required whenever there is a
+// response at all: the backend, the model asked for, the account it was answered
+// on, and the configuration in force while it was. That is what the
 // durable-state-is-provider-independent invariant asks of every provider
-// invocation: which backend, which model was asked for and which was served,
-// which account, which configuration, and which harness binary made the call.
-// They are here rather than on the request because a request retried across a
-// configuration edit is answered by whatever served the attempt that answered
-// it.
+// invocation, and this record is the only durable copy of this one — a response
+// pinned to nothing is an answer nobody can attribute or reconstruct once the
+// session that produced it is gone. There is no older-record exemption to make,
+// because this schema is introduced with this code and no record predates it.
+//
+// They are on the response rather than on the request because a request retried
+// across a configuration edit is answered by whatever served the attempt that
+// answered it.
+//
+// The resolved model and the build are recorded where they are known and not
+// required. The provider names the model it actually served only where it says
+// so, and a binary built without the stamping carries no revision at all — which
+// is a comparison nobody can make rather than an answer served by nothing.
 type Response struct {
 	Text string    `json:"text"`
 	At   time.Time `json:"at"`
 	// Attempt is which delivery produced this, so the answer and the cost of
 	// getting it are the same record.
 	Attempt        int            `json:"attempt"`
-	Backend        domain.Backend `json:"backend,omitempty"`
-	Model          string         `json:"model,omitempty"`
+	Backend        domain.Backend `json:"backend"`
+	Model          string         `json:"model"`
+	AccountAlias   string         `json:"account_alias"`
+	ConfigRevision string         `json:"config_revision"`
 	ResolvedModel  string         `json:"resolved_model,omitempty"`
-	AccountAlias   string         `json:"account_alias,omitempty"`
-	ConfigRevision string         `json:"config_revision,omitempty"`
 	Build          string         `json:"build,omitempty"`
 	// SessionID is the provider session the invocation ran in, kept only because
 	// resuming one is cheaper than starting over. Nothing is read back from it
@@ -439,19 +449,32 @@ func (r Request) validateResponse() error {
 	if r.Response.CostUSD < 0 {
 		problems = append(problems, errors.New("response cost cannot be negative"))
 	}
-	// What served the invocation is checked for shape rather than for presence,
-	// exactly as an exchange round's is: a record naming an account or a
-	// configuration nothing could have produced says less than one naming
-	// neither, because it reads as evidence.
-	if r.Response.Backend != "" && !r.Response.Backend.Valid() {
+	// What served the invocation is required, and checked for shape as well. This
+	// record is the only durable copy of the invocation, so an answer pinned to
+	// nothing is one nobody can attribute once the session behind it is gone —
+	// and a record naming an account or a configuration nothing could have issued
+	// is worse than one naming none, because it reads as evidence.
+	if r.Response.Backend == "" {
+		problems = append(problems, errors.New("response records no backend; an answer names what served it"))
+	} else if !r.Response.Backend.Valid() {
 		problems = append(problems, fmt.Errorf("response backend %q is not a backend identifier", r.Response.Backend))
 	}
-	if r.Response.AccountAlias != "" && !accountAliasPattern.MatchString(r.Response.AccountAlias) {
+	problems = append(problems, boundedText("response model", r.Response.Model, MaxReferenceBytes, true))
+	if r.Response.AccountAlias == "" {
+		problems = append(problems, errors.New("response records no account alias; an answer names the account it was answered on"))
+	} else if !accountAliasPattern.MatchString(r.Response.AccountAlias) {
 		problems = append(problems, fmt.Errorf("response account alias %q is not an account alias", r.Response.AccountAlias))
 	}
-	if r.Response.ConfigRevision != "" && !configRevisionPattern.MatchString(r.Response.ConfigRevision) {
+	if r.Response.ConfigRevision == "" {
+		problems = append(problems, errors.New("response records no configuration revision; an answer names the configuration in force while it was given"))
+	} else if !configRevisionPattern.MatchString(r.Response.ConfigRevision) {
 		problems = append(problems, fmt.Errorf("response config revision %q is not a configuration revision", r.Response.ConfigRevision))
 	}
+	// The resolved model and the build are recorded where they are known. A
+	// provider that does not say which model served the call, and a binary built
+	// without the stamping, each leave a comparison nobody can make rather than
+	// an invocation served by nothing.
+	problems = append(problems, boundedText("response resolved model", r.Response.ResolvedModel, MaxReferenceBytes, false))
 	if r.Response.Build != "" && !buildPattern.MatchString(r.Response.Build) {
 		problems = append(problems, fmt.Errorf("response build %q is not a revision", r.Response.Build))
 	}

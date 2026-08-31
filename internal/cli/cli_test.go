@@ -204,7 +204,7 @@ func TestReconcileReportsTheCatchUpASettleMadeAndTheOneItHeld(t *testing.T) {
 			Catchup:    &gitworktree.Catchup{TargetBranch: "main", Held: "the primary checkout has unsaved changes"},
 		},
 	}
-	code := reportReconcileResult(&stdout, &stderr, false, results, nil, orchestrator.Convergence{}, 0, nil)
+	code := reportReconcileResult(&stdout, &stderr, false, reconcileSweep{Runs: results}, nil)
 	if code != 0 {
 		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
 	}
