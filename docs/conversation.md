@@ -644,6 +644,12 @@ shows it under what is no longer in force, reading as withdrawn. Withdrawing one
 that pauses work lifts that pause without answering what it was waiting for,
 which is what taking a question back means.
 
+From a conversation, who is you: the record names the conversation and the turn
+you did it on. From the command line it is asked for rather than assumed —
+`--by` is required, because agents run `yoyo` too and a command line does not say
+who typed at it. Putting "the operator" on a withdrawal an agent made would be a
+false answer to the one question that record exists to answer.
+
 From the command line the same records are reachable, which is how a directive
 you gave to an agent other than the product manager gets written down:
 
@@ -654,7 +660,8 @@ you gave to an agent other than the product manager gets written down:
   --received-by reviewer \
   "do publishing differently"
 ./bin/yoyo directive resolve --resolution "the second one" directive-3f2a
-./bin/yoyo directive withdraw --reason "recorded in error: that was a question" directive-05d6
+./bin/yoyo directive withdraw --by "Mason, at a terminal" \
+  --reason "recorded in error: that was a question" directive-05d6
 ```
 
 What the harness enforces is the pause; what it does not do yet is work out

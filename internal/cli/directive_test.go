@@ -291,12 +291,13 @@ func TestWithdrawingADirectiveFromTheCommandLineEndsItWithoutDeletingIt(t *testi
 
 	// By a prefix, which is how anybody names one out of a listing.
 	withdrawn := runDirectiveOK(t, configPath, "withdraw",
+		"--by", "Mason, at a terminal",
 		"--reason", "recorded in error: this was a question about a run, not an instruction",
 		miscategorized[:len("directive-")+6])
 	for _, wanted := range []string{
 		"withdrawn",
 		"no longer in force",
-		"the operator, at a command line",
+		"Mason, at a terminal",
 		"recorded in error: this was a question about a run, not an instruction",
 		"nothing was deleted",
 	} {
@@ -344,25 +345,33 @@ func TestWithdrawRefusesWhatWouldLeaveTheRecordUnanswerable(t *testing.T) {
 	}{
 		{
 			name: "withdrawing without saying why",
-			args: []string{"withdraw", "--reason", "", standing},
+			args: []string{"withdraw", "--by", "Mason, at a terminal", "--reason", "", standing},
 			code: 1,
 			want: "say why the directive is withdrawn",
 		},
 		{
-			name: "withdrawing with nobody withdrawing it",
-			args: []string{"withdraw", "--reason", "we do it the other way now", "--by", "", standing},
+			// Who is asked for rather than assumed: agents run this binary too, and a
+			// default would put the operator's name on a withdrawal an agent made.
+			name: "withdrawing without saying who",
+			args: []string{"withdraw", "--reason", "we do it the other way now", standing},
 			code: 1,
-			want: "say who withdrew the directive",
+			want: "say who is withdrawing it",
+		},
+		{
+			name: "withdrawing with an empty who",
+			args: []string{"withdraw", "--reason", "we do it the other way now", "--by", "  ", standing},
+			code: 1,
+			want: "say who is withdrawing it",
 		},
 		{
 			name: "withdrawing a directive nobody recorded",
-			args: []string{"withdraw", "--reason", "recorded in error", "directive-" + strings.Repeat("0", 32)},
+			args: []string{"withdraw", "--by", "Mason, at a terminal", "--reason", "recorded in error", "directive-" + strings.Repeat("0", 32)},
 			code: 1,
 			want: "no directive is recorded under that reference",
 		},
 		{
 			name: "withdrawing nothing in particular",
-			args: []string{"withdraw", "--reason", "recorded in error"},
+			args: []string{"withdraw", "--by", "Mason, at a terminal", "--reason", "recorded in error"},
 			code: 2,
 			want: "requires exactly one directive id",
 		},
@@ -370,7 +379,7 @@ func TestWithdrawRefusesWhatWouldLeaveTheRecordUnanswerable(t *testing.T) {
 			// The pause is already lifted and the work it held has already carried
 			// on, on the strength of the answer.
 			name: "withdrawing a directive that has already ended",
-			args: []string{"withdraw", "--reason", "never mind", pausing},
+			args: []string{"withdraw", "--by", "Mason, at a terminal", "--reason", "never mind", pausing},
 			code: 1,
 			want: "no longer in force",
 		},

@@ -15,6 +15,7 @@ package cli
 // stopped, and resolving one says plainly what it released.
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -178,17 +179,32 @@ func resolveDirective(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// withdrawDirective takes a directive out of force. It is the operator's own
-// act and the only one that ends an operational directive, so who is recorded as
-// having done it is the operator: this runs where they run it, exactly as an
-// artifact approval does, and the surface it came from is what the record names.
+// withdrawDirective takes a directive out of force. It is the only act that ends
+// an operational directive, and who did it is the one thing the record cannot
+// work out for itself, so this asks rather than assuming.
+//
+// There is deliberately no default. A command line is not proof of an operator:
+// agents run this binary too, under the harness, and a default of "the operator"
+// would put the operator's name on a directive an agent ended — on the single
+// field that exists to say who ended it, in a record whose whole purpose is to
+// still be answerable long after the run that wrote it. An approval can assume
+// its typist because approving is refused to everything but a person; nothing
+// refuses an agent a command line, so this is the honest arrangement rather than
+// the convenient one.
 func withdrawDirective(args []string, stdout, stderr io.Writer) int {
 	flags := newDirectiveFlags("directive withdraw", stderr)
 	reason := flags.set.String("reason", "",
 		"why you no longer mean it; required, because the record keeps what was said and this is what says why it stopped applying")
-	by := flags.set.String("by", operatorAtACommandLine, "who is withdrawing it")
+	by := flags.set.String("by", "", "who is withdrawing it; required, and it is what the record answers for who ended the directive")
 	if code, ok := flags.parse(args, 1); !ok {
 		return code
+	}
+	if strings.TrimSpace(*by) == "" {
+		// Refused here rather than left to the record, so the message can say what
+		// to put there. The record refuses it too, which is what holds for every
+		// other caller.
+		return reportDirectiveError(stdout, stderr, *flags.jsonOutput,
+			errors.New("say who is withdrawing it, as --by: yourself if you are the operator, or the agent and the run if a run is doing it; a command line does not say who typed at it"))
 	}
 	store, code := flags.store(stderr)
 	if code != 0 {
@@ -213,12 +229,6 @@ func withdrawDirective(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
-
-// operatorAtACommandLine is who a withdrawal made from a terminal is recorded
-// as having been made by. A command line is the operator's, in the same way an
-// artifact approval typed at one is, and naming the surface is what keeps this
-// honest: it is the strongest claim about who this process can actually make.
-const operatorAtACommandLine = "the operator, at a command line"
 
 // directiveFlags is the flag set every directive command shares: which
 // configuration to read the product from, and how to report the result.
@@ -324,7 +334,8 @@ and it continues from where it stopped once the directive is resolved.
   list [--all]                         the directives in force, or every one
   record [options] <what you said>     record one, pausing what it affects
   resolve --resolution <how> <id>      settle one and release the work it paused
-  withdraw --reason <why> <id>         take one back; it stops being in force
+  withdraw --by <who> --reason <why> <id>
+                                       take one back; it stops being in force
 
 A directive that pauses work stops being in force when it is resolved. An
 operational one is in force from the moment it is recorded and stays there:
@@ -336,6 +347,10 @@ nothing: what you said is kept, list --all shows it as withdrawn, and from then
 on nothing is enforced against it. Withdrawing one that pauses work lifts
 that pause without answering what it was waiting for, which is what taking back
 a question means.
+
+Who is asked for rather than assumed. Agents run this binary too, so a command
+line does not say who typed at it, and --by is the one field the record answers
+for who ended the directive.
 
 An id may be shortened to any prefix that names exactly one directive.
 
@@ -352,5 +367,5 @@ record options:
 
 withdraw options:
   --reason <why>        why you no longer mean it; required
-  --by <who>            who is withdrawing it (default: the operator, at a command line)`)
+  --by <who>            who is withdrawing it; required`)
 }
