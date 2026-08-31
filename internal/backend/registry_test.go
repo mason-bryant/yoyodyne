@@ -127,6 +127,31 @@ func TestAPluginIsRefusedForAnUnsupportedPosture(t *testing.T) {
 	}
 }
 
+// A built-in's claim is held to the same standard, and Codex's read-only claim
+// did not meet it: its read-only sandbox stops writes and network and still lets
+// the agent read the machine, which is the one thing the posture exists to
+// prevent. The descriptor claims what Codex can be held to, so a reviewer
+// configured on it is refused rather than run under a sandbox that does not hold
+// the posture — and the role stays served, so the refusal names the posture
+// instead of sending the operator after a role Codex does serve.
+func TestCodexClaimsOnlyThePostureItsSandboxHolds(t *testing.T) {
+	t.Parallel()
+
+	codex, known := BuiltInDescriptor(domain.BackendCodex)
+	if !known {
+		t.Fatal("BuiltInDescriptor() found no codex")
+	}
+	if codex.SupportsPosture(PostureReadOnly) {
+		t.Error("codex claims a read-only posture its sandbox does not enforce")
+	}
+	if !codex.SupportsPosture(PostureFor(domain.RoleDeveloper)) {
+		t.Error("codex refuses the developer posture its sandbox does hold")
+	}
+	if !codex.SupportsRole(domain.RoleReviewer) {
+		t.Error("codex stopped serving the reviewer, so a reviewer on codex is refused for the wrong reason")
+	}
+}
+
 // Every role the harness has needs a posture, because every posture the harness
 // derives from a role is what a backend is checked against. A role with no
 // posture would be checked against nothing.

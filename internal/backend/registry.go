@@ -140,6 +140,10 @@ func (d Descriptor) SupportsPosture(posture Posture) bool {
 // as not matching every Claude Code feature, serves the two roles inside a run,
 // and has no adapter yet — which is the same statement that used to live as a
 // switch on the backend identifier and is now the one place it is made.
+//
+// A descriptor states what its provider can be held to and not what would be
+// convenient, because everything downstream is derived from it: a posture
+// claimed here is a posture nothing later checks again.
 func BuiltInDescriptors() []Descriptor {
 	return []Descriptor{
 		{
@@ -167,8 +171,24 @@ func BuiltInDescriptors() []Descriptor {
 				ToolControl:       true,
 				LocalAuth:         true,
 			},
-			Roles:    []domain.AgentRole{domain.RoleDeveloper, domain.RoleReviewer},
-			Postures: Postures,
+			Roles: []domain.AgentRole{domain.RoleDeveloper, domain.RoleReviewer},
+			// Worktree-write only. Codex scopes writes to a directory, which is
+			// what the developer's posture asks for; what it has no setting for is
+			// the read-only posture as this harness defines it. Its read-only
+			// sandbox stops writes and network and still lets the agent read the
+			// machine, and reading unrelated local files and sending them to a
+			// provider is precisely what the read-only posture exists to prevent.
+			// So the descriptor claims the posture Codex can be held to and not the
+			// role's convenience: a reviewer configured on Codex is refused when the
+			// configuration loads, naming the posture, rather than run under a
+			// sandbox that does not hold it.
+			//
+			// This is a statement about Codex's sandbox rather than about the parked
+			// adapter (yoyodyne-ifd.6). An adapter that later achieves the posture's
+			// actual property — no filesystem read outside the evidence it was
+			// handed — is what would make this line true again, and it is the same
+			// line either way.
+			Postures: []Posture{PostureWorktreeWrite},
 			BuiltIn:  true,
 		},
 	}
