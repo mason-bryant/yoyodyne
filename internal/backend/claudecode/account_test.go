@@ -80,11 +80,12 @@ func TestARequestsAccountOverridesTheOneTheBackendWasBuiltFor(t *testing.T) {
 	assertConfigDir(t, runner.commands[0], "/state/accounts/second")
 }
 
-// An installation with one account runs byte for byte the command it always did:
-// no environment is imposed at all, so the provider reads the home it would have
-// read anyway. This is what makes the account plumbing additive rather than a
-// change every existing installation absorbs.
-func TestAnInvocationUnderNoNamedAccountLeavesTheEnvironmentAlone(t *testing.T) {
+// An installation with one account names no provider home at all, so the
+// provider reads the one it would have read anyway. This is what makes the
+// account plumbing additive rather than a change every existing installation
+// absorbs — what the invocation does carry beside it is the run's build cache,
+// which is nobody's account.
+func TestAnInvocationUnderNoNamedAccountNamesNoProviderHome(t *testing.T) {
 	t.Parallel()
 
 	stream := `{"type":"result","subtype":"success","session_id":"s","is_error":false,"result":"done","total_cost_usd":0.01}` + "\n"
@@ -92,13 +93,15 @@ func TestAnInvocationUnderNoNamedAccountLeavesTheEnvironmentAlone(t *testing.T) 
 	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
 		RunID:            testRunID,
 		Role:             domain.RoleDeveloper,
-		WorkingDirectory: "/worktree",
+		WorkingDirectory: t.TempDir(),
 		Prompt:           "implement the task",
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if runner.commands[0].Env != nil {
-		t.Fatalf("an invocation naming no account was given an environment: %v", runner.commands[0].Env)
+	for _, entry := range runner.commands[0].Env {
+		if strings.HasPrefix(entry, providerConfigDirVariable+"=") {
+			t.Fatalf("an invocation naming no account was pointed at a provider home: %q", entry)
+		}
 	}
 }
 

@@ -13,20 +13,41 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist release release-notes
+.PHONY: build test race vet fmt fmtcheck cachecheck check dist dist-verify clean-dist release release-notes
 .NOTPARALLEL: check
 
-build:
+# Every Go command below writes what it compiles to the build cache before it
+# compiles anything, so a cache the environment does not grant fails the whole
+# gate at setup -- "operation not permitted" on a path in the message and no
+# mention of a cache anywhere, which reads as a broken toolchain rather than as
+# a directory nobody granted. That is exactly what an agent sandbox looks like
+# from in here: it grants writes to the worktree, to .git, and to TMPDIR, and
+# the cache defaults under the user's home. The harness sets GOCACHE for the
+# runs it makes, so this is for an environment it did not make -- an interactive
+# agent session, or any other sandbox -- and it names the redirect rather than
+# leaving it to be rediscovered.
+cachecheck:
+	@cache="$$($(GO) env GOCACHE)"; \
+	if ! mkdir -p "$$cache" 2>/dev/null || ! touch "$$cache/.yoyodyne-writable" 2>/dev/null; then \
+		echo "The Go build cache at $$cache cannot be written, so every Go command here fails at setup." >&2; \
+		echo "Point it somewhere this environment grants, such as its temporary directory:" >&2; \
+		echo "  export GOCACHE=\"$${TMPDIR:-/tmp}/go-build\"" >&2; \
+		echo "docs/developing-yoyo.md says what else this affects." >&2; \
+		exit 1; \
+	fi; \
+	rm -f "$$cache/.yoyodyne-writable"
+
+build: cachecheck
 	mkdir -p $(dir $(BINARY))
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/yoyo
 
-test:
+test: cachecheck
 	$(GO) test ./...
 
-race:
+race: cachecheck
 	$(GO) test -race ./...
 
-vet:
+vet: cachecheck
 	$(GO) vet ./...
 
 fmt:

@@ -78,9 +78,16 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 		lastAccepted = sequence.Last()
 		var observerErrors []error
 		processResult, err := r.Process.Run(ctx, execution.Command{
-			Name:     shell,
-			Args:     []string{"-c", command},
-			Dir:      directory,
+			Name: shell,
+			Args: []string{"-c", command},
+			Dir:  directory,
+			// The checks are the project's own commands, so a toolchain that
+			// cannot write its build cache fails them at setup with nothing
+			// about the change to show for it. The environment is this
+			// process's own with the cache pointed inside the repository being
+			// checked -- the same redirect the run's own probe was given, so
+			// the two share what has already been compiled.
+			Env:      execution.WithGoBuildCache(nil, directory),
 			Timeout:  timeout,
 			Redactor: redactor,
 		}, func(output execution.Output) {

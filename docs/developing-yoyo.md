@@ -22,6 +22,38 @@ runs. Those same four are what this project declares as its
 let a change reach review or integration — so anything a run has to exercise has
 to reach one of the four, and for content that is not Go that means `make test`.
 
+## Where the build cache goes
+
+The Go toolchain writes what it has compiled to `$GOCACHE`, which defaults to a
+directory under your home. Every command above needs it before it compiles
+anything, so an environment that does not grant writes there fails all four
+checks at setup — `operation not permitted` on a path, and no mention of a cache
+anywhere in the message — which reads as a broken toolchain rather than as a
+directory nobody granted. An agent sandbox is exactly such an environment: it
+grants writes to the worktree, to `.git`, and to `TMPDIR`, and to nothing else.
+
+The harness sets `GOCACHE` for every run it makes, at `.git/yoyodyne/go-build`
+in the repository the run works in. That directory is granted, it is outside the
+working tree so it is not untracked content in anybody's checkout, and every
+worktree of one repository shares it — so a run's own execution probe and the
+checks the harness then applies to its change compile against one cache rather
+than two. `internal/execution/gocache.go` is the whole of it, and it creates
+nothing: it names a path, and the Go command creates its own cache.
+
+Nothing sets it for an environment the harness did not make, so redirect it
+yourself in one:
+
+```sh
+export GOCACHE="${TMPDIR:-/tmp}/go-build"
+```
+
+`make build`, `make test`, `make race`, and `make vet` refuse before they spend
+anything when the cache cannot be written, and the refusal names that redirect,
+so it costs a message rather than a diagnosis. `GOTMPDIR` is deliberately left
+alone: it defaults into `TMPDIR`, which every environment that runs these grants
+already, and the Go command refuses a `GOTMPDIR` that does not exist — naming
+one would add a way to fail rather than remove one.
+
 ## What a surface may do with emphasis
 
 This is the contract for anything that writes output an operator reads — a
