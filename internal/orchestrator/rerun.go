@@ -740,11 +740,10 @@ func rerunReason(entry triage.Entry, decided runstate.TriageCounters, taken int,
 	// rather than the arithmetic above. The prefix is no longer a fixed sentence:
 	// it carries an attribution clause per crossed cap, built from a name an
 	// operator chose, so measuring room and then not enforcing the bound on the
-	// result is how an over-length reason reaches the record. What it would do
-	// there is not an error — a selection past the bound fails validation and is
-	// dropped, so the run would record no reason at all, which is precisely the
-	// unaccounted work `selected-work-passes-intake-and-records-why` exists to
-	// prevent, arriving on the one path that carries an operator's own decision out.
+	// result is how an over-length reason reaches the record. It is folded here
+	// anyway rather than left to the record's own fold, because cutting the
+	// reasoning and keeping the whole of the verified decision is a better cut
+	// than the record can make from the assembled sentence alone.
 	return singleLine(reason+singleLine(reasoning, room), runstate.MaxSelectionReasonBytes)
 }
 
