@@ -81,6 +81,12 @@ type Launch struct {
 	Args    []string
 	Dir     string
 	Env     []string
+	// LogRoot is the root the sink's output is confined to and Log names the
+	// file inside it. They are a root and a path within it rather than one
+	// absolute name because that is what a confined write is: containment is
+	// decided against the filesystem below the root, so no symlink along Log can
+	// put a running sink's output outside it.
+	LogRoot string
 	Log     string
 }
 
@@ -172,18 +178,29 @@ func (s Supervisor) Ensure(ctx context.Context) (Supervision, error) {
 		}, nil
 	}
 
-	log := filepath.Join(s.Store.Root(), sinkLogFile)
+	// The sink's own state directory, made before anything is confined to it: a
+	// root that does not exist yet is not a root anything can be held inside.
+	if err := s.Store.ensureRoot(); err != nil {
+		return Supervision{}, err
+	}
+	logRoot, logPath := s.Store.SinkLog()
 	pid, err := s.Launcher.Launch(Launch{
 		Program: s.Program,
 		Args:    s.arguments(),
 		Dir:     s.Dir,
 		Env:     Environment(s.Environ, product, bot, app),
-		Log:     log,
+		LogRoot: logRoot,
+		Log:     logPath,
 	})
 	if err != nil {
 		return Supervision{}, fmt.Errorf("start the Slack sink for %s: %w", product, err)
 	}
-	return Supervision{Product: product, Outcome: OutcomeStarted, PID: pid, Log: log}, nil
+	return Supervision{
+		Product: product,
+		Outcome: OutcomeStarted,
+		PID:     pid,
+		Log:     filepath.Join(logRoot, filepath.FromSlash(logPath)),
+	}, nil
 }
 
 func (s Supervisor) arguments() []string {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite/writertest"
 )
 
 // The two tokens every test here uses. They are obviously not credentials, and
@@ -400,13 +401,16 @@ func TestAStartedSinkOutlivesThePassAndWritesToItsOwnLog(t *testing.T) {
 	}
 	t.Parallel()
 
-	log := filepath.Join(t.TempDir(), "products", "yoyodyne", "slack", sinkLogFile)
+	root := t.TempDir()
+	relative := "products/yoyodyne/slack/" + sinkLogFile
+	log := filepath.Join(root, filepath.FromSlash(relative))
 	pid, err := DetachedLauncher{}.Launch(Launch{
 		Program: "/bin/sh",
 		Args:    []string{"-c", "printenv " + SecretNamespaceVariable},
 		Dir:     t.TempDir(),
 		Env:     Environment(nil, "yoyodyne", botToken, appToken),
-		Log:     log,
+		LogRoot: root,
+		Log:     relative,
 	})
 	if err != nil {
 		t.Fatalf("Launch() error = %v", err)
@@ -430,6 +434,36 @@ func TestAStartedSinkOutlivesThePassAndWritesToItsOwnLog(t *testing.T) {
 	if info, err := os.Stat(log); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("the sink log is mode %v (%v), want it readable only by its owner", info.Mode().Perm(), err)
 	}
+}
+
+// A sink's log is a write like any other the harness owns, and the one thing
+// that makes it different is that the bytes keep coming for as long as the sink
+// runs: a symlink anywhere along the path would send every line of what the
+// harness is doing outside the root it was told to stay in, and nothing would
+// report it. So the launcher is held to the same topology matrix as every other
+// confined writer rather than to a test of its own.
+func TestTheSinkLogIsConfinedToTheStateRootItWasGiven(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the launcher is exercised on the Unix hosts Yoyodyne supports")
+	}
+
+	writertest.Run(t, writertest.Writer{
+		Name:      "the Slack sink launcher",
+		Directory: "products/yoyodyne/slack",
+		File:      sinkLogFile,
+		Write: func(_ *testing.T, root string) error {
+			// A process that exits immediately: what is under test is where its
+			// output was pointed, not what it wrote.
+			_, err := DetachedLauncher{}.Launch(Launch{
+				Program: "/bin/sh",
+				Args:    []string{"-c", ":"},
+				Env:     Environment(nil, "yoyodyne", botToken, appToken),
+				LogRoot: root,
+				Log:     "products/yoyodyne/slack/" + sinkLogFile,
+			})
+			return err
+		},
+	})
 }
 
 // A supervisor assembled without what it needs says so rather than starting

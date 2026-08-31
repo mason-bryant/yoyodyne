@@ -57,6 +57,12 @@ const (
 
 // Store is the sink's own durable state for one product.
 type Store struct {
+	// base is the state root everything below is inside, kept because a write
+	// that has to be confined is a root and a path within it rather than one
+	// absolute name.
+	base string
+	// within is where this store's state sits under that root, in slash form.
+	within  string
 	root    string
 	product domain.ProductID
 }
@@ -69,13 +75,37 @@ func NewStore(root string, productID domain.ProductID) (*Store, error) {
 	if err := domain.ValidateIdentifier("product id", string(productID)); err != nil {
 		return nil, err
 	}
+	base := filepath.Clean(root)
+	within := filepath.Join("products", string(productID), "slack")
 	return &Store{
-		root:    filepath.Join(filepath.Clean(root), "products", string(productID), "slack"),
+		base:    base,
+		within:  filepath.ToSlash(within),
+		root:    filepath.Join(base, within),
 		product: productID,
 	}, nil
 }
 
 func (s *Store) Root() string { return s.root }
+
+// SinkLog is where a supervised sink says what it is doing: the root that write
+// is confined to, and the path to the file inside it. The two are returned
+// together because neither is enough on its own — the containment is decided
+// against the filesystem below the root — and the layout is spelled once, here,
+// where the rest of this store's own paths come from.
+func (s *Store) SinkLog() (root, relative string) {
+	return s.base, s.within + "/" + sinkLogFile
+}
+
+// ensureRoot creates this product's sink state directory. It is the store's own
+// directory — the root everything it writes is confined inside — rather than a
+// write within somebody else's, which is why it is here and why nothing below
+// it creates directories by name.
+func (s *Store) ensureRoot() error {
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return fmt.Errorf("create the slack state directory: %w", err)
+	}
+	return nil
+}
 
 // Product is the product this store's state belongs to, and so the product the
 // sink built on it reports on. It is kept rather than re-derived from the path
@@ -562,8 +592,8 @@ func (s *Store) refusalPath() string { return filepath.Join(s.root, "refusals.js
 // previous file rather than half of the new one, which for the thread map is the
 // difference between reopening one thread and losing every thread it holds.
 func (s *Store) write(path, label string, value any) error {
-	if err := os.MkdirAll(s.root, 0o700); err != nil {
-		return fmt.Errorf("create the slack state directory: %w", err)
+	if err := s.ensureRoot(); err != nil {
+		return err
 	}
 	encoded, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {

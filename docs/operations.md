@@ -85,9 +85,10 @@ product, and whether the sink that is running was launched with them. See
 A stopped sink is the one finding here you need not act on by hand. On macOS,
 `yoyo slack ensure` starts one if nothing is reporting for this product, from
 this product's own keychain items, and does nothing when a sink is already
-running — so it is what a maintenance pass runs on a schedule, in each product
-on the machine. `yoyo doctor` still only diagnoses: it changes nothing, and
-starting the sink is the other command's job.
+running — so it is what an unattended pass calls, once per product checkout on
+the machine. Scheduling it is still yours: nothing `yoyo` installs runs it for
+you. `yoyo doctor` only diagnoses — it changes nothing, and starting the sink is
+the other command's job.
 
 ## Pausing everything, and resuming it
 

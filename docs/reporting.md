@@ -548,7 +548,8 @@ keychain items into that one process. It is safe to run on a schedule — an
 unattended pass every few minutes meets a running sink and does nothing — and it
 is safe on a machine running several harnesses, because whether a sink is
 running is asked of this product's lease rather than of the process table, where
-one project's `yoyo slack` answers for every project's.
+one project's `yoyo slack` answers for every project's. Putting it on a schedule
+is yours: the harness ships the step and not the timer.
 [`docs/slack/setup.md`](slack/setup.md#6-start-the-sink) has the rest of it.
 
 **The top of the channel reads as a status board.** Each thread's opening message

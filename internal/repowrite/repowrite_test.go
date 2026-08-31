@@ -165,6 +165,59 @@ func TestAWriteLeavesNoTemporaryFileBehind(t *testing.T) {
 	}
 }
 
+// What OpenAppend is for is output that keeps arriving: a descriptor a process
+// writes to for as long as it runs. So it adds to what is there rather than
+// replacing it, and it makes the directories it needs, the same way a document
+// written into a directory nobody created yet does.
+func TestAppendingAddsToWhatIsAlreadyThere(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	for _, line := range []string{"first\n", "second\n"} {
+		opened, err := root.OpenAppend("state/sink.log", 0o600, 0o700)
+		if err != nil {
+			t.Fatalf("OpenAppend() error = %v", err)
+		}
+		if _, err := opened.WriteString(line); err != nil {
+			t.Fatalf("WriteString() error = %v", err)
+		}
+		if err := opened.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}
+	written := filepath.Join(root.Path(), "state", "sink.log")
+	if content := readFile(t, written); content != "first\nsecond\n" {
+		t.Fatalf("content = %q, want the second open to have added to the first", content)
+	}
+	info, err := os.Stat(written)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the appended file is mode %v (%v), want the mode it was opened with", info.Mode().Perm(), err)
+	}
+}
+
+// The reason this is in this package at all: a descriptor handed to a
+// long-lived process is a write nobody watches afterwards, so where it points
+// is decided here and refused here.
+func TestAppendingThroughASymlinkOutOfTheRepositoryIsRefused(t *testing.T) {
+	t.Parallel()
+
+	root, outside := repository(t)
+	writeFile(t, filepath.Join(outside, "sink.log"), "somebody else's log")
+	link(t, filepath.Join(outside, "sink.log"), filepath.Join(root.Path(), "sink.log"))
+
+	opened, err := root.OpenAppend("sink.log", 0o600, 0o700)
+	if opened != nil {
+		opened.Close()
+	}
+	var refused *EscapeError
+	if !errors.As(err, &refused) {
+		t.Fatalf("OpenAppend() error = %v, want an EscapeError", err)
+	}
+	if content := readFile(t, filepath.Join(outside, "sink.log")); content != "somebody else's log" {
+		t.Fatalf("the file outside the repository reads %q, and a refused append changed it", content)
+	}
+}
+
 func TestARootThatIsNotAUsableRepositoryIsRefused(t *testing.T) {
 	t.Parallel()
 
