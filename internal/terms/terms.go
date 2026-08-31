@@ -21,6 +21,13 @@
 // that the sweep does not have to be run twice — a term taken out of these
 // documents cannot quietly come back, and a term kept has to say what it means.
 //
+// The list is closed but the spelling is not. A term is looked for however its
+// parts are spaced — hyphenated, spaced, closed up, or broken by a line wrap —
+// because those are one word to a reader and a check that knew only the spelling
+// the sweep recorded would be a floor a hyphen walks over. `minute-zero` did
+// exactly that to the sweep and to the first version of this check, which is why
+// pattern is written the way it is.
+//
 // Where the register decides and the check only reports: adding an entry to
 // `docs/terms.md` permits a term, and removing the entry forbids it again,
 // neither of which is a change to this package. A term nothing here lists is
@@ -70,7 +77,9 @@ type Coinage struct {
 	Term string
 	// Match is what the scan looks for at a word start, which is the stem rather
 	// than the term where a term inflects: `wedge` catches `wedged` and `starv`
-	// catches `starving`, the same way the sweep counted them.
+	// catches `starving`, the same way the sweep counted them. Where the stem is
+	// written in more than one part, every spacing of those parts is looked for
+	// rather than only the one written here — see pattern.
 	Match string
 	// Whole holds the match to a whole word, for a term whose stem also begins an
 	// ordinary word that is not it. `seamless` is not `seam`, and reporting it
@@ -229,11 +238,7 @@ func Check(root string) ([]Problem, error) {
 	}
 	patterns := make([]*regexp.Regexp, len(Vocabulary))
 	for index, coinage := range Vocabulary {
-		expression := `(?i)\b` + regexp.QuoteMeta(coinage.Match)
-		if coinage.Whole {
-			expression += `\b`
-		}
-		patterns[index] = regexp.MustCompile(expression)
+		patterns[index] = pattern(coinage)
 	}
 	for _, document := range documents {
 		content, err := read(filepath.Join(root, filepath.FromSlash(document)))
@@ -279,6 +284,95 @@ func checkRegister(entries []Entry) ([]Problem, map[string]bool) {
 // quotes, rather than prose somebody reads for its meaning.
 var fencePattern = regexp.MustCompile("^(?:```|~~~)")
 
+// termParts splits a match into the parts a writer can space differently.
+var termParts = regexp.MustCompile(`[-\s]+`)
+
+// pattern is what one term is looked for as: its parts, at a word start, spaced
+// however whoever wrote the sentence spaced them.
+//
+// A term written in more than one part is one word to a reader however it was
+// typed. `minute zero`, `minute-zero`, and a `minute` that a line wrap left at
+// the end of one line with its `zero` at the start of the next are the same
+// coinage, and a check that found only the spelling the register happens to use
+// is a floor with a hole in it — `minute-zero` is written in an active
+// invariant and escaped the sweep and the first version of this check alike.
+// Whichever spelling is found, the failure names the term as the register
+// spells it, because what the reader needs is the wording to write rather than
+// the respelling they used.
+//
+// The tolerance is only where the term is already divided. A term the register
+// writes as one word is looked for as one word: `hand back` is ordinary English
+// in sentences that have nothing to do with `handback`, and reporting those is
+// the mistake Whole already exists to avoid — a term this check misses a
+// reviewer still catches, and a term it reports wrongly is a check people learn
+// to argue with.
+func pattern(coinage Coinage) *regexp.Regexp {
+	parts := termParts.Split(coinage.Match, -1)
+	for index, part := range parts {
+		parts[index] = regexp.QuoteMeta(part)
+	}
+	// The separator is optional rather than required, so the parts closed up into
+	// one word — `rearm` for `re-arm` — is found too.
+	expression := `(?i)\b` + strings.Join(parts, `[-\s]*`)
+	if coinage.Whole {
+		expression += `\b`
+	}
+	return regexp.MustCompile(expression)
+}
+
+// passage is one stretch of a document that is read for coinage: consecutive
+// body lines, trimmed and joined, with the line number the stretch starts at.
+//
+// The document is read in stretches rather than a line at a time because a term
+// of more than one word is as easily broken by a line wrap as by a hyphen, and
+// neither makes it a different word. What ends a stretch is what a term cannot
+// wrap across: a blank line, a fence, the fenced lines themselves, and the
+// frontmatter. So `minute` at the end of one line and `zero` at the start of the
+// next is found, and the last word of one paragraph followed by the first word
+// of the next is not.
+type passage struct {
+	first int
+	text  string
+}
+
+// lineOf is the physical line a match at this offset falls on.
+func (p passage) lineOf(offset int) int {
+	return p.first + strings.Count(p.text[:offset], "\n")
+}
+
+// passages is the stretches of one document's body, in the order they are
+// written.
+func passages(lines []string) []passage {
+	var stretches []passage
+	var current []string
+	first := 0
+	fenced := false
+	end := func() {
+		if len(current) > 0 {
+			stretches = append(stretches, passage{first: first, text: strings.Join(current, "\n")})
+			current = nil
+		}
+	}
+	for index := skipFrontmatter(lines); index < len(lines); index++ {
+		line := strings.TrimSpace(lines[index])
+		if fencePattern.MatchString(line) {
+			fenced = !fenced
+			end()
+			continue
+		}
+		if fenced || line == "" {
+			end()
+			continue
+		}
+		if len(current) == 0 {
+			first = index + 1
+		}
+		current = append(current, line)
+	}
+	end()
+	return stretches
+}
+
 // problemsIn reports the unregistered coinage one document uses.
 //
 // Two parts of a document are deliberately not read. The frontmatter carries the
@@ -287,26 +381,34 @@ var fencePattern = regexp.MustCompile("^(?:```|~~~)")
 // falsifies a record rather than clarifying a sentence. Fenced blocks are code.
 func problemsIn(document, content string, patterns []*regexp.Regexp, registered map[string]bool) []Problem {
 	var problems []Problem
-	lines := strings.Split(content, "\n")
-	fenced := false
-	for index := skipFrontmatter(lines); index < len(lines); index++ {
-		line := strings.TrimSpace(lines[index])
-		if fencePattern.MatchString(line) {
-			fenced = !fenced
-			continue
-		}
-		if fenced {
-			continue
-		}
+	for _, stretch := range passages(strings.Split(content, "\n")) {
+		// Collected by line first and reported afterwards, so problems come out in
+		// the order the document is written whichever term was searched for first,
+		// and a term written twice on one line is one problem rather than two.
+		found := make(map[int]map[int]bool)
 		for position, coinage := range Vocabulary {
-			if registered[coinage.Term] || !patterns[position].MatchString(line) {
+			if registered[coinage.Term] {
 				continue
 			}
-			problems = append(problems, Problem{
-				Path: document, Line: index + 1, Term: coinage.Term,
-				Reason: fmt.Sprintf("%q is a coined term with no entry in %s; write %s, or register the term with a plain-word definition",
-					coinage.Term, RegisterPath, coinage.PlainWords),
-			})
+			for _, match := range patterns[position].FindAllStringIndex(stretch.text, -1) {
+				line := stretch.lineOf(match[0])
+				if found[line] == nil {
+					found[line] = make(map[int]bool)
+				}
+				found[line][position] = true
+			}
+		}
+		for line := stretch.first; line <= stretch.first+strings.Count(stretch.text, "\n"); line++ {
+			for position, coinage := range Vocabulary {
+				if !found[line][position] {
+					continue
+				}
+				problems = append(problems, Problem{
+					Path: document, Line: line, Term: coinage.Term,
+					Reason: fmt.Sprintf("%q is a coined term with no entry in %s; write %s, or register the term with a plain-word definition",
+						coinage.Term, RegisterPath, coinage.PlainWords),
+				})
+			}
 		}
 	}
 	return problems

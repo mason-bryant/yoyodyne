@@ -18,7 +18,14 @@ nowhere to go.
 The inventory this was seeded from is
 [the yoyodyne-ifd.206 sweep](diagnoses/yoyodyne-ifd-206-coined-terms-sweep.md),
 which measured every term below across the tracker, the governed documents, the
-Go source, and command output.
+Go source, and command output. Its governed-document figures were a floor rather
+than a count: the scan looked for one spelling of each term, so `minute-zero`
+went past it, and two documents were written after it ran. The governed homes
+were measured again on 2026-08-31 under yoyodyne-ifd.220, tolerant of how a
+term's parts are spaced, and
+[what that re-run found](diagnoses/yoyodyne-ifd-206-coined-terms-sweep.md#the-yoyodyne-ifd220-re-run)
+is what this document is now written against: **25 occurrences of 6 terms** in
+the prose the check reads, every one of them a term with a row below.
 
 ## The register
 
@@ -29,7 +36,7 @@ Go source, and command output.
 | `handback` | handing the work back to the developer that made it | `internal/orchestrator` and `internal/runstate` only — it names no command output and no document |
 | `heartbeat` | how often to repeat | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md) |
 | `in force` | active, or still applies | [the prose governing how invariants are amended](decisions/invariants/README.md), which only the architect changes |
-| `minute zero` | before development begins | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes |
+| `minute zero` | before development begins | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes — written there both spaced and as `minute-zero`, which this one row covers |
 | `posture` | which tools a role may use — written as *tool posture* | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide |
 | `sink` | the process that posts to Slack | `yoyo slack` and `yoyo doctor` output; `internal/slack`; [the Slack reporting design](designs/slack-reporting-design.md) |
 | `steer` | direct the work, or change what is being worked on | `yoyo chat` help and the Slack thread replies; `internal/chat`; [the Slack reporting design](designs/slack-reporting-design.md) |
@@ -48,10 +55,15 @@ to `in force` by name, so these three are the entries most worth losing.
 These were decoration: each named nothing a reader can point at, and each had an
 ordinary word that said the same thing. The second column is the wording to
 write instead, rather than a claim that every occurrence has been changed: where
-one of these was written in a governed document it was replaced, and the rest
-are still in places outside this sweep — mostly the tracker's own items, which
-are the product manager's to reword. Either way the check below refuses any of
-them coming back into a governed document without an entry.
+one of these was written in the prose of a governed document it was replaced,
+and the rest are still in places outside this sweep — mostly the tracker's own
+items, which are the product manager's to reword. One exception the re-run
+confirms: `re-arm` is still written once in `designs/v1-harness-design.md`,
+inside a recorded amendment reason in the frontmatter, which is the architect's
+account of what she decided on a date rather than a sentence to clarify. The
+check does not read frontmatter, for that reason. Either way the check below
+refuses any of them coming back into the prose of a governed document without an
+entry.
 
 | Term | Write instead |
 | --- | --- |
@@ -88,6 +100,17 @@ entry; it needs the ordinary word.
 with no entry here fails, naming the file, the line, and the ordinary wording to
 write instead. It also holds this document to its own shape: an entry that
 defines nothing, or names no place the term is used, fails the same check.
+
+A term of more than one word is looked for however its parts are spaced —
+`minute zero`, `minute-zero`, `minutezero`, and a `minute` a line wrap left with
+its `zero` on the next line are the same coinage and all four fail. That cuts
+both ways: a row here permits every spelling of its term, so registering
+`minute zero` is what makes the invariant's `minute-zero` legal, and no variant
+of a registered term is reported as though nothing defined it. The tolerance
+applies only where the term is already written in parts — a term written here as
+one word is looked for as one word, so `hand back` in a sentence about handing
+something back is not reported as `handback`. Nothing is matched across a blank
+line or a fenced block, because a term cannot wrap across either.
 
 Three things it deliberately does not read. A document's frontmatter is identity
 and revision history, and a revision's recorded reason is what somebody decided

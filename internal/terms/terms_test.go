@@ -191,6 +191,172 @@ func TestCheckDoesNotReportAnOrdinaryWordAStemBegins(t *testing.T) {
 	}
 }
 
+// The hyphenated spelling of a term the register writes with a space. This one
+// is not hypothetical: `minute-zero` is written in an active invariant, and it
+// escaped both the ifd.206 sweep's `minute zero` regex and the first version of
+// this check, which looked for the register's spelling and nothing else.
+func TestCheckReportsAHyphenatedSpellingOfASpacedTerm(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"docs/decisions/one.md": "# One\n\nEvery run begins with a minute-zero execution probe.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 1 || problems[0].Term != "minute zero" || problems[0].Line != 3 {
+		t.Fatalf("Check() reported %v, want minute zero on line 3", problems)
+	}
+	// Named as the register spells it, because what the reader needs is the
+	// wording to write rather than the respelling they used.
+	if !strings.Contains(problems[0].Reason, "before development begins") {
+		t.Errorf("Check() reason = %q, want the plain wording in it", problems[0].Reason)
+	}
+}
+
+// The other miss the re-run found: `soak` in the wording that reached
+// `configurable-workflows.md`, which the sweep's own table records as having no
+// governed occurrence at all.
+func TestCheckReportsTheTermTheSweepRecordedAsAbsent(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"docs/designs/one.md": "# One\n\nKeep an opt-in parity soak alongside the old path.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 1 || problems[0].Term != "soak" || problems[0].Line != 3 {
+		t.Fatalf("Check() reported %v, want soak on line 3", problems)
+	}
+}
+
+// Every spacing of a term's parts is the term: hyphenated, doubly spaced, and
+// closed up into one word.
+func TestCheckReportsEverySpacingOfATermsParts(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"docs/designs/one.md": strings.Join([]string{
+			"# One", "",
+			"A dropped merge request is re-armed once.", "",
+			"A dropped merge request is re armed once.", "",
+			"A dropped merge request is rearmed once.", "",
+		}, "\n"),
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 3 {
+		t.Fatalf("Check() reported %d problems, want 3: %v", len(problems), problems)
+	}
+	for index, line := range []int{3, 5, 7} {
+		if problems[index].Term != "re-arm" || problems[index].Line != line {
+			t.Errorf("Check() reported %+v, want re-arm on line %d", problems[index], line)
+		}
+	}
+}
+
+// A line wrap between a term's parts is a spacing of them like any other. These
+// documents are wrapped at eighty columns, so this is the likeliest way a term
+// of two words is written without either word looking coined on its own line.
+func TestCheckReportsATermBrokenByALineWrap(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"docs/product/one.md": "# One\n\nThe refusal names the condition before development begins, at minute\nzero, rather than at review.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 1 || problems[0].Term != "minute zero" || problems[0].Line != 3 {
+		t.Fatalf("Check() reported %v, want minute zero reported where it starts, on line 3", problems)
+	}
+}
+
+// What a term cannot wrap across, it is not matched across. A paragraph that
+// ends in one part and a paragraph that begins with the next are two sentences
+// about different things, and so are the lines on either side of a code block.
+func TestCheckDoesNotMatchAcrossAParagraphOrAFence(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"docs/designs/one.md": strings.Join([]string{
+			"# One", "",
+			"The probe is run at the appointed minute", "",
+			"Zero runs were refused.", "",
+			"It is run at the appointed minute",
+			"```",
+			"grep zero docs",
+			"```",
+			"Zero of them were refused.", "",
+		}, "\n"),
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Check() reported %v, want nothing: neither pair is one phrase", problems)
+	}
+}
+
+// A variant of a registered term is the registered term, so registering one
+// permits every spelling of it rather than the one the register wrote.
+func TestCheckPermitsAVariantOfARegisteredTerm(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register("| `minute zero` | before development begins | the invariant |"), map[string]string{
+		"docs/decisions/one.md": "# One\n\nEvery run begins with a minute-zero execution probe.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Check() reported %v, want nothing: the term is registered", problems)
+	}
+}
+
+// A term the register writes as one word is looked for as one word. `hand back`
+// is ordinary English in sentences that have nothing to do with `handback`, and
+// a check that reported those is one people learn to argue with.
+func TestCheckDoesNotSplitATermTheRegisterWritesAsOneWord(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"docs/designs/one.md": "# One\n\nThe reviewer may hand back the work, or take it.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Check() reported %v, want nothing: `hand back` here is two ordinary words", problems)
+	}
+}
+
+// One term written twice on a line is one problem, because what a reader is sent
+// to is the line.
+func TestCheckReportsOneProblemPerTermPerLine(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"docs/designs/one.md": "# One\n\nA wedged check beside a wedged release.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 1 || problems[0].Term != "wedged" {
+		t.Fatalf("Check() reported %v, want the one line named once", problems)
+	}
+}
+
 func TestCheckReportsARegisterEntryThatDefinesNothing(t *testing.T) {
 	t.Parallel()
 
