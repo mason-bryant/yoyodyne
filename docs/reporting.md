@@ -542,6 +542,15 @@ how the sink records whose secrets it was launched with, so
 running from one that is running for this project. Leave it out and the sink
 still works; what is lost is anything being able to notice when it is wrong.
 
+On macOS, `yoyo slack ensure` is that launcher done by the harness: it starts a
+sink only if nothing is reporting for this product, reading this product's own
+keychain items into that one process. It is safe to run on a schedule — an
+unattended pass every few minutes meets a running sink and does nothing — and it
+is safe on a machine running several harnesses, because whether a sink is
+running is asked of this product's lease rather than of the process table, where
+one project's `yoyo slack` answers for every project's.
+[`docs/slack/setup.md`](slack/setup.md#6-start-the-sink) has the rest of it.
+
 **The top of the channel reads as a status board.** Each thread's opening message
 carries one reaction saying what that item is doing now — working, with the
 reviewer, blocked, or landed — replaced as the record moves and taken off when it

@@ -236,6 +236,37 @@ at most one of them is right. Under these names, `yoyo doctor` can ask whether
 
 ## 6. Start the sink
 
+On macOS, the harness does this for you:
+
+```sh
+yoyo slack ensure
+```
+
+It starts a sink only if nothing is reporting for this product, reads this
+project's own keychain items into that one process, and returns either way — so
+it is what an unattended maintenance pass runs every few minutes as well as what
+you type once. It prints what it did: a sink already running, a sink started and
+the pid it started as, or the stored items it could not read. Nothing it prints
+is a token. It fails only in the last of those, which is the one outcome
+somebody has to do something about.
+
+Whether a sink is running is asked of **this product's lease**, which is the
+same lease the sink itself takes and one per product. That is what makes it
+right on a machine running more than one harness: a `pgrep` for `yoyo slack`
+matches the sibling project's sink, so a pass built on one would decide this
+product's sink is running when it is the other product's, and this project would
+report nothing indefinitely. The tokens come from this product's names for the
+same reason. Run it in each product; the products do not see each other.
+
+The sink it starts is in a session of its own, so it stays up when the pass, the
+terminal, or the job that started it goes away, and it says what it is doing in
+`sink.log` beside that product's own sink state. `--json` is the same account
+for something that reads it rather than somebody.
+
+Underneath, that is exactly the launcher below, which is what to write where
+there is no keychain to read — or where you want the sink in front of you rather
+than behind you.
+
 The launcher reads this project's pair into exactly one process:
 
 ```sh

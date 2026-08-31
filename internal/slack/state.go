@@ -91,6 +91,32 @@ func (s *Store) Lease() (*runstate.Lease, bool, error) {
 	return runstate.TryLeasePath(filepath.Join(s.root, ".sink.lock"), "slack sink")
 }
 
+// Running reports whether a sink is holding this product's lease, by trying to
+// take it and letting it go again. Taking the lease is how the question is
+// asked — the lock is advisory and the operating system drops it when its
+// holder dies, so an answer of "nobody" is an answer about processes rather
+// than about files somebody forgot to clean up.
+//
+// It is asked of this product's lease and of nothing wider, which is what makes
+// the answer right on a machine running several harnesses: a sibling product's
+// sink holds a different lease, so it neither answers for this product nor is
+// disturbed by the asking.
+func (s *Store) Running() (bool, error) {
+	lease, held, err := s.Lease()
+	if err != nil {
+		return false, err
+	}
+	if !held {
+		return true, nil
+	}
+	// Held for as long as it took to find out it was free. A sink starting a
+	// moment later takes it as it always would.
+	if err := lease.Release(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 // Thread is one topic's thread. The channel is recorded with the timestamp
 // because a thread timestamp only means anything inside the channel it was
 // posted in: a project that changes channels has not moved its threads, it has

@@ -82,6 +82,13 @@ one**, so what is checked is this project's own pair under names that carry the
 product, and whether the sink that is running was launched with them. See
 [Reporting into Slack](reporting.md#reporting-into-slack).
 
+A stopped sink is the one finding here you need not act on by hand. On macOS,
+`yoyo slack ensure` starts one if nothing is reporting for this product, from
+this product's own keychain items, and does nothing when a sink is already
+running — so it is what a maintenance pass runs on a schedule, in each product
+on the machine. `yoyo doctor` still only diagnoses: it changes nothing, and
+starting the sink is the other command's job.
+
 ## Pausing everything, and resuming it
 
 `yoyo pause` stops everything the harness would spend on a provider, and

@@ -53,9 +53,10 @@ import (
 )
 
 // keychainAccount is the account the namespaced Slack secrets are stored under
-// on macOS. It is fixed because the distinguishing part is the service name,
-// which carries the product.
-const keychainAccount = "yoyo"
+// on macOS, named where the secret names themselves are: a diagnosis that
+// looked under a different account from the one supervision reads would report
+// a stored pair as missing, or a missing one as stored.
+const keychainAccount = slack.KeychainAccount
 
 // checkSlack diagnoses reporting: the configuration, this instance's secrets,
 // and the sink itself. A project that has not turned reporting on is healthy
@@ -417,26 +418,13 @@ func (d *diagnosis) checkSinkSecrets(presence slack.Presence, productID domain.P
 	}
 }
 
-// sinkIsRunning finds out whether anybody holds this product's sink lease, by
-// trying to take it and letting it go again. Taking a lease is how the question
-// is asked -- the lock is advisory and the operating system drops it when its
-// holder dies, so an answer of "nobody" is an answer about processes rather than
-// about files somebody forgot to clean up.
+// sinkIsRunning finds out whether anybody holds this product's sink lease. The
+// store answers it rather than this file reading the lease itself, because
+// supervision asks the same question before it starts a sink: two readings of
+// one lease that could disagree is how a diagnosis reports nothing reporting
+// while something is.
 func (d *diagnosis) sinkIsRunning(store *slack.Store) (bool, error) {
-	lease, held, err := store.Lease()
-	if err != nil {
-		return false, err
-	}
-	if !held {
-		return true, nil
-	}
-	// Held for as long as it took to find out it was free, which is the whole of
-	// what this diagnosis does with it. A sink starting a moment later takes it
-	// as it always would.
-	if err := lease.Release(); err != nil {
-		return false, err
-	}
-	return false, nil
+	return store.Running()
 }
 
 // missingKeychainSecrets names which of the two namespaced items the keychain
