@@ -75,21 +75,31 @@ type Conversation struct {
 	// floating family alias makes the resolved identifier the only real record.
 	ProviderModel         string `json:"provider_model,omitempty"`
 	ProviderResolvedModel string `json:"provider_resolved_model,omitempty"`
-	// AccountAlias is the provider account this conversation's turns are answered
-	// on and ConfigRevision the configuration in force when the last of them was
-	// taken. They sit beside the backend and the model selectors because the four
-	// together are what the durable-state-is-provider-independent invariant asks
-	// of every provider invocation: a conversation turn is one, and a record that
-	// named only the session would be attributable to nothing once the session was
-	// gone. Under a pool that stops being bookkeeping — the account answering this
-	// conversation is the agent's own rather than the machine's default, so the
-	// alias is the only thing that says whose subscription paid for it.
+	// AccountAlias is the provider account the turn this record last took was
+	// answered on, and ConfigRevision the configuration in force while it was.
+	// They sit beside the backend and the model selectors and are kept exactly as
+	// those are: rewritten by each completed turn, so the record says what served
+	// the conversation as it now stands. Under a pool that stops being
+	// bookkeeping — the account answering this conversation is the agent's own
+	// rather than the machine's default, so the alias is the only thing on the
+	// record that says whose subscription is paying for it.
 	//
-	// The alias is a fact about the whole record, because a conversation is opened
-	// against one account and stays there; the revision moves with the
-	// configuration and is the one the recorded turn ran under. Both are empty on
-	// a conversation recorded before the harness wrote them down, and on one whose
-	// first turn has not completed.
+	// What pins every turn rather than the last one is the cost log, which takes a
+	// line per provider invocation carrying the account and the revision that
+	// served it, and refuses a line that names either. So a conversation resumed
+	// after a configuration edit or an account move still has each earlier turn's
+	// attribution, on that turn's own line, and this record is not the only copy
+	// of any of it.
+	//
+	// That is the whole of why this is one pair and an exchange's is one per
+	// round. An exchange record holds its rounds, so a round is a thing already in
+	// the record to pin; a conversation record holds no turns at all — it is a
+	// summary every turn rewrites in place — and a per-turn list inside it would
+	// be an unbounded array in a file that is rewritten on every turn, kept for a
+	// fact the cost log already keeps correctly.
+	//
+	// Both are empty on a conversation recorded before the harness wrote them
+	// down, and on one whose first turn has not completed.
 	AccountAlias   string `json:"account_alias,omitempty"`
 	ConfigRevision string `json:"config_revision,omitempty"`
 	Turns          int    `json:"turns"`

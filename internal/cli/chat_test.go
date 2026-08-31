@@ -18,6 +18,7 @@ import (
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -507,6 +508,104 @@ func TestAFailedCommandStillWritesWhatItDid(t *testing.T) {
 // newTestChatSession builds a conversation over a real conversation store and a
 // provider that has to be asked before it answers, so what is tested is the
 // command line's own behavior rather than a stand-in for the conversation.
+// The conversation counterpart of the answering voice's pooled case: under a
+// pool there is no configuration-wide account, so what serves a conversation is
+// the account its own agent is configured for. This drives the same decision
+// `openChat` makes and carries it the whole way to the durable record and to the
+// turn's cost line, so what is asserted is what a pooled project actually
+// records rather than an alias a test picked.
+func TestAPooledConversationRecordsTheAccountItsAgentAnswersOn(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	cfg := answeringConfig()
+	cfg.Accounts = map[string]config.Account{"personal": {}, "research": {}}
+	// One agent names its account and the other names none. Neither may end up on
+	// the machine's default, because under a pool there is no such account to
+	// fall back to.
+	architect := cfg.Agents["architect"]
+	architect.Account = "research"
+	cfg.Agents["architect"] = architect
+
+	for _, test := range []struct {
+		agent string
+		want  string
+	}{
+		{agent: "architect", want: "research"},
+		{agent: "product-manager", want: "personal"},
+	} {
+		t.Run(test.agent, func(t *testing.T) {
+			t.Parallel()
+
+			account, err := conversationAccount(cfg, stateRoot, test.agent)
+			if err != nil {
+				t.Fatalf("conversationAccount() error = %v", err)
+			}
+			if account.Alias != test.want {
+				t.Fatalf("account = %+v, want the agent's own account %q", account, test.want)
+			}
+			// The provider home follows the same account, so the login the turn runs
+			// under and the alias the record names are one decision rather than two.
+			if account.Directory != config.AccountConfigDirectory(stateRoot, test.want) {
+				t.Fatalf("account = %+v, want the provider home of %q", account, test.want)
+			}
+		})
+	}
+
+	// And what that resolution lands on: the conversation record and the line the
+	// turn puts in the cost log both name the answering agent's own account and
+	// the configuration that was in force.
+	account, err := conversationAccount(cfg, stateRoot, "architect")
+	if err != nil {
+		t.Fatalf("conversationAccount() error = %v", err)
+	}
+	root := t.TempDir()
+	store, err := runstate.NewConversationStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	log := &recordingSpendLog{}
+	session, err := chat.Open(chat.Options{
+		Role:         domain.RoleArchitect,
+		Agent:        "architect",
+		Backend: &recordingChatBackend{result: backendapi.RunResult{
+			SessionID: "session-1", ResolvedModel: "claude-opus-5", FinalText: "More than the ordering assumes.",
+			CostUSD: 0.25, CostReported: true,
+		}},
+		Store:        store,
+		Spend:        log,
+		Model:        "opus-architect",
+		Provider:     domain.BackendClaudeCode,
+		Repository:   filepath.Join(root, "repository"),
+		ProductID:    "yoyodyne",
+		RepositoryID: "yoyodyne",
+		Briefing:     chat.Briefing{Text: "the product is a harness", GatheredAt: time.Now().UTC()},
+		// The two lines `openChat` writes from the same resolution.
+		AccountAlias:   account.Alias,
+		ConfigRevision: cfg.Revision(),
+	})
+	if err != nil {
+		t.Fatalf("chat.Open() error = %v", err)
+	}
+	if _, err := session.Send(context.Background(), "What does this goal cost?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	recorded, err := store.Load(runstate.ConversationIdentity{Agent: "architect", Role: domain.RoleArchitect})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.AccountAlias != "research" || recorded.ConfigRevision != cfg.Revision() {
+		t.Fatalf("recorded conversation = %#v, want the architect's own account and the live configuration", recorded)
+	}
+	if len(log.lines) != 1 {
+		t.Fatalf("recorded %d cost line(s), want one for the turn: %#v", len(log.lines), log.lines)
+	}
+	if log.lines[0].AccountAlias != "research" || log.lines[0].ConfigRevision != cfg.Revision() {
+		t.Fatalf("cost line = %#v, want the same account and configuration the record names", log.lines[0])
+	}
+}
+
 func newTestChatSession(t *testing.T, provider chat.Backend, reports ...report.Report) *chat.Session {
 	t.Helper()
 
