@@ -59,6 +59,30 @@ one bounded repair of the change it already has" — but it was carried by the
 work item's prose rather than by the dispatch, and the item being put back to
 open is all the scheduler needs to pull it.
 
+## Which code path each dispatcher takes
+
+Naming the dispatcher is only half of it; what matters for the defense is the
+call each one makes. There are four call sites that start work on a work item,
+and every one of them calls `Pipeline.Run`, which is where ifd.178's
+`refuseSubstitutedHandback` sits:
+
+| dispatcher | call site | dispatches |
+| --- | --- | --- |
+| scheduler (`yoyo watch`, `yoyo schedule`) | `openPull` in `internal/cli/schedule.go`, the `Start` it builds | `pipeline.Run` |
+| operator by name (`yoyo run <id>`) | `internal/cli/run.go` | `pipeline.Run` |
+| a conversation running an item | `conversationWork.Run` in `internal/cli/work.go` | `pipeline.Run` |
+| triage re-run (`yoyo triage rerun`) | `buildRerunner` in `internal/cli/triage.go` | `pipeline.Run` |
+
+There is one `orchestrator.Scheduler` in the harness and one `Pull` behind it,
+so there is no lower entry point for the scheduler to reach past the refusal:
+`Pull.Start` is a `Starter`, the only `Starter` the command builds is the one
+above, and `Reserve` and `Worktrees.Create` are reached from inside `Run` after
+the refusal has been asked. `TestTheSchedulersDispatchIsRefusedWhereARepairIsOwed`
+drives that whole route — a real `Scheduler`, a real `Pull`, a real pipeline,
+and an item whose last run stopped owing a repair — and asserts the pull is
+turned away with nothing reserved and no worktree cut. The fifth call site is
+the repair carry-out, which ifd.195 moved off `Run` and onto `Pipeline.Continue`.
+
 ## What ifd.195 changed
 
 The carry-out now names the run it re-enters and dispatches it to
@@ -73,15 +97,24 @@ in the first place.
 Four of the substitutions — ifd.180 and ifd.182 on 2026-08-27, ifd.143 and
 ifd.68.22 on 2026-08-30 — were dispatched after ifd.178's refusal reached main
 (merged 2026-08-27 09:47). Each of the four owed runs satisfies every condition
-that refusal tests, and the refusal is exercised by
-`TestAFreshRunIsRefusedWhereARepairIsOwed`, so the code that ran cannot have
-been the code on main. The run records cannot say which build the scheduler
+that refusal tests.
+
+The explanation that had to be ruled out first is the one inside this
+repository: that the scheduler dispatches past the refusal rather than through
+it, in which case fourteen of the seventeen losses had no defense at all and
+these four need nothing else to explain them. It does not. The table above
+traces the scheduler's dispatch to `pipeline.Run`, the refusal is inside that
+function ahead of every reservation, and the route is now driven end to end by a
+test. So the code on main does refuse this, and the code that dispatched those
+four cannot have been it.
+
+What is left is the build. The run records cannot say which one the scheduler
 process was running: `watch.jsonl` only began stamping a `build` on 2026-08-30
-11:15, after all four. The likeliest reading is a resident scheduler older than
-the fix — which is the same class `docs/work.md` already names as an
-environmental refusal, "the build that dispatched it predated the decision it
-was carrying out". Settling it needs the provenance of the binary the resident
-runs, which lives outside these records.
+11:15, after all four. A resident older than the fix is the same class
+`docs/work.md` already names as an environmental refusal — "the build that
+dispatched it predated the decision it was carrying out" — and settling it needs
+the provenance of the binary the resident runs, which lives outside these
+records.
 
 One shape of the loss is out of reach of both refusals: ifd.68.22's repair
 target was a run of a *different* work item (ifd.68.20), named in the item's

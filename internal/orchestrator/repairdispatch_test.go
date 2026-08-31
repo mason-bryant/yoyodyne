@@ -19,6 +19,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -151,6 +152,170 @@ func TestARepairDispatchRefusesADifferentRunInFlight(t *testing.T) {
 	if untouched.Status != runstate.StatusRunning || untouched.Phase != runstate.PhaseDeveloping {
 		t.Fatalf("run in flight = %s/%s, want the refusal to have left it running and developing", untouched.Status, untouched.Phase)
 	}
+}
+
+// The third refusal: the run named is the one in flight, and it is not a repair
+// loop. A continuation is dispatched about a run that was made live under a
+// grant, so one that is going for any other reason is somebody else's, and
+// spending this grant on it would be the same substitution one run further on.
+func TestARepairDispatchRefusesARunThatIsNotAResumableRepair(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
+	// The run is live again, but at a phase no repair loop is re-entered at: this
+	// is a run in the middle of being integrated rather than one owed an attempt.
+	live, err := store.Load(stopped.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	live.Status = runstate.StatusRunning
+	live.Phase = runstate.PhaseIntegrating
+	live.Blocker = ""
+	live.CompletedAt = nil
+	if err := store.Save(live); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	provider := roleBackend(func(request backend.RunRequest) error {
+		t.Errorf("a developer was invoked in %s for a run that is not owed a repair attempt", request.WorkingDirectory)
+		return nil
+	}, approveVerdict)
+	dispatching := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
+
+	_, err = dispatching.Continue(context.Background(), tracker.item.ID, stopped.RunID)
+	if !errors.Is(err, ErrNoRunToContinue) {
+		t.Fatalf("Continue() error = %v, want the dispatch refused for a run that is not a repair loop", err)
+	}
+	// The refusal says what it found rather than only that it refused, because
+	// what to do about it depends on which of the three mismatches happened.
+	if !strings.Contains(err.Error(), string(runstate.PhaseIntegrating)) {
+		t.Fatalf("refusal = %v, want it to name the phase the run is actually at", err)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("provider invocations = %d, want nothing spent", len(provider.requests))
+	}
+}
+
+// The approval policy is deliberately not asked. A repair carried out under a
+// policy that holds integration for a person is still a repair the development
+// manager granted and the harness verified, and refusing it there would spend
+// the grant to report that the run may not be integrated automatically —
+// something the run reaches on its own and reports for itself. This pins that,
+// because the check it leaves out is one a later reader could restore as a fix.
+func TestARepairDispatchContinuesUnderAPolicyThatHoldsIntegration(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
+	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseDeveloping)
+
+	var handedTo backend.RunRequest
+	second := roleBackend(func(request backend.RunRequest) error {
+		handedTo = request
+		return nil
+	}, approveVerdict)
+	// No `automatic`: integration is whatever the shared fixture configures,
+	// which is a policy that does not integrate on the harness's own say-so.
+	continuing := newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"})
+	if continuing.Config.Approvals.Integration == domain.ApprovalAutomatic {
+		t.Fatalf("integration policy = %q, want a fixture whose policy is not automatic", continuing.Config.Approvals.Integration)
+	}
+
+	_, err := continuing.Continue(context.Background(), tracker.item.ID, stopped.RunID)
+	// The two refusals a policy-conditioned re-entry would produce: `yoyo run`
+	// under this policy reports the run in flight as somebody else's rather than
+	// picking its repair loop up, and that is exactly what a dispatch must not do
+	// to a run it was told to continue.
+	var existing ExistingRunError
+	if errors.As(err, &existing) {
+		t.Fatalf("Continue() reported the run it was dispatched to as somebody else's: %v", err)
+	}
+	if errors.Is(err, ErrNoRunToContinue) {
+		t.Fatalf("Continue() error = %v, want the repair re-entered rather than refused for the approval policy", err)
+	}
+	// What the criterion actually is: the developer was handed the preserved
+	// worktree, which is the re-entry having happened at all.
+	if handedTo.WorkingDirectory != stopped.WorktreePath {
+		t.Fatalf("the repair was handed %q, want the preserved worktree %q", handedTo.WorkingDirectory, stopped.WorktreePath)
+	}
+}
+
+// The route that actually caused the loss, driven end to end: the scheduler
+// pulling an item off the backlog whose last run stopped owing a repair. Its
+// dispatch is `Pipeline.Run` — the same call `openPull` makes — so what refuses
+// it is the fresh-run refusal, and this is the test that says so about the
+// scheduler's own path rather than about the pipeline in isolation.
+func TestTheSchedulersDispatchIsRefusedWhereARepairIsOwed(t *testing.T) {
+	t.Parallel()
+
+	harness := newRealScheduleHarness(t, 1, "yoyodyne-alpha")
+	stopped := stopScheduledItemWithARepairOwed(t, harness, "yoyodyne-alpha")
+	// Somebody puts the item back, which is what makes the scheduler pull it: an
+	// item the tracker calls ready is one the backlog offers, and nothing about
+	// the stoppage is visible in that offer.
+	if _, err := harness.setStatus("yoyodyne-alpha", "open"); err != nil {
+		t.Fatalf("setStatus() error = %v", err)
+	}
+	harness.develop = func(workItemID, worktree string) error {
+		t.Errorf("the scheduler put a developer to work on %s in %s, in place of the repair run %s is owed",
+			workItemID, worktree, stopped.RunID)
+		return nil
+	}
+	worktreesBefore := worktreeDirectories(t, harness.worktreeRoot)
+
+	schedule, err := (Scheduler{Open: harness.open}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %d, want the scheduler to have pulled the item once: %s", len(schedule.Started), schedule.Render())
+	}
+	// The pull reached the refusal and was turned away by it, naming the branch
+	// the change is on and both decisions that act on it.
+	started := schedule.Started[0]
+	for _, want := range []string{stopped.Branch, "yoyo triage repair", "yoyo triage rerun"} {
+		if !strings.Contains(started.Failure, want) {
+			t.Fatalf("the scheduler's dispatch reported %q, want a substituted-handback refusal naming %q", started.Failure, want)
+		}
+	}
+	// And it was turned away before anything was reserved or cut, so the stopped
+	// run is still exactly what a repair would be carried out on.
+	if cut := worktreesCutSince(t, harness.worktreeRoot, worktreesBefore); len(cut) != 0 {
+		t.Fatalf("worktrees cut by the scheduler's dispatch = %v, want none", cut)
+	}
+	recorded, err := harness.store.Recorded()
+	if err != nil {
+		t.Fatalf("Recorded() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].RunID != stopped.RunID {
+		t.Fatalf("recorded runs = %#v, want only the stopped run %s", recorded, stopped.RunID)
+	}
+}
+
+// stopScheduledItemWithARepairOwed runs one of the scheduler harness's items to
+// a stoppage owing a repair, over the same repository, worktree root, and run
+// state the scheduler's own dispatch will use. It is the ordinary stoppage: a
+// reviewer that kept asking for repair until the budget was spent, with the
+// change preserved on the run's branch.
+func stopScheduledItemWithARepairOwed(t *testing.T, harness *realScheduleHarness, workItemID string) Outcome {
+	t.Helper()
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return writeHandbackChange(request.WorkingDirectory)
+	}, repairVerdict)
+	stopping := automatic(newSharedPipeline(t, harness.repository, harness.worktreeRoot, harness.store, harness, provider, []string{"exit 0"}), provider)
+	stopping.NewRunID = runstate.NewRunID
+
+	stopped, err := stopping.Run(context.Background(), workItemID)
+	if err == nil {
+		t.Fatal("Run() ended without stopping, so there is no repair for a dispatch to stand in for")
+	}
+	if !stopped.Blocked || stopped.Branch == "" {
+		t.Fatalf("stopped run = %#v, want a blocked run with its change preserved on a branch", stopped)
+	}
+	return stopped
 }
 
 // worktreesCutSince is the worktrees that appeared while a dispatch was being
