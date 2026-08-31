@@ -132,6 +132,22 @@ type Options struct {
 	// was a refusal to give.
 	Recognized []string
 	Contacts   []string
+	// Conversation is the durable product-manager conversation this channel is a
+	// client of. It is what makes a message addressed to this app something the
+	// product manager answers rather than something the door has to refuse, and
+	// it is the same conversation `yoyo chat` holds rather than a second one: one
+	// begun at the terminal carries on here and back, because both project the
+	// one durable record.
+	//
+	// It is optional, and a sink assembled without one answers where things stand
+	// and says outright that everything else is driven from the terminal — which
+	// is exactly what this door did before there was a conversation behind it.
+	Conversation Conversation
+	// ConversationDeadline bounds one turn taken from this channel. Zero takes
+	// DefaultConversationDeadline, and the bound is the point: an operator asking
+	// from a phone must be told something, and the conversation's own call can
+	// wait far longer than anybody watching a thread will.
+	ConversationDeadline time.Duration
 	// Inbound is what to do with a message that arrives on the connection. It is
 	// how a test drives the connection without a workspace; a sink the harness
 	// builds leaves it unset and gets the steering above.
@@ -158,24 +174,33 @@ type Titles interface {
 
 // Sink is the long-running reporting process for one product.
 //
-// Two goroutines run inside it and both of them post: the delivery loop, which
-// reads the durable records and says what has happened, and the connection,
-// which answers a reply in a thread. The division between them is a rule rather
-// than a lock, and it is worth stating because a lock would only be as good as
-// the next thing somebody adds to either side:
+// Three goroutines run inside it and all of them post: the delivery loop, which
+// reads the durable records and says what has happened; the connection, which
+// answers a reply in a thread; and, for as long as one turn lasts, the
+// conversation, which carries what somebody said to the product manager and
+// posts back what it said. The division between them is a rule rather than a
+// lock, and it is worth stating because a lock would only be as good as the next
+// thing somebody adds to any side:
 //
 // Everything above `pace` is written once, by New, and only read afterwards.
 // Everything below it belongs to exactly one goroutine — `marking` to the
 // delivery pass, which is the only thing that reconciles a status mark, and
 // `steering`'s own memory to the connection, which guards it itself.
 //
-// What both touch is three things, and each one carries its own answer. The
-// pacer is shared on purpose, since a pace two callers each advanced from their
-// own reading of it is not a pace, and it holds a mutex for exactly that. The
-// API is an HTTP client, which is safe to use from several goroutines. And the
-// store is read from both and written from one: the delivery pass owns the thread
-// map, and the acknowledgment path is structurally unable to write it, because
-// the poster it is given cannot open a thread (see `poster.opens`).
+// What they touch in common is three things, and each one carries its own
+// answer. The pacer is shared on purpose, since a pace two callers each advanced
+// from their own reading of it is not a pace, and it holds a mutex for exactly
+// that. The API is an HTTP client, which is safe to use from several goroutines.
+// And the store is read from all of them and written from one: the delivery pass
+// owns the thread map, and neither the acknowledgment path nor a conversation
+// turn can write it, because the poster each is given cannot open a thread (see
+// `poster.opens`).
+//
+// The conversation runs off the connection rather than on it for one reason: the
+// connection is a read loop that Slack expects to keep reading, and a turn takes
+// minutes. A turn held on that loop would stall every other message arriving in
+// the channel behind one operator's question, which is the shape of outage this
+// whole door exists to prevent.
 type Sink struct {
 	channel string
 	// appearance is how this product's speakers appear here: its own id after
@@ -297,10 +322,15 @@ func New(options Options) (*Sink, error) {
 			log:  log,
 		},
 	}
-	// A sink with somewhere to record a directive steers; one without reports and
-	// no more. The handler a caller supplied wins, because the only caller that
-	// can name that type is a test driving the connection itself.
-	if options.Directives != nil {
+	// A sink with somewhere to record a directive steers, and one with the durable
+	// conversation behind it carries what somebody says to the product manager;
+	// one with neither reports and no more. Either is enough to read what arrives
+	// on the connection, because the two doors are separate — a reply in a thread
+	// and a message addressed to this app — and a sink that could do one of them
+	// must not be silent at the other. The handler a caller supplied wins, because
+	// the only caller that can name that type is a test driving the connection
+	// itself.
+	if options.Directives != nil || options.Conversation != nil {
 		sink.steering = newSteering(sink, options)
 		sink.connection.handle = sink.steering.handle
 	}
@@ -362,6 +392,7 @@ func (s *Sink) Run(ctx context.Context) error {
 	// a workspace that has named nobody is "no". Saying it at startup is how
 	// somebody following the setup document finds that out before they rely on it.
 	s.log("%s", s.steer())
+	s.log("%s", s.converses())
 
 	connected := make(chan struct{})
 	go func() {
@@ -371,6 +402,13 @@ func (s *Sink) Run(ctx context.Context) error {
 
 	err = s.deliver(ctx)
 	<-connected
+	// A turn the connection set off outlives the read loop that started it, so it
+	// is waited for rather than left running past the process. Its own context is
+	// already ended by here, so the wait is what it takes the turn to notice and
+	// say so in its thread — not the deadline it was given.
+	if s.steering != nil {
+		s.steering.settle()
+	}
 	return err
 }
 
@@ -393,12 +431,27 @@ func (s *Sink) Once(ctx context.Context) error {
 // same fact where an operator setting the sink up is looking.
 func (s *Sink) steer() string {
 	switch {
-	case s.steering == nil:
+	case s.steering == nil || s.steering.directives == nil:
 		return "replies in these threads are read and not acted on: this sink was assembled without the directive record"
 	case len(s.steering.operators) == 0:
 		return "replies in these threads are acknowledged and not acted on: no human in this project holds direct-work with a bound Slack member id"
 	default:
 		return fmt.Sprintf("replies in these threads steer the work, from the %d Slack member(s) this project granted direct-work", len(s.steering.operators))
+	}
+}
+
+// converses says what a message addressed to this app will get, which is the
+// other half of the same question `steer` answers and is asked at startup for
+// the same reason: whether this channel reaches the product manager is invisible
+// from the channel until somebody tries it.
+func (s *Sink) converses() string {
+	switch {
+	case s.steering == nil || s.steering.conversation == nil:
+		return "a message addressed to this app is answered with where things stand and no more: this sink was assembled without the durable conversation"
+	case len(s.steering.operators) == 0:
+		return "a message addressed to this app is answered with where things stand: no human in this project holds direct-work with a bound Slack member id, so nobody may talk to the product manager from here"
+	default:
+		return fmt.Sprintf("a message addressed to this app reaches the product manager, from the %d Slack member(s) this project granted direct-work; it is the same conversation `yoyo chat` continues", len(s.steering.operators))
 	}
 }
 

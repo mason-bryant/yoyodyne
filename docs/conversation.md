@@ -1099,6 +1099,39 @@ Everything you type as a command — `/status`, `/backlog`, `/show`, `/work`,
 those are your authority carried out by the harness rather than anything the
 agent did.
 
+## The same conversation from Slack
+
+`yoyo chat` is not the only way into it. Where the
+[Slack sink](slack/setup.md#asking-the-app-directly) is running, @-mentioning the
+app in its channel reaches the same product manager, and the answer comes back in
+the thread you asked in and in the product manager's own name.
+
+It is the same conversation and not a copy of one. There is one durable record
+per agent, and the terminal and the channel are two clients of it: the provider
+session is resumed rather than restarted, the turns accumulate on one record, and
+a proposal put to you in one client is decided in the other — `y` typed in the
+channel approves what `yoyo chat` offered you, because the harness carries out a
+decision the same way whichever client it arrived through. So a question you
+asked before you left your desk is answered from a phone, and what was said there
+is in front of you when you open `yoyo chat` again.
+
+One conversation has one holder, which is what the two rules around it are for.
+The channel takes it when you say something and gives it back as soon as the
+answer is in hand, so a `yoyo chat` you leave open is never locked out for more
+than a turn — and where your terminal has it, the thread says so rather than
+failing quietly. And the channel's wait is bounded at ten minutes, after which the
+thread is told what happened: the wait running out, the conversation held
+elsewhere, or the provider's own reason, which for an exhausted usage limit is
+that limit in its own words. A turn that steers work can wait on capacity for
+hours, and that is a thing you choose at a terminal rather than something a
+channel does to you while you watch a thread.
+
+Where things stand is the exception, and answered without a turn: `@yoyodyne
+status` is the read model's own four lines rather than something the product
+manager was asked for. Talking to it at all is held to the same `direct-work`
+grant a thread reply is, because it admits work, reorders the queue, and spends
+your money.
+
 ## What the conversation looks like on a terminal
 
 On a terminal, the line you are composing has a region of its own at the bottom

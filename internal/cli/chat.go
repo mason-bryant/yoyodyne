@@ -294,13 +294,23 @@ func reportChatDecisions(stdout, stderr io.Writer, jsonOutput bool, role domain.
 // than as part of a reply: an approval that created an item and one the tracker
 // refused are the two things the operator has to be able to tell apart.
 func printChatDecisions(writer io.Writer, decisions []chat.DecisionOutcome) {
+	fmt.Fprint(writer, renderDecisions(decisions))
+}
+
+// renderDecisions is what a message that decided something says back. It is one
+// rendering rather than one per client: a decision made from a channel and the
+// same decision made at a terminal are the same act, and two accounts of it that
+// could drift apart would be the operator reading two answers to one question.
+func renderDecisions(decisions []chat.DecisionOutcome) string {
 	if len(decisions) == 0 {
-		return
+		return ""
 	}
-	fmt.Fprintf(writer, "You decided %d proposal(s):\n\n", len(decisions))
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "You decided %d proposal(s):\n\n", len(decisions))
 	for _, made := range decisions {
-		fmt.Fprint(writer, made.Render())
+		rendered.WriteString(made.Render())
 	}
+	return rendered.String()
 }
 
 // runChatCommand carries out an operator command that arrived as a single

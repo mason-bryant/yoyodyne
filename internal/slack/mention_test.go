@@ -348,7 +348,7 @@ func TestSomebodyWithoutDirectWorkStillGetsAnAnswer(t *testing.T) {
 func TestAnAnswerTooLargeForOneMessageIsCutWithSomewhereToRead(t *testing.T) {
 	t.Parallel()
 
-	bounded := boundAnswer(strings.Repeat("é", maxTextBytes))
+	bounded := boundAnswer(strings.Repeat("é", maxTextBytes), standingElsewhere)
 	if len(bounded) > maxTextBytes {
 		t.Fatalf("bounded to %d bytes, want no more than %d", len(bounded), maxTextBytes)
 	}
@@ -358,8 +358,15 @@ func TestAnAnswerTooLargeForOneMessageIsCutWithSomewhereToRead(t *testing.T) {
 	if !strings.Contains(bounded, "yoyo status") {
 		t.Fatalf("bounded = %q, want it to say where the whole of it is printed", bounded)
 	}
-	if short := "the whole thing"; boundAnswer(short) != short {
-		t.Fatalf("boundAnswer(%q) = %q, want an answer that fits left alone", short, boundAnswer(short))
+	// A cut answer from the conversation points at the conversation instead, which
+	// is what holds it: `yoyo status` prints a standing and would not hold a word
+	// of what the product manager said.
+	cut := boundAnswer(strings.Repeat("é", maxTextBytes), conversationElsewhere)
+	if !strings.Contains(cut, "yoyo chat") {
+		t.Fatalf("bounded = %q, want a cut answer to point at the conversation that holds it", cut)
+	}
+	if short := "the whole thing"; boundAnswer(short, standingElsewhere) != short {
+		t.Fatalf("boundAnswer(%q) = %q, want an answer that fits left alone", short, boundAnswer(short, standingElsewhere))
 	}
 }
 

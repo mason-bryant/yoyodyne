@@ -26,7 +26,9 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
@@ -445,13 +447,111 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		// that addresses this app at the top of the channel is answered with the
 		// four lines rather than with silence.
 		Standing: standing,
-		Poll:     poll,
-		Log:      log,
+		// And everything else somebody says to this app, which goes to the product
+		// manager in the one durable conversation `yoyo chat` holds. The
+		// configuration is named rather than a conversation handed over, because a
+		// conversation is opened per message: see productManagerConversation.
+		Conversation: productManagerConversation{configPath: configPath, log: log},
+		Poll:         poll,
+		Log:          log,
 	})
 	if err != nil {
 		return nil, "", err
 	}
 	return sink, settings.Channel, nil
+}
+
+// productManagerConversation is the durable product-manager conversation as the
+// Slack door reaches it: the same one `yoyo chat` opens, in the same state root,
+// resumed from the same provider session. That sameness is the whole feature —
+// a conversation begun at a terminal is answered from a channel and carried
+// back — and it is had by opening the conversation exactly as `yoyo chat` does
+// rather than by keeping anything about it here.
+//
+// It is opened per message and released as soon as the answer is in hand, which
+// is two decisions rather than one:
+//
+// The conversation admits a single holder, so a sink that opened it at startup
+// and kept it would hold it against the operator's own `yoyo chat` for as long as
+// the sink ran — which is the exact seam ifd.130 records as the reason the
+// harness could not reach the product manager while a console was open. A client
+// that holds it only while it is talking cannot cause that.
+//
+// And the sink deliberately starts without the run pipeline's components, so a
+// process an operator leaves running does not refuse to start because of what a
+// run would need. Building them here, when somebody actually asks something,
+// keeps that true: a machine that cannot open a conversation still reports, and
+// says so in the thread of whoever asked rather than by never having started.
+type productManagerConversation struct {
+	configPath string
+	log        func(format string, args ...any)
+}
+
+// Say opens the conversation, takes one message to it, and releases it again.
+func (c productManagerConversation) Say(ctx context.Context, said string) (slack.Answer, error) {
+	// The warnings openChat writes go into the sink's own log, which is the
+	// operator's window onto this process; there is no terminal to write them to.
+	session, lease, err := openChat(ctx, domain.RoleProductManager, "", c.configPath, false, logWriter{log: c.log})
+	if err != nil {
+		return slack.Answer{}, err
+	}
+	defer func() {
+		if err := lease.Release(); err != nil {
+			c.log("the product manager's conversation could not be released after a message from Slack, so a later one may be refused as held: %v", err)
+		}
+	}()
+	return sayToConversation(ctx, session, said, c.log)
+}
+
+// sayToConversation is what one message does to a conversation somebody else
+// opened, which is the whole of what a client of it decides.
+//
+// It dispatches exactly as `yoyo chat --message` does, and for the same reason:
+// an answer to a proposal this conversation is still waiting on is a decision the
+// harness carries out rather than speech to say to an agent, and a conversation
+// two clients dispatched differently would be one where an approval typed at a
+// terminal and the same approval typed in a channel did different things. A
+// command is not among them — Slack's own composer takes a leading slash and
+// never delivers it as a message — so what arrives here is speech or a decision.
+func sayToConversation(ctx context.Context, session *chat.Session, said string, log func(format string, args ...any)) (slack.Answer, error) {
+	evidence := session.Evidence()
+	answer := slack.Answer{ConversationID: evidence.ConversationID, Turns: evidence.Turns}
+	if outcomes, decided, err := session.Decide(ctx, said); decided {
+		// A decision is the harness's own answer: no turn was spent, and the product
+		// manager was never asked. What was decided travels back whether or not it
+		// then failed, because a decision that was recorded happened.
+		answer.Harness = true
+		answer.Text = renderDecisions(outcomes)
+		answer.Turns = session.Evidence().Turns
+		return answer, err
+	}
+	// How old the conversation's picture of the product is. It is said in the log
+	// rather than in the channel: it is a caveat on the answer for whoever is
+	// watching this process, and a thread carrying one every time would bury the
+	// answer somebody asked for.
+	log("%s", session.Freshness(ctx))
+	reply, err := session.Send(ctx, said)
+	answer.Text = reply.Text
+	answer.ConversationID = reply.Evidence.ConversationID
+	answer.Turns = reply.Evidence.Turns
+	// A turn that failed part way still answered part way, so what it said travels
+	// with the failure rather than behind it — the door posts both.
+	return answer, err
+}
+
+// logWriter turns a stream of warnings into lines in the sink's log. It is for
+// the one caller that has warnings to pass on and no terminal to pass them to.
+type logWriter struct {
+	log func(format string, args ...any)
+}
+
+func (w logWriter) Write(payload []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(payload), "\n"), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			w.log("%s", trimmed)
+		}
+	}
+	return len(payload), nil
 }
 
 // readyBacklog is the tracker's own count of what is ready to pull, which is the

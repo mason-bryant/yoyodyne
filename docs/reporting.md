@@ -696,12 +696,22 @@ Outside those threads the sink is silent, with one exception: **a message that
 @-mentions the app is always answered**, wherever it can see one — at the top of
 the channel or in a thread it never opened. A question about where things stand
 is answered with the same four lines `yoyo status` prints, read from the same
-place rather than assembled a second way; anything else gets one sentence saying
-that is the only question it answers here yet and where the work is driven from
-instead. No directive is recorded from one and nothing about the work changes,
-because a message at the top of the channel names no item to scope a directive
-to — but every message addressed to the app goes into the sink's own log, with
-what was asked in it and before the answer is posted, so being heard does not
-depend on the workspace carrying the answer. It exists because the alternative
-was silence, and a reporting process that answers nothing is indistinguishable
-from one that has died.
+place rather than assembled a second way. Everything else reaches **the product
+manager**, in the [same durable conversation](conversation.md) `yoyo chat` holds
+rather than in one this channel keeps of its own: a conversation begun at a
+terminal carries on in Slack and back, because both are clients of one record.
+The answer comes back in the product manager's own name, in the thread it was
+asked in, and it is held to the same `direct-work` grant a thread reply is —
+talking to the product manager admits work and spends money, while asking where
+things stand tells a reader nothing the channel was not already telling them.
+
+The wait for it is bounded and the failures are said rather than swallowed: a
+turn gets ten minutes, and the conversation being held at somebody's terminal,
+the wait running out, and a provider out of capacity are each answered in the
+thread with what happened. No directive is recorded from a mention and nothing
+about the work changes through one, because a message at the top of the channel
+names no item to scope a directive to — but every message addressed to the app
+goes into the sink's own log, with what was asked in it and before the answer is
+posted, so being heard does not depend on the workspace carrying the answer. It
+exists because the alternative was silence, and a reporting process that answers
+nothing is indistinguishable from one that has died.
