@@ -1,16 +1,17 @@
 # Sweep: coined terms in open tracker items and governed documents
 
-Work item: yoyodyne-ifd.206. **This document is the audit half of that item, and
-the item is not done.** No coinage has been replaced anywhere. The sweep has
-been run and its result written down here, but neither of the two places it
-applies to was writable by the run that produced it, for the reasons in
-[What could not be applied](#what-could-not-be-applied). Both reasons are
+Work item: yoyodyne-ifd.206. **This document is the audit half of that item.**
+The sweep has been run and its result written down here; the run that produced
+it could change neither of the two places its result applies to, for the reasons
+in [What could not be applied](#what-could-not-be-applied). Both reasons are
 boundaries working as designed, and neither is a developer's to lift.
 
-What has to happen before ifd.206 can be closed is listed in
-[What remains](#what-remains). Anyone reading this as evidence that the backlog
-and the governed documents have been swept should stop there: they have been
-measured, not changed.
+**What has been applied since, and by whom, is in
+[What has landed](#what-has-landed).** Read that before acting on anything
+below: the governed-document half was applied on 2026-08-31 under a later work
+item's grants, so the counts and the wordings quoted here are as measured on
+2026-08-30 and no longer describe the documents. The tracker half has not been
+applied, and [What remains](#what-remains) is what is still owed.
 
 Records read at 2026-08-30, against the live tracker export
 (`/Users/mbryant/github/yoyodyne/.beads/issues.jsonl`, 309 rows, latest
@@ -28,8 +29,61 @@ The rule being applied is the legibility goal's plain-language clause
 (`docs/product/goals/v1-goals.md:108`): *user-facing language chooses the
 ordinary, literal word over metaphor, coinage, or term of art.*
 
+## What has landed
+
+**2026-08-31, yoyodyne-ifd.216.** The operator amended the plain-language
+directive: a coined term is permitted where it is defined in `docs/terms.md`,
+which holds every one of them. That item was admitted with
+`protected-path grant:` lines for `docs/product`, `docs/designs` and
+`docs/decisions` — the grant this document asked for in
+[What remains](#what-remains) — and a run applied the governed-document half
+under them. What it did, against this document's own measurements:
+
+- **[The register](../terms.md) exists**, seeded from the inventory below. Nine
+  entries: the six mechanism names of
+  [Category 2](#category-2-mechanism-names-where-the-architects-ruling-was-requested),
+  plus `in force`, `minute zero` and `posture` — decoration by this document's
+  reading, registered rather than replaced because each survives only in the
+  invariants home, whose wording this document says is the architect's alone.
+  Each of those three retires if she takes the rewording.
+- **Nine of the twelve Category 1 governed-document occurrences were replaced**:
+  `seam` ×2 in `claude-only-v1-execution.md` and
+  `claude-execution-and-account-routing.md`, `in force` ×2 in `goals/README.md`
+  and `claude-execution-and-account-routing.md`, and `posture` ×1, `re-arm` ×3
+  and `wedged` ×1 in `v1-harness-design.md`.
+- **Three of the twelve were left**, each for a reason this document already
+  states or a reason it would accept:
+  - `harness-is-the-only-role-invoker.md:20` (`posture`) — the text of an active
+    invariant. Registered instead.
+  - `invariants/README.md:10` (`in force`) — the prose governing how invariants
+    are amended, which this document says is nobody's to replace but the
+    architect's. Registered instead.
+  - `v1-harness-design.md:32` (`re-arm`) — inside a recorded amendment reason in
+    the frontmatter. A revision's reason is what the architect decided in her own
+    words on a date, and rewriting one falsifies a record rather than clarifying
+    a sentence. The check does not read frontmatter, for the same reason.
+- **Two occurrences outside the twelve** were found by rescanning the homes on
+  2026-08-31, in documents that did not carry them when this was measured:
+  `soak` ×1 in `configurable-workflows.md`, replaced; and `minute zero` ×2 in
+  `developer-verifies-before-submitting.md`, registered, being invariant text.
+  Neither is in the Category 1 table below, which records no governed-document
+  occurrence of either term.
+- **`internal/terms` is a declared check.** It reads the three artifact homes
+  for the terms below and fails on one the register does not define, so nothing
+  swept out here can come back undefined without a check going red. The reviewer
+  persona carries the same rule as a finding class, for the coinage no check can
+  recognize.
+
+Three things this document reports as outstanding are outstanding still: the
+tracker half, `cadence` in the `yoyo slack` refusal text, and the decisions on
+the proposals in
+[Where the proposals are](#where-the-proposals-are) — of which the three
+carrying Category 1 wording now describe edits already made, and are worth
+deciding rather than leaving open.
+
 ## Summary
 
+Measured on 2026-08-30, before the changes above.
 The governed documents are close to clean and the tracker is not. Across the
 three artifact homes the sweep found **32 occurrences of 8 terms**, of which 18
 are one mechanism name (`sink`) and the rest are 14 scattered occurrences. Across
@@ -278,8 +332,10 @@ rather than wholly.
 
 ## What could not be applied
 
-Neither half of the item's scope is writable by a developer run, for two
-separate reasons. Both are boundaries working as designed, not faults.
+Neither half of the item's scope was writable by the run that produced this
+document, for two separate reasons. Both are boundaries working as designed, not
+faults. The first was lifted afterwards by a grant on yoyodyne-ifd.216, which is
+[what let the governed half land](#what-has-landed); the second still stands.
 
 **The governed documents are protected paths, and this item grants none.** The
 homes the sweep covers — `docs/product`, `docs/designs`, `docs/decisions`, and
@@ -301,36 +357,33 @@ items are therefore listed above rather than applied.
 
 ## What remains
 
-ifd.206 is not done and should not be closed on the strength of this document.
-Measured against the item's own four done conditions:
+ifd.206 was closed on the strength of this document before the registration
+model landed, which is why yoyodyne-ifd.216 exists. The four done conditions
+below are this document's own, restated against what is true after
+[What has landed](#what-has-landed):
 
 | Done condition | State |
 |---|---|
 | The sweep has run over open items and governed documents | **Met.** Both scans are complete and recorded here. |
-| Decorative coinages are gone | **Not met.** All 66 Category 1 occurrences — 54 in open items, 12 in governed documents — are still in the records. Nine of the 12 governed ones are with their owner as proposals, which is as far as a developer can take them; a proposal is not a removal. |
-| Every surviving mechanism term has an architect ruling, and a plain-words first-use definition where kept | **Not met.** The ruling is requested — `amendment-19d55188…` and `amendment-1af49513…`, both undecided — and no definition can be written until it is decided. |
-| The item lists what was changed | **Not met.** Nothing was changed, and the tracker item could not be updated to say so. |
+| Decorative coinages are gone | **Met in the governed documents, not in the tracker.** Nine of the 12 governed occurrences were replaced on 2026-08-31 and three were registered or left, each named in [What has landed](#what-has-landed): two are invariants-home wording that is the architect's, and one is inside a recorded amendment reason. The 54 occurrences in open items are untouched — the tracker is still outside a developer run's sandbox. |
+| Every surviving mechanism term has an architect ruling, and a plain-words first-use definition where kept | **Superseded.** The operator's amendment replaced the rename-or-define-at-first-use choice with registration: all six mechanism names are kept and defined once, in [the register](../terms.md). `amendment-19d55188…` and `amendment-1af49513…` are still undecided, and a ruling to rename any of them would now be a rename plus a retired entry. |
+| The item lists what was changed | **Met here rather than there.** The tracker was unreachable from the run that made the changes, so the account is [What has landed](#what-has-landed) above. |
 
-Three things have to be arranged by roles other than a developer, and none of
-them is a judgment call this document is trying to pre-empt:
+Two things still have to be arranged by roles other than a developer, and
+neither is a judgment call this document is trying to pre-empt. The third — a
+grant for the governed-document half — was arranged on yoyodyne-ifd.216 and is
+[what let that half land](#what-has-landed).
 
-1. **A grant for the governed-document half.** ifd.206 needs
-   `protected-path grant:` lines admitting `docs/product`, `docs/designs` and
-   `docs/decisions`, written into the item's title, description, design
-   guidance, or acceptance criteria — the fields somebody authored. A grant in
-   the notes does not count, and nothing a developer writes grants a path.
-2. **A writable tracker for the item half.** The run needs its sandbox widened
+1. **A writable tracker for the item half.** The run needs its sandbox widened
    to the primary checkout's `.beads` directory, or the tracker edits have to be
-   made by something that already reaches it.
-3. **Decisions on the six open proposals**, listed in
+   made by something that already reaches it. This is the whole of what is left
+   of Category 1: 54 occurrences in open items, 21 of them in titles.
+2. **Decisions on the six open proposals**, listed in
    [Where the proposals are](#where-the-proposals-are): three carry the
    Category 1 decoration and two carry the mechanism rulings, and one is a
-   duplicate to decline. The Category 1 tracker work does not depend on any of
-   them and can proceed first.
-
-The first two are independent of each other, so the item can be finished in two
-runs rather than one if that is easier to arrange than a single run holding
-both.
+   duplicate to decline. The three carrying decoration now describe edits
+   already made under ifd.216's grants, so deciding them costs nothing and
+   leaves the record honest. The tracker work does not depend on any of them.
 
 ## How this was measured
 

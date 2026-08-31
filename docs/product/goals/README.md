@@ -52,7 +52,7 @@ goals document carries identity frontmatter, every goal's *Supports* trailer —
 the emphasized line directly under its entry, indented with it and with no blank
 line between — is resolved against the brief mechanically, reference validation
 and orphan reporting run over the loaded set, and a test enforces that every
-goal in force names a claim the brief states. A reader can still trace the links
+active goal names a claim the brief states. A reader can still trace the links
 by hand; the harness no longer depends on them to.
 
 This file is a directory index rather than an artifact: it carries no identity

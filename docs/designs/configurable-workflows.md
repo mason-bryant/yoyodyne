@@ -50,7 +50,7 @@ The Sentinel is the first specialist: an observer bundle — read canonical evid
 
 ## Conversion order and the recorded trade
 
-Delivery first — it is bounded, tested, safety-critical, and durable — behind the brief's parity discipline: freeze the behavioral baseline, wrap existing code as actions unchanged, run the compiled definition against the baseline, soak opt-in, then default for new runs with legacy resume preserved; existing incomplete runs stay resumable throughout. Triage second, preserving the docket's caps and authority. Management requests third: **ifd.142 proceeds bespoke, per the operator's recorded trade, and converts here — its durable records must therefore map onto instances and interrupts without loss, which constrains 142's persistence now.** The specialist substrate and Sentinel fourth. Parallel branches, fan-out, visual authoring, and new gate types wait for demonstrated need.
+Delivery first — it is bounded, tested, safety-critical, and durable — behind the brief's parity discipline: freeze the behavioral baseline, wrap existing code as actions unchanged, run the compiled definition against the baseline, keep an opt-in trial alongside the old path, then default for new runs with legacy resume preserved; existing incomplete runs stay resumable throughout. Triage second, preserving the docket's caps and authority. Management requests third: **ifd.142 proceeds bespoke, per the operator's recorded trade, and converts here — its durable records must therefore map onto instances and interrupts without loss, which constrains 142's persistence now.** The specialist substrate and Sentinel fourth. Parallel branches, fan-out, visual authoring, and new gate types wait for demonstrated need.
 
 ## The twenty questions, settled
 
