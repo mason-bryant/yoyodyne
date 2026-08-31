@@ -857,20 +857,9 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		invariants: invariants,
 	}
 
-	item, err = p.Tracker.Claim(ctx, workItemID)
-	if err != nil {
-		return run.fail(fmt.Errorf("claim work item: %w", err), runstate.StatusFailed)
+	if err := run.claim(ctx); err != nil {
+		return run.fail(err, runstate.StatusFailed)
 	}
-	run.claimed = true
-	run.item = item
-	if err := validateClaimedItem(item, workItemID); err != nil {
-		return run.fail(fmt.Errorf("validate claimed work item: %w", err), runstate.StatusFailed)
-	}
-	bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: p.Repository, WorkItem: item})
-	if err != nil {
-		return run.fail(fmt.Errorf("assemble claimed work item context: %w", err), runstate.StatusFailed)
-	}
-	run.context = bundle.Text
 	worktree, err := p.Worktrees.Create(ctx, gitworktree.CreateRequest{
 		RunID:        runID,
 		WorkItemID:   workItemID,
@@ -893,10 +882,36 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	run.outcome.Status = runstate.StatusRunning
 	run.outcome.Phase = run.state.Phase
 
-	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text), ""); err != nil {
+	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), run.context), ""); err != nil {
 		return run.stop(ctx, err)
 	}
 	return run.verifyReviewAndFinish(ctx)
+}
+
+// claim takes the work item this run was dispatched for and assembles the
+// context its developer is given.
+//
+// It is the first thing a run changes outside itself: everything above it in Run
+// is a question, and after this the item is claimed and a failure has to give it
+// back. The three failures are wrapped separately and none of them is handled
+// here, because what a caller does about a run that could not be started is the
+// caller's — Run fails it, and the failure says which of the three it was.
+func (a *activeRun) claim(ctx context.Context) error {
+	item, err := a.pipeline.Tracker.Claim(ctx, a.state.WorkItemID)
+	if err != nil {
+		return fmt.Errorf("claim work item: %w", err)
+	}
+	a.claimed = true
+	a.item = item
+	if err := validateClaimedItem(item, a.state.WorkItemID); err != nil {
+		return fmt.Errorf("validate claimed work item: %w", err)
+	}
+	bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: a.pipeline.Repository, WorkItem: item})
+	if err != nil {
+		return fmt.Errorf("assemble claimed work item context: %w", err)
+	}
+	a.context = bundle.Text
+	return nil
 }
 
 // ErrNoRunToContinue is what a continuation refused for not finding the run it
@@ -3688,24 +3703,11 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 		return a.outcome, nil
 	}
 
-	// Only artifacts proven to be integrated are removed, and only after the
-	// tracker agrees the item is done and that fact is durable. Cleanup reports
-	// each artifact separately, so a partial removal is recorded as what it is
-	// rather than collapsed into a single failed flag.
-	cleanup, cleanupErr := p.Worktrees.CleanupIntegrated(ctx, gitworktree.CleanupRequest{
-		Worktree:     a.worktree,
-		TargetBranch: a.outcome.Integration.TargetBranch,
-		SourceCommit: a.outcome.Integration.SourceCommit,
-	})
-	a.outcome.WorktreeRemoved = cleanup.WorktreeRemoved
-	a.outcome.BranchRemoved = cleanup.BranchRemoved
-	a.state.WorktreeRemoved = cleanup.WorktreeRemoved
-	a.state.BranchRemoved = cleanup.BranchRemoved
-	if cleanupErr != nil {
+	if err := a.cleanUp(ctx); err != nil {
 		// A failure here leaves the run succeeded and reports the outstanding
 		// cleanup: the change is integrated and the item is closed. Whatever was
 		// removed before the failure is still recorded as removed.
-		return p.reportOutstandingCleanup(a.state, a.outcome, fmt.Errorf("clean up integrated run artifacts: %w", cleanupErr))
+		return p.reportOutstandingCleanup(a.state, a.outcome, err)
 	}
 	// Cleanup finished, so the run is complete whatever happens to the record of
 	// it. The reported phase follows that fact rather than the write below.
@@ -3722,6 +3724,29 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 		}
 	}
 	return a.outcome, nil
+}
+
+// cleanUp removes what this run created, once its work is somewhere else.
+//
+// Only artifacts proven to be integrated are removed, and only after the tracker
+// agrees the item is done and that fact is durable. Cleanup reports each
+// artifact separately, so a partial removal is recorded as what it is rather
+// than collapsed into a single failed flag — which is why what was removed is
+// recorded before the failure is returned rather than after it.
+func (a *activeRun) cleanUp(ctx context.Context) error {
+	cleanup, err := a.pipeline.Worktrees.CleanupIntegrated(ctx, gitworktree.CleanupRequest{
+		Worktree:     a.worktree,
+		TargetBranch: a.outcome.Integration.TargetBranch,
+		SourceCommit: a.outcome.Integration.SourceCommit,
+	})
+	a.outcome.WorktreeRemoved = cleanup.WorktreeRemoved
+	a.outcome.BranchRemoved = cleanup.BranchRemoved
+	a.state.WorktreeRemoved = cleanup.WorktreeRemoved
+	a.state.BranchRemoved = cleanup.BranchRemoved
+	if err != nil {
+		return fmt.Errorf("clean up integrated run artifacts: %w", err)
+	}
+	return nil
 }
 
 // stop turns a stopped step into the outcome the run reports. Two things it can
