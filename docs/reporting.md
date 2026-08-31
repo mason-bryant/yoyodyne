@@ -258,9 +258,20 @@ and every round of an inter-role exchange.
 
 Each line carries the role and the configured agent that spent it, the phase, the
 amount and its classification, the account alias and the configuration revision
-in force, the one thing the invocation belonged to — and the work item, where the
-invocation was made for one — the backend, the requested and resolved models, and
-when it happened.
+in force, the revision the harness binary that made the call was built from, the
+one thing the invocation belonged to — and the work item, where the invocation was
+made for one — the backend, the requested and resolved models, and when it
+happened.
+
+That last pin is the build, and it is taken by the metering itself rather than
+supplied by whatever is invoking: a build a call site could pass in is one a call
+site could forget, and the line would then say whose account paid for an
+invocation without saying what code made it. It is the only pin that can be
+absent on a line the harness wrote — the harness always knows the account and the
+revision, and a binary installed from the module cache carries no revision of its
+own. An absence is recorded as one rather than guessed at from the version,
+because a comparison nobody can make is an answer and a comparison made against
+the wrong commit is not.
 
 That one thing is a run, a conversation, an exchange, or a branch review, and a
 line names exactly one of the four. A branch review has a field of its own rather
@@ -577,6 +588,26 @@ as it happened, and being told after the first round has been spent is being tol
 too late. It is silent on a session running what is deployed, and on one whose
 binary recorded no revision at all, which is a comparison nobody can make rather
 than a session that is current.
+
+Two records answer which build that is, and they are asked in that order. The
+watch log is the direct one: that process is the resident, and it stamps what it
+was started with on every transition it writes. Where no live session names one,
+the **runs still in flight** do — a run's record pins the harness that reserved
+it, so a resident whose own log predates the stamping is still visible through the
+work it is dispatching, and so is a dispatcher that is not a watch session at all.
+Neither is inferred from anything else: both are stamps the process wrote about
+itself.
+
+A live session's stamp settles it outright, and the runs are consulted only where
+no live session carries one — including where a run in flight was reserved by a
+different binary and started later. That is a precedence rather than a contest of
+which record is newer, because a live watch session is the resident by definition
+while a run reserved by some other binary is usually an operator's `yoyo run` or a
+triage carry-out: a process that has already ended or is about to, whose build is
+not the one that will go on choosing work. Within each source the most recent is
+taken — the newest live session that recorded a build, and the latest-started run
+still in flight. A run that has ended says which build made it and is no longer
+evidence about what is running now.
 
 **It is a self-hosting line, and it says so rather than assuming it.** The
 revision is the one the `yoyo` binary was built from, and the repository it is

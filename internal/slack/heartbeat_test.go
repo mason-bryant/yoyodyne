@@ -384,6 +384,77 @@ func TestASessionWithNothingToCompareIsNotReportedAsStale(t *testing.T) {
 	harness.poll(t, cursors)
 }
 
+// The runs in flight are the second record that says which harness is
+// dispatching work, and they are read when the watch log does not say. That is
+// the shape the field cases had: the session choosing work stamped nothing at
+// all — watch.jsonl only began carrying a build on 2026-08-30 — while every run
+// it reserved was made by that same binary and now says so. Without this the
+// stale resident is silent exactly where it is spending rounds.
+func TestARunInFlightNamesTheBuildWhenTheSessionDoesNot(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.deployed(31)
+	// A session that is alive and says nothing about its binary, which is every
+	// session recorded before the stamping existed.
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	dispatched := harness.run(t, runstate.StatusRunning)
+	dispatched.Build = staleResidentBuild
+	harness.record(t, dispatched)
+
+	harness.poll(t, harness.start(),
+		notify.KindRunStarted, notify.KindWatchStarted, notify.KindResidentStale)
+}
+
+// A live session that says which binary it is is believed over the runs beside
+// it, even where a run was reserved later by a different one. That is the
+// precedence rather than a contest of which record is newer: the session is the
+// resident, and a run reserved by another binary is an operator's `yoyo run` or a
+// triage carry-out — a process that is already ending, whose build is not the one
+// that will go on choosing work.
+func TestALiveSessionsOwnStampIsBelievedOverTheRunsBesideIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.feed.Deployments = perBuildDeployments{currentResidentBuild: 0, staleResidentBuild: 31}
+	// The session is on what is deployed and said so ten minutes ago; a run
+	// started since was reserved by a binary thirty-one changes behind.
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, currentResidentBuild)
+	dispatched := harness.run(t, runstate.StatusRunning)
+	dispatched.Build = staleResidentBuild
+	dispatched.StartedAt = moment.Add(10 * time.Minute)
+	dispatched.UpdatedAt = dispatched.StartedAt
+	harness.record(t, dispatched)
+
+	// The resident is current, so nothing is said about a stale one however
+	// recently the run beside it started.
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindWatchStarted)
+	harness.now = harness.now.Add(2 * time.Hour)
+	harness.poll(t, cursors)
+}
+
+// A run that has ended says which build made it and is not evidence about what is
+// running now. The record is still the answer to "which build did this" long
+// afterwards; what it stops being is an account of the resident.
+func TestAFinishedRunIsNotReadAsTheResident(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.deployed(31)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	ended := harness.run(t, runstate.StatusSucceeded)
+	ended.Build = staleResidentBuild
+	harness.record(t, ended)
+
+	cursors := harness.poll(t, harness.start(),
+		notify.KindRunStarted, notify.KindChecksPassed, notify.KindWatchStarted)
+	harness.now = harness.now.Add(2 * time.Hour)
+	harness.poll(t, cursors)
+}
+
 // The build revision is the yoyodyne binary's and the repository is the
 // product's, and those are one history only where the product is the harness's
 // own source. Everywhere else the repository has never held that revision, there
@@ -437,11 +508,13 @@ func TestARepositoryThatCannotBeReadIsSaidRatherThanGuessedAt(t *testing.T) {
 	}
 }
 
-// The builds a session can be running: one the harness has moved past, and the
-// newer one a restart puts it on that is still not current.
+// The builds a session can be running: one the harness has moved past, the newer
+// one a restart puts it on that is still not current, and the one that is
+// actually deployed.
 const (
-	staleResidentBuild = "4c1f2b3a9d8e7f6a5b4c3d2e1f0099887766554433221100aabbccddeeff0011"
-	newerResidentBuild = "aa11bb22cc33dd44ee55ff6677889900112233445566778899aabbccddeeff00"
+	staleResidentBuild   = "4c1f2b3a9d8e7f6a5b4c3d2e1f0099887766554433221100aabbccddeeff0011"
+	newerResidentBuild   = "aa11bb22cc33dd44ee55ff6677889900112233445566778899aabbccddeeff00"
+	currentResidentBuild = "ff00ee11dd22cc33bb44aa5566778899001122334455667788990011223344ff"
 )
 
 // ready gives the feed a tracker that reports this many items ready to pull, and
@@ -547,6 +620,16 @@ type countedDeployments struct {
 }
 
 func (d countedDeployments) Behind(context.Context, string) (int, error) { return d.behind, nil }
+
+// perBuildDeployments answers differently for each build, which is what a real
+// repository does and what separating two candidate residents needs: a session on
+// what is deployed and a run reserved by something older are one reading only if
+// the repository is asked about each of them.
+type perBuildDeployments map[string]int
+
+func (d perBuildDeployments) Behind(_ context.Context, build string) (int, error) {
+	return d[build], nil
+}
 
 type brokenDeployments struct{}
 

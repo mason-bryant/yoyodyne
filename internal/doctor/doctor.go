@@ -160,6 +160,15 @@ type Environment struct {
 	// build on PATH and against the build a running sink recorded, which is the
 	// pair of comparisons a stale installation hides in.
 	Version string
+	// Build is the repository revision that build was made from, which is the
+	// comparison the version alone cannot make. A harness developing itself runs
+	// unreleased binaries, so every one of them answers "dev": a sink started a
+	// week ago and the binary asking about it report the same version and compare
+	// as identical, which is the false all-clear this is here to end.
+	//
+	// It is empty where the binary carries no revision of its own, and an absence
+	// on either side is a comparison nobody can make rather than agreement.
+	Build string
 	// Load resolves the project's configuration, and returns the same error the
 	// operator would see from `yoyo config validate`.
 	Load func() (config.Resolved, error)

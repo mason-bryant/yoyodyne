@@ -177,6 +177,7 @@ func TestATurnPinsTheAccountAndConfigurationThatServedIt(t *testing.T) {
 	options.Store = newTestStore(t, root)
 	options.AccountAlias = "research"
 	options.ConfigRevision = "cfg-0123456789ab"
+	options.Build = "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900"
 	if _, err := openTestSession(t, options).Send(context.Background(), "What is missing from the brief?"); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
@@ -190,6 +191,12 @@ func TestATurnPinsTheAccountAndConfigurationThatServedIt(t *testing.T) {
 	}
 	if recorded.AccountAlias != "research" || recorded.ConfigRevision != "cfg-0123456789ab" {
 		t.Fatalf("recorded attribution = %#v, want the account and configuration that served the turn", recorded)
+	}
+	// And which harness answered it. A conversation an operator leaves open is
+	// held by a process that goes on running whatever binary started it, so the
+	// record says which one rather than leaving it to be inferred from a date.
+	if recorded.Build != options.Build {
+		t.Fatalf("recorded build = %q, want the harness that answered the turn %q", recorded.Build, options.Build)
 	}
 	if recorded.Backend != domain.BackendClaudeCode || recorded.ProviderModel != "opus" ||
 		recorded.ProviderResolvedModel != "claude-opus-5-20260514" {

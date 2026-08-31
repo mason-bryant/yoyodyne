@@ -108,13 +108,23 @@ function ahead of every reservation, and the route is now driven end to end by a
 test. So the code on main does refuse this, and the code that dispatched those
 four cannot have been it.
 
-What is left is the build. The run records cannot say which one the scheduler
+What is left is the build. The run records could not say which one the scheduler
 process was running: `watch.jsonl` only began stamping a `build` on 2026-08-30
-11:15, after all four. A resident older than the fix is the same class
-`docs/work.md` already names as an environmental refusal — "the build that
-dispatched it predated the decision it was carrying out" — and settling it needs
-the provenance of the binary the resident runs, which lives outside these
-records.
+11:15, after all four, and nothing else carried one at all. A resident older than
+the fix is the same class `docs/work.md` already names as an environmental
+refusal — "the build that dispatched it predated the decision it was carrying
+out" — and these four cannot now be settled, because the evidence was never
+written.
+
+**They are the last four that could not be.** ifd.213 put the revision the
+reserving harness was built from onto every run record, beside the account and
+the configuration it already carried, and onto every line of the cost log, every
+conversation record, and every round of an inter-role exchange. A dispatch made
+after that says in its own record which binary made it, so the same question
+asked of a later incident is answered from the records rather than abandoned
+here. What is still not automatic is the comparison at dispatch — a run reserved
+by a build older than the decision it is carrying out still proceeds, and
+`docs/work.md` names that as the half of the environmental cause that remains.
 
 One shape of the loss is out of reach of both refusals: ifd.68.22's repair
 target was a run of a *different* work item (ifd.68.20), named in the item's

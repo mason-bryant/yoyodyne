@@ -165,6 +165,12 @@ type RunSummary struct {
 	// afterwards, and there is one of each today only until there is not.
 	AccountAlias   string `json:"account_alias,omitempty"`
 	ConfigRevision string `json:"config_revision,omitempty"`
+	// Build is the harness revision that reserved the run. It is here for a
+	// sharper version of the same reason: a run whose behaviour cannot be
+	// attributed to a binary is one whose defects cannot be told apart from a
+	// deployment that never happened, which is how a week of code defects turns
+	// out to have been one stale process.
+	Build string `json:"build,omitempty"`
 	// CostUSD is what the provider reported for every invocation in this run's
 	// log, and UnknownCost says why there is no figure rather than reporting one
 	// of zero: a run whose evidence is gone did not cost nothing.
@@ -285,6 +291,7 @@ func (s *Store) summarize(state State) RunSummary {
 		MergeQueued:       state.PullRequest != nil && state.PullRequest.MergeQueued,
 		AccountAlias:      state.AccountAlias,
 		ConfigRevision:    state.ConfigRevision,
+		Build:             state.Build,
 		Failure:           state.Failure,
 		PublishFailure:    state.PublishFailure,
 		CleanupFailure:    state.CleanupFailure,

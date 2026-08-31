@@ -22,10 +22,24 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
+
+// processBuild is the revision this binary was built from, read once because a
+// process does not change binary while it lives — and that is exactly the
+// problem it answers: a long-lived one goes on making invocations from what it
+// was started with while the harness moves on underneath it.
+//
+// It is taken here rather than passed in with the rest of the attribution for
+// the reason the recording itself is not left to callers: a build a call site
+// could supply is one a call site could forget, and the line would then say
+// which account paid for an invocation without saying which harness made it. A
+// binary that carries no revision leaves it empty, which reads as a comparison
+// nobody can make.
+var processBuild = buildinfo.Commit()
 
 // Provider is the invocation half of a provider backend. It is the narrow view
 // every role already takes of one, so a metered provider drops in wherever an
@@ -156,6 +170,7 @@ func (m Metered) line(request backend.RunRequest, result backend.RunResult, err 
 		Model:          request.Model,
 		ResolvedModel:  result.ResolvedModel,
 		SessionID:      result.SessionID,
+		Build:          processBuild,
 	}
 	// The provider names the backend that served the invocation, which is the
 	// same one the configuration named. It is preferred where it is there because

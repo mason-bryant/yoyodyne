@@ -53,12 +53,6 @@ const maxEncodedWatchBytes = 16 << 10
 
 var watchSessionIDPattern = regexp.MustCompile(`^watch-[a-f0-9]{32}$`)
 
-// watchBuildPattern is what a recorded build revision may look like. It is held
-// to being a Git object name because that is the only thing it ever is and
-// because a reader measures the session's age by handing it to Git: a field that
-// could carry anything is a field that could carry an option.
-var watchBuildPattern = regexp.MustCompile(`^[a-f0-9]{7,64}$`)
-
 // WatchState is what a session is doing between one transition and the next.
 type WatchState string
 
@@ -147,7 +141,7 @@ func (t WatchTransition) Validate() error {
 	// A session recorded before the build was written down carries none, and that
 	// is not a malformed entry: what it costs is the one comparison, which is
 	// reported as unmakeable where it is read.
-	if t.Build != "" && !watchBuildPattern.MatchString(t.Build) {
+	if t.Build != "" && !buildPattern.MatchString(t.Build) {
 		problems = append(problems, fmt.Errorf("watch transition build %q is not a revision", t.Build))
 	}
 	return errors.Join(problems...)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
@@ -363,10 +364,17 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// records as well as the configuration, and this is where both are in
 		// hand. A project with one account has nothing to choose between and gets
 		// the same answer the configuration alone would have given.
-		Accounts:     accountPool{config: cfg, stateRoot: parts.stateRoot, runs: parts.store},
-		StateRoot:    parts.stateRoot,
-		Repository:   parts.repository,
-		Config:       cfg,
+		Accounts:   accountPool{config: cfg, stateRoot: parts.stateRoot, runs: parts.store},
+		StateRoot:  parts.stateRoot,
+		Repository: parts.repository,
+		Config:     cfg,
+		// Which harness is dispatching, read once here for the reason the watch
+		// session reads its own the same way: a process does not change binary
+		// while it lives, and that is exactly what has to be written down — a
+		// resident goes on dispatching from what it was started with while the
+		// harness moves on underneath it. A binary that recorded no revision leaves
+		// this empty, which reads as a comparison nobody can make.
+		Build:        buildinfo.Commit(),
 		RedactValues: redactValues,
 	}
 }

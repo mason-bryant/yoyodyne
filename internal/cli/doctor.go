@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/doctor"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -52,6 +53,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, ver
 		UserHomeDir: os.UserHomeDir,
 		GOOS:        runtime.GOOS,
 		Version:     version,
+		Build:       buildinfo.Commit(),
 		Load:        func() (config.Resolved, error) { return loadConfiguration(*configPath) },
 	})
 

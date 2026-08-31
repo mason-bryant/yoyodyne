@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
@@ -525,15 +526,19 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// than a configuration-wide single account there is none of.
 		AccountAlias:   account.Alias,
 		ConfigRevision: cfg.Revision(),
-		Model:          agent.Model,
-		Persona:        agent.Persona.Text,
-		Agent:          name,
-		Provider:       agent.Backend,
-		Providers:      providerRegistry(cfg),
-		Repository:     repository,
-		ProductID:      cfg.Product.ID,
-		RepositoryID:   string(cfg.Product.RepositoryID),
-		Briefing:       briefing,
+		// And which harness is holding it, read once here because a process does not
+		// change binary while it lives — which is the whole reason a conversation
+		// somebody leaves open for days is worth stamping.
+		Build:        buildinfo.Commit(),
+		Model:        agent.Model,
+		Persona:      agent.Persona.Text,
+		Agent:        name,
+		Provider:     agent.Backend,
+		Providers:    providerRegistry(cfg),
+		Repository:   repository,
+		ProductID:    cfg.Product.ID,
+		RepositoryID: string(cfg.Product.RepositoryID),
+		Briefing:     briefing,
 		// The repository and the tracker are kept reachable so the conversation
 		// can say how old its picture is and take a new one when the operator
 		// asks. The product manager reaches neither: this is the harness's hand,

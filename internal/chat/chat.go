@@ -254,6 +254,13 @@ type Options struct {
 	// loading one.
 	AccountAlias   string
 	ConfigRevision string
+	// Build is the repository revision the harness binary holding this
+	// conversation was built from, recorded on the conversation with the pair
+	// above. It is supplied for the reason they are — the conversation is handed
+	// its environment rather than reading one — and it is recorded at all because
+	// a conversation an operator leaves open is held by a process that goes on
+	// running whatever binary started it.
+	Build string
 	// Repository is the working directory the provider is started in. Nothing
 	// is written there: the role has no tools.
 	Repository   string
@@ -976,6 +983,11 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// configuration edit or an account move even though this pair does not.
 	s.state.AccountAlias = s.options.AccountAlias
 	s.state.ConfigRevision = s.options.ConfigRevision
+	// And which harness answered it. It is rewritten with the pair above because
+	// it says the same kind of thing about the conversation as it now stands: a
+	// conversation resumed by a newer binary is being held by that one, and a
+	// conversation nobody has resumed is still being held by whatever started it.
+	s.state.Build = s.options.Build
 	s.state.Turns++
 	// The activity and the results were carried into the prompt this turn
 	// answered, so neither is pending any more. A turn that failed keeps them,

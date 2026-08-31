@@ -55,15 +55,21 @@ import (
 // then the whole of what bounded its repairs.
 const StateSchemaVersion = 1
 
-// The shape of the two things a run records about how it was configured. They
-// are stated here rather than imported from the configuration package for the
-// reason the review decisions above are: the durable schema stays independent of
-// the code that produces what it stores, so a record is checked against what a
-// record may hold rather than against what this version of the harness happens
-// to write.
+// The shape of the three things a run records about how it was configured and
+// what was executing it. They are stated here rather than imported from the
+// configuration package for the reason the review decisions above are: the
+// durable schema stays independent of the code that produces what it stores, so
+// a record is checked against what a record may hold rather than against what
+// this version of the harness happens to write.
+//
+// buildPattern is shared by every record in this package that pins a harness
+// build, and it holds one to being a Git object name because that is the only
+// thing it ever is: a reader measures how old a build is by handing it to Git,
+// and a field that could carry anything is a field that could carry an option.
 var (
 	accountAliasPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 	configRevisionPattern = regexp.MustCompile(`^cfg-[a-f0-9]{8,}$`)
+	buildPattern          = regexp.MustCompile(`^[a-f0-9]{7,64}$`)
 )
 
 type Status string
@@ -577,6 +583,25 @@ type State struct {
 	// Absent means nothing recorded a configuration, which is what every run
 	// written before this did.
 	ConfigRevision string `json:"config_revision,omitempty"`
+	// Build is the repository revision the harness binary that reserved this run
+	// was built from. It is written with the account and the configuration and
+	// never rewritten, for the same reason and for one of its own: a run picked up
+	// again by a later process still says which build started it, which is what an
+	// account of what that run did has to be able to answer.
+	//
+	// It is here because a process goes on running whatever it was started with
+	// while the harness moves on underneath it, and nothing else in a run's record
+	// says which of the two dispatched it. That gap is not hypothetical: four
+	// repair dispatches in the week of 2026-08-27 were made after the refusal that
+	// should have turned each of them away had merged, by a resident scheduler
+	// nobody could show was running the merged code, and the diagnosis had to stop
+	// there because no record could name the binary. Most of that week's code
+	// defects were deployment defects and nothing could tell the two apart.
+	//
+	// Absent means nothing recorded a build, which is what every run written
+	// before this did and what a binary carrying no revision of its own produces —
+	// a comparison nobody can make, rather than a run that is current.
+	Build string `json:"build,omitempty"`
 	// ProviderSessionID is the developer session. The reviewer's session is
 	// recorded separately because the two are always distinct invocations.
 	ProviderSessionID string `json:"provider_session_id,omitempty"`
@@ -950,15 +975,18 @@ func (s State) Validate() error {
 			problems = append(problems, fmt.Errorf("selection: %w", err))
 		}
 	}
-	// Both are absent from every record written before they were carried, so what
-	// is checked is the shape of one that is there: a record naming an account or
-	// a configuration nothing could have produced says less than one naming
-	// neither, because it reads as evidence.
+	// All three are absent from every record written before they were carried, so
+	// what is checked is the shape of one that is there: a record naming an
+	// account, a configuration, or a build nothing could have produced says less
+	// than one naming none of them, because it reads as evidence.
 	if s.AccountAlias != "" && !accountAliasPattern.MatchString(s.AccountAlias) {
 		problems = append(problems, errors.New("account_alias is not an account alias"))
 	}
 	if s.ConfigRevision != "" && !configRevisionPattern.MatchString(s.ConfigRevision) {
 		problems = append(problems, errors.New("config_revision is not a configuration revision"))
+	}
+	if s.Build != "" && !buildPattern.MatchString(s.Build) {
+		problems = append(problems, errors.New("build is not a revision"))
 	}
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))

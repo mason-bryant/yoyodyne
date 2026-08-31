@@ -324,9 +324,19 @@ type Pipeline struct {
 	// under it, and that path is this machine's business rather than the
 	// configuration's — which is why it is wired here rather than written down in
 	// a file that is versioned with the repository.
-	StateRoot    string
-	Repository   string
-	Config       config.Config
+	StateRoot  string
+	Repository string
+	Config     config.Config
+	// Build is the repository revision this harness binary was built from,
+	// recorded on every run this pipeline reserves. It is wired in rather than
+	// read here because which binary is executing is a fact about the process the
+	// command started, exactly as the state root is, and because a pipeline that
+	// read it for itself would be one no test could drive.
+	//
+	// A caller that supplies none records none, which is what a binary carrying no
+	// revision of its own leaves behind: a comparison nobody can make, rather than
+	// a run that is current.
+	Build        string
 	RedactValues []string
 }
 
@@ -815,7 +825,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		// also what the run is affined to: every invocation this run goes on to make
 		// reads it back off the record rather than asking the pool a second time.
 		ConfigRevision: p.Config.Revision(),
-		Status:         runstate.StatusPending,
+		// And which harness dispatched it, written in the same breath and for the
+		// same reason: a process runs whatever binary it was started with while the
+		// harness moves on underneath it, so what a run's record says about the code
+		// that made its decisions is a fact only this process holds. Without it a
+		// run that behaved like a build from before the fix is indistinguishable
+		// from a fix that does not work.
+		Build:  p.Build,
+		Status: runstate.StatusPending,
 	}
 	// Which account will serve this run is settled here, before anything is
 	// claimed, so a pool with nothing left to spend refuses before a work item has
@@ -1093,6 +1110,12 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	if state.ConfigRevision == "" {
 		state.ConfigRevision = p.Config.Revision()
 	}
+	// The build is deliberately not acquired the same way. The account and the
+	// revision are what the rest of the run is carried out under, so this process
+	// can honestly supply them; the build says which harness reserved the run, and
+	// stamping this one onto a record that never carried it would assert that this
+	// binary started work it only picked up. An empty build stays empty, which is
+	// the truthful answer: nobody wrote down what dispatched it.
 	run := &activeRun{
 		pipeline:   p,
 		state:      state,

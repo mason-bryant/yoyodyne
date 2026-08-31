@@ -38,6 +38,11 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	// is the only thing that says whose subscription paid for it.
 	conversation.AccountAlias = "research"
 	conversation.ConfigRevision = "cfg-0123456789ab"
+	// And so does the harness that answered it. A conversation an operator leaves
+	// open is held by a process that goes on running whatever binary started it,
+	// so which one that is has to be in the record rather than inferred from when
+	// the conversation began.
+	conversation.Build = "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900"
 	conversation.Turns = 1
 	conversation.PendingTrackerResults = "- t1.1: closed yoyodyne-2\n"
 	// What the agent is reasoning from travels with the record, because the
@@ -384,6 +389,16 @@ func TestConversationValidateRejectsIncoherentRecords(t *testing.T) {
 			name:   "a revision of no digest",
 			mutate: func(c *Conversation) { c.ConfigRevision = "yesterday's" },
 			want:   "config_revision is not a configuration revision",
+		},
+		{
+			// And the same for the build: a conversation may name none, because one
+			// recorded before the harness pinned it does and because a binary carrying
+			// no revision of its own leaves it empty. What it may not do is name
+			// something no repository could resolve, which reads as an answer to
+			// "which harness held this" and is not one.
+			name:   "a build that is not a revision",
+			mutate: func(c *Conversation) { c.Build = "the one from Tuesday" },
+			want:   "build is not a revision",
 		},
 		{
 			// A picture may predate the conversation that carries it, because it
