@@ -237,6 +237,135 @@ func TestASettlementSaidInAnotherThreadStillOwesTheThreadThatAsked(t *testing.T)
 	}
 }
 
+// The fixture, replayed: on 2026-08-30 the operator asked in a thread what a
+// phrase in one of these acknowledgments meant, and the inbound half — having
+// one category — recorded the question as a directive and acknowledged it in the
+// phrase he was asking about. Both halves of that are checked here, because both
+// were wrong: the record must hold nothing, and the answer must not offer the
+// asked-about words as their own explanation.
+func TestTheFixtureQuestionIsAnsweredAsOneRatherThanRecordedAsADirective(t *testing.T) {
+	t.Parallel()
+
+	const askedTS = "1750000001.000200"
+	const asked = "What does 'in force from now' mean?"
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(), reply(testOperator, asked, askedTS))
+
+	recorded, err := directives.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 0 {
+		t.Fatalf("recorded %+v, want a question kept out of the record of what was directed", recorded)
+	}
+
+	answer := onlyPost(t, posts)
+	if !strings.HasPrefix(answer.Text, "<@"+testOperator+"> ") {
+		t.Fatalf("answer = %q, want the answer tagged to whoever asked", answer.Text)
+	}
+	if !strings.Contains(answer.Text, "written down as a question") || !strings.Contains(answer.Text, "An answer follows") {
+		t.Fatalf("answer = %q, want it to say the question was recorded as one and that an answer follows", answer.Text)
+	}
+	// The second defect: a receipt must not explain a term by restating it, so
+	// the words the operator asked about appear nowhere in the answer to them.
+	if strings.Contains(strings.ToLower(answer.Text), "in force from now") {
+		t.Fatalf("answer = %q, want it to answer the question rather than repeat the phrase it asked about", answer.Text)
+	}
+	// Recorded, and not settled: the answer has not been given, so the message
+	// that asked keeps saying so.
+	if worn := posts.wearing[askedTS]; !worn[notify.ReceiptUnderConsideration.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the question wears %#v, want the thinking face while the answer is still owed", worn)
+	}
+}
+
+// The question itself is written down, where the harness owns it rather than the
+// workspace. The receipt promises an answer, and a promise whose only copy is a
+// Slack message is one a provider can lose — so what the product manager will
+// answer from is durable state of the harness's own.
+func TestAQuestionIsRememberedWhereTheHarnessOwnsIt(t *testing.T) {
+	t.Parallel()
+
+	const askedTS = "1750000001.000200"
+	sink, _, _ := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "@architect why is the store read twice here?", askedTS))
+
+	questions, err := sink.store.LoadQuestions()
+	if err != nil {
+		t.Fatalf("LoadQuestions() error = %v", err)
+	}
+	question, found := questions.Lookup(askedTS)
+	if !found {
+		t.Fatalf("questions = %#v, want the question remembered against the message that asked it", questions)
+	}
+	if question.Text != "why is the store read twice here?" {
+		t.Fatalf("text = %q, want what was asked in the operator's own words", question.Text)
+	}
+	if question.Member != testOperator {
+		t.Fatalf("member = %q, want whoever asked, so the answer can reach them", question.Member)
+	}
+	topic, err := notify.WorkItem(testItem)
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	if question.Topic != topic.Key() {
+		t.Fatalf("topic = %q, want the thread it was asked in", question.Topic)
+	}
+	if question.ReceivedBy != domain.RoleArchitect {
+		t.Fatalf("received by %q, want the role the question addressed", question.ReceivedBy)
+	}
+}
+
+// A reply that is both a question and an instruction is the case where guessing
+// costs something either way, so it is asked back in one line and nothing is
+// recorded from it.
+func TestAReplyThatCouldBeEitherIsAskedBackRatherThanRecorded(t *testing.T) {
+	t.Parallel()
+
+	for _, said := range []string{
+		"stop refactoring the store. why is it read twice?",
+		"what we need here",
+	} {
+		sink, directives, posts := newSteeringSink(t, testOperator)
+		sink.steering.handle(context.Background(), reply(testOperator, said, "1750000001.000200"))
+
+		recorded, err := directives.List()
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		if len(recorded) != 0 {
+			t.Fatalf("%q recorded %+v, want nothing recorded from a reply that could be either", said, recorded)
+		}
+		questions, err := sink.store.LoadQuestions()
+		if err != nil {
+			t.Fatalf("LoadQuestions() error = %v", err)
+		}
+		if len(questions.Questions) != 0 {
+			t.Fatalf("%q was remembered as %#v, want a reply nobody could read filed as neither", said, questions.Questions)
+		}
+		answer := onlyPost(t, posts)
+		if !strings.Contains(answer.Text, "say it again as one or the other") {
+			t.Fatalf("%q was answered %q, want one line asking which it was", said, answer.Text)
+		}
+	}
+}
+
+// The reading decides what is recorded and never whether work stops. A reply
+// that states one of the pausing kinds is taken at its word however it is
+// punctuated, because somebody who opened with the word said what they meant.
+func TestAStatedKindIsNotSecondGuessedByTheReading(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, _ := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which of the two branches did you mean?", "1750000001.000200"))
+
+	recorded := onlyDirective(t, directives)
+	if recorded.Kind != directive.KindAmbiguous || !recorded.Pauses() {
+		t.Fatalf("recorded = %+v, want the stated kind taken at its word", recorded)
+	}
+}
+
 // The pausing kinds are stated rather than inferred, and a stated one pauses the
 // work exactly as one recorded at a terminal does. Nothing about arriving through
 // a chat workspace makes it a weaker record.

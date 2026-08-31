@@ -615,7 +615,8 @@ holds a Slack token — one separate process posts, so no agent's subprocess tre
 ever has a credential for your workspace in it.
 
 Replies go the other way. A reply in a work item's thread, from somebody this
-project granted `direct-work` with a bound Slack member id, is recorded as a
+project granted `direct-work` with a bound Slack member id, and which directs
+something, is recorded as a
 [directive](conversation.md#directives-and-the-work-they-pause) against that item
 — the same record `yoyo directive record` writes, with the same pause semantics
 and the same resolution, so a run meets it whichever way it arrived. Every reply
@@ -626,6 +627,15 @@ settled, that is said in the same thread, tagged the same way, and the mark on
 the reply moves with it. A project that has granted nobody is steered by nobody.
 What a reply may say is in
 [`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).
+
+**Only what directs something is recorded.** A reply that asks is written down as
+a question and answered in the thread, and a reply that reads as both a question
+and an instruction is asked back in one line; neither puts anything in the
+directive record. That record is the product's account of what somebody
+instructed, so a question filed in it would be a standing instruction nobody gave
+and every later run of the item would meet it. The reading decides only whether
+anything is recorded — never whether work stops, which stays stated by the
+operator and inferred from nothing.
 
 Outside those threads the sink is silent, with one exception: **a message that
 @-mentions the app is always answered**, wherever it can see one — at the top of

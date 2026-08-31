@@ -536,6 +536,32 @@ force from that moment, with nothing waiting on it.
 prefer the smaller change here — don't refactor the store as well
 ```
 
+**A reply that asks is answered rather than recorded.** The record is what you
+have *directed*, so a question written into it would be a standing instruction
+you never gave, and every later run of that item would be held to it. A reply
+whose sentences all end on a question mark is written down as a question
+instead, the thread says so and that an answer follows, and nothing about the
+work changes:
+
+```text
+what does that acknowledgment mean by "recorded"?
+```
+
+**A reply that could be either is asked back, in one line.** One that mixes a
+question with an instruction, or that opens on `what`, `why`, `how`, `when`,
+`where`, `which`, `who`, or `whose` and never reaches a question mark, is
+answered with a line asking which it was. Reading it either way is wrong in a way
+you would have to undo — one puts something you never directed into the record,
+the other drops what you asked for — so nothing is recorded from it:
+
+```text
+stop refactoring the store. why is it read twice?
+```
+
+Neither reading can stop work, and neither looks at a reply that opened with one
+of the two words below: you said what you were doing, and the channel does not
+second-guess it.
+
 Two kinds pause the work instead, and **you say which**, because a classifier
 deciding that a sentence stops work is worse than one that never stops it. Open
 the reply with the word, and say what is unresolved — a pause nobody can name a
@@ -578,7 +604,7 @@ which has been answered without any of them being read:
 
 | Mark | What it means |
 | --- | --- |
-| :thinking_face: | Recorded, and not settled yet. It goes on as the reply arrives and stays while the directive stands. |
+| :thinking_face: | Recorded, and not settled or answered yet. It goes on as the reply arrives and stays while the directive stands, or while a question is still owed its answer. |
 | :white_check_mark: | The directive is settled — carried out, decided, or answered. It lands when the outcome is said in the thread, not when the directive was written down. |
 | :no_entry_sign: | Nothing was recorded. The thread says why. |
 
@@ -610,13 +636,16 @@ An operational directive is in force from the moment it is recorded and stays
 there; carrying it out records what it produced and withdraws nothing, so it is
 still listed by `yoyo directive list` as in force, with what it became under it.
 
-Three things are refused, visibly:
+Four things are refused, visibly:
 
 - **a reply from somebody without `direct-work`**, or with the grant but no
   `slack_member_id` bound. The list defaults to empty, so a workspace steers
   nothing until you add yourself in step 4.
 - **a stated kind that says nothing unresolved** — `ambiguous:` on its own, or
   `artifact:` without a document and what to decide about it.
+- **a reply that reads as both a question and an instruction.** That is the
+  one-line ask-back above; the reply itself is marked :no_entry_sign:, because
+  nothing was recorded from it.
 - **a reply in a thread that is not a work item's.** A directive from a thread is
   scoped to the item the thread is about, and one recorded against no item would
   pause the whole product. `yoyo directive record --scope` is how a wider one is

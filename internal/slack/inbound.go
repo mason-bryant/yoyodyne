@@ -13,13 +13,20 @@ package slack
 // received it" costs and all it costs. Nothing here can weaken directive
 // governance, because nothing here has governance of its own to weaken.
 //
-// Three rules hold the channel to that:
+// Four rules hold the channel to that:
 //
 // The pausing kinds are stated, never inferred. A reply opening `ambiguous:` or
 // `artifact:` records that kind and must say what is unresolved; everything else
 // is operational. A classifier deciding which sentences stop work is exactly
 // what the command line already refused, and it would be worse here, where the
 // input is chat.
+//
+// Only what directs something is recorded. A reply that asks is written down as
+// a question and answered; one that could be either is asked back in one line;
+// and both of those put nothing in the durable record, which is intent.go's
+// reading and the one thing it is allowed to decide. The record is the product's
+// account of what somebody instructed, and a question sitting in it is a
+// standing instruction nobody gave — which every run of that item then meets.
 //
 // Authority defaults closed. A reply acts only when its Slack member id belongs
 // to a human the project granted direct-work, and the derivation of that list is
@@ -258,6 +265,17 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 	if err != nil {
 		return refused(topic, at, err.Error())
 	}
+	// What a reply that stated no kind of its own turns out to be. Only direction
+	// reaches the record below: a question is written down as a question and
+	// answered, and a reply that could be either is asked back in one line. Both
+	// of those record nothing, so neither can put something into the durable
+	// account of what the operator directed that they did not direct.
+	switch parsed.intent {
+	case intentQuestion:
+		return s.asked(topic, message, parsed, at)
+	case intentUnclear:
+		return refused(topic, at, askBack)
+	}
 	if parsed.resolves != "" {
 		resolved, err := s.directives.Resolve(parsed.resolves, parsed.resolution, at)
 		if err != nil {
@@ -275,6 +293,51 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 		return refused(topic, at, err.Error())
 	}
 	return acknowledged(topic, notify.KindDirectiveRecorded, recorded, at)
+}
+
+// asked writes down one question and produces the receipt that says so.
+//
+// Nothing about it reaches the durable directive record, and that is the whole
+// of the fix: that record is what every run of this item is held to before it
+// starts, before it resumes, and at its gate, so a question filed there is a
+// standing instruction nobody gave. It is kept in the sink's own state instead,
+// where it constrains nothing and is still written down — because the receipt
+// says an answer follows, and a promise whose only copy is a Slack message is
+// one the workspace owns rather than the harness.
+//
+// A question that could not be written down is refused rather than acknowledged.
+// Saying an answer follows when nothing recorded the question is the same
+// dishonesty in a politer sentence, and the refusal names what failed.
+func (s *steering) asked(topic notify.Topic, message inboundMessage, parsed steer, at time.Time) notify.Notification {
+	questions, err := s.sink.store.LoadQuestions()
+	if err != nil {
+		return refused(topic, at, "that is a question rather than an instruction, and what the harness has been asked could not be read, so it was not written down and no answer can be promised: "+err.Error())
+	}
+	questions.Record(message.ts, Question{
+		Member:     message.user,
+		Topic:      topic.Key(),
+		ReceivedBy: parsed.receivedBy,
+		Text:       parsed.text,
+		AskedAt:    at.UTC(),
+	})
+	if err := s.sink.store.SaveQuestions(questions); err != nil {
+		return refused(topic, at, "that is a question rather than an instruction, and it could not be written down, so no answer can be promised for it: "+err.Error())
+	}
+	return notify.Notification{
+		Topic:   topic,
+		Speaker: notify.Harness(),
+		Event: notify.Event{
+			Kind:     notify.KindQuestionRecorded,
+			At:       at.UTC(),
+			Severity: report.SeverityNote,
+			Refs:     notify.Refs{WorkItemID: workItemOf(topic)},
+			// The role it addressed and no more. What was asked is one message above
+			// the receipt in the same thread, said by the person who asked it, and a
+			// receipt that quoted it back would be answering a question by repeating
+			// it — which is the second half of what went wrong on 2026-08-30.
+			Detail: notify.Detail{ReceivedBy: parsed.receivedBy.Title()},
+		},
+	}
 }
 
 // record writes one directive where every process that acts on this product's
@@ -500,6 +563,12 @@ func topicOf(threads ThreadMap, channel, threadTS string) (string, bool) {
 
 // steer is what one reply asks for, once it has been read.
 type steer struct {
+	// intent is what a reply that stated no kind of its own turns out to be, and
+	// it is direction on every reply that did state one: somebody who opened with
+	// `ambiguous:`, `artifact:`, or `resolve` said what they were doing, and
+	// reading their words for a second opinion about it would be the channel
+	// overruling them.
+	intent intent
 	// resolves and resolution are set for exactly the resolve verb: which
 	// directive to settle, and how it was settled.
 	resolves   string
@@ -514,8 +583,9 @@ type steer struct {
 }
 
 // parseSteer reads a reply. The grammar is small on purpose: everything it does
-// not recognize is an operational directive said in the operator's own words,
-// which is the reading that cannot silently stop work.
+// not recognize is read for whether it directs anything at all, and what it
+// finds direction in is an operational directive said in the operator's own
+// words — which is the reading that cannot silently stop work.
 //
 // A refusal names what to type instead, because the person reading it is in a
 // chat client rather than at a terminal with the usage text in front of them.
@@ -554,6 +624,12 @@ func parseSteer(raw string) (steer, error) {
 		if parsed.unresolved == "" {
 			return steer{}, errors.New("`artifact: <name> <what has to be decided about it>` — say what has to be decided; work derived from that document waits until somebody does")
 		}
+	default:
+		// Nothing stated what shape this reply is, so what it is has to be read from
+		// the words. It decides only whether anything is recorded — a question and a
+		// reply that could be either both record nothing — and never whether work
+		// stops, which stays stated above and nowhere else.
+		parsed.intent = intentOf(said)
 	}
 	return parsed, nil
 }

@@ -185,6 +185,7 @@ var harnessVoice = voice{
 		KindDirectiveResolved:   "{directive} is resolved: {text}",
 		KindDirectiveCarriedOut: "{directive} was carried out: {text}",
 		KindDirectiveRefused:    "Nothing was recorded from that reply: {why}",
+		KindQuestionRecorded:    "That reply asked something of the {receiver} rather than directing anything, so it is written down as a question and no directive was recorded. An answer follows here.",
 		KindIntakeHeld:          "Intake is held for this product: {why}",
 		KindIntakeReleased:      "Intake is released for this product.",
 		KindHoldPlaced:          "All harness activity is held.",
@@ -236,6 +237,7 @@ var developerVoice = voice{
 		KindDirectiveResolved:   "{directive} is settled: {text}. I pick the change up from where it stopped.",
 		KindDirectiveCarriedOut: "What {directive} asked for is done: {text}. Nothing about this item was waiting on it.",
 		KindDirectiveRefused:    "That reply changed nothing about what I'm building: {why}",
+		KindQuestionRecorded:    "Somebody asked the {receiver} something here rather than telling me to build differently, so nothing was recorded against this item and I carry on. The answer comes back to this thread.",
 		KindIntakeHeld:          "Intake is held, so nothing new reaches me: {why}",
 		KindIntakeReleased:      "Intake is open again; I'll take what I'm given.",
 		KindHoldPlaced:          "Held before my next provider call. Nothing of the change is lost.",
@@ -287,6 +289,7 @@ var reviewerVoice = voice{
 		KindDirectiveResolved:   "{directive} is settled: {text}. What I judge against is settled with it.",
 		KindDirectiveCarriedOut: "{directive} was carried out: {text}. It stood while I judged this and it stands now.",
 		KindDirectiveRefused:    "Nothing in that reply reaches what I judge this against: {why}",
+		KindQuestionRecorded:    "A question for the {receiver} arrived here, not direction, so the standard I hold this change to is unchanged. The answer is owed back to this thread.",
 		KindIntakeHeld:          "Intake is held, so nothing new will arrive for review: {why}",
 		KindIntakeReleased:      "Intake is open; work will reach me again.",
 		KindHoldPlaced:          "Held before my next review. Nothing already judged changes.",
@@ -337,6 +340,7 @@ var developmentManagerVoice = voice{
 		KindDirectiveResolved:   "{directive} is settled: {text}. The item it held moves again.",
 		KindDirectiveCarriedOut: "{directive} was carried out: {text}. It held nothing up, so this is what came of it rather than the queue moving.",
 		KindDirectiveRefused:    "That reply is not direction anything can act on, so nothing about this item moved: {why}",
+		KindQuestionRecorded:    "What came in on this thread is a question for the {receiver}, not direction, so the item's place and its instructions are where they were. The answer goes back to this thread.",
 		KindIntakeHeld:          "Intake is held, so I pull nothing new until it lifts: {why}",
 		KindIntakeReleased:      "Intake is released; I'm pulling from the top of the backlog again.",
 		KindHoldPlaced:          "Everything is held. Nothing new starts, and nothing in flight is lost.",
@@ -388,6 +392,7 @@ var productManagerVoice = voice{
 		KindDirectiveResolved:   "The operator settled {directive}: {text}",
 		KindDirectiveCarriedOut: "{directive} was carried out, and this is what came of what the operator asked for: {text}",
 		KindDirectiveRefused:    "The operator said something here the harness would not record as a directive rather than guess at it: {why}",
+		KindQuestionRecorded:    "The operator asked the {receiver} something rather than directing anything, so it is written down as a question and the record of what they have directed is untouched. Answering it is mine.",
 		KindIntakeHeld:          "The operator holds intake, so nothing new is chosen until they lift it: {why}",
 		KindIntakeReleased:      "The operator released intake; the backlog is being pulled from again.",
 		KindHoldPlaced:          "The operator holds all harness activity.",
@@ -439,6 +444,7 @@ var architectVoice = voice{
 		KindDirectiveResolved:   "{directive} is settled: {text}. The pause it held is lifted where it stood, rather than the work restarting.",
 		KindDirectiveCarriedOut: "{directive} was carried out: {text}. A directive that pauses nothing still has a disposition, and this is it recorded rather than remembered.",
 		KindDirectiveRefused:    "The channel refused that reply rather than inferring a directive from it: {why}",
+		KindQuestionRecorded:    "A question addressed to the {receiver} is kept as a question, because the directive record holds only what somebody meant to instruct and a question filed there would constrain every later run of this item. An answer is owed back here.",
 		KindIntakeHeld:          "Intake is held, which stops selection and nothing already running: {why}",
 		KindIntakeReleased:      "Intake is released; selection resumes.",
 		KindHoldPlaced:          "All harness activity is held, at the provider-call boundary rather than mid-generation.",
@@ -547,6 +553,10 @@ var nextMoves = map[Kind]string{
 	// answer somebody was owed has just arrived.
 	KindDirectiveCarriedOut: "nobody's — what was asked for is done, and nothing was waiting on it.",
 	KindDirectiveRefused:    "the operator's — nothing was recorded, so nothing about the work has changed.",
+	// A question is waiting on somebody to answer it, and on nobody to carry
+	// anything out. Naming the product manager is naming who owes the answer: a
+	// question routed nowhere is the silence this whole channel exists to remove.
+	KindQuestionRecorded: "the product manager's — the answer is owed back to this thread, and nothing about the work has changed.",
 	// The operator's switches and the session that chooses work. These are about
 	// the whole line rather than one item, and every one of them is waiting on
 	// somebody by name.
@@ -573,7 +583,14 @@ var nextMoves = map[Kind]string{
 // nobody to wait for — and a thread that told a reader to wait for a resolution
 // would be naming a move nobody has to make, on the ordinary case rather than
 // the rare one.
-const directiveInForceMove = "the harness's — the directive is in force from now, and no work is waiting on it."
+//
+// It says what happens rather than naming the state, and it says something the
+// effect clause beside it does not. Both of them used to reach for "in force
+// from now", which is how an operator asking what that phrase meant was answered
+// with the phrase: a receipt that explains a term by restating it has told the
+// reader nothing, and two clauses of one receipt restating each other is the
+// same failure said twice.
+const directiveInForceMove = "the harness's — no pause was placed, and the next run of this item is held to what was said."
 
 // nextMove is whose move follows one event, and says whether anything does. A
 // kind nothing answers for is a kind added to the vocabulary without anybody
@@ -906,11 +923,17 @@ func priorityOf(detail Detail) string {
 // work until somebody settles it — so the sentence says which, and says what is
 // waiting where anything is. A reader who had to infer that from a severity mark
 // would be inferring the whole of what a directive did.
+//
+// The second case says what "in force" amounts to rather than saying the words.
+// The phrase was what the acknowledgment offered as its explanation and what the
+// clause after it repeated, so an operator who asked what it meant read it twice
+// more and learned nothing — which is the wording rule this now keeps: a receipt
+// explains a term, it does not restate it.
 func effectOf(detail Detail) string {
 	if unresolved := strings.TrimSpace(detail.Unresolved); unresolved != "" {
 		return "the work it affects waits until this is settled: " + unresolved
 	}
-	return "it is in force from now, and nothing waits on it"
+	return "nothing is waiting on it, and every run of the work it names meets it from the moment it was recorded"
 }
 
 // outcomeOf says how an exchange ended. Closing unresolved at the round cap is

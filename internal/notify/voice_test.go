@@ -167,6 +167,63 @@ func TestWorkAConversationCarriesIsNeverSaidToBeWaitingForARun(t *testing.T) {
 	}
 }
 
+// A receipt explains a term; it does not restate it. The acknowledgment of a
+// directive that stopped nothing used to say it was in force from now and then
+// say, in the clause after it, that it was in force from now — so an operator
+// who asked what the phrase meant read it twice more and learned nothing. The
+// two clauses are one receipt, and a phrase carried by both of them is an
+// explanation that explains nothing.
+func TestNoReceiptExplainsAPhraseByRestatingIt(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.23")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	// A directive that left nothing unsettled: the case the operator was reading.
+	standing := fullyRecorded(KindDirectiveRecorded)
+	standing.Detail.Unresolved = ""
+	standing.Text = "the operator's own words"
+	for _, speaker := range speakers() {
+		message, err := Render(topic, speaker, standing)
+		if err != nil {
+			t.Fatalf("the %s says a standing directive: %v", speaker.Key(), err)
+		}
+		account, move, found := strings.Cut(message.Body, nextMoveLead)
+		if !found {
+			t.Fatalf("the %s says %q, which carries no clause to compare against", speaker.Key(), message.Body)
+		}
+		if shared, repeated := sharedPhrase(account, move); repeated {
+			t.Fatalf("the %s says %q, where the clause restates %q rather than adding to it",
+				speaker.Key(), message.Body, shared)
+		}
+	}
+}
+
+// sharedPhrase reports the first run of three or more words carried by both
+// halves of one message, which is short enough to catch a repeated term and long
+// enough that the ordinary connective words two sentences share do not trip it.
+func sharedPhrase(account, move string) (string, bool) {
+	const phrase = 3
+	carried := map[string]bool{}
+	for _, run := range runsOf(move, phrase) {
+		carried[run] = true
+	}
+	for _, run := range runsOf(account, phrase) {
+		if carried[run] {
+			return run, true
+		}
+	}
+	return "", false
+}
+
+func runsOf(said string, length int) []string {
+	words := strings.Fields(strings.ToLower(said))
+	var runs []string
+	for index := 0; index+length <= len(words); index++ {
+		runs = append(runs, strings.Join(words[index:index+length], " "))
+	}
+	return runs
+}
+
 func TestNoTwoPersonasSayTheSameEventTheSameWay(t *testing.T) {
 	// This is the whole point of a voice: a reader who has scrolled past the
 	// display name still knows who is talking.

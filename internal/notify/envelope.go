@@ -112,6 +112,15 @@ const (
 	KindDirectiveResolved   Kind = "directive.resolved"
 	KindDirectiveCarriedOut Kind = "directive.carried-out"
 	KindDirectiveRefused    Kind = "directive.refused"
+	// A reply that asked rather than told. It is separate from all four above
+	// because it is the one thing a thread reply can be that the directive record
+	// must never hold: that record is the product's account of what somebody
+	// directed, and a question filed in it is a standing instruction nobody gave.
+	// So the receipt says what actually happened — the question is written down as
+	// a question, and an answer is owed back to the thread — rather than declaring
+	// a question to be in effect, which is what the operator was told on
+	// 2026-08-30 when they asked what one of these acknowledgments meant.
+	KindQuestionRecorded Kind = "question.recorded"
 	// The operator's two switches. They are about the whole line rather than any
 	// one item, which is why they are addressed to the product rather than
 	// buried in a thread that would misfile them.
@@ -190,6 +199,7 @@ func Kinds() []Kind {
 		KindDirectiveResolved,
 		KindDirectiveCarriedOut,
 		KindDirectiveRefused,
+		KindQuestionRecorded,
 		KindIntakeHeld,
 		KindIntakeReleased,
 		KindHoldPlaced,
@@ -219,6 +229,7 @@ func (k Kind) Valid() bool {
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
+		KindQuestionRecorded,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindLineWaiting, KindResidentStale, KindCatchUpDigest:

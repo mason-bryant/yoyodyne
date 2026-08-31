@@ -126,19 +126,44 @@ func TestAMentionInAThreadThisSinkNeverOpenedIsAnsweredThere(t *testing.T) {
 	}
 }
 
-// A reply in one of this sink's own threads is untouched by any of this: it is
-// still the directive path, and the door for messages outside those threads is
-// not a second way into the record.
+// A reply in one of this sink's own threads is untouched by any of this: it
+// still goes to the inbound half, and the door for messages outside those
+// threads is not a second way in. Naming the app in one changes nothing about
+// which path reads it.
 func TestAReplyInThisSinksOwnThreadStillRecordsADirective(t *testing.T) {
 	t.Parallel()
 
 	sink, directives, _ := newSteeringSink(t, testOperator)
 	sink.steering.handle(context.Background(),
-		reply(testOperator, "<@"+testApp+"> what is running?", "1750000001.000200"))
+		reply(testOperator, "<@"+testApp+"> prefer the smaller change here", "1750000001.000200"))
 
 	recorded := onlyDirective(t, directives)
 	if !recorded.Affects(testItem) {
 		t.Fatalf("recorded = %+v, want a directive against the thread's item", recorded)
+	}
+}
+
+// The same reply asking rather than telling gets the inbound half's answer to a
+// question and not the standing block, because the door outside these threads
+// answers one question and the thread it was asked in is not outside them.
+func TestAQuestionInThisSinksOwnThreadIsNotAnsweredByTheMentionDoor(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "<@"+testApp+"> what is running?", "1750000001.000200"))
+
+	if recorded, err := directives.List(); err != nil {
+		t.Fatalf("List() error = %v", err)
+	} else if len(recorded) != 0 {
+		t.Fatalf("recorded = %+v, want a question kept out of the directive record", recorded)
+	}
+	answer := onlyPost(t, posts)
+	if strings.Contains(answer.Text, "Running:") {
+		t.Fatalf("answer = %q, want the inbound half's answer rather than the four lines", answer.Text)
+	}
+	if !strings.Contains(answer.Text, "written down as a question") {
+		t.Fatalf("answer = %q, want it to say the question was recorded as one", answer.Text)
 	}
 }
 

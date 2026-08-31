@@ -1,10 +1,11 @@
 package slack
 
 // What the sink remembers between runs: which thread each topic opened, how far
-// it has read each durable stream, and which directives were said to it in a
-// thread rather than at a terminal.
+// it has read each durable stream, which directives were said to it in a thread
+// rather than at a terminal, and what it has been asked and still owes an answer
+// for.
 //
-// All three live at the state root beside the runs, conversations, and reports
+// All four live at the state root beside the runs, conversations, and reports
 // they are read from, per product, and each is owned by the sink alone. A
 // restart therefore posts into the same threads, resumes from the same place,
 // and still knows who asked for what, which is the whole of what makes an outage
@@ -36,9 +37,10 @@ const (
 	// ThreadMapSchemaVersion and CursorsSchemaVersion are versioned separately
 	// from run state because they describe neither a run nor a conversation, and
 	// a sink is free to be upgraded without every other record moving with it.
-	ThreadMapSchemaVersion = 1
-	CursorsSchemaVersion   = 1
-	SteerMapSchemaVersion  = 1
+	ThreadMapSchemaVersion   = 1
+	CursorsSchemaVersion     = 1
+	SteerMapSchemaVersion    = 1
+	QuestionMapSchemaVersion = 1
 	// maxRecordBytes bounds any of them. A thread map is one line per topic, a
 	// cursor set one line per stream, and a steer map one line per directive
 	// somebody typed into a thread, so anything near this bound is a file
@@ -261,6 +263,93 @@ func (m *SteerMap) Record(directiveID string, steer Steer) {
 	m.Steers[directiveID] = steer
 }
 
+// Question is one thing an operator asked in a thread rather than told it.
+//
+// It is kept here and never in the durable directive record. That record is the
+// product's account of what somebody directed, read by every run of the item it
+// scopes to; a question filed in it is a standing instruction nobody gave, which
+// is exactly what happened on 2026-08-30 and what the reading in intent.go now
+// stops. Kept here, the question constrains nothing and is still written down.
+//
+// Written down is the point. The acknowledgment promises an answer, and a
+// promise whose only copy is a Slack message is a promise the workspace owns:
+// the product manager answering these is the conversation ifd.140 opens, and
+// what it will answer from is this file.
+type Question struct {
+	// Member is the Slack member id of whoever asked, which is what an answer
+	// tags to reach them.
+	Member string `json:"member"`
+	// Topic is the key of the thread it was asked in, so the answer lands in the
+	// narrative it belongs to rather than at the top of the channel.
+	Topic string `json:"topic"`
+	// ReceivedBy is the role the question addressed, by the same reading a
+	// directive's is: attribution rather than routing, and the product manager
+	// where the reply named nobody.
+	ReceivedBy domain.AgentRole `json:"received_by"`
+	// Text is what was asked, in the operator's own words. It is the one thing
+	// here that cannot be reconstructed from anywhere else the harness owns.
+	Text    string    `json:"text"`
+	AskedAt time.Time `json:"asked_at"`
+}
+
+// QuestionMap is what the sink has been asked, keyed by the timestamp of the
+// message that asked it — which is that message's identity in its channel, and
+// the same value the mark on it is set by.
+//
+// It is the connection's to write, exactly as the steer map is, and for the same
+// reason: the goroutine that reads replies is the only one that adds to it.
+type QuestionMap struct {
+	SchemaVersion int                 `json:"schema_version"`
+	Questions     map[string]Question `json:"questions"`
+}
+
+// LoadQuestions reads what the sink has been asked. A product nobody has asked
+// anything has no file rather than a broken one.
+func (s *Store) LoadQuestions() (QuestionMap, error) {
+	var stored QuestionMap
+	found, err := readJSON(s.questionPath(), "slack question map", &stored)
+	if err != nil {
+		return QuestionMap{}, err
+	}
+	if !found {
+		return QuestionMap{SchemaVersion: QuestionMapSchemaVersion, Questions: map[string]Question{}}, nil
+	}
+	if stored.SchemaVersion != QuestionMapSchemaVersion {
+		return QuestionMap{}, fmt.Errorf("slack question map schema version %d is not supported", stored.SchemaVersion)
+	}
+	if stored.Questions == nil {
+		stored.Questions = map[string]Question{}
+	}
+	return stored, nil
+}
+
+// SaveQuestions replaces the question map durably.
+func (s *Store) SaveQuestions(questions QuestionMap) error {
+	questions.SchemaVersion = QuestionMapSchemaVersion
+	if questions.Questions == nil {
+		questions.Questions = map[string]Question{}
+	}
+	return s.write(s.questionPath(), "slack question map", questions)
+}
+
+// Lookup reports what was asked in one message. A message nobody asked anything
+// in is not in the map, which is every reply that directed something instead.
+func (m QuestionMap) Lookup(messageTS string) (Question, bool) {
+	question, found := m.Questions[messageTS]
+	if !found || strings.TrimSpace(question.Topic) == "" {
+		return Question{}, false
+	}
+	return question, true
+}
+
+// Record remembers one question and where it was asked.
+func (m *QuestionMap) Record(messageTS string, question Question) {
+	if m.Questions == nil {
+		m.Questions = map[string]Question{}
+	}
+	m.Questions[messageTS] = question
+}
+
 // Cursor is how far the sink has read one durable stream, and the streams are
 // read four ways because they are four shapes.
 //
@@ -419,6 +508,8 @@ func (c *Cursors) Keep(streams map[string]struct{}) bool {
 func (s *Store) threadPath() string { return filepath.Join(s.root, "threads.json") }
 func (s *Store) cursorPath() string { return filepath.Join(s.root, "cursors.json") }
 func (s *Store) steerPath() string  { return filepath.Join(s.root, "steers.json") }
+
+func (s *Store) questionPath() string { return filepath.Join(s.root, "questions.json") }
 
 // write replaces one record atomically: a sink killed mid-write leaves the
 // previous file rather than half of the new one, which for the thread map is the
