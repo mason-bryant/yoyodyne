@@ -51,11 +51,11 @@ Splitting them the way the operator directed:
   ruling needs in
   [Category 2](#category-2-mechanism-names-where-the-architects-ruling-was-requested).
 
-Two of the three terms the item names as pure decoration — *doorbell*, *front
+All three of the terms the item names as pure decoration — *doorbell*, *front
 door*, *courier-as-a-name* — appear nowhere in the tracker or the governed
 documents except inside yoyodyne-ifd.206's own description, where they are cited
-as examples. They were swept for and are absent. The illustration was of the
-category, not of a live backlog.
+as examples. All three were swept for and all three are absent. The illustration
+was of the category, not of a live backlog.
 
 ## Category 1: decoration, to be replaced outright
 
@@ -87,6 +87,42 @@ directive; that item carries his general rule that a receipt must not explain a
 term by restating it. He has separately asked for `waiting on you` in place of
 `whose-move`. Both terms are still in the records.
 
+### Which of these were proposed, and which could not be
+
+The 54 tracker occurrences could not be proposed to anybody: a work item is not
+a canonical artifact and the amendment channel does not carry one. They wait on
+a writable tracker.
+
+Of the 12 governed-document occurrences, **nine were filed as amendment
+proposals** — the same persisted path used for the Category 2 rulings — and
+three could not be. Identifiers are in
+[Where the proposals are](#where-the-proposals-are).
+
+| Governed occurrence | Count | Proposed as |
+|---|---|---|
+| `v1-harness-design.md` — `re-arm` ×4, `wedged`, `tool posture` | 6 | `amendment-08df99fa…`, restated in `amendment-19d55188…` |
+| `claude-execution-and-account-routing.md:19,:31` — `seam`, `in force` | 2 | `amendment-7481c317…`, restated in `amendment-134be872…` |
+| `claude-only-v1-execution.md:27` — `seam` | 1 | `amendment-0d9af680…` |
+| `goals/README.md:55` — `in force` | 1 | **Not proposable.** No id frontmatter, so no owner to decide it. |
+| `invariants/README.md:10` — `in force` | 1 | **Not proposable.** Same, and see below. |
+| `harness-is-the-only-role-invoker.md:20` — `tool posture` | 1 | **Architect only.** Raised in the run's summary, not as a proposal. |
+
+Two of those last three need saying plainly, because the table above them reads
+as a list of edits somebody should make and these are not that.
+`harness-is-the-only-role-invoker.md:20` is the text of an active architectural
+invariant, and `invariants/README.md:10` is the prose governing how invariants
+are amended. **Neither wording is anyone's to replace except the architect's**,
+and an invariant has its own lifecycle rather than the amendment channel's: the
+wording this sweep would argue for goes to the architect in the raising run's
+summary, and the invariant stays active exactly as written until she decides
+otherwise. Nothing in this document authorizes changing either one.
+
+The two README occurrences reach no owner for a structural reason rather than an
+oversight: neither file carries the `id:` frontmatter every governed document
+carries, so an amendment proposal naming them would reach nobody. That gap is
+already open work — yoyodyne-ifd.87, *Decide how directory indexes and
+out-of-home identity are governed*.
+
 ### Not swept, and why
 
 `papering over`, `eats every context budget`, `carved from`, `front the queue`
@@ -106,12 +142,13 @@ below is what that ruling needs: how far the name reaches, and what the plain
 words would be.
 
 **The ruling has been requested, not merely awaited.** The run that produced
-this document filed amendment proposals against `v1-harness-design` (for
-`docket`, `brake`, `heartbeat`, `steer` and `handback`) and against
-`slack-reporting-design` (for `sink`), which is the harness's persisted path for
-putting a change to the role that owns a document and having it wait on that
-role's decision. Until those are decided, no term below has a ruling and none
-should be treated as settled either way.
+this document filed `amendment-19d55188…` against `v1-harness-design` (for
+`docket`, `brake`, `heartbeat`, `steer` and `handback`) and `amendment-1af49513…`
+against `slack-reporting-design` (for `sink`), which is the harness's persisted
+path for putting a change to the role that owns a document and having it wait on
+that role's decision. Both are owned by the architect and undecided as this is
+written. Until they are decided, no term below has a ruling and none should be
+treated as settled either way.
 
 The other channel that might look right for this is not available here. The
 inter-role ask (`internal/exchange`) is wired only into `internal/chat`:
@@ -204,6 +241,41 @@ amendment or it does not land.
   internal identifier everywhere else. `invokes the handback path` →
   **hands the work back to the developer that made it**.
 
+## Where the proposals are
+
+Amendment proposals are durable and independent of the run that raised them:
+they live in one append-only log per product at
+`<state root>/products/yoyodyne/amendments.jsonl`
+(`internal/runstate/amendment.go`), which on this machine is under
+`~/Library/Application Support/Yoyodyne/state`. Read one with
+`yoyo amendment show <id>`, list what is undecided with `yoyo amendment list`,
+or narrow to this set with `yoyo amendment list --owner architect`. Each is
+decided with `yoyo amendment approve <id> --reason …` or
+`yoyo amendment decline <id> --reason …`; approving records that the owner
+decided in favour, after which the owner makes the change — nothing here is
+applied for them.
+
+Six were raised against yoyodyne-ifd.206, all owned by the architect, all
+undecided as this is written. Three carry the Category 1 decoration and three
+carry the Category 2 rulings.
+
+| Proposal | Artifact | Carries |
+|---|---|---|
+| `amendment-08df99fac5a86f0639bcaf3b073e8e90` | `v1-harness-design` | Category 1: `re-arm` ×4, `wedged`, `tool posture` |
+| `amendment-7481c3173ec2e9cef697c8d0f570cc95` | `claude-execution-and-account-routing` | Category 1: `seam`, `in force` |
+| `amendment-0d9af68020571e38b0753bbc811a8005` | `claude-only-v1-execution` | Category 1: `seam` |
+| `amendment-19d55188d2d5ba8578f4e24feeeea0c1` | `v1-harness-design` | Category 2 ruling: `docket`, `brake`, `heartbeat`, `steer`, `handback` |
+| `amendment-1af49513b03f7bcef82960c7bd5889c9` | `slack-reporting-design` | Category 2 ruling: `sink` |
+| `amendment-134be872795bd0bf6206804080aa4891` | `claude-execution-and-account-routing` | Duplicate of `amendment-7481c317…` |
+
+The last row is a mistake worth naming rather than hiding: the run restated a
+proposal it had already filed, so the architect has two records asking for the
+same change to `claude-execution-and-account-routing`. Declining either one with
+a reason naming the other costs nothing and leaves the record honest.
+`amendment-19d55188…` also restates the Category 1 wording from
+`amendment-08df99fa…` alongside its ruling request, so those two overlap in part
+rather than wholly.
+
 ## What could not be applied
 
 Neither half of the item's scope is writable by a developer run, for two
@@ -214,9 +286,10 @@ homes the sweep covers — `docs/product`, `docs/designs`, `docs/decisions`, and
 `docs/decisions/invariants` — are exactly the set `internal/protectedpath`
 refuses in a developer's diff, and yoyodyne-ifd.206 carries no
 `protected-path grant:` line in its title or description, and has no design or
-acceptance-criteria field at all. The 12 governed-document occurrences in
-Category 1 are therefore proposals to the artifact owners rather than edits, and
-are listed above in applicable form.
+acceptance-criteria field at all. Nine of the 12 governed-document occurrences
+in Category 1 went to their owners as proposals rather than edits; the other
+three could not, for the reasons in
+[Which of these were proposed](#which-of-these-were-proposed-and-which-could-not-be).
 
 **The tracker is outside the run's writable sandbox.** The Beads Dolt database
 lives at `/Users/mbryant/github/yoyodyne/.beads/embeddeddolt`, in the primary
@@ -234,8 +307,8 @@ Measured against the item's own four done conditions:
 | Done condition | State |
 |---|---|
 | The sweep has run over open items and governed documents | **Met.** Both scans are complete and recorded here. |
-| Decorative coinages are gone | **Not met.** All 66 Category 1 occurrences — 54 in open items, 12 in governed documents — are still in the records. |
-| Every surviving mechanism term has an architect ruling, and a plain-words first-use definition where kept | **Not met.** The ruling is requested and undecided; no definition can be written until it is. |
+| Decorative coinages are gone | **Not met.** All 66 Category 1 occurrences — 54 in open items, 12 in governed documents — are still in the records. Nine of the 12 governed ones are with their owner as proposals, which is as far as a developer can take them; a proposal is not a removal. |
+| Every surviving mechanism term has an architect ruling, and a plain-words first-use definition where kept | **Not met.** The ruling is requested — `amendment-19d55188…` and `amendment-1af49513…`, both undecided — and no definition can be written until it is decided. |
 | The item lists what was changed | **Not met.** Nothing was changed, and the tracker item could not be updated to say so. |
 
 Three things have to be arranged by roles other than a developer, and none of
@@ -249,9 +322,11 @@ them is a judgment call this document is trying to pre-empt:
 2. **A writable tracker for the item half.** The run needs its sandbox widened
    to the primary checkout's `.beads` directory, or the tracker edits have to be
    made by something that already reaches it.
-3. **The architect's ruling on the six mechanism terms**, requested by the two
-   amendment proposals named in [Category 2](#category-2-mechanism-names-where-the-architects-ruling-was-requested).
-   The Category 1 work does not depend on it and can proceed first.
+3. **Decisions on the six open proposals**, listed in
+   [Where the proposals are](#where-the-proposals-are): three carry the
+   Category 1 decoration and two carry the mechanism rulings, and one is a
+   duplicate to decline. The Category 1 tracker work does not depend on any of
+   them and can proceed first.
 
 The first two are independent of each other, so the item can be finished in two
 runs rather than one if that is easier to arrange than a single run holding
