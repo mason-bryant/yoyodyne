@@ -140,13 +140,18 @@ type PreservedChanges interface {
 	ChangedPaths(ctx context.Context, worktree gitworktree.Worktree) ([]string, error)
 }
 
-// RepairContinueStarter re-enters the harness on one work item. For a run
-// recorded as running and resumable — which is what this action leaves behind —
-// that is the run being adopted and continued rather than a fresh one started,
-// so no selection is passed: why this run exists was recorded when it was
-// reserved, and why it is going again is recorded on the run and the item by the
-// action itself.
-type RepairContinueStarter func(ctx context.Context, workItemID string) (Outcome, error)
+// RepairContinueStarter re-enters the harness on one run of one work item. It
+// names the run because that is the whole of what this action dispatches: the
+// run recorded as running and resumable that it has just left behind, adopted
+// and continued rather than a fresh one started. No selection is passed, because
+// why this run exists was recorded when it was reserved and why it is going
+// again is recorded on the run and the item by the action itself.
+//
+// It is satisfied by Pipeline.Continue, which re-enters the run named or refuses
+// — every recorded loss of a repair round was a dispatch that started something
+// fresh instead, so what this type asks for is deliberately not something a
+// fresh run can satisfy.
+type RepairContinueStarter func(ctx context.Context, workItemID, runID string) (Outcome, error)
 
 // RepairContinuer re-enters one stopped run's repair loop under a grant of
 // further repair attempts. It reads the work item and writes the triage decision
@@ -430,7 +435,10 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 	// process this action exists to start.
 	lease.Release()
 
-	outcome, runErr := c.Start(ctx, entry.WorkItemID)
+	// The run is named rather than left to be discovered. What is dispatched is
+	// this run's repair loop and nothing else, so a dispatch that found anything
+	// else in flight for the item refuses instead of continuing it.
+	outcome, runErr := c.Start(ctx, entry.WorkItemID, prior.RunID)
 	result.Outcome = outcome
 	return result, runErr
 }

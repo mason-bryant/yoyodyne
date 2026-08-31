@@ -2514,6 +2514,19 @@ it against the stoppage, and a claim naming that run is what lets the fresh run
 through. Nothing is reserved, claimed, or created by the refusal, so carrying out
 either decision afterwards costs the stoppage nothing.
 
+**And the repair itself is dispatched to the run it is about**, which is the
+other end of the same loss. Every recorded instance of a repair round going
+missing was a dispatch that started something fresh instead — the scheduler
+pulling the item off the backlog, or somebody naming it with `yoyo run` — so a
+carry-out that only named the item was one a fresh run satisfied. It names the
+run as well, and the entry point it names it to re-enters that run or refuses:
+it reserves nothing, claims nothing, and creates no worktree, whatever it finds.
+A dispatch that finds no run in flight, or a different run of the same item,
+says which of the two it found and stops there, leaving the stoppage and its
+branch as they were. The refusal in `yoyo run` above is then the backstop for
+the routes that never carried repair intent at all, rather than the only thing
+standing between a repair and a clean worktree.
+
 **A repair supersedes the blocker rather than needing somebody to remember to.**
 The run that stopped blocked its item and recorded the blocker on its own state,
 which `yoyo status`, `yoyo reconcile`, and the docket all read as the fact that

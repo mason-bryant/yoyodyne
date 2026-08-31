@@ -382,8 +382,8 @@ func repairContinuerOver(t *testing.T, continuing Pipeline, store *runstate.Stor
 		Worktrees:          worktrees,
 		ConfiguredAttempts: continuing.Config.Execution.RepairAttemptsBeforeReplan,
 		Capacity:           continuing.Config.Execution.MaxConcurrentDevelopers,
-		Start: func(ctx context.Context, workItemID string) (Outcome, error) {
-			return continuing.Run(ctx, workItemID)
+		Start: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
+			return continuing.Continue(ctx, workItemID, runID)
 		},
 	}
 }

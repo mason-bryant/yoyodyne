@@ -1056,6 +1056,12 @@ is caught by nothing downstream. The refusal names the branch and both ways out,
 and `yoyo triage rerun` is the one that starts over deliberately — a claimed
 re-run is exactly what lets a fresh run through.
 
+The repair is also dispatched to the run it is about rather than to the item:
+carrying it out re-enters that run or refuses, and creates no worktree either
+way. That is what makes the refusal above a backstop rather than the only
+defense — every recorded case of a repair round going missing was a dispatch
+that started something fresh in its place.
+
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull
 request again yourself — nothing in the harness repeats a merge request the forge

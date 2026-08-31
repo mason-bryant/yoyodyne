@@ -70,6 +70,11 @@ its change preserved on a branch is refused a fresh clean run, naming both the
 repair that would continue the change and the re-run that would start over
 deliberately, because a fresh worktree off the target branch looks perfectly
 valid and a developer given one delivers an empty change or reinvents the work.
+The repair goes the other way about it: it names the run it re-enters, and what
+carries it out can re-enter that run or refuse and nothing else — no reservation,
+no claim, and no worktree. So a repair cannot arrive as a fresh run however it
+was dispatched, and `yoyo run`'s refusal is what catches the dispatches that
+never said they were repairs at all.
 
 Not every round an item is charged for is one it cost. A round whose diff is
 empty **and** whose run recorded an environmental cause — the worktree it was

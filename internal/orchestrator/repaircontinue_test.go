@@ -70,8 +70,8 @@ type continueHarness struct {
 	intake    *runstate.IntakeHoldStore
 	tracker   *fakeTracker
 	ownership *fakeOwnership
-	// started is the items the carry-out asked the harness to continue.
-	started []string
+	// started is the continuations the carry-out dispatched.
+	started []continuedRun
 	outcome Outcome
 	failure error
 	// capacity is execution.max_concurrent_developers as the action reads it.
@@ -89,11 +89,19 @@ func (h *continueHarness) continuer() RepairContinuer {
 		ConfiguredAttempts: 2,
 		Capacity:           h.capacity,
 		Clock:              docketClock{},
-		Start: func(_ context.Context, workItemID string) (Outcome, error) {
-			h.started = append(h.started, workItemID)
+		Start: func(_ context.Context, workItemID, runID string) (Outcome, error) {
+			h.started = append(h.started, continuedRun{workItemID: workItemID, runID: runID})
 			return h.outcome, h.failure
 		},
 	}
+}
+
+// continuedRun is one continuation the carry-out dispatched: the item, and the
+// run it named to be re-entered. The run is recorded because naming it is what
+// keeps a repair from being carried out as a fresh run of the same item.
+type continuedRun struct {
+	workItemID string
+	runID      string
 }
 
 // continuableState is the stopped run this action is about: one whose repair
@@ -212,8 +220,14 @@ func TestARepairContinuesTheSameRunUnderTheConfiguredGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Continue() error = %v", err)
 	}
-	if !result.Continued || len(harness.started) != 1 || harness.started[0] != docketedItem {
+	if !result.Continued || len(harness.started) != 1 || harness.started[0].workItemID != docketedItem {
 		t.Fatalf("started = %#v, continued = %t, want the docketed item continued once", harness.started, result.Continued)
+	}
+	// And the dispatch named the run it verified rather than the item alone. A
+	// dispatch that named only the item is one a fresh run satisfies, which is
+	// what every recorded loss of a repair round actually was.
+	if harness.started[0].runID != docketedRunID {
+		t.Fatalf("continued run = %q, want the docketed run %q named by the dispatch", harness.started[0].runID, docketedRunID)
 	}
 	// Nothing started over: the run the docket entry names is the run that goes
 	// on, in the worktree, branch, and session it stopped in.
@@ -847,9 +861,9 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 		Worktrees:          worktrees,
 		ConfiguredAttempts: pipeline.Config.Execution.RepairAttemptsBeforeReplan,
 		Capacity:           pipeline.Config.Execution.MaxConcurrentDevelopers,
-		Start: func(ctx context.Context, workItemID string) (Outcome, error) {
+		Start: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
 			return automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, continuing, []string{"test -f feature.txt"}), continuing).
-				Run(ctx, workItemID)
+				Continue(ctx, workItemID, runID)
 		},
 	}
 

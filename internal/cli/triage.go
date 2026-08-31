@@ -270,11 +270,15 @@ func buildRepairContinuer(configPath string) (orchestrator.RepairContinuer, erro
 		// harness leaves the decision standing rather than spending the item's
 		// grant on a run there is no room to continue.
 		Capacity: parts.config.Execution.MaxConcurrentDevelopers,
-		Start: func(ctx context.Context, workItemID string) (orchestrator.Outcome, error) {
-			// No selection is stamped: this continues the run that was already
-			// reserved for this item, and why that run exists was recorded when it
-			// was. Why it is going again is on the run and the item already.
-			return pipelineFrom(parts).Run(ctx, workItemID)
+		Start: func(ctx context.Context, workItemID, runID string) (orchestrator.Outcome, error) {
+			// The continuation names the run it re-enters, and takes the entry
+			// point that can do nothing else: a repair is worth the change one
+			// stopped run preserved, and every recorded loss of one was a dispatch
+			// that started something fresh in its place. No selection is stamped,
+			// because this continues the run that was already reserved for this
+			// item and why that run exists was recorded when it was. Why it is
+			// going again is on the run and the item already.
+			return pipelineFrom(parts).Continue(ctx, workItemID, runID)
 		},
 	}, nil
 }
