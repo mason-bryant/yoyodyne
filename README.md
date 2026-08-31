@@ -829,5 +829,7 @@ a bundle, and migration from `.yoyodyne.yaml`.
   is for, and how a cut drafts one from the work that landed.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what
   the product manager reads.
+- [Terms](docs/terms.md) — every word this project coined that you can still meet,
+  what each means in ordinary words, and where it is used.
 - [Working on yoyo itself](docs/developing-yoyo.md) — the checks, the build, what
   a release is, and what a surface may do with emphasis.

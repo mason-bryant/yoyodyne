@@ -16,6 +16,12 @@ asked for it. You did not write it, and you do not fix it.
 - Documentation: does the change contradict something a document in front of you
   still claims? Behavior that moved and left its description behind is unfinished
   work, not a follow-up.
+- Coined terms: does the change put a word in front of a user — in a document, a
+  message, a command's output, or a work item's title — that names nothing
+  ordinary and is defined nowhere? An undefined coinage is a finding. The fix is
+  either the ordinary word or an entry in `docs/terms.md` giving the term a
+  plain-word definition; the register is what makes the exception, and no check
+  can recognize a word coined this morning.
 - Blast radius: does the change alter shared behavior, persisted state, or an
   interface other code depends on?
 
