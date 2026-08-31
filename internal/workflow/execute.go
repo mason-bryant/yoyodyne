@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // DefaultBound is how many transitions one Run performs before it stops and says
@@ -18,13 +20,14 @@ const DefaultBound = 1000
 // Executor runs one instance of one compiled graph, one durable transition at a
 // time.
 //
-// Every step is the same four things in the same order: read the instance's
+// Every step is the same five things in the same order: read the instance's
 // durable record, refuse it if the graph in hand is not the definition it pinned,
 // check the authority the action requires against the grant this executor
-// performs under, and perform it — then record the boundary it arrived at before
-// anything else happens. So the record is never ahead of what was performed, and
-// a process that dies leaves a record naming a state boundary rather than the
-// middle of a step.
+// performs under, check that the record can still hold the boundary this step
+// would produce, and perform it — then record that boundary before anything else
+// happens. So the record is never ahead of what was performed, nothing is
+// performed that could not then be recorded, and a process that dies leaves a
+// record naming a state boundary rather than the middle of a step.
 //
 // What that costs, and it is worth being plain about it: an action that was
 // performed and whose outcome was not yet recorded is performed again by whatever
@@ -41,8 +44,9 @@ type Executor[S any] struct {
 	// digest at creation, and every later step is refused unless the graph
 	// presented digests the same.
 	Graph Graph[S]
-	// Instances is where the durable records live.
-	Instances *InstanceStore
+	// Instances is where the durable records live: the harness's own state store,
+	// which is where every other durable record it keeps is written.
+	Instances *runstate.Store
 	// Grant is the authority this executor performs under. It is checked at every
 	// state boundary rather than once at the start, because authority is a fact
 	// about the thing performing the work now and not a property the instance
@@ -72,24 +76,25 @@ type Executor[S any] struct {
 // Nothing is performed: an instance exists before its first action, so that the
 // record of what is about to run is durable before anything runs. Creating a
 // second instance under one identifier is refused.
-func (e Executor[S]) Start(id string) (Instance, error) {
+func (e Executor[S]) Start(id string) (runstate.WorkflowInstance, error) {
 	if err := e.ready(); err != nil {
-		return Instance{}, err
+		return runstate.WorkflowInstance{}, err
 	}
-	instance := Instance{
-		ID:         id,
-		WorkflowID: e.Graph.ID(),
-		Schema:     e.Graph.Schema(),
-		Digest:     e.Graph.Digest(),
-		State:      e.Graph.Initial(),
-		Checkpoints: []Checkpoint{{
+	instance := runstate.WorkflowInstance{
+		SchemaVersion:    runstate.WorkflowInstanceSchemaVersion,
+		InstanceID:       id,
+		WorkflowID:       e.Graph.ID(),
+		DefinitionSchema: e.Graph.Schema(),
+		Digest:           e.Graph.Digest(),
+		State:            e.Graph.Initial(),
+		Checkpoints: []runstate.WorkflowCheckpoint{{
 			Sequence: 0,
 			State:    e.Graph.Initial(),
 			At:       e.now(),
 		}},
 	}
-	if err := e.Instances.Create(instance); err != nil {
-		return Instance{}, err
+	if err := e.Instances.CreateWorkflowInstance(instance); err != nil {
+		return runstate.WorkflowInstance{}, err
 	}
 	return instance, nil
 }
@@ -104,19 +109,19 @@ func (e Executor[S]) Start(id string) (Instance, error) {
 // Either way the instance keeps running the definition it started on, or nothing
 // runs it at all — what does not happen is the instance quietly continuing under
 // a definition somebody edited while it was in flight.
-func (e Executor[S]) Resume(id string) (Instance, error) {
+func (e Executor[S]) Resume(id string) (runstate.WorkflowInstance, error) {
 	if err := e.ready(); err != nil {
-		return Instance{}, err
+		return runstate.WorkflowInstance{}, err
 	}
-	instance, err := e.Instances.Load(id)
+	instance, err := e.Instances.LoadWorkflowInstance(id)
 	if err != nil {
-		return Instance{}, err
+		return runstate.WorkflowInstance{}, err
 	}
 	if instance.Digest != e.Graph.Digest() {
-		return Instance{}, fmt.Errorf("workflow instance %s is pinned to %s and this executor holds %s; the definition changed under an instance already running it, and an instance in flight is never migrated", id, instance.Digest, e.Graph.Digest())
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s is pinned to %s and this executor holds %s; the definition changed under an instance already running it, and an instance in flight is never migrated", id, instance.Digest, e.Graph.Digest())
 	}
 	if instance.WorkflowID != e.Graph.ID() {
-		return Instance{}, fmt.Errorf("workflow instance %s is running %q and this executor holds %q", id, instance.WorkflowID, e.Graph.ID())
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s is running %q and this executor holds %q", id, instance.WorkflowID, e.Graph.ID())
 	}
 	return instance, nil
 }
@@ -128,37 +133,43 @@ func (e Executor[S]) Resume(id string) (Instance, error) {
 // refusal leaves the instance exactly where it was — so a caller that fixes what
 // was refused steps the same state again rather than finding the instance
 // somewhere it never durably stood.
-func (e Executor[S]) Step(ctx context.Context, id string, subject S) (Instance, error) {
+func (e Executor[S]) Step(ctx context.Context, id string, subject S) (runstate.WorkflowInstance, error) {
 	instance, err := e.Resume(id)
 	if err != nil {
-		return Instance{}, err
+		return runstate.WorkflowInstance{}, err
 	}
 	if instance.Terminal {
-		return Instance{}, fmt.Errorf("workflow instance %s ended in %q; a terminal is where an instance stops rather than a state with a step in it", id, instance.State)
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s ended in %q; a terminal is where an instance stops rather than a state with a step in it", id, instance.State)
 	}
 	node, isAState := e.Graph.Node(instance.State)
 	if !isAState {
 		// The graph was compiled from the definition this instance pinned, so a
 		// state the record names and the graph does not hold is a defect in this
 		// build rather than in the record.
-		return Instance{}, fmt.Errorf("workflow instance %s stands in %q, which the definition it is pinned to does not declare", id, instance.State)
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s stands in %q, which the definition it is pinned to does not declare", id, instance.State)
 	}
 	if err := withinGrant(e.Grant, instance.State, node); err != nil {
-		return Instance{}, fmt.Errorf("workflow instance %s: %w", id, err)
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s: %w", id, err)
+	}
+	// Whether the boundary this step would produce can be recorded is asked here,
+	// before the action, because the answer stops being useful afterwards: an
+	// action performed and not recordable is an instance nothing can move on.
+	if err := instance.RoomForAnotherCheckpoint(widestCheckpoint(instance, node, e.now())); err != nil {
+		return runstate.WorkflowInstance{}, err
 	}
 	if err := node.Action().Perform(ctx, subject); err != nil {
-		return Instance{}, fmt.Errorf("workflow instance %s performing %q in the state %q: %w", id, node.Action().Name, instance.State, err)
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s performing %q in the state %q: %w", id, node.Action().Name, instance.State, err)
 	}
 	outcome, err := e.Outcome(instance.State, subject)
 	if err != nil {
-		return Instance{}, fmt.Errorf("workflow instance %s: what %q produced in the state %q could not be read: %w", id, node.Action().Name, instance.State, err)
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s: what %q produced in the state %q could not be read: %w", id, node.Action().Name, instance.State, err)
 	}
 	destination, handled := node.Next(outcome)
 	if !handled {
-		return Instance{}, fmt.Errorf("workflow instance %s: the state %q produced the outcome %q, which the definition it is pinned to sends nowhere; it handles %v", id, instance.State, outcome, node.Outcomes())
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s: the state %q produced the outcome %q, which the definition it is pinned to sends nowhere; it handles %v", id, instance.State, outcome, node.Outcomes())
 	}
 
-	instance.Checkpoints = append(instance.Checkpoints, Checkpoint{
+	instance.Checkpoints = append(instance.Checkpoints, runstate.WorkflowCheckpoint{
 		Sequence: len(instance.Checkpoints),
 		State:    destination.Name,
 		Terminal: destination.Terminal,
@@ -168,8 +179,8 @@ func (e Executor[S]) Step(ctx context.Context, id string, subject S) (Instance, 
 	})
 	instance.State = destination.Name
 	instance.Terminal = destination.Terminal
-	if err := e.Instances.Save(instance); err != nil {
-		return Instance{}, err
+	if err := e.Instances.SaveWorkflowInstance(instance); err != nil {
+		return runstate.WorkflowInstance{}, err
 	}
 	return instance, nil
 }
@@ -179,10 +190,10 @@ func (e Executor[S]) Step(ctx context.Context, id string, subject S) (Instance, 
 // It is a loop over Step and nothing more: every transition it makes is as
 // durable as one made a step at a time, so a process running this and a process
 // stepping by hand leave records a third process resumes identically.
-func (e Executor[S]) Run(ctx context.Context, id string, subject S) (Instance, error) {
+func (e Executor[S]) Run(ctx context.Context, id string, subject S) (runstate.WorkflowInstance, error) {
 	instance, err := e.Resume(id)
 	if err != nil {
-		return Instance{}, err
+		return runstate.WorkflowInstance{}, err
 	}
 	bound := e.Bound
 	if bound <= 0 {
@@ -190,21 +201,21 @@ func (e Executor[S]) Run(ctx context.Context, id string, subject S) (Instance, e
 	}
 	for transitions := 0; !instance.Terminal; transitions++ {
 		if transitions == bound {
-			return Instance{}, fmt.Errorf("workflow instance %s made %d transitions in this run without reaching a terminal and stands in %q; it is looping, and the run stops rather than going round again", id, bound, instance.State)
+			return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s made %d transitions in this run without reaching a terminal and stands in %q; it is looping, and the run stops rather than going round again", id, bound, instance.State)
 		}
 		if err := ctx.Err(); err != nil {
-			return Instance{}, fmt.Errorf("workflow instance %s stopped in %q: %w", id, instance.State, err)
+			return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s stopped in %q: %w", id, instance.State, err)
 		}
 		instance, err = e.Step(ctx, id, subject)
 		if err != nil {
-			return Instance{}, err
+			return runstate.WorkflowInstance{}, err
 		}
 	}
 	return instance, nil
 }
 
 // ready refuses an executor that could not run anything, once, rather than
-// leaving each of the three to be discovered by whichever step first needed it.
+// leaving each of the four to be discovered by whichever step first needed it.
 func (e Executor[S]) ready() error {
 	var problems []error
 	if e.Graph.digest == "" {
@@ -257,4 +268,32 @@ func withinGrant[S any](grant Grant, state string, node Node[S]) error {
 		return errors.Join(problems...)
 	}
 	return nil
+}
+
+// widestCheckpoint is the largest checkpoint the state about to be performed
+// could produce: the longest outcome it handles, arriving at the longest
+// destination it leads to, and terminal because a terminal boundary is written
+// with one field more than an ordinary one.
+//
+// It is a worst case rather than the real thing because the real thing is not
+// known until the action has been performed, which is after the point where
+// knowing it is any use. A step that fits the widest boundary fits whichever one
+// it actually produces.
+func widestCheckpoint[S any](instance runstate.WorkflowInstance, node Node[S], at time.Time) runstate.WorkflowCheckpoint {
+	widest := runstate.WorkflowCheckpoint{
+		Sequence: len(instance.Checkpoints),
+		From:     instance.State,
+		Terminal: true,
+		At:       at,
+	}
+	for _, outcome := range node.Outcomes() {
+		if len(outcome) > len(widest.Outcome) {
+			widest.Outcome = outcome
+		}
+		destination, _ := node.Next(outcome)
+		if len(destination.Name) > len(widest.State) {
+			widest.State = destination.Name
+		}
+	}
+	return widest
 }

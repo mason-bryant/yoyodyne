@@ -22,6 +22,10 @@
 // transition at a time, recording every state boundary it crosses so a process
 // killed at one is resumed exactly there.
 //
+// What an instance durably is lives in `internal/runstate`, beside every other
+// record the harness keeps: this package decides what a transition is and when
+// one has happened, and the state store is what writes it down.
+//
 // Nothing in the delivery path runs on it. The executor is exercised against test
 // graphs, because what makes an action with a side effect safe to re-perform
 // after a death — the step-attempt record, the idempotency key, and the

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/capability"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // deliveryOutcomes is what each state of the delivery fixture produces in these
@@ -129,14 +130,14 @@ func journalGraph(t *testing.T) Graph[*journal] {
 	return graph
 }
 
-// checkpointing is an executor over that graph: instances recorded under root,
-// and the scripted outcomes above.
-func checkpointing(t *testing.T, root string) Executor[*journal] {
+// checkpointing is an executor over that graph: instances recorded in the
+// harness's own state store under stateRoot, and the scripted outcomes above.
+func checkpointing(t *testing.T, stateRoot string) Executor[*journal] {
 	t.Helper()
 
-	store, err := NewInstanceStore(root)
+	store, err := runstate.NewStore(stateRoot, "fixtures")
 	if err != nil {
-		t.Fatalf("NewInstanceStore() error = %v", err)
+		t.Fatalf("runstate.NewStore() error = %v", err)
 	}
 	grant, err := NewGrant(capability.All()...)
 	if err != nil {
@@ -187,7 +188,7 @@ func TestAnInstanceRecordsItsPinItsPositionAndEveryBoundary(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	executor := checkpointing(t, filepath.Join(root, "instances"))
+	executor := checkpointing(t, filepath.Join(root, "state"))
 	logged := filepath.Join(root, "performed")
 
 	started, err := executor.Start("delivery")
@@ -197,8 +198,8 @@ func TestAnInstanceRecordsItsPinItsPositionAndEveryBoundary(t *testing.T) {
 	if started.Digest != executor.Graph.Digest() {
 		t.Errorf("a new instance is pinned to %q, want the graph's %q", started.Digest, executor.Graph.Digest())
 	}
-	if started.WorkflowID != "delivery" || started.Schema != SchemaVersion {
-		t.Errorf("a new instance runs %q under schema %d", started.WorkflowID, started.Schema)
+	if started.WorkflowID != "delivery" || started.DefinitionSchema != SchemaVersion {
+		t.Errorf("a new instance runs %q under schema %d", started.WorkflowID, started.DefinitionSchema)
 	}
 	if started.State != "claim" || started.Done() {
 		t.Errorf("a new instance stands in %q (done %t), want the initial state", started.State, started.Done())
@@ -228,7 +229,7 @@ func TestAnInstanceRecordsItsPinItsPositionAndEveryBoundary(t *testing.T) {
 
 	// What was returned is what was recorded: a caller reading the record and a
 	// caller holding the value are reading one instance.
-	recorded, err := executor.Instances.Load("delivery")
+	recorded, err := executor.Instances.LoadWorkflowInstance("delivery")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -261,32 +262,33 @@ func TestEveryTransitionIsDurableBeforeTheNextOne(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	executor := checkpointing(t, filepath.Join(root, "instances"))
+	state := filepath.Join(root, "state")
+	executor := checkpointing(t, state)
 	subject := &journal{path: filepath.Join(root, "performed")}
 	if _, err := executor.Start("delivery"); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	for step, state := range deliveredPath[:len(deliveredPath)-1] {
+	for step, standing := range deliveredPath[:len(deliveredPath)-1] {
 		stepped, err := executor.Step(context.Background(), "delivery", subject)
 		if err != nil {
-			t.Fatalf("Step() from %q error = %v", state, err)
+			t.Fatalf("Step() from %q error = %v", standing, err)
 		}
 		// A second executor over the same store is a second process: what it reads
 		// is the whole of what the first one would leave behind.
-		elsewhere := checkpointing(t, executor.Instances.Root())
+		elsewhere := checkpointing(t, state)
 		recorded, err := elsewhere.Resume("delivery")
 		if err != nil {
-			t.Fatalf("Resume() after %q error = %v", state, err)
+			t.Fatalf("Resume() after %q error = %v", standing, err)
 		}
 		if recorded.State != stepped.State || recorded.Terminal != stepped.Terminal {
-			t.Fatalf("after %q the record stands in %q (terminal %t) and the step reported %q (terminal %t)", state, recorded.State, recorded.Terminal, stepped.State, stepped.Terminal)
+			t.Fatalf("after %q the record stands in %q (terminal %t) and the step reported %q (terminal %t)", standing, recorded.State, recorded.Terminal, stepped.State, stepped.Terminal)
 		}
 		if want := step + 2; len(recorded.Checkpoints) != want {
-			t.Fatalf("after %q the record holds %d checkpoints, want %d", state, len(recorded.Checkpoints), want)
+			t.Fatalf("after %q the record holds %d checkpoints, want %d", standing, len(recorded.Checkpoints), want)
 		}
 		if recorded.State != deliveredPath[step+1] {
-			t.Fatalf("after %q the record stands in %q, want %q", state, recorded.State, deliveredPath[step+1])
+			t.Fatalf("after %q the record stands in %q, want %q", standing, recorded.State, deliveredPath[step+1])
 		}
 	}
 
@@ -304,7 +306,7 @@ func TestADefinitionChangedUnderAnInstanceIsRefused(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	executor := checkpointing(t, filepath.Join(root, "instances"))
+	executor := checkpointing(t, filepath.Join(root, "state"))
 	subject := &journal{path: filepath.Join(root, "performed")}
 	if _, err := executor.Start("delivery"); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -343,7 +345,7 @@ func TestADefinitionChangedUnderAnInstanceIsRefused(t *testing.T) {
 
 	// The instance is where it was, still pinned to what it started on, and the
 	// executor holding that definition steps it exactly as before.
-	recorded, err := executor.Instances.Load("delivery")
+	recorded, err := executor.Instances.LoadWorkflowInstance("delivery")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -364,7 +366,7 @@ func TestTheCapabilitiesEnforcedAtAStepAreTheRegistrysOwn(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	executor := checkpointing(t, filepath.Join(root, "instances"))
+	executor := checkpointing(t, filepath.Join(root, "state"))
 	logged := filepath.Join(root, "performed")
 	subject := &journal{path: logged}
 	if _, err := executor.Start("delivery"); err != nil {
@@ -412,7 +414,7 @@ func TestTheCapabilitiesEnforcedAtAStepAreTheRegistrysOwn(t *testing.T) {
 
 	// The refusal happened before the action, so the instance stands where it
 	// stood and the step nothing was authorized for was never performed.
-	recorded, err := executor.Instances.Load("delivery")
+	recorded, err := executor.Instances.LoadWorkflowInstance("delivery")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -440,7 +442,7 @@ func TestAnOutcomeThePinnedDefinitionSendsNowhereStopsWhereItIs(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	executor := checkpointing(t, filepath.Join(root, "instances"))
+	executor := checkpointing(t, filepath.Join(root, "state"))
 	logged := filepath.Join(root, "performed")
 	unmapped := map[string]string{}
 	for state, outcome := range deliveryOutcomes {
@@ -459,7 +461,7 @@ func TestAnOutcomeThePinnedDefinitionSendsNowhereStopsWhereItIs(t *testing.T) {
 	if !strings.Contains(err.Error(), `"rubber-stamped"`) || !strings.Contains(err.Error(), `"review"`) {
 		t.Errorf("Run() error = %v, and it does not name the state and the outcome", err)
 	}
-	recorded, err := executor.Instances.Load("delivery")
+	recorded, err := executor.Instances.LoadWorkflowInstance("delivery")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -491,7 +493,7 @@ func TestAnActionThatFailsLeavesTheInstanceWhereItWas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile() error = %v", err)
 	}
-	executor := checkpointing(t, filepath.Join(root, "instances"))
+	executor := checkpointing(t, filepath.Join(root, "state"))
 	executor.Graph = graph
 	if _, err := executor.Start("delivery"); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -502,7 +504,7 @@ func TestAnActionThatFailsLeavesTheInstanceWhereItWas(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "the checks could not be run at all") {
 		t.Errorf("Run() error = %v, and it does not carry what failed", err)
 	}
-	recorded, err := executor.Instances.Load("delivery")
+	recorded, err := executor.Instances.LoadWorkflowInstance("delivery")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -518,7 +520,7 @@ func TestAnInstanceThatLoopsStopsAtItsBound(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	executor := checkpointing(t, filepath.Join(root, "instances"))
+	executor := checkpointing(t, filepath.Join(root, "state"))
 	looping := map[string]string{}
 	for state, outcome := range deliveryOutcomes {
 		looping[state] = outcome
@@ -539,7 +541,7 @@ func TestAnInstanceThatLoopsStopsAtItsBound(t *testing.T) {
 	if !strings.Contains(err.Error(), "looping") {
 		t.Errorf("Run() error = %v, want it to say the instance is going round", err)
 	}
-	recorded, err := executor.Instances.Load("delivery")
+	recorded, err := executor.Instances.LoadWorkflowInstance("delivery")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -569,7 +571,7 @@ func TestAnExecutorMissingWhatItNeedsRefusesEverything(t *testing.T) {
 	// A grant conferring nothing is refused on its own, so an executor that
 	// narrowed one down to nothing hears about it before a step does.
 	root := t.TempDir()
-	unauthorized := checkpointing(t, filepath.Join(root, "instances"))
+	unauthorized := checkpointing(t, filepath.Join(root, "state"))
 	unauthorized.Grant = Grant{}
 	if _, err := unauthorized.Start("delivery"); err == nil {
 		t.Fatal("Start() started an instance under a grant conferring nothing")
@@ -590,5 +592,83 @@ func TestStartingAnInstanceTwiceIsRefused(t *testing.T) {
 	}
 	if _, err := executor.Start("Delivery Run"); err == nil {
 		t.Fatal("Start() accepted an identifier that is not one")
+	}
+}
+
+// fillHistory grows an instance's history until one more boundary would not fit
+// inside the bound a record is held to.
+//
+// It grows in blocks and then one at a time, because the exact question is asked
+// by encoding the whole record and asking it once per checkpoint over a record
+// heading for a megabyte is a great deal of encoding for an answer that only
+// matters at the end.
+func fillHistory(t *testing.T, instance runstate.WorkflowInstance) runstate.WorkflowInstance {
+	t.Helper()
+
+	next := func(of runstate.WorkflowInstance) runstate.WorkflowCheckpoint {
+		return runstate.WorkflowCheckpoint{
+			Sequence: len(of.Checkpoints),
+			State:    "develop",
+			From:     of.Checkpoints[len(of.Checkpoints)-1].State,
+			Outcome:  "changes-requested",
+			At:       time.Now().UTC(),
+		}
+	}
+	const block = 100
+	for {
+		grown := instance
+		grown.Checkpoints = slices.Clone(instance.Checkpoints)
+		for added := 0; added < block; added++ {
+			grown.Checkpoints = append(grown.Checkpoints, next(grown))
+		}
+		if grown.RoomForAnotherCheckpoint(next(grown)) != nil {
+			break
+		}
+		instance = grown
+	}
+	for instance.RoomForAnotherCheckpoint(next(instance)) == nil {
+		instance.Checkpoints = append(instance.Checkpoints, next(instance))
+	}
+	instance.State = instance.Checkpoints[len(instance.Checkpoints)-1].State
+	return instance
+}
+
+// TestAStepThatCouldNotBeRecordedIsRefusedBeforeItIsPerformed is the order the
+// bound is checked in, and the order is the whole point of checking it. An
+// instance whose action has been performed and whose record will not take the
+// result is one nothing can move on: every later attempt performs the same
+// action again and fails to record it again. Asked first, the same limit costs
+// nothing and says what is wrong.
+func TestAStepThatCouldNotBeRecordedIsRefusedBeforeItIsPerformed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	executor := checkpointing(t, filepath.Join(root, "state"))
+	logged := filepath.Join(root, "performed")
+	started, err := executor.Start("delivery")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	filled := fillHistory(t, started)
+	if err := executor.Instances.SaveWorkflowInstance(filled); err != nil {
+		t.Fatalf("SaveWorkflowInstance() refused a record that still fits: %v", err)
+	}
+
+	_, err = executor.Step(context.Background(), "delivery", &journal{path: logged})
+	if err == nil {
+		t.Fatal("Step() performed a step whose result the record could not hold")
+	}
+	if !strings.Contains(err.Error(), "cannot be stepped any further") {
+		t.Errorf("Step() error = %v, want it to say the instance can go no further", err)
+	}
+	if acted := performed(t, logged); len(acted) != 0 {
+		t.Errorf("a step that could not be recorded performed %v", acted)
+	}
+	recorded, err := executor.Instances.LoadWorkflowInstance("delivery")
+	if err != nil {
+		t.Fatalf("LoadWorkflowInstance() error = %v", err)
+	}
+	if recorded.State != filled.State || len(recorded.Checkpoints) != len(filled.Checkpoints) {
+		t.Errorf("the instance stands in %q with %d checkpoints, want %q with %d", recorded.State, len(recorded.Checkpoints), filled.State, len(filled.Checkpoints))
 	}
 }

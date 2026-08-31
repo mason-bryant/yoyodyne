@@ -39,7 +39,7 @@ func TestAKilledProcessResumesAtItsLastCheckpoint(t *testing.T) {
 			t.Parallel()
 
 			root := t.TempDir()
-			instances := filepath.Join(root, "instances")
+			instances := filepath.Join(root, "state")
 			logged := filepath.Join(root, "performed")
 			executor := checkpointing(t, instances)
 			if _, err := executor.Start("delivery"); err != nil {
@@ -61,7 +61,7 @@ func TestAKilledProcessResumesAtItsLastCheckpoint(t *testing.T) {
 				t.Fatalf("the child process ran to completion instead of being killed:\n%s", output)
 			}
 
-			killed, err := executor.Instances.Load("delivery")
+			killed, err := executor.Instances.LoadWorkflowInstance("delivery")
 			if err != nil {
 				t.Fatalf("Load() after the child was killed: %v", err)
 			}
