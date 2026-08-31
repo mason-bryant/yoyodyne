@@ -88,10 +88,11 @@ const (
 
 // The names below are the rest of what the harness authorizes, one per authority
 // the inventory's rows actually tell roles apart by. They are not the pipeline's:
-// no registered action requires one yet, and none will until the authorization
-// call sites convert. What they are for is that a role's authority can be stated
-// in capabilities at all — a bundle built only from the delivery names above
-// would say nothing about the four roles that never enter a run.
+// no registered action requires one, and what requires them instead is the
+// authorization sites the inventory lists, which ask who holds one rather than
+// which role they are talking to. What they are for is that a role's authority can
+// be stated in capabilities at all — a bundle built only from the delivery names
+// above would say nothing about the four roles that never enter a run.
 //
 // The granularity is the inventory's rather than a tidier one. Where a row tells
 // two roles apart, there is a name for what it tells them apart by; where it does

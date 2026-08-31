@@ -52,12 +52,23 @@ what stops them moving silently.
 [`internal/rolecapability`](../internal/rolecapability/rolecapability.go) is this
 document said once more, in capabilities rather than in role names: five bundles,
 one per role, built from the vocabulary
-[`internal/capability`](../internal/capability/capability.go) declares. Nothing
-reads it yet — no authorization site below has changed — and it is held to the
-inventory all the same, by a table that answers every row here with the capability
+[`internal/capability`](../internal/capability/capability.go) declares. It is held
+to the inventory by a table that answers every row here with the capability
 question that row becomes, or with the reason there is not one. A row added below
 and left unanswered fails that check, which is what stops the re-expression
 quietly falling behind the thing it re-expresses.
+
+The rows that turn on a role's identity now read their answer out of it rather
+than naming a role: which role owns a kind of document
+(`artifact.owner`, `artifact.authorize`, `artifact.unauthorized-revisions`, and
+the three store rows underneath them), which may change an invariant
+(`invariant.authorize` and everything routed through it), what a role may ask for
+in a conversation (`conversation.authority-derived`, which the rest of the
+conversation rows read through), and whose judgement gates an integration
+(`review.policy`). Every other row is answered in that table with the reason a
+bundle cannot express it — a contract's prose, a path gate, the separation of two
+invocations, a posture, or an authority no role holds at all — and those rows
+still name what they name.
 
 Two capabilities belong to no role. The promotion lease and the branch it admits a
 move onto are the harness's, as `promotion.lease`, `run.integrate-under-lease`,
@@ -70,6 +81,7 @@ requires: no agent performs a promotion, so no role's bundle confers one.
 | Check | Binds | File | Declaration | Refuses |
 | --- | --- | --- | --- | --- |
 | conversation.authority-table | every role | `internal/chat/role.go` | `authorities` | Anything a role's row does not carry. The table is the whole of what each role may ask for in a conversation, in Go so that a persona cannot widen it. |
+| conversation.authority-derived | every role | `internal/chat/role.go` | `buildAuthorities` | Reading the table above off anything but the role-capability registry. Every flag on a row is one capability the role holds, the tracker actions are the operations whose capability it holds, and the parent requirement is decomposition without admission — so what a role may ask for in a conversation and what a role may do are one statement rather than two that can drift. |
 | conversation.role-is-known | every role | `internal/chat/role.go` | `AuthorityFor` | A role the table has no row for: it has no contract to send and no statement of what it may ask for. |
 | conversation.session-opens | every role | `internal/chat/chat.go` | `(Options).validate` | Opening a conversation at all for a role the table has no row for. |
 | conversation.authorize-reply | every role | `internal/chat/role.go` | `(*Session).authorize` | A parsed reply's proposals, concerns, research queries, evaluation, ask, or tracker actions that the role has no authority for. Nothing in the block is carried out. |
@@ -147,6 +159,7 @@ to make the same judgement out loud instead of the question never being asked.
 
 | File | Declaration | Why it is not one |
 | --- | --- | --- |
+| `internal/artifact/ownership.go` | `authority` | Names the capability a kind of document belongs to. It refuses nothing: the lookup that turns it into an owner is `artifact.owner` and the refusal made on it is `artifact.authorize`. |
 | `internal/artifact/references.go` | `ProblemUnauthorizedRevision` | The name of the problem kind `UnauthorizedRevisions` reports; the check is that row. |
 | `internal/backend/registry.go` | `DescriptorFor` | Validates a provider plugin declaration, the roles it serves included. Which provider serves a role is selection, not what the role may do. |
 | `internal/capability/capability.go` | `PromotionLease` | The name an action declares the promotion lease by. The lease itself is `promotion.lease`. |

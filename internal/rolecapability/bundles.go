@@ -19,6 +19,7 @@ package rolecapability
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -155,3 +156,28 @@ func Default() (Registry, error) {
 	}
 	return registry, nil
 }
+
+// MustDefault is Default for an authorization site with nowhere to put an error.
+//
+// A check answers one question — may this role do this — and the caller acts on
+// the answer. Threading a construction failure through every one of them would
+// put a second, unrelated failure into every refusal, and a check that answers
+// "no, because the table would not build" is one nobody can tell from a role
+// that was genuinely refused. Several of the sites reading this have no error to
+// return at all: which role owns a kind of document is a lookup, not an attempt.
+//
+// So stopping is the honest answer instead, and it is a safe one here because the
+// table is a Go literal. A registry that will not build cannot be caused by
+// configuration, by an operator, or by anything an agent writes; it is a defect
+// in this binary, `Default`'s own refusals name it, and this package's tests
+// reach it before a release does. The registry is built once and kept, so the
+// cost is one construction per process rather than one per check.
+func MustDefault() Registry { return defaultRegistry() }
+
+var defaultRegistry = sync.OnceValue(func() Registry {
+	registry, err := Default()
+	if err != nil {
+		panic(err)
+	}
+	return registry
+})

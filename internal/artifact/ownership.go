@@ -11,12 +11,17 @@ package artifact
 // configuration can weaken, and a boundary that holds because a well-behaved
 // model honoured it is not one anybody can rely on.
 //
-// The table it encodes is the one the design records. The product manager owns
-// the brief and the goals derived from it; the architect owns the designs and
+// The table it encodes is the one the design records, and it is now half a table:
+// what stays here is which capability a kind of document belongs to, and who holds
+// that capability is `internal/rolecapability`. The product manager owns the brief
+// and the goals derived from it; the architect owns the designs and
 // specifications, and the decision records with the invariants extracted from
-// them. The development manager owns no document at all — its decomposition is
-// Beads work rather than Markdown — which falls out of this table rather than
-// being stated separately: no kind names it, so it owns none.
+// them. Both of those sentences are the registry's, read back through the two
+// capabilities below rather than repeated here, because ownership stated twice is
+// ownership two files can disagree about. The development manager owns no document
+// at all — its decomposition is Beads work rather than Markdown — which falls out
+// of the same lookup rather than being stated separately: no kind names a
+// capability it holds, so it owns none.
 //
 // What this does not bound by itself is an agent with an editor in its worktree.
 // Three things narrow it. Every mutation the harness performs comes through
@@ -46,25 +51,54 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 )
 
 // ErrUnauthorized is what every unauthorized mutation returns, so a caller can
 // tell a refused authority from a malformed artifact.
 var ErrUnauthorized = errors.New("only the role that owns an artifact may create, amend, supersede, or retire it")
 
-// Owner returns the role that owns a kind of artifact, and whether the kind is
-// one the harness knows. An unknown kind has no owner rather than a default one:
-// a document nobody can place is not one anybody can be authorized over.
-func Owner(kind Kind) (domain.AgentRole, bool) {
+// authority is the capability a kind of artifact belongs to, and whether the
+// kind is one the harness knows. It is the whole of what this file decides: who
+// holds either of these two capabilities is the role-capability registry's to
+// say, not a second ownership table kept here.
+//
+// The two names are the artifact-kind scope written into the vocabulary, which is
+// what `internal/capability` records them as until scopes exist. A kind that
+// arrives owned by a third role needs a third name there before it can be placed
+// here, which is the same demand the old table made in a less visible way.
+func authority(kind Kind) (capability.Capability, bool) {
 	switch kind {
 	case KindBrief, KindGoals, KindNonGoals:
-		return domain.RoleProductManager, true
+		return capability.ArtifactProductMutate, true
 	case KindDesign, KindSpecification, KindDecision:
-		return domain.RoleArchitect, true
+		return capability.ArtifactDesignMutate, true
 	default:
 		return "", false
 	}
+}
+
+// Owner returns the role that owns a kind of artifact, and whether the kind is
+// one the harness knows. An unknown kind has no owner rather than a default one:
+// a document nobody can place is not one anybody can be authorized over.
+//
+// The owner is read out of the registry rather than named here, so that "the
+// architect owns designs" is one statement in one place. A kind whose capability
+// is held by anything other than exactly one role has no owner either: an
+// ownership question has a single answer or it has none, and returning the first
+// of several would pick one silently.
+func Owner(kind Kind) (domain.AgentRole, bool) {
+	required, known := authority(kind)
+	if !known {
+		return "", false
+	}
+	holders := rolecapability.MustDefault().RolesHolding(required)
+	if len(holders) != 1 {
+		return "", false
+	}
+	return holders[0], true
 }
 
 // Authorize reports whether a role may create, amend, supersede, or retire an
@@ -72,13 +106,21 @@ func Owner(kind Kind) (domain.AgentRole, bool) {
 // problem raises it for the architect, and a reviewer that found intent
 // contradicted files a finding, and neither edits the document and carries on as
 // if the change had been approved.
+//
+// What it asks is whether the role holds the capability the kind belongs to. The
+// refusal still names the owner, because a role told only that it lacks
+// `artifact.design.mutate` has been told nothing it can act on.
 func Authorize(role domain.AgentRole, kind Kind) error {
-	owner, known := Owner(kind)
+	required, known := authority(kind)
 	if !known {
 		return fmt.Errorf("kind %q must be one of %s", kind, renderKinds())
 	}
-	if role == owner {
+	if rolecapability.MustDefault().Holds(role, required) {
 		return nil
+	}
+	owner, placed := Owner(kind)
+	if !placed {
+		return fmt.Errorf("%w; a %s artifact is whoever holds %q, and no single role does", ErrUnauthorized, kind, required)
 	}
 	if strings.TrimSpace(string(role)) == "" {
 		return fmt.Errorf("%w; no role was named, and a %s artifact is the %s's", ErrUnauthorized, kind, owner)
