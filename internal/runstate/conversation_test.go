@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -123,6 +124,192 @@ func TestConversationStoreHoldsOneConversationAtATime(t *testing.T) {
 	if err := regained.Release(); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
+}
+
+// Observing a conversation must take nothing from it. The four-line status asks
+// this of every conversation on every reading and the heartbeat asks hourly, so
+// a probe that took the lease and let it go again would be refusing the
+// operator their own chat for the instant it held.
+func TestConversationInFlightObservesWithoutTakingTheLease(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	for ask := 1; ask <= 3; ask++ {
+		if inFlight, err := store.InFlight(identity); inFlight || err != nil {
+			t.Fatalf("ask %d of a free conversation = %v, %v", ask, inFlight, err)
+		}
+	}
+
+	held, err := store.Hold(identity)
+	if err != nil {
+		t.Fatalf("Hold() after asking error = %v, want the conversation still free", err)
+	}
+	// A hold this process took is what another process holding it looks like from
+	// outside: the stamp is written by whoever owns the lease, and read by
+	// anybody.
+	if inFlight, err := store.InFlight(identity); !inFlight || err != nil {
+		t.Fatalf("a held conversation = %v, %v, want it reported in flight", inFlight, err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if inFlight, err := store.InFlight(identity); inFlight || err != nil {
+		t.Fatalf("a released conversation = %v, %v, want it free again", inFlight, err)
+	}
+	// A hold is observable per agent, exactly as it is taken per agent.
+	sibling := ConversationIdentity{Agent: "development-manager", Role: domain.RoleDevelopmentManager}
+	lease, err := store.Hold(sibling)
+	if err != nil {
+		t.Fatalf("Hold(sibling) error = %v", err)
+	}
+	defer lease.Release()
+	if inFlight, err := store.InFlight(identity); inFlight || err != nil {
+		t.Fatalf("a sibling's hold reported on %s = %v, %v", identity, inFlight, err)
+	}
+}
+
+// The whole of the defect: a conversation somebody wants to have must be there
+// to take, however often something else is asking whether it is in use.
+func TestAConversationIsNeverRefusedByAProbe(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+
+	asking := make(chan struct{})
+	asked := make(chan error, 1)
+	go func() {
+		var problem error
+		for {
+			select {
+			case <-asking:
+				asked <- problem
+				return
+			default:
+			}
+			if _, err := store.InFlight(identity); err != nil && problem == nil {
+				problem = err
+			}
+		}
+	}()
+
+	for attempt := 1; attempt <= 200; attempt++ {
+		lease, err := store.Hold(identity)
+		if err != nil {
+			close(asking)
+			<-asked
+			t.Fatalf("Hold() attempt %d error = %v, want a conversation no probe can refuse", attempt, err)
+		}
+		if err := lease.Release(); err != nil {
+			close(asking)
+			<-asked
+			t.Fatalf("Release() attempt %d error = %v", attempt, err)
+		}
+	}
+	close(asking)
+	if err := <-asked; err != nil {
+		t.Fatalf("observing a conversation being held and released error = %v", err)
+	}
+}
+
+// A holder that exits without releasing leaves its stamp behind, and the
+// operating system has already dropped its lock. The probe's answer has to be
+// the operating system's, or a killed chat would read as a turn in flight for
+// as long as the state directory lasts.
+func TestAStampFromADeadHolderIsNotATurnInFlight(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	lease, err := store.Hold(identity)
+	if err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+	stamp := filepath.Join(store.Root(), "product-manager.holder")
+	written, err := os.ReadFile(stamp)
+	if err != nil {
+		t.Fatalf("the hold left no stamp to observe: %v", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if _, err := os.Stat(stamp); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a released hold left its stamp behind: %v", err)
+	}
+
+	// The stamp of a process that is gone, which is what a killed holder leaves.
+	// It is put back by hand because nothing the store does can produce it.
+	gone := exitedProcess(t)
+	stale := strings.Replace(string(written), fmt.Sprintf(`"pid": %d`, os.Getpid()), fmt.Sprintf(`"pid": %d`, gone), 1)
+	if stale == string(written) {
+		t.Fatalf("the stamp does not name this process, so this test proves nothing:\n%s", written)
+	}
+	if err := os.WriteFile(stamp, []byte(stale), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if inFlight, err := store.InFlight(identity); inFlight || err != nil {
+		t.Fatalf("a stamp from a process that has gone = %v, %v, want the conversation free", inFlight, err)
+	}
+	// And it is free to take, which is the answer the operating system was
+	// already giving.
+	regained, err := store.Hold(identity)
+	if err != nil {
+		t.Fatalf("Hold() after a stale stamp error = %v", err)
+	}
+	if err := regained.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+}
+
+// A stamp that is there and will not decode is a failure to answer rather than
+// an answer: a reader that guessed would be inventing whether somebody is
+// mid-turn.
+func TestAnUnreadableStampIsAProblemRatherThanAnAnswer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	if err := os.MkdirAll(store.Root(), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Root(), "product-manager.holder"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if inFlight, err := store.InFlight(identity); inFlight || err == nil {
+		t.Fatalf("an unreadable stamp = %v, %v, want a stated problem", inFlight, err)
+	}
+	// A name that could never be a path is refused before anything is read, for
+	// the same reason.
+	if inFlight, err := store.InFlight(ConversationIdentity{Agent: "Not An Agent", Role: domain.RoleProductManager}); inFlight || err == nil {
+		t.Fatalf("an unaskable identity = %v, %v, want a stated problem", inFlight, err)
+	}
+}
+
+// exitedProcess is the identifier of a process that has run and gone, which is
+// the closest thing a test has to a holder that was killed.
+func exitedProcess(t *testing.T) int {
+	t.Helper()
+
+	command := exec.Command(os.Args[0], "-test.run=TestNoSuchTestExistsHere")
+	command.Env = append(os.Environ(), "GO_TEST_EXITED_PROCESS=1")
+	if err := command.Start(); err != nil {
+		t.Fatalf("start a process to let it exit: %v", err)
+	}
+	pid := command.Process.Pid
+	// The wait is what makes it gone rather than merely finishing, and it is also
+	// what reaps it: a zombie is still a process the null signal reaches.
+	if err := command.Wait(); err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatalf("wait for the process to exit: %v", err)
+		}
+	}
+	return pid
 }
 
 func TestConversationStoreRefusesForeignAndMalformedRecords(t *testing.T) {

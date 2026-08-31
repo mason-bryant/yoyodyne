@@ -411,12 +411,12 @@ func TestAConversationLeaseThatCannotBeAskedIsReportedAsAProblem(t *testing.T) {
 	}
 }
 
-// Asking whether a conversation is in use takes its lease and lets it go again,
-// so asking must leave the conversation exactly as free as it found it. A
-// release that did not happen leaves this process holding the lock, and every
-// later question — the next agent in the same listing, the next listing, the
-// operator's own chat — is answered "held by another process" about a
-// conversation nobody is in.
+// Asking whether a conversation is in use must leave it exactly as free as it
+// found it, and asking takes nothing to do it. The listing asks once per agent
+// and the status asks on every reading, so an ask that acquired anything would
+// answer "held by another process" — to the next agent in the same listing, to
+// the next listing, and to the operator's own chat — about a conversation
+// nobody is in.
 func TestAskingWhetherAConversationIsInUseDoesNotKeepIt(t *testing.T) {
 	t.Parallel()
 

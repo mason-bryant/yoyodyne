@@ -84,6 +84,10 @@ type Lease struct {
 	// label names what this lease owns, so a failure to release says which.
 	label string
 	file  *os.File
+	// holder is the stamp a reader observes this lease by, on the leases that keep
+	// one. It is empty on the rest: a lease nobody has to watch from outside
+	// carries nothing to keep in step with the lock.
+	holder string
 }
 
 // Release drops the lease. Releasing twice is a no-op, so a caller can defer it
@@ -97,14 +101,26 @@ type Lease struct {
 // question about the thing it owns would answer that another process holds it,
 // which is the one answer nobody could act on. Unlocking first makes a failed
 // close a leaked descriptor at worst, never a lock nobody can see.
+//
+// The stamp a reader observes goes before the lock is dropped, so no reader
+// sees a holder for a lease the next process may already own. A stamp that
+// could not be removed is reported: what it leaves behind is this process
+// described as still holding something it let go of.
 func (l *Lease) Release() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
 	file := l.file
 	l.file = nil
+	var cleared error
+	if l.holder != "" {
+		if err := os.Remove(l.holder); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleared = fmt.Errorf("clear the %s holder: %w", l.label, err)
+		}
+		l.holder = ""
+	}
 	unlocked := unlockStateFile(file)
-	if err := errors.Join(unlocked, closeStateFile(file)); err != nil {
+	if err := errors.Join(cleared, unlocked, closeStateFile(file)); err != nil {
 		return fmt.Errorf("release %s lease: %w", l.label, err)
 	}
 	return nil

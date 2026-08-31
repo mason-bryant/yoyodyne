@@ -41,26 +41,21 @@ func (f fakeRuns) Price(workItemID string) (runstate.ItemPrice, error) {
 }
 
 type fakeConversations struct {
-	recorded []runstate.Conversation
-	held     map[string]bool
-	fail     error
-	failHold map[string]error
+	recorded    []runstate.Conversation
+	held        map[string]bool
+	fail        error
+	failObserve map[string]error
 }
 
 func (f fakeConversations) Recorded() ([]runstate.Conversation, error) {
 	return f.recorded, f.fail
 }
 
-func (f fakeConversations) Hold(identity runstate.ConversationIdentity) (*runstate.Lease, error) {
-	if err, named := f.failHold[identity.Agent]; named {
-		return nil, err
+func (f fakeConversations) InFlight(identity runstate.ConversationIdentity) (bool, error) {
+	if err, named := f.failObserve[identity.Agent]; named {
+		return false, err
 	}
-	if f.held[identity.Agent] {
-		return nil, runstate.ErrConversationHeld
-	}
-	// A lease with nothing open releases cleanly, which is what an unheld
-	// conversation looks like to the probe.
-	return nil, nil
+	return f.held[identity.Agent], nil
 }
 
 type fakeTracker struct {
@@ -522,7 +517,7 @@ func TestAnUnwiredSourceIsSaidRatherThanAssumedEmpty(t *testing.T) {
 	}
 }
 
-// A conversation whose lease could not be asked about is not counted either way,
+// A conversation whose hold could not be observed is not counted either way,
 // and the count says it is partial rather than passing as complete.
 func TestAConversationThatCannotBeAskedIsSaidBesideTheCount(t *testing.T) {
 	t.Parallel()
@@ -532,8 +527,8 @@ func TestAConversationThatCannotBeAskedIsSaidBesideTheCount(t *testing.T) {
 			{ConversationID: "chat-1", Agent: "architect", Role: domain.RoleArchitect, UpdatedAt: moment},
 			{ConversationID: "chat-2", Agent: "reviewer", Role: domain.RoleReviewer, UpdatedAt: moment},
 		},
-		held:     map[string]bool{"reviewer": true},
-		failHold: map[string]error{"architect": errors.New("the lease would not open")},
+		held:        map[string]bool{"reviewer": true},
+		failObserve: map[string]error{"architect": errors.New("the holder stamp would not open")},
 	}
 	standing := ReadStanding(context.Background(), sources)
 	if len(standing.Working) != 1 {

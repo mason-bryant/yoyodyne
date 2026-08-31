@@ -608,8 +608,12 @@ Needs a human (1):
   evidence cannot be priced says so; it is never reported as free.
 - **Working** is the persona conversations with a turn in flight, which nothing
   counted before this: a conversation is not a run, so a machine spending money
-  on six persona turns used to report nothing running at all. The advisory lease
-  is what decides, because it is the only thing that actually knows.
+  on six persona turns used to report nothing running at all. The advisory hold
+  is what decides, because it is the only thing that actually knows. It is
+  observed rather than taken: the process holding a conversation writes down
+  which process it is, and a reading checks that the process is still there. A
+  status that took the hold to find out — which is how this was first built —
+  would refuse a chat that asked for its own conversation in the same instant.
 - **Not startable** is each admitted item nothing will pull, with the refusal
   that stops it — the queue's own account where the queue has one, the directive
   where a directive pauses the work, and otherwise what has stopped the harness
