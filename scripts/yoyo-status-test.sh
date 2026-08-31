@@ -562,6 +562,68 @@ else
   esac
 fi
 
+step "an interrupted -L leaves nothing printing behind it"
+# The reported bug: -L prints from a background pipeline so it can switch to a
+# later run, and a background pipeline in a shell without job control ignores an
+# interrupt -- so control-c returned the prompt and the tail kept writing to the
+# operator's terminal. What proves the pipeline is gone is an event written
+# after the interrupt that never arrives.
+#
+# A product of its own, so this follows a log nothing else here appends to and
+# the claim does not depend on which fixture happens to be newest.
+following="$YOYODYNE_STATE_HOME/products/following"
+mkdir -p "$following/runs"
+followed_run="run-cccccccccccccccccccccccccccccccc"
+followed_log="$following/runs/$followed_run.events.jsonl"
+printf '{"status":"running"}\n' > "$following/runs/$followed_run.json"
+printf '{"sequence":1,"timestamp":"2026-08-01T10:00:00.000000Z","type":"run.started","source":"harness","payload":{}}\n' \
+  > "$followed_log"
+followed_out="$scratch/followed.out"
+: > "$followed_out"
+
+# Job control is turned on to start it, so the interrupt can be delivered the
+# way a terminal delivers one: to the whole process group of what is in front of
+# the operator. Backgrounding it without job control would instead make this
+# test's own child ignore SIGINT, which is not what an operator's shell does to
+# the command they are looking at.
+set -m
+"$status" --product following -L > "$followed_out" 2>&1 &
+followed_pid=$!
+set +m
+
+# Interrupt a follow that is actually following: the header and the first event
+# have to have arrived, or this would prove nothing about a pipeline that had
+# not started yet.
+waited=0
+while [ "$(wc -l < "$followed_out" | tr -d ' ')" -lt 2 ] && [ "$waited" -lt 100 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+kill -INT -- -"$followed_pid" 2>/dev/null || true
+# A watchdog, so a trap that ever stops returning fails this rather than hanging
+# every environment that runs it.
+( sleep 10; kill -KILL -- -"$followed_pid" 2>/dev/null || true ) &
+watchdog=$!
+wait "$followed_pid" 2>/dev/null && followed_status=0 || followed_status=$?
+kill "$watchdog" 2>/dev/null || true
+wait "$watchdog" 2>/dev/null || true
+
+if [ "$followed_status" = "130" ]; then
+  pass "an interrupted follow ends, and reports the interrupt as one"
+else
+  fail "an interrupted follow ends, and reports the interrupt as one -- got status $followed_status"
+fi
+
+before="$(wc -c < "$followed_out" | tr -d ' ')"
+printf '{"sequence":2,"timestamp":"2026-08-01T10:00:01.000000Z","type":"run.completed","source":"harness","payload":{}}\n' \
+  >> "$followed_log"
+sleep 2
+if [ "$(wc -c < "$followed_out" | tr -d ' ')" = "$before" ]; then
+  pass "an event written afterwards reaches nothing, so the terminal is left quiet"
+else
+  fail "an event written afterwards reaches nothing, so the terminal is left quiet -- something is still printing"
+fi
+
 printf '\n=== result\n'
 if [ "$failures" = "0" ]; then
   printf 'yoyo-status reports runs, conversations, and branch reviews as documented\n'
