@@ -906,7 +906,6 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		SystemPrompt:     systemPrompt,
 		SessionID:        s.state.ProviderSessionID,
 		Model:            s.options.Model,
-		PermissionMode:   "plan",
 		AllowedTools:     []string{},
 		Timeout:          s.options.timeout(),
 		LastSequence:     lastSequence,

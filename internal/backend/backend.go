@@ -31,6 +31,21 @@ type Availability struct {
 	APIProvider   string `json:"api_provider,omitempty"`
 }
 
+// RunRequest is one provider invocation the harness asks for.
+//
+// There is deliberately no session mode on it. A provider that has interactive
+// modes has one for planning, and Claude Code's puts that layer's own workflow
+// into the session's system prompt: do not execute yet, write a plan file,
+// launch planning agents, finish by declaring the plan. That reaches a
+// harness-invoked role on top of a role contract saying the opposite -- a
+// reviewer told to plan, or worse, a developer told not to edit. A reviewer read
+// exactly that on 2026-08-30 in run-fe0ad8461100ca399c4d2dee371afd53 and
+// reported it.
+//
+// So the mode is a function of the role's posture, decided by the adapter that
+// knows the provider's spelling of it, and there is no field here for a caller
+// to name one. What a role's session is is settled by which role it is, and no
+// caller is in a position to say otherwise.
 type RunRequest struct {
 	RunID            string
 	Role             domain.AgentRole
@@ -39,7 +54,6 @@ type RunRequest struct {
 	SystemPrompt     string
 	SessionID        string
 	Model            string
-	PermissionMode   string
 	AllowedTools     []string
 	// AccountAlias is the provider account this invocation is made under, and
 	// AccountConfigDir is where that account's authentication lives on this

@@ -28,7 +28,6 @@ func TestLocalConformance(t *testing.T) {
 		Role:             domain.RoleDeveloper,
 		WorkingDirectory: t.TempDir(),
 		Prompt:           "Reply with exactly: ok",
-		PermissionMode:   "dontAsk",
 		AllowedTools:     []string{},
 		Timeout:          2 * time.Minute,
 	})

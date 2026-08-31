@@ -50,9 +50,34 @@ const developerSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"
 // separately confined by Claude Code's OS-level sandbox settings below.
 var developerTools = []string{"Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 
-// readOnlyPermissionMode is the only Claude Code mode that leaves a toolless
-// role unable to apply an edit itself.
-const readOnlyPermissionMode = "plan"
+// The session mode a role's invocation runs under, one per posture. Which mode
+// a role gets is settled here and nowhere else: the request carries no mode, so
+// there is no caller who can name one and no path by which a role receives a
+// session somebody else chose for it.
+//
+// Neither is "plan", and that is the point of them. Plan mode is the
+// interactive layer's workflow rather than a permission: Claude Code puts its
+// own planning instructions into the session's system prompt -- do not execute
+// yet, write a plan file, launch Explore and Plan agents, finish by calling
+// ExitPlanMode -- and a harness-invoked role receives them on top of a role
+// contract that says the opposite. The reviewer on run
+// run-fe0ad8461100ca399c4d2dee371afd53 read them beside a contract forbidding it
+// tools and requiring one JSON verdict, followed its contract, and reported the
+// injection; nothing but its own judgement made that the outcome. The same
+// instructions reaching a developer forbid the edits the run exists to make.
+//
+// worktreeWriteSessionMode lets an agent whose work is editing a worktree apply
+// its edits without a prompt nobody is there to answer.
+//
+// readOnlySessionMode is the mode that grants nothing: every tool use asks for
+// approval, and a non-interactive invocation has nobody to give it. It stands
+// behind the empty tool list rather than instead of it -- a role with no tools
+// has nothing to ask about -- so what it adds is that the mode itself grants no
+// standing permission if a tool ever reached one of these roles.
+const (
+	worktreeWriteSessionMode = "acceptEdits"
+	readOnlySessionMode      = "manual"
+)
 
 // readOnlyTools is intentionally empty. A reviewer receives a bounded context,
 // patch, and check results, and the product manager, the architect, and the
@@ -77,6 +102,16 @@ var readOnlyTools = []string{}
 // this backend, and it reaches the refusal in Run.
 func readOnlyRole(role domain.AgentRole) bool {
 	return backend.PostureFor(role) == backend.PostureReadOnly
+}
+
+// sessionModeFor is the mode a role's session runs under, read off the posture
+// the contract holds for that role rather than decided again here. A role whose
+// posture nobody has decided never reaches this: Run refuses it first.
+func sessionModeFor(role domain.AgentRole) string {
+	if readOnlyRole(role) {
+		return readOnlySessionMode
+	}
+	return worktreeWriteSessionMode
 }
 
 // supportedRole reports whether this backend knows how to assemble an
@@ -223,16 +258,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		return backend.RunResult{}, fmt.Errorf("Claude Code backend does not support role %q", request.Role)
 	}
 
-	permissionMode := request.PermissionMode
-	if permissionMode == "" {
-		permissionMode = "acceptEdits"
-		if readOnlyRole(request.Role) {
-			permissionMode = readOnlyPermissionMode
-		}
-	}
-	if !validPermissionMode(permissionMode) {
-		return backend.RunResult{}, fmt.Errorf("unsupported Claude Code permission mode %q", permissionMode)
-	}
+	sessionMode := sessionModeFor(request.Role)
 	allowedTools := request.AllowedTools
 	if allowedTools == nil {
 		if readOnlyRole(request.Role) {
@@ -249,13 +275,8 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	// Advisory roles consume only the bounded supplied evidence. Refuse every
 	// tool, including nominally read-only tools that could inspect outside that
 	// evidence and send unrelated local data to the provider.
-	if readOnlyRole(request.Role) {
-		if len(allowedTools) > 0 {
-			return backend.RunResult{}, fmt.Errorf("%s runs cannot be granted tools; the role reasons over bounded supplied evidence", request.Role)
-		}
-		if permissionMode != readOnlyPermissionMode {
-			return backend.RunResult{}, fmt.Errorf("%s runs require the read-only %q permission mode, not %q", request.Role, readOnlyPermissionMode, permissionMode)
-		}
+	if readOnlyRole(request.Role) && len(allowedTools) > 0 {
+		return backend.RunResult{}, fmt.Errorf("%s runs cannot be granted tools; the role reasons over bounded supplied evidence", request.Role)
 	}
 	if request.Role == domain.RoleDeveloper {
 		for _, tool := range allowedTools {
@@ -269,7 +290,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
-		"--permission-mode", permissionMode,
+		"--permission-mode", sessionMode,
 		"--name", "yoyodyne-" + shortRunID(request.RunID),
 	}
 	if request.Role == domain.RoleDeveloper {
@@ -395,15 +416,6 @@ func developerWriteToolIsScoped(tool string) bool {
 		return strings.HasPrefix(pattern, "/") && !strings.HasPrefix(pattern, "//") && !strings.Contains(pattern, "..")
 	}
 	return true
-}
-
-func validPermissionMode(mode string) bool {
-	switch mode {
-	case "acceptEdits", "auto", "dontAsk", "manual", "plan":
-		return true
-	default:
-		return false
-	}
 }
 
 func shortRunID(runID string) string {

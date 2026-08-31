@@ -126,7 +126,6 @@ func TestATerminalNamesTheRoleTheInvocationWasMadeAs(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
 		role    domain.AgentRole
-		mode    string
 		tools   []string
 		stream  string
 		wanted  execution.EventType
@@ -135,7 +134,6 @@ func TestATerminalNamesTheRoleTheInvocationWasMadeAs(t *testing.T) {
 		{
 			name:   "a developer that finished",
 			role:   domain.RoleDeveloper,
-			mode:   "acceptEdits",
 			stream: `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","total_cost_usd":12.5,"terminal_reason":"end_turn"}`,
 			wanted: execution.EventRunCompleted,
 		},
@@ -144,7 +142,6 @@ func TestATerminalNamesTheRoleTheInvocationWasMadeAs(t *testing.T) {
 			// has to be attributable for the same reason a successful one does.
 			name:    "a developer the provider ended badly",
 			role:    domain.RoleDeveloper,
-			mode:    "acceptEdits",
 			stream:  `{"type":"result","subtype":"error","session_id":"session-1","is_error":true,"result":"API Error","total_cost_usd":1.5,"terminal_reason":"api_error"}`,
 			wanted:  execution.EventRunFailed,
 			isError: true,
@@ -152,7 +149,6 @@ func TestATerminalNamesTheRoleTheInvocationWasMadeAs(t *testing.T) {
 		{
 			name:   "a reviewer",
 			role:   domain.RoleReviewer,
-			mode:   readOnlyPermissionMode,
 			tools:  []string{},
 			stream: `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"{}","total_cost_usd":0.75,"terminal_reason":"end_turn"}`,
 			wanted: execution.EventRunCompleted,
@@ -168,7 +164,6 @@ func TestATerminalNamesTheRoleTheInvocationWasMadeAs(t *testing.T) {
 				Role:             testCase.role,
 				WorkingDirectory: "/worktree",
 				Prompt:           "do the work",
-				PermissionMode:   testCase.mode,
 				AllowedTools:     testCase.tools,
 				EventSink: func(event execution.Event) error {
 					if event.Type == execution.EventRunCompleted || event.Type == execution.EventRunFailed {
@@ -232,7 +227,6 @@ func TestATerminalCarriesTheProvidersUsageWhereThePriceReaderLooksForIt(t *testi
 		Role:             domain.RoleDeveloper,
 		WorkingDirectory: "/worktree",
 		Prompt:           "do the work",
-		PermissionMode:   "acceptEdits",
 		EventSink: func(event execution.Event) error {
 			if event.Type == execution.EventRunCompleted {
 				recorded := event
@@ -279,7 +273,6 @@ func TestATerminalCarriesTheProvidersUsageWhereThePriceReaderLooksForIt(t *testi
 		Role:             domain.RoleDeveloper,
 		WorkingDirectory: "/worktree",
 		Prompt:           "do the work",
-		PermissionMode:   "acceptEdits",
 		EventSink: func(event execution.Event) error {
 			if event.Type == execution.EventRunCompleted {
 				recorded := event
@@ -885,7 +878,7 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -904,11 +897,6 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 			name:    "command execution",
 			request: backendapi.RunRequest{AllowedTools: []string{"Bash"}},
 			want:    "cannot be granted tools",
-		},
-		{
-			name:    "editing permission mode",
-			request: backendapi.RunRequest{AllowedTools: []string{}, PermissionMode: "acceptEdits"},
-			want:    "reviewer runs require the read-only",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -943,7 +931,7 @@ func TestRunKeepsTheProductManagerAdvisory(t *testing.T) {
 	}
 	// No sandbox settings, because there is nothing to sandbox: the role has no
 	// tools at all and cannot apply an edit it proposes.
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -962,11 +950,6 @@ func TestRunKeepsTheProductManagerAdvisory(t *testing.T) {
 			name:    "tracker and git commands",
 			request: backendapi.RunRequest{AllowedTools: []string{"Bash"}},
 			want:    "product-manager runs cannot be granted tools",
-		},
-		{
-			name:    "editing permission mode",
-			request: backendapi.RunRequest{AllowedTools: []string{}, PermissionMode: "acceptEdits"},
-			want:    "product-manager runs require the read-only",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1009,10 +992,10 @@ func TestRunServesEveryConversationalRole(t *testing.T) {
 				Role:             role,
 				WorkingDirectory: "/repository",
 				Prompt:           "what do you make of this?",
-				// The shape a conversation sends whichever role is answering: a
-				// read-only permission mode and no tools at all.
-				PermissionMode: "plan",
-				AllowedTools:   []string{},
+				// The shape a conversation sends whichever role is answering: no
+				// tools at all, and no session mode, because it does not get to name
+				// one.
+				AllowedTools: []string{},
 			})
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
@@ -1048,7 +1031,7 @@ func TestRunKeepsTheManagementRolesToolless(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
-			wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
+			wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
 			if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 				t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 			}
@@ -1067,11 +1050,6 @@ func TestRunKeepsTheManagementRolesToolless(t *testing.T) {
 					name:    "tracker and git commands",
 					request: backendapi.RunRequest{AllowedTools: []string{"Bash"}},
 					want:    string(role) + " runs cannot be granted tools",
-				},
-				{
-					name:    "editing permission mode",
-					request: backendapi.RunRequest{AllowedTools: []string{}, PermissionMode: "acceptEdits"},
-					want:    string(role) + " runs require the read-only",
 				},
 			} {
 				t.Run(test.name, func(t *testing.T) {
@@ -1612,7 +1590,6 @@ func TestTheReplyReachesAWatcherRedactedRecordedAndBeforeTheResult(t *testing.T)
 		Role:             domain.RoleProductManager,
 		WorkingDirectory: "/repository",
 		Prompt:           "what next?",
-		PermissionMode:   "plan",
 		AllowedTools:     []string{},
 		RedactValues:     []string{secret},
 		EventSink: func(event execution.Event) error {
@@ -1669,7 +1646,6 @@ func TestAWatchedInvocationRecordsAndReturnsWhatAnUnwatchedOneDoes(t *testing.T)
 			Role:             domain.RoleProductManager,
 			WorkingDirectory: "/repository",
 			Prompt:           "what next?",
-			PermissionMode:   "plan",
 			AllowedTools:     []string{},
 			EventSink: func(event execution.Event) error {
 				events = append(events, event)

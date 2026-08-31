@@ -127,11 +127,9 @@ func TestSendGivesTheProductManagerNoToolsAndBriefsItOnce(t *testing.T) {
 	}
 	// The authority the product manager has is over the tracker, and it is
 	// exercised by the harness on its behalf. What it never gets is a way to run
-	// anything: a read-only permission mode and an explicitly empty tool list, so
-	// no file, command, or network is reachable from the conversation at all.
-	if first.PermissionMode != "plan" {
-		t.Fatalf("permission mode = %q, want plan", first.PermissionMode)
-	}
+	// anything: an explicitly empty tool list, so no file, command, or network is
+	// reachable from the conversation at all. The session mode that stands behind
+	// it is the backend's, decided from the role rather than named here.
 	if first.AllowedTools == nil || len(first.AllowedTools) != 0 {
 		t.Fatalf("allowed tools = %#v, want an empty non-nil list", first.AllowedTools)
 	}
