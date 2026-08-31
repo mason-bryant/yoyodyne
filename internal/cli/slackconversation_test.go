@@ -151,5 +151,59 @@ func TestAFailedTurnStillCarriesBackWhatItManagedToSay(t *testing.T) {
 	}
 }
 
+// A command typed at the app is refused rather than said to the product manager.
+//
+// It reaches this client with its slash intact — the message arrives
+// mention-first, so `@yoyodyne /backlog` has the mention stripped and is a
+// command again — and saying one to a role that cannot carry it out is the
+// defect `yoyo chat --message` already had once: a confused answer bought with a
+// turn the operator paid for.
+func TestACommandFromSlackIsRefusedRatherThanSaidToTheProductManager(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"/backlog", "/work yoyodyne-ifd.70", "/refresh", "  /stop  "} {
+		provider := &recordingChatBackend{}
+		session := openTestChatSession(t, t.TempDir(), provider, &recordingChatTracker{})
+		answer, err := sayToConversation(context.Background(), session, command, discardLog)
+		if err != nil {
+			t.Fatalf("sayToConversation(%q) error = %v", command, err)
+		}
+		if provider.turns != 0 {
+			t.Fatalf("%q was said to the product manager %d time(s); it is a command", command, provider.turns)
+		}
+		if !answer.Harness {
+			t.Fatalf("%q = %#v, want the refusal to read as the harness's own rather than as something said", command, answer)
+		}
+		if !strings.Contains(answer.Text, "commands are not carried out from here") {
+			t.Fatalf("%q answered %q, want it refused with where to type it instead", command, answer.Text)
+		}
+		if answer.ConversationID == "" {
+			t.Fatalf("%q = %#v, want the conversation named even where nothing was said to it", command, answer)
+		}
+	}
+}
+
+// And the interception is a slash rather than a mood: a sentence that merely
+// mentions a command still reaches the product manager, which is the other half
+// of the rule the terminal follows.
+func TestAMessageThatOnlyTalksAboutACommandStillReachesTheProductManager(t *testing.T) {
+	t.Parallel()
+
+	provider := &recordingChatBackend{
+		result: backendapi.RunResult{SessionID: "session-1", FinalText: "It starts the run you name."},
+	}
+	session := openTestChatSession(t, t.TempDir(), provider, &recordingChatTracker{})
+	answer, err := sayToConversation(context.Background(), session, "what does /work do?", discardLog)
+	if err != nil {
+		t.Fatalf("sayToConversation() error = %v", err)
+	}
+	if provider.turns != 1 {
+		t.Fatalf("the product manager was asked %d time(s), want the question put to it", provider.turns)
+	}
+	if answer.Harness || !strings.Contains(answer.Text, "It starts the run you name.") {
+		t.Fatalf("answer = %#v, want what the product manager said", answer)
+	}
+}
+
 // discardLog is the sink's log for a test that is not reading it.
 func discardLog(string, ...any) {}

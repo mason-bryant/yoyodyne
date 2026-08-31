@@ -708,10 +708,14 @@ things stand tells a reader nothing the channel was not already telling them.
 The wait for it is bounded and the failures are said rather than swallowed: a
 turn gets ten minutes, and the conversation being held at somebody's terminal,
 the wait running out, and a provider out of capacity are each answered in the
-thread with what happened. No directive is recorded from a mention and nothing
-about the work changes through one, because a message at the top of the channel
-names no item to scope a directive to — but every message addressed to the app
-goes into the sink's own log, with what was asked in it and before the answer is
-posted, so being heard does not depend on the workspace carrying the answer. It
-exists because the alternative was silence, and a reporting process that answers
-nothing is indistinguishable from one that has died.
+thread with what happened. No directive is recorded from a mention, because a
+message at the top of the channel names no item to scope one to — what a mention
+changes about the work it changes by speaking to the product manager, which is
+the product manager's own doing and reaches this channel through the ordinary
+reporting of its record. Commands are not carried out from here either: a
+message that opens with a slash is refused with where to type it, so it costs no
+turn. And every message addressed to the app goes into the sink's own log, with
+what was asked in it and before the answer is posted, so being heard does not
+depend on the workspace carrying the answer. It exists because the alternative
+was silence, and a reporting process that answers nothing is indistinguishable
+from one that has died.

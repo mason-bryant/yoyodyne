@@ -503,19 +503,45 @@ func (c productManagerConversation) Say(ctx context.Context, said string) (slack
 	return sayToConversation(ctx, session, said, c.log)
 }
 
+// slackCommandRefusal is what a command typed at this app gets. It says the
+// thing this client does not do and the two places the same authority is
+// actually exercised, because somebody who has just been told no is owed the
+// next thing to try.
+//
+// It is a refusal rather than a dispatch on purpose. A command is the operator's
+// own authority carried out by the harness — `/work` starts a run this process
+// does not supervise, `/stop` ends one, `/refresh` retakes a picture — and
+// carrying those out from a reporting sink would put a second driver of work
+// beside the terminal. What matters is that it is refused rather than spoken:
+// said to the product manager it would buy a confused answer and a turn the
+// operator paid for, which is the defect `yoyo chat --message` already had once.
+const slackCommandRefusal = "That is a command, and commands are not carried out from here — they are your own authority rather than anything the product manager can do. Type it at `yoyo chat`, or as `yoyo` at the terminal. Nothing was said to the product manager and no turn was spent."
+
 // sayToConversation is what one message does to a conversation somebody else
 // opened, which is the whole of what a client of it decides.
 //
-// It dispatches exactly as `yoyo chat --message` does, and for the same reason:
-// an answer to a proposal this conversation is still waiting on is a decision the
+// Its two dispatches are `yoyo chat --message`'s own, and for its reason: an
+// answer to a proposal this conversation is still waiting on is a decision the
 // harness carries out rather than speech to say to an agent, and a conversation
 // two clients dispatched differently would be one where an approval typed at a
-// terminal and the same approval typed in a channel did different things. A
-// command is not among them — Slack's own composer takes a leading slash and
-// never delivers it as a message — so what arrives here is speech or a decision.
+// terminal and the same approval typed in a channel did different things.
+//
+// Where the two clients differ is the third: a terminal carries a command out
+// and this client refuses it. A command does reach here — the message arrives
+// mention-first, so `@yoyodyne /backlog` has its mention stripped and a leading
+// slash again — and what it must not do is arrive at the product manager as
+// prose. The rule that a slash is a command is asked of the chat package rather
+// than restated, so the two clients cannot come to disagree about what one is.
 func sayToConversation(ctx context.Context, session *chat.Session, said string, log func(format string, args ...any)) (slack.Answer, error) {
 	evidence := session.Evidence()
 	answer := slack.Answer{ConversationID: evidence.ConversationID, Turns: evidence.Turns}
+	if chat.IsCommand(said) {
+		// The harness's own answer, exactly as a decision below is: nothing said it,
+		// no turn was spent, and the product manager was never asked.
+		answer.Harness = true
+		answer.Text = slackCommandRefusal
+		return answer, nil
+	}
 	if outcomes, decided, err := session.Decide(ctx, said); decided {
 		// A decision is the harness's own answer: no turn was spent, and the product
 		// manager was never asked. What was decided travels back whether or not it

@@ -1126,11 +1126,14 @@ that limit in its own words. A turn that steers work can wait on capacity for
 hours, and that is a thing you choose at a terminal rather than something a
 channel does to you while you watch a thread.
 
-Where things stand is the exception, and answered without a turn: `@yoyodyne
-status` is the read model's own four lines rather than something the product
-manager was asked for. Talking to it at all is held to the same `direct-work`
-grant a thread reply is, because it admits work, reorders the queue, and spends
-your money.
+Two things do not go to the product manager from there. Where things stand is
+answered without a turn: `@yoyodyne status` is the read model's own four lines
+rather than something the product manager was asked for. And the commands above
+are refused with where to type them: they are your authority carried out by the
+harness, so `@yoyodyne /backlog` is answered rather than read out to the product
+manager as a sentence, and costs nothing. Talking to it at all is held to the
+same `direct-work` grant a thread reply is, because it admits work, reorders the
+queue, and spends your money.
 
 ## What the conversation looks like on a terminal
 

@@ -731,6 +731,15 @@ manager's own name and face, in the thread you asked in:
 @yoyodyne put the installer epic ahead of the dashboard
 ```
 
+With one exception: **the `/` commands are not carried out from here.** `/work`,
+`/stop`, `/backlog`, `/refresh` and the rest are your own authority carried out
+by the harness rather than anything the product manager can do, so a message that
+opens with a slash is answered with where to type it — `yoyo chat`, or `yoyo` at
+the terminal — and nothing is said to the product manager. It costs no turn.
+Slack's composer takes a slash you type at the start of a line, but a mention
+comes first here, so `@yoyodyne /backlog` reaches the app as a command and is
+refused as one rather than read out to the product manager as a sentence.
+
 It is the [same conversation](../conversation.md) `yoyo chat` holds, not a second
 one this channel keeps. There is one durable conversation per agent and both are
 clients of it, so a question you asked at your terminal is answered from your
@@ -889,6 +898,7 @@ command line whenever the digest is not enough.
 | Slack says it is `not displaying some messages sent by this application` | Slack suppressed messages for volume, and suppressed ones are hidden rather than delayed. The sink paces itself below that threshold, so seeing this means something else is posting as the same app into the same channel — a second sink, or another integration sharing the app. What was suppressed is still in the durable records. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | `replies in these threads are acknowledged and not acted on` | Said once when the sink starts: nobody in this project holds `direct-work` with a bound `slack_member_id`, so no reply steers anything. Step 4 is where that is written. |
+| `no human in this project holds direct-work with a bound Slack member id, so nobody may talk to the product manager from here` | The other half of the same line, said once at startup: where things stand is all this channel will answer until somebody holds that grant. Step 4 again. |
 | A reply is answered `the reply is from somebody this project has not granted direct-work` | Your member id is not bound to a human with that grant, or is bound to a different one. Your profile → *Copy member ID*, and check it against `operators` in `.yoyodyne/config.yaml`. |
 | A message is answered `I don't know you` | Your member id is bound to nobody in the `operators` mapping. An entry with a `slack_member_id` and no grants is enough to be recognized; `direct-work` is the separate grant that lets you steer. |
 | A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item. Reply inside the item's thread. It is also what a second message gets from somebody this project does not know: they are told once per thread, and read after that. |
@@ -896,7 +906,7 @@ command line whenever the digest is not enough.
 | A message to the app is answered `The product manager's conversation is held by another client` | A `yoyo chat` is open at a terminal and holds it. Close it and ask again; the channel only ever holds the conversation for the length of one answer. |
 | A message to the app is answered `I waited 10m0s for the product manager` | The turn did not finish inside the channel's bound. It is one conversation, so `yoyo chat` shows where it actually got to. A turn that steers work and meets an exhausted usage limit is the usual cause. |
 | A message to the app is answered `The product manager could not answer:` | The provider's own reason follows the colon. An exhausted usage limit says so there, and also reaches this channel as a warning through the ordinary reporting. |
-| `a message addressed to this app is answered with where things stand and no more` | Said once when the sink starts: it was assembled without the durable conversation, so nothing can carry a question to the product manager. |
+| A message to the app is answered `That is a command` | You typed one of the `/` commands at the app. They are your own authority rather than the product manager's, and `yoyo chat` or `yoyo` at the terminal is where they are carried out. Nothing was said and no turn was spent. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 
 Every row above is something you saw. What a stopped, stale, or misdirected sink
