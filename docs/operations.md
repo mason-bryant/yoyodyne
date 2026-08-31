@@ -586,16 +586,65 @@ remote gained, which is by definition work this repository has never seen.
    Nothing sweeps it for you: it is preserved work, and the convergence sweep only
    ever removes a branch whose work the target provably carries.
 
+## Where the harness stands: the four lines
+
+`yoyo status` opens with four lines, and prints all four every time:
+
+```text
+Running (2 developer runs):
+  yoyodyne-ifd.194 — developing, 12m elapsed, $3.41 so far
+  yoyodyne-ifd.201 — reviewing, 3m elapsed, cost unknown (its event log is gone)
+Working (1 conversation):
+  product-manager — product-manager, a turn in flight for 40s after 270 recorded turns
+Not startable (2 of 7 admitted items):
+  yoyodyne-ifd.200 — waiting on yoyodyne-ifd.199
+  yoyodyne-ifd.212 — parked, so no pull selects it however far the queue drains: the design is being reworked
+Needs a human (1):
+  directive-4f2c… is unresolved: which branch does this land on? — the operator's — the work it affects waits until `yoyo directive resolve` settles it
+```
+
+- **Running** is the developer runs in flight, each with its item, the phase it
+  reached, how long it has been going, and what it has spent so far. A run whose
+  evidence cannot be priced says so; it is never reported as free.
+- **Working** is the persona conversations with a turn in flight, which nothing
+  counted before this: a conversation is not a run, so a machine spending money
+  on six persona turns used to report nothing running at all. The advisory lease
+  is what decides, because it is the only thing that actually knows.
+- **Not startable** is each admitted item nothing will pull, with the refusal
+  that stops it — the queue's own account where the queue has one, the directive
+  where a directive pauses the work, and otherwise what has stopped the harness
+  choosing at all: a switch, a full machine, or no session choosing work. It
+  never comes from a watch session's memory of what it has already tried, which
+  is a fact about one process rather than about the product. Work that is
+  admitted and would be started next is not listed here at all; the count of
+  admitted items beside the heading is where it shows.
+- **Needs a human** is always present, and says either `nothing` or the list with
+  whose move each one is: the operator's two switches, an unresolved directive, a
+  proposed change nobody has decided, a run that ended still owing a step, and
+  work marked for a conversation rather than for a run.
+
+A line with nothing in it says `nothing` in words, and a line whose records could
+not be read says that instead — never `nothing`, which would be a confident
+emptiness assembled from a file nobody could open. There is no fifth line and no
+residual bucket: a state that will not render into these four is a bug in the
+state.
+
+Naming an item leaves the four lines out. They are about the product, and a
+question about one piece of work is a different question. `--json` carries the
+same derivation under `standing`, so a second surface reads the answer rather
+than parsing the rendering.
+
 ## What became of the runs, and what remains of them
 
-`yoyo status` reads back what the runs themselves recorded — newest first, the
-work item, the outcome and the phase the run reached, what remains of it, what it
-cost, why the item was chosen, and the reasons its record kept:
+Under the four lines, `yoyo status` reads back what the runs themselves recorded
+— newest first, the work item, the outcome and the phase the run reached, what
+remains of it, what it cost, why the item was chosen, and the reasons its record
+kept:
 
 ```sh
-./bin/yoyo status                    # the twenty most recent runs
+./bin/yoyo status                    # the four lines, then the twenty most recent runs
 ./bin/yoyo status --failed           # only the ones that did not succeed
-./bin/yoyo status yoyodyne-ifd.90    # one item's runs
+./bin/yoyo status yoyodyne-ifd.90    # one item's runs, without the four lines
 ./bin/yoyo status --limit 0 --json   # every recorded run, for a script
 ```
 

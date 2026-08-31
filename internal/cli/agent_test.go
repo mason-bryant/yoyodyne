@@ -8,6 +8,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -386,7 +387,7 @@ func TestAConversationLeaseThatCannotBeAskedIsReportedAsAProblem(t *testing.T) {
 		t.Fatalf("NewConversationStore() error = %v", err)
 	}
 	architectIdentity := runstate.ConversationIdentity{Agent: "architect", Role: domain.RoleArchitect}
-	inUse, problem := conversationInUse(store, architectIdentity)
+	inUse, problem := readmodel.InFlight(store, architectIdentity)
 	if inUse || problem != "" {
 		t.Fatalf("a free conversation reported in use = %v, problem = %q", inUse, problem)
 	}
@@ -398,14 +399,14 @@ func TestAConversationLeaseThatCannotBeAskedIsReportedAsAProblem(t *testing.T) {
 		t.Fatalf("Hold() error = %v", err)
 	}
 	defer lease.Release()
-	if inUse, problem = conversationInUse(store, architectIdentity); !inUse || problem != "" {
+	if inUse, problem = readmodel.InFlight(store, architectIdentity); !inUse || problem != "" {
 		t.Fatalf("a held conversation reported in use = %v, problem = %q", inUse, problem)
 	}
 
 	// A role whose name could never be a path is the failure to ask: it is
 	// refused before any lock is taken, so it is a problem to report rather than
 	// a conversation to claim.
-	if inUse, problem = conversationInUse(store, runstate.ConversationIdentity{Agent: "Not An Agent", Role: domain.RoleArchitect}); inUse || problem == "" {
+	if inUse, problem = readmodel.InFlight(store, runstate.ConversationIdentity{Agent: "Not An Agent", Role: domain.RoleArchitect}); inUse || problem == "" {
 		t.Fatalf("an unaskable lease reported in use = %v, problem = %q", inUse, problem)
 	}
 }
@@ -425,7 +426,7 @@ func TestAskingWhetherAConversationIsInUseDoesNotKeepIt(t *testing.T) {
 	}
 	identity := runstate.ConversationIdentity{Agent: "architect", Role: domain.RoleArchitect}
 	for ask := 1; ask <= 3; ask++ {
-		if inUse, problem := conversationInUse(store, identity); inUse || problem != "" {
+		if inUse, problem := readmodel.InFlight(store, identity); inUse || problem != "" {
 			t.Fatalf("ask %d reported in use = %v, problem = %q, want a conversation nobody holds", ask, inUse, problem)
 		}
 	}

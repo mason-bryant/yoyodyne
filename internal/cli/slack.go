@@ -27,6 +27,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
@@ -97,12 +98,14 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 // worktree and no pipeline, and a process an operator leaves running must not
 // refuse to start because of what a run would need.
 //
-// It does need the tracker, and only for one question: how much admitted work is
-// ready. That is what separates a line waiting on somebody from an honestly quiet
-// one, and it is asked at most once per heartbeat and never on the path of
-// anything. A tracker that will not answer costs the sink that one message and
-// nothing else — it is said in the sink's own log and asked again later — so this
-// is still a process that starts wherever the operator runs it.
+// It does need the tracker, for what the heartbeat says: how much admitted work
+// is ready, which separates a line waiting on somebody from an honestly quiet
+// one, and the queue itself, which is where the four lines get the refusal
+// standing against each item. Both are asked at most once per heartbeat and
+// never on the path of anything. A tracker that will not answer costs the sink
+// that one message and nothing else — it is said in the sink's own log, or in
+// the line that could not be read, and asked again later — so this is still a
+// process that starts wherever the operator runs it.
 func buildSlackSink(configPath string, poll, heartbeat time.Duration, version string, stdout io.Writer) (*slack.Sink, string, error) {
 	resolved, err := loadConfiguration(configPath)
 	if err != nil {
@@ -243,6 +246,24 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 				timeout:    chatTrackerTimeout,
 			},
 			Heartbeat: heartbeat,
+			// The four lines, from the same derivation `yoyo status` prints them
+			// from. They are said with the heartbeat because that message is the one
+			// somebody reads at three in the morning, and what it said before was
+			// that choosing had stopped and nothing whatever about what the machine
+			// was doing instead. Every store here is one this sink already holds,
+			// wired into the read model rather than read a second way.
+			Standing: &readmodel.Sources{
+				Runs:           runs,
+				Conversations:  conversations,
+				Tracker:        tracker,
+				Directives:     directives,
+				Amendments:     proposals,
+				OperatorHolds:  holds,
+				IntakeHolds:    intake,
+				Sessions:       watch,
+				Capacity:       resolved.Config.Execution.MaxConcurrentDevelopers,
+				TrackerTimeout: chatTrackerTimeout,
+			},
 			// What became of a directive somebody asked for in a thread, said in
 			// that thread and addressed to them. The same records the inbound half
 			// writes and reads: the product's directives, and the sink's own note of

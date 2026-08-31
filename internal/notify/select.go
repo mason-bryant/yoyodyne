@@ -302,6 +302,14 @@ type Line struct {
 	// separates a line waiting on somebody from an honestly quiet one, so a line
 	// with nothing ready is never said at all.
 	Ready int
+	// Standing is where the harness stands, in the four lines the read model
+	// renders. It is said with the line because the two answer one question at
+	// different grains: the sentence says the choosing has stopped and for how
+	// long, and the four lines say what is running, what is working, what will not
+	// start and what is waiting on somebody — which is the whole of what an
+	// operator reading a stalled channel at three in the morning has to
+	// reconstruct otherwise.
+	Standing string
 }
 
 // FromLine says that nothing is being chosen while work is ready to be chosen.
@@ -314,9 +322,10 @@ type Line struct {
 // point is that it is being looked at again.
 func FromLine(line Line, at time.Time) Notification {
 	return productNotification(KindLineWaiting, at, Detail{
-		Stopped: strings.TrimSpace(line.Stopped),
-		Since:   line.Since,
-		Ready:   line.Ready,
+		Stopped:  strings.TrimSpace(line.Stopped),
+		Since:    line.Since,
+		Ready:    line.Ready,
+		Standing: strings.TrimRight(line.Standing, "\n"),
 	})
 }
 

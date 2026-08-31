@@ -22,6 +22,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -326,7 +327,11 @@ func readAgents(parts components) ([]agentReport, error) {
 		default:
 			report.Problem = err.Error()
 		}
-		inUse, problem := conversationInUse(store, identity)
+		// Whether a turn is in flight is asked of the read model rather than
+		// answered again here: the standing status counts the same conversations
+		// from the same lease, and two surfaces asking that question their own way
+		// is how they come to give an operator two answers.
+		inUse, problem := readmodel.InFlight(store, identity)
 		report.InUse = inUse
 		if problem != "" {
 			report.Problem = appendProblem(report.Problem, problem)
@@ -334,37 +339,6 @@ func readAgents(parts components) ([]agentReport, error) {
 		reports = append(reports, report)
 	}
 	return reports, nil
-}
-
-// conversationInUse reports whether another process is holding this role's
-// conversation, and why the question could not be answered when it could not.
-// It answers by taking the same lease a conversation would and letting it go
-// again immediately: an advisory lock is the only thing that actually decides
-// this, so asking it is the only answer that is not a guess.
-//
-// A failure to ask is not an answer. Reporting one as "in use" would tell the
-// operator that every agent at once was mid-conversation whenever the state
-// directory could not be opened, which is both wrong and the opposite of what
-// they would do about it.
-func conversationInUse(store *runstate.ConversationStore, identity runstate.ConversationIdentity) (bool, string) {
-	lease, err := store.Hold(identity)
-	switch {
-	case errors.Is(err, runstate.ErrConversationHeld):
-		return true, ""
-	case err != nil:
-		return false, err.Error()
-	}
-	// A release that could not be taken is another failure to ask, not an
-	// answer. The lease drops its lock before it closes, so what is left is a
-	// descriptor rather than a held conversation — but a release this process
-	// could not complete is exactly the state in which its own answers about
-	// this conversation stop being trustworthy, and a listing that keeps asking
-	// would report every later question against it as somebody else's
-	// conversation. Saying so is what tells the operator the difference.
-	if err := lease.Release(); err != nil {
-		return false, err.Error()
-	}
-	return false, ""
 }
 
 // readRunsInFlight reports the runs that have not finished, which is what the

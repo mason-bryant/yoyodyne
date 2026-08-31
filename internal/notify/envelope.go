@@ -577,6 +577,14 @@ type Detail struct {
 	Stopped string    `json:"stopped,omitempty"`
 	Since   time.Time `json:"since,omitempty"`
 	Ready   int       `json:"ready,omitempty"`
+	// Standing is where the harness stands, already rendered into the four lines
+	// the read model produces, and read by KindLineWaiting. It is carried as the
+	// rendered text rather than as the state it came from, because the format is
+	// the contract: the same four lines are printed at a terminal and said here,
+	// and a second rendering of one standing is the disagreement one derivation
+	// exists to prevent. Absent means the surface was assembled without a way to
+	// read it, which is stated rather than left as a blank.
+	Standing string `json:"standing,omitempty"`
 	// Accumulated is how many events one topic gathered while nothing was posting
 	// them, read by KindCatchUpDigest. It is the whole of what the digest claims:
 	// how much there is, and therefore how much of the thread's narrative is in
