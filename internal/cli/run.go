@@ -445,6 +445,40 @@ func reconcilerFrom(parts components) orchestrator.Reconciler {
 	}
 }
 
+// supervisionLoopFrom wires one pass of the management loop over parts that
+// are already built.
+//
+// It is given no voice, for the same reason reconciliation is given no backend:
+// recovering from a lost process is a question about recorded evidence, and
+// never a reason to put something in front of a role that nobody asked for. So
+// this pass reclaims the requests whose carrier is gone, settles the answers a
+// dead process recorded and never got to close, ends the ones that ran out of
+// attempts, and delivers nothing. Delivering is the wakeup half of the loop and
+// arrives with the thing that wakes roles.
+func supervisionLoopFrom(parts components) (orchestrator.SupervisionLoop, error) {
+	store, err := runstate.NewSupervisionStore(parts.stateRoot, parts.config.Product.ID)
+	if err != nil {
+		return orchestrator.SupervisionLoop{}, err
+	}
+	return orchestrator.SupervisionLoop{
+		Store: store,
+		// A request that ran out of attempts reaches the operator through the same
+		// pile every role's reports land in.
+		Reports:      parts.reports,
+		Holder:       supervisionHolder(),
+		ProductID:    parts.config.Product.ID,
+		RepositoryID: string(parts.config.Product.RepositoryID),
+	}, nil
+}
+
+// supervisionHolder names this process on every attempt it opens. The process
+// identifier is what makes it useful: a later pass reading an attempt nobody
+// holds says which process was carrying it, and an operator can tell a harness
+// that is still running from one that is not.
+func supervisionHolder() string {
+	return fmt.Sprintf("yoyo pid %d", os.Getpid())
+}
+
 // agentModel returns the configured selector for a role. Configuration
 // validation already requires one for every agent, so an empty result means the
 // role is not configured at all and the pipeline refuses the run.
