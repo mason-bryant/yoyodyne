@@ -630,6 +630,17 @@ fi
 # Follow the newest run or conversation, moving on when a later one appears.
 # Each tail is killed only after a successor exists, so no events are dropped in
 # between.
+#
+# Why this is still here rather than retired in favour of the binary, checked on
+# 2026-08-31: `yoyo status` cannot follow anything at all, let alone follow the
+# latest. The fold that was to give it `--follow` (yoyodyne-ifd.63) did not land
+# -- the item is blocked, having been stopped after its permitted repair
+# attempts, and its branch is not an ancestor of this one. `yoyo status` takes
+# `--config`, `--failed`, `--limit`, and `--json` and nothing else, and its own
+# source still refers a reader here to follow a live run. So there is nowhere to
+# send this capability, and the fix for an interrupted `-L` printing on is the
+# one below. Retiring `-L` becomes the right change on the day the fold lands,
+# and not before.
 follow_pgid=""
 
 # Start printing the current target in the background, so a later run can be
@@ -666,6 +677,15 @@ stop_follow() {
 # none of them leaves the pipeline behind. The exit status is the conventional
 # one for the signal, so whatever started this can still tell an interrupt from
 # a failure.
+#
+# Installing an EXIT handler replaces any earlier one, and there is no earlier
+# one to replace: the only other trap in this file is the RETURN trap inside
+# cost_report that removes that report's two temporary files, and a RETURN trap
+# on a function is a different trap from EXIT and is not touched by these. Nor
+# could the two ever both be live -- the cost report exits the script when it is
+# done, well above here, so a run that reaches this line never ran cost_report
+# and has no temporary files to leave behind. Anything added above that does
+# want an EXIT trap has to be composed with this one rather than set beside it.
 trap 'stop_follow; exit 130' INT
 trap 'stop_follow; exit 143' TERM
 trap 'stop_follow; exit 129' HUP

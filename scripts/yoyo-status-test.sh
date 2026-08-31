@@ -562,6 +562,27 @@ else
   esac
 fi
 
+step "the cost report still removes the temporary files it works in"
+# Following installs an EXIT trap, and an EXIT trap replaces any earlier one.
+# The only other trap in the tool is the RETURN trap that removes this report's
+# two temporary files, so this is the claim that would break if those two were
+# ever confused -- and a claim is worth more here than the argument that they
+# cannot both be live. The report is given a temporary directory of its own,
+# because a shared one holds files this did not put there and could not count.
+if command -v jq >/dev/null 2>&1; then
+  cost_tmp="$scratch/cost-tmp"
+  mkdir -p "$cost_tmp"
+  TMPDIR="$cost_tmp" "$status" --product demo -c >/dev/null 2>&1 || true
+  left="$(find "$cost_tmp" -name 'yoyo-status.*' | wc -l | tr -d ' ')"
+  if [ "$left" = "0" ]; then
+    pass "the report leaves no temporary file behind"
+  else
+    fail "the report leaves no temporary file behind -- $left left in $cost_tmp"
+  fi
+else
+  skip "the report's temporary files: this environment has no jq, so the report never makes any"
+fi
+
 step "an interrupted -L leaves nothing printing behind it"
 # The reported bug: -L prints from a background pipeline so it can switch to a
 # later run, and a background pipeline in a shell without job control ignores an
