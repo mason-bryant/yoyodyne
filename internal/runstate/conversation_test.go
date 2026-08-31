@@ -31,6 +31,13 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	conversation.ProviderSessionID = "session-1"
 	conversation.ProviderModel = "opus"
 	conversation.ProviderResolvedModel = "claude-opus-5-20260514"
+	// The account the turn was answered on and the configuration in force while it
+	// was travel with the backend and the selectors, because those four together
+	// are what the durable-state-is-provider-independent invariant asks of a
+	// provider invocation — and a conversation turn is one. Under a pool the alias
+	// is the only thing that says whose subscription paid for it.
+	conversation.AccountAlias = "research"
+	conversation.ConfigRevision = "cfg-0123456789ab"
 	conversation.Turns = 1
 	conversation.PendingTrackerResults = "- t1.1: closed yoyodyne-2\n"
 	// What the agent is reasoning from travels with the record, because the
@@ -363,6 +370,20 @@ func TestConversationValidateRejectsIncoherentRecords(t *testing.T) {
 			name:   "backwards clock",
 			mutate: func(c *Conversation) { c.UpdatedAt = c.StartedAt.Add(-time.Second) },
 			want:   "updated_at cannot be before started_at",
+		},
+		{
+			// A conversation may name no account, because one recorded before the
+			// harness pinned them names none. What it may not do is name an account
+			// nothing could have configured, which reads as evidence about whose
+			// subscription answered it and is not.
+			name:   "an account nothing configured",
+			mutate: func(c *Conversation) { c.AccountAlias = "Someone Else's" },
+			want:   "account_alias is not an account alias",
+		},
+		{
+			name:   "a revision of no digest",
+			mutate: func(c *Conversation) { c.ConfigRevision = "yesterday's" },
+			want:   "config_revision is not a configuration revision",
 		},
 		{
 			// A picture may predate the conversation that carries it, because it

@@ -207,6 +207,67 @@ func TestAnUnansweredRoundIsStillSpentAndSaysWhy(t *testing.T) {
 	}
 }
 
+// An answering round is a provider invocation with no run and no conversation
+// behind it, so the exchange record is the only place what served it can be
+// pinned. The durable-state-is-provider-independent invariant asks for the
+// backend, the model, the account alias, and the configuration revision on every
+// one, and it asks it of a round the provider failed exactly as of one that
+// answered: the round was still answered on somebody's account and still charged
+// for. A record naming only the answering session attributes nothing once that
+// session is gone — and under a pool the account is what says whose subscription
+// paid for the round.
+func TestEveryRoundPinsTheProviderThatServedIt(t *testing.T) {
+	t.Parallel()
+
+	store := &memoryExchanges{}
+	// The first round answers, the second is one the provider never answered.
+	voice := &scriptedVoice{
+		answers: []string{"More than the ordering assumes."},
+		errs:    []error{nil, errors.New("the provider went away")},
+	}
+	conductor := newTestConductor(store, voice, &memoryReports{}, 10)
+	asker := Party{Role: domain.RoleProductManager, Agent: "product-manager"}
+
+	opened, err := conductor.Put(context.Background(), Ask{
+		Role: domain.RoleArchitect, Question: "what does this goal cost?",
+	}, asker)
+	if err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+	if _, err := conductor.Put(context.Background(), Ask{
+		Role: domain.RoleArchitect, Exchange: opened.ID, Question: "how much more?",
+	}, asker); err == nil {
+		t.Fatal("Put() reported no problem for a round nobody answered")
+	}
+
+	// Read back from the store rather than from what Put returned, because what
+	// the invariant is about is the durable record.
+	recorded, err := store.Load(opened.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.Spent() != 2 {
+		t.Fatalf("rounds = %d, want the answered one and the failed one", recorded.Spent())
+	}
+	for i, round := range recorded.Rounds {
+		if round.Backend != served.Backend || round.Model != served.Model {
+			t.Errorf("rounds[%d] = %#v, want the backend and selector that served it", i, round)
+		}
+		if round.AccountAlias != served.AccountAlias || round.ConfigRevision != served.ConfigRevision {
+			t.Errorf("rounds[%d] = %#v, want the account and configuration that served it", i, round)
+		}
+	}
+	// The resolved model is the only real evidence where the selector was a
+	// floating alias, and the failed round has none because nothing ever reported
+	// serving it.
+	if recorded.Rounds[0].ResolvedModel != served.ResolvedModel {
+		t.Errorf("answered round resolved model = %q, want %q", recorded.Rounds[0].ResolvedModel, served.ResolvedModel)
+	}
+	if err := recorded.Validate(); err != nil {
+		t.Errorf("a pinned exchange does not satisfy the durable contract: %v", err)
+	}
+}
+
 // Who is in an exchange is fixed when it opens. A thread a third role picked up
 // would be two conversations wearing one identifier.
 func TestAnExchangeCannotChangeWhoIsInIt(t *testing.T) {
@@ -325,17 +386,36 @@ func (s *scriptedVoice) Answer(_ context.Context, question Question) (Spoken, er
 	s.sessions = append(s.sessions, question.SessionID)
 	s.roundsWhenAsked = append(s.roundsWhenAsked, question.Round)
 	if index < len(s.errs) && s.errs[index] != nil {
-		return Spoken{Agent: "architect"}, s.errs[index]
+		// What served the invocation is reported whether or not it produced an
+		// answer, exactly as a real voice reports it: the round was answered on an
+		// account under a configuration either way.
+		return Spoken{Agent: "architect", Backend: served.Backend, Model: served.Model,
+			AccountAlias: served.AccountAlias, ConfigRevision: served.ConfigRevision}, s.errs[index]
 	}
 	if index >= len(s.answers) {
 		return Spoken{}, errors.New("unexpected exchange round")
 	}
 	return Spoken{
-		Answer:    s.answers[index],
-		Agent:     "architect",
-		SessionID: "session-1",
-		CostUSD:   0.25,
+		Answer:         s.answers[index],
+		Agent:          "architect",
+		SessionID:      "session-1",
+		CostUSD:        0.25,
+		Backend:        served.Backend,
+		Model:          served.Model,
+		ResolvedModel:  served.ResolvedModel,
+		AccountAlias:   served.AccountAlias,
+		ConfigRevision: served.ConfigRevision,
 	}, nil
+}
+
+// served is what the scripted voice says answered it, in the shape the durable
+// record pins.
+var served = Spoken{
+	Backend:        domain.BackendClaudeCode,
+	Model:          "opus-architect",
+	ResolvedModel:  "claude-opus-5-20260514",
+	AccountAlias:   "research",
+	ConfigRevision: "cfg-0123456789ab",
 }
 
 type memoryReports struct {

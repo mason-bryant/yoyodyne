@@ -75,7 +75,34 @@ type Conversation struct {
 	// floating family alias makes the resolved identifier the only real record.
 	ProviderModel         string `json:"provider_model,omitempty"`
 	ProviderResolvedModel string `json:"provider_resolved_model,omitempty"`
-	Turns                 int    `json:"turns"`
+	// AccountAlias is the provider account the turn this record last took was
+	// answered on, and ConfigRevision the configuration in force while it was.
+	// They sit beside the backend and the model selectors and are kept exactly as
+	// those are: rewritten by each completed turn, so the record says what served
+	// the conversation as it now stands. Under a pool that stops being
+	// bookkeeping — the account answering this conversation is the agent's own
+	// rather than the machine's default, so the alias is the only thing on the
+	// record that says whose subscription is paying for it.
+	//
+	// What pins every turn rather than the last one is the cost log, which takes a
+	// line per provider invocation carrying the account and the revision that
+	// served it, and refuses a line that names either. So a conversation resumed
+	// after a configuration edit or an account move still has each earlier turn's
+	// attribution, on that turn's own line, and this record is not the only copy
+	// of any of it.
+	//
+	// That is the whole of why this is one pair and an exchange's is one per
+	// round. An exchange record holds its rounds, so a round is a thing already in
+	// the record to pin; a conversation record holds no turns at all — it is a
+	// summary every turn rewrites in place — and a per-turn list inside it would
+	// be an unbounded array in a file that is rewritten on every turn, kept for a
+	// fact the cost log already keeps correctly.
+	//
+	// Both are empty on a conversation recorded before the harness wrote them
+	// down, and on one whose first turn has not completed.
+	AccountAlias   string `json:"account_alias,omitempty"`
+	ConfigRevision string `json:"config_revision,omitempty"`
+	Turns          int    `json:"turns"`
 	// PendingTrackerResults is what an agent did to the work tracker and has not
 	// been told the result of yet, already rendered as the text its next turn is
 	// given. It is durable for the same reason the provider session is: the agent
@@ -247,6 +274,18 @@ func (c Conversation) Validate() error {
 	// turn without one would leave the conversation unauditable.
 	if c.Turns > 0 && c.ProviderModel == "" {
 		problems = append(problems, errors.New("a recorded turn requires the requested model selector"))
+	}
+	// The account and the configuration are absent from every record written
+	// before they were carried, so what is checked is the shape of one that is
+	// there rather than that it is there at all: a conversation recorded by an
+	// older build must still load, and a record naming an account or a
+	// configuration nothing could have produced says less than one naming neither,
+	// because it reads as evidence.
+	if c.AccountAlias != "" && !accountAliasPattern.MatchString(c.AccountAlias) {
+		problems = append(problems, errors.New("account_alias is not an account alias"))
+	}
+	if c.ConfigRevision != "" && !configRevisionPattern.MatchString(c.ConfigRevision) {
+		problems = append(problems, errors.New("config_revision is not a configuration revision"))
 	}
 	if len(c.PendingTrackerResults) > MaxPendingTrackerResultBytes {
 		problems = append(problems, fmt.Errorf("pending tracker results are %d bytes, limit is %d",

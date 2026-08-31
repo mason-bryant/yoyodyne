@@ -967,6 +967,15 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	}
 	s.state.ProviderModel = s.options.Model
 	s.state.ProviderResolvedModel = result.ResolvedModel
+	// And what served it besides the model: the account the turn was answered on
+	// and the configuration in force while it was. They are rewritten with the
+	// selectors above, so the record says what is serving this conversation now.
+	// What pins each turn rather than the last one is the line this turn already
+	// put in the cost log, which carries the same account and revision and is
+	// refused without them — so an earlier turn's attribution survives a
+	// configuration edit or an account move even though this pair does not.
+	s.state.AccountAlias = s.options.AccountAlias
+	s.state.ConfigRevision = s.options.ConfigRevision
 	s.state.Turns++
 	// The activity and the results were carried into the prompt this turn
 	// answered, so neither is pending any more. A turn that failed keeps them,

@@ -381,7 +381,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// the availability below is asked of that same account: a check made against
 	// the machine's own login would report a conversation ready to open on an
 	// account nobody had signed in to.
-	account, err := cfg.Endpoint(parts.stateRoot, cfg.AgentAccountAlias(name))
+	account, err := conversationAccount(cfg, parts.stateRoot, name)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve the account %s agent %s runs under: %w", role, name, err)
 	}
@@ -546,6 +546,21 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		return nil, nil, errors.Join(err, lease.Release())
 	}
 	return session, lease, nil
+}
+
+// conversationAccount picks the provider account one agent's conversation is
+// held under, and is the one place that decision is made. Three things are told
+// the answer and all three have to be told the same one: the provider, which
+// authenticates in that account's own home; the conversation's durable record,
+// which says whose subscription is serving it; and every turn's cost line, which
+// is what the money is attributed by.
+//
+// It is the agent's own account rather than a configuration-wide one, because
+// under a pool there is no configuration-wide account to name — the answering
+// agent's is the only alias that is true of the conversation. It is the same
+// resolution the answering half of an exchange makes for the same reason.
+func conversationAccount(cfg config.Config, stateRoot, agentName string) (config.AccountEndpoint, error) {
+	return cfg.Endpoint(stateRoot, cfg.AgentAccountAlias(agentName))
 }
 
 // conversationAgent picks the agent a conversation is actually held with, and

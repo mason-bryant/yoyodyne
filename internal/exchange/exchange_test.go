@@ -155,6 +155,19 @@ func TestAnExchangeRecordIsRefusedWhenItContradictsItself(t *testing.T) {
 			e.Rounds = []Round{{Number: 1, Question: "a?", AskedAt: at}, {Number: 2, Question: "b?", AskedAt: at}}
 		},
 		"an outcome with no moment": func(e *Exchange) { e.Outcome = OutcomeResolved },
+		// A round may name nothing that served it, because rounds recorded before
+		// the harness pinned them name nothing. What it may not do is name an
+		// account, a backend, or a configuration nothing could have produced: such a
+		// round reads as evidence about who paid for it and is not.
+		"an account nothing configured": func(e *Exchange) {
+			e.Rounds = []Round{{Number: 1, Question: "a?", AskedAt: at, AccountAlias: "Someone Else's"}}
+		},
+		"a revision of no digest": func(e *Exchange) {
+			e.Rounds = []Round{{Number: 1, Question: "a?", AskedAt: at, ConfigRevision: "yesterday's"}}
+		},
+		"a backend nothing runs": func(e *Exchange) {
+			e.Rounds = []Round{{Number: 1, Question: "a?", AskedAt: at, Backend: "carrier pigeon"}}
+		},
 		"unresolved but settled": func(e *Exchange) {
 			e.Outcome = OutcomeUnresolved
 			e.ClosedAt = &closed

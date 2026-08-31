@@ -243,7 +243,22 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 		AccountAlias:     account.Alias,
 		AccountConfigDir: account.Directory,
 	})
-	spoken := exchange.Spoken{Agent: name, SessionID: result.SessionID, CostUSD: result.CostUSD}
+	// What served the round travels back with what it cost, so the exchange record
+	// pins the invocation to a backend, a model, an account, and a configuration
+	// rather than to a provider session that outlives none of them. The alias is
+	// the one the round was actually answered under, which under a pool is the
+	// answering agent's own rather than a configuration-wide account there is none
+	// of — the same alias its cost line is charged to.
+	spoken := exchange.Spoken{
+		Agent:          name,
+		SessionID:      result.SessionID,
+		CostUSD:        result.CostUSD,
+		Backend:        agent.Backend,
+		Model:          agent.Model,
+		ResolvedModel:  result.ResolvedModel,
+		AccountAlias:   account.Alias,
+		ConfigRevision: v.config.Revision(),
+	}
 	// The refusal is recorded before the round is failed, because it is a fact
 	// about the whole product rather than about this exchange. Failing to record
 	// it never replaces the refusal itself in what the round reports: the round is

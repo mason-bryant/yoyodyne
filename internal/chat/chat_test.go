@@ -157,6 +157,122 @@ func TestSendGivesTheProductManagerNoToolsAndBriefsItOnce(t *testing.T) {
 	}
 }
 
+// A conversation turn is a provider invocation, so the durable record of it says
+// what served it: the backend, the requested and resolved models, the provider
+// account it was answered on, and the configuration in force while it was. That
+// is what the durable-state-is-provider-independent invariant asks of every
+// provider invocation, and it is what makes the record still attributable once
+// the provider session behind it is gone. Under a pool it stops being
+// bookkeeping — the account answering this conversation is the agent's own
+// rather than the machine's default, and the alias is the only thing that says
+// whose subscription paid for the turn.
+func TestATurnPinsTheAccountAndConfigurationThatServedIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Noted."},
+	}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.AccountAlias = "research"
+	options.ConfigRevision = "cfg-0123456789ab"
+	if _, err := openTestSession(t, options).Send(context.Background(), "What is missing from the brief?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// A second store over the same root is what anything reading this afterwards
+	// sees, which is the only copy that matters.
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{
+		Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.AccountAlias != "research" || recorded.ConfigRevision != "cfg-0123456789ab" {
+		t.Fatalf("recorded attribution = %#v, want the account and configuration that served the turn", recorded)
+	}
+	if recorded.Backend != domain.BackendClaudeCode || recorded.ProviderModel != "opus" ||
+		recorded.ProviderResolvedModel != "claude-opus-5-20260514" {
+		t.Fatalf("recorded evidence = %#v, want the backend and the models that served the turn", recorded)
+	}
+}
+
+// The conversation record carries the turn it last took, so a conversation that
+// spans an account move keeps only the newer attribution on it. What pins every
+// turn is the cost log: a line per invocation, carrying the account and the
+// revision that served that one, refused without either. So the earlier turn's
+// attribution is still durable after the move, on its own line, and the record
+// is not the only copy of it.
+//
+// A configuration edit or an account move mid-conversation is a second process
+// resuming the record with different options, which is what this drives: two
+// turns, two accounts, two revisions, one conversation.
+func TestAConversationSpanningAnAccountMovePinsEachTurnWhereItsCostIs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	log := &recordingSpendLog{}
+
+	before := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5", FinalText: "Noted.", CostUSD: 0.02, CostReported: true},
+	}})
+	before.Store = newTestStore(t, root)
+	before.Spend = log
+	before.AccountAlias = "personal"
+	before.ConfigRevision = "cfg-0123456789ab"
+	if _, err := openTestSession(t, before).Send(context.Background(), "What is missing from the brief?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// The operator moves the agent to another account and edits the
+	// configuration; a later process resumes the same conversation under both.
+	after := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5", FinalText: "Two, then.", CostUSD: 0.03, CostReported: true},
+	}})
+	after.Store = newTestStore(t, root)
+	after.Spend = log
+	after.AccountAlias = "research"
+	after.ConfigRevision = "cfg-fedcba987654"
+	resumed := openTestSession(t, after)
+	if !resumed.Resumed() {
+		t.Fatal("the second process started a new conversation instead of resuming the recorded one")
+	}
+	if _, err := resumed.Send(context.Background(), "Name two, then."); err != nil {
+		t.Fatalf("resumed Send() error = %v", err)
+	}
+
+	// Each turn is pinned where its cost is, to the account and configuration
+	// that served that turn rather than to whichever served the last one.
+	if len(log.lines) != 2 {
+		t.Fatalf("recorded %d line(s), want one per turn: %#v", len(log.lines), log.lines)
+	}
+	for index, want := range []struct{ alias, revision string }{
+		{alias: "personal", revision: "cfg-0123456789ab"},
+		{alias: "research", revision: "cfg-fedcba987654"},
+	} {
+		line := log.lines[index]
+		if line.AccountAlias != want.alias || line.ConfigRevision != want.revision {
+			t.Errorf("lines[%d] = %#v, want account %q under %q", index, line, want.alias, want.revision)
+		}
+		// The line is refused without either, so this is the contract rather than
+		// a convention the next writer could drop.
+		if err := line.Validate(); err != nil {
+			t.Errorf("lines[%d] does not satisfy the durable contract: %v", index, err)
+		}
+	}
+
+	// And the record says what is serving the conversation now, which is the
+	// account and configuration the move left it on.
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{
+		Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.Turns != 2 || recorded.AccountAlias != "research" || recorded.ConfigRevision != "cfg-fedcba987654" {
+		t.Fatalf("recorded conversation = %#v, want the account and configuration the last turn ran under", recorded)
+	}
+}
+
 func TestConversationResumesAcrossProcessRestarts(t *testing.T) {
 	t.Parallel()
 
