@@ -46,6 +46,10 @@ revisions:
       by: architect
       at: 2026-08-23T18:42:25Z
       reason: the Codex backend subsection now records the operator's 2026-08-22 parking decision via the claude-only-v1-execution record, and the artifact model points at the artifact-contract specification as the normative home of the identity and shape rules, per approved amendment c84e23a5
+    - action: amended
+      by: architect
+      at: 2026-08-31T15:58:12Z
+      reason: the fixed-roles statement points at the authority-by-capability decision record and the configurable-workflows design, which refine it - authority semantics stay in Go while composition becomes protected operator-activated configuration only after behavioral parity - per the 2026-08-31 promotion of the configurable-workflows brief (yoyodyne-ifd.210)
 approvals:
     - revision: 0
       by: operator
@@ -206,7 +210,7 @@ The local Claude Code or Codex process is not the agent's durable identity. Each
 - Returns a structured approve-or-repair verdict with actionable findings.
 - Does not integrate the change directly.
 
-The set of roles is fixed in the harness. What a project configures is which agents fill those roles, how many, and each one's backend, model selector, and persona. Role authority and per-role tool posture — including the reviewer running with no tools — are derived from the role in code and are not configurable: authority a project could declare is authority a project could widen, and the ownership model rests on it. Adding or redefining a role is a change to the harness, not to a configuration file. Role and backend combinations are validated against the effective configuration before work is claimed, and an unknown role name must be refused at load. The `Capabilities` negotiation in the backend boundary is untouched by this: what a backend can do is a genuinely varying fact.
+The set of roles is fixed in the harness. What a project configures is which agents fill those roles, how many, and each one's backend, model selector, and persona. Role authority and per-role tool posture — including the reviewer running with no tools — are derived from the role in code and are not configurable: authority a project could declare is authority a project could widen, and the ownership model rests on it. Adding or redefining a role is a change to the harness, not to a configuration file. How that fixture becomes capability-based - authority semantics staying in Go while composition becomes protected operator-activated configuration after behavioral parity - is governed by [authority-by-capability](../decisions/authority-by-capability.md) and the [configurable-workflows](configurable-workflows.md) design. Role and backend combinations are validated against the effective configuration before work is claimed, and an unknown role name must be refused at load. The `Capabilities` negotiation in the backend boundary is untouched by this: what a backend can do is a genuinely varying fact.
 
 ### Management and supervision
 
