@@ -296,7 +296,11 @@ func TestValidateAcceptsEveryHarnessRole(t *testing.T) {
 	}
 }
 
-func TestValidateAllowsCodexOnlyForThinRoles(t *testing.T) {
+// Codex is the developer's backend and nothing else's. A role it does not serve
+// is refused for the role; the reviewer, which it serves and cannot hold to the
+// posture the role requires, is refused for the posture — and the difference is
+// the whole of what the operator has to read to know which one to fix.
+func TestValidateAllowsCodexOnlyForTheDeveloper(t *testing.T) {
 	t.Parallel()
 
 	input := strings.Replace(validBootstrapConfig, "backend: claude-code", "backend: codex", 1)
@@ -304,10 +308,23 @@ func TestValidateAllowsCodexOnlyForThinRoles(t *testing.T) {
 		t.Fatalf("Decode() developer Codex error = %v", err)
 	}
 
-	input = strings.Replace(input, "role: developer", "role: architect", 1)
-	_, err := Decode(strings.NewReader(input))
+	architect := strings.Replace(input, "role: developer", "role: architect", 1)
+	_, err := Decode(strings.NewReader(architect))
 	if err == nil || !strings.Contains(err.Error(), "does not support role") {
 		t.Fatalf("Decode() architect Codex error = %v, want capability error", err)
+	}
+
+	// Codex's read-only sandbox stops writes and network and still lets the agent
+	// read the machine, so it cannot be held to the posture the reviewer needs.
+	// The refusal names the posture, because "does not support role" would send
+	// the operator looking for a role Codex does in fact serve.
+	reviewer := strings.Replace(input, "role: developer", "role: reviewer", 1)
+	_, err = Decode(strings.NewReader(reviewer))
+	if err == nil || !strings.Contains(err.Error(), `cannot hold the "read-only" tool posture`) {
+		t.Fatalf("Decode() reviewer Codex error = %v, want a posture refusal", err)
+	}
+	if strings.Contains(err.Error(), "does not support role") {
+		t.Fatalf("Decode() reviewer Codex error = %q, which blames the role for a posture it serves", err)
 	}
 }
 

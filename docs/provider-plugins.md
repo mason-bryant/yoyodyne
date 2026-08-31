@@ -2,8 +2,9 @@
 
 Yoyo runs agents through a provider — a coding CLI or a harness that speaks to a
 model API. Two are in the vocabulary: Claude Code, which serves every role and is
-the one this build ships an adapter for, and Codex, which serves the two roles
-inside a run and has no adapter yet.
+the one this build ships an adapter for, and Codex, which is the developer's
+alone — it has no adapter yet, and its sandbox cannot hold the tool posture every
+other role requires ([capability validation](#capability-validation)).
 
 A project can declare a provider of its own in its configuration, without forking
 this repository or rebuilding the binary. **What a declaration supplies is the
@@ -156,6 +157,14 @@ A provider that declares only `read-only` is refused for a developer agent, and
 one that declares only `worktree-write` is refused for a reviewer. Declaring a
 capability you do not have is how a role meant to have no tools gets a shell, so
 declare what is true.
+
+The built-ins are held to it too, and Codex is the worked example: it declares
+`worktree-write` and not `read-only`. Its read-only sandbox stops writes and
+network, and still lets the agent read the machine — and reading unrelated local
+files and sending them to a provider is the thing the `read-only` posture exists
+to prevent. So `codex` is refused for a `reviewer` agent, with the refusal naming
+the posture rather than the role, and the way to make that claim true again is an
+adapter that achieves the property rather than a line that asserts it.
 
 The posture is also what decides the session mode an invocation is made in, and
 the invocation the harness asks for carries none: nothing above the adapter names

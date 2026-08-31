@@ -673,11 +673,17 @@ func TestPipelineRefusesAutomaticIntegrationThatIsNotGatedByAReviewer(t *testing
 			want:    "automatic integration requires at least one reviewer agent",
 		},
 		{
-			name: "reviewer agent on an unsupported backend",
+			// Codex serves the reviewer role and cannot be held to the posture
+			// that role requires, so the configuration is refused before the
+			// pipeline's own gate is reached. Both refusals stop the run before
+			// anything is claimed, and this is the one an operator actually sees;
+			// the gate underneath it is held by
+			// TestValidateReviewPolicyRefusesAReviewerNothingCanLaunch.
+			name: "reviewer agent on a backend that cannot hold the reviewer's posture",
 			degrade: func(pipeline *Pipeline) {
 				pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.BackendCodex, Model: testReviewerModel, Instances: 1}
 			},
-			want: "requires a claude-code reviewer",
+			want: `backend "codex" cannot hold the "read-only" tool posture`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -695,6 +701,28 @@ func TestPipelineRefusesAutomaticIntegrationThatIsNotGatedByAReviewer(t *testing
 				t.Fatalf("ungated automatic integration started work: claimed = %t, requests = %d", tracker.claimed, len(provider.requests))
 			}
 		})
+	}
+}
+
+// The gate that refuses a reviewer this build cannot launch is held here rather
+// than through Run, because no built-in reaches it through a valid configuration
+// any more: the one backend with no compiled adapter is Codex, and it is now the
+// developer's alone, so configuration validation refuses a Codex reviewer first.
+// The gate is what stops an unlaunchable reviewer if that ever stops being true
+// — a built-in that ships without an adapter, or an adapter parked mid-build —
+// and an untested gate is one a later change removes without noticing.
+func TestValidateReviewPolicyRefusesAReviewerNothingCanLaunch(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.BackendCodex, Model: testReviewerModel, Instances: 1}
+
+	err := pipeline.validateReviewPolicy()
+	if err == nil || !strings.Contains(err.Error(), "requires a claude-code reviewer") {
+		t.Fatalf("validateReviewPolicy() error = %v, want a refusal naming the reviewer's backend", err)
 	}
 }
 
