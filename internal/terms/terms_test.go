@@ -173,6 +173,24 @@ func TestCheckMatchesTheStemAndNotTheWordOnly(t *testing.T) {
 	}
 }
 
+// A term held to a whole word does not report the ordinary word its stem begins.
+// `seamless` is not `seam`, and offering `seam`'s wording for it would tell an
+// author to name a boundary in a sentence that has none.
+func TestCheckDoesNotReportAnOrdinaryWordAStemBegins(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"docs/designs/one.md": "# One\n\nResuming is seamless, and it happens seamlessly.\n\nThe seam is here.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 1 || problems[0].Line != 5 {
+		t.Fatalf("Check() reported %v, want only the whole word on line 5", problems)
+	}
+}
+
 func TestCheckReportsARegisterEntryThatDefinesNothing(t *testing.T) {
 	t.Parallel()
 

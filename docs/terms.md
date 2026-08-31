@@ -28,29 +28,33 @@ Go source, and command output.
 | `docket` | the list of stopped runs waiting on the development manager | `yoyo reconcile` and `yoyo triage` output, and the product manager's context bundle; `internal/runstate`; [management and supervision](designs/management-and-supervision.md) |
 | `handback` | handing the work back to the developer that made it | `internal/orchestrator` and `internal/runstate` only — it names no command output and no document |
 | `heartbeat` | how often to repeat | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md) |
+| `in force` | active, or still applies | [the prose governing how invariants are amended](decisions/invariants/README.md), which only the architect changes |
 | `minute zero` | before development begins | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes |
 | `posture` | which tools a role may use — written as *tool posture* | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide |
 | `sink` | the process that posts to Slack | `yoyo slack` and `yoyo doctor` output; `internal/slack`; [the Slack reporting design](designs/slack-reporting-design.md) |
 | `steer` | direct the work, or change what is being worked on | `yoyo chat` help and the Slack thread replies; `internal/chat`; [the Slack reporting design](designs/slack-reporting-design.md) |
 
-Two entries are here because the word is still written somewhere no other role
-may edit. `minute zero` and `posture` are the sweep's decoration rather than
-mechanism names, and both survive only inside the text of an active
-architectural invariant. An invariant's wording is the architect's alone, so the
-entry is what keeps the word readable until she decides otherwise, and it is
-retired when she does.
+Three entries are here because the word is still written somewhere no other role
+may edit. `in force`, `minute zero` and `posture` are the sweep's decoration
+rather than mechanism names, and each survives only in the invariants home: two
+inside the text of an active invariant, and `in force` in the prose that governs
+how an invariant is amended. That wording is the architect's alone — the sweep
+says so outright — so the entry is what keeps the word readable until she
+decides otherwise, and each is retired when she does. The operator has objected
+to `in force` by name, so these three are the entries most worth losing.
 
 ## Replaced rather than registered
 
 These were decoration: each named nothing a reader can point at, and each had an
-ordinary word that said the same thing. They were replaced in the governed
-documents rather than given entries, and the check below refuses each of them
-coming back without one.
+ordinary word that said the same thing. Where one was written in a governed
+document it was replaced rather than given an entry; several were only ever in
+the tracker's own items, which are the product manager's to reword. Either way
+the check below refuses any of them coming back into a governed document without
+an entry.
 
 | Term | What replaced it |
 | --- | --- |
 | `cadence` | how often it repeats |
-| `in force` | active, or still applies |
 | `one pane of glass` | one window |
 | `re-arm` | repeat the merge request |
 | `seam` | the boundary, named for what attaches to what |

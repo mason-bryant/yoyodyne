@@ -7,7 +7,7 @@ and delivers them into the developer's context and the reviewer's evidence, so
 a constraint holds even where the work item never mentions it.
 
 **Owner.** The architect, and no other role at all. A developer or a reviewer
-that believes an invariant is wrong leaves it active and proposes the
+that believes an invariant is wrong leaves it in force and proposes the
 amendment in what it reports, for the architect to decide.
 
 **Editing by hand.** You may, and nothing refuses it. What `yoyo invariant`

@@ -72,6 +72,13 @@ type Coinage struct {
 	// than the term where a term inflects: `wedge` catches `wedged` and `starv`
 	// catches `starving`, the same way the sweep counted them.
 	Match string
+	// Whole holds the match to a whole word, for a term whose stem also begins an
+	// ordinary word that is not it. `seamless` is not `seam`, and reporting it
+	// with `seam`'s wording would tell an author to name a boundary in a sentence
+	// that has none. The cost is that a plural is missed, which is the cheaper of
+	// the two mistakes: a term this check misses a reviewer still catches, and a
+	// term it reports wrongly is a check people learn to argue with.
+	Whole bool
 	// PlainWords is the ordinary wording the audit recorded, carried here so a
 	// failure says what to write instead rather than only what is wrong.
 	PlainWords string
@@ -93,7 +100,7 @@ var Vocabulary = []Coinage{
 	{Term: "pane of glass", Match: "pane of glass", PlainWords: "one window"},
 	{Term: "posture", Match: "posture", PlainWords: "which tools a role may use"},
 	{Term: "re-arm", Match: "re-arm", PlainWords: "repeat the merge request"},
-	{Term: "seam", Match: "seam", PlainWords: "name the boundary instead — what attaches to what"},
+	{Term: "seam", Match: "seam", Whole: true, PlainWords: "name the boundary instead — what attaches to what"},
 	{Term: "sidecar", Match: "sidecar", PlainWords: "a separate directory outside the repository"},
 	{Term: "sink", Match: "sink", PlainWords: "the process that posts to Slack"},
 	{Term: "soak", Match: "soak", PlainWords: "a trial run kept alongside the old path for comparison"},
@@ -222,7 +229,11 @@ func Check(root string) ([]Problem, error) {
 	}
 	patterns := make([]*regexp.Regexp, len(Vocabulary))
 	for index, coinage := range Vocabulary {
-		patterns[index] = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(coinage.Match))
+		expression := `(?i)\b` + regexp.QuoteMeta(coinage.Match)
+		if coinage.Whole {
+			expression += `\b`
+		}
+		patterns[index] = regexp.MustCompile(expression)
 	}
 	for _, document := range documents {
 		content, err := read(filepath.Join(root, filepath.FromSlash(document)))
