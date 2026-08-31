@@ -185,15 +185,38 @@ millions. See
 [`docs/experiments/yoyodyne-ifd-84-prompt-prefix-stability.md`](experiments/yoyodyne-ifd-84-prompt-prefix-stability.md)
 for the numbers and what they did and did not establish.
 
+The line under it is that experiment's lesson made into an instrument. It says
+the same share once per phase:
+
+```text
+cache-read share by phase: development 98.4% over 296 invocation(s), review 0.5% over 534 invocation(s), repair 95.8% over 252 invocation(s)
+```
+
+The phases neither assemble their prompts alike nor cache alike. A developer
+session resumes and re-reads its own conversation on every turn; a review is one
+short invocation with no session to resume, whose only cacheable part is the
+prefix it shares with every other review. Summed, the larger decides the column,
+and a review reading nothing at all leaves that column at ninety-seven per cent —
+which is exactly what it did, unnoticed, for as long as the harness has kept
+usage. So a change to what one phase sends is read here, and the column above is
+what the harness costs altogether. Each phase carries the count of invocations
+behind its share for the reason every other line does, and a phase nothing
+measured is a dash rather than a nought; a window where nothing measured anything
+has no line at all, because the one above it already says so.
+[`docs/experiments/yoyodyne-ifd-205-review-prompt-cache.md`](experiments/yoyodyne-ifd-205-review-prompt-cache.md)
+is the finding it was built for.
+
 Naming an item says the same thing per run, under each attempt:
 
 ```text
 yoyodyne-ifd.1.5: $49.43 across 4 run(s)
   development $29.18 from 4 invocation(s), review $5.78 from 4, repair $14.47 from 3; waited 3h37m for the provider
   cache-read share 68.4% of 41905311 input token(s) over 11 invocation(s): 28663234 cached, 12984077 fresh, 258000 written to the cache; 194422 output
+  cache-read share by phase: development 71.2% over 4 invocation(s), review 0.0% over 4 invocation(s), repair 69.8% over 3 invocation(s)
   run-c25525d6…  started 2026-08-18T14:31:34Z [cancelled, developing] $26.93 from 3 invocation(s)
     development $22.84 from 1 invocation(s), review $0.96 from 1, repair $3.13 from 1; waited 3h37m for the provider
     cache-read share 71.0% of 19218662 input token(s) over 3 invocation(s): 13645250 cached, 5461412 fresh, 112000 written to the cache; 88104 output
+    cache-read share by phase: development 74.1% over 1 invocation(s), review 0.0% over 1 invocation(s), repair 66.3% over 1 invocation(s)
 ```
 
 The split is read out of the run's event log, which is what makes it answer for

@@ -91,6 +91,38 @@ const (
 // into using.
 var readOnlyTools = []string{}
 
+// stableSystemPromptFlag keeps the per-machine facts out of the part of the
+// prompt a provider caches, so the harness's one-shot invocations share a prefix
+// instead of each paying to write its own.
+//
+// Claude Code assembles its own system prompt above whatever the harness
+// appends, and one of its sections states the working directory and whether that
+// directory is a git worktree. A review runs in the developer's worktree, whose
+// path carries the work item and a per-run suffix, so that one section makes the
+// whole cached block unique to a single review — and the review contract, the
+// reviewer persona, and everything else identical across every review sits
+// behind it, off the shared prefix. This flag moves those sections into the
+// first user message, where they still reach the role and no longer decide what
+// the cache key is. Moved rather than dropped is the provider's documented
+// behaviour and is what its shipped code does: the excluded sections are
+// rebuilt into a record and prepended to the messages as one user message before
+// the model is called. It applies only where the default system prompt is
+// appended to rather than replaced, which is what this backend does and what
+// TestAOneShotInvocationSharesItsPrefixAndTheDevelopersDoesNot holds it to.
+//
+// It is the read-only roles' and not the developer's. Their invocation is a
+// single short turn with no session to resume, so the cached prefix is the only
+// thing they could ever read back; the developer's session re-reads its own
+// conversation on every turn and already reads almost all of its input from the
+// cache, and moving what a tool-using agent is told about its own working
+// directory is a change to that role rather than to what it is charged.
+//
+// What it is worth is measured rather than assumed: before this, the reviewer's
+// invocations reported a cache read of exactly nothing across every recorded
+// run, while writing their whole prompt into the cache at the write rate. See
+// docs/experiments/yoyodyne-ifd-205-review-prompt-cache.md.
+const stableSystemPromptFlag = "--exclude-dynamic-system-prompt-sections"
+
 // readOnlyRole reports whether a role reasons over supplied evidence rather than
 // reaching outside it. Such a role gets no tools and cannot be given them.
 //
@@ -300,6 +332,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		// mode prevents a checked-in CLAUDE.md from entering the provider's
 		// system context alongside an immutable harness contract.
 		args = append(args, "--safe-mode")
+		args = append(args, stableSystemPromptFlag)
 	}
 	if len(allowedTools) > 0 {
 		args = append(args, "--allowedTools")

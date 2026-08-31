@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -878,7 +879,7 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--exclude-dynamic-system-prompt-sections", "--tools", ""}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -915,6 +916,66 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 	}
 }
 
+// A one-shot invocation's whole hope of reading anything back from the
+// provider's cache is the prefix it shares with the last one, and Claude Code
+// puts the working directory into the cached system prompt above whatever the
+// harness appends. A review runs in the developer's worktree, so that one
+// section is unique per review and takes the review contract, the persona, and
+// every other identical byte behind it off the shared prefix -- which is exactly
+// what the recorded runs showed: a cache read of nothing on every review while
+// each wrote its whole prompt into the cache.
+//
+// The developer is deliberately not given it. Its session re-reads its own
+// conversation on every turn and already reads nearly all of its input from the
+// cache, so what the flag would buy there is a first turn, and what it would
+// cost is a change to what a tool-using role is told about its own working
+// directory.
+func TestAOneShotInvocationSharesItsPrefixAndTheDevelopersDoesNot(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []domain.AgentRole{domain.RoleReviewer, domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager} {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+
+			stream := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"answered"}` + "\n"
+			runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
+			if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+				RunID: testRunID, Role: role, WorkingDirectory: "/worktree", Prompt: "judge this",
+				SystemPrompt: "the contract",
+			}); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			args := runner.commands[0].Args
+			if !slices.Contains(args, stableSystemPromptFlag) {
+				t.Fatalf("a %s invocation carries no %s, so the working directory of the run it was made for decides its cache key: %#v",
+					role, stableSystemPromptFlag, args)
+			}
+			// The flag is a modification of the provider's own default system
+			// prompt and its documented behaviour is to be ignored where a caller
+			// replaces that prompt outright. The harness appends to it, which is why
+			// this works at all, so a later change from appending to replacing would
+			// take the fix with it and leave the flag sitting in the arguments
+			// looking as though it still did something.
+			if !slices.Contains(args, "--append-system-prompt") || slices.Contains(args, "--system-prompt") {
+				t.Fatalf("a %s invocation does not append to the default system prompt, so %s is ignored: %#v",
+					role, stableSystemPromptFlag, args)
+			}
+		})
+	}
+
+	stream := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done"}` + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
+	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID: testRunID, Role: domain.RoleDeveloper, WorkingDirectory: "/worktree", Prompt: "make the change",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if slices.Contains(runner.commands[0].Args, stableSystemPromptFlag) {
+		t.Fatalf("a developer invocation carries %s, which moves what it is told about its own worktree: %#v",
+			stableSystemPromptFlag, runner.commands[0].Args)
+	}
+}
+
 func TestRunKeepsTheProductManagerAdvisory(t *testing.T) {
 	t.Parallel()
 
@@ -931,7 +992,7 @@ func TestRunKeepsTheProductManagerAdvisory(t *testing.T) {
 	}
 	// No sandbox settings, because there is nothing to sandbox: the role has no
 	// tools at all and cannot apply an edit it proposes.
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--exclude-dynamic-system-prompt-sections", "--tools", ""}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -1031,7 +1092,7 @@ func TestRunKeepsTheManagementRolesToolless(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
-			wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
+			wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "manual", "--name", "yoyodyne-01234567", "--safe-mode", "--exclude-dynamic-system-prompt-sections", "--tools", ""}
 			if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 				t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 			}

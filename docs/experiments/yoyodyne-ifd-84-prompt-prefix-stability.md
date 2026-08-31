@@ -183,6 +183,13 @@ own. Whatever this change did to prefix stability, nothing downstream is
 converting it into a cache read, so the lever cannot pay until that is
 understood.
 
+That was understood by yoyodyne-ifd.205, and the cause was one line of Claude
+Code's own system prompt: it states the working directory, a review runs in the
+developer's worktree, and everything identical across reviews sat behind it.
+[`yoyodyne-ifd-205-review-prompt-cache.md`](yoyodyne-ifd-205-review-prompt-cache.md)
+is that finding, the change, and the per-phase measure `yoyo cost` now reports —
+which is the instrument this experiment concluded it should have had.
+
 So the honest reading is two things at once: the criterion as written is met and
 says revert, and the criterion as written could never have said anything else,
 because it was specified at a resolution the effect could not reach. Both belong

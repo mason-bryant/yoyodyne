@@ -15,6 +15,16 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
+// money is what a phase cost and how many invocations it took, with the token
+// usage beside it set aside. These assertions are about where a real run's money
+// landed, and the invocations the pricing backend makes carry no usage object --
+// which is itself recorded, so a whole-struct comparison would be asserting the
+// absence of a measurement in tests that are not about one.
+func money(phase runstate.PhaseCost) runstate.PhaseCost {
+	phase.Tokens = runstate.TokenUsage{}
+	return phase
+}
+
 // The phase split is read from the log a real run leaves behind, so what it is
 // worth depends on that log rather than on one a test wrote by hand. A run that
 // developed, was sent back, and was approved on the second look is the shape
@@ -37,20 +47,20 @@ func TestEveryPricedInvocationOfARunAttributesToThePhaseThatSpentIt(t *testing.T
 		t.Fatalf("Price() error = %v", err)
 	}
 	phases := price.Runs[0].Phases
-	if phases.Development != (runstate.PhaseCost{CostUSD: 12.0, Invocations: 1}) {
+	if money(phases.Development) != (runstate.PhaseCost{CostUSD: 12.0, Invocations: 1}) {
 		t.Fatalf("development = %#v, want the first developer attempt alone", phases.Development)
 	}
-	if phases.Review != (runstate.PhaseCost{CostUSD: 2.0, Invocations: 2}) {
+	if money(phases.Review) != (runstate.PhaseCost{CostUSD: 2.0, Invocations: 2}) {
 		t.Fatalf("review = %#v, want both reviewer invocations", phases.Review)
 	}
-	if phases.Repair != (runstate.PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+	if money(phases.Repair) != (runstate.PhaseCost{CostUSD: 4.0, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want the attempt the findings bought", phases.Repair)
 	}
 	// Nothing the run spent may sit outside the three. A figure here is an
 	// invocation that reached the log without saying what it was for, which is
 	// the pollution this attribution exists to make visible instead of quietly
 	// charging to repair.
-	if phases.Unattributed != (runstate.PhaseCost{}) {
+	if money(phases.Unattributed) != (runstate.PhaseCost{}) {
 		t.Fatalf("unattributed = %#v, want every invocation of a real run placed", phases.Unattributed)
 	}
 	if phases.TotalUSD() != price.Runs[0].CostUSD || phases.Invocations() != price.Runs[0].Invocations {
@@ -99,10 +109,10 @@ func TestAFailedDeveloperInvocationIsReissuedIntoItsOwnAttempt(t *testing.T) {
 	phases := price.Runs[0].Phases
 	// The dead invocation and the one that replaced it are one attempt: what the
 	// change cost is what it took to get it made.
-	if phases.Development != (runstate.PhaseCost{CostUSD: 13.5, Invocations: 2}) {
+	if money(phases.Development) != (runstate.PhaseCost{CostUSD: 13.5, Invocations: 2}) {
 		t.Fatalf("development = %#v, want the failed invocation and its reissue", phases.Development)
 	}
-	if phases.Repair != (runstate.PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+	if money(phases.Repair) != (runstate.PhaseCost{CostUSD: 4.0, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want only the attempt the findings bought", phases.Repair)
 	}
 	// The property said plainly: the run made one repair attempt, so exactly one
@@ -112,7 +122,7 @@ func TestAFailedDeveloperInvocationIsReissuedIntoItsOwnAttempt(t *testing.T) {
 		t.Fatalf("repair holds %d invocation(s), run made %d repair attempt(s)",
 			phases.Repair.Invocations, outcome.RepairAttempts)
 	}
-	if phases.Unattributed != (runstate.PhaseCost{}) {
+	if money(phases.Unattributed) != (runstate.PhaseCost{}) {
 		t.Fatalf("unattributed = %#v, want every invocation placed", phases.Unattributed)
 	}
 }

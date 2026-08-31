@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -197,6 +198,7 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 	printAskNote(writer, exchanges)
 	printSplitNote(writer, phases)
 	printCacheNote(writer, tokens)
+	printPhaseCacheNote(writer, phases)
 	fmt.Fprintln(writer, "this prices runs; conversation turns are recorded but not attributed to an item")
 }
 
@@ -311,6 +313,9 @@ func printPriceBreakdown(writer io.Writer, price runstate.ItemPrice) {
 	if tokens := renderTokenSplit(price.Tokens); tokens != "" {
 		fmt.Fprintf(writer, "  %s\n", tokens)
 	}
+	if shares := renderPhaseCacheShares(price.Phases); shares != "" {
+		fmt.Fprintf(writer, "  %s\n", shares)
+	}
 	for _, run := range price.Runs {
 		fmt.Fprintf(writer, "  %s started %s [%s] %s\n", run.RunID, run.StartedAt.UTC().Format(time.RFC3339), renderRunOutcome(run), renderRunPrice(run))
 		// A run nothing survives to price has no split to show, but it still
@@ -320,6 +325,9 @@ func printPriceBreakdown(writer io.Writer, price runstate.ItemPrice) {
 			fmt.Fprintf(writer, "    %s\n", renderPhaseSplit(run.Phases, 0))
 			if tokens := renderTokenSplit(run.Tokens); tokens != "" {
 				fmt.Fprintf(writer, "    %s\n", tokens)
+			}
+			if shares := renderPhaseCacheShares(run.Phases); shares != "" {
+				fmt.Fprintf(writer, "    %s\n", shares)
 			}
 		} else if wait := renderWaits(run.Phases.Waits); wait != "" {
 			fmt.Fprintf(writer, "    %s\n", wait)
@@ -405,6 +413,67 @@ func printCacheNote(writer io.Writer, tokens runstate.TokenUsage) {
 		fmt.Fprintf(writer, "%d priced invocation(s) reported no token usage at all and are outside that share entirely,\n", tokens.Unreported)
 		fmt.Fprintln(writer, "counted apart rather than added in as nothing")
 	}
+}
+
+// printPhaseCacheNote says the same share once per phase, under the one above.
+// It is a separate line because the aggregate cannot answer the question the
+// phases can: a developer session re-reading its own conversation is tens of
+// millions of cached tokens beside a review's tens of thousands, so a review
+// that reads nothing at all leaves the column above at ninety-seven per cent and
+// says so nowhere. That is not hypothetical -- it is how yoyodyne-ifd.84 came to
+// be measured against a figure its own effect could not move, and this line is
+// what a later prefix change is kept or reverted on instead.
+func printPhaseCacheNote(writer io.Writer, phases runstate.PhaseSpend) {
+	shares := renderPhaseCacheShares(phases)
+	if shares == "" {
+		return
+	}
+	fmt.Fprintf(writer, "%s;\n", shares)
+	fmt.Fprintln(writer, "the phases neither assemble their prompts alike nor cache alike, so a change to what one of")
+	fmt.Fprintln(writer, "them sends is read here rather than in the column above, which the largest of them decides")
+}
+
+// renderPhaseCacheShares says which part of the work read its prompt back from
+// the provider's cache and which paid to write one. The three phases are named
+// even where nothing measured them, for the reason the money split names a phase
+// that cost nothing: a review that read none of its prefix and a review that
+// never happened are opposite facts, and a line that omitted the second would
+// read as the first. What separates them is the invocation count beside each
+// share, which is why every phase carries one.
+//
+// A phase nothing measured is a dash rather than a nought, exactly as the ledger
+// column is: a phase measured at nothing is a reading, and a phase nobody
+// measured is the absence of one.
+func renderPhaseCacheShares(phases runstate.PhaseSpend) string {
+	type named struct {
+		label string
+		phase runstate.PhaseCost
+	}
+	phaseList := []named{
+		{"development", phases.Development},
+		{"review", phases.Review},
+		{"repair", phases.Repair},
+	}
+	// The unattributed bucket is named only when there is something in it, for
+	// the reason the money split names it only then: it is not a phase, and a
+	// share beside the three would read as a fourth part of the work.
+	if phases.Unattributed.Invocations > 0 {
+		phaseList = append(phaseList, named{"unattributed", phases.Unattributed})
+	}
+	measured := false
+	parts := make([]string, 0, len(phaseList))
+	for _, entry := range phaseList {
+		measured = measured || entry.phase.Tokens.Reported()
+		parts = append(parts, fmt.Sprintf("%s %s over %d invocation(s)",
+			entry.label, renderCacheShare(entry.phase.Tokens), entry.phase.Tokens.Measured))
+	}
+	// Nothing measured anywhere is the window that cannot answer, and the line
+	// above it says so already; four dashes would be repeating that in a shape
+	// that reads like a measurement.
+	if !measured {
+		return ""
+	}
+	return "cache-read share by phase: " + strings.Join(parts, ", ")
 }
 
 // printSplitNote says what the three phase columns come to as a whole. The

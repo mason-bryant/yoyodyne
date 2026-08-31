@@ -50,16 +50,28 @@ var spendEvidenceEvents = append([]execution.EventType{execution.EventReviewStar
 type PhaseCost struct {
 	CostUSD     float64 `json:"cost_usd"`
 	Invocations int     `json:"invocations,omitempty"`
+	// Tokens is what the provider billed this phase's invocations for, split by
+	// how it billed the input. It is here rather than only on the run because the
+	// phases do not assemble their prompts alike and are not cached alike: the
+	// developer's session re-reads its own conversation every turn and reads
+	// nearly all of its input from the cache, and the reviewer makes one short
+	// invocation whose only cacheable part is the prefix it shares with every
+	// other review. Summed together those are one figure the larger of them
+	// decides, which is exactly how yoyodyne-ifd.84 came to be measured against a
+	// number that could not resolve what it was pointed at.
+	Tokens TokenUsage `json:"tokens,omitempty"`
 }
 
-func (p *PhaseCost) add(cost float64) {
+func (p *PhaseCost) add(cost float64, tokens TokenUsage) {
 	p.CostUSD += cost
 	p.Invocations++
+	p.Tokens.Merge(tokens)
 }
 
 func (p *PhaseCost) merge(other PhaseCost) {
 	p.CostUSD += other.CostUSD
 	p.Invocations += other.Invocations
+	p.Tokens.Merge(other.Tokens)
 }
 
 // Waits is time a run spent not working: waiting out a provider that refused it
@@ -251,10 +263,10 @@ type RunPrice struct {
 	// they come from the run's own state rather than from the log that is gone.
 	Phases PhaseSpend `json:"phases"`
 	// Tokens is what the provider billed this run's invocations for, split by how
-	// it billed the input. It is not split by phase: the question it answers is
-	// about the prompt the harness assembles, which every phase assembles the same
-	// way, and a share per phase would be four small samples where the measure
-	// wants one.
+	// it billed the input. It is the sum of what the phases beside it were billed,
+	// and it is kept because a run's whole input is what a window-wide share is
+	// taken over; which phase reads its prefix and which rewrites it every time is
+	// the question Phases answers.
 	Tokens TokenUsage `json:"tokens"`
 	// Unknown says why this run could not be priced, and is empty on one that
 	// was. A run carrying it is not a run that cost nothing: nothing survives to
@@ -561,12 +573,12 @@ func scanEventCost(path string) (float64, int, error) {
 // to that attempt. The first attempt is the development and every attempt after
 // it is a repair.
 //
-// The token usage beside the money is read off the same terminals and is not
-// split by phase. What a share of it answers is a question about the prompt the
-// harness assembles rather than about the part of the run it was assembled for,
-// and a terminal that carried no usage object is counted apart rather than added
-// in as zero -- an invocation nobody measured must not be able to drag a share
-// down by exactly itself.
+// The token usage beside the money is read off the same terminals, and lands in
+// the phase the money did as well as in the run's total, so a share can be taken
+// over one phase or over all of them. A terminal that carried no usage object is
+// counted apart rather than added in as zero, in the phase exactly as in the
+// total -- an invocation nobody measured must not be able to drag a share down
+// by exactly itself.
 //
 // Runs recorded before execution.TerminalRoleSchemaVersion had no role to omit,
 // so their terminals are read the way they were written: the reviewer announces
@@ -626,7 +638,8 @@ func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 		if !priced.priced() {
 			continue
 		}
-		tokens.Merge(priced.tokens())
+		usage := priced.tokens()
+		tokens.Merge(usage)
 		// An open bracket is spent by the first terminal that arrives whatever that
 		// terminal turns out to be, because the review that opened it has by then
 		// made the one invocation it makes.
@@ -634,19 +647,19 @@ func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 		reviewing = false
 		switch priced.phase(announced) {
 		case phaseReview:
-			spend.Review.add(priced.Payload.TotalCostUSD)
+			spend.Review.add(priced.Payload.TotalCostUSD, usage)
 		case phaseDevelopment:
 			if ended {
 				attempt++
 			}
 			if attempt == 0 {
-				spend.Development.add(priced.Payload.TotalCostUSD)
+				spend.Development.add(priced.Payload.TotalCostUSD, usage)
 			} else {
-				spend.Repair.add(priced.Payload.TotalCostUSD)
+				spend.Repair.add(priced.Payload.TotalCostUSD, usage)
 			}
 			ended = priced.Type == execution.EventRunCompleted
 		default:
-			spend.Unattributed.add(priced.Payload.TotalCostUSD)
+			spend.Unattributed.add(priced.Payload.TotalCostUSD, usage)
 		}
 	}
 	if err := scanner.Err(); err != nil {
