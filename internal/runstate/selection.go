@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // The things that choose work, named here rather than imported from the role
@@ -86,20 +87,54 @@ func (s Selection) Stated() bool {
 // Stamped dates a stated selection and reports whether there was one to date. A
 // caller that supplied its own moment keeps it; one that did not gets the moment
 // the run was reserved, which is when the choice took effect. An unstated
-// selection, or one that could not be recorded as it stands, is reported as
-// nothing rather than stored half-formed.
+// selection is reported as nothing rather than stored half-formed.
+//
+// A stated one is always recorded. Whether a caller said who chose the work and
+// why is the whole of the question here: nothing else about a stated selection
+// makes it unrecordable, because the length of its reason is folded to the bound
+// rather than refused and the moment is supplied where it is missing.
 func (s Selection) Stamped(at time.Time) (Selection, bool) {
 	if !s.Stated() {
 		return Selection{}, false
 	}
-	stamped := Selection{By: strings.TrimSpace(s.By), Reason: strings.TrimSpace(s.Reason), At: s.At}
+	stamped := Selection{By: strings.TrimSpace(s.By), Reason: boundReason(strings.TrimSpace(s.Reason)), At: s.At}
 	if stamped.At.IsZero() {
 		stamped.At = at.UTC()
 	}
-	if stamped.Validate() != nil {
-		return Selection{}, false
-	}
 	return stamped, true
+}
+
+// boundReason folds an over-length reason to what a selection may carry, and
+// says in the record itself where it was cut.
+//
+// Truncating is the decision, over refusing the selection, and the two are not
+// close. An over-length reason is the one rule of Validate that a stated
+// selection can still break, and it breaks it in the record that answers why the
+// run exists at all. Cut, that answer stands and is visibly incomplete: an
+// operator reads the argument up to the marker and can see there was more of it.
+// Refused, the run records no selection whatsoever, which is indistinguishable
+// from work nobody accounted for — precisely what
+// `selected-work-passes-intake-and-records-why` exists to make visible, arriving
+// as silent success. A reason too long is a caller assembling prose badly; it is
+// not evidence that the choice was unaccounted for, and must not be recorded as
+// though it were.
+//
+// The fold is here rather than in each caller because every caller inherits the
+// bound and none of them can see it: a reason is assembled from a fixed sentence
+// and prose that arrived with an instruction, and whether the two together cross
+// the bound is not knowable where they are written.
+//
+// It is cut on a rune boundary: a reason truncated mid-rune is not text.
+func boundReason(reason string) string {
+	if len(reason) <= MaxSelectionReasonBytes {
+		return reason
+	}
+	const marker = " …truncated to the recorded bound"
+	cut := MaxSelectionReasonBytes - len(marker)
+	for cut > 0 && !utf8.RuneStart(reason[cut]) {
+		cut--
+	}
+	return strings.TrimRight(reason[:cut], " ") + marker
 }
 
 // SelectedByHarness reports a selection that is not the operator naming the
