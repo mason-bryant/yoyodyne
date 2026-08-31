@@ -529,6 +529,16 @@ It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
 
+Under that sentence it carries [the four lines](operations.md#where-the-harness-stands-the-four-lines)
+— Running, Working, Not startable, Needs a human — from the same derivation
+`yoyo status` prints them from, so the channel and the terminal answer one
+question one way. Before this the message said that choosing had stopped and
+nothing whatever about what the machine was doing instead, which is exactly what
+somebody woken by it at three in the morning then had to reconstruct. A sink
+assembled without a way to read them says so in the message rather than leaving
+them out: a message that simply lacked the lines is indistinguishable from a
+harness with nothing in any of them.
+
 Beside it is the **session's own age**, which is the same shape of message about
 the opposite situation. A `yoyo work --watch` session runs whatever binary it was
 started with, so a fix that lands after it started is not in it until somebody

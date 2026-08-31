@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -559,4 +561,72 @@ type unrelatedDeployments struct{}
 
 func (unrelatedDeployments) Behind(context.Context, string) (int, error) {
 	return 0, fmt.Errorf("%w: not in /some-other-product", ErrUnrelatedBuild)
+}
+
+// standingTracker is a tracker with an empty admitted queue, which is what the
+// four lines need to be readable at all: a nil tracker would make the queue's
+// line report a wiring gap rather than an empty backlog.
+type standingTracker struct{}
+
+func (standingTracker) List(context.Context, string) ([]beads.WorkItem, error) { return nil, nil }
+func (standingTracker) Ready(context.Context) ([]beads.WorkItem, error)        { return nil, nil }
+
+// The heartbeat says the same four lines the terminal prints. Before this it
+// said that choosing had stopped and nothing whatever about what the machine was
+// doing instead, which is exactly what somebody woken by it at three in the
+// morning then has to go and reconstruct.
+func TestTheHeartbeatCarriesTheFourLines(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	held := harness.now
+	harness.hold(t, "reordering the backlog first", held)
+	harness.feed.Standing = &readmodel.Sources{
+		Runs:          harness.runs,
+		Conversations: harness.chats,
+		Tracker:       standingTracker{},
+		Directives:    harness.directives,
+		Amendments:    harness.amend,
+		OperatorHolds: harness.holds,
+		IntakeHolds:   harness.intake,
+		Sessions:      harness.watch,
+		Capacity:      1,
+		Now:           func() time.Time { return harness.now },
+	}
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped, notify.KindIntakeHeld)
+	harness.now = held.Add(2 * time.Hour)
+	said := harness.say(t, cursors, notify.KindLineWaiting)
+	for _, line := range []string{
+		"Running: nothing",
+		"Working: nothing",
+		"Not startable: nothing, of no admitted items",
+		"Needs a human (1):",
+	} {
+		if !strings.Contains(said.Body, line) {
+			t.Fatalf("body %q does not carry %q", said.Body, line)
+		}
+	}
+}
+
+// A sink assembled without a way to read the four lines says so, rather than
+// leaving them out. A message that simply lacked them would be indistinguishable
+// from a harness with nothing in any of them.
+func TestAHeartbeatWithNoStandingSaysSoRatherThanOmittingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	held := harness.now
+	harness.hold(t, "reordering the backlog first", held)
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped, notify.KindIntakeHeld)
+	harness.now = held.Add(2 * time.Hour)
+	said := harness.say(t, cursors, notify.KindLineWaiting)
+	if !strings.Contains(said.Body, "where the harness stands could not be read here") {
+		t.Fatalf("body %q does not say the four lines were unavailable", said.Body)
+	}
 }

@@ -194,7 +194,7 @@ var harnessVoice = voice{
 		KindWatchBraked:         "The watch session is choosing nothing while intake is held: {why}",
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
-		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.",
+		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.\n\n{standing}",
 		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. Restarting it deploys them.",
 		KindCatchUpDigest:       "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
 	},
@@ -245,7 +245,7 @@ var developerVoice = voice{
 		KindWatchBraked:         "Nothing is being handed to me while intake is held: {why}",
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
-		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.",
+		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.\n\n{standing}",
 		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until somebody restarts it, and I'd spend the round finding that out.",
 		KindCatchUpDigest:       "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
 	},
@@ -296,7 +296,7 @@ var reviewerVoice = voice{
 		KindWatchBraked:         "Nothing new is being started while intake is held, so nothing is coming for a verdict: {why}",
 		KindWatchResumed:        "Work is starting again, so changes will come back to me: {why}",
 		KindWatchStopped:        "No more changes will arrive from this session; what I judged already stands: {why}",
-		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.",
+		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.\n\n{standing}",
 		KindResidentStale:       "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back.",
 		KindCatchUpDigest:       "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
 	},
@@ -346,7 +346,7 @@ var developmentManagerVoice = voice{
 		KindWatchBraked:         "I'm pulling nothing while intake is held, and what was already running finishes: {why}",
 		KindWatchResumed:        "I'm pulling from the top of the queue again: {why}",
 		KindWatchStopped:        "The queue stops being pulled from here; what is in it stays in it: {why}",
-		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.",
+		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.\n\n{standing}",
 		KindResidentStale:       "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does.",
 		KindCatchUpDigest:       "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
 	},
@@ -397,7 +397,7 @@ var productManagerVoice = voice{
 		KindWatchBraked:         "Spending has stopped while intake is held, and what is in the backlog keeps its place: {why}",
 		KindWatchResumed:        "Work is being chosen again, and what I admit is what gets spent on: {why}",
 		KindWatchStopped:        "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
-		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.",
+		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.\n\n{standing}",
 		KindResidentStale:       "What is being spent on this product was built at {commit}, before {behind} landed. Until it is restarted, some of that spend buys work the system has already paid for once.",
 		KindCatchUpDigest:       "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
 	},
@@ -448,7 +448,7 @@ var architectVoice = voice{
 		KindWatchBraked:         "Selection is stopped by the intake hold, which is the brake working rather than failing: {why}",
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
-		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} the tracker calls ready behind it. Quiet nobody chose is the failure mode this exists to say out loud.",
+		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} the tracker calls ready behind it. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
 		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap, said out loud until restart has an owner.",
 		KindCatchUpDigest:       "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
 	},
@@ -746,6 +746,11 @@ func (e Event) fields(topic Topic) map[string]string {
 		"ready":     countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
 		"behind":    countOf(detail.Behind, "harness change", "harness changes", "a number of harness changes the record does not carry"),
 		"events":    countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
+		// The four lines, already rendered by the read model. A surface with no way
+		// to read them says so rather than leaving the block out, because a message
+		// that simply lacks the lines is indistinguishable from a harness with
+		// nothing in any of them.
+		"standing": stated(detail.Standing, "where the harness stands could not be read here"),
 	}
 }
 

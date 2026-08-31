@@ -987,3 +987,81 @@ func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
 		t.Fatalf("rendered = %q, want no under-cap claim at the boundary", rendered)
 	}
 }
+
+// The four lines are a contract rather than a layout: all four print, every
+// time, and a line with nothing in it says so in words. An operator who sees a
+// line missing cannot tell a quiet machine from a broken one, which is the whole
+// failure this format exists to end.
+func TestStatusAlwaysPrintsAllFourLines(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	for _, label := range []string{"Running", "Working", "Not startable", "Needs a human"} {
+		if !strings.Contains(stdout, label+":") && !strings.Contains(stdout, label+" (") {
+			t.Fatalf("stdout does not carry the %q line:\n%s", label, stdout)
+		}
+	}
+	// Nothing has run and nothing is being held, so two of them say "nothing" in
+	// words rather than printing a blank somebody would read as a bug.
+	if !strings.Contains(stdout, "Running: nothing") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if !strings.Contains(stdout, "Working: nothing") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	// There is no residual category: nothing in the output offers a bucket for
+	// whatever the four lines did not cover.
+	for _, residual := range []string{"Other:", "Unknown:", "Remaining:"} {
+		if strings.Contains(stdout, residual) {
+			t.Fatalf("stdout carries the residual category %q:\n%s", residual, stdout)
+		}
+	}
+}
+
+// The four lines are about the product, so a question about one item is answered
+// without them: an operator asking what became of one run must not be handed a
+// screen of everything else first.
+func TestStatusLeavesTheFourLinesOutWhenAnItemIsNamed(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath, "yoyodyne-ifd.1")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, "Needs a human") {
+		t.Fatalf("an item-scoped status carried the product's four lines:\n%s", stdout)
+	}
+}
+
+// The same four lines a terminal prints are in the machine-readable answer, so a
+// second surface reads the derivation rather than parsing the rendering.
+func TestStatusCarriesTheFourLinesInJSON(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	var decoded statusOutput
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("decode status JSON: %v (%q)", err, stdout)
+	}
+	if decoded.Standing == nil {
+		t.Fatalf("status JSON carries no standing:\n%s", stdout)
+	}
+	if decoded.Standing.ObservedAt.IsZero() {
+		t.Fatal("the standing does not say when it was read")
+	}
+	if decoded.Standing.Running == nil || decoded.Standing.NeedsHuman == nil {
+		t.Fatalf("a line is absent rather than empty: %+v", decoded.Standing)
+	}
+}

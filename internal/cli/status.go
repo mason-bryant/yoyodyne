@@ -33,6 +33,7 @@ package cli
 // `bin/yoyo-status`; this is the record afterwards.
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -41,12 +42,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 type statusOutput struct {
-	Runs []runstate.RunSummary `json:"runs"`
+	// Standing is where the harness stands right now, in the four lines the
+	// operator ratified. It comes first because it is the question this verb is
+	// actually reached for: the run history says what became of attempts that are
+	// over, and until this existed there was nowhere at all that said what is
+	// happening. It is absent when one item was named, because the four lines are
+	// about the product rather than about any one piece of work.
+	Standing *readmodel.Standing   `json:"standing,omitempty"`
+	Runs     []runstate.RunSummary `json:"runs"`
 	// Matched and Recorded are what keep a limited listing honest: how many runs
 	// the query selected, and how many the harness holds at all.
 	Matched  int `json:"matched"`
@@ -142,8 +154,19 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	// about a particular run.
 	watched, watchFailure := latestWatch(*configPath)
 
+	// Where the harness stands is read only when nothing was named, because the
+	// four lines are about the product: an operator asking about one item is
+	// asking a different question, and answering both would put a screen of
+	// product-wide state in front of the run they came here to read.
+	var standing *readmodel.Standing
+	if workItemID == "" {
+		read := readmodel.ReadStanding(context.Background(), standingSources(*configPath))
+		standing = &read
+	}
+
 	if *jsonOutput {
 		output := statusOutput{
+			Standing: standing,
 			Runs:     history.Runs,
 			Matched:  history.Matched,
 			Recorded: history.Recorded,
@@ -160,6 +183,13 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 		output.TriageError = triageFailure
 		output.WatchError = watchFailure
 		return writeJSON(stdout, stderr, output)
+	}
+	// The four lines come first and are separated from the history by a blank
+	// line, because they answer opposite questions: everything above is what is
+	// true now, and everything below is what became of attempts that are over.
+	if standing != nil {
+		fmt.Fprint(stdout, standing.Render())
+		fmt.Fprintln(stdout)
 	}
 	printWatch(stdout, watched)
 	printRunHistory(stdout, history, workItemID, *failedOnly)
@@ -206,6 +236,80 @@ func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, 
 	// beside them: "three review rounds" says nothing about whether this item is
 	// nearly out of them.
 	return store, orchestrator.TriageCaps(resolved.Config.Execution, resolved.Config.Triage), nil
+}
+
+// standingSources wires the four lines over the same durable records every run
+// writes. It goes through the configuration and the state root alone, for the
+// reason the run store does: a verb an operator reaches for when something has
+// gone wrong must not refuse to answer because of where their checkout happens
+// to sit, and none of these stores needs a worktree or a process runner.
+//
+// A source that cannot be built is left out rather than failing the answer, and
+// the line it belongs to says it could not be read. That is the whole discipline
+// of this format: three quarters of an answer with the missing quarter named
+// beats no answer, and beats an answer that quietly reports the missing quarter
+// as empty.
+//
+// The tracker is the one source that needs the repository, so it is the one that
+// can be missing on a checkout the configuration does not resolve against. It is
+// wired as a tracker that reports that failure rather than left nil, so the line
+// says what actually went wrong instead of reporting a wiring gap.
+func standingSources(configPath string) readmodel.Sources {
+	sources := readmodel.Sources{TrackerTimeout: chatTrackerTimeout}
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		sources.Tracker = unreadableTracker{err}
+		return sources
+	}
+	cfg := resolved.Config
+	sources.Capacity = cfg.Execution.MaxConcurrentDevelopers
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		sources.Tracker = unreadableTracker{err}
+		return sources
+	}
+	if store, err := runstate.NewStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Runs = store
+	}
+	if store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Conversations = store
+	}
+	if store, err := runstate.NewDirectiveStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Directives = store
+	}
+	if store, err := runstate.NewAmendmentStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Amendments = store
+	}
+	if store, err := runstate.NewOperatorHoldStore(stateRoot); err == nil {
+		sources.OperatorHolds = store
+	}
+	if store, err := runstate.NewIntakeHoldStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.IntakeHolds = store
+	}
+	if store, err := runstate.NewWatchStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Sessions = store
+	}
+	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
+	if err != nil {
+		sources.Tracker = unreadableTracker{fmt.Errorf("resolve product repository: %w", err)}
+		return sources
+	}
+	sources.Tracker = beads.Client{Runner: execution.OSProcessRunner{}, Dir: repository}
+	return sources
+}
+
+// unreadableTracker is the tracker a reading gets when the harness could not be
+// resolved far enough to build one. It answers every question with the reason,
+// so the queue's line says what went wrong rather than reporting an empty
+// backlog assembled from nothing.
+type unreadableTracker struct{ err error }
+
+func (t unreadableTracker) List(context.Context, string) ([]beads.WorkItem, error) {
+	return nil, t.err
+}
+
+func (t unreadableTracker) Ready(context.Context) ([]beads.WorkItem, error) {
+	return nil, t.err
 }
 
 // latestWatch reads where the session that chooses work got to. A product
@@ -634,7 +738,19 @@ func reportStatusFailure(stdout, stderr io.Writer, jsonOutput bool, err error) i
 func printStatusUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo status [options] [<beads-id>]
 
-What became of the runs the harness made, newest first: the work item, the
+Where the harness stands, then what became of the runs it made.
+
+Naming no item prints four lines first, and prints all four every time: what is
+Running, with each run's item, phase, elapsed time and spend; what is Working,
+which is the persona conversations with a turn in flight; what is Not startable,
+which is each admitted item nothing will pull with the refusal that stops it; and
+what Needs a human, which is either "nothing" or the list with whose move each
+one is. A line with nothing in it says so in words, and a line whose records
+could not be read says that instead of saying nothing. Naming an item leaves them
+out: they are about the product, and a question about one item is a different
+question.
+
+Under them, what became of the runs the harness made, newest first: the work item, the
 outcome it reached, the phase it was in, what it cost, and the reasons its record
 kept. Naming an item reports only its runs, and under them what triage has spent
 on that item: the review rounds it has cost across every run of it, against the

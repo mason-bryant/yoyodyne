@@ -25,6 +25,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -193,6 +194,13 @@ type HarnessFeed struct {
 	// operators are told directly rather than in the channel alone. Zero takes
 	// DefaultStaleBuildThreshold.
 	StaleBuildThreshold int
+	// Standing is where the harness stands, as the read model derives it: the same
+	// four lines `yoyo status` prints, said with the heartbeat so a channel and a
+	// terminal answer one question one way. It is optional, and a feed assembled
+	// without one says the heartbeat exactly as it did before the lines existed —
+	// with the message itself saying the lines could not be read here, rather than
+	// leaving them out and reading as a harness with nothing in any of them.
+	Standing *readmodel.Sources
 	// Heartbeat is how often a line that is choosing nothing over ready work says
 	// so again. Zero takes DefaultHeartbeat. It is a cadence rather than a switch:
 	// there is deliberately no way to turn it off, because what it would buy is

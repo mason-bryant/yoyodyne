@@ -35,6 +35,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -182,11 +183,33 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		// a machine that is behaving.
 		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
 	}
+	// The four lines are read here rather than assembled from what this pass
+	// happens to hold, because they are the read model's answer and not the
+	// sink's: a channel and a terminal saying one standing two ways is the
+	// disagreement only the operator could adjudicate. They are read only when
+	// something is actually due, which is the same cost rule the rest of this
+	// pass keeps.
 	return []Delivery{{
-		Stream:       heartbeatStream,
-		Cursor:       armed,
-		Notification: notify.FromLine(notify.Line{Stopped: state.stopped, Since: state.since, Ready: ready}, now),
+		Stream: heartbeatStream,
+		Cursor: armed,
+		Notification: notify.FromLine(notify.Line{
+			Stopped:  state.stopped,
+			Since:    state.since,
+			Ready:    ready,
+			Standing: f.standing(ctx),
+		}, now),
 	}}, nil
+}
+
+// standing is where the harness stands, in the four lines, or nothing at all
+// when this sink was assembled without a way to read them. Nothing is what the
+// voice states as an absence: a message that simply lacked the lines would be
+// indistinguishable from a harness with nothing in any of them.
+func (f *HarnessFeed) standing(ctx context.Context) string {
+	if f.Standing == nil {
+		return ""
+	}
+	return readmodel.ReadStanding(ctx, *f.Standing).Render()
 }
 
 // residentDeliveries says that the session choosing work is running a binary the
@@ -311,20 +334,11 @@ func (f *HarnessFeed) residentDeliveries(ctx context.Context, cursor Cursor, ses
 // half of it is that a stale session is still named as stale whichever of them it
 // is.
 func residentBuild(sessions []runstate.WatchTransition) (string, bool) {
-	last := make(map[string]runstate.WatchTransition, len(sessions))
-	for _, transition := range sessions {
-		last[transition.SessionID] = transition
+	live := readmodel.Live(sessions)
+	if len(live) == 0 {
+		return "", false
 	}
-	var live runstate.WatchTransition
-	for _, transition := range last {
-		if transition.State == runstate.WatchStopped {
-			continue
-		}
-		if transition.At.After(live.At) {
-			live = transition
-		}
-	}
-	build := strings.TrimSpace(live.Build)
+	build := strings.TrimSpace(live[0].Build)
 	return build, build != ""
 }
 
@@ -381,12 +395,10 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 	return choosing(sessions)
 }
 
-// choosing derives the line from what the watch sessions are doing, and it reads
-// them per session rather than reading the last line of the log. One log holds
-// every session a product has had, and nothing stops two running at once: the
-// last entry can be one session stopping while another carries on watching, and
-// a reading that took it at face value would report a line that is being pulled
-// from as one that nobody is pulling from.
+// choosing derives the line from what the watch sessions are doing. Which
+// sessions are still alive is the read model's fold rather than one of this
+// package's: a log read two ways is two answers to whether anything is pulling
+// the queue, and that is the one question the whole heartbeat turns on.
 //
 // A session choosing work settles it whatever else is in the log. Otherwise a
 // session polling an idle queue is the state, and if every session there has ever
@@ -400,33 +412,28 @@ func choosing(sessions []runstate.WatchTransition) (waiting, bool) {
 	if len(sessions) == 0 {
 		return waiting{}, false
 	}
-	last := make(map[string]runstate.WatchTransition, len(sessions))
-	for _, transition := range sessions {
-		last[transition.SessionID] = transition
-	}
-	var idle, stopped runstate.WatchTransition
-	for _, transition := range last {
-		switch transition.State {
-		case runstate.WatchIdle:
-			if transition.At.After(idle.At) {
-				idle = transition
-			}
-		case runstate.WatchStopped:
-			if transition.At.After(stopped.At) {
-				stopped = transition
-			}
-		default:
+	// Live is newest first, so the first idle session it holds is the latest one.
+	live := readmodel.Live(sessions)
+	for _, transition := range live {
+		if transition.State != runstate.WatchIdle {
 			// Watching, braked, or resumed: a session is alive and either choosing
 			// or stopped by a hold, which was read before this.
 			return waiting{}, false
 		}
 	}
-	if !idle.At.IsZero() {
+	if len(live) > 0 {
+		idle := live[0]
 		return waiting{
 			stopped: "the watch session has found nothing it can start",
 			since:   idle.At,
 			mark:    "idle:" + stamp(idle.At),
 		}, true
+	}
+	var stopped runstate.WatchTransition
+	for _, transition := range sessions {
+		if transition.State == runstate.WatchStopped && transition.At.After(stopped.At) {
+			stopped = transition
+		}
 	}
 	return waiting{
 		stopped: "no watch session is running",

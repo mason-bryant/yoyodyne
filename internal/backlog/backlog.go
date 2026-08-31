@@ -251,7 +251,7 @@ func (q Queue) Render() string {
 		if entry.Ready {
 			continue
 		}
-		fmt.Fprintf(&rendered, "     %s\n", entry.hold())
+		fmt.Fprintf(&rendered, "     %s\n", entry.Hold())
 	}
 	if len(q.Entries) > len(listed) {
 		fmt.Fprintf(&rendered, "  %d further admitted item(s) are not listed here.\n", len(q.Entries)-len(listed))
@@ -264,7 +264,7 @@ func (q Queue) Render() string {
 	return rendered.String()
 }
 
-// hold says what is keeping an unready entry from being pulled. The five
+// Hold says what is keeping an unready entry from being pulled. The five
 // answers are different things to act on: an executor no run can be, a parking
 // somebody decided, named work it waits for, a blocker recorded on the item
 // itself, and the tracker simply not offering it, which is what a dependency the
@@ -277,7 +277,11 @@ func (q Queue) Render() string {
 // release. Between the two, the executor answers first: an item that is both is
 // one no run could take even after the parking is lifted, so naming the parking
 // there would offer a release that changes nothing.
-func (e Entry) hold() string {
+//
+// It is exported because the refusal is the same fact wherever the queue is
+// read, and the standing status names it per item: a second surface wording the
+// same refusal differently is the disagreement one derivation exists to prevent.
+func (e Entry) Hold() string {
 	switch {
 	case !e.Executor.DeveloperRun():
 		return fmt.Sprintf("its executor is %q rather than a developer run, so no run carries it out; the item says which conversation does", e.Executor)
