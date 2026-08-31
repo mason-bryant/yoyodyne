@@ -27,6 +27,13 @@ package slack
 // all cannot be shown anything. It is a note of having been heard rather than a
 // directive — nothing reads it, and no work moves because of it.
 //
+// Who is asking decides which door they get. Everything below is for somebody
+// this project recognizes — a human its `operators` mapping names, whether or
+// not it granted them anything — because answering is not steering and the four
+// lines are already posted to this channel. A message from anybody else is
+// answered once with a refusal naming who to contact instead, which is
+// stranger.go's.
+//
 // Two answers, and no more than two. A question about where things stand gets
 // the read model's own four lines, because that derivation is the read model's
 // and a surface that assembled its own would be a second answer to the one
@@ -123,6 +130,15 @@ func (s *steering) mentioned(ctx context.Context, message inboundMessage) {
 		return
 	}
 	if !s.first(message.ts) {
+		return
+	}
+	// Somebody this project does not recognize is told so rather than answered,
+	// once in this thread, which is stranger.go's and the third stated exception.
+	// A human the mapping names is not one of them whatever they were granted:
+	// answering is not steering, so a colleague who may steer nothing still gets
+	// the four lines they could already read in this channel.
+	if !s.knows(message.user) {
+		s.refuse(ctx, message)
 		return
 	}
 

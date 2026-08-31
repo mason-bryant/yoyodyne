@@ -47,9 +47,11 @@ harness's own durable records and posts from them, so:
 Replies go the other way, and only for the people you say. A reply in a work
 item's thread, from somebody this project granted `direct-work`, is recorded as a
 directive against that item and reaches the work exactly as one typed at a
-terminal does; everybody else's is answered saying it was not acted on. A project
-that has named nobody is steered by nobody, which is what every workspace is
-until you add yourself. See *Steering the work from a thread* below.
+terminal does; anybody else the `operators` mapping names is answered saying it
+was not acted on, and anybody it does not name is told once that this app does
+not know them and who to reach out to instead. A project that has named nobody is
+steered by nobody, which is what every workspace is until you add yourself. See
+*Steering the work from a thread* below.
 
 Setting this up takes about five minutes and needs a Slack workspace you can
 install an app into.
@@ -193,6 +195,13 @@ a member id, and nobody else. Until somebody is on it, every reply is answered
 saying it was not acted on, which is what a workspace gets by default. The member
 id lives in the configuration rather than in the environment because it is
 identity rather than a secret.
+
+The mapping is also who this app *knows*, which is the wider list: everybody with
+an entry here, whatever you granted them. Somebody with no entry at all is told
+once per thread that this app does not know them, and the names in this mapping
+are who they are told to reach out to — so an entry with no grants is worth
+writing for a colleague who should be recognized without being able to steer
+anything. A mapping that names nobody says this to nobody.
 [`docs/configuration.md`](../configuration.md#operators) has the rest of the
 mapping, including the other grant and the namespaces you can bind.
 
@@ -288,7 +297,9 @@ and says which one. Leave `threads.json` beside it alone unless you also want ne
 threads, and `steers.json` — which is what it remembers about replies that
 steered the work — alone either way: a directive settled before the new moment is
 read past on its age, so starting the cursors over does not answer you again for
-everything you ever steered.
+everything you ever steered. `refusals.json` beside them is the threads it has
+already told somebody it does not know them in; deleting it says that sentence
+once more in each of those threads, which is the whole of what it costs.
 
 **Do not run two.** One sink per product: two of them hold separate thread maps,
 so the second opens its own threads and posts everything twice. The second to
@@ -610,11 +621,16 @@ An operational directive is in force from the moment it is recorded and stays
 there; carrying it out records what it produced and withdraws nothing, so it is
 still listed by `yoyo directive list` as in force, with what it became under it.
 
-Three things are refused, visibly:
+Four things are refused, visibly:
 
 - **a reply from somebody without `direct-work`**, or with the grant but no
   `slack_member_id` bound. The list defaults to empty, so a workspace steers
   nothing until you add yourself in step 4.
+- **a reply from somebody the `operators` mapping does not name at all**, which
+  is refused differently: they are told once in that thread that this app does
+  not know them and who to reach out to instead, and everything they say in it
+  after that is written to the sink's log and answered with nothing. See *Somebody
+  this project does not know* below.
 - **a stated kind that says nothing unresolved** — `ambiguous:` on its own, or
   `artifact:` without a document and what to decide about it.
 - **a reply in a thread that is not a work item's.** A directive from a thread is
@@ -641,6 +657,10 @@ the app is answered where you said it, in a reply hanging from your own message
 and tagging you. This is the one thing the sink says outside its own threads, and
 it exists because the alternative was silence: a question at the top of the
 channel had no handler at all, which reads exactly like a sink that has died.
+
+This is for the humans your `operators` mapping names, whatever you granted
+them. Somebody with no entry there gets the sentence in *Somebody this project
+does not know* below instead of an answer.
 
 Ask where things stand and you get the four lines — the same four
 [`yoyo status`](../operations.md) prints and the same four the heartbeat posts,
@@ -671,6 +691,46 @@ telling them.
 A message that does not name the app is still left entirely alone, which is what
 keeps a reporting channel a reporting channel rather than a participant in
 everybody's conversation.
+
+## Somebody this project does not know
+
+A channel has other people in it. Somebody whose Slack member id is bound to
+nobody in your [`operators`](../configuration.md#operators) mapping is told so,
+once, in the words:
+
+```text
+I don't know you. Please reach out to mason-bryant if you need something.
+```
+
+The names are the entries in your mapping, said the way the mapping files them
+rather than as Slack mentions — so telling one person who to ask does not notify
+everybody in it. It is said in the two places the app is spoken to at all: a
+thread this sink opened, and a message that @-mentions the app anywhere it can
+see.
+
+**Once per thread, and no more.** The next thing the same person says in that
+thread is written to the sink's own log — with what they said, so you can see
+who wanted what — and answered with nothing. An app that can be made to talk by
+repeating yourself is one you would turn off, and this channel is a report on
+your work rather than a conversation with the workspace.
+
+Three things follow from that, worth knowing before somebody asks you about
+them:
+
+- **The mark, not the sentence, is what a second attempt gets.** Nothing is
+  posted, so a person watching the channel sees one refusal in a thread however
+  many times it was tried.
+- **It survives a restart.** The thread is remembered in the sink's own state
+  beside the cursors, so a sink restarted overnight does not greet the same
+  person again in the morning.
+- **A mapping that names nobody says this to nobody.** There is no boundary to
+  be outside of, and nobody to name as a contact, so a workspace that has not
+  filled the mapping in behaves exactly as it did before: every mention is
+  answered, and a reply that would steer is refused for the grant it is missing.
+
+If a colleague is getting this and should not be, they need an entry in
+`operators` — a `slack_member_id` and nothing else is enough to be recognized,
+and granting them `direct-work` is the separate decision that lets them steer.
 
 ## Coming back from a long gap
 
@@ -739,7 +799,8 @@ command line whenever the digest is not enough.
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | `replies in these threads are acknowledged and not acted on` | Said once when the sink starts: nobody in this project holds `direct-work` with a bound `slack_member_id`, so no reply steers anything. Step 4 is where that is written. |
 | A reply is answered `the reply is from somebody this project has not granted direct-work` | Your member id is not bound to a human with that grant, or is bound to a different one. Your profile → *Copy member ID*, and check it against `operators` in `.yoyodyne/config.yaml`. |
-| A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item. Reply inside the item's thread. |
+| A message is answered `I don't know you` | Your member id is bound to nobody in the `operators` mapping. An entry with a `slack_member_id` and no grants is enough to be recognized; `direct-work` is the separate grant that lets you steer. |
+| A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item. Reply inside the item's thread. It is also what a second message gets from somebody this project does not know: they are told once per thread, and read after that. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 
 Every row above is something you saw. What a stopped, stale, or misdirected sink

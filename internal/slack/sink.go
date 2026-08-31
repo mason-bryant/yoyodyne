@@ -115,6 +115,23 @@ type Options struct {
 	// workspace changes nothing about how it behaves until an operator names
 	// themselves.
 	Operators []string
+	// Recognized is every Slack member id the operators mapping binds, whatever
+	// the human holding it was granted, and Contacts is what the mapping calls
+	// those humans. Together they are who this project knows and how to ask for
+	// them: a message from anybody else is a stranger's, and is answered once per
+	// thread with a refusal naming the contacts rather than acted on or read.
+	//
+	// They are wider than Operators on purpose. A colleague the project
+	// recognizes but has granted nothing may steer nothing and is still not a
+	// stranger, so what they get for a reply is the refusal naming the grant they
+	// are missing, and what they get for a question is the answer.
+	//
+	// Both default to empty, and an empty Recognized is read as everybody rather
+	// than nobody: a project that recognizes nobody has drawn no boundary and has
+	// nobody to name as a contact, so it behaves exactly as it did before there
+	// was a refusal to give.
+	Recognized []string
+	Contacts   []string
 	// Inbound is what to do with a message that arrives on the connection. It is
 	// how a test drives the connection without a workspace; a sink the harness
 	// builds leaves it unset and gets the steering above.
@@ -284,7 +301,7 @@ func New(options Options) (*Sink, error) {
 	// no more. The handler a caller supplied wins, because the only caller that
 	// can name that type is a test driving the connection itself.
 	if options.Directives != nil {
-		sink.steering = newSteering(sink, options.Directives, options.Operators)
+		sink.steering = newSteering(sink, options)
 		sink.connection.handle = sink.steering.handle
 	}
 	if options.Inbound != nil {

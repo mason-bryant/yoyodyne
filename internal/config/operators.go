@@ -165,6 +165,26 @@ func (c Config) SlackOperators() []string {
 	return allowed
 }
 
+// SlackMembers is every Slack member id this mapping binds, whatever the human
+// holding it was granted: who the project recognizes in the workspace, rather
+// than who may steer it. It is the wider list on purpose — recognizing a human
+// and authorizing one are two decisions, and a colleague the project knows but
+// has granted nothing is somebody it knows.
+//
+// The sink reads it for the one thing authority cannot answer: whether a message
+// came from a stranger. Somebody on this list who cannot steer is refused for
+// the grant they are missing; somebody on it at all is not told the harness does
+// not know them.
+func (c Config) SlackMembers() []string {
+	var members []string
+	for _, name := range c.OperatorNames() {
+		if member := strings.TrimSpace(c.Operators[name].SlackMemberID); member != "" {
+			members = append(members, member)
+		}
+	}
+	return members
+}
+
 // binding is what this human bound in one namespace, empty when they bound
 // nothing there.
 func (o Operator) binding(namespace Namespace) string {

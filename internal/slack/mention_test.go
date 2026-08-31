@@ -316,19 +316,23 @@ func TestWhichTextsAddressThisApp(t *testing.T) {
 // silent about something already on the screen.
 //
 // It is pinned by a test so a later tightening of who may steer cannot quietly
-// put the silence back.
+// put the silence back. What was tightened is who the project recognizes at all,
+// which is a wider list than the allow-list and deliberately so: the human here
+// is in the mapping with nothing granted, and the sentence somebody outside it
+// gets instead is stranger_test.go's.
 func TestSomebodyWithoutDirectWorkStillGetsAnAnswer(t *testing.T) {
 	t.Parallel()
 
 	sink, directives, posts := newSteeringSink(t, testOperator)
+	recognize(sink, testColleague)
 	sink.steering.handle(context.Background(),
-		topLevel(testStranger, "<@"+testApp+"> what is running?", "1750000001.000100"))
+		topLevel(testColleague, "<@"+testApp+"> what is running?", "1750000001.000100"))
 
 	answer := onlyPost(t, posts)
 	if !strings.Contains(answer.Text, "Running:") {
 		t.Fatalf("answer = %q, want the four lines for somebody the project has not granted direct-work", answer.Text)
 	}
-	if !strings.HasPrefix(answer.Text, "<@"+testStranger+"> ") {
+	if !strings.HasPrefix(answer.Text, "<@"+testColleague+"> ") {
 		t.Fatalf("answer = %q, want it addressed to whoever asked", answer.Text)
 	}
 	if recorded, err := directives.List(); err != nil {
