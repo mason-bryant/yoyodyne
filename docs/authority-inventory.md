@@ -112,6 +112,7 @@ what stops them moving silently.
 | capability.known | every role | `internal/capability/capability.go` | `(Capability).Known` | Answers what the two rows below refuse on: the vocabulary an action declares its authority in is a closed list in Go, so a name nothing here declares is not one anything can require. |
 | action.registry-closed | every role | `internal/action/action.go` | `New` | An action requiring a capability nothing declares, declaring no capabilities at all, or naming no trusted function it wraps. Configuration selects sequence; code grants capability. |
 | workflow.catalog-closed | every role | `internal/workflow/validate.go` | `NewCatalog` | A catalog entry naming a capability the repository does not declare, which would be a claim about authority nothing grants. |
+| workflow.compiled-under-grant | every role | `internal/workflow/compile.go` | `Grant` | A definition selecting an action that requires a capability the grant it is compiled under does not confer, and a compile under a grant that confers nothing at all. It is refused before an instance exists and before any work is claimed, so a definition never widens the authority it was bound with. The refusal is made by the loader's `Compile`, whose generic receiver this inventory cannot name, so the row pins the grant it is made against. |
 | cli.conversation-contract-exists | every role | `internal/cli/agent.go` | `agentConversationRequest` | Addressing an agent whose role the harness holds no conversation contract for. |
 
 ## Not an authority check
