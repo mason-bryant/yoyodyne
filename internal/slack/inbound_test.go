@@ -114,12 +114,13 @@ func TestARefusedReplyWearsARefusalRatherThanNothing(t *testing.T) {
 
 	const replyTS = "1750000001.000200"
 	sink, _, posts := newSteeringSink(t, testOperator)
-	sink.steering.handle(context.Background(), reply(testStranger, "do it the other way", replyTS))
+	recognize(sink, testColleague)
+	sink.steering.handle(context.Background(), reply(testColleague, "do it the other way", replyTS))
 
 	if worn := posts.wearing[replyTS]; !worn[notify.ReceiptRefused.Symbol()] || len(worn) != 1 {
 		t.Fatalf("the reply wears %#v, want the refusal mark and nothing else", worn)
 	}
-	if answer := onlyPost(t, posts); !strings.HasPrefix(answer.Text, "<@"+testStranger+"> ") {
+	if answer := onlyPost(t, posts); !strings.HasPrefix(answer.Text, "<@"+testColleague+"> ") {
 		t.Fatalf("answer = %q, want a refusal addressed to whoever it refuses", answer.Text)
 	}
 }
@@ -322,13 +323,15 @@ func TestAStatedKindThatSaysNothingUnresolvedIsRefused(t *testing.T) {
 
 // Authority defaults closed, and a reply from somebody who does not hold it is
 // answered rather than dropped: a channel that silently ignores some people looks
-// broken rather than closed.
+// broken rather than closed. This is somebody the project recognizes and granted
+// nothing — a stranger gets a different answer, which is stranger_test.go's.
 func TestAReplyFromSomebodyWithoutDirectWorkRecordsNothingAndSaysSo(t *testing.T) {
 	t.Parallel()
 
 	sink, directives, posts := newSteeringSink(t, testOperator)
+	recognize(sink, testColleague)
 	sink.steering.handle(context.Background(),
-		reply(testStranger, "ambiguous: stop what you are doing", "1750000001.000200"))
+		reply(testColleague, "ambiguous: stop what you are doing", "1750000001.000200"))
 
 	recorded, err := directives.List()
 	if err != nil {
@@ -704,6 +707,11 @@ func newSteeringSinkWithFeed(t *testing.T, feed Feed, operators ...string) (*Sin
 		Feed:       feed,
 		Directives: directives,
 		Operators:  operators,
+		// The same humans, read the wider way: who this project recognizes at all,
+		// and what it calls them. A member id on neither list is a stranger's, and
+		// what one of those gets is stranger_test.go's.
+		Recognized: operators,
+		Contacts:   []string{testContact},
 		// Wired, but from no records: what a message asking where things stand gets
 		// back is the read model's own four lines, and an unwired source says so on
 		// its own line rather than reading as an empty state.

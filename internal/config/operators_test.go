@@ -174,6 +174,42 @@ operators:
 	}
 }
 
+// Who the project recognizes is the wider reading of the same mapping: every
+// human it names who bound a member id, whatever they were granted. The sink
+// reads it to tell a colleague it may refuse for a missing grant from somebody
+// it has never heard of, and the two lists must be derived from one mapping or
+// they are two answers to who this project knows.
+func TestEveryBoundMemberIsRecognizedWhateverTheyWereGranted(t *testing.T) {
+	t.Parallel()
+
+	cfg := loadProject(t, minimalProjectConfig+`operators:
+  mason:
+    slack_member_id: U0BR9M2EKKP
+    grants:
+      - direct-work
+  # Recognized and granted nothing, which is who this derivation exists for.
+  robin:
+    slack_member_id: U11111111
+  # Granted direct-work with no member id bound: nothing arriving from Slack can
+  # be recognized as them.
+  ash:
+    git_email: ash@example.com
+    grants:
+      - direct-work
+`, nil).Config
+
+	want := []string{"U0BR9M2EKKP", "U11111111"}
+	if got := cfg.SlackMembers(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("SlackMembers() = %#v, want every bound member id in operator-name order: %#v", got, want)
+	}
+	if got := cfg.SlackOperators(); len(got) != 1 || got[0] != "U0BR9M2EKKP" {
+		t.Fatalf("SlackOperators() = %#v, want recognizing somebody to have granted them nothing", got)
+	}
+	if names := cfg.OperatorNames(); !reflect.DeepEqual(names, []string{"ash", "mason", "robin"}) {
+		t.Fatalf("OperatorNames() = %#v, want the humans a stranger would be told to reach out to", names)
+	}
+}
+
 // A typo in an authority record is found at load or it is found as an act that
 // silently resolved to nobody. Everything is checked whether or not anything
 // reads the namespace yet, for the reason the Slack section is checked whether

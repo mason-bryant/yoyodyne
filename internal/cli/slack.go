@@ -286,6 +286,12 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		// acknowledges every reply and acts on none.
 		Directives: directives,
 		Operators:  resolved.Config.SlackOperators(),
+		// Who the project recognizes, which is the wider reading of the same
+		// mapping: every human it names who bound a member id, and what it calls
+		// them. A message from anybody else is a stranger's, and is told so once per
+		// thread with the humans above named as who to reach out to instead.
+		Recognized: resolved.Config.SlackMembers(),
+		Contacts:   resolved.Config.OperatorNames(),
 		// Where things stand, for the other half of the same question: a message
 		// that addresses this app at the top of the channel is answered with the
 		// four lines rather than with silence.

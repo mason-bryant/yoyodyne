@@ -25,7 +25,9 @@ package slack
 // to a human the project granted direct-work, and the derivation of that list is
 // the configuration's rather than this file's. An unlisted reply is answered in
 // the thread saying it was not acted on, because a channel that silently ignores
-// some people looks broken rather than closed.
+// some people looks broken rather than closed — and a reply from somebody the
+// project does not recognize at all is a different case with a different answer,
+// which is stranger.go's.
 //
 // Every message this reads is answered in its own thread — the directive as
 // recorded with its identifier, or the refusal with its reason — and the answer
@@ -100,6 +102,14 @@ type steering struct {
 	// member id — and an empty one is a product nobody may steer from Slack,
 	// which is what every workspace gets until somebody names themselves.
 	operators map[string]bool
+	// recognized is who the project knows, by Slack member id: every human the
+	// same mapping names, whatever they were granted. It is wider than the
+	// allow-list, and the difference is the whole of what separates a colleague
+	// who may not steer from somebody this app has never heard of.
+	recognized map[string]bool
+	// contacts is what those humans are called, which is who a stranger is told
+	// to reach out to instead.
+	contacts []string
 	// mu guards what this process has already acted on, because replies arrive on
 	// the connection's goroutine while the delivery loop runs on its own.
 	mu      sync.Mutex
@@ -112,19 +122,31 @@ type steering struct {
 	member string
 }
 
-func newSteering(sink *Sink, directives Directives, operators []string) *steering {
-	allowed := make(map[string]bool, len(operators))
-	for _, member := range operators {
-		if trimmed := strings.TrimSpace(member); trimmed != "" {
-			allowed[trimmed] = true
-		}
-	}
+// newSteering wires the inbound half from the options the sink was assembled
+// with. It takes them whole rather than one list at a time because three of them
+// are three readings of one mapping, and a caller that could pass them
+// separately is a caller that could pass them from different configurations.
+func newSteering(sink *Sink, options Options) *steering {
 	return &steering{
 		sink:       sink,
-		directives: directives,
-		operators:  allowed,
+		directives: options.Directives,
+		operators:  membership(options.Operators),
+		recognized: membership(options.Recognized),
+		contacts:   options.Contacts,
 		acted:      map[string]bool{},
 	}
+}
+
+// membership is one list of Slack member ids as it is asked about: by id, with
+// whatever a configuration left blank dropped.
+func membership(members []string) map[string]bool {
+	set := make(map[string]bool, len(members))
+	for _, member := range members {
+		if trimmed := strings.TrimSpace(member); trimmed != "" {
+			set[trimmed] = true
+		}
+	}
+	return set
 }
 
 // handle reads one inbound envelope and, where it is a reply in a thread this
@@ -171,6 +193,16 @@ func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
 	// an ordinary busy channel cannot push the replies that steer the work out of
 	// what one process remembers having acted on.
 	if !s.first(message.ts) {
+		return
+	}
+	// Somebody this project does not recognize is told so once in this thread and
+	// read no further, which is stranger.go's. It is decided before the thread is
+	// resolved to a topic and before anything is parsed, for the reason the
+	// authority check below it is: what a stranger typed is not something this
+	// harness should be reading, and the answer they are owed does not depend on
+	// what they said.
+	if !s.knows(message.user) {
+		s.refuse(ctx, message)
 		return
 	}
 	topic, err := notify.ParseTopic(key)
@@ -244,6 +276,9 @@ func disposition(answer notify.Notification) (notify.Receipt, bool) {
 func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundMessage, at time.Time) notify.Notification {
 	// Authority first, and before the reply is even read: what an unlisted person
 	// typed is not something the harness should be parsing, let alone recording.
+	// Whoever reaches here is somebody the project recognizes, so the refusal
+	// names the grant they are missing rather than telling a colleague this app
+	// has never heard of them.
 	if !s.operators[message.user] {
 		return refused(topic, at, "the reply is from somebody this project has not granted direct-work with a bound Slack member id, so nothing was recorded; `operators` in .yoyodyne/config.yaml is where that grant lives")
 	}

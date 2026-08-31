@@ -1,14 +1,15 @@
 package slack
 
 // What the sink remembers between runs: which thread each topic opened, how far
-// it has read each durable stream, and which directives were said to it in a
-// thread rather than at a terminal.
+// it has read each durable stream, which directives were said to it in a thread
+// rather than at a terminal, and which threads it has already told a stranger it
+// does not know them in.
 //
-// All three live at the state root beside the runs, conversations, and reports
+// All four live at the state root beside the runs, conversations, and reports
 // they are read from, per product, and each is owned by the sink alone. A
 // restart therefore posts into the same threads, resumes from the same place,
-// and still knows who asked for what, which is the whole of what makes an outage
-// a delay rather than a gap.
+// still knows who asked for what, and does not greet the same stranger twice,
+// which is the whole of what makes an outage a delay rather than a gap.
 //
 // Known limit, stated rather than solved: the thread map is per machine. Two
 // collaborators' harnesses against one shared repository would open two threads
@@ -36,14 +37,22 @@ const (
 	// ThreadMapSchemaVersion and CursorsSchemaVersion are versioned separately
 	// from run state because they describe neither a run nor a conversation, and
 	// a sink is free to be upgraded without every other record moving with it.
-	ThreadMapSchemaVersion = 1
-	CursorsSchemaVersion   = 1
-	SteerMapSchemaVersion  = 1
+	ThreadMapSchemaVersion  = 1
+	CursorsSchemaVersion    = 1
+	SteerMapSchemaVersion   = 1
+	RefusalMapSchemaVersion = 1
 	// maxRecordBytes bounds any of them. A thread map is one line per topic, a
 	// cursor set one line per stream, and a steer map one line per directive
 	// somebody typed into a thread, so anything near this bound is a file
 	// something other than the sink has written.
 	maxRecordBytes = 4 << 20
+	// maxRememberedRefusals bounds the one record a person outside this project
+	// can cause a line to be written to. The rest of what the sink keeps grows
+	// with the work; this grows with how many threads strangers have spoken in,
+	// which is not the harness's to bound by asking them to stop. Forgetting the
+	// oldest costs at most one more polite refusal in a thread nobody has touched
+	// in a long time, which is the cheapest thing here to be wrong about.
+	maxRememberedRefusals = 256
 )
 
 // Store is the sink's own durable state for one product.
@@ -261,6 +270,107 @@ func (m *SteerMap) Record(directiveID string, steer Steer) {
 	m.Steers[directiveID] = steer
 }
 
+// Refusal is one thread this sink has already told somebody it does not know
+// them in: who was told, and when.
+//
+// It is durable for the same reason a cursor is. The rule the refusal is held to
+// is one per thread and not one per process, so a sink that restarted overnight
+// must not greet the same stranger again in the morning — and a mark kept only
+// in memory would do exactly that, every time anything restarted the process.
+type Refusal struct {
+	// Member is the Slack member id this was said to, kept so a reader of this
+	// file can tell one stranger's thread from another's rather than only that
+	// something was said in it.
+	Member string `json:"member"`
+	// At is when it was said, which is what says which entry to forget when the
+	// map reaches its bound.
+	At time.Time `json:"at"`
+}
+
+// RefusalMap is the threads a stranger has already been answered in, as it is
+// stored.
+//
+// It is written by the connection alone, like the steer map, and read by nothing
+// else at all: what it holds is the memory of one sentence having been said, and
+// nothing downstream acts on it. It is bounded rather than unbounded, which is
+// the one way it differs from every other record here — the lines in it are
+// caused by people outside this project rather than by the work.
+type RefusalMap struct {
+	SchemaVersion int                `json:"schema_version"`
+	Refused       map[string]Refusal `json:"refused"`
+}
+
+// LoadRefusals reads the refusal map. A product nobody outside it has spoken to
+// has no map rather than a broken one, so an absent file is an empty map.
+func (s *Store) LoadRefusals() (RefusalMap, error) {
+	var stored RefusalMap
+	found, err := readJSON(s.refusalPath(), "slack refusal map", &stored)
+	if err != nil {
+		return RefusalMap{}, err
+	}
+	if !found {
+		return RefusalMap{SchemaVersion: RefusalMapSchemaVersion, Refused: map[string]Refusal{}}, nil
+	}
+	if stored.SchemaVersion != RefusalMapSchemaVersion {
+		return RefusalMap{}, fmt.Errorf("slack refusal map schema version %d is not supported", stored.SchemaVersion)
+	}
+	if stored.Refused == nil {
+		stored.Refused = map[string]Refusal{}
+	}
+	return stored, nil
+}
+
+// SaveRefusals replaces the refusal map durably.
+func (s *Store) SaveRefusals(refusals RefusalMap) error {
+	refusals.SchemaVersion = RefusalMapSchemaVersion
+	if refusals.Refused == nil {
+		refusals.Refused = map[string]Refusal{}
+	}
+	return s.write(s.refusalPath(), "slack refusal map", refusals)
+}
+
+// Has reports a thread this sink has already said it in. The channel is part of
+// the key for the reason it is part of a thread: a timestamp means nothing
+// outside the channel it was posted in, and a project that moved channels has
+// left the conversation behind rather than taken it with it.
+func (m RefusalMap) Has(channel, threadTS string) bool {
+	_, found := m.Refused[refusalKey(channel, threadTS)]
+	return found
+}
+
+// Record remembers having said it in one thread, forgetting the oldest once the
+// map is at its bound.
+func (m *RefusalMap) Record(channel, threadTS string, refusal Refusal) {
+	if m.Refused == nil {
+		m.Refused = map[string]Refusal{}
+	}
+	m.Refused[refusalKey(channel, threadTS)] = refusal
+	for len(m.Refused) > maxRememberedRefusals {
+		delete(m.Refused, m.oldest())
+	}
+}
+
+// oldest is the entry to forget first: the one said longest ago, and the first
+// of them by key where two were said at the same moment, so a map at its bound
+// is pruned the same way twice rather than by whichever order a map was walked
+// in.
+func (m RefusalMap) oldest() string {
+	var oldest string
+	var at time.Time
+	for key, refusal := range m.Refused {
+		if oldest == "" || refusal.At.Before(at) || (refusal.At.Equal(at) && key < oldest) {
+			oldest, at = key, refusal.At
+		}
+	}
+	return oldest
+}
+
+// refusalKey names one thread in one channel, which is the scope the refusal is
+// held to.
+func refusalKey(channel, threadTS string) string {
+	return channel + "/" + threadTS
+}
+
 // Cursor is how far the sink has read one durable stream, and the streams are
 // read four ways because they are four shapes.
 //
@@ -419,6 +529,8 @@ func (c *Cursors) Keep(streams map[string]struct{}) bool {
 func (s *Store) threadPath() string { return filepath.Join(s.root, "threads.json") }
 func (s *Store) cursorPath() string { return filepath.Join(s.root, "cursors.json") }
 func (s *Store) steerPath() string  { return filepath.Join(s.root, "steers.json") }
+
+func (s *Store) refusalPath() string { return filepath.Join(s.root, "refusals.json") }
 
 // write replaces one record atomically: a sink killed mid-write leaves the
 // previous file rather than half of the new one, which for the thread map is the

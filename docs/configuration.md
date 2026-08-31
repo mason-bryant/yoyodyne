@@ -3139,10 +3139,22 @@ hold the authority, and Slack is not a boundary they can reach it through.
 
 A reply from somebody on that list is recorded as a directive against the item
 whose thread it was said in, and reaches the work exactly as one typed at a
-terminal does. A reply from anybody else is answered in the thread saying it was
-not acted on — visibly, because a channel that silently ignores some people looks
+terminal does. A reply from a human this mapping names who is not on it is
+answered in the thread saying it was not acted on, naming the grant they are
+missing — visibly, because a channel that silently ignores some people looks
 broken rather than closed. What a reply may say is in
 [`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).
+
+**Somebody the mapping does not name at all gets a different answer**, and gets
+it once: *I don't know you. Please reach out to … if you need something*, with
+the humans this mapping names filling in the gap — by the names it files them
+under, rather than as Slack mentions, so telling one stranger who to ask does not
+notify everybody. It is said at most once per thread — in a thread this sink
+opened, or under the message that @-mentioned the app — and everything the same
+person says after it in that thread is written to the sink's log and answered
+with nothing, so an unknown user cannot make the app talk by repeating
+themselves. A project whose mapping names nobody has drawn no boundary and has
+nobody to name as a contact, so it says this to nobody.
 
 An earlier shape put this list under `slack` as `slack.operators`. It is gone,
 and a file that still carries it is refused when the configuration loads, with a
