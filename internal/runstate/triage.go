@@ -43,6 +43,7 @@ package runstate
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -158,6 +159,24 @@ type TriageCounters struct {
 	// a record still naming an attempt whose round is no longer counted would make
 	// the next review of that attempt free.
 	LastRound string `json:"last_round,omitempty"`
+	// LastRoundCharger is the process that charged the round at the head, and it
+	// is what a return of that round has to match. The attempt alone is not
+	// enough: a run re-entered after its process died is the same run at the same
+	// attempt number, so an attempt key names a round the process before this one
+	// may have been the one to spend, and a later refusal at that attempt would
+	// otherwise give back a round the item genuinely cost.
+	//
+	// It travels with the round rather than beside it. A charge and its credit are
+	// one write under the item's lock, so a process that died between producing a
+	// verdict and recording who produced it is not a state this can be in — which
+	// is the whole reason it is here rather than on the run.
+	//
+	// A record written before rounds carried this names nobody, and a return
+	// against it is refused for the same reason any mismatch is: nothing in the
+	// record says this process is the one that charged it, and leaving a round
+	// spent costs an item a round it should have kept, while crediting one it did
+	// spend is a budget nothing bounds.
+	LastRoundCharger string `json:"last_round_charger,omitempty"`
 	// Overrides are the operator's recorded decisions to cross this item's caps,
 	// in the order they were recorded. They are the one thing that gets past a cap
 	// and they are kept here rather than beside the counters, so a guard reading
@@ -215,6 +234,13 @@ func (c TriageCounters) Validate() error {
 	}
 	if c.LastRound != "" && c.ReviewRounds == 0 {
 		problems = append(problems, errors.New("a counted round requires the round count that includes it"))
+	}
+	// A charger is written with the round it charged and cleared with it, so one
+	// standing alone could not have been written by the only thing that writes it.
+	// The other way round is ordinary: a record written before rounds carried the
+	// process that charged them names an attempt and nobody.
+	if c.LastRoundCharger != "" && c.LastRound == "" {
+		problems = append(problems, errors.New("a charging process requires the round it charged"))
 	}
 	problems = append(problems, validateTriageOverrides(c.Overrides)...)
 	if c.UpdatedAt.IsZero() {
@@ -447,11 +473,20 @@ func (s *TriageStore) Counters(workItemID string) (TriageCounters, error) {
 // the round just counted. It is also what makes an interrupted review safe to
 // resume — the review is re-asked for, and the round is not counted again.
 //
+// chargedBy is the process counting it, kept with the round so that only that
+// process can give it back. A round already at the head keeps the charger it was
+// written with rather than acquiring the one asking: the item was charged once,
+// by whoever produced the verdict, and a re-review that counted nothing has
+// bought nothing to give back.
+//
 // Only the most recent round is compared against, which is sufficient rather
 // than approximate; LastRound says why.
-func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, error) {
+func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attemptID, chargedBy string, at time.Time) (TriageCounters, error) {
 	if strings.TrimSpace(attemptID) == "" {
 		return TriageCounters{}, errors.New("a developer attempt is required to count the round its review produced")
+	}
+	if strings.TrimSpace(chargedBy) == "" {
+		return TriageCounters{}, errors.New("a charging process is required to count a review round")
 	}
 	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
 		if counters.LastRound == attemptID {
@@ -459,6 +494,7 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 		}
 		counters.ReviewRounds++
 		counters.LastRound = attemptID
+		counters.LastRoundCharger = chargedBy
 		return nil
 	})
 }
@@ -473,39 +509,91 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 //
 // It is deliberately not the mirror of RecordReviewRound. That one never
 // refuses, because a round is something that happened; this one refuses
-// everything except the round at the head of the record, so it can only ever
-// give back a round this attempt is the one that counted. A caller naming an
-// attempt the record does not stand at gets its counters back unchanged and is
-// told nothing was returned, rather than a decrement against somebody else's
-// round.
+// everything except the round at the head of the record charged by the process
+// asking, so it can only ever give back a round this caller is the one that
+// counted. A caller naming an attempt the record does not stand at gets its
+// counters back unchanged and is told nothing was returned, rather than a
+// decrement against somebody else's round.
+//
+// The charger is asked as well as the attempt, because the attempt alone does
+// not say whose round it is. An attempt is keyed to a run and how many repairs
+// into it the round is, and a run re-entered after its process died is that same
+// run at that same attempt: a refusal in the new process would otherwise find
+// its own key at the head and give back a round the process before it spent on a
+// verdict the item really got. A mismatch is reported rather than decremented,
+// so the settle that asked can say the round was left spent instead of claiming
+// the item stands where it did.
 //
 // What it does not touch is the grant. A grant is a decision the development
 // manager recorded, and it still stands after an environmental refusal — what
 // was never spent is the run's carrying it out, which the run's own record says.
 // The commitment a grant wrote stays for the same reason: the rounds it promised
 // are still promised.
-func (s *TriageStore) ReturnReviewRound(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, bool, error) {
+func (s *TriageStore) ReturnReviewRound(ctx context.Context, workItemID, attemptID, chargedBy string, at time.Time) (TriageCounters, RoundReturn, error) {
 	if strings.TrimSpace(attemptID) == "" {
-		return TriageCounters{}, false, errors.New("a developer attempt is required to return the round its review was counted as")
+		return TriageCounters{}, RoundReturn{}, errors.New("a developer attempt is required to return the round its review was counted as")
 	}
-	returned := false
+	if strings.TrimSpace(chargedBy) == "" {
+		return TriageCounters{}, RoundReturn{}, errors.New("a charging process is required to return a review round")
+	}
+	var outcome RoundReturn
 	counters, err := s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
 		if counters.LastRound != attemptID || counters.ReviewRounds < 1 {
 			return errNoTriageChange
 		}
+		if counters.LastRoundCharger != chargedBy {
+			outcome.Mismatched = true
+			outcome.ChargedBy = counters.LastRoundCharger
+			return errNoTriageChange
+		}
 		counters.ReviewRounds--
-		// The head is cleared with the round it named. Leaving it would leave the
-		// record saying a round was counted for an attempt whose round has been
-		// given back, which is the one reading that makes the next review of the
-		// same attempt free.
+		// The head is cleared with the round it named, and its charger with it.
+		// Leaving either would leave the record saying a round was counted for an
+		// attempt whose round has been given back, which is the one reading that
+		// makes the next review of the same attempt free.
 		counters.LastRound = ""
-		returned = true
+		counters.LastRoundCharger = ""
+		outcome.Returned = true
 		return nil
 	})
 	if err != nil {
-		return TriageCounters{}, false, err
+		return TriageCounters{}, RoundReturn{}, err
 	}
-	return counters, returned, nil
+	return counters, outcome, nil
+}
+
+// RoundReturn is what asking for a review round back came to.
+//
+// Returned and Mismatched are different answers and a caller must not read one
+// as the other. Nothing returned can mean the record stands at some other round
+// entirely, which says nothing about this one; Mismatched says the round asked
+// for is exactly the one at the head and another process is credited with it, so
+// it stays spent and the item does not stand where it did before the round.
+type RoundReturn struct {
+	Returned   bool
+	Mismatched bool
+	// ChargedBy is the process holding the round, on a mismatch. It is empty on a
+	// record written before rounds carried the process that charged them, which is
+	// a mismatch all the same: a round nothing attributes is not one this caller
+	// can prove it spent.
+	ChargedBy string
+}
+
+// NewChargingProcess mints the identity one process charges review rounds under.
+//
+// It is minted rather than derived from the run, because what it has to tell
+// apart is two processes carrying the same run: a run re-entered after an
+// interrupted process is the same run identifier at the same attempt number, and
+// a derivation from either would give the second process the first one's
+// credit. It carries this process's number so a record naming it says something
+// to whoever reads it, and the random half is what makes it unique — process
+// numbers are reused, and a reused one matching would be the whole bug back.
+func NewChargingProcess() (string, error) {
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate charging process id: %w", err)
+	}
+	return fmt.Sprintf("pid-%d-%s", os.Getpid(), hex.EncodeToString(bytes)), nil
 }
 
 // GrantRepair records a repair grant and reports what it came to. The grant is

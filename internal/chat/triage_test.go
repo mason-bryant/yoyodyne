@@ -21,6 +21,10 @@ import (
 const (
 	stoppedRun      = "run-0123456789abcdef0123456789abcdef"
 	otherStoppedRun = "run-fedcba9876543210fedcba9876543210"
+	// countingProcess is who a round these tests seed was charged by. A round is
+	// only ever given back to the process that charged it, and nothing here gives
+	// one back; what it needs is somebody to have charged it.
+	countingProcess = "pid-1-000000000000000a"
 )
 
 // A triage decision lands on the work item, and it says which stoppage it
@@ -161,7 +165,7 @@ func TestARepairGrantSpendsTheDurableBudgetAndIsRefusedOnceItIsGone(t *testing.T
 	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 2, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
 	// One round is already spent by the run that stopped, so a grant of two is
 	// cut to the one the cap still has room for.
-	if _, err := budgets.store.RecordReviewRound(context.Background(), "yoyodyne-ifd.90", runstate.RoundKey(stoppedRun, 0), budgets.clock.Now()); err != nil {
+	if _, err := budgets.store.RecordReviewRound(context.Background(), "yoyodyne-ifd.90", runstate.RoundKey(stoppedRun, 0), countingProcess, budgets.clock.Now()); err != nil {
 		t.Fatalf("RecordReviewRound() error = %v", err)
 	}
 	answer := trackerReply("The findings are actionable.",

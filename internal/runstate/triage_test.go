@@ -13,6 +13,12 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
+// countingProcess is who the tests below charge their rounds under. Which
+// process charged a round matters only where a second one is in play, which is
+// what TestARoundIsGivenBackOnlyToTheProcessThatChargedIt is about; everywhere
+// else a round has to have been charged by somebody and this is who.
+const countingProcess = "pid-1-000000000000000a"
+
 func newTriageStore(t *testing.T) *TriageStore {
 	t.Helper()
 	store, err := NewTriageStore(t.TempDir(), domain.ProductID("yoyodyne"))
@@ -56,7 +62,7 @@ func TestTriageCountersSurviveTheProcessThatWroteThem(t *testing.T) {
 		t.Fatalf("NewTriageStore() error = %v", err)
 	}
 	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
-	if _, err := first.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", time.Now()); err != nil {
+	if _, err := first.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", countingProcess, time.Now()); err != nil {
 		t.Fatalf("RecordReviewRound() error = %v", err)
 	}
 	if _, err := first.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); err != nil {
@@ -91,7 +97,7 @@ func TestAReviewRoundIsCountedOncePerConsecutiveDeveloperAttempt(t *testing.T) {
 
 	store := newTriageStore(t)
 	for _, attempt := range []string{"run-a#0", "run-a#0", "run-a#1", "run-a#1", "run-b#0"} {
-		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, time.Now()); err != nil {
+		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, countingProcess, time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
@@ -117,7 +123,7 @@ func TestARepairGrantIsTruncatedToTheRoundsTheCapHasRoomFor(t *testing.T) {
 	store := newTriageStore(t)
 	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
 	for _, attempt := range []string{"run-a#0", "run-a#1", "run-a#2"} {
-		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, time.Now()); err != nil {
+		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, countingProcess, time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
@@ -203,7 +209,7 @@ func TestAGrantThatHasBeenCarriedOutIsNotChargedTwice(t *testing.T) {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	for _, attempt := range []string{"run-a#1", "run-a#2"} {
-		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, time.Now()); err != nil {
+		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, countingProcess, time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
@@ -254,7 +260,7 @@ func TestTriageActionsAreRefusedPastTheirCaps(t *testing.T) {
 	rounds := TriageCaps{ReviewRounds: 1, RepairGrants: 1, Reruns: 1, MergeRearms: 1}
 	ownBudget := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}
 	spendRound := func(store *TriageStore) error {
-		_, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", time.Now())
+		_, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", countingProcess, time.Now())
 		return err
 	}
 	grant := func(caps TriageCaps) func(*TriageStore) error {
@@ -371,7 +377,7 @@ func TestARepairGrantIsRefusedWhenNoRoundsRemain(t *testing.T) {
 	store := newTriageStore(t)
 	caps := TriageCaps{ReviewRounds: 2, RepairGrants: 1, Reruns: 1}
 	for _, attempt := range []string{"run-a#0", "run-a#1"} {
-		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, time.Now()); err != nil {
+		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, countingProcess, time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
@@ -394,7 +400,7 @@ func TestAReviewRoundIsRecordedPastEveryCap(t *testing.T) {
 
 	store := newTriageStore(t)
 	for _, attempt := range []string{"run-a#0", "run-a#1", "run-a#2", "run-a#3", "run-a#4", "run-a#5"} {
-		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, time.Now()); err != nil {
+		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, countingProcess, time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
@@ -488,7 +494,7 @@ func TestConcurrentTriageUpdatesEachLand(t *testing.T) {
 		go func(round int) {
 			defer waiting.Done()
 			attempt := RoundKey("run-a", round)
-			if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, time.Now()); err != nil {
+			if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, countingProcess, time.Now()); err != nil {
 				failures <- err
 			}
 		}(round)

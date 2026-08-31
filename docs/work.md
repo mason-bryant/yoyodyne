@@ -94,12 +94,24 @@ whether the worktree differs from the base commit: a round of a repair grant run
 in the worktree earlier rounds already filled. Where the harness refused before
 anything that round would have delivered could exist — no agent invoked, or an
 invocation the machine never started — the round added nothing whatever the
-worktree holds, and the refusal says so rather than the worktree being asked. Where it
-applies, the run's record, the docket entry, and the thread all say so beside the
-counters, because a stoppage whose last round was refused means something
-different about how close the item is to its cap — including the one case where
-the harness classified the round and could not write the return, which every one
-of those surfaces says out loud rather than claiming the item stands where it did.
+worktree holds, and the refusal says so rather than the worktree being asked.
+Where it applies, the run's record, the docket entry, and the thread all say so
+beside the counters, because a stoppage whose last round was refused means
+something different about how close the item is to its cap — including the two
+cases where the item does not stand where it did: the round the harness
+classified and could not write the return for, and the round another process is
+credited with. Every one of those surfaces says both out loud rather than
+claiming the item stands where it did.
+
+That second case is the other direction this accounting can fail in, and it is
+guarded the same way. A round is counted under the developer attempt that
+produced it — the run it was made in and how many repairs into that run it is —
+and a run picked up again after its process died is that same run at that same
+attempt number, so the attempt alone would let a refusal in the new process give
+back a round the process before it spent on a verdict the item really got. So the
+count carries the process that charged it as well, and only that process is ever
+given the round back; a return from any other is refused and the round left
+spent.
 
 Three of those four causes are recognized today. The last one is not: a stale
 build does not refuse, it proceeds, so there is no refusal to hang the cause on,

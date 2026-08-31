@@ -174,10 +174,13 @@ type Publication struct {
 // manager must not change shape because the harness's own schema was refactored.
 //
 // It is the one thing on an entry that changes what the counters beside it mean.
-// A stoppage whose last round was environmentally refused is an item that spent
-// nothing on that round, so a development manager reading the counters alone
-// would see an item one round closer to its cap than it is — and would decide an
-// escalation the item never earned.
+// A stoppage whose last round was environmentally refused is usually an item
+// that spent nothing on that round, so a development manager reading the
+// counters alone would see an item one round closer to its cap than it is — and
+// would decide an escalation the item never earned. Usually rather than always:
+// a refusal whose return could not be written, and one asking for a round
+// another process charged, both leave the round spent. Which of them this is, is
+// what Account says.
 type Environmental struct {
 	Cause  string `json:"cause"`
 	Detail string `json:"detail,omitempty"`
@@ -191,11 +194,12 @@ type Environmental struct {
 	GrantReturned bool `json:"grant_returned,omitempty"`
 	// Account is the harness's own sentence about what this round cost the item,
 	// carried onto the entry rather than derived here from the flags above. The
-	// accounting has five states and one of them — a return the settle decided on
-	// and could not write — is the one a reader must not be told the opposite of,
-	// so it is derived once where the round settles and every surface says the
-	// same words. An entry written before this was carried has none, and the
-	// rendering says so rather than inventing an accounting for it.
+	// accounting has several states, and the ones that leave the round spent — a
+	// return the settle decided on and could not write, and a round another
+	// process is credited with — are the ones a reader must not be told the
+	// opposite of, so it is derived once where the round settles and every surface
+	// says the same words. An entry written before this was carried has none, and
+	// the rendering says so rather than inventing an accounting for it.
 	Account string `json:"account,omitempty"`
 	// Problem is a return the settle decided on and could not write, which is the
 	// one case where the counters above are higher than what the item actually

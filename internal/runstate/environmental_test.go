@@ -13,43 +13,148 @@ func TestAReturnedRoundIsTakenBackFromTheAttemptThatWasChargedForIt(t *testing.T
 	t.Parallel()
 
 	store := newTriageStore(t)
+	charging := chargingProcess(t)
 	for _, attempt := range []string{"run-a#0", "run-a#1", "run-a#2"} {
-		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.190", attempt, time.Now()); err != nil {
+		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.190", attempt, charging, time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
 
 	// A round the record does not stand at is not this caller's to give back: the
 	// count belongs to whatever was judged since.
-	counters, returned, err := store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.190", "run-a#0", time.Now())
+	counters, round, err := store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.190", "run-a#0", charging, time.Now())
 	if err != nil {
 		t.Fatalf("ReturnReviewRound() error = %v", err)
 	}
-	if returned || counters.ReviewRounds != 3 {
-		t.Fatalf("returned = %t at %d round(s), want an older attempt refused with the count left at 3", returned, counters.ReviewRounds)
+	if round.Returned || counters.ReviewRounds != 3 {
+		t.Fatalf("returned = %t at %d round(s), want an older attempt refused with the count left at 3", round.Returned, counters.ReviewRounds)
+	}
+	// And an older attempt is not a round somebody else is holding: the record
+	// stands somewhere else entirely, which says nothing about who charged what.
+	if round.Mismatched {
+		t.Fatalf("return of an older attempt = %#v, want it refused for the record standing elsewhere rather than reported as another process's round", round)
 	}
 
-	counters, returned, err = store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.190", "run-a#2", time.Now())
+	counters, round, err = store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.190", "run-a#2", charging, time.Now())
 	if err != nil {
 		t.Fatalf("ReturnReviewRound() error = %v", err)
 	}
-	if !returned || counters.ReviewRounds != 2 {
-		t.Fatalf("returned = %t at %d round(s), want the head round given back", returned, counters.ReviewRounds)
+	if !round.Returned || counters.ReviewRounds != 2 {
+		t.Fatalf("returned = %t at %d round(s), want the head round given back", round.Returned, counters.ReviewRounds)
 	}
 	// The head is cleared with the round it named, so the record no longer claims
 	// a round is counted for an attempt that is not being charged for one.
-	if counters.LastRound != "" {
-		t.Fatalf("last round = %q after the return, want the head cleared", counters.LastRound)
+	if counters.LastRound != "" || counters.LastRoundCharger != "" {
+		t.Fatalf("last round = %q charged by %q after the return, want the head cleared", counters.LastRound, counters.LastRoundCharger)
 	}
 	// And a second return of the same round gives back nothing: the round is
 	// already back, and repeating a settle must not credit the item twice.
-	counters, returned, err = store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.190", "run-a#2", time.Now())
+	counters, round, err = store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.190", "run-a#2", charging, time.Now())
 	if err != nil {
 		t.Fatalf("ReturnReviewRound() error = %v", err)
 	}
-	if returned || counters.ReviewRounds != 2 {
-		t.Fatalf("returned = %t at %d round(s), want the repeat to give back nothing", returned, counters.ReviewRounds)
+	if round.Returned || counters.ReviewRounds != 2 {
+		t.Fatalf("returned = %t at %d round(s), want the repeat to give back nothing", round.Returned, counters.ReviewRounds)
 	}
+}
+
+// The guard the re-entered run turns on, at the store: the round at the head is
+// given back to the process that charged it and to no other. A run picked up
+// again after its process died carries the same run identifier at the same
+// attempt number, so the attempt alone would hand the new process a round the
+// old one spent on a verdict the item really got.
+func TestARoundIsGivenBackOnlyToTheProcessThatChargedIt(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	charged, reEntered := chargingProcess(t), chargingProcess(t)
+	if charged == reEntered {
+		t.Fatal("two processes were minted the same identity, so nothing here tells them apart")
+	}
+	if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.196", "run-a#1", charged, time.Now()); err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	// The re-entered process re-asks the review of the attempt already at the
+	// head, which counts nothing — so it has bought nothing to give back.
+	counters, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.196", "run-a#1", reEntered, time.Now())
+	if err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	if counters.ReviewRounds != 1 || counters.LastRoundCharger != charged {
+		t.Fatalf("counters = %d round(s) charged by %q, want the one round left with the process that charged it", counters.ReviewRounds, counters.LastRoundCharger)
+	}
+
+	counters, round, err := store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.196", "run-a#1", reEntered, time.Now())
+	if err != nil {
+		t.Fatalf("ReturnReviewRound() error = %v", err)
+	}
+	if round.Returned || counters.ReviewRounds != 1 {
+		t.Fatalf("returned = %t at %d round(s), want the predecessor's round left spent", round.Returned, counters.ReviewRounds)
+	}
+	// And the refusal says which of the two it was, because a round somebody else
+	// is holding and a record standing at some other attempt leave the item in
+	// different places.
+	if !round.Mismatched || round.ChargedBy != charged {
+		t.Fatalf("round = %#v, want the mismatch reported against %q", round, charged)
+	}
+	if counters.LastRound != "run-a#1" || counters.LastRoundCharger != charged {
+		t.Fatalf("head = %q charged by %q, want the refused return to have left the record alone", counters.LastRound, counters.LastRoundCharger)
+	}
+
+	// The process that did charge it still gets it back.
+	counters, round, err = store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.196", "run-a#1", charged, time.Now())
+	if err != nil {
+		t.Fatalf("ReturnReviewRound() error = %v", err)
+	}
+	if !round.Returned || round.Mismatched || counters.ReviewRounds != 0 {
+		t.Fatalf("returned = %#v at %d round(s), want the charging process given its round back", round, counters.ReviewRounds)
+	}
+}
+
+// A record written before rounds carried the process that charged them names
+// nobody, and a return against it is refused rather than honored. Leaving a
+// round spent costs an item a round it should have kept; crediting one nothing
+// says this process spent is a budget nothing bounds.
+func TestARoundNothingAttributesIsNotReturnedToWhoeverAsks(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	// A round counted with no charger beside it, which is the only shape a record
+	// written before this accounting can be in. It is a valid record: the charger
+	// is what a later write added, not something that was always required.
+	legacy, err := store.update(context.Background(), "yoyodyne-ifd.196", time.Now(), func(stored *TriageCounters) error {
+		stored.ReviewRounds, stored.LastRound = 1, "run-a#0"
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seeding a record from before this accounting: %v", err)
+	}
+	if legacy.LastRoundCharger != "" {
+		t.Fatalf("seeded charger = %q, want the record to name nobody", legacy.LastRoundCharger)
+	}
+
+	after, round, err := store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.196", "run-a#0", chargingProcess(t), time.Now())
+	if err != nil {
+		t.Fatalf("ReturnReviewRound() error = %v", err)
+	}
+	if round.Returned || after.ReviewRounds != 1 {
+		t.Fatalf("returned = %t at %d round(s), want a round nobody is recorded as having charged left spent", round.Returned, after.ReviewRounds)
+	}
+	if !round.Mismatched || round.ChargedBy != "" {
+		t.Fatalf("round = %#v, want the mismatch reported against nobody", round)
+	}
+}
+
+// chargingProcess is one process's identity, minted the way the harness mints
+// it. A test that wants two of them asks twice, which is the whole of what a run
+// re-entered by a second process differs by.
+func chargingProcess(t *testing.T) string {
+	t.Helper()
+	charging, err := NewChargingProcess()
+	if err != nil {
+		t.Fatalf("NewChargingProcess() error = %v", err)
+	}
+	return charging
 }
 
 // The grant is a different question from the run's own budget, and the two

@@ -18,6 +18,11 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
+// countingProcess is who a round these tests seed was charged by. A round is
+// only ever given back to the process that charged it, and nothing here gives
+// one back; what it needs is somebody to have charged it.
+const countingProcess = "pid-1-000000000000000a"
+
 // The failure an operator is chasing is already recorded; what was missing was
 // any way to read it back without going through the tracker item by item. So the
 // verb has to reach the records a run actually wrote, name the item, and carry
@@ -796,7 +801,7 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	caps := runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
 	triage := store.Triage()
 	for _, attempt := range []string{"run-a#0", "run-a#1", "run-a#2"} {
-		if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", attempt, started); err != nil {
+		if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", attempt, countingProcess, started); err != nil {
 			t.Fatalf("RecordReviewRound() error = %v", err)
 		}
 	}
@@ -889,7 +894,7 @@ func TestStatusReportsAnUnreadableTriageRecordBesideTheRunsItFound(t *testing.T)
 	// found by listing rather than by name, because what names it is the store's
 	// own business.
 	triage := store.Triage()
-	if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", "run-a#0", started); err != nil {
+	if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", "run-a#0", countingProcess, started); err != nil {
 		t.Fatalf("RecordReviewRound() error = %v", err)
 	}
 	entries, err := os.ReadDir(triage.Root())
