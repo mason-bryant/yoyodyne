@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -22,6 +23,9 @@ const (
 	testStranger = "U0STRANGER"
 	testItem     = "yoyodyne-ifd.68.4"
 	testThreadTS = "1750000000.000100"
+	// testApp is the member id the workspace gives this app, which is what a
+	// message has to name to be addressed to it rather than to the channel.
+	testApp = "U0YOYODYNE"
 )
 
 // A plain reply is an operational directive, recorded where every run reads it
@@ -700,7 +704,11 @@ func newSteeringSinkWithFeed(t *testing.T, feed Feed, operators ...string) (*Sin
 		Feed:       feed,
 		Directives: directives,
 		Operators:  operators,
-		Log:        func(string, ...any) {},
+		// Wired, but from no records: what a message asking where things stand gets
+		// back is the read model's own four lines, and an unwired source says so on
+		// its own line rather than reading as an empty state.
+		Standing: &readmodel.Sources{},
+		Log:      func(string, ...any) {},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

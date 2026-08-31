@@ -87,11 +87,12 @@ Socket Mode, so they cannot go in until it is actually on. Once it is, paste
 the original manifest back in under *App Manifest*.
 
 The manifest says what each scope is for. The two that read messages —
-`channels:history` and `groups:history` — are what carries a thread reply back to
-your machine, which is how the harness is steered from the channel. An operator
-who would rather not steer from Slack at all can delete those two scopes and the
-two `message.*` events beside them: everything else in this document still works,
-and replies simply never arrive.
+`channels:history` and `groups:history` — are what carries a message in the
+channel back to your machine: a thread reply, which is how the harness is
+steered, and an @-mention of the app, which is answered. An operator who would
+rather not do either from Slack can delete those two scopes and the two
+`message.*` events beside them: everything else in this document still works, and
+nothing typed in the channel ever arrives.
 
 `im:write` is used for one message and only that one: the harness reporting itself
 degraded, sent directly to whoever step 4 grants `direct-work`. Removing it costs
@@ -623,13 +624,49 @@ Three things are refused, visibly:
 
 Everything else in a channel is left entirely alone: a message that is not in one
 of these threads, a thread this sink never opened, and anything the app itself
-posted. The last is not a nicety — the sink's own messages arrive back on the
-same connection, and reading one as an instruction would be the harness directing
-itself.
+posted — with the one exception in *Asking the app directly* below, which
+answers and never records. The last is not a nicety: the sink's own messages
+arrive back on the same connection, and reading one as an instruction would be
+the harness directing itself.
 
 `yoyo directive list` shows what is recorded whichever way it arrived, and
 `yoyo directive resolve` settles one from the terminal. The two surfaces are the
 same record.
+
+## Asking the app directly
+
+**@-mention the app and you always get an answer.** Anywhere the sink can see
+you — the top of the channel, or a thread it never opened — a message that names
+the app is answered where you said it, in a reply hanging from your own message
+and tagging you. This is the one thing the sink says outside its own threads, and
+it exists because the alternative was silence: a question at the top of the
+channel had no handler at all, which reads exactly like a sink that has died.
+
+Ask where things stand and you get the four lines — the same four
+[`yoyo status`](../operations.md) prints and the same four the heartbeat posts,
+read from the same place so a channel and a terminal cannot answer one question
+two ways:
+
+```text
+@yoyodyne what is running?
+@yoyodyne status
+```
+
+Words like `status`, `sitrep`, `what is running`, `what are you doing`, and
+`where do things stand` all ask for it. Anything else gets one sentence saying
+that this is the only question the app answers here yet, and where the work is
+actually driven from — a work item's thread for a directive, and `yoyo` at the
+terminal for everything else.
+
+Two things it is not. **Nothing is recorded**: a mention writes no directive and
+changes nothing, so a question at the top of the channel where there is no item
+to scope one to is answered rather than refused. And **nothing is disclosed**:
+the four lines are already posted to this channel by the heartbeat, so the answer
+tells a reader nothing the channel was not already telling them.
+
+A message that does not name the app is still left entirely alone, which is what
+keeps a reporting channel a reporting channel rather than a participant in
+everybody's conversation.
 
 ## Coming back from a long gap
 

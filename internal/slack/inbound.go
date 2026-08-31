@@ -105,6 +105,11 @@ type steering struct {
 	mu      sync.Mutex
 	acted   map[string]bool
 	ordered []string
+	// member is this app's own Slack member id, which is what a message has to
+	// name to be addressed to it. It is learned from the workspace — at startup
+	// where that call worked, and lazily otherwise — and it is under the same
+	// mutex for the same reason: both are what the connection remembers.
+	member string
 }
 
 func newSteering(sink *Sink, directives Directives, operators []string) *steering {
@@ -135,14 +140,23 @@ func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
 	if !ok {
 		return
 	}
-	if !s.first(message.ts) {
+
+	// A message at the top of the channel steers nothing — there is no thread and
+	// so no item to scope a directive to — but it is not therefore nothing. One
+	// that addresses this app is answered where it was said, which is mention.go's
+	// and is the second stated exception to answering only inside this sink's own
+	// threads.
+	if message.threadTS == "" {
+		s.mentioned(ctx, message)
 		return
 	}
 
 	// The thread map is the correlation: a reply carries the timestamp of the
 	// message its thread hangs from, and that message is the one this sink posted
 	// to open a topic. A thread this sink did not open is somebody's own
-	// conversation in the channel and is left alone.
+	// conversation in the channel, and nothing is recorded from it — but a message
+	// in one that addresses this app is still answered there, by the same door the
+	// top of the channel gets.
 	threads, err := s.sink.store.LoadThreads()
 	if err != nil {
 		s.sink.log("a reply arrived but the thread map could not be read, so it was not acted on: %v", err)
@@ -150,6 +164,13 @@ func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
 	}
 	key, found := topicOf(threads, s.sink.channel, message.threadTS)
 	if !found {
+		s.mentioned(ctx, message)
+		return
+	}
+	// Remembered only once this is a reply in one of this sink's own threads, so
+	// an ordinary busy channel cannot push the replies that steer the work out of
+	// what one process remembers having acted on.
+	if !s.first(message.ts) {
 		return
 	}
 	topic, err := notify.ParseTopic(key)
@@ -400,7 +421,9 @@ func (s *steering) first(ts string) bool {
 }
 
 // inboundMessage is one Slack message event reduced to what this reads: who said
-// it, what they said, and which thread they said it in.
+// it, what they said, and which thread they said it in. A message at the top of
+// the channel is in no thread, and its thread is empty rather than its own
+// timestamp — what it is not in is the whole of what the caller reads it for.
 type inboundMessage struct {
 	user     string
 	text     string
@@ -408,16 +431,19 @@ type inboundMessage struct {
 	threadTS string
 }
 
-// readInbound reads a message a person typed in one of this sink's threads, and
-// reports whether the envelope was one at all.
+// readInbound reads a message a person typed in this sink's channel, and reports
+// whether the envelope was one at all.
 //
 // What it refuses is as important as what it accepts. A message with a subtype
 // or a bot id is not a person typing — an edit, a join, a file share, and above
 // all this sink's own posts, which arrive back on the same connection and would
-// otherwise be read as instructions the harness gave itself. A message with no
-// thread is somebody talking in the channel rather than steering a topic. And a
-// message in another channel is not this sink's business even when one workspace
-// runs two.
+// otherwise be read as instructions the harness gave itself. And a message in
+// another channel is not this sink's business even when one workspace runs two.
+//
+// A message at the top of the channel is read rather than refused, which it was
+// not until an operator asked the app three questions there and got silence.
+// Reading it is not acting on it: what steers work is still only a reply in one
+// of this sink's own threads, and what a top-level message gets is an answer.
 func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool) {
 	if envelope.Type != socketEventsAPI || len(envelope.Payload) == 0 {
 		return inboundMessage{}, false
@@ -444,16 +470,18 @@ func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool)
 	if event.Channel != channel || strings.TrimSpace(event.User) == "" {
 		return inboundMessage{}, false
 	}
-	// A thread's own opening message carries its own timestamp as the thread's,
-	// and this sink wrote every one of those.
-	if strings.TrimSpace(event.ThreadTS) == "" || event.ThreadTS == event.TS {
-		return inboundMessage{}, false
+	// A message that carries its own timestamp as its thread's is the message a
+	// thread hangs from rather than a reply into one, so it is read as what it is:
+	// something said at the top of the channel.
+	threadTS := strings.TrimSpace(event.ThreadTS)
+	if threadTS == event.TS {
+		threadTS = ""
 	}
 	return inboundMessage{
 		user:     strings.TrimSpace(event.User),
 		text:     event.Text,
 		ts:       event.TS,
-		threadTS: event.ThreadTS,
+		threadTS: threadTS,
 	}, true
 }
 

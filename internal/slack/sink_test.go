@@ -1233,9 +1233,10 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	// A running sink asks the workspace who it is before it posts anything, and
-	// that call carries no body at all.
+	// that call carries no body at all. The member id in the answer is what a
+	// message has to name to be addressed to this app.
 	if request.Body == nil {
-		writeJSON(writer, map[string]any{"ok": true, "team": "test", "user": "yoyodyne"})
+		writeJSON(writer, map[string]any{"ok": true, "team": "test", "user": "yoyodyne", "user_id": testApp})
 		return
 	}
 	body, _ := io.ReadAll(request.Body)
