@@ -504,9 +504,14 @@ func (d Directive) alreadyWithdrawn() error {
 		d.ID, d.WithdrawnAt.UTC().Format(time.RFC3339), d.WithdrawnBy)
 }
 
-// Pausing selects the unresolved directives that pause one work item. It is the
+// Pausing selects the in-force directives that pause one work item. It is the
 // question the run pipeline asks, in one place, so a run that starts, a run that
 // resumes, and a run at its gate are all held to the same reading.
+//
+// In force rather than unresolved, because the two came apart when a directive
+// could be withdrawn: a withdrawn one is still unresolved — nobody ever answered
+// what it was waiting for — and holds nothing, because the operator took back the
+// thing the work was waiting on.
 func Pausing(directives []Directive, workItemID string) []Directive {
 	var pausing []Directive
 	for _, candidate := range directives {

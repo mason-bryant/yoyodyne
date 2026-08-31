@@ -115,7 +115,7 @@ func (s *DirectiveStore) List() ([]directive.Directive, error) {
 	return directives, nil
 }
 
-// Pausing lists the unresolved directives that pause one work item. It is the
+// Pausing lists the in-force directives that pause one work item. It is the
 // question the run pipeline asks, and it is answered from the durable records
 // every time rather than from anything a process remembers: a directive recorded
 // by one process while another is mid-run has to reach that run.
