@@ -2,9 +2,10 @@ package runstate
 
 // The lease, taken on something that is not a run.
 //
-// Runs and promotions each take their lease through the store that owns them,
-// because what may hold one is decided there. Other harness state has the same
-// need and no such store: the Slack sink owns one thread map per product, and
+// Runs, promotions, and the account rotation each take their lease through the
+// store that owns them, because what may hold one is decided there. Other
+// harness state has the same need and no such store: the Slack sink owns one
+// thread map per product, and
 // two sinks against it would open two threads per work item and post everything
 // twice. That is the same problem an unheld run is, so it is solved the same
 // way rather than with a second mechanism — an advisory file lock the operating

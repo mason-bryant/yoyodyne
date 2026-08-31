@@ -72,14 +72,15 @@ var ErrNoRunInFlight = errors.New("work item has no run in flight")
 var ErrRunHeld = errors.New("run is held by another process")
 
 // Lease is exclusive ownership of something only one process may act on at a
-// time: an in-flight run, held for as long as a process acts on it, or a
-// promotion into one target branch, held for as long as that promotion takes.
-// Only one holder exists at a time, so a run resumed by a second process is as
-// singular as one a first process reserved. It is an advisory file lock, which
-// the operating system releases if its holder exits unexpectedly: an
-// interrupted run stays adoptable, and a crashed promotion blocks nobody,
-// rather than either becoming permanently owned by a process that no longer
-// exists.
+// time: an in-flight run, held for as long as a process acts on it; a promotion
+// into one target branch, held for as long as that promotion takes; or the
+// account rotation, held for as long as one start takes to choose and record
+// which account it spends. Only one holder exists at a time, so a run resumed by
+// a second process is as singular as one a first process reserved. It is an
+// advisory file lock, which the operating system releases if its holder exits
+// unexpectedly: an interrupted run stays adoptable, and a crashed promotion or
+// start blocks nobody, rather than any of them becoming permanently owned by a
+// process that no longer exists.
 type Lease struct {
 	// label names what this lease owns, so a failure to release says which.
 	label string
