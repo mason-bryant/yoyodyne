@@ -12,9 +12,8 @@ import (
 )
 
 // run is what the actions in these tests act on. It records what was performed,
-// which is how a test can say that compiling performed nothing: the runtime that
-// walks a graph is a later milestone, and until it exists every action in every
-// compiled graph must stay unperformed.
+// which is how a test can say that compiling performed nothing: opening a door
+// belongs to the executor, so a load that resolved one must leave it shut.
 type run struct {
 	performed []string
 }
@@ -32,14 +31,24 @@ func deliveryRegistry(t *testing.T, acted *run) action.Registry[*run] {
 	// than on whatever subject is handed in, because nothing hands a loader a
 	// subject at all: a compile that reached through one of these doors has to be
 	// visible somewhere the test still holds.
-	performing := func(name string) func(context.Context, *run) error {
+	return deliveryActions(t, func(name string) func(context.Context, *run) error {
 		return func(context.Context, *run) error {
 			acted.performed = append(acted.performed, name)
 			return nil
 		}
-	}
-	registered := func(name string, required ...capability.Capability) action.Action[*run] {
-		return action.Action[*run]{
+	})
+}
+
+// deliveryActions is that same table over whatever subject a test performs it
+// against. The executor's tests act on a subject whose record outlives the
+// process that wrote it, and both sets of tests are held against one fixture
+// definition, so the table they are validated against is written once here
+// rather than once per subject.
+func deliveryActions[S any](t *testing.T, performing func(name string) func(context.Context, S) error) action.Registry[S] {
+	t.Helper()
+
+	registered := func(name string, required ...capability.Capability) action.Action[S] {
+		return action.Action[S]{
 			Name:         name,
 			Summary:      "performs " + name,
 			Wraps:        "(*activeRun)." + name,
