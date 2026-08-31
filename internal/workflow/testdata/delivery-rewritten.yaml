@@ -1,0 +1,49 @@
+# The same workflow as delivery.yaml, written by somebody else: the states and
+# the terminals in a different order, the transitions in flow style, some of the
+# strings quoted, and different comments throughout. Nothing it says about the
+# sequence differs, so nothing about its digest may differ either.
+terminals:
+  abandoned: {summary: "the run stopped without putting a change on the target branch"}
+  delivered: {summary: "the change is on the target branch and the run's worktree is gone"}
+
+initial: "claim"
+id: "delivery"
+schema: 1
+summary: "claim a work item, develop a change, check it, review it, and integrate it"
+
+states:
+  # Reviewing comes first here only because this file lists its states
+  # alphabetically. Order is how a file was written, not what it says.
+  check:
+    on: {failed: develop, passed: review}
+    action: "candidate.check"
+    summary: "refuse an ungranted path, then run the project's configured checks"
+  claim:
+    on: {claimed: develop, unavailable: abandoned}
+    action: "work-item.claim"
+    summary: "take the work item and assemble the context its developer is given"
+  clean-up:
+    on: {cleaned: delivered}
+    action: "run.clean-up"
+    summary: "remove the worktree and branch once the change is somewhere else"
+  develop:
+    on:
+      produced-nothing: abandoned
+      produced: publish
+    action: "candidate.develop"
+    summary: "invoke the developer until it produces a change or the run stops trying"
+  integrate:
+    on: {superseded: develop, integrated: clean-up}
+    action: "candidate.integrate"
+    summary: "take the promotion lease and promote the approved change"
+  publish:
+    on: {published: check}
+    action: "candidate.publish"
+    summary: "commit the attempt, push the branch, and open or update its pull request"
+  review:
+    on:
+      rejected: abandoned
+      approved: integrate
+      changes-requested: develop
+    action: "candidate.review"
+    summary: "obtain one independent verdict on the change"
