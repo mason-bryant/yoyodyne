@@ -13,14 +13,20 @@
 // authority model answer "what may this role do" by reading the actions it may
 // select instead of reading the code inside them.
 //
-// The vocabulary here is the one the delivery pipeline's own steps need and no
-// more. The full inventory belongs to the authority workstream, which derives it
-// from what the harness actually authorizes today rather than from what looks
-// tidy in advance; these names are expected to be absorbed by that inventory
-// rather than to pre-empt it. That inventory is now written down —
-// `docs/authority-inventory.md`, held to the code by `internal/authority` — and
-// it is the enumeration of authority checks rather than of capability names, so
-// it is what these names have still to be reconciled against.
+// The vocabulary is in two halves, and the second is why the first is no longer
+// the whole of it. The delivery names below are what the pipeline's own steps
+// need; the names after them are derived from the authority inventory —
+// `docs/authority-inventory.md`, held to the code by `internal/authority` — which
+// is the enumeration of what the harness authorizes today. Deriving them from
+// the inventory rather than inventing them is the order the design records: a
+// name here that answers no check the inventory lists is authority nobody
+// enforces.
+//
+// Which role holds which of these is `internal/rolecapability`, deliberately not
+// here. A capability stays a primitive: two roles that need the same authority
+// name it identically, and the sentence "the architect may amend a design" is one
+// package away rather than folded into the vocabulary the actions declare
+// against.
 package capability
 
 import "slices"
@@ -80,6 +86,84 @@ const (
 	RunStateMutate Capability = "run-state.mutate"
 )
 
+// The names below are the rest of what the harness authorizes, one per authority
+// the inventory's rows actually tell roles apart by. They are not the pipeline's:
+// no registered action requires one yet, and none will until the authorization
+// call sites convert. What they are for is that a role's authority can be stated
+// in capabilities at all — a bundle built only from the delivery names above
+// would say nothing about the four roles that never enter a run.
+//
+// The granularity is the inventory's rather than a tidier one. Where a row tells
+// two roles apart, there is a name for what it tells them apart by; where it does
+// not, there is not one.
+const (
+	// BacklogAdmit is putting new work into the backlog and taking it out again —
+	// admitting, closing, retiring. It is apart from WorkItemMutate because that is
+	// the boundary the harness enforces most often: the development manager may
+	// build structure underneath admitted work all day and may not admit any, and
+	// an item admitted by anything but the product manager is work nobody chose.
+	BacklogAdmit Capability = "backlog.admit"
+	// BacklogOrder is what is pulled next: priority, and parking admitted work out
+	// of reach without taking it out of the queue. Order is the product manager's
+	// in the same breath as admission and is still its own name, because a role
+	// that may reorder without admitting is a coherent thing to write down.
+	BacklogOrder Capability = "backlog.order"
+	// WorkDecompose is creating work underneath something already admitted. It is
+	// the development manager's whole tracker authority beyond annotation, and it is
+	// deliberately not BacklogAdmit: decomposition underneath an admitted parent is
+	// not admission, which is the distinction the parent requirement enforces today.
+	WorkDecompose Capability = "work.decompose"
+	// WorkTriage is recording what was decided about work that stopped moving. Its
+	// subject is a stopped run rather than the item's own fields, which is why it is
+	// not WorkItemMutate: a decision nobody can find is the state triage exists to
+	// leave behind.
+	WorkTriage Capability = "work.triage"
+	// ArtifactProductMutate and ArtifactDesignMutate are authorship of the
+	// canonical documents, split the way ownership is: the brief, the goals and the
+	// non-goals are the product manager's, and the designs, the specifications and
+	// the decision records are the architect's.
+	//
+	// They are two names rather than one because one name would answer the
+	// ownership check wrongly. "May this role amend an artifact?" is a question with
+	// no true answer — it depends on the kind — and a vocabulary that could only ask
+	// it that way would let the architect through on a goals document. The design
+	// settles the eventual shape as one capability with a typed artifact-kind scope;
+	// until scopes exist, these two are that scope written into the names.
+	ArtifactProductMutate Capability = "artifact.product.mutate"
+	ArtifactDesignMutate  Capability = "artifact.design.mutate"
+	// InvariantMutate is creating, amending, or retiring an architectural
+	// invariant. It is the architect's and is not folded into the design documents
+	// it is extracted from: an invariant binds work that never reads the design, and
+	// the harness refuses a change to one from every other role by name.
+	InvariantMutate Capability = "invariant.mutate"
+	// ResearchCommission is having the harness gather evidence from outside this
+	// machine, and EvaluationRecord is writing down a durable recommendation about
+	// an idea. Both are the product manager's today. They stay apart for the reason
+	// the conversation authority already keeps them apart: one reaches outside and
+	// decides nothing, the other decides nothing and is authority over what the
+	// product's own record says it was advised.
+	ResearchCommission Capability = "research.commission"
+	EvaluationRecord   Capability = "evaluation.record"
+	// ProposalRaise is handing the operator work to approve, and ConcernRaise is
+	// stopping to put a question to them instead. They belong to the role that
+	// decides what is admitted, and they are two names because they are the two
+	// flags the conversation authority carries: a role that may propose and may not
+	// stop is a different role from one that may do both.
+	ProposalRaise Capability = "proposal.raise"
+	ConcernRaise  Capability = "concern.raise"
+	// ExchangeAsk is being on the inter-role ask channel, at both ends of it. It
+	// carries no authority to decide anything — an ask is judgment-only and an
+	// answer resolves nothing — and it is still a capability, because whether the
+	// harness will carry a question to or from a role at all is a boundary the
+	// harness enforces.
+	ExchangeAsk Capability = "exchange.ask"
+	// ReviewVerdict is returning the judgement a change is gated on. It is the
+	// reviewer's alone, and naming it is what lets "no role but the reviewer decides
+	// a verdict" and "the development manager may not override one" be the same
+	// question asked twice rather than two rules kept in two places.
+	ReviewVerdict Capability = "review.verdict"
+)
+
 // declared is every capability this repository has, in the order above. It is
 // the list Known answers from, so adding a constant without adding it here
 // leaves the constant unusable rather than silently half-declared — which the
@@ -95,6 +179,19 @@ var declared = []Capability{
 	ChecksExecute,
 	ForgePublish,
 	RunStateMutate,
+	BacklogAdmit,
+	BacklogOrder,
+	WorkDecompose,
+	WorkTriage,
+	ArtifactProductMutate,
+	ArtifactDesignMutate,
+	InvariantMutate,
+	ResearchCommission,
+	EvaluationRecord,
+	ProposalRaise,
+	ConcernRaise,
+	ExchangeAsk,
+	ReviewVerdict,
 }
 
 // All is every capability this repository declares, in declaration order.
