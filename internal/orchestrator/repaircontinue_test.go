@@ -408,7 +408,7 @@ func TestARepairIsRefusedOnceTheRoundCapHasNoRoomLeft(t *testing.T) {
 	harness := newUndecidedHarness(t, continuableState())
 	for round := 0; round < continueCaps.ReviewRounds; round++ {
 		if _, err := harness.runs.Triage().RecordReviewRound(context.Background(), docketedItem,
-			runstate.RoundKey(docketedRunID, round), docketedNow); err != nil {
+			runstate.RoundKey(docketedRunID, round), countingProcess, docketedNow); err != nil {
 			t.Fatalf("RecordReviewRound() error = %v", err)
 		}
 	}
@@ -442,7 +442,7 @@ func TestARepairCarriesOutTheGrantAtTheSizeTheCapLeftIt(t *testing.T) {
 	harness := newUndecidedHarness(t, continuableState())
 	for round := 0; round < continueCaps.ReviewRounds-1; round++ {
 		if _, err := harness.runs.Triage().RecordReviewRound(context.Background(), docketedItem,
-			runstate.RoundKey(docketedRunID, round), docketedNow); err != nil {
+			runstate.RoundKey(docketedRunID, round), countingProcess, docketedNow); err != nil {
 			t.Fatalf("RecordReviewRound() error = %v", err)
 		}
 	}

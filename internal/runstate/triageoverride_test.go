@@ -22,7 +22,7 @@ var overrideCaps = TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, Merge
 func spendRounds(t *testing.T, store *TriageStore, workItemID string, from, to int) {
 	t.Helper()
 	for round := from; round < to; round++ {
-		if _, err := store.RecordReviewRound(context.Background(), workItemID, fmt.Sprintf("run-a#%d", round), time.Now()); err != nil {
+		if _, err := store.RecordReviewRound(context.Background(), workItemID, fmt.Sprintf("run-a#%d", round), countingProcess, time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound() error = %v", err)
 		}
 	}

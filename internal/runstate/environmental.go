@@ -170,6 +170,22 @@ type EnvironmentalRefusal struct {
 	// before any reviewer was asked has no round to return.
 	RoundReturned bool `json:"round_returned,omitempty"`
 	GrantReturned bool `json:"grant_returned,omitempty"`
+	// RoundLeftSpent says the settle asked for the review round back and was
+	// refused because this process is not the one that charged it. It is the run
+	// re-entered at the review: the round at the head of the item's record was
+	// spent by the process before this one, on a verdict the item really got, so
+	// it stays spent.
+	//
+	// It is not the same as having reached nothing that spends, and it is recorded
+	// rather than left to read as one. A refusal that returned nothing because
+	// there was nothing to return leaves the item where it stood; this one leaves
+	// it one round further on, and a reader shown the first as the second decides
+	// how much budget the item has left against a figure that is wrong.
+	RoundLeftSpent bool `json:"round_left_spent,omitempty"`
+	// RoundChargedBy names the process holding that round, where the record names
+	// one. A round charged before rounds carried the process that charged them
+	// names nobody and is left spent all the same.
+	RoundChargedBy string `json:"round_charged_by,omitempty"`
 	// Problem is a return the settle decided on and could not write. It is never
 	// left unsaid: a round classified environmental whose budget was not actually
 	// returned is an item walking toward its cap with a record that says it is
@@ -200,6 +216,14 @@ func (r EnvironmentalRefusal) Validate() error {
 	}
 	if r.Refused && !r.Settled {
 		problems = append(problems, errors.New("a refused round requires the settle that classified it"))
+	}
+	// A round left spent is a return the settle asked for and was refused, so it
+	// is written by the same step and cannot stand beside the return it excludes.
+	if r.RoundLeftSpent && (!r.Refused || r.RoundReturned) {
+		problems = append(problems, errors.New("a round left spent requires the refusal that asked for it back and excludes the return of it"))
+	}
+	if r.RoundChargedBy != "" && !r.RoundLeftSpent {
+		problems = append(problems, errors.New("a process credited with the round requires the return that was refused for it"))
 	}
 	return errors.Join(problems...)
 }
@@ -236,9 +260,24 @@ func (r EnvironmentalRefusal) Describe() string {
 		return fmt.Sprintf("environmentally refused: %s, so the review round it was charged and the granted repair round it consumed were both returned, and this item stands where it did before the round", named)
 	case r.RoundReturned:
 		return fmt.Sprintf("environmentally refused: %s, so the review round it was charged was returned and no repair grant had been consumed, and this item stands where it did before the round", named)
+	case r.RoundLeftSpent && r.GrantReturned:
+		return fmt.Sprintf("environmentally refused: %s, so the granted repair round it consumed was returned, and the review round at the head of this item's record was left spent because %s charged it rather than this one", named, r.roundHolder())
+	case r.RoundLeftSpent:
+		return fmt.Sprintf("environmentally refused: %s, and the review round at the head of this item's record was left spent because %s charged it rather than this one, so the item stands one round further on than before it", named, r.roundHolder())
 	case r.GrantReturned:
 		return fmt.Sprintf("environmentally refused: %s, so the granted repair round it consumed was returned and no review round had been charged, and this item stands where it did before the round", named)
 	default:
 		return fmt.Sprintf("environmentally refused: %s, and it reached nothing that spends, so there was nothing to give back and this item stands where it did before the round", named)
 	}
+}
+
+// roundHolder is the process credited with a round a settle was refused, in the
+// words a sentence about it needs. A round charged before rounds carried the
+// process that charged them names nobody, and saying so is better than a
+// sentence that trails off where the identity should be.
+func (r EnvironmentalRefusal) roundHolder() string {
+	if strings.TrimSpace(r.RoundChargedBy) == "" {
+		return "a process the record does not name"
+	}
+	return r.RoundChargedBy
 }

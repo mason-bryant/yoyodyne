@@ -17,6 +17,11 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
+// countingProcess is who a round these tests seed was charged by. A round is
+// only ever given back to the process that charged it, and the tests that seed
+// one here only ever spend it; what they need is somebody to have charged it.
+const countingProcess = "pid-1-000000000000000a"
+
 // memoryDocket is the durable docket without the disk: it enforces the one
 // property the store guarantees, which is that a key is recorded once.
 type memoryDocket struct {
@@ -642,7 +647,7 @@ func TestAGrantTheRoundCapCutShowsOnTheDocketWithWhatARepeatWouldMeet(t *testing
 	// The item has cost three of the four rounds its cap permits, one for each
 	// developer attempt its runs were judged on.
 	for _, attempt := range []string{"attempt-1", "attempt-2", "attempt-3"} {
-		if _, err := decisions.RecordReviewRound(context.Background(), docketedItem, attempt, docketedNow); err != nil {
+		if _, err := decisions.RecordReviewRound(context.Background(), docketedItem, attempt, countingProcess, docketedNow); err != nil {
 			t.Fatalf("RecordReviewRound(%s) error = %v", attempt, err)
 		}
 	}

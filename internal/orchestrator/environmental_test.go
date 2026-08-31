@@ -462,6 +462,86 @@ func TestAResumedRunDoesNotInheritADispatchTheEnvironmentTurnedAway(t *testing.T
 	}
 }
 
+// The other direction the accounting can fail in, and the one the attempt key
+// alone cannot catch: a round given back that was genuinely spent. A run
+// re-entered at the review is the same run identifier at the same attempt
+// number as the process that already charged the item for judging that attempt,
+// so a refusal in the new process finds its own key at the head of the record —
+// and giving it back would credit the item for a verdict it really got.
+func TestAReEnteredRunCannotReturnTheRoundItsPredecessorCharged(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
+	spent, err := store.Load(stopped.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	before, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	// The shape this is about, proved rather than assumed: the head of the item's
+	// record is the attempt a re-entry at the review settles under, charged by the
+	// process that has just ended.
+	head := runstate.RoundKey(stopped.RunID, spent.RepairAttempts)
+	if before.ReviewRounds < 1 || before.LastRound != head {
+		t.Fatalf("counters = %d round(s) at head %q, want the round the re-entry will settle under charged and at the head %q",
+			before.ReviewRounds, before.LastRound, head)
+	}
+	if before.LastRoundCharger == "" {
+		t.Fatalf("the head round names no charging process, so this proves nothing: %#v", before)
+	}
+
+	// The same run picked up by a second process, in a worktree that lost the
+	// change — which is the environment refusing the round it is picked up for.
+	emptyPreservedWorktree(t, stopped.WorktreePath)
+	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseReviewing)
+
+	second := roleBackend(func(request backend.RunRequest) error {
+		t.Errorf("a provider was invoked from %s by a re-entry the environment refused", request.WorkingDirectory)
+		return nil
+	}, approveVerdict)
+	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
+	if _, err := continuing.Run(context.Background(), tracker.item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
+		t.Fatalf("Run() error = %v, want the re-entry refused for holding none of its change", err)
+	}
+
+	refused, err := store.Load(stopped.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	environmental := refused.Environmental
+	if environmental == nil || !environmental.Refused {
+		t.Fatalf("environmental = %#v, want the re-entered round classified and refused", environmental)
+	}
+	if environmental.RoundReturned {
+		t.Fatal("the re-entered process gave back the review round the process before it charged")
+	}
+	// And it says so, because a round left spent and a refusal that reached
+	// nothing to give back leave the item in different places.
+	if !environmental.RoundLeftSpent || environmental.RoundChargedBy != before.LastRoundCharger {
+		t.Fatalf("environmental = %#v, want the round recorded as left spent under %q", environmental, before.LastRoundCharger)
+	}
+	described := environmental.Describe()
+	if !strings.Contains(described, "left spent") || strings.Contains(described, "stands where it did") {
+		t.Fatalf("Describe() = %q, want a round left spent said as one rather than as an item standing where it did", described)
+	}
+	// The counters are exactly as the process before left them: the round it spent
+	// is still spent, and the head still names it.
+	after, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if after.ReviewRounds != before.ReviewRounds {
+		t.Fatalf("review rounds = %d after the re-entry, want the %d the process before it spent", after.ReviewRounds, before.ReviewRounds)
+	}
+	if after.LastRound != head || after.LastRoundCharger != before.LastRoundCharger {
+		t.Fatalf("head = %q charged by %q, want the refused return to have left the record alone", after.LastRound, after.LastRoundCharger)
+	}
+}
+
 // dirtyPrimaryWorktrees passes the readiness gate and then refuses to cut a
 // worktree, which is the window that gate cannot close: the checkout is the
 // harness's to read at the moment it is asked and somebody's to write into a

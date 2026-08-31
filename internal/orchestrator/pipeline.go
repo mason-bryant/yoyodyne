@@ -1392,6 +1392,29 @@ type activeRun struct {
 	// at a pause this run has already served. The zero time means the deadline
 	// was written by an earlier process, which no release can predate.
 	pausedAt time.Time
+	// charger is the identity this process charges the item's review rounds
+	// under, minted on first use and kept for the rest of the run so the charge
+	// and the settle that may return it agree. It is deliberately not durable: a
+	// later invocation of the same run is a different process and gets one of its
+	// own, which is exactly what stops it returning this one's round.
+	charger string
+}
+
+// chargingProcess is what this process charges this run's review rounds under.
+// A round is only ever given back to the process that charged it, so the same
+// identity has to answer both the charge and the settle, and a run picked up by
+// a later process has to answer differently — which is why it is minted here
+// rather than derived from the run, whose identifier and attempt number are the
+// same in both processes.
+func (a *activeRun) chargingProcess() (string, error) {
+	if a.charger == "" {
+		minted, err := runstate.NewChargingProcess()
+		if err != nil {
+			return "", err
+		}
+		a.charger = minted
+	}
+	return a.charger, nil
 }
 
 // loadInvariants reads the architect's durable constraints. It is a hard failure
@@ -2031,16 +2054,35 @@ func (a *activeRun) settleEnvironmentalRound() {
 	}
 	refusal.Refused = true
 	// The review round the item was charged against its cap, given back under the
-	// attempt that produced it — which is what keeps the return to this round and
-	// not to whatever the item spent before it.
+	// attempt that produced it and the process that charged it — the attempt keeps
+	// the return to this round rather than to whatever the item spent before it,
+	// and the process keeps it to a round this run's own charge bought. A run
+	// re-entered at the review carries the same attempt number as the process
+	// before it, so without the second key a refusal here would give back a round
+	// that process spent on a verdict the item really got.
 	attempt := runstate.RoundKey(a.state.RunID, a.state.RepairAttempts)
-	_, returned, err := a.pipeline.Store.Triage().ReturnReviewRound(settleCtx, a.state.WorkItemID, attempt, a.pipeline.clock().Now())
+	charger, err := a.chargingProcess()
+	if err != nil {
+		refusal.Problem = singleLine(fmt.Sprintf(
+			"the process charging attempt %s could not be identified, so the review round it was charged was left spent: %v", attempt, err),
+			runstate.MaxEnvironmentalProblemBytes)
+		refusal.GrantReturned = a.state.ReturnGrantedRound()
+		a.outcome.Environmental = refusal
+		return
+	}
+	_, round, err := a.pipeline.Store.Triage().ReturnReviewRound(settleCtx, a.state.WorkItemID, attempt, charger, a.pipeline.clock().Now())
 	if err != nil {
 		refusal.Problem = singleLine(fmt.Sprintf(
 			"the review round attempt %s was charged could not be returned: %v", attempt, err),
 			runstate.MaxEnvironmentalProblemBytes)
 	}
-	refusal.RoundReturned = returned
+	refusal.RoundReturned = round.Returned
+	// A round another process is credited with is left spent, and the record says
+	// so rather than reading as a refusal that found nothing to give back. The two
+	// leave the item in different places, and this is the one that leaves it a
+	// round nearer its cap.
+	refusal.RoundLeftSpent = round.Mismatched
+	refusal.RoundChargedBy = round.ChargedBy
 	// And the granted repair round the continuation consumed, which is the budget
 	// the field cases actually burned: the grant itself still stands, and this is
 	// what stops the run's record saying it was carried out.
@@ -4141,9 +4183,20 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // verdict on it, which is the reviewer judging the same developer attempt on
 // moved ground — charging the item for that would charge it for losing a race it
 // did not cause.
+//
+// The round is charged under this process as well as under the attempt, because
+// the attempt does not say which process spent it and only the process that
+// spent one may give it back. The two keys answer different questions: a run
+// re-entered at the review re-judges the attempt already at the head and counts
+// nothing, and the charger is what stops the refusal that follows crediting this
+// process with the round the process before it bought.
 func (a *activeRun) countReviewRound(ctx context.Context) error {
 	attempt := runstate.RoundKey(a.state.RunID, a.state.RepairAttempts)
-	if _, err := a.pipeline.Store.Triage().RecordReviewRound(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
+	charger, err := a.chargingProcess()
+	if err != nil {
+		return fmt.Errorf("identify the process charging the review round attempt %s produced: %w", attempt, err)
+	}
+	if _, err := a.pipeline.Store.Triage().RecordReviewRound(ctx, a.state.WorkItemID, attempt, charger, a.pipeline.clock().Now()); err != nil {
 		return fmt.Errorf("count the review round attempt %s produced: %w", attempt, err)
 	}
 	return nil
