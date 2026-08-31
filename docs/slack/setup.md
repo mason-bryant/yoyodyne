@@ -251,10 +251,14 @@ reporting turned off for this project so there is no sink to run. Nothing it
 prints is a token. It fails only on the third, which is the one outcome somebody
 has to do something about; a project reporting nowhere is healthy and says so.
 
-**Running it on a schedule is yours to arrange.** The harness ships the step and
-not the timer: nothing installed by `yoyo` calls this for you yet, so it goes in
-whatever already runs unattended on that machine — a `launchd` job, a `cron`
-line, the maintenance pass you keep — once per product checkout.
+**Nothing schedules this for you yet, and that is a gap rather than a design.**
+The step is what the installed maintenance pass is meant to call, once per
+product checkout, in place of the hand-rolled `pgrep`-and-one-namespace step it
+replaces. That pass is the productization of the operator's own script, tracked
+as `yoyodyne-ifd.207`, and it is not in this tree: nothing `yoyo` installs runs
+anything on a schedule. Until it lands, the timer is yours — put `yoyo slack
+ensure` in whatever already runs unattended on that machine, a `launchd` job, a
+`cron` line, or the pass you keep, once per product.
 
 Whether a sink is running is asked of **this product's lease**, which is the
 same lease the sink itself takes and one per product. That is what makes it

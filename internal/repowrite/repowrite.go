@@ -224,7 +224,15 @@ func (r Root) OpenAppend(relative string, file, directory fs.FileMode) (*os.File
 	if err := os.MkdirAll(filepath.Dir(target), directory); err != nil {
 		return nil, fmt.Errorf("create %s: %w", path.Dir(clean), err)
 	}
-	opened, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_APPEND, file)
+	// Opened refusing to follow a link, which is this path's half of what the
+	// rename below does for a written document. The resolve above already refuses
+	// a final component that points out of the root, so what is left is the
+	// moment after that answer: a link planted at the target between the check
+	// and the open. A rename replaces such a link rather than writing through it,
+	// and there is no rename here — what is handed back is a descriptor a
+	// long-lived process writes to for as long as it runs, so following one would
+	// send everything it ever says somewhere nobody is looking.
+	opened, err := os.OpenFile(target, appendFlags, file)
 	if err != nil {
 		return nil, fmt.Errorf("open %s for appending: %w", clean, err)
 	}

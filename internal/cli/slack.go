@@ -112,6 +112,13 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 // running, the keychain items the tokens come from, and the state the sink
 // writes. None of them can see a sibling's, so no pass ever double-starts a
 // sink or starts one holding the wrong project's tokens.
+//
+// Nothing in the harness calls this on a schedule yet, and that is stated here
+// rather than left to be discovered: the pass that is meant to — the
+// productization of the operator's hand-rolled maintenance script, tracked as
+// yoyodyne-ifd.207 — is not in this tree, so there is nothing here to wire the
+// step into. Until it lands, the operator's own schedule calls it, and the
+// hand-rolled Slack step it supersedes is still what runs on their machine.
 func ensureSlackSink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("slack ensure", flag.ContinueOnError)
 	flags.SetOutput(stderr)

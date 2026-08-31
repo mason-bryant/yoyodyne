@@ -549,7 +549,8 @@ unattended pass every few minutes meets a running sink and does nothing — and 
 is safe on a machine running several harnesses, because whether a sink is
 running is asked of this product's lease rather than of the process table, where
 one project's `yoyo slack` answers for every project's. Putting it on a schedule
-is yours: the harness ships the step and not the timer.
+is yours until the productized maintenance job (`yoyodyne-ifd.207`) lands and
+calls it: the harness ships the step and, for now, no timer.
 [`docs/slack/setup.md`](slack/setup.md#6-start-the-sink) has the rest of it.
 
 **The top of the channel reads as a status board.** Each thread's opening message
