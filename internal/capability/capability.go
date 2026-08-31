@@ -17,7 +17,10 @@
 // more. The full inventory belongs to the authority workstream, which derives it
 // from what the harness actually authorizes today rather than from what looks
 // tidy in advance; these names are expected to be absorbed by that inventory
-// rather than to pre-empt it.
+// rather than to pre-empt it. That inventory is now written down —
+// `docs/authority-inventory.md`, held to the code by `internal/authority` — and
+// it is the enumeration of authority checks rather than of capability names, so
+// it is what these names have still to be reconciled against.
 package capability
 
 import "slices"
