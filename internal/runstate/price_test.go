@@ -433,12 +433,6 @@ func TestStorePricesOnlyRealInvocations(t *testing.T) {
 	}
 }
 
-// A price that says only what a piece of work cost invites the question it
-// cannot answer: whether the money went on making the change, on judging it, or
-// on making it again. The split comes out of the log's own shape -- a review
-// announces itself and makes one invocation, and the developer invocations
-// between the reviews group into attempts -- and it always adds back up to the
-// total it was split from.
 // money is what a phase cost and how many invocations it took, with the token
 // usage beside it set aside. The assertions that use it are about where a run's
 // money landed, and the invocations they are made of carry no usage object --
@@ -449,6 +443,12 @@ func money(phase PhaseCost) PhaseCost {
 	return phase
 }
 
+// A price that says only what a piece of work cost invites the question it
+// cannot answer: whether the money went on making the change, on judging it, or
+// on making it again. The split comes out of the log's own shape -- a review
+// announces itself and makes one invocation, and the developer invocations
+// between the reviews group into attempts -- and it always adds back up to the
+// total it was split from.
 func TestStoreSplitsWhatARunSpentByThePhaseItServed(t *testing.T) {
 	t.Parallel()
 

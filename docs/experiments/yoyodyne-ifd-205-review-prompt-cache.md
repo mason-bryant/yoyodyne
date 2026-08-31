@@ -86,11 +86,63 @@ cost is a change to what a tool-using agent is told about the directory it is
 editing, which is a decision about that role rather than about what it is
 charged.
 
+### That the sections are moved and not dropped
+
+The claim above decides the harm analysis below, so it is evidence rather than a
+reading of the flag's name. Three things say it, and the third is the one that
+settles it:
+
+- `claude --help`: "Move per-machine sections (cwd, env info, memory paths, git
+  status) from the system prompt into the first user message. Improves cross-user
+  prompt-cache reuse. Only applies with the default system prompt (ignored with
+  `--system-prompt`)."
+- The same option in the CLI's own SDK schema: "omit per-user dynamic sections
+  (working directory, auto-memory path) from the cached system prompt and
+  re-inject them as the first user message."
+- The shipped code of Claude Code 2.1.226. With the flag set, the system-prompt
+  builder swaps its environment section for one carrying no working directory and
+  omits the memory and scratchpad sections; the same content is rebuilt into a
+  record keyed by each section's heading, and the function that calls the model
+  prepends that record to the messages as a single user message wrapped in a
+  `<system-reminder>` block. Nothing on that path discards it.
+
+The last of the three also names the precondition: the flag modifies the
+provider's default system prompt and does nothing where a caller replaces that
+prompt outright. This backend appends to it with `--append-system-prompt`, which
+is why the flag applies here, and
+`TestAOneShotInvocationSharesItsPrefixAndTheDevelopersDoesNot` asserts that it
+still does — a later change from appending to replacing would otherwise leave the
+flag in the arguments looking as though it worked.
+
+### What holds it
+
 `internal/backend/claudecode.TestAOneShotInvocationSharesItsPrefixAndTheDevelopersDoesNot`
-holds both halves. The local conformance test, which is opt-in and runs against
-the installed CLI, now makes a read-only invocation as well as a developer one:
-an installed Claude Code that does not know a flag refuses the whole invocation
-rather than ignoring it, so a version too old to carry this surfaces there.
+holds the flag onto the read-only roles, off the developer, and beside an
+appended rather than replaced system prompt. That test drives a fake process,
+so on its own it cannot tell a correct flag from a misspelled one.
+
+`TestTheInstalledCLIKnowsEveryFlagThisBackendPasses` is what can. It reads the
+installed CLI's own `--help`, collects the options it lists, and asserts every
+long flag this backend passes for every role it serves is one of them. An unknown
+option makes Claude Code refuse the whole invocation before it reaches the
+provider, so a flag misspelled here, or right but newer than the installed CLI,
+would fail every read-only role at once — the reviewer, the product manager, the
+architect, and the development manager — and the first evidence would be a day of
+runs that cannot be reviewed. The check costs nothing: `--help` makes no provider
+call and needs no account, so it is gated on the CLI being installed rather than
+on opting in.
+
+Taken against Claude Code 2.1.226 it passes for all five roles. Changing the
+constant to the singular `--exclude-dynamic-system-prompt-section` fails it on
+each of the four read-only roles, which is what says the check discriminates
+rather than merely passing. The CLI agrees from the other side: invoked with the
+singular spelling it exits with `error: unknown option
+'--exclude-dynamic-system-prompt-section'` and makes no request, and invoked with
+the real flag it reaches the provider exactly as it does without it.
+
+The opt-in `TestLocalConformance` now makes a read-only invocation as well as a
+developer one, so the same flag is exercised end to end wherever an account and a
+network are available to run it.
 
 ## The instrument
 
@@ -130,12 +182,16 @@ the harness's contract, the persona, and Claude Code's own static sections, and
 the share this can reach is that over a whole review prompt.
 
 **Harm.** The per-machine sections now arrive in the first user message rather
-than in the system prompt. A read-only role has no tools and cannot act on a
-working directory either way, so what to watch for is not a behaviour change but
-an evidence one: a review that mistakes the environment block for part of the
-change it is judging would show up as findings about the harness's own worktree
-paths. Compare first-pass approval rate and findings per review across the same
-window boundary.
+than in the system prompt, inside a `<system-reminder>` block the provider writes
+and ahead of the evidence the harness sends. A read-only role has no tools and
+cannot act on a working directory either way, so what to watch for is not a
+behaviour change but an evidence one: the reviewer's contract tells it the
+supplied invariants, context, patch, and check results are the only evidence it
+has, and a block arriving in front of them is now the first thing it reads. It is
+the provider's own text rather than the developer's, so it is not untrusted
+evidence — but a review that mistook it for part of the change would show up as
+findings about the harness's own worktree paths. Compare first-pass approval rate
+and findings per review across the same window boundary.
 
 **Null result.** If the review phase's share does not rise, the flag is not
 reaching the prefix and the change buys nothing; it is reverted, and what is

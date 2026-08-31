@@ -103,7 +103,12 @@ var readOnlyTools = []string{}
 // reviewer persona, and everything else identical across every review sits
 // behind it, off the shared prefix. This flag moves those sections into the
 // first user message, where they still reach the role and no longer decide what
-// the cache key is.
+// the cache key is. Moved rather than dropped is the provider's documented
+// behaviour and is what its shipped code does: the excluded sections are
+// rebuilt into a record and prepended to the messages as one user message before
+// the model is called. It applies only where the default system prompt is
+// appended to rather than replaced, which is what this backend does and what
+// TestAOneShotInvocationSharesItsPrefixAndTheDevelopersDoesNot holds it to.
 //
 // It is the read-only roles' and not the developer's. Their invocation is a
 // single short turn with no session to resume, so the cached prefix is the only

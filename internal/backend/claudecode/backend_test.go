@@ -941,12 +941,24 @@ func TestAOneShotInvocationSharesItsPrefixAndTheDevelopersDoesNot(t *testing.T) 
 			runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
 			if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
 				RunID: testRunID, Role: role, WorkingDirectory: "/worktree", Prompt: "judge this",
+				SystemPrompt: "the contract",
 			}); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
-			if !slices.Contains(runner.commands[0].Args, stableSystemPromptFlag) {
+			args := runner.commands[0].Args
+			if !slices.Contains(args, stableSystemPromptFlag) {
 				t.Fatalf("a %s invocation carries no %s, so the working directory of the run it was made for decides its cache key: %#v",
-					role, stableSystemPromptFlag, runner.commands[0].Args)
+					role, stableSystemPromptFlag, args)
+			}
+			// The flag is a modification of the provider's own default system
+			// prompt and its documented behaviour is to be ignored where a caller
+			// replaces that prompt outright. The harness appends to it, which is why
+			// this works at all, so a later change from appending to replacing would
+			// take the fix with it and leave the flag sitting in the arguments
+			// looking as though it still did something.
+			if !slices.Contains(args, "--append-system-prompt") || slices.Contains(args, "--system-prompt") {
+				t.Fatalf("a %s invocation does not append to the default system prompt, so %s is ignored: %#v",
+					role, stableSystemPromptFlag, args)
 			}
 		})
 	}
