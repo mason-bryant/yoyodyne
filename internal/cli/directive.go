@@ -15,6 +15,7 @@ package cli
 // stopped, and resolving one says plainly what it released.
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -43,6 +44,8 @@ func runDirective(args []string, stdout, stderr io.Writer) int {
 		return recordDirective(args[1:], stdout, stderr)
 	case "resolve":
 		return resolveDirective(args[1:], stdout, stderr)
+	case "withdraw":
+		return withdrawDirective(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown directive command %q\n\n", args[0])
 		printDirectiveUsage(stderr)
@@ -176,6 +179,57 @@ func resolveDirective(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// withdrawDirective takes a directive out of force. It is the only act that ends
+// an operational directive, and who did it is the one thing the record cannot
+// work out for itself, so this asks rather than assuming.
+//
+// There is deliberately no default. A command line is not proof of an operator:
+// agents run this binary too, under the harness, and a default of "the operator"
+// would put the operator's name on a directive an agent ended — on the single
+// field that exists to say who ended it, in a record whose whole purpose is to
+// still be answerable long after the run that wrote it. An approval can assume
+// its typist because approving is refused to everything but a person; nothing
+// refuses an agent a command line, so this is the honest arrangement rather than
+// the convenient one.
+func withdrawDirective(args []string, stdout, stderr io.Writer) int {
+	flags := newDirectiveFlags("directive withdraw", stderr)
+	reason := flags.set.String("reason", "",
+		"why you no longer mean it; required, because the record keeps what was said and this is what says why it stopped applying")
+	by := flags.set.String("by", "", "who is withdrawing it; required, and it is what the record answers for who ended the directive")
+	if code, ok := flags.parse(args, 1); !ok {
+		return code
+	}
+	if strings.TrimSpace(*by) == "" {
+		// Refused here rather than left to the record, so the message can say what
+		// to put there. The record refuses it too, which is what holds for every
+		// other caller.
+		return reportDirectiveError(stdout, stderr, *flags.jsonOutput,
+			errors.New("say who is withdrawing it, as --by: yourself if you are the operator, or the agent and the run if a run is doing it; a command line does not say who typed at it"))
+	}
+	store, code := flags.store(stderr)
+	if code != 0 {
+		return code
+	}
+	withdrawn, err := store.Withdraw(flags.argument(), *by, *reason, time.Now())
+	if err != nil {
+		return reportDirectiveError(stdout, stderr, *flags.jsonOutput, err)
+	}
+	if *flags.jsonOutput {
+		return writeJSON(stdout, stderr, directiveOutput{Directives: []directive.Directive{withdrawn}})
+	}
+	fmt.Fprint(stdout, withdrawn.Render())
+	// Said every time, because the one way a withdrawal could quietly become
+	// something else is somebody reading it as the record being cleaned up. It is
+	// not: the directive is still there, still says what the operator said, and is
+	// listed by `directive list --all` as withdrawn.
+	fmt.Fprintln(stdout, "this directive is no longer in force; nothing is enforced against it and no run is held by it from now.")
+	fmt.Fprintln(stdout, "nothing was deleted: what it said is kept, and `yoyo directive list --all` shows it as withdrawn.")
+	if withdrawn.Kind.Pauses() && !withdrawn.Resolved() {
+		fmt.Fprintln(stdout, "the work it paused can carry on, without what it was waiting for having been answered.")
+	}
+	return 0
+}
+
 // directiveFlags is the flag set every directive command shares: which
 // configuration to read the product from, and how to report the result.
 type directiveFlags struct {
@@ -259,7 +313,7 @@ func reportDirectiveError(stdout, stderr io.Writer, jsonOutput bool, err error) 
 }
 
 func printDirectiveUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo directive <list|record|resolve> [options]
+	fmt.Fprintln(writer, `Usage: yoyo directive <list|record|resolve|withdraw> [options]
 
 A directive is something you told an agent to do. It is recorded for the product
 rather than for the agent that heard it, so it reaches the work it affects
@@ -280,10 +334,23 @@ and it continues from where it stopped once the directive is resolved.
   list [--all]                         the directives in force, or every one
   record [options] <what you said>     record one, pausing what it affects
   resolve --resolution <how> <id>      settle one and release the work it paused
+  withdraw --by <who> --reason <why> <id>
+                                       take one back; it stops being in force
 
 A directive that pauses work stops being in force when it is resolved. An
 operational one is in force from the moment it is recorded and stays there:
 recording what came of it says what it produced, and does not withdraw it.
+
+Withdrawing is what ends a directive of any kind, and it is the only thing that
+ends an operational one. It records who took it back and when, and it deletes
+nothing: what you said is kept, list --all shows it as withdrawn, and from then
+on nothing is enforced against it. Withdrawing one that pauses work lifts
+that pause without answering what it was waiting for, which is what taking back
+a question means.
+
+Who is asked for rather than assumed. Agents run this binary too, so a command
+line does not say who typed at it, and --by is the one field the record answers
+for who ended the directive.
 
 An id may be shortened to any prefix that names exactly one directive.
 
@@ -296,5 +363,9 @@ record options:
   --received-by <role>  the role you said it to (default: product-manager)
   --artifact <name>     the governed artifact an artifact directive changes
   --unresolved <what>   what has to be settled; required on the two pausing kinds
-  --scope <items>       comma-separated work items (default: every item)`)
+  --scope <items>       comma-separated work items (default: every item)
+
+withdraw options:
+  --reason <why>        why you no longer mean it; required
+  --by <who>            who is withdrawing it; required`)
 }

@@ -53,6 +53,12 @@ type Directives interface {
 	// that ever says one was acted on rather than filed: it refuses the pausing
 	// kinds, so admitting work can never lift a pause that is holding work up.
 	CarryOut(ctx context.Context, reference, outcome string) (directive.Directive, error)
+	// Withdraw takes one out of force on the operator's instruction, recording
+	// who did it and why. It is the only thing that ends a directive that paused
+	// nothing, and it settles nothing: what the record says was said, and
+	// whatever became of it, are kept. The reference may be any prefix that names
+	// exactly one directive.
+	Withdraw(ctx context.Context, reference, by, reason string) (directive.Directive, error)
 }
 
 // DirectiveRequest is what the operator asked to have recorded. The harness
@@ -90,6 +96,14 @@ type DirectiveRecorded struct {
 
 // DirectiveResolved is what settling a directive achieved.
 type DirectiveResolved struct {
+	Directive directive.Directive
+}
+
+// DirectiveWithdrawn is what taking a directive back achieved. It is the record
+// alone, because withdrawing one does nothing to work already under way: a
+// directive that was pausing something stops pausing it at the next
+// consultation, in whichever process makes it, exactly as resolving one does.
+type DirectiveWithdrawn struct {
 	Directive directive.Directive
 }
 
@@ -253,6 +267,50 @@ func (s *Session) ResolveDirective(ctx context.Context, reference, resolution st
 	return DirectiveResolved{Directive: resolved}, nil
 }
 
+// WithdrawDirective takes a directive back on the operator's instruction. It is
+// what they reach for when they no longer mean what they said, and when what was
+// recorded as a directive never was one: a question read as an instruction is in
+// force from the moment it is written down and, until this existed, forever
+// after — listed as live direction and met by every run that read it.
+//
+// Nothing is deleted and nothing is settled. The record keeps the operator's
+// words and whatever disposition it had already collected, and gains who ended
+// it, when, and why; from then on it is out of force, so no run is held by it
+// and no listing of live direction shows it.
+func (s *Session) WithdrawDirective(ctx context.Context, reference, reason string) (DirectiveWithdrawn, error) {
+	if s.options.Directives == nil {
+		return DirectiveWithdrawn{}, errNoDirectives
+	}
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return DirectiveWithdrawn{}, errors.New("say why you are withdrawing it; the record keeps what you said, and this is what says why it stopped applying")
+	}
+	if len(trimmed) > MaxOperatorMessageBytes {
+		return DirectiveWithdrawn{}, fmt.Errorf("reason is %d bytes, limit is %d", len(trimmed), MaxOperatorMessageBytes)
+	}
+	withdrawn, err := s.options.Directives.Withdraw(ctx, strings.TrimSpace(reference), s.withdrawnBy(), trimmed)
+	if err != nil {
+		return DirectiveWithdrawn{}, fmt.Errorf("withdraw the directive: %w", err)
+	}
+	if err := s.emit(execution.EventDirectiveWithdrawn, map[string]any{
+		"directive_id": withdrawn.ID,
+		"reason":       trimmed,
+	}); err != nil {
+		return DirectiveWithdrawn{Directive: withdrawn}, fmt.Errorf("record the withdrawal in this conversation's log: %w", err)
+	}
+	s.notice("the operator withdrew directive %s: %s", withdrawn.ID, singleLine(trimmed, maxSurveyTitleBytes))
+	return DirectiveWithdrawn{Directive: withdrawn}, nil
+}
+
+// withdrawnBy is who a withdrawal made from here is recorded as having been made
+// by. It names the conversation and the turn as every other durable note this
+// conversation writes does, because the record has to trace back to the moment
+// the operator decided it: a withdrawal is the one act that ends a standing
+// instruction, and "somebody withdrew it" is not an account anybody can follow.
+func (s *Session) withdrawnBy() string {
+	return fmt.Sprintf("the operator, from conversation %s, after turn %d", s.state.ConversationID, s.state.Turns)
+}
+
 // validateDirectiveRequest checks what the operator typed before anything
 // durable is written. The record has its own validation, which is what actually
 // holds; this is here so a mistyped command is refused in the operator's own
@@ -360,6 +418,22 @@ func (d DirectiveResolved) Render() string {
 	var rendered strings.Builder
 	rendered.WriteString(d.Directive.Render())
 	rendered.WriteString("the work this paused can carry on. A run it stopped continues from where it stopped the next time the item is started.\n")
+	return rendered.String()
+}
+
+// Render describes a withdrawn directive: the record as it now stands, and what
+// withdrawing it did and did not do.
+func (d DirectiveWithdrawn) Render() string {
+	if d.Directive.ID == "" {
+		return ""
+	}
+	var rendered strings.Builder
+	rendered.WriteString(d.Directive.Render())
+	rendered.WriteString("this directive is no longer in force; nothing is enforced against it from now.\n")
+	rendered.WriteString("nothing was deleted: what you said is kept, and /directives shows it as withdrawn.\n")
+	if d.Directive.Kind.Pauses() && !d.Directive.Resolved() {
+		rendered.WriteString("the work it paused can carry on, without what it was waiting for having been answered.\n")
+	}
 	return rendered.String()
 }
 

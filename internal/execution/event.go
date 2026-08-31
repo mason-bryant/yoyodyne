@@ -113,6 +113,11 @@ const (
 	// has to say that the operator gave one.
 	EventDirectiveRecorded EventType = "directive.recorded"
 	EventDirectiveResolved EventType = "directive.resolved"
+	// A directive the operator took back. It is separate from the two above
+	// because it is the opposite fact from a settlement: what was directed was not
+	// carried out or answered, it stopped being meant, and a log that recorded the
+	// two the same way could not say which of them ended a standing instruction.
+	EventDirectiveWithdrawn EventType = "directive.withdrawn"
 	// An ask this conversation put to another role is recorded in this
 	// conversation's own log as well as in the exchange itself, for the reason a
 	// report is recorded in both places: the exchange holds the thread, and the

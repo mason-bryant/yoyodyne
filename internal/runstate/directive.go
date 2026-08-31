@@ -27,9 +27,11 @@ import (
 //
 // It is a file per directive rather than an append-only log, which is the one
 // way it differs from the reports beside it. A report is written once and never
-// revised; a directive is revised exactly once, when somebody settles it —
-// resolving one that paused work, which is what lets that work resume, or
-// recording what came of one that paused nothing.
+// revised; a directive is revised by the acts that dispose of it — resolving one
+// that paused work, which is what lets that work resume, recording what came of
+// one that paused nothing, and the operator withdrawing one they no longer mean.
+// Each of those is written at most once, and none of them removes anything the
+// record already said.
 type DirectiveStore struct {
 	root      string
 	productID domain.ProductID
@@ -113,7 +115,7 @@ func (s *DirectiveStore) List() ([]directive.Directive, error) {
 	return directives, nil
 }
 
-// Pausing lists the unresolved directives that pause one work item. It is the
+// Pausing lists the in-force directives that pause one work item. It is the
 // question the run pipeline asks, and it is answered from the durable records
 // every time rather than from anything a process remembers: a directive recorded
 // by one process while another is mid-run has to reach that run.
@@ -216,10 +218,27 @@ func (s *DirectiveStore) CarryOut(reference, outcome string, at time.Time) (dire
 	})
 }
 
+// Withdraw takes a directive out of force on the operator's own instruction,
+// recording who did it and when. It is the only act that ends a directive that
+// pauses nothing: such a directive is in force from the moment it is recorded,
+// and without this the store could only ever accumulate standing instructions —
+// including ones that were never instructions, which is how a question read as a
+// directive stays live and 'met' by every run forever.
+//
+// What it writes is a record that says the directive no longer applies, not one
+// with the directive taken out of it. A run that was held or judged while it
+// stood has to stay explicable afterwards, and that needs the words the operator
+// used, which is exactly what deleting the file would throw away.
+func (s *DirectiveStore) Withdraw(reference, by, reason string, at time.Time) (directive.Directive, error) {
+	return s.settle(reference, func(found directive.Directive) (directive.Directive, error) {
+		return found.Withdraw(by, reason, at)
+	})
+}
+
 // settle is the one revision path: find what the reference names, let the record
-// itself decide whether the act is one its kind takes, and replace it. Both
-// callers go through it so a settlement is never written by one route that the
-// other would have refused.
+// itself decide whether the act is one it can take, and replace it. Every caller
+// goes through it so a revision is never written by one route that another would
+// have refused.
 func (s *DirectiveStore) settle(reference string, apply func(directive.Directive) (directive.Directive, error)) (directive.Directive, error) {
 	found, err := s.Find(reference)
 	if err != nil {
@@ -235,8 +254,8 @@ func (s *DirectiveStore) settle(reference string, apply func(directive.Directive
 	return settled, nil
 }
 
-// save replaces one recorded directive atomically. It is the one revision a
-// directive ever takes, so it refuses to write a record for a directive that
+// save replaces one recorded directive atomically. Every revision a directive
+// takes comes through here, so it refuses to write a record for a directive that
 // does not already exist rather than creating one by the back door.
 func (s *DirectiveStore) save(recorded directive.Directive) error {
 	if err := s.validate(recorded); err != nil {

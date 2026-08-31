@@ -416,6 +416,7 @@ everything else is said to the product manager:
 /directive ambiguous <what is unresolved> | <what you said>
 /directive artifact <artifact> <what is unresolved> | <what changes>
 /resolve <directive-id> <how it was settled>
+/withdraw <directive-id> <why you no longer mean it>
 /help                    the list
 /exit                    end the conversation, stopping anything it is running
 ```
@@ -626,9 +627,28 @@ tells you which one.
 Carrying one out does not withdraw it. A standing instruction like "prefer
 smaller pull requests" is still the instruction after the work it prompted is
 admitted, so it stays in force and stays in the listing, now with an account of
-what it produced under it. What ends a directive is superseding or retiring it,
-and neither is built yet — the two kinds that pause work are the only ones
-anything takes out of force today, by being resolved.
+what it produced under it.
+
+What ends a directive is you withdrawing it. `/withdraw <id> <why you no longer
+mean it>` takes it out of force: nothing is enforced against it from then on, no
+run is held by it, and `/directives` stops listing it among what still applies.
+It is the only thing that ends an operational directive, which otherwise stands
+from the moment it is recorded and never lapses — including one that was never an
+instruction, like a question the harness read as a directive, which would
+otherwise be listed as live direction and met by every run forever.
+
+Withdrawing is not deleting and not settling. The record keeps your words and
+whatever it had already collected, and gains who withdrew it, when, and why, so
+a run that was held or judged while it stood is still explicable; `/directives`
+shows it under what is no longer in force, reading as withdrawn. Withdrawing one
+that pauses work lifts that pause without answering what it was waiting for,
+which is what taking a question back means.
+
+From a conversation, who is you: the record names the conversation and the turn
+you did it on. From the command line it is asked for rather than assumed —
+`--by` is required, because agents run `yoyo` too and a command line does not say
+who typed at it. Putting "the operator" on a withdrawal an agent made would be a
+false answer to the one question that record exists to answer.
 
 From the command line the same records are reachable, which is how a directive
 you gave to an agent other than the product manager gets written down:
@@ -640,6 +660,8 @@ you gave to an agent other than the product manager gets written down:
   --received-by reviewer \
   "do publishing differently"
 ./bin/yoyo directive resolve --resolution "the second one" directive-3f2a
+./bin/yoyo directive withdraw --by "Mason, at a terminal" \
+  --reason "recorded in error: that was a question" directive-05d6
 ```
 
 What the harness enforces is the pause; what it does not do yet is work out
