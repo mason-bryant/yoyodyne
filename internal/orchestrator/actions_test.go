@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -125,6 +126,44 @@ func TestEveryStepTheDeliveryLoopCallsIsRegistered(t *testing.T) {
 	for method := range notAStep {
 		if name, isStep := registered["(*activeRun)."+method]; isStep {
 			t.Errorf("notAStep excuses %q and %q registers it", method, name)
+		}
+	}
+}
+
+// TestAStepDeclaresWhatTheStepsInsideItRequire holds a declaration to what
+// performing it actually reaches.
+//
+// Capabilities are what an action requires, not what the lines of its own
+// function require, and one step calling another is where the two come apart:
+// candidate.develop ends by calling publishAttempt, so going through its door
+// reaches the forge even though nothing in develop's own body mentions it. A
+// declaration that missed that would understate the authority the action needs
+// in the one place authority is written down, which is worse than not writing it
+// down at all.
+//
+// The claim is only about steps calling steps, because that is the case where
+// the answer is already recorded: the inner action has declared what it needs,
+// so the outer one can be held to it without anybody having to re-derive it.
+func TestAStepDeclaresWhatTheStepsInsideItRequire(t *testing.T) {
+	t.Parallel()
+
+	steps := deliverySteps()
+	byWraps := map[string]action.Action[*activeRun]{}
+	for _, step := range steps {
+		byWraps[step.action.Wraps] = step.action
+	}
+	for _, step := range steps {
+		for _, method := range slices.Sorted(maps.Keys(activeRunMethodsCalledBy(t, []string{step.action.Wraps}))) {
+			inner, isStep := byWraps["(*activeRun)."+method]
+			if !isStep || inner.Name == step.action.Name {
+				continue
+			}
+			for _, required := range inner.Capabilities {
+				if !slices.Contains(step.action.Capabilities, required) {
+					t.Errorf("%q performs %q and does not declare %q, which %q requires",
+						step.action.Name, inner.Name, required, inner.Name)
+				}
+			}
 		}
 	}
 }

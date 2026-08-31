@@ -3,9 +3,11 @@ package orchestrator
 // The delivery pipeline's steps, named and registered.
 //
 // This is a second door onto functions the pipeline already calls, and nothing
-// yet walks through it. Run still calls claim, develop, publishAttempt, verify,
-// reviewChange, integrate and cleanUp directly, in the order Go control flow
-// puts them in, and this file changes none of that. What it adds is that each of
+// yet walks through it. Run still calls claim and develop directly; develop
+// calls publishAttempt on its way out of an attempt; and verifyReviewAndFinish,
+// the repair loop and finish call verify, reviewChange, integrate and cleanUp
+// between them — all in the order Go control flow puts them in, and this file
+// changes none of that. What it adds is that each of
 // those steps now has a name a workflow definition could select, and a statement
 // in code of what performing it requires — which is the half of "configuration
 // selects sequence, code grants capability" that has to exist before any
@@ -74,9 +76,18 @@ func deliverySteps() []deliveryStep {
 				Name:    "candidate.develop",
 				Summary: "invoke the developer against this run's worktree until it produces a change or the run stops trying",
 				Wraps:   "(*activeRun).develop",
+				// The forge is here because develop ends by calling publishAttempt, so
+				// going through this door pushes the run branch and opens or updates the
+				// pull request exactly as candidate.publish does. A declaration that named
+				// only what the function's own body reaches would understate the authority
+				// this action actually needs, which is the one thing the registry exists
+				// to state truthfully. The repository read is the change summary
+				// recordDevelopment takes of what the invocation produced.
 				Capabilities: []capability.Capability{
 					capability.ProviderInvoke,
+					capability.RepositoryRead,
 					capability.WorktreeMutate,
+					capability.ForgePublish,
 					capability.RunStateMutate,
 				},
 				// The prompt and the session are exactly what Run hands it for a fresh

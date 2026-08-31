@@ -64,10 +64,16 @@ const (
 	// run branch, opening and updating a pull request, asking for a merge, and
 	// deleting the branch afterwards.
 	ForgePublish Capability = "forge.publish"
-	// RunStateMutate is writing the run's own durable record. Nearly every step
-	// needs it, and it is still named: a step that records nothing about itself is
-	// a step reconciliation cannot reason about, so declaring it is what makes the
-	// exceptions visible.
+	// RunStateMutate is writing the harness's own durable store: the run's record,
+	// its event log, and the per-work-item counters kept beside it — the review
+	// rounds an item has spent, which outlive any one run and are still the
+	// harness's own bookkeeping rather than the tracker's. It is deliberately not
+	// WorkItemMutate: nothing under this capability reaches the work item, and a
+	// step that writes a counter here has not touched what the tracker says.
+	//
+	// Nearly every step needs it, and it is still named: a step that records
+	// nothing about itself is a step reconciliation cannot reason about, so
+	// declaring it is what makes the exceptions visible.
 	RunStateMutate Capability = "run-state.mutate"
 )
 
