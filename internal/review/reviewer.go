@@ -253,7 +253,6 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		Prompt:           prompt,
 		SystemPrompt:     systemPrompt,
 		Model:            r.Model,
-		PermissionMode:   "plan",
 		AllowedTools:     []string{},
 		Timeout:          r.timeout(),
 		LastSequence:     sequence.Last(),

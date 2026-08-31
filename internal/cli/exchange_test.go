@@ -152,13 +152,10 @@ func TestTheAnsweringRoundIsDispatchedWithNoToolsAndNoAuthority(t *testing.T) {
 	}
 
 	request := provider.request
-	// No tools at all, and a read-only permission mode. An answering round has
-	// less than a conversation does, not more.
+	// No tools at all. An answering round has less than a conversation does, not
+	// more; the session mode behind that is the backend's, read off the role.
 	if request.AllowedTools == nil || len(request.AllowedTools) != 0 {
 		t.Fatalf("allowed tools = %#v, want an empty non-nil list", request.AllowedTools)
-	}
-	if request.PermissionMode != "plan" {
-		t.Fatalf("permission mode = %q, want plan", request.PermissionMode)
 	}
 	// The answering prompt rather than the role's ordinary conversation contract:
 	// there is no operator here, no block to act through, and no authority.

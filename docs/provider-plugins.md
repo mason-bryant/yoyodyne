@@ -157,6 +157,17 @@ one that declares only `worktree-write` is refused for a reviewer. Declaring a
 capability you do not have is how a role meant to have no tools gets a shell, so
 declare what is true.
 
+The posture is also what decides the session mode an invocation is made in, and
+the invocation the harness asks for carries none: nothing above the adapter names
+a mode, so which one a role gets follows from which role it is. That matters most
+for what an adapter must *not* choose. A provider with an interactive planning
+mode puts that mode's own workflow into the session — do not execute yet, write a
+plan, hand the plan back — and a harness-invoked role receives it on top of a role
+contract that says the opposite: a reviewer told to plan when its contract wants
+one verdict, or a developer told not to edit when the whole run is an edit. An
+adapter picks the mode that grants what the posture needs and nothing else, never
+the one that instructs.
+
 ## Writing one
 
 Providers go under a top-level `providers:` key in your configuration, keyed by

@@ -382,9 +382,6 @@ func TestReviewRunsAsAnIndependentReadOnlyReviewer(t *testing.T) {
 	if got.Role != domain.RoleReviewer {
 		t.Errorf("role = %q, want %q", got.Role, domain.RoleReviewer)
 	}
-	if got.PermissionMode != "plan" {
-		t.Errorf("permission mode = %q, want %q", got.PermissionMode, "plan")
-	}
 	if len(got.AllowedTools) != 0 {
 		t.Errorf("allowed tools = %#v, want no filesystem or command tools", got.AllowedTools)
 	}

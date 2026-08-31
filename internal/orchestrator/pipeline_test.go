@@ -791,7 +791,7 @@ func TestPipelineIntegratesReviewedWorkAndClosesTheItem(t *testing.T) {
 	if len(developerRequests) != 1 || len(reviewerRequests) != 1 {
 		t.Fatalf("invocations: developer = %d, reviewer = %d", len(developerRequests), len(reviewerRequests))
 	}
-	if reviewerRequests[0].SessionID != "" || reviewerRequests[0].PermissionMode != "plan" || len(reviewerRequests[0].AllowedTools) != 0 {
+	if reviewerRequests[0].SessionID != "" || len(reviewerRequests[0].AllowedTools) != 0 {
 		t.Fatalf("reviewer invocation = %#v", reviewerRequests[0])
 	}
 	if reviewerRequests[0].Prompt == developerRequests[0].Prompt || !strings.Contains(reviewerRequests[0].Prompt, "feature.txt") {

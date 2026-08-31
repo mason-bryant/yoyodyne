@@ -2151,7 +2151,6 @@ func (a *activeRun) attemptDevelopment(ctx context.Context, prompt, sessionID st
 		Prompt:           prompt,
 		SessionID:        sessionID,
 		Model:            developer.Model,
-		PermissionMode:   "acceptEdits",
 		LastSequence:     a.state.LastSequence,
 		RedactValues:     p.RedactValues,
 		EventSink:        a.sink,

@@ -237,7 +237,6 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 		Model:            agent.Model,
 		// No tools at all, exactly as a conversation gets none. What separates this
 		// from a conversation is only that there is no authority behind it either.
-		PermissionMode:   "plan",
 		AllowedTools:     []string{},
 		Timeout:          exchangeAnswerTimeout,
 		RedactValues:     v.redactValues,

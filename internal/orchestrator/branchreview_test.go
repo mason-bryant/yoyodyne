@@ -145,7 +145,7 @@ func TestBranchReviewJudgesEveryCommitTogetherAndRecordsTheVerdict(t *testing.T)
 		t.Fatalf("reviewer invocations = %d", len(requests))
 	}
 	request := requests[0]
-	if len(request.AllowedTools) != 0 || request.PermissionMode != "plan" || request.SessionID != "" {
+	if len(request.AllowedTools) != 0 || request.SessionID != "" {
 		t.Errorf("reviewer invocation = %#v", request)
 	}
 	// All three commits reached it as one change, described as a history.
