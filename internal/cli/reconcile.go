@@ -26,11 +26,13 @@ type reconcileOutput struct {
 	// is acted on, which is the development manager's conversation; what this
 	// command reports is that the sweep found something, not what it found.
 	Docketed int `json:"docketed"`
-	// Supervision is what this sweep made of the requests the roles have put to
-	// each other: the ones whose carrier is gone, the answers a dead process
-	// recorded and never closed, and the ones that ran out of attempts. It is
-	// reported beside the runs because it is the same recovery — a process died
-	// holding something — over a different kind of record.
+	// Supervision is the whole of what this sweep made of the requests the roles
+	// have put to each other. Most of it is what was recovered: an answer a dead
+	// process recorded and never closed, a request that ran out of attempts. The
+	// rest is every request the sweep found free and did not deliver, since it
+	// carries no voice — which is the ordinary state of a request waiting its
+	// turn, and is carried here rather than printed for the same reason `--json`
+	// carries the whole of every other sweep.
 	Supervision []orchestrator.SupervisionResult `json:"supervision"`
 	Error       string                           `json:"error,omitempty"`
 }
@@ -323,12 +325,21 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 	}
 }
 
-// printSupervision reports what the sweep did with the requests the roles have
-// put to each other, and says nothing where it did nothing — which is nearly
-// every sweep, since a request being carried by a live process is the ordinary
-// state and a line about it every time is a line nobody reads.
+// printSupervision reports what the sweep actually recovered, and leaves out
+// the requests it merely declined to deliver.
+//
+// This sweep carries no voice, so every request it finds free comes back
+// undelivered — including the ordinary pending ones nobody has ever carried,
+// which is most of them. Printing those would say "reconcile did not deliver
+// this" about a request that is simply waiting its turn, on every sweep, which
+// is a line nobody reads in front of the two or three that matter. `--json`
+// carries them, exactly as it carries the branches and publications this leaves
+// unprinted for the same reason.
 func printSupervision(stdout io.Writer, results []orchestrator.SupervisionResult) {
 	for _, result := range results {
+		if result.Outcome == orchestrator.SupervisionUndelivered {
+			continue
+		}
 		fmt.Fprintf(stdout, "%s: %s\n", result.RequestID, result.Outcome)
 		if result.Detail != "" {
 			fmt.Fprintf(stdout, "  %s\n", result.Detail)

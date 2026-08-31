@@ -163,37 +163,38 @@ func TestAnAnswerNamesAnAttemptThatWasMade(t *testing.T) {
 	assertRefused(t, request.Validate(), "response names attempt 4")
 }
 
-// This record is the only durable copy of the invocation that produced the
-// answer, so what served it is required rather than optional. An answer pinned
-// to nothing is one nobody can attribute or reconstruct once the provider
-// session behind it is gone.
-func TestAnAnswerNamesWhatServedIt(t *testing.T) {
+// Every attempt is one provider invocation, and every provider invocation is
+// pinned to what served it — the failed ones included. An attempt that reached
+// a provider, ran on somebody's account and may have been charged for, and
+// records none of that, is the expensive case nobody can attribute.
+func TestEveryAttemptNamesWhatServedIt(t *testing.T) {
 	t.Parallel()
 
 	moment := time.Date(2026, 8, 22, 9, 30, 0, 0, time.UTC)
-	answered := testRequest(1)
-	answered.Attempts = []Attempt{testFinishedAttempt(1, "harness-a", moment, "")}
-	answered.Outcome = OutcomeAnswered
-	answered.SettledAt = &moment
 
-	bare := answered
-	bare.Response = &Response{Text: "It costs a design revision.", At: moment, Attempt: 1}
+	// The failed attempt is the one that matters here: no answer ever came back
+	// to carry the attribution, so the attempt has to carry it itself.
+	failed := testRequest(1)
+	failed.Attempts = []Attempt{{
+		Number: 1, Holder: "harness-a", StartedAt: moment,
+		FinishedAt: &moment, Problem: "the provider refused the invocation",
+	}}
 	for _, want := range []string{
-		"records no backend",
-		"response model is required",
-		"records no account alias",
-		"records no configuration revision",
+		"attempts[0] records no backend",
+		"attempts[0] model is required",
+		"attempts[0] records no account alias",
+		"attempts[0] records no configuration revision",
 	} {
-		assertRefused(t, bare.Validate(), want)
+		assertRefused(t, failed.Validate(), want)
 	}
 
-	// The two that are recorded where they are known: a provider that does not
-	// say which model it served, and a binary built without the stamping, each
-	// leave a comparison nobody can make rather than an answer served by nothing.
-	served := *testAnswer(1, moment)
-	served.ResolvedModel, served.Build = "", ""
-	unstamped := answered
-	unstamped.Response = &served
+	// The two recorded where they are known: a provider that does not say which
+	// model it served, and a binary built without the stamping, each leave a
+	// comparison nobody can make rather than an invocation served by nothing.
+	unstamped := testRequest(2)
+	attempt := testFinishedAttempt(1, "harness-a", moment, "the provider refused the invocation")
+	attempt.ResolvedModel, attempt.Build = "", ""
+	unstamped.Attempts = []Attempt{attempt}
 	if err := unstamped.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v, want the resolved model and build optional", err)
 	}
@@ -202,30 +203,52 @@ func TestAnAnswerNamesWhatServedIt(t *testing.T) {
 // Shape is checked as well as presence: a record naming an account or a
 // configuration nothing could have issued is worse than one naming none,
 // because it reads as evidence.
-func TestWhatServedTheAnswerIsCheckedForShape(t *testing.T) {
+func TestWhatServedAnAttemptIsCheckedForShape(t *testing.T) {
+	t.Parallel()
+
+	moment := time.Date(2026, 8, 22, 9, 30, 0, 0, time.UTC)
+	for _, invented := range []struct {
+		what string
+		with func(*Attempt)
+		want string
+	}{
+		{"backend", func(a *Attempt) { a.Backend = "Claude Code" }, "is not a backend identifier"},
+		{"account", func(a *Attempt) { a.AccountAlias = "Work Account" }, "is not an account alias"},
+		{"configuration", func(a *Attempt) { a.ConfigRevision = "revision-two" }, "is not a configuration revision"},
+		{"build", func(a *Attempt) { a.Build = "not-a-revision" }, "is not a revision"},
+		{"cost", func(a *Attempt) { a.CostUSD = -1 }, "cost cannot be negative"},
+	} {
+		attempt := testFinishedAttempt(1, "harness-a", moment, "")
+		invented.with(&attempt)
+		claimed := testRequest(1)
+		claimed.Attempts = []Attempt{attempt}
+		assertRefused(t, claimed.Validate(), invented.want)
+	}
+}
+
+// What a request cost is summed over the attempts it spent, the failed ones
+// included: an invocation that reached a provider is charged for whether or not
+// it answered, and a total that left it out would understate exactly the
+// request somebody is asking the cost of.
+func TestARequestCostsWhatEveryAttemptCost(t *testing.T) {
 	t.Parallel()
 
 	moment := time.Date(2026, 8, 22, 9, 30, 0, 0, time.UTC)
 	request := testRequest(1)
-	request.Attempts = []Attempt{testFinishedAttempt(1, "harness-a", moment, "")}
+	refused := testFinishedAttempt(1, "harness-a", moment, "the provider refused the invocation")
+	refused.CostUSD = 0.02
+	answered := testFinishedAttempt(2, "harness-a", moment.Add(time.Minute), "")
+	answered.CostUSD = 0.1
+	request.Attempts = []Attempt{refused, answered}
+	request.Response = testAnswer(2, moment.Add(2*time.Minute))
 	request.Outcome = OutcomeAnswered
 	request.SettledAt = &moment
 
-	for _, invented := range []struct {
-		what string
-		with func(*Response)
-		want string
-	}{
-		{"backend", func(r *Response) { r.Backend = "Claude Code" }, "is not a backend identifier"},
-		{"account", func(r *Response) { r.AccountAlias = "Work Account" }, "is not an account alias"},
-		{"configuration", func(r *Response) { r.ConfigRevision = "revision-two" }, "is not a configuration revision"},
-		{"build", func(r *Response) { r.Build = "not-a-revision" }, "is not a revision"},
-	} {
-		response := *testAnswer(1, moment)
-		invented.with(&response)
-		claimed := request
-		claimed.Response = &response
-		assertRefused(t, claimed.Validate(), invented.want)
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if got := request.CostUSD(); got < 0.1199 || got > 0.1201 {
+		t.Fatalf("CostUSD() = %v, want the failed attempt counted too", got)
 	}
 }
 
@@ -291,25 +314,34 @@ func testRequest(n int) Request {
 }
 
 func testOpenAttempt(number int, holder string, at time.Time) Attempt {
-	return Attempt{Number: number, Holder: holder, StartedAt: at}
+	attempt := Attempt{Number: number, Holder: holder, StartedAt: at}
+	testServe(&attempt)
+	return attempt
 }
 
 func testFinishedAttempt(number int, holder string, at time.Time, problem string) Attempt {
 	finished := at.Add(time.Minute)
-	return Attempt{Number: number, Holder: holder, StartedAt: at, FinishedAt: &finished, Problem: problem}
+	attempt := Attempt{Number: number, Holder: holder, StartedAt: at, FinishedAt: &finished, Problem: problem}
+	testServe(&attempt)
+	return attempt
+}
+
+// testServe puts on an attempt what the harness records about the invocation
+// before it makes it.
+func testServe(attempt *Attempt) {
+	attempt.Backend = "claudecode"
+	attempt.Model = "opus"
+	attempt.AccountAlias = "work"
+	attempt.ConfigRevision = "cfg-0a1b2c3d"
+	attempt.ResolvedModel = "claude-opus-5"
+	attempt.Build = "abc1234"
 }
 
 func testAnswer(attempt int, at time.Time) *Response {
 	return &Response{
-		Text:           "It costs a design revision, and you are missing the migration.",
-		At:             at,
-		Attempt:        attempt,
-		Backend:        "claudecode",
-		Model:          "opus",
-		ResolvedModel:  "claude-opus-5",
-		AccountAlias:   "work",
-		ConfigRevision: "cfg-0a1b2c3d",
-		Build:          "abc1234",
+		Text:    "It costs a design revision, and you are missing the migration.",
+		At:      at,
+		Attempt: attempt,
 	}
 }
 

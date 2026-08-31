@@ -29,9 +29,7 @@ func TestASupervisionPassReclaimsARequestNobodyIsCarrying(t *testing.T) {
 	root := t.TempDir()
 	store := newSupervisionTestStore(t, root)
 	interrupted := supervisionTestRequest(1)
-	interrupted.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: interrupted.OpenedAt,
-	}}
+	interrupted.Attempts = []supervision.Attempt{supervisionTestAttempt(1, "harness-a", interrupted.OpenedAt)}
 	saveSupervisionRequest(t, store, interrupted)
 
 	voice := &supervisionTestVoice{}
@@ -54,14 +52,81 @@ func TestASupervisionPassReclaimsARequestNobodyIsCarrying(t *testing.T) {
 	if settled.Response == nil || settled.Response.Attempt != 2 {
 		t.Fatalf("the answer = %+v, want it recorded against attempt 2", settled.Response)
 	}
-	// The invocation is attributable after the session that ran it is gone,
-	// which is the only reason this record is the durable one.
-	if settled.Response.Backend != "claudecode" || settled.Response.Model != "opus" ||
-		settled.Response.AccountAlias != "work" || settled.Response.ConfigRevision != "cfg-0a1b2c3d" {
-		t.Fatalf("the answer = %+v, want what served it recorded", settled.Response)
-	}
 	if len(settled.Attempts) != 2 || settled.Attempts[0].Open() || settled.Attempts[1].Open() {
 		t.Fatalf("attempts = %#v, want both closed", settled.Attempts)
+	}
+	// The invocation is attributable after the session that ran it is gone,
+	// which is the only reason this record is the durable one.
+	served := settled.Attempts[1]
+	if served.Backend != "claudecode" || served.Model != "opus" ||
+		served.AccountAlias != "work" || served.ConfigRevision != "cfg-0a1b2c3d" {
+		t.Fatalf("the attempt = %+v, want what served it recorded", served)
+	}
+	if served.ResolvedModel != "claude-opus-5" || served.CostUSD != 0.12 {
+		t.Fatalf("the attempt = %+v, want what the call itself reported recorded", served)
+	}
+}
+
+// The invariant asks that every provider invocation be pinned to what served
+// it, not every one that produced an answer. The failed attempt is the case
+// that matters: no answer ever comes back to carry the attribution, and it is
+// the invocation somebody is most likely to go looking for, because it was paid
+// for and produced nothing.
+func TestAFailedInvocationIsStillAttributableAndStillCosted(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newSupervisionTestStore(t, root)
+	pending := supervisionTestRequest(1)
+	saveSupervisionRequest(t, store, pending)
+
+	voice := &supervisionTestVoice{
+		fail:     errors.New("the provider refused the invocation"),
+		failCost: 0.04,
+	}
+	if _, err := newSupervisionLoop(newSupervisionTestStore(t, root), voice).Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	recorded := loadSupervisionRequest(t, store, pending.ID)
+	if len(recorded.Attempts) != 1 {
+		t.Fatalf("attempts = %#v, want the failed attempt recorded", recorded.Attempts)
+	}
+	spent := recorded.Attempts[0]
+	if spent.Backend != "claudecode" || spent.Model != "opus" ||
+		spent.AccountAlias != "work" || spent.ConfigRevision != "cfg-0a1b2c3d" {
+		t.Fatalf("the failed attempt = %+v, want what served it recorded", spent)
+	}
+	if spent.SessionID != "session-that-failed" || spent.ResolvedModel != "claude-opus-5" {
+		t.Fatalf("the failed attempt = %+v, want what the call reported recorded", spent)
+	}
+	if spent.CostUSD != 0.04 || recorded.CostUSD() != 0.04 {
+		t.Fatalf("the failed attempt cost %v and the request %v, want the failure charged for",
+			spent.CostUSD, recorded.CostUSD())
+	}
+}
+
+// An invocation nobody could have attributed is one that should not be made. A
+// voice that cannot say what will serve the call opens no attempt and spends
+// nothing, and the request is left exactly as it was.
+func TestNothingIsSpentWhenTheHarnessCannotSayWhatWouldServeIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newSupervisionTestStore(t, root)
+	pending := supervisionTestRequest(1)
+	saveSupervisionRequest(t, store, pending)
+
+	voice := &supervisionTestVoice{servingFails: errors.New("no account is configured for the architect")}
+	pass, err := newSupervisionLoop(newSupervisionTestStore(t, root), voice).Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no account is configured") {
+		t.Fatalf("Run() error = %v, want the routing failure reported", err)
+	}
+	if len(voice.asked) != 0 || len(pass.Results) != 0 {
+		t.Fatalf("pass = %#v, voice = %#v, want nothing invoked", pass.Results, voice.asked)
+	}
+	if untouched := loadSupervisionRequest(t, store, pending.ID); untouched.Spent() != 0 {
+		t.Fatalf("the record = %+v, want no attempt opened", untouched)
 	}
 }
 
@@ -74,17 +139,11 @@ func TestASupervisionPassNeverAsksAgainForAnAnswerAlreadyRecorded(t *testing.T) 
 	root := t.TempDir()
 	store := newSupervisionTestStore(t, root)
 	paidFor := supervisionTestRequest(1)
-	paidFor.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: paidFor.OpenedAt,
-	}}
+	paidFor.Attempts = []supervision.Attempt{supervisionTestAttempt(1, "harness-a", paidFor.OpenedAt)}
 	paidFor.Response = &supervision.Response{
-		Text:           "It costs a design revision.",
-		At:             paidFor.OpenedAt.Add(time.Minute),
-		Attempt:        1,
-		Backend:        "claudecode",
-		Model:          "opus",
-		AccountAlias:   "work",
-		ConfigRevision: "cfg-0a1b2c3d",
+		Text:    "It costs a design revision.",
+		At:      paidFor.OpenedAt.Add(time.Minute),
+		Attempt: 1,
 	}
 	saveSupervisionRequest(t, store, paidFor)
 
@@ -248,10 +307,11 @@ func TestARequestOutOfAttemptsIsSettledAndEscalated(t *testing.T) {
 	spent := supervisionTestRequest(1)
 	spent.CycleLimit = 1
 	finished := spent.OpenedAt.Add(time.Minute)
-	spent.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: spent.OpenedAt,
-		FinishedAt: &finished, Problem: "the provider refused the invocation",
-	}}
+	attempt := supervisionTestAttempt(1, "harness-a", spent.OpenedAt)
+	attempt.FinishedAt = &finished
+	attempt.Problem = "the provider refused the invocation"
+	attempt.CostUSD = 0.03
+	spent.Attempts = []supervision.Attempt{attempt}
 	saveSupervisionRequest(t, store, spent)
 
 	reports := &supervisionTestReports{}
@@ -284,17 +344,12 @@ func TestAPassWithNoVoiceSettlesAndDeliversNothing(t *testing.T) {
 	store := newSupervisionTestStore(t, root)
 
 	interrupted := supervisionTestRequest(1)
-	interrupted.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: interrupted.OpenedAt,
-	}}
+	interrupted.Attempts = []supervision.Attempt{supervisionTestAttempt(1, "harness-a", interrupted.OpenedAt)}
 	answered := supervisionTestRequest(2)
 	answered.Topic = "chat-two"
-	answered.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: answered.OpenedAt,
-	}}
+	answered.Attempts = []supervision.Attempt{supervisionTestAttempt(1, "harness-a", answered.OpenedAt)}
 	answered.Response = &supervision.Response{
 		Text: "It costs a design revision.", At: answered.OpenedAt.Add(time.Minute), Attempt: 1,
-		Backend: "claudecode", Model: "opus", AccountAlias: "work", ConfigRevision: "cfg-0a1b2c3d",
 	}
 	saveSupervisionRequest(t, store, interrupted)
 	saveSupervisionRequest(t, store, answered)
@@ -389,6 +444,20 @@ func newSupervisionLoop(store *runstate.SupervisionStore, voice SupervisionVoice
 	return loop
 }
 
+// supervisionTestAttempt is one attempt as the harness opens it: still running,
+// and already naming what it is about to spend.
+func supervisionTestAttempt(number int, holder string, at time.Time) supervision.Attempt {
+	return supervision.Attempt{
+		Number:         number,
+		Holder:         holder,
+		StartedAt:      at,
+		Backend:        "claudecode",
+		Model:          "opus",
+		AccountAlias:   "work",
+		ConfigRevision: "cfg-0a1b2c3d",
+	}
+}
+
 func supervisionTestRequest(n int) supervision.Request {
 	opened := time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC).Add(time.Duration(n) * time.Minute)
 	return supervision.Request{
@@ -430,6 +499,25 @@ type supervisionTestVoice struct {
 	asked  []supervision.Delivery
 	during func()
 	fail   error
+	// failCost is what a failed invocation reports having cost, which a provider
+	// that got far enough to charge for the call does.
+	failCost float64
+	// servingFails makes the voice unable to say what would serve the call, which
+	// is the one case where nothing may be spent.
+	servingFails error
+}
+
+func (v *supervisionTestVoice) Serving(supervision.Request) (SupervisionServing, error) {
+	if v.servingFails != nil {
+		return SupervisionServing{}, v.servingFails
+	}
+	return SupervisionServing{
+		Backend:        "claudecode",
+		Model:          "opus",
+		AccountAlias:   "work",
+		ConfigRevision: "cfg-0a1b2c3d",
+		Build:          "abc1234",
+	}, nil
 }
 
 func (v *supervisionTestVoice) Answer(_ context.Context, delivery supervision.Delivery, _ supervision.Request) (SupervisionSpoken, error) {
@@ -440,17 +528,19 @@ func (v *supervisionTestVoice) Answer(_ context.Context, delivery supervision.De
 		v.during()
 	}
 	if v.fail != nil {
-		return SupervisionSpoken{}, v.fail
+		// A call that reached a provider and then failed still ran in a session
+		// and was still charged for, and says so beside the error.
+		return SupervisionSpoken{
+			ResolvedModel: "claude-opus-5",
+			SessionID:     "session-that-failed",
+			CostUSD:       v.failCost,
+		}, v.fail
 	}
 	return SupervisionSpoken{
-		Answer:         "It costs a design revision, and you are missing the migration.",
-		Backend:        "claudecode",
-		Model:          "opus",
-		ResolvedModel:  "claude-opus-5",
-		AccountAlias:   "work",
-		ConfigRevision: "cfg-0a1b2c3d",
-		Build:          "abc1234",
-		CostUSD:        0.12,
+		Answer:        "It costs a design revision, and you are missing the migration.",
+		ResolvedModel: "claude-opus-5",
+		SessionID:     "session-abc",
+		CostUSD:       0.12,
 	}, nil
 }
 

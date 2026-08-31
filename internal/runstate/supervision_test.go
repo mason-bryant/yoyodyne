@@ -23,9 +23,7 @@ func TestARequestOutlivesTheProcessThatOpenedIt(t *testing.T) {
 	root := t.TempDir()
 	store := newTestSupervisionStore(t, root)
 	opened := testStoredRequest(1)
-	opened.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: opened.OpenedAt,
-	}}
+	opened.Attempts = []supervision.Attempt{testStoredAttempt(1, "harness-a", opened.OpenedAt)}
 	if err := store.SaveRequest(opened); err != nil {
 		t.Fatalf("SaveRequest() error = %v", err)
 	}
@@ -53,34 +51,24 @@ func TestARestartReadsBackWhatEachInterruptedRequestNeeds(t *testing.T) {
 
 	// One was being carried when the process died and has attempts left.
 	interrupted := testStoredRequest(1)
-	interrupted.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: interrupted.OpenedAt,
-	}}
+	interrupted.Attempts = []supervision.Attempt{testStoredAttempt(1, "harness-a", interrupted.OpenedAt)}
 
 	// One had its answer recorded and its ending not yet written, which is the
 	// window a crash can land in and the one that must not be paid for twice.
 	answered := testStoredRequest(2)
 	answered.Topic = "chat-two"
-	answered.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: answered.OpenedAt,
-	}}
+	answered.Attempts = []supervision.Attempt{testStoredAttempt(1, "harness-a", answered.OpenedAt)}
 	answered.Response = &supervision.Response{
-		Text:           "It costs a design revision.",
-		At:             answered.OpenedAt.Add(time.Minute),
-		Attempt:        1,
-		Backend:        "claudecode",
-		Model:          "opus",
-		AccountAlias:   "work",
-		ConfigRevision: "cfg-0a1b2c3d",
+		Text:    "It costs a design revision.",
+		At:      answered.OpenedAt.Add(time.Minute),
+		Attempt: 1,
 	}
 
 	// One had spent its last attempt, so nothing will finish it.
 	abandoned := testStoredRequest(3)
 	abandoned.Topic = "chat-three"
 	abandoned.CycleLimit = 1
-	abandoned.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-a", StartedAt: abandoned.OpenedAt,
-	}}
+	abandoned.Attempts = []supervision.Attempt{testStoredAttempt(1, "harness-a", abandoned.OpenedAt)}
 
 	for _, request := range []supervision.Request{interrupted, answered, abandoned} {
 		if err := store.SaveRequest(request); err != nil {
@@ -128,9 +116,7 @@ func TestSavingARequestAgainReplacesIt(t *testing.T) {
 	if err := store.SaveRequest(request); err != nil {
 		t.Fatalf("SaveRequest() error = %v", err)
 	}
-	request.Attempts = []supervision.Attempt{{
-		Number: 1, Holder: "harness-b", StartedAt: request.OpenedAt,
-	}}
+	request.Attempts = []supervision.Attempt{testStoredAttempt(1, "harness-b", request.OpenedAt)}
 	request.UpdatedAt = request.OpenedAt.Add(time.Minute)
 	if err := store.SaveRequest(request); err != nil {
 		t.Fatalf("SaveRequest() again error = %v", err)
@@ -319,6 +305,21 @@ func newTestSupervisionStore(t *testing.T, root string) *SupervisionStore {
 }
 
 func testStoredRequestID(n int) string { return fmt.Sprintf("request-%032x", n) }
+
+// testStoredAttempt is one attempt as the harness opens it: still running, and
+// already naming what it is about to spend, since an invocation nobody could
+// attribute is one the contract refuses to record.
+func testStoredAttempt(number int, holder string, at time.Time) supervision.Attempt {
+	return supervision.Attempt{
+		Number:         number,
+		Holder:         holder,
+		StartedAt:      at,
+		Backend:        "claudecode",
+		Model:          "opus",
+		AccountAlias:   "work",
+		ConfigRevision: "cfg-0a1b2c3d",
+	}
+}
 
 func testStoredRequest(n int) supervision.Request {
 	opened := time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC).Add(time.Duration(n) * time.Minute)

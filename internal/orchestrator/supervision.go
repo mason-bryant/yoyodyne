@@ -49,23 +49,46 @@ type SupervisionStore interface {
 // SupervisionVoice is one invocation of the role a request names. It is an
 // interface so that what drives the loop does not depend on which provider
 // answers, and so a test can take a whole pass without one.
+//
+// It is two calls rather than one because an invocation has to be attributable
+// whether or not it worked. Serving is the harness's own routing decision and
+// is asked first, so the attempt is on disk naming what it is about to spend
+// before anything is spent — which is the only ordering under which a provider
+// that fails, or a process that dies mid-call, still leaves a record somebody
+// can attribute. An answer that came back cannot be what carries that, because
+// the case most worth attributing is the one where nothing came back.
 type SupervisionVoice interface {
+	// Serving is what will serve the next invocation of this request's target
+	// role. A voice that cannot say opens no attempt and spends nothing.
+	Serving(request supervision.Request) (SupervisionServing, error)
+	// Answer puts the request in front of the role. What it returns beside an
+	// error is still read: an invocation that failed after reaching a provider
+	// has a session, a resolved model, and a cost like any other, and those
+	// belong on the attempt whichever way the call went.
 	Answer(ctx context.Context, delivery supervision.Delivery, request supervision.Request) (SupervisionSpoken, error)
 }
 
-// SupervisionSpoken is what the target role said and what served the invocation
-// that produced it. All of it is written to the request's own record: the
-// durable-state-is-provider-independent invariant asks that every provider
-// invocation be attributable after the session that ran it is gone, and this
-// record is the only copy of this one.
-type SupervisionSpoken struct {
-	Answer         string
+// SupervisionServing is what the harness has decided will serve an invocation,
+// known before the provider is reached. The four are what the
+// durable-state-is-provider-independent invariant asks of every provider
+// invocation — every one, rather than every one that produced an answer.
+type SupervisionServing struct {
 	Backend        domain.Backend
 	Model          string
-	ResolvedModel  string
 	AccountAlias   string
 	ConfigRevision string
-	Build          string
+	// Build is the harness binary making the call, where it was stamped with one.
+	Build string
+}
+
+// SupervisionSpoken is what came back. It carries what only the call itself can
+// say, and every field of it is recorded on the attempt whether the call
+// succeeded or failed.
+type SupervisionSpoken struct {
+	// Answer is the reply, and is empty where the call produced none.
+	Answer string
+	// ResolvedModel is the model the provider reported actually serving.
+	ResolvedModel string
 	// SessionID accelerates resuming the same provider session and is never read
 	// back as state.
 	SessionID string
@@ -305,23 +328,44 @@ func (l SupervisionLoop) deliver(ctx context.Context, request supervision.Reques
 				request.Attempts[last].Holder)
 		}
 	}
+	// What will serve the invocation is settled before the attempt is opened, so
+	// the attempt on disk names what it is about to spend. A voice that cannot
+	// say opens nothing and spends nothing: an invocation nobody could have
+	// attributed is one that should not be made.
+	serving, err := l.Voice.Serving(request)
+	if err != nil {
+		return SupervisionResult{}, fmt.Errorf("say what will serve attempt %d of request %s: %w",
+			delivery.Attempt, request.ID, err)
+	}
 	request.Attempts = append(request.Attempts, supervision.Attempt{
-		Number:    delivery.Attempt,
-		Holder:    l.Holder,
-		StartedAt: started,
+		Number:         delivery.Attempt,
+		Holder:         l.Holder,
+		StartedAt:      started,
+		Backend:        serving.Backend,
+		Model:          serving.Model,
+		AccountAlias:   serving.AccountAlias,
+		ConfigRevision: serving.ConfigRevision,
+		Build:          serving.Build,
 	})
 	request.UpdatedAt = started
 	if err := l.Store.SaveRequest(request); err != nil {
 		return SupervisionResult{}, fmt.Errorf("open attempt %d of request %s: %w", delivery.Attempt, request.ID, err)
 	}
 
-	spoken, err := l.Voice.Answer(ctx, delivery, request)
+	spoken, answerErr := l.Voice.Answer(ctx, delivery, request)
 	finished := l.now()
 	last := len(request.Attempts) - 1
 	request.Attempts[last].FinishedAt = &finished
 	request.UpdatedAt = finished
-	if err != nil {
-		request.Attempts[last].Problem = singleLineProblem(err.Error())
+	// What the call itself reported is recorded whichever way it went. A failed
+	// invocation still ran in a session, still resolved to a model, and is still
+	// charged for, and dropping that on the error path would leave the expensive
+	// case as the one nothing can account for.
+	request.Attempts[last].ResolvedModel = spoken.ResolvedModel
+	request.Attempts[last].SessionID = spoken.SessionID
+	request.Attempts[last].CostUSD = spoken.CostUSD
+	if answerErr != nil {
+		request.Attempts[last].Problem = singleLineProblem(answerErr.Error())
 		if saveErr := l.Store.SaveRequest(request); saveErr != nil {
 			return SupervisionResult{}, fmt.Errorf("record the failed attempt on request %s: %w", request.ID, saveErr)
 		}
@@ -329,22 +373,14 @@ func (l SupervisionLoop) deliver(ctx context.Context, request supervision.Reques
 			RequestID: request.ID,
 			Outcome:   SupervisionUnanswered,
 			Reclaimed: delivery.Reclaimed,
-			Detail:    singleLineProblem(err.Error()),
+			Detail:    singleLineProblem(answerErr.Error()),
 		}, nil
 	}
 
 	request.Response = &supervision.Response{
-		Text:           spoken.Answer,
-		At:             finished,
-		Attempt:        delivery.Attempt,
-		Backend:        spoken.Backend,
-		Model:          spoken.Model,
-		ResolvedModel:  spoken.ResolvedModel,
-		AccountAlias:   spoken.AccountAlias,
-		ConfigRevision: spoken.ConfigRevision,
-		Build:          spoken.Build,
-		SessionID:      spoken.SessionID,
-		CostUSD:        spoken.CostUSD,
+		Text:    spoken.Answer,
+		At:      finished,
+		Attempt: delivery.Attempt,
 	}
 	// The answer and the ending are written together where nothing interrupts
 	// them. Where something does, the answer alone is what the next pass finds,
@@ -369,15 +405,20 @@ func (l SupervisionLoop) escalate(request supervision.Request, settlement superv
 	if l.Reports == nil {
 		return nil
 	}
-	message := fmt.Sprintf("%s ended unresolved: %s. The %s asked the %s %q on topic %s, and nothing answered it. Decide it, or say what neither of them could.",
+	message := fmt.Sprintf("%s ended unresolved: %s. The %s asked the %s %q on topic %s, and nothing answered it; it cost %s. Decide it, or say what neither of them could.",
 		request.ID, settlement.Because, request.From.Title(), request.To.Title(),
-		singleLineProblem(request.Subject), request.Topic)
+		singleLineProblem(request.Subject), request.Topic, requestCost(request.CostUSD()))
 	collected, err := report.Collect(
 		[]report.Entry{{Severity: report.SeverityWarning, Message: message}},
 		report.Attribution{
 			Role: request.From,
-			// The request is the record this leads back to, exactly as a run is for
-			// a report filed inside one.
+			// The request goes in the field the report calls the invocation it came
+			// out of, which its own documentation defines as "a run for a role the
+			// pipeline executes, a conversation for one the operator talks to" rather
+			// than a run identifier — a conversation puts a "chat-" identifier here
+			// and the inter-role ask channel puts an "exchange-" one, and this is the
+			// same kind of record. It is what a reader has to name to go and find the
+			// thing the report is about, which is the whole of what the field is for.
 			RunID:        request.ID,
 			ProductID:    l.ProductID,
 			RepositoryID: l.RepositoryID,
@@ -399,6 +440,11 @@ func (l SupervisionLoop) now() time.Time {
 	}
 	return time.Now().UTC()
 }
+
+// requestCost renders what a request cost the way every other place the harness
+// quotes one does, so an escalation and a spend report about the same request
+// agree.
+func requestCost(amount float64) string { return fmt.Sprintf("$%.4f", amount) }
 
 // singleLineProblem keeps what went wrong to one line and inside what a record
 // may hold, so a provider that failed with a page of output still leaves an

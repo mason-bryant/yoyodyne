@@ -174,6 +174,24 @@ func (r Reference) validate(what string) error {
 // one that was taken and never counted. That is the same direction every other
 // durable budget here fails in, and it is what makes the cycle limit hold across
 // a crash.
+//
+// # The attempt is the invocation
+//
+// One attempt is one provider invocation, so what served it is recorded here
+// rather than on the answer. The
+// durable-state-is-provider-independent invariant asks that every provider
+// invocation be pinned to its backend, model, account alias and configuration
+// revision — every invocation, not every one that worked. An attempt the
+// provider failed still reached a provider, still ran on somebody's account, and
+// may still have cost money; recording that only on the successful path would
+// leave the expensive case, the one somebody actually goes looking for, as the
+// one nothing can attribute.
+//
+// So the four are required on every attempt and written when it opens, before
+// the provider is reached. That ordering is what makes them survivable: a
+// process that dies mid-invocation leaves an attempt that says what it was
+// spending on, rather than one that says nothing because the answer never came
+// back to carry it.
 type Attempt struct {
 	Number int `json:"number"`
 	// Holder names the process that took the lease for this attempt, so a
@@ -187,48 +205,48 @@ type Attempt struct {
 	// An attempt that was spent and says nothing about itself is the thing an
 	// operator cannot act on.
 	Problem string `json:"problem,omitempty"`
+	// What served this invocation: the backend it went to, the model asked for,
+	// the account it ran on, and the configuration in force while it did. All
+	// four are the harness's own routing decision, known before the provider is
+	// reached and required whatever became of the call.
+	Backend        domain.Backend `json:"backend"`
+	Model          string         `json:"model"`
+	AccountAlias   string         `json:"account_alias"`
+	ConfigRevision string         `json:"config_revision"`
+	// ResolvedModel is the model the provider reported serving, and Build is the
+	// harness binary that made the call. Both are recorded where they are known
+	// and neither is required: a provider that does not say what served the call,
+	// and a binary built without the stamping, each leave a comparison nobody can
+	// make rather than an invocation served by nothing.
+	ResolvedModel string `json:"resolved_model,omitempty"`
+	Build         string `json:"build,omitempty"`
+	// SessionID is the provider session this invocation ran in, kept only because
+	// resuming one is cheaper than starting over. Nothing is read back from it
+	// and nothing here is lost when it expires.
+	SessionID string `json:"session_id,omitempty"`
+	// CostUSD is what this attempt cost, as the provider reported it. It is on
+	// the attempt rather than on the answer because a failed invocation is
+	// charged for like any other.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // Open reports an attempt that was started and never finished.
 func (a Attempt) Open() bool { return a.FinishedAt == nil }
 
-// Response is what the target role said, and what served the invocation that
-// produced it.
+// Response is what the target role said.
 //
-// Four of the fields naming the provider are required whenever there is a
-// response at all: the backend, the model asked for, the account it was answered
-// on, and the configuration in force while it was. That is what the
-// durable-state-is-provider-independent invariant asks of every provider
-// invocation, and this record is the only durable copy of this one — a response
-// pinned to nothing is an answer nobody can attribute or reconstruct once the
-// session that produced it is gone. There is no older-record exemption to make,
-// because this schema is introduced with this code and no record predates it.
-//
-// They are on the response rather than on the request because a request retried
-// across a configuration edit is answered by whatever served the attempt that
-// answered it.
-//
-// The resolved model and the build are recorded where they are known and not
-// required. The provider names the model it actually served only where it says
-// so, and a binary built without the stamping carries no revision at all — which
-// is a comparison nobody can make rather than an answer served by nothing.
+// It names nothing about the provider, because the attempt it names already
+// does. One attempt is one invocation, and putting what served it in two places
+// would let the two disagree — which for an answer retried across a
+// configuration edit is exactly the disagreement nobody could resolve
+// afterwards. So the answer is the words, and the attribution is the attempt
+// they came back on.
 type Response struct {
 	Text string    `json:"text"`
 	At   time.Time `json:"at"`
-	// Attempt is which delivery produced this, so the answer and the cost of
-	// getting it are the same record.
-	Attempt        int            `json:"attempt"`
-	Backend        domain.Backend `json:"backend"`
-	Model          string         `json:"model"`
-	AccountAlias   string         `json:"account_alias"`
-	ConfigRevision string         `json:"config_revision"`
-	ResolvedModel  string         `json:"resolved_model,omitempty"`
-	Build          string         `json:"build,omitempty"`
-	// SessionID is the provider session the invocation ran in, kept only because
-	// resuming one is cheaper than starting over. Nothing is read back from it
-	// and nothing here is lost when it expires: the answer above is the record.
-	SessionID string  `json:"session_id,omitempty"`
-	CostUSD   float64 `json:"cost_usd,omitempty"`
+	// Attempt is which delivery produced this, so the answer, what served it,
+	// and what getting it cost are one chain rather than three records.
+	Attempt int `json:"attempt"`
 }
 
 // Request is one durable typed ask from one role to another.
@@ -319,12 +337,16 @@ func (r Request) InFlight() (Attempt, bool) {
 	return Attempt{}, false
 }
 
-// CostUSD is what getting the answer cost, as the provider reported it.
+// CostUSD is what this request has cost, summed over every attempt it spent.
+// An attempt the provider failed is counted like any other: it reached a
+// provider and was charged for, and a total that left it out would understate
+// exactly the request somebody is asking the cost of.
 func (r Request) CostUSD() float64 {
-	if r.Response == nil {
-		return 0
+	var total float64
+	for _, attempt := range r.Attempts {
+		total += attempt.CostUSD
 	}
-	return r.Response.CostUSD
+	return total
 }
 
 // Moved reports the references this request was written against that have since
@@ -406,6 +428,7 @@ func (r Request) Validate() error {
 		if attempt.Open() && i != len(r.Attempts)-1 {
 			problems = append(problems, fmt.Errorf("attempts[%d] is still open behind a later attempt", i))
 		}
+		problems = append(problems, attempt.validateServing(i))
 	}
 	problems = append(problems, r.validateResponse())
 	if r.Outcome != "" && !r.Outcome.Valid() {
@@ -429,6 +452,39 @@ func (r Request) Validate() error {
 	return nil
 }
 
+// validateServing holds one attempt to naming what served it. It is required
+// and checked for shape: an invocation pinned to nothing is one nobody can
+// attribute once the session behind it is gone, and one naming an account or a
+// configuration nothing could have issued is worse than one naming none,
+// because it reads as evidence.
+func (a Attempt) validateServing(index int) error {
+	var problems []error
+	if a.Backend == "" {
+		problems = append(problems, fmt.Errorf("attempts[%d] records no backend; an invocation names what served it", index))
+	} else if !a.Backend.Valid() {
+		problems = append(problems, fmt.Errorf("attempts[%d] backend %q is not a backend identifier", index, a.Backend))
+	}
+	problems = append(problems, boundedText(fmt.Sprintf("attempts[%d] model", index), a.Model, MaxReferenceBytes, true))
+	if a.AccountAlias == "" {
+		problems = append(problems, fmt.Errorf("attempts[%d] records no account alias; an invocation names the account it ran on", index))
+	} else if !accountAliasPattern.MatchString(a.AccountAlias) {
+		problems = append(problems, fmt.Errorf("attempts[%d] account alias %q is not an account alias", index, a.AccountAlias))
+	}
+	if a.ConfigRevision == "" {
+		problems = append(problems, fmt.Errorf("attempts[%d] records no configuration revision; an invocation names the configuration in force while it ran", index))
+	} else if !configRevisionPattern.MatchString(a.ConfigRevision) {
+		problems = append(problems, fmt.Errorf("attempts[%d] config revision %q is not a configuration revision", index, a.ConfigRevision))
+	}
+	problems = append(problems, boundedText(fmt.Sprintf("attempts[%d] resolved model", index), a.ResolvedModel, MaxReferenceBytes, false))
+	if a.Build != "" && !buildPattern.MatchString(a.Build) {
+		problems = append(problems, fmt.Errorf("attempts[%d] build %q is not a revision", index, a.Build))
+	}
+	if a.CostUSD < 0 {
+		problems = append(problems, fmt.Errorf("attempts[%d] cost cannot be negative", index))
+	}
+	return errors.Join(problems...)
+}
+
 func (r Request) validateResponse() error {
 	if r.Response == nil {
 		// The one ending that asserts an answer is the one that has to have it.
@@ -442,41 +498,12 @@ func (r Request) validateResponse() error {
 	if r.Response.At.IsZero() {
 		problems = append(problems, errors.New("response records no moment it came back"))
 	}
+	// The attempt the answer names is where its attribution lives, so an answer
+	// naming an attempt that was never made is an answer nothing can be said
+	// about.
 	if r.Response.Attempt < 1 || r.Response.Attempt > len(r.Attempts) {
 		problems = append(problems, fmt.Errorf("response names attempt %d, and %d attempts are recorded",
 			r.Response.Attempt, len(r.Attempts)))
-	}
-	if r.Response.CostUSD < 0 {
-		problems = append(problems, errors.New("response cost cannot be negative"))
-	}
-	// What served the invocation is required, and checked for shape as well. This
-	// record is the only durable copy of the invocation, so an answer pinned to
-	// nothing is one nobody can attribute once the session behind it is gone —
-	// and a record naming an account or a configuration nothing could have issued
-	// is worse than one naming none, because it reads as evidence.
-	if r.Response.Backend == "" {
-		problems = append(problems, errors.New("response records no backend; an answer names what served it"))
-	} else if !r.Response.Backend.Valid() {
-		problems = append(problems, fmt.Errorf("response backend %q is not a backend identifier", r.Response.Backend))
-	}
-	problems = append(problems, boundedText("response model", r.Response.Model, MaxReferenceBytes, true))
-	if r.Response.AccountAlias == "" {
-		problems = append(problems, errors.New("response records no account alias; an answer names the account it was answered on"))
-	} else if !accountAliasPattern.MatchString(r.Response.AccountAlias) {
-		problems = append(problems, fmt.Errorf("response account alias %q is not an account alias", r.Response.AccountAlias))
-	}
-	if r.Response.ConfigRevision == "" {
-		problems = append(problems, errors.New("response records no configuration revision; an answer names the configuration in force while it was given"))
-	} else if !configRevisionPattern.MatchString(r.Response.ConfigRevision) {
-		problems = append(problems, fmt.Errorf("response config revision %q is not a configuration revision", r.Response.ConfigRevision))
-	}
-	// The resolved model and the build are recorded where they are known. A
-	// provider that does not say which model served the call, and a binary built
-	// without the stamping, each leave a comparison nobody can make rather than
-	// an invocation served by nothing.
-	problems = append(problems, boundedText("response resolved model", r.Response.ResolvedModel, MaxReferenceBytes, false))
-	if r.Response.Build != "" && !buildPattern.MatchString(r.Response.Build) {
-		problems = append(problems, fmt.Errorf("response build %q is not a revision", r.Response.Build))
 	}
 	// A settled request that carries an answer settled because of it. Recording
 	// any other ending over an answer already on the record is how an answer
