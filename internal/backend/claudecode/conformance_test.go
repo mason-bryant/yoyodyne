@@ -37,4 +37,24 @@ func TestLocalConformance(t *testing.T) {
 	if result.IsError || result.SessionID == "" || result.FinalText == "" {
 		t.Fatalf("Run() result = %#v", result)
 	}
+
+	// A read-only role is invoked with flags the developer's is not, and the one
+	// that keeps its prompt prefix stable is the newest of them. An installed CLI
+	// that does not know a flag refuses the whole invocation rather than ignoring
+	// it, so this is where a version too old to carry it surfaces -- as one
+	// skipped conformance run rather than as every review of the day failing.
+	advisory, err := provider.Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleReviewer,
+		WorkingDirectory: t.TempDir(),
+		Prompt:           "Reply with exactly: ok",
+		AllowedTools:     []string{},
+		Timeout:          2 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Run() as a reviewer error = %v", err)
+	}
+	if advisory.IsError || advisory.FinalText == "" {
+		t.Fatalf("Run() as a reviewer result = %#v", advisory)
+	}
 }

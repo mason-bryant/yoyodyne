@@ -439,6 +439,16 @@ func TestStorePricesOnlyRealInvocations(t *testing.T) {
 // announces itself and makes one invocation, and the developer invocations
 // between the reviews group into attempts -- and it always adds back up to the
 // total it was split from.
+// money is what a phase cost and how many invocations it took, with the token
+// usage beside it set aside. The assertions that use it are about where a run's
+// money landed, and the invocations they are made of carry no usage object --
+// which is itself recorded, so a whole-struct comparison would be asserting the
+// absence of a measurement in tests that are not about one.
+func money(phase PhaseCost) PhaseCost {
+	phase.Tokens = TokenUsage{}
+	return phase
+}
+
 func TestStoreSplitsWhatARunSpentByThePhaseItServed(t *testing.T) {
 	t.Parallel()
 
@@ -465,13 +475,13 @@ func TestStoreSplitsWhatARunSpentByThePhaseItServed(t *testing.T) {
 		t.Fatalf("Price() error = %v", err)
 	}
 	phases := price.Runs[0].Phases
-	if phases.Development != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
+	if money(phases.Development) != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
 		t.Fatalf("development = %#v, want the first attempt alone", phases.Development)
 	}
-	if phases.Review != (PhaseCost{CostUSD: 3.5, Invocations: 2}) {
+	if money(phases.Review) != (PhaseCost{CostUSD: 3.5, Invocations: 2}) {
 		t.Fatalf("review = %#v, want both reviewer invocations", phases.Review)
 	}
-	if phases.Repair != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+	if money(phases.Repair) != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want the second developer attempt", phases.Repair)
 	}
 	// The split is a decomposition of the price rather than a second opinion
@@ -512,10 +522,10 @@ func TestStoreChargesAReissuedInvocationToTheAttemptItReissues(t *testing.T) {
 		t.Fatalf("Price() error = %v", err)
 	}
 	phases := price.Runs[0].Phases
-	if phases.Development != (PhaseCost{CostUSD: 18.5, Invocations: 2}) {
+	if money(phases.Development) != (PhaseCost{CostUSD: 18.5, Invocations: 2}) {
 		t.Fatalf("development = %#v, want the refused attempt and its reissue", phases.Development)
 	}
-	if phases.Repair != (PhaseCost{CostUSD: 3.0, Invocations: 1}) {
+	if money(phases.Repair) != (PhaseCost{CostUSD: 3.0, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want only the attempt the review asked for", phases.Repair)
 	}
 	if phases.TotalUSD() != price.TotalUSD {
@@ -548,10 +558,10 @@ func TestStoreClosesAReviewBracketOnTheInvocationItMade(t *testing.T) {
 		t.Fatalf("Price() error = %v", err)
 	}
 	phases := price.Runs[0].Phases
-	if phases.Review != (PhaseCost{CostUSD: 0.5, Invocations: 1}) {
+	if money(phases.Review) != (PhaseCost{CostUSD: 0.5, Invocations: 1}) {
 		t.Fatalf("review = %#v, want only the reviewer's own invocation", phases.Review)
 	}
-	if phases.Repair != (PhaseCost{CostUSD: 2.5, Invocations: 1}) {
+	if money(phases.Repair) != (PhaseCost{CostUSD: 2.5, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want the developer invocation after the lost review", phases.Repair)
 	}
 }
@@ -582,16 +592,16 @@ func TestStoreReadsAnInvocationsPhaseFromTheRoleItRecorded(t *testing.T) {
 		t.Fatalf("Price() error = %v", err)
 	}
 	phases := price.Runs[0].Phases
-	if phases.Development != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
+	if money(phases.Development) != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
 		t.Fatalf("development = %#v, want the first developer attempt alone", phases.Development)
 	}
-	if phases.Review != (PhaseCost{CostUSD: 3.5, Invocations: 2}) {
+	if money(phases.Review) != (PhaseCost{CostUSD: 3.5, Invocations: 2}) {
 		t.Fatalf("review = %#v, want both reviewer invocations without an announcement", phases.Review)
 	}
-	if phases.Repair != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+	if money(phases.Repair) != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want the second developer attempt", phases.Repair)
 	}
-	if phases.Unattributed != (PhaseCost{}) {
+	if money(phases.Unattributed) != (PhaseCost{}) {
 		t.Fatalf("unattributed = %#v, want nothing left over", phases.Unattributed)
 	}
 	if phases.TotalUSD() != price.TotalUSD {
@@ -626,15 +636,15 @@ func TestStoreLeavesAnInvocationThatNamedNoPhaseOutOfEveryPhase(t *testing.T) {
 		t.Fatalf("Price() error = %v", err)
 	}
 	phases := price.Runs[0].Phases
-	if phases.Unattributed != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
+	if money(phases.Unattributed) != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
 		t.Fatalf("unattributed = %#v, want the invocation that named no phase", phases.Unattributed)
 	}
-	if phases.Development != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
+	if money(phases.Development) != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
 		t.Fatalf("development = %#v, want the first developer attempt alone", phases.Development)
 	}
 	// The developer attempt after it is still the second attempt, and still the
 	// only repair: an invocation nothing placed does not end an attempt either.
-	if phases.Repair != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+	if money(phases.Repair) != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want only the developer's second attempt", phases.Repair)
 	}
 	if phases.TotalUSD() != price.TotalUSD || price.TotalUSD != 19.0 {
@@ -672,10 +682,10 @@ func TestStoreWillNotPlaceATerminalThatCouldHaveNamedItsPhaseAndDidNot(t *testin
 		t.Fatalf("Price() error = %v", err)
 	}
 	phases := price.Runs[0].Phases
-	if phases.Unattributed != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
+	if money(phases.Unattributed) != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
 		t.Fatalf("unattributed = %#v, want the terminal that named no phase", phases.Unattributed)
 	}
-	if phases.Repair != (PhaseCost{}) {
+	if money(phases.Repair) != (PhaseCost{}) {
 		t.Fatalf("repair = %#v, want nothing charged to a phase by position", phases.Repair)
 	}
 	if phases.TotalUSD() != price.TotalUSD || price.TotalUSD != 15.0 {
@@ -703,10 +713,10 @@ func TestStoreWillNotPlaceATerminalThatCouldHaveNamedItsPhaseAndDidNot(t *testin
 		t.Fatalf("Price() error = %v", err)
 	}
 	older := price.Runs[1].Phases
-	if older.Repair != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
+	if money(older.Repair) != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want the older run read the way it was written", older.Repair)
 	}
-	if older.Unattributed != (PhaseCost{}) {
+	if money(older.Unattributed) != (PhaseCost{}) {
 		t.Fatalf("unattributed = %#v, want nothing unplaced in a log with no role to omit", older.Unattributed)
 	}
 }
@@ -814,6 +824,69 @@ func TestStoreReadsTheCacheReadShareOfEveryPricedInvocation(t *testing.T) {
 	}
 	if price.Tokens.Measured != 3 || price.Tokens.Unreported != 0 {
 		t.Fatalf("tokens = %#v, want all three invocations measured and none unreported", price.Tokens)
+	}
+}
+
+// A run's aggregate share is decided by whichever phase reads the most, and the
+// phases do not read alike: a developer session re-reads its own conversation
+// every turn, and a review is one short invocation whose only cacheable part is
+// the prefix it shares with the last review. Summed, a review that reads nothing
+// at all is invisible behind a developer that reads nearly everything -- which is
+// how yoyodyne-ifd.84 came to be measured against a figure its own effect could
+// not move. The split is what makes that readable, and the run's total is still
+// the sum of it.
+func TestStoreSplitsWhatARunReadFromTheCacheByThePhaseThatReadIt(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.205"
+	state.ProviderSessionID = "session-developer"
+	state.ReviewSessionID = "session-reviewer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendUsageCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0,
+		usageTokens{InputTokens: 100, OutputTokens: 4000, CacheReadTokens: 900})
+	// The reviewer pays to write a prefix and reads none of it back, which is
+	// what every recorded review did before ifd.205.
+	appendUsageCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, domain.RoleReviewer, 2.0,
+		usageTokens{InputTokens: 0, OutputTokens: 500, CacheCreationTokens: 1000})
+	appendUsageCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, domain.RoleDeveloper, 3.0,
+		usageTokens{InputTokens: 100, OutputTokens: 300, CacheReadTokens: 100})
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if share := phases.Development.Tokens.CacheReadShare(); share != 0.9 {
+		t.Fatalf("development cache-read share = %v, want 900 of 1000", share)
+	}
+	if share := phases.Review.Tokens.CacheReadShare(); share != 0 {
+		t.Fatalf("review cache-read share = %v, want the nought a review that read nothing reports", share)
+	}
+	// A review measured at nothing and a review nobody measured are the same
+	// figure and opposite facts, so the count is what tells them apart here as it
+	// does everywhere else.
+	if !phases.Review.Tokens.Reported() || phases.Review.Tokens.Measured != 1 {
+		t.Fatalf("review tokens = %#v, want one measured invocation", phases.Review.Tokens)
+	}
+	if share := phases.Repair.Tokens.CacheReadShare(); share != 0.5 {
+		t.Fatalf("repair cache-read share = %v, want 100 of 200", share)
+	}
+	// The split is a decomposition of the run's usage rather than a second
+	// reading of it, so the phases add back up to what the run was billed.
+	var summed TokenUsage
+	for _, phase := range []PhaseCost{phases.Development, phases.Review, phases.Repair, phases.Unattributed} {
+		summed.Merge(phase.Tokens)
+	}
+	if summed != price.Runs[0].Tokens {
+		t.Fatalf("phases summed = %#v, want the run's own usage %#v", summed, price.Runs[0].Tokens)
+	}
+	// And an item aggregates the phases exactly as it aggregates the money.
+	if price.Phases.Review.Tokens != phases.Review.Tokens {
+		t.Fatalf("item review tokens = %#v, want the run's %#v", price.Phases.Review.Tokens, phases.Review.Tokens)
 	}
 }
 

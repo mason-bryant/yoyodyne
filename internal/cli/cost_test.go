@@ -412,6 +412,70 @@ func TestCostReportsTheCacheReadShareOfInputTokens(t *testing.T) {
 	}
 }
 
+// The aggregate share is decided by whichever phase reads the most, so a review
+// that reads none of its prefix hides behind a developer session that reads
+// nearly all of its input. That is not a hypothetical: it is how yoyodyne-ifd.84
+// came to be measured against a figure its own effect could not move, and this
+// line is what a later change to what one phase sends is read on instead.
+func TestCostReportsTheCacheReadShareOfEachPhaseBesideTheWhole(t *testing.T) {
+	t.Parallel()
+
+	started := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
+	phases := runstate.PhaseSpend{
+		Development: runstate.PhaseCost{CostUSD: 9.00, Invocations: 1,
+			Tokens: runstate.TokenUsage{InputTokens: 100, CacheReadTokens: 9900, OutputTokens: 4000, Measured: 1}},
+		Review: runstate.PhaseCost{CostUSD: 2.00, Invocations: 2,
+			Tokens: runstate.TokenUsage{CacheCreationTokens: 1000, OutputTokens: 500, Measured: 2}},
+	}
+	tokens := runstate.TokenUsage{InputTokens: 100, CacheReadTokens: 9900, CacheCreationTokens: 1000, OutputTokens: 4500, Measured: 3}
+	prices := []runstate.ItemPrice{{
+		WorkItemID: "yoyodyne-ifd.205",
+		Runs: []runstate.RunPrice{{
+			RunID: "run-1", Status: runstate.StatusSucceeded, Outcome: runstate.OutcomeSucceeded,
+			StartedAt: started, CostUSD: 11.00, Invocations: 3, Phases: phases, Tokens: tokens,
+		}},
+		TotalUSD: 11.00,
+		Phases:   phases,
+		Tokens:   tokens,
+	}}
+
+	var out bytes.Buffer
+	printPrices(&out, prices, nil, false)
+	rendered := out.String()
+	for _, required := range []string{
+		// 9900 of 11000 across everything, which is the figure the review is
+		// invisible in.
+		"cached is the cache-read share of input tokens: 9900 of 11000 input token(s)",
+		// And the same measure once per phase, where it is not.
+		"cache-read share by phase: development 99.0% over 1 invocation(s), review 0.0% over 2 invocation(s), repair - over 0 invocation(s)",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered ledger = %q, want it to contain %q", rendered, required)
+		}
+	}
+
+	// The same split under each item and each run, so a before-and-after window
+	// can be cut on the runs rather than only on the whole ledger.
+	out.Reset()
+	printPrices(&out, prices, nil, true)
+	if breakdown := out.String(); strings.Count(breakdown, "review 0.0% over 2 invocation(s)") != 2 {
+		t.Fatalf("rendered breakdown = %q, want the phase split under the item and under its run", breakdown)
+	}
+
+	// A window where nothing reported usage says so once, above; four dashes
+	// under it would repeat that in a shape that reads like a measurement.
+	unmeasured := prices
+	unmeasured[0].Phases = runstate.PhaseSpend{Development: runstate.PhaseCost{CostUSD: 9.00, Invocations: 1, Tokens: runstate.TokenUsage{Unreported: 1}}}
+	unmeasured[0].Runs[0].Phases = unmeasured[0].Phases
+	unmeasured[0].Tokens = runstate.TokenUsage{Unreported: 1}
+	unmeasured[0].Runs[0].Tokens = unmeasured[0].Tokens
+	out.Reset()
+	printPrices(&out, unmeasured, nil, false)
+	if strings.Contains(out.String(), "cache-read share by phase") {
+		t.Fatalf("ledger = %q, want no per-phase share where nothing was measured", out.String())
+	}
+}
+
 // A run nobody measured and a run measured at nothing are the same figure and
 // opposite facts. Every run recorded before the harness kept the provider's
 // usage object is the first kind, and reporting it as a share of nought would
