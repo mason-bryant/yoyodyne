@@ -26,6 +26,10 @@ revisions:
       by: product-manager
       at: 2026-08-19T04:19:30Z
       reason: added the team goal, drafted by the product manager when the operator admitted the team-mode epic and approved by the operator verbatim; the non-goals were amended in the same decision
+    - action: amended
+      by: product-manager
+      at: 2026-08-31T01:36:05Z
+      reason: the legibility goal gains the plain-language clause the operator directed on 2026-08-31 - user-facing language chooses the ordinary, literal word over metaphor, coinage, or term of art; drafted by the product manager, approved by the operator as drafted
 approvals:
     - revision: 2
       by: operator
@@ -39,6 +43,10 @@ approvals:
       by: operator
       at: 2026-08-19T04:19:30Z
       reason: 'Approved by the operator in conversation on 2026-08-18, "Both Approved": the team goal, drafted by the product manager for the team-mode epic (yoyodyne-ifd.82).'
+    - revision: 5
+      by: operator
+      at: 2026-08-31T01:36:12.363441Z
+      reason: 'Approved by the operator on 2026-08-31 - ''I''ll approve that'': the legibility goal''s plain-language clause as the product manager drafted it, one added clause, nothing else changed.'
 ---
 
 # V1 goals
@@ -97,7 +105,7 @@ milestone rather than an outcome, it was reached, and it is recorded as such.
   *Supports: safety invariants hold whatever the configuration says.*
 - Run development nearly autonomously. The human's routine interface is the product manager: they state intent, approve the brief and goals, and answer questions the product manager escalates. Directing the architect, development manager, developer, or reviewer individually is available for inspection, recovery, and override, but is not part of the normal loop.
   *Supports: the human's attention goes only where it is needed.*
-- The harness's surfaces read clearly: boundaries between topics and speakers are visible, important findings stand out, and every distinction survives a terminal that cannot render emphasis.
+- The harness's surfaces read clearly: boundaries between topics and speakers are visible, important findings stand out, every distinction survives a terminal that cannot render emphasis, and user-facing language chooses the ordinary, literal word over metaphor, coinage, or term of art.
   *Supports: the human's attention goes only where it is needed.*
 - The operator can see what the harness spends on their behalf: provider-reported cost, per work item, per run, and in total.
   *Supports: the operator can see what the system does on their behalf.*
