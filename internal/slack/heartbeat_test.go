@@ -728,6 +728,36 @@ func TestTheHeartbeatSaysTheStateTheReadModelDerived(t *testing.T) {
 	}
 }
 
+// The mark a standing state is remembered by still renders exactly as this
+// package stamped it before the derivation moved to the read model.
+//
+// Both halves of the cursor value matter and for one reason. A sink names the
+// state it is standing on by this, and a mark it does not recognise re-arms the
+// clock silently — so a state standing when the harness is deployed would go
+// quiet for a whole interval, which is precisely the silence the heartbeat
+// exists to end. The reason tokens were kept as they were found for that, and
+// the timestamp is the other half: a format that drifted from stamp's would buy
+// the same silence by the other route.
+func TestTheStandingMarkRendersAsThisPackageStampedIt(t *testing.T) {
+	t.Parallel()
+
+	since := time.Date(2026, 8, 30, 12, 0, 0, 123456789, time.UTC)
+	for _, testCase := range []struct {
+		reason readmodel.Reason
+		legacy string
+	}{
+		{readmodel.ReasonOperatorHold, "hold:"},
+		{readmodel.ReasonIntakeHold, "intake:"},
+		{readmodel.ReasonSessionIdle, "idle:"},
+		{readmodel.ReasonNoWatchSession, "stopped:"},
+	} {
+		stall := readmodel.Stall{Reason: testCase.reason, Since: since}
+		if want := testCase.legacy + stamp(since); stall.Mark() != want {
+			t.Fatalf("mark = %q, want the cursor value this package already holds, %q", stall.Mark(), want)
+		}
+	}
+}
+
 // A sink assembled without a way to read the four lines says so, rather than
 // leaving them out. A message that simply lacked them would be indistinguishable
 // from a harness with nothing in any of them.

@@ -12,6 +12,17 @@ package readmodel
 // nothing it could start, and by the other as no session running at all, which
 // told the operator to start the session that was already there.
 //
+// A third copy is expected and is not on this line yet. The work item that
+// consolidated these names an escalation path in the Slack sink — the push half
+// of the heartbeat, which DMs the operators when the system is stopped — as
+// carrying its own answer to the same question; that file was written on the
+// branch for yoyodyne-ifd.68.20 and has never been merged here, so there was
+// nothing in this tree to route through this. It is named here rather than left
+// out because the omission is what would make it look considered: when that work
+// lands it projects this, and does not derive the stopped state again. What it
+// would otherwise inherit is a disagreement this change has just widened, since
+// the wording and the idle-versus-absent answer both moved when they came here.
+//
 // # The taxonomy is closed
 //
 // Every state this can be in is a named Reason, and every Reason says whose move
