@@ -1,10 +1,16 @@
 # Sweep: coined terms in open tracker items and governed documents
 
-Work item: yoyodyne-ifd.206. Sweep-class: read-only against the records and the
-governed documents. Nothing in the tracker and nothing under an artifact home
-was changed by this run, for the two reasons in [What could not be
-applied](#what-could-not-be-applied); this document is the sweep's result, in a
-form the roles that own those records can apply.
+Work item: yoyodyne-ifd.206. **This document is the audit half of that item, and
+the item is not done.** No coinage has been replaced anywhere. The sweep has
+been run and its result written down here, but neither of the two places it
+applies to was writable by the run that produced it, for the reasons in
+[What could not be applied](#what-could-not-be-applied). Both reasons are
+boundaries working as designed, and neither is a developer's to lift.
+
+What has to happen before ifd.206 can be closed is listed in
+[What remains](#what-remains). Anyone reading this as evidence that the backlog
+and the governed documents have been swept should stop there: they have been
+measured, not changed.
 
 Records read at 2026-08-30, against the live tracker export
 (`/Users/mbryant/github/yoyodyne/.beads/issues.jsonl`, 309 rows, latest
@@ -43,7 +49,7 @@ Splitting them the way the operator directed:
   a reader can point at, and each is why the item reserves this half for the
   architect: a rename crosses her interfaces. Listed with the evidence the
   ruling needs in
-  [Category 2](#category-2-mechanism-names-awaiting-the-architects-ruling).
+  [Category 2](#category-2-mechanism-names-where-the-architects-ruling-was-requested).
 
 Two of the three terms the item names as pure decoration — *doorbell*, *front
 door*, *courier-as-a-name* — appear nowhere in the tracker or the governed
@@ -91,13 +97,30 @@ grew to every metaphor in 78 items would be a different and much larger change
 than the one admitted. They are named here so the next reader knows they were
 seen and left, not missed.
 
-## Category 2: mechanism names, awaiting the architect's ruling
+## Category 2: mechanism names, where the architect's ruling was requested
 
 Each of these names something that exists. Per the item, each is either renamed
 end to end or defined in plain words at first use in each document, and the
 choice is the architect's because a rename crosses her interfaces. The evidence
 below is what that ruling needs: how far the name reaches, and what the plain
 words would be.
+
+**The ruling has been requested, not merely awaited.** The run that produced
+this document filed amendment proposals against `v1-harness-design` (for
+`docket`, `brake`, `heartbeat`, `steer` and `handback`) and against
+`slack-reporting-design` (for `sink`), which is the harness's persisted path for
+putting a change to the role that owns a document and having it wait on that
+role's decision. Until those are decided, no term below has a ruling and none
+should be treated as settled either way.
+
+The other channel that might look right for this is not available here. The
+inter-role ask (`internal/exchange`) is wired only into `internal/chat`:
+`exchange.AskingContract` is delivered from `internal/chat/role.go` and nothing
+in `internal/orchestrator` references the package, so a developer run cannot
+open one. It would also be the wrong instrument if it could — an ask is
+decisionless by construction, and this needs a decision rather than an opinion.
+A ruling that has to bind a rename across 2,361 occurrences lands as an
+amendment or it does not land.
 
 ### `docket`
 
@@ -203,7 +226,123 @@ ones such as `bd show`, which still opens the database read-write — fails with
 `openat LOCK: operation not permitted`. The 54 Category 1 occurrences in open
 items are therefore listed above rather than applied.
 
-A run that is to apply the tracker half needs the sandbox widened to the primary
-checkout's `.beads` directory. A run that is to apply the governed-document half
-needs the item to grant the three artifact homes. Neither is a developer's to
-arrange.
+## What remains
+
+ifd.206 is not done and should not be closed on the strength of this document.
+Measured against the item's own four done conditions:
+
+| Done condition | State |
+|---|---|
+| The sweep has run over open items and governed documents | **Met.** Both scans are complete and recorded here. |
+| Decorative coinages are gone | **Not met.** All 66 Category 1 occurrences — 54 in open items, 12 in governed documents — are still in the records. |
+| Every surviving mechanism term has an architect ruling, and a plain-words first-use definition where kept | **Not met.** The ruling is requested and undecided; no definition can be written until it is. |
+| The item lists what was changed | **Not met.** Nothing was changed, and the tracker item could not be updated to say so. |
+
+Three things have to be arranged by roles other than a developer, and none of
+them is a judgment call this document is trying to pre-empt:
+
+1. **A grant for the governed-document half.** ifd.206 needs
+   `protected-path grant:` lines admitting `docs/product`, `docs/designs` and
+   `docs/decisions`, written into the item's title, description, design
+   guidance, or acceptance criteria — the fields somebody authored. A grant in
+   the notes does not count, and nothing a developer writes grants a path.
+2. **A writable tracker for the item half.** The run needs its sandbox widened
+   to the primary checkout's `.beads` directory, or the tracker edits have to be
+   made by something that already reaches it.
+3. **The architect's ruling on the six mechanism terms**, requested by the two
+   amendment proposals named in [Category 2](#category-2-mechanism-names-where-the-architects-ruling-was-requested).
+   The Category 1 work does not depend on it and can proceed first.
+
+The first two are independent of each other, so the item can be finished in two
+runs rather than one if that is easier to arrange than a single run holding
+both.
+
+## How this was measured
+
+Every count in this document comes from one of the three scans below, run on
+2026-08-30 from the worktree root. They are recorded so the architect can
+reproduce or spot-check them before deciding a rename, rather than taking the
+numbers on trust.
+
+**Tracker scan** — the 78 not-closed items, titles and descriptions only,
+counting case-insensitive substring matches per term:
+
+```bash
+python3 - <<'PY'
+import json, re, collections
+rows = [json.loads(l) for l in open('/Users/mbryant/github/yoyodyne/.beads/issues.jsonl')]
+open_items = [r for r in rows if r['status'] != 'closed']
+cat1 = ["tranche","seam","posture","re-arm","sidecar","wedge","in force",
+        "minute zero","soak","pane of glass","starv","whose-move","supersession pile"]
+cat2 = ["docket","brake","heartbeat","sink","steer","handback"]
+for name, terms in (("CAT1", cat1), ("CAT2", cat2)):
+    total = collections.Counter()
+    for r in open_items:
+        text = ((r.get('title') or '') + "\n" + (r.get('description') or '')).lower()
+        for t in terms:
+            n = len(re.findall(re.escape(t), text))
+            if n: total[t] += n
+    print(name, sum(total.values()), len(total), dict(total))
+# titles carrying any coinage
+print(sum(1 for r in open_items
+          if any(re.search(re.escape(t), r['title'], re.I) for t in cat1 + cat2)))
+PY
+```
+
+**Governed-document scan** — the same two term lists over every Markdown file
+under the three artifact homes. This is what produced the headline 32
+occurrences of 8 terms: 12 of 5 in Category 1, 20 of 3 in Category 2.
+
+```bash
+python3 - <<'PY'
+import os, re, collections
+cat1 = ["tranche","seam","posture","re-arm","sidecar","wedge","in force",
+        "minute zero","soak","pane of glass","starv","whose-move","supersession pile"]
+cat2 = ["docket","brake","heartbeat","sink","steer","handback"]
+for name, terms in (("CAT1", cat1), ("CAT2", cat2)):
+    g = collections.Counter()
+    for root in ['docs/product', 'docs/designs', 'docs/decisions']:
+        for dp, _, fns in os.walk(root):
+            for fn in fns:
+                if not fn.endswith('.md'): continue
+                txt = open(os.path.join(dp, fn)).read().lower()
+                for t in terms:
+                    n = len(re.findall(re.escape(t), txt))
+                    if n: g[t] += n
+    print(name, sum(g.values()), len(g), dict(g))
+PY
+```
+
+**Code scan** — word-start matches over every `.go` file in the repository,
+excluding `.git` and `.beads`. This is what produced 928 across 49 files for
+`docket`, 912 across 61 for `sink`, 296 across 36 for `steer`, 96 across 16 for
+`brake`, 66 across 9 for `handback`, 63 across 8 for `heartbeat`, and 2,361 in
+total:
+
+```bash
+python3 -c "
+import os, re, collections
+terms = ['docket','brake','heartbeat','sink','steer','handback']
+tot, files = collections.Counter(), collections.Counter()
+for dp, _, fns in os.walk('.'):
+    if any(x in dp for x in ('/.git','/.beads','node_modules')): continue
+    for fn in fns:
+        if not fn.endswith('.go'): continue
+        txt = open(os.path.join(dp, fn)).read().lower()
+        for t in terms:
+            n = len(re.findall(r'\b' + t, txt))
+            if n: tot[t] += n; files[t] += 1
+print(dict(tot), sum(tot.values()), dict(files))"
+```
+
+Two caveats a spot-check will otherwise trip over. The code scan matches word
+starts, so `docket` counts `docketed` and `DocketStore`, and `brake` counts
+`braked` and `brakes`; this is deliberate, because a rename has to move those
+too. And `ripgrep`'s count mode reports matching *lines* rather than
+occurrences, so counting the same terms with `rg -c` gives slightly lower
+figures — 879 for `docket`, 110 for `brake` — against multiple matches on one
+line. The figures above are occurrences.
+
+The operator-facing strings quoted in Category 2 were found by extracting Go
+string literals of 25 characters or more containing a space, then matching the
+six terms against them, which is what separates command output from identifiers.
