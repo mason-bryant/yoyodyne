@@ -543,29 +543,61 @@ func (e ExistingRunError) Error() string {
 	return fmt.Sprintf("work item %s already has incomplete run %s in status %s", e.State.WorkItemID, e.State.RunID, e.State.Status)
 }
 
-func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
+// validateDispatch asks what every dispatch must be able to answer before it
+// touches a work item at all: that this process is configured to run one, with a
+// developer it can invoke, a model named for it, checks to put the change
+// through, and a review policy where the policy decides integration. It is
+// stated apart from the entry points because both of them ask it — a
+// continuation invokes the same roles a fresh run does, and a harness that
+// cannot run one cannot continue one either.
+func (p Pipeline) validateDispatch() error {
 	if err := p.validate(); err != nil {
-		return Outcome{}, err
+		return err
 	}
 	if err := p.Config.Validate(); err != nil {
-		return Outcome{}, err
+		return err
 	}
 	developer := p.developer()
 	if !p.runsOnCompiledAdapter(developer.Backend) {
-		return Outcome{}, fmt.Errorf("Milestone 0 run pipeline requires a claude-code developer, configured backend is %q", developer.Backend)
+		return fmt.Errorf("Milestone 0 run pipeline requires a claude-code developer, configured backend is %q", developer.Backend)
 	}
 	// Every invocation names its own model; the harness never lets a provider
 	// pick one for it, so the run evidence always says what actually ran.
 	if err := config.ValidateModelSelector(developer.Model); err != nil {
-		return Outcome{}, fmt.Errorf("developer agent %s", err)
+		return fmt.Errorf("developer agent %s", err)
 	}
 	if len(p.Config.Checks) == 0 {
-		return Outcome{}, errors.New("run pipeline requires at least one configured check")
+		return errors.New("run pipeline requires at least one configured check")
 	}
 	if p.automatic() {
 		if err := p.validateReviewPolicy(); err != nil {
-			return Outcome{}, err
+			return err
 		}
+	}
+	return nil
+}
+
+// requireBackendReady refuses a dispatch the provider could not serve. It is
+// asked after the operator's hold rather than with the validation above,
+// because a held harness asks the provider nothing at all — not even whether it
+// is installed.
+func (p Pipeline) requireBackendReady(ctx context.Context) error {
+	availability, err := p.Backend.CheckAvailability(ctx)
+	if err != nil {
+		return err
+	}
+	if !availability.Installed {
+		return errors.New("Claude Code is not installed")
+	}
+	if !availability.Authenticated {
+		return fmt.Errorf("Claude Code is not authenticated; run `claude auth login` before handing work to Yoyodyne (auth method: %s)", availability.AuthMethod)
+	}
+	return nil
+}
+
+func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
+	if err := p.validateDispatch(); err != nil {
+		return Outcome{}, err
 	}
 	// The operator's hold is read before anything else this command would do,
 	// because it is the cheapest question here and the broadest answer: a held
@@ -585,15 +617,8 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	availability, err := p.Backend.CheckAvailability(ctx)
-	if err != nil {
+	if err := p.requireBackendReady(ctx); err != nil {
 		return Outcome{}, err
-	}
-	if !availability.Installed {
-		return Outcome{}, errors.New("Claude Code is not installed")
-	}
-	if !availability.Authenticated {
-		return Outcome{}, fmt.Errorf("Claude Code is not authenticated; run `claude auth login` before handing work to Yoyodyne (auth method: %s)", availability.AuthMethod)
 	}
 
 	item, err := p.Tracker.Show(ctx, workItemID)
@@ -804,10 +829,152 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	run.outcome.Status = runstate.StatusRunning
 	run.outcome.Phase = run.state.Phase
 
-	if err := run.develop(ctx, developerPrompt(developer.Persona.Text, run.deliveredInvariants().Text(), bundle.Text), ""); err != nil {
+	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text), ""); err != nil {
 		return run.stop(ctx, err)
 	}
 	return run.verifyReviewAndFinish(ctx)
+}
+
+// ErrNoRunToContinue is what a continuation refused for not finding the run it
+// was dispatched to continue unwraps to, so a caller can tell it from the
+// refusals about the change that run preserved — those mean the run was found
+// and its worktree was wrong, and this one means the run was never entered.
+var ErrNoRunToContinue = errors.New("the run a continuation was dispatched to is not the run in flight for its item")
+
+// ContinuationMismatchError refuses a repair-intent dispatch that did not find
+// the run it was told to continue. Nothing was reserved, claimed, or created:
+// the stoppage is exactly as it was, and so is its branch.
+type ContinuationMismatchError struct {
+	WorkItemID string
+	// RunID is the run the dispatch was told to continue.
+	RunID string
+	// InFlight is the run actually in flight for that item, empty where none is.
+	// It is carried separately from the sentence below so a caller can act on it
+	// without reading prose.
+	InFlight string
+	// Found says what was there instead, in the words an operator needs to know
+	// what to do about it.
+	Found string
+}
+
+func (e ContinuationMismatchError) Error() string {
+	return fmt.Sprintf(
+		"a repair of %s was dispatched to continue run %s, and %s; nothing was reserved and no worktree was created. A repair continues a change that already exists, so it re-enters the run that holds it or it does nothing — starting a fresh run in its place hands a developer the findings about that change and an empty worktree off the target branch, which is delivered as an empty repair or as the same change reinvented. `yoyo triage rerun` is what starts %s over deliberately",
+		e.WorkItemID, e.RunID, e.Found, e.WorkItemID)
+}
+
+func (e ContinuationMismatchError) Unwrap() error { return ErrNoRunToContinue }
+
+// Continue re-enters one run the harness already made, and can do nothing else.
+//
+// This is the dispatch half of the loss `refuseSubstitutedHandback` refuses the
+// landing half of, and it exists because the two are the same failure seen from
+// each end. A repair is decided about one stopped run and is worth exactly the
+// change that run preserved; every recorded instance of it going wrong is a
+// dispatch that started something fresh instead, and a fresh worktree off the
+// target branch is perfectly valid, so nothing downstream noticed. Routing the
+// carry-out through Run left that possible by construction: Run resumes what it
+// finds in flight and otherwise starts over, which is the right answer to "run
+// this item" and the wrong answer to "continue this run".
+//
+// So repair intent says which run it means and gets an entry point that cannot
+// start one. Nothing here reserves a run, claims an item, or creates a worktree:
+// the run named is adopted and resumed, or the dispatch is refused with the
+// mismatch named. The refusal costs the stoppage nothing — its record, its
+// branch, and its worktree are untouched — so whatever the mismatch turns out to
+// have been, the same decision is carried out by asking again once it is settled.
+//
+// The approval policy is not asked, unlike the repair resume Run will make on
+// its own. Run's is a judgement about an item somebody named, where picking a
+// repair loop up silently is the harness deciding to spend for them; here the
+// caller named the run and verified the grant that pays for it, so what the
+// policy governs is integrating the result rather than whether the re-entry may
+// happen.
+func (p Pipeline) Continue(ctx context.Context, workItemID, runID string) (Outcome, error) {
+	if err := p.validateDispatch(); err != nil {
+		return Outcome{}, err
+	}
+	if strings.TrimSpace(runID) == "" {
+		return Outcome{}, errors.New("a continuation names the run it continues; a dispatch that named none would be a fresh run of the item under another name")
+	}
+	// The hold is read exactly where a fresh run reads it and for the same
+	// reason: continuing a run spends on a provider, and a held harness spends
+	// nothing. The run is left as it stands, which is what it would be left as
+	// anyway.
+	if hold, held, err := p.operatorHold(); err != nil || held {
+		if err != nil {
+			return Outcome{}, err
+		}
+		return p.holdWorkItem(workItemID, hold)
+	}
+	publishing, skipped, err := p.resolvePublishing(ctx)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if err := p.requireBackendReady(ctx); err != nil {
+		return Outcome{}, err
+	}
+	item, err := p.Tracker.Show(ctx, workItemID)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("load work item: %w", err)
+	}
+	// What the operator has directed and what the item waits on are read before
+	// the run is touched, exactly as they are for a fresh run: a continuation is
+	// still a developer invoked against intent that may be being rewritten, and
+	// the run is left in flight rather than resumed.
+	pausing, err := p.pausingDirectives(workItemID)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if len(pausing) > 0 {
+		return pauseWorkItem(workItemID, pausing[0]), nil
+	}
+	if blockers := blockingDependencies(item); len(blockers) > 0 {
+		return pauseWorkItemForDependencies(workItemID, blockers), nil
+	}
+	inFlight, lease, err := p.Store.Adopt(ctx, workItemID)
+	switch {
+	case err == nil:
+		defer lease.Release()
+	case errors.Is(err, runstate.ErrNoRunInFlight):
+		// The run the dispatch names is not going, and this path will not start
+		// one in its place. A stopped run is re-entered by the triage carry-out,
+		// which makes it live again under the grant it verified; reaching here
+		// means that never happened or something has settled it since.
+		return Outcome{}, ContinuationMismatchError{
+			WorkItemID: workItemID,
+			RunID:      runID,
+			Found:      "no run is in flight for that item at all, so there is nothing to continue",
+		}
+	default:
+		var existing runstate.ExistingWorkItemError
+		if errors.As(err, &existing) {
+			return Outcome{}, ExistingRunError{State: existing.State}
+		}
+		return Outcome{}, fmt.Errorf("adopt run in flight: %w", err)
+	}
+	if inFlight.RunID != runID {
+		// Another run of the same item is going. Continuing it would spend this
+		// repair's grant on a change nobody decided about, so it is named rather
+		// than picked up.
+		return Outcome{}, ContinuationMismatchError{
+			WorkItemID: workItemID,
+			RunID:      runID,
+			InFlight:   inFlight.RunID,
+			Found: fmt.Sprintf("the run in flight for that item is %s, which is not the run the repair was decided about",
+				inFlight.RunID),
+		}
+	}
+	if !resumableRepair(inFlight) {
+		return Outcome{}, ContinuationMismatchError{
+			WorkItemID: workItemID,
+			RunID:      runID,
+			InFlight:   inFlight.RunID,
+			Found: fmt.Sprintf("that run is in flight in status %s at the %s phase, which is not a repair loop this can re-enter",
+				inFlight.Status, inFlight.Phase),
+		}
+	}
+	return p.resumeRun(ctx, inFlight, item, publishing, skipped)
 }
 
 // resumeRun picks up a run this process did not finish: one an interrupted
