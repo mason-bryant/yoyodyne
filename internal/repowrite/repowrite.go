@@ -197,6 +197,48 @@ func (r Root) contains(candidate string) bool {
 	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
+// OpenAppend opens the file a root-relative path names for appending, creating
+// it and any missing directories above it, and hands back the open descriptor.
+//
+// It is here for the output nobody can hold in a byte slice: a long-lived child
+// process writes its standard output and standard error into a descriptor for
+// as long as it runs, so the write-and-rename below cannot express it, and a
+// writer that reached for `os.OpenFile` itself would be a write outside this
+// package deciding its own containment. Confinement is the same and is decided
+// the same way — every existing component below the root is resolved before
+// anything is created or opened, and one that leaves the root is refused rather
+// than followed.
+//
+// The modes are the caller's, unlike the fixed ones a repository document is
+// written with, because what this opens is not a repository document: a file
+// holding what the harness is doing, under a state directory, wants the
+// permissions its own root does rather than a checkout's.
+func (r Root) OpenAppend(relative string, file, directory fs.FileMode) (*os.File, error) {
+	clean, target, err := r.resolve(relative)
+	if err != nil {
+		return nil, err
+	}
+	// Every existing component of the target was checked above and everything
+	// below the first missing one does not exist yet, so there is nothing left
+	// here for MkdirAll to follow out of the root.
+	if err := os.MkdirAll(filepath.Dir(target), directory); err != nil {
+		return nil, fmt.Errorf("create %s: %w", path.Dir(clean), err)
+	}
+	// Opened refusing to follow a link, which is this path's half of what the
+	// rename below does for a written document. The resolve above already refuses
+	// a final component that points out of the root, so what is left is the
+	// moment after that answer: a link planted at the target between the check
+	// and the open. A rename replaces such a link rather than writing through it,
+	// and there is no rename here — what is handed back is a descriptor a
+	// long-lived process writes to for as long as it runs, so following one would
+	// send everything it ever says somewhere nobody is looking.
+	opened, err := os.OpenFile(target, appendFlags, file)
+	if err != nil {
+		return nil, fmt.Errorf("open %s for appending: %w", clean, err)
+	}
+	return opened, nil
+}
+
 // WriteFile replaces the document a repository-relative path names and returns
 // where it landed, which is the resolved path rather than the one asked for.
 //

@@ -236,6 +236,47 @@ at most one of them is right. Under these names, `yoyo doctor` can ask whether
 
 ## 6. Start the sink
 
+On macOS, the harness does this for you:
+
+```sh
+yoyo slack ensure
+```
+
+It starts a sink only if nothing is reporting for this product, reads this
+project's own keychain items into that one process, and returns either way — so
+it is what an unattended pass can run every few minutes as well as what you type
+once. It prints what it did, in one of four ways: a sink already running, a sink
+it started and the pid it started as, the stored items it could not read, or
+reporting turned off for this project so there is no sink to run. Nothing it
+prints is a token. It fails only on the third, which is the one outcome somebody
+has to do something about; a project reporting nowhere is healthy and says so.
+
+**Nothing schedules this for you yet, and that is a gap rather than a design.**
+The step is what the installed maintenance pass is meant to call, once per
+product checkout, in place of the hand-rolled `pgrep`-and-one-namespace step it
+replaces. That pass is the productization of the operator's own script, tracked
+as `yoyodyne-ifd.207`, and it is not in this tree: nothing `yoyo` installs runs
+anything on a schedule. Until it lands, the timer is yours — put `yoyo slack
+ensure` in whatever already runs unattended on that machine, a `launchd` job, a
+`cron` line, or the pass you keep, once per product.
+
+Whether a sink is running is asked of **this product's lease**, which is the
+same lease the sink itself takes and one per product. That is what makes it
+right on a machine running more than one harness: a `pgrep` for `yoyo slack`
+matches the sibling project's sink, so a pass built on one would decide this
+product's sink is running when it is the other product's, and this project would
+report nothing indefinitely. The tokens come from this product's names for the
+same reason. Run it in each product; the products do not see each other.
+
+The sink it starts is in a session of its own, so it stays up when the pass, the
+terminal, or the job that started it goes away, and it says what it is doing in
+`sink.log` beside that product's own sink state. `--json` is the same account
+for something that reads it rather than somebody.
+
+Underneath, that is exactly the launcher below, which is what to write where
+there is no keychain to read — or where you want the sink in front of you rather
+than behind you.
+
 The launcher reads this project's pair into exactly one process:
 
 ```sh

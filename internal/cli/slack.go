@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -33,15 +34,22 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
 
-// The environment the sink reads its credentials from. They are deliberately
-// the names Slack's own documentation uses, so the setup document can say
-// "export the two tokens the app page shows you" and mean it literally.
+// The environment the sink reads its credentials from, named where the launch
+// that fills it is: a sink reading one variable while supervision sets another
+// is a sink that never starts, and one definition cannot drift from itself.
 const (
-	botTokenVariable = "SLACK_BOT_TOKEN"
-	appTokenVariable = "SLACK_APP_TOKEN"
+	botTokenVariable = slack.BotTokenVariable
+	appTokenVariable = slack.AppTokenVariable
 )
 
 func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, version string) int {
+	// `ensure` is the sink supervised rather than run: it starts one if nothing
+	// is reporting for this product and returns either way, which is what an
+	// unattended pass can call every few minutes. Everything else here is the
+	// sink itself, so the verb is looked for before the flags are.
+	if len(args) > 0 && args[0] == "ensure" {
+		return ensureSlackSink(ctx, args[1:], stdout, stderr)
+	}
 	flags := flag.NewFlagSet("slack", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
@@ -91,6 +99,142 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 		return 1
 	}
 	return 0
+}
+
+// ensureSlackSink is the step a maintenance pass takes about reporting: this
+// product's sink started if nothing is reporting for it, from this product's
+// own stored tokens, and nothing done at all if something already is.
+//
+// It is one product per invocation, because a product is a configuration and a
+// checkout rather than something a machine keeps a list of. A machine running
+// several harnesses runs this in each of them, and the three things that keep
+// those apart are all per product: the lease that answers whether a sink is
+// running, the keychain items the tokens come from, and the state the sink
+// writes. None of them can see a sibling's, so no pass ever double-starts a
+// sink or starts one holding the wrong project's tokens.
+//
+// Nothing in the harness calls this on a schedule yet, and that is stated here
+// rather than left to be discovered: the pass that is meant to — the
+// productization of the operator's hand-rolled maintenance script, tracked as
+// yoyodyne-ifd.207 — is not in this tree, so there is nothing here to wire the
+// step into. Until it lands, the operator's own schedule calls it, and the
+// hand-rolled Slack step it supersedes is still what runs on their machine.
+func ensureSlackSink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("slack ensure", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
+	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "slack ensure does not accept positional arguments")
+		printSlackUsage(stderr)
+		return 2
+	}
+
+	resolved, err := loadConfiguration(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "slack ensure failed: %v\n", err)
+		return 1
+	}
+	productID := resolved.Config.Product.ID
+	if !resolved.Config.Slack.Enabled {
+		// A product that never asked for reporting is healthy with nothing to
+		// supervise, so this is the ordinary answer rather than a failure: a pass
+		// that ran over every product on the machine would otherwise report one
+		// every time it passed a project that reports nowhere.
+		return reportSupervision(stdout, stderr, *jsonOutput, slack.Supervision{
+			Product: productID,
+			Outcome: slack.OutcomeReportingOff,
+			Detail:  "set slack.enabled and slack.channel in " + resolved.Path + " to turn it on",
+		})
+	}
+	if runtime.GOOS != "darwin" {
+		// The keychain is macOS's. Elsewhere the pair lives in a file this
+		// project's own launch sources, and starting a sink from that is nothing
+		// this has been asked to do -- so it says which arrangement it supports
+		// rather than reporting a keychain that was never going to be there.
+		fmt.Fprintf(stderr, "slack ensure reads this product's tokens from the macOS keychain, and this machine is %s\n", runtime.GOOS)
+		fmt.Fprintf(stderr, "start the sink from the environment file instead: (set -a; . ~/.config/yoyo/%s/slack.env; %s=%s exec yoyo slack)\n",
+			productID, slack.SecretNamespaceVariable, productID)
+		return 1
+	}
+
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "slack ensure failed: %v\n", err)
+		return 1
+	}
+	store, err := slack.NewStore(stateRoot, productID)
+	if err != nil {
+		fmt.Fprintf(stderr, "slack ensure failed: %v\n", err)
+		return 1
+	}
+	// The sink is started from the binary that is supervising it rather than
+	// from whatever `yoyo` is on the pass's PATH, so the sink that comes back
+	// after a stop is the build that noticed it was gone.
+	program, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "slack ensure failed: %v\n", err)
+		return 1
+	}
+	supervision, err := slack.Supervisor{
+		Store:    store,
+		Secrets:  slack.Keychain{Runner: execution.OSProcessRunner{}},
+		Launcher: slack.DetachedLauncher{},
+		Program:  program,
+		// The configuration this pass read, named to the sink rather than left
+		// for it to find: a sink started by a pass run from somewhere else would
+		// otherwise read whichever project is nearest that directory.
+		Config:  resolved.Path,
+		Dir:     config.ProjectDirectory(resolved.Path),
+		Environ: os.Environ(),
+	}.Ensure(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "slack ensure failed: %v\n", err)
+		return 1
+	}
+	return reportSupervision(stdout, stderr, *jsonOutput, supervision)
+}
+
+// reportSupervision says what the pass did, and fails only where reporting is
+// on and nothing is running: that is the one outcome somebody has to act on,
+// and an unattended pass that exited 0 on it would be silence over a channel
+// that has gone quiet.
+func reportSupervision(stdout, stderr io.Writer, jsonOutput bool, supervision slack.Supervision) int {
+	if jsonOutput {
+		if code := writeJSON(stdout, stderr, supervision); code != 0 {
+			return code
+		}
+	} else {
+		fmt.Fprintln(stdout, describeSupervision(supervision))
+	}
+	if supervision.Outcome == slack.OutcomeSecretsUnavailable {
+		return 1
+	}
+	return 0
+}
+
+// describeSupervision is the same account in a sentence. Nothing it prints is a
+// credential: the secrets it names are the items, never their values.
+func describeSupervision(supervision slack.Supervision) string {
+	switch supervision.Outcome {
+	case slack.OutcomeRunning:
+		return fmt.Sprintf("a Slack sink is already reporting for %s; nothing was started", supervision.Product)
+	case slack.OutcomeStarted:
+		return fmt.Sprintf("started the Slack sink for %s as pid %d, logging to %s", supervision.Product, supervision.PID, supervision.Log)
+	case slack.OutcomeSecretsUnavailable:
+		// The store is named, because "the tokens could not be read" is the same
+		// sentence for a pair nobody stored and a pair kept somewhere this does
+		// not read — and only one of those is the operator's to do anything
+		// about.
+		return fmt.Sprintf("no Slack sink is reporting for %s and the keychain would not produce its tokens: %s\n%s\nrun `yoyo doctor` for what this machine has stored and the command that stores the rest",
+			supervision.Product, strings.Join(supervision.Secrets, " and "), supervision.Detail)
+	case slack.OutcomeReportingOff:
+		return fmt.Sprintf("Slack reporting is off for %s, so there is no sink to run: %s", supervision.Product, supervision.Detail)
+	}
+	return fmt.Sprintf("the Slack sink for %s: %s", supervision.Product, supervision.Outcome)
 }
 
 // buildSlackSink assembles the sink from the configuration, the state root, and
@@ -442,6 +586,7 @@ func slackAPI() (*slack.API, error) {
 
 func printSlackUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo slack [options]
+       yoyo slack ensure [--config <path>] [--json]
 
 Report what the harness is doing into the configured Slack channel: one thread
 per work item, one message per milestone, and every report an agent files at the
@@ -492,6 +637,23 @@ One sink per product. Two of them hold separate thread maps, so the second
 opens its own threads and posts everything twice; the second to start is
 refused. Setting it up from nothing is `+"`docs/slack/setup.md`"+`, and the app
 manifest it asks for is beside it.
+
+Keeping one running is `+"`yoyo slack ensure`"+`, which is the launcher above done by
+the harness rather than by a shell line:
+
+  yoyo slack ensure
+
+It starts a sink only if nothing is reporting for this product, reading this
+product's own stored pair into that one process and nothing else. Whether a sink
+is running is asked of this product's lease rather than of the process table, so
+on a machine running more than one harness a sibling's sink is neither mistaken
+for this one nor fought over. Run it from an unattended pass as often as you
+like: with a sink already running it does nothing and says so, and it fails only
+where reporting is on, nothing is running, and the stored tokens could not be
+read.
+
+Commands:
+  ensure             start a sink for this product if none is running
 
 Options:
   --config <path>    configuration file (default: the nearest .yoyodyne/config.yaml)

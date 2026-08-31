@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -162,6 +163,116 @@ func TestAWriteLeavesNoTemporaryFileBehind(t *testing.T) {
 	}
 	if content := readFile(t, filepath.Join(root.Path(), "docs", "brief.md")); content != "second" {
 		t.Fatalf("content = %q, want the second write", content)
+	}
+}
+
+// What OpenAppend is for is output that keeps arriving: a descriptor a process
+// writes to for as long as it runs. So it adds to what is there rather than
+// replacing it, and it makes the directories it needs, the same way a document
+// written into a directory nobody created yet does.
+func TestAppendingAddsToWhatIsAlreadyThere(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	for _, line := range []string{"first\n", "second\n"} {
+		opened, err := root.OpenAppend("state/sink.log", 0o600, 0o700)
+		if err != nil {
+			t.Fatalf("OpenAppend() error = %v", err)
+		}
+		if _, err := opened.WriteString(line); err != nil {
+			t.Fatalf("WriteString() error = %v", err)
+		}
+		if err := opened.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}
+	written := filepath.Join(root.Path(), "state", "sink.log")
+	if content := readFile(t, written); content != "first\nsecond\n" {
+		t.Fatalf("content = %q, want the second open to have added to the first", content)
+	}
+	info, err := os.Stat(written)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the appended file is mode %v (%v), want the mode it was opened with", info.Mode().Perm(), err)
+	}
+}
+
+// The reason this is in this package at all: a descriptor handed to a
+// long-lived process is a write nobody watches afterwards, so where it points
+// is decided here and refused here.
+func TestAppendingThroughASymlinkOutOfTheRepositoryIsRefused(t *testing.T) {
+	t.Parallel()
+
+	root, outside := repository(t)
+	writeFile(t, filepath.Join(outside, "sink.log"), "somebody else's log")
+	link(t, filepath.Join(outside, "sink.log"), filepath.Join(root.Path(), "sink.log"))
+
+	opened, err := root.OpenAppend("sink.log", 0o600, 0o700)
+	if opened != nil {
+		opened.Close()
+	}
+	var refused *EscapeError
+	if !errors.As(err, &refused) {
+		t.Fatalf("OpenAppend() error = %v, want an EscapeError", err)
+	}
+	if content := readFile(t, filepath.Join(outside, "sink.log")); content != "somebody else's log" {
+		t.Fatalf("the file outside the repository reads %q, and a refused append changed it", content)
+	}
+}
+
+// A link inside the root is followed by the resolution, so what the append
+// opens is the file that link points at rather than the link — which is what
+// keeps refusing to follow one from refusing a layout that never left.
+func TestAppendingThroughASymlinkThatStaysInsideTheRepositoryLandsOnItsTarget(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	elsewhere := filepath.Join(root.Path(), "elsewhere")
+	writeFile(t, filepath.Join(elsewhere, "real.log"), "before\n")
+	link(t, filepath.Join(elsewhere, "real.log"), filepath.Join(root.Path(), "sink.log"))
+
+	opened, err := root.OpenAppend("sink.log", 0o600, 0o700)
+	if err != nil {
+		t.Fatalf("OpenAppend() error = %v", err)
+	}
+	if _, err := opened.WriteString("after\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if content := readFile(t, filepath.Join(elsewhere, "real.log")); content != "before\nafter\n" {
+		t.Fatalf("content = %q, want the append to have landed on what the link points at", content)
+	}
+}
+
+// The case the resolution cannot answer, because it is about the moment after
+// it answered: a link standing at the target when the descriptor is opened. A
+// descriptor handed to a process that runs for hours is not one write anybody
+// will look at again, so the open refuses rather than follows. This plants the
+// link where the check has already been made, which is what a race would do at a
+// moment nothing can arrange on purpose.
+func TestAppendingRefusesALinkStandingAtTheTargetItself(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("refusing to follow the final component is the Unix hosts' O_NOFOLLOW")
+	}
+	t.Parallel()
+
+	root, outside := repository(t)
+	writeFile(t, filepath.Join(outside, "sink.log"), "somebody else's log")
+	// Straight at the resolved target, past the resolution rather than through
+	// it: what this proves is that the open itself refuses a link.
+	target := filepath.Join(root.Path(), "sink.log")
+	link(t, filepath.Join(outside, "sink.log"), target)
+
+	opened, err := os.OpenFile(target, appendFlags, 0o600)
+	if opened != nil {
+		opened.Close()
+	}
+	if err == nil {
+		t.Fatal("the append flags followed a symlink at the target")
+	}
+	if content := readFile(t, filepath.Join(outside, "sink.log")); content != "somebody else's log" {
+		t.Fatalf("the file outside the repository reads %q, and a refused open changed it", content)
 	}
 }
 
