@@ -191,6 +191,39 @@ func TestTheDirectoryIndexIsNeitherLoadedNorReported(t *testing.T) {
 	}
 }
 
+// The test above proves the rule; this proves the home. A fixture cannot fail
+// the way a home does — the phantom gap that forced this test was reported out
+// of this repository's own invariants directory into every run's delivered
+// context and every reviewer's evidence, telling both that the constraint set
+// was incomplete, while the fixture beside it passed the whole time. So the
+// claim those two rest on is asserted against the directory they actually read,
+// where a file that arrives in it, or an index the skip stops recognising, is
+// something to notice here rather than a week of runs later.
+func TestThisRepositorysInvariantsHomeLoadsWithNoGapToReport(t *testing.T) {
+	t.Parallel()
+
+	set, err := Store{RepositoryRoot: "../..", Directory: invariantsDirectory}.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	for _, problem := range set.Problems {
+		t.Errorf("%s is reported as unreadable, so every run is told the invariant set is incomplete: %s",
+			problem.Path, problem.Reason)
+	}
+	// A home recording nothing would satisfy the check above while saying
+	// nothing, which is the other way a clean load means less than it reads as.
+	if len(set.Active) == 0 {
+		t.Fatal("this repository records no active invariant, so loading it without a problem proves nothing")
+	}
+	// And skipped rather than read: an index loaded as a constraint is delivered
+	// to every role as something to be held to, which no problem would report.
+	for _, recorded := range append(append([]Invariant{}, set.Active...), set.Retired...) {
+		if strings.EqualFold(recorded.ID, "readme") {
+			t.Errorf("the directory index was loaded as the invariant %q", recorded.ID)
+		}
+	}
+}
+
 func TestSelectDeliversRepositoryWideInvariantsAndScopeMatches(t *testing.T) {
 	t.Parallel()
 
