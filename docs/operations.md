@@ -68,7 +68,15 @@ was working and stopped. **A long-running sink is started from a binary that
 keeps moving underneath it**, so the build that is reporting and the build that
 is installed drift apart with no event between them — nothing fails, nothing is
 logged, and the milestones added since it started are simply never posted, which
-in a channel reads as a quiet week. And **on a machine running more than one
+in a channel reads as a quiet week. The version is asked first, because that is
+what you installed by; the revision behind it is asked second, because on a
+harness developing itself the version cannot answer at all. Every unreleased
+binary reports the same version, so a sink started last week and the binary
+diagnosing it compare as identical — a clean report over exactly the drift being
+looked for. Two revisions are two places in one history, so where the versions
+agree and the revisions do not, the revisions settle it; and where there is no
+pair of revisions to compare, the finding says the comparison was not made rather
+than reporting the versions agreeing as if it had been. And **on a machine running more than one
 harness, "a Slack token exists" is true for all of them and right for at most
 one**, so what is checked is this project's own pair under names that carry the
 product, and whether the sink that is running was launched with them. See
@@ -658,14 +666,14 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [stopped, developing, work preserved] $4.62
   selected by the operator: the operator ran this item by name from the command line
-  ran under default, configuration cfg-9f2c41ab7e05
+  ran under default, configuration cfg-9f2c41ab7e05, harness 9870df6a1b2c
   reason: the provider ended this run without judging the work after 3 of 3 permitted relaunch(es)
   preserved branch: yoyodyne/yoyodyne-ifd.1.7/19dc9dff
   preserved worktree: /Users/you/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-1-7-19dc9dff
   preserved developer session: 0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, no artifacts recorded] $12.80
   selected: no reason recorded
-  ran under an account the record does not name, configuration a configuration the record does not name
+  ran under an account the record does not name, configuration a configuration the record does not name, harness a build the record does not name
   reason: create isolated worktree: primary checkout is not ready for integration
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
 each reason is shown as one line; --json carries what the record holds in full
@@ -714,15 +722,25 @@ account for is exactly what you most need to see, and a line left out would read
 as a reason you had already looked at rather than as one nobody wrote.
 
 The `ran under` line beneath it is the same shape of fact and is printed for the
-same reason: which provider account the run spent, and the revision of the
-configuration that set it up. A project with one account reads `ran under
+same reason: which provider account the run spent, the revision of the
+configuration that set it up, and the revision of the harness that dispatched it.
+A project with one account reads `ran under
 default`; a pooled one reads whichever account the pool served that run, which
 is what makes a rotation something you can see rather than infer. The revision is
 a digest of the effective configuration, so two
 runs carrying the same one were configured identically and a run whose
 configuration was edited under it is distinguishable from one that was not;
-`yoyo config show` prints the revision in force. A run recorded before either was
-carried says so, in those words, rather than showing a blank.
+`yoyo config show` prints the revision in force. A run recorded before any of the
+three was carried says so, in those words, rather than showing a blank.
+
+The `harness` on the end is a Git object name, shortened here and carried whole
+by `--json`. It is there because a process runs whatever binary it was started
+with while the harness moves on underneath it, so a run that behaved like a build
+from before the fix is otherwise indistinguishable from a fix that does not work —
+which is how a week of deployment defects came to be read as code defects. A
+binary installed without the stamping records none, and the line says so rather
+than inventing one: a comparison nobody can make is an answer, and a comparison
+made against the wrong commit is not.
 
 Each of the other reasons is printed under the run it belongs to and named for
 what it is, because the records keep them apart deliberately. Only `reason` is the

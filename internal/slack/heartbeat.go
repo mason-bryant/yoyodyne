@@ -233,20 +233,20 @@ func (f *HarnessFeed) standing(ctx context.Context) string {
 // log this pass has already read, and only once something is actually due does the
 // repository get asked anything, so an idle sink polling every fifteen seconds
 // spawns no process at all and a stale one spawns one an hour.
-func (f *HarnessFeed) residentDeliveries(ctx context.Context, cursor Cursor, sessions []runstate.WatchTransition, streams map[string]struct{}) ([]Delivery, error) {
+func (f *HarnessFeed) residentDeliveries(ctx context.Context, cursor Cursor, sessions []runstate.WatchTransition, states []runstate.State, streams map[string]struct{}) ([]Delivery, error) {
 	if f.Deployments == nil {
 		return nil, nil
 	}
 	streams[residentStream] = struct{}{}
 
-	build, running := residentBuild(sessions)
+	build, running := residentBuild(sessions, states)
 	if !running {
-		// Either nothing is watching this product, or what is watching it was
-		// started by a binary that recorded no revision. Both are comparisons
-		// nobody can make rather than sessions that are current, and neither is
-		// worth an hourly message: a stopped session is already said where sessions
-		// are said, and a binary that stamped nothing is a fact about how somebody
-		// built it rather than news about this product.
+		// Either nothing is choosing or dispatching work on this product, or what
+		// is doing it was started by a binary that recorded no revision. Both are
+		// comparisons nobody can make rather than sessions that are current, and
+		// neither is worth an hourly message: a stopped session is already said
+		// where sessions are said, and a binary that stamped nothing is a fact about
+		// how somebody built it rather than news about this product.
 		if cursor.Standing != "" {
 			return []Delivery{{Stream: residentStream, Cursor: Cursor{}}}, nil
 		}
@@ -322,23 +322,41 @@ func (f *HarnessFeed) residentDeliveries(ctx context.Context, cursor Cursor, ses
 	}}, nil
 }
 
-// residentBuild is the build the session choosing work is running, and it reads
-// the log per session for the reason choosing() does: one log holds every session
-// a product has had, and its last entry can be a session stopping while another
-// carries on watching. Taking that at face value would report the build of a
-// process that is not running.
+// residentBuild is the build the harness is choosing and dispatching work with,
+// taken from the records that say so rather than worked out from anything else.
 //
-// Where two sessions are alive, the one that acted most recently is the one
-// reported. That is a reading rather than a resolution — two residents on one
-// product is a state nothing else here has an answer for either — and the honest
-// half of it is that a stale session is still named as stale whichever of them it
-// is.
-func residentBuild(sessions []runstate.WatchTransition) (string, bool) {
-	live := readmodel.Live(sessions)
-	if len(live) == 0 {
-		return "", false
+// Two records say it, and they are asked in that order. A live watch session's
+// own transitions are the direct answer: that process is the resident, and it
+// stamps what it was started with on every transition it writes. Where no live
+// session names one, the runs still in flight do — a run's record pins the build
+// of the harness that reserved it, so a resident whose own log predates the
+// stamping is still visible through the work it is dispatching, and so is a
+// dispatcher that is not a watch session at all.
+//
+// It is a reading of both rather than a resolution between them. Where two
+// sessions are alive, or a run in flight was reserved by a different binary from
+// the session polling beside it, what is reported is the one that acted most
+// recently — two residents on one product is a state nothing else here has an
+// answer for either, and the honest half of it is that a stale build is still
+// named as stale whichever process is carrying it.
+func residentBuild(sessions []runstate.WatchTransition, states []runstate.State) (string, bool) {
+	// Live is newest first, so the first session naming a build is the latest one
+	// that recorded which binary it is.
+	for _, session := range readmodel.Live(sessions) {
+		if build := strings.TrimSpace(session.Build); build != "" {
+			return build, true
+		}
 	}
-	build := strings.TrimSpace(live[0].Build)
+	var dispatched runstate.State
+	for _, state := range states {
+		if state.Status.Terminal() || strings.TrimSpace(state.Build) == "" {
+			continue
+		}
+		if dispatched.RunID == "" || state.StartedAt.After(dispatched.StartedAt) {
+			dispatched = state
+		}
+	}
+	build := strings.TrimSpace(dispatched.Build)
 	return build, build != ""
 }
 

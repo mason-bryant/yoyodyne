@@ -511,14 +511,21 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	} else {
 		fmt.Fprintln(writer, "  selected: no reason recorded")
 	}
-	// What the run was spent on and what set it up are printed for every run, and
-	// for the reason the selection line is: there is one account today, so a line
-	// that appeared only where several existed would be a line nobody was reading
-	// on the day the second one arrived. A record that names neither is a record
-	// written before either was carried, and says so.
-	fmt.Fprintf(writer, "  ran under %s, configuration %s\n",
+	// What the run was spent on, what set it up, and which harness dispatched it
+	// are printed for every run, and for the reason the selection line is: there
+	// is one account today, so a line that appeared only where several existed
+	// would be a line nobody was reading on the day the second one arrived. A
+	// record that names none of them is a record written before they were carried,
+	// and says so.
+	//
+	// The build is on the same line because it answers the same class of question
+	// and is read at the same moment: an operator asking why a run behaved the way
+	// it did needs to know whether the code it ran was the code that was merged,
+	// and a run that cannot say is a defect nobody can classify.
+	fmt.Fprintf(writer, "  ran under %s, configuration %s, harness %s\n",
 		recorded(run.AccountAlias, "an account the record does not name"),
-		recorded(run.ConfigRevision, "a configuration the record does not name"))
+		recorded(run.ConfigRevision, "a configuration the record does not name"),
+		recorded(shortBuild(run.Build), "a build the record does not name"))
 	printed := true
 	for _, reason := range []struct {
 		label string
@@ -614,6 +621,16 @@ func recorded(value, absence string) string {
 		return trimmed
 	}
 	return absence
+}
+
+// shortBuild names a revision the way somebody quoting one does. A run's record
+// keeps the whole object name, which --json carries; a listing wants the prefix
+// a person would type into `git show`.
+func shortBuild(build string) string {
+	if trimmed := strings.TrimSpace(build); len(trimmed) > 12 {
+		return trimmed[:12]
+	}
+	return build
 }
 
 // printOutstandingSteps says what a finished run still owes, so a run marked

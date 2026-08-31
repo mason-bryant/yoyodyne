@@ -275,6 +275,68 @@ func TestAStaleSinkIsNamedAsStale(t *testing.T) {
 	}
 }
 
+// The same outage on the installation it actually happened on. A harness
+// developing itself runs nothing but unreleased binaries, so a sink started a
+// week ago and the binary asking about it report one version and compare as
+// identical — a clean report over exactly the drift being looked for. Two
+// revisions are two places in one history, and they settle it.
+func TestASinkOnAnotherRevisionOfOneVersionIsNamedAsStale(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = reportingConfig
+	world.build = currentBuild
+	world.sinkRunning(slack.Presence{
+		Version: currentVersion, Build: staleBuild, PID: 4242, SecretNamespace: "yoyodyne", Channel: "C1",
+	})
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "slack-sink-version")
+	if !found {
+		t.Fatalf("Diagnose() never compared the sink's build: %s", render(report))
+	}
+	if finding.Status != StatusWarning {
+		t.Fatalf("slack-sink-version = %s, want a warning: %s", finding.Status, finding.Summary)
+	}
+	// Both revisions have to be named, for the reason both versions are: "restart
+	// the sink" over an unnamed drift is advice, and the two side by side are the
+	// evidence somebody checks.
+	if !strings.Contains(finding.Detail, staleBuild[:12]) || !strings.Contains(finding.Detail, currentBuild[:12]) {
+		t.Fatalf("slack-sink-version detail = %q, want both revisions named", finding.Detail)
+	}
+	if !strings.Contains(finding.Remedy, "kill 4242") {
+		t.Fatalf("slack-sink-version remedy = %q, want the recorded pid stopped", finding.Remedy)
+	}
+
+	// A sink on the same revision is the ordinary healthy state and says so.
+	agreeing := newWorld(t)
+	agreeing.configuration = reportingConfig
+	agreeing.build = currentBuild
+	agreeing.sinkRunning(slack.Presence{
+		Version: currentVersion, Build: currentBuild, PID: 4242, SecretNamespace: "yoyodyne", Channel: "C1",
+	})
+	healthy, found := findingFor(agreeing.diagnose(), "slack-sink-version")
+	if !found || healthy.Status != StatusOK {
+		t.Fatalf("slack-sink-version = %#v, want a sink on the deployed revision reported healthy", healthy)
+	}
+
+	// And a pair with no revisions to compare says the comparison was not made,
+	// rather than reporting the versions agreeing as if it had been. On an install
+	// where every build answers one version, that agreement is not evidence.
+	unstamped := newWorld(t)
+	unstamped.configuration = reportingConfig
+	unstamped.sinkRunning(slack.Presence{
+		Version: currentVersion, PID: 4242, SecretNamespace: "yoyodyne", Channel: "C1",
+	})
+	unchecked, found := findingFor(unstamped.diagnose(), "slack-sink-version")
+	if !found || unchecked.Status != StatusOK {
+		t.Fatalf("slack-sink-version = %#v, want a version that agrees reported healthy", unchecked)
+	}
+	if !strings.Contains(unchecked.Summary, "no pair of revisions") {
+		t.Fatalf("slack-sink-version summary = %q, want it to say the revisions could not be compared", unchecked.Summary)
+	}
+}
+
 // TestSecretsAreCheckedForThisInstanceRatherThanForAnyToken is the
 // multi-harness case. "A Slack token exists somewhere on this machine" passes
 // for every project on it and is right for at most one, so what is asked for is
@@ -702,10 +764,23 @@ type world struct {
 	stateRoot     string
 	project       string
 	goos          string
-	leases        []*leaseHold
+	// build is the revision the diagnosing binary reports, which is what a sink's
+	// own revision is checked against. A world that names none is the ordinary
+	// released install, where the version is the whole of the comparison.
+	build  string
+	leases []*leaseHold
 }
 
 const currentVersion = "v1.2.3"
+
+// currentBuild and staleBuild are two revisions of one history: what the binary
+// making the diagnosis was built from, and what a sink started a week earlier
+// was. On a harness developing itself both of them answer the same version, so
+// these are the only thing that can tell them apart.
+const (
+	currentBuild = "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900"
+	staleBuild   = "0364141b2c3d4e5f60718293a4b5c6d7e8f9001a"
+)
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
@@ -834,6 +909,7 @@ func (w *world) diagnose() Report {
 		UserHomeDir: func() (string, error) { return w.project, nil },
 		GOOS:        w.goos,
 		Version:     currentVersion,
+		Build:       w.build,
 		Load:        w.load,
 		Now:         time.Now,
 	})

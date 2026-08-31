@@ -168,6 +168,19 @@ type Spend struct {
 	// one. It is evidence about the invocation and never the record of it: what
 	// this line says survives the session being gone.
 	SessionID string `json:"session_id,omitempty"`
+	// Build is the repository revision the harness binary that made the
+	// invocation was built from. It completes what the durable-state invariant
+	// asks every provider invocation to be pinned to: the backend, the model, the
+	// account, the configuration — and, since a long-lived process goes on running
+	// what it was started with, which harness actually made the call.
+	//
+	// It is not required, and that is the one place this differs from the account
+	// and the revision beside it. Those the harness always knows; a build is
+	// stamped into the binary by whoever built it, so one installed from the
+	// module cache carries none. An absence is recorded as one rather than guessed
+	// at from the version: a comparison nobody can make is an answer, and a
+	// comparison made against the wrong commit is not.
+	Build string `json:"build,omitempty"`
 }
 
 // Known reports a line carrying an amount somebody can add up.
@@ -208,6 +221,13 @@ func (s Spend) Validate() error {
 	}
 	if !configRevisionPattern.MatchString(s.ConfigRevision) {
 		problems = append(problems, errors.New("config_revision is not a configuration revision"))
+	}
+	// The build is absent from a line an unstamped binary wrote and from every
+	// line written before it was carried, so what is checked is the shape of one
+	// that is there: a line naming a revision nothing could have produced says
+	// less than one naming none, because it reads as evidence.
+	if s.Build != "" && !buildPattern.MatchString(s.Build) {
+		problems = append(problems, errors.New("build is not a revision"))
 	}
 	problems = append(problems, s.subjectProblem(), s.amountProblem())
 	if err := errors.Join(problems...); err != nil {

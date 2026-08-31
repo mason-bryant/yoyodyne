@@ -338,6 +338,29 @@ func TestStateRequiresCompleteWorktreeIdentity(t *testing.T) {
 	}
 }
 
+// A run may name no build, because every run recorded before the harness pinned
+// one names none and because a binary carrying no revision of its own leaves it
+// empty. What it may not do is name something no repository could resolve: the
+// whole use of the field is that a reader hands it to Git, and a value that
+// could never be one reads as an answer to "which harness did this" while being
+// nothing of the kind.
+func TestARunRecordsABuildThatCouldBeOneOrNoneAtAll(t *testing.T) {
+	t.Parallel()
+
+	state := testState(t, StatusRunning)
+	if err := state.Validate(); err != nil {
+		t.Fatalf("Validate() with no build error = %v", err)
+	}
+	state.Build = "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900"
+	if err := state.Validate(); err != nil {
+		t.Fatalf("Validate() with a revision error = %v", err)
+	}
+	state.Build = "the one from Tuesday"
+	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "build is not a revision") {
+		t.Fatalf("Validate() invented build error = %v", err)
+	}
+}
+
 func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 	t.Parallel()
 

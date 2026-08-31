@@ -179,6 +179,50 @@ func TestARunRecordsTheAccountAndConfigurationItRanUnder(t *testing.T) {
 	}
 }
 
+// And which harness dispatched it. A process runs whatever binary it was started
+// with while the harness moves on underneath it, so a run that cannot name the
+// build that reserved it is a run whose behaviour cannot be told apart from a
+// fix that was merged and never deployed — which is what left four substituted
+// repair dispatches undiagnosable in the week of 2026-08-27.
+func TestARunRecordsTheHarnessBuildThatDispatchedIt(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Work", Status: "open"}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Build = "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900"
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.Build != pipeline.Build {
+		t.Fatalf("recorded build = %q, want the build that dispatched it %q", state.Build, pipeline.Build)
+	}
+	// A binary that carries no revision of its own records none rather than
+	// something invented for it: a comparison nobody can make is an answer, and a
+	// comparison made against the wrong commit is not.
+	unstamped, unstampedStore := newPipeline(t, pipelineRepository(t), &fakeTracker{
+		item: beads.WorkItem{ID: "yoyodyne-other", Title: "Work", Status: "open"},
+	}, roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict), []string{"exit 0"})
+	second, err := unstamped.Run(context.Background(), "yoyodyne-other")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	quiet, err := unstampedStore.Load(second.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if quiet.Build != "" {
+		t.Fatalf("recorded build = %q, want nothing where the binary stamped nothing", quiet.Build)
+	}
+}
+
 func TestPipelinePreservesFailedWorkAndRecordsFailure(t *testing.T) {
 	t.Parallel()
 

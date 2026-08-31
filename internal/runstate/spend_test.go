@@ -42,6 +42,13 @@ func TestRecordedSpendsSurviveTheProcessThatMadeThem(t *testing.T) {
 	if reloaded[0].AccountAlias != development.AccountAlias || reloaded[0].ConfigRevision != development.ConfigRevision {
 		t.Fatalf("the attribution did not survive intact: %#v", reloaded[0])
 	}
+	// Which harness made the invocation travels with the rest of it. It is the
+	// field that separates a defect in the code from a deployment that never
+	// happened, and a log that could not answer it is what left a week of stale
+	// dispatches undiagnosable.
+	if reloaded[0].Build != development.Build {
+		t.Fatalf("recorded build = %q, want %q", reloaded[0].Build, development.Build)
+	}
 	if !reloaded[0].At.Equal(development.At) {
 		t.Fatalf("recorded time = %s, want %s", reloaded[0].At, development.At)
 	}
@@ -96,6 +103,7 @@ func TestSpendsAreRefusedWhenNobodyCouldAttributeThem(t *testing.T) {
 		"a classification nothing writes": func(s *Spend) { s.Classification = "estimated" },
 		"an account nothing configured":   func(s *Spend) { s.AccountAlias = "Work Account" },
 		"a revision of no digest":         func(s *Spend) { s.ConfigRevision = "yesterday's" },
+		"a build that is not a revision":  func(s *Spend) { s.Build = "the one from Tuesday" },
 		"a phase nothing runs":            func(s *Spend) { s.Phase = "integrating" },
 		"a role nobody fills":             func(s *Spend) { s.Role = "auditor" },
 		"a backend nothing could name":    func(s *Spend) { s.Backend = "hand written" },
@@ -245,6 +253,7 @@ func testSpend(phase SpendPhase, amount float64) Spend {
 		Model:          "opus",
 		ResolvedModel:  "claude-opus-4-1-20250805",
 		SessionID:      "session-1",
+		Build:          "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900",
 	}
 	if phase == SpendPhaseConversation {
 		line.Role = "product-manager"

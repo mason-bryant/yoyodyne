@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -244,11 +245,13 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 		AccountConfigDir: account.Directory,
 	})
 	// What served the round travels back with what it cost, so the exchange record
-	// pins the invocation to a backend, a model, an account, and a configuration
-	// rather than to a provider session that outlives none of them. The alias is
-	// the one the round was actually answered under, which under a pool is the
-	// answering agent's own rather than a configuration-wide account there is none
-	// of — the same alias its cost line is charged to.
+	// pins the invocation to a backend, a model, an account, a configuration, and
+	// the harness that made the call rather than to a provider session that
+	// outlives none of them. The alias is the one the round was actually answered
+	// under, which under a pool is the answering agent's own rather than a
+	// configuration-wide account there is none of — the same alias its cost line is
+	// charged to. The build is this process's own, because a resident conducting an
+	// exchange goes on running the binary it was started with.
 	spoken := exchange.Spoken{
 		Agent:          name,
 		SessionID:      result.SessionID,
@@ -258,6 +261,7 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 		ResolvedModel:  result.ResolvedModel,
 		AccountAlias:   account.Alias,
 		ConfigRevision: v.config.Revision(),
+		Build:          buildinfo.Commit(),
 	}
 	// The refusal is recorded before the round is failed, because it is a fact
 	// about the whole product rather than about this exchange. Failing to record

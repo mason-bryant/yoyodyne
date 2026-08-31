@@ -256,6 +256,12 @@ func TestEveryRoundPinsTheProviderThatServedIt(t *testing.T) {
 		if round.AccountAlias != served.AccountAlias || round.ConfigRevision != served.ConfigRevision {
 			t.Errorf("rounds[%d] = %#v, want the account and configuration that served it", i, round)
 		}
+		// And the harness that made the call, which is the one thing the other five
+		// cannot say: a resident conducting an exchange goes on running whatever
+		// binary it was started with.
+		if round.Build != served.Build {
+			t.Errorf("rounds[%d] build = %q, want the harness that made the call %q", i, round.Build, served.Build)
+		}
 	}
 	// The resolved model is the only real evidence where the selector was a
 	// floating alias, and the failed round has none because nothing ever reported
@@ -390,7 +396,8 @@ func (s *scriptedVoice) Answer(_ context.Context, question Question) (Spoken, er
 		// answer, exactly as a real voice reports it: the round was answered on an
 		// account under a configuration either way.
 		return Spoken{Agent: "architect", Backend: served.Backend, Model: served.Model,
-			AccountAlias: served.AccountAlias, ConfigRevision: served.ConfigRevision}, s.errs[index]
+			AccountAlias: served.AccountAlias, ConfigRevision: served.ConfigRevision,
+			Build: served.Build}, s.errs[index]
 	}
 	if index >= len(s.answers) {
 		return Spoken{}, errors.New("unexpected exchange round")
@@ -405,6 +412,7 @@ func (s *scriptedVoice) Answer(_ context.Context, question Question) (Spoken, er
 		ResolvedModel:  served.ResolvedModel,
 		AccountAlias:   served.AccountAlias,
 		ConfigRevision: served.ConfigRevision,
+		Build:          served.Build,
 	}, nil
 }
 
@@ -416,6 +424,7 @@ var served = Spoken{
 	ResolvedModel:  "claude-opus-5-20260514",
 	AccountAlias:   "research",
 	ConfigRevision: "cfg-0123456789ab",
+	Build:          "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900",
 }
 
 type memoryReports struct {

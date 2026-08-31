@@ -341,11 +341,16 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, beat...)
 
-	// The session's own age, from the same reading of the watch log. It is a
-	// separate stream from the heartbeat above because the two are true at
+	// How old the binary choosing work is, from the same reading of the watch log
+	// and the same reading of the runs. Both are records that stamp the build that
+	// wrote them, and neither is read a second time here: a resident derived from
+	// one reading and runs derived from another could disagree about which binary
+	// is dispatching, which is the one question this stream turns on.
+	//
+	// It is a separate stream from the heartbeat above because the two are true at
 	// opposite times: the line is said when nothing is being chosen, and a session
 	// running an old binary is at its most expensive while it is busy.
-	resident, err := f.residentDeliveries(ctx, cursors.Streams[residentStream], sessions, batch.Streams)
+	resident, err := f.residentDeliveries(ctx, cursors.Streams[residentStream], sessions, states, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}

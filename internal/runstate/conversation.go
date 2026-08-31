@@ -102,7 +102,22 @@ type Conversation struct {
 	// down, and on one whose first turn has not completed.
 	AccountAlias   string `json:"account_alias,omitempty"`
 	ConfigRevision string `json:"config_revision,omitempty"`
-	Turns          int    `json:"turns"`
+	// Build is the repository revision the harness binary holding this
+	// conversation was built from, rewritten by each completed turn exactly as the
+	// pair above is. A conversation outlives the process that opened it, so what
+	// this says is which harness is answering it now — and a conversation an
+	// operator left open for days is one of the residents that quietly goes on
+	// running a binary the harness has moved past.
+	//
+	// What pins every turn rather than the last one is the same cost log the
+	// account and the revision are pinned by, which now carries the build on each
+	// line for the same reason it carries those.
+	//
+	// It is empty on a conversation recorded before the harness wrote it down, on
+	// one whose first turn has not completed, and where the binary carries no
+	// revision of its own.
+	Build string `json:"build,omitempty"`
+	Turns int    `json:"turns"`
 	// PendingTrackerResults is what an agent did to the work tracker and has not
 	// been told the result of yet, already rendered as the text its next turn is
 	// given. It is durable for the same reason the provider session is: the agent
@@ -275,17 +290,20 @@ func (c Conversation) Validate() error {
 	if c.Turns > 0 && c.ProviderModel == "" {
 		problems = append(problems, errors.New("a recorded turn requires the requested model selector"))
 	}
-	// The account and the configuration are absent from every record written
-	// before they were carried, so what is checked is the shape of one that is
-	// there rather than that it is there at all: a conversation recorded by an
-	// older build must still load, and a record naming an account or a
-	// configuration nothing could have produced says less than one naming neither,
-	// because it reads as evidence.
+	// The account, the configuration, and the build are absent from every record
+	// written before they were carried, so what is checked is the shape of one
+	// that is there rather than that it is there at all: a conversation recorded
+	// by an older build must still load, and a record naming an account, a
+	// configuration, or a revision nothing could have produced says less than one
+	// naming none of them, because it reads as evidence.
 	if c.AccountAlias != "" && !accountAliasPattern.MatchString(c.AccountAlias) {
 		problems = append(problems, errors.New("account_alias is not an account alias"))
 	}
 	if c.ConfigRevision != "" && !configRevisionPattern.MatchString(c.ConfigRevision) {
 		problems = append(problems, errors.New("config_revision is not a configuration revision"))
+	}
+	if c.Build != "" && !buildPattern.MatchString(c.Build) {
+		problems = append(problems, errors.New("build is not a revision"))
 	}
 	if len(c.PendingTrackerResults) > MaxPendingTrackerResultBytes {
 		problems = append(problems, fmt.Errorf("pending tracker results are %d bytes, limit is %d",

@@ -55,6 +55,49 @@ func TestEveryInvocationLandsInTheLogExactlyOnce(t *testing.T) {
 	}
 }
 
+// Which harness made the invocation is on every line and comes from no caller.
+// It is the one thing on a line that says whether the code that spent the money
+// was the code that was merged, and a field a call site supplied would be a field
+// a call site could forget: the line would then say whose account paid for an
+// invocation without saying what made it.
+//
+// This is deliberately not parallel: it stands the process's own answer aside for
+// the length of the test, which is the only way to drive a fact a test binary
+// does not have one of.
+func TestEveryLineSaysWhichHarnessMadeTheInvocation(t *testing.T) {
+	restore := processBuild
+	processBuild = "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900"
+	t.Cleanup(func() { processBuild = restore })
+
+	log := &recordingLog{}
+	metered := testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{Backend: "claude-code", CostUSD: 1, CostReported: true}, nil
+	})
+	if _, err := metered.Run(context.Background(), testRequest()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// And an invocation that failed says it too. The money was spent either way,
+	// and a failure is exactly the case somebody comes back to asking which build
+	// produced it.
+	failing := testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{}, errors.New("the provider was unreachable")
+	})
+	if _, err := failing.Run(context.Background(), testRequest()); err == nil {
+		t.Fatal("Run() accepted an invocation the provider refused")
+	}
+	if len(log.lines) != 2 {
+		t.Fatalf("recorded %d line(s), want one per invocation", len(log.lines))
+	}
+	for _, line := range log.lines {
+		if line.Build != processBuild {
+			t.Fatalf("recorded build = %q, want the build that made the call %q", line.Build, processBuild)
+		}
+		if err := line.Validate(); err != nil {
+			t.Fatalf("the recorded line does not satisfy the durable contract: %v", err)
+		}
+	}
+}
+
 func TestAnInvocationTheProviderDidNotPriceIsRecordedAsUnknown(t *testing.T) {
 	t.Parallel()
 

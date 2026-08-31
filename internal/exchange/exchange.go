@@ -161,13 +161,22 @@ type Round struct {
 	// whichever way the round went, since a round the provider failed was answered
 	// on an account and charged for like any other.
 	//
-	// All five are empty on a round recorded before the harness wrote them down,
-	// and on one no voice with a provider behind it ever took.
+	// The build is the sixth and answers a question the other five cannot: which
+	// harness binary made the call. A process that stays open runs whatever it was
+	// started with, so an exchange conducted by a resident says what served it and
+	// nothing about whether that resident was the harness that is deployed.
+	//
+	// All six are empty on a round recorded before the harness wrote them down,
+	// and on one no voice with a provider behind it ever took. The build is empty
+	// for one further reason: a binary built without the stamping carries no
+	// revision at all, which is a comparison nobody can make rather than a round
+	// that ran on what is deployed.
 	Backend        domain.Backend `json:"backend,omitempty"`
 	Model          string         `json:"model,omitempty"`
 	ResolvedModel  string         `json:"resolved_model,omitempty"`
 	AccountAlias   string         `json:"account_alias,omitempty"`
 	ConfigRevision string         `json:"config_revision,omitempty"`
+	Build          string         `json:"build,omitempty"`
 }
 
 // Exchange is one durable ask thread.
@@ -213,6 +222,7 @@ var idPattern = regexp.MustCompile(`^exchange-[a-f0-9]{32}$`)
 var (
 	accountAliasPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 	configRevisionPattern = regexp.MustCompile(`^cfg-[a-f0-9]{8,}$`)
+	buildPattern          = regexp.MustCompile(`^[a-f0-9]{7,64}$`)
 )
 
 func NewID() (string, error) {
@@ -305,6 +315,9 @@ func (e Exchange) Validate() error {
 		}
 		if round.ConfigRevision != "" && !configRevisionPattern.MatchString(round.ConfigRevision) {
 			problems = append(problems, fmt.Errorf("rounds[%d] config revision %q is not a configuration revision", i, round.ConfigRevision))
+		}
+		if round.Build != "" && !buildPattern.MatchString(round.Build) {
+			problems = append(problems, fmt.Errorf("rounds[%d] build %q is not a revision", i, round.Build))
 		}
 	}
 	if e.Outcome != "" && !e.Outcome.Valid() {

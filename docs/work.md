@@ -114,12 +114,16 @@ given the round back; a return from any other is refused and the round left
 spent.
 
 Three of those four causes are recognized today. The last one is not: a stale
-build does not refuse, it proceeds, so there is no refusal to hang the cause on,
-and recognizing it needs the harness to record which build reserved a run and
-which build carried out each triage decision and to compare the two at dispatch.
-Until that exists a stale dispatch reaches the class only through whichever
-symptom it trips — which is how the field cases reached it, as a handback holding
-none of its change.
+build does not refuse, it proceeds, so there is no refusal to hang the cause on.
+Half of what recognizing it needs now exists — **every run records the revision
+the harness that reserved it was built from**, alongside the account and the
+configuration, and so does every line in the cost log, every conversation record,
+and every round of an inter-role exchange. What is still missing is the other
+half: which build carried out each triage decision, and the comparison between
+the two at dispatch. Until that exists a stale dispatch reaches the class only
+through whichever symptom it trips — which is how the field cases reached it, as a
+handback holding none of its change — but it is now answerable after the fact
+from the records alone, which is what those cases could not be.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the

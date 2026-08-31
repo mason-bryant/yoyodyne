@@ -168,6 +168,12 @@ func TestAnExchangeRecordIsRefusedWhenItContradictsItself(t *testing.T) {
 		"a backend nothing runs": func(e *Exchange) {
 			e.Rounds = []Round{{Number: 1, Question: "a?", AskedAt: at, Backend: "carrier pigeon"}}
 		},
+		// The build is the sixth of the same kind, and is refused the same way:
+		// which harness made the call is a place in a repository's history, and
+		// something no repository could resolve is not an answer to it.
+		"a build that is not a revision": func(e *Exchange) {
+			e.Rounds = []Round{{Number: 1, Question: "a?", AskedAt: at, Build: "the one from Tuesday"}}
+		},
 		"unresolved but settled": func(e *Exchange) {
 			e.Outcome = OutcomeUnresolved
 			e.ClosedAt = &closed

@@ -384,6 +384,49 @@ func TestASessionWithNothingToCompareIsNotReportedAsStale(t *testing.T) {
 	harness.poll(t, cursors)
 }
 
+// The runs in flight are the second record that says which harness is
+// dispatching work, and they are read when the watch log does not say. That is
+// the shape the field cases had: the session choosing work stamped nothing at
+// all — watch.jsonl only began carrying a build on 2026-08-30 — while every run
+// it reserved was made by that same binary and now says so. Without this the
+// stale resident is silent exactly where it is spending rounds.
+func TestARunInFlightNamesTheBuildWhenTheSessionDoesNot(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.deployed(31)
+	// A session that is alive and says nothing about its binary, which is every
+	// session recorded before the stamping existed.
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	dispatched := harness.run(t, runstate.StatusRunning)
+	dispatched.Build = staleResidentBuild
+	harness.record(t, dispatched)
+
+	harness.poll(t, harness.start(),
+		notify.KindRunStarted, notify.KindWatchStarted, notify.KindResidentStale)
+}
+
+// A run that has ended says which build made it and is not evidence about what is
+// running now. The record is still the answer to "which build did this" long
+// afterwards; what it stops being is an account of the resident.
+func TestAFinishedRunIsNotReadAsTheResident(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.deployed(31)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	ended := harness.run(t, runstate.StatusSucceeded)
+	ended.Build = staleResidentBuild
+	harness.record(t, ended)
+
+	cursors := harness.poll(t, harness.start(),
+		notify.KindRunStarted, notify.KindChecksPassed, notify.KindWatchStarted)
+	harness.now = harness.now.Add(2 * time.Hour)
+	harness.poll(t, cursors)
+}
+
 // The build revision is the yoyodyne binary's and the repository is the
 // product's, and those are one history only where the product is the harness's
 // own source. Everywhere else the repository has never held that revision, there

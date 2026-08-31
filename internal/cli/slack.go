@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
@@ -223,7 +224,11 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		// whose secrets the launcher said it read, and a launcher that said
 		// nothing has to read as nothing rather than as agreement.
 		Identity: slack.Presence{
-			Version:         version,
+			Version: version,
+			// And the revision that release was built from, which is what tells two
+			// unreleased builds apart. A harness developing itself runs nothing but
+			// those, so the version alone reports every sink as the installed one.
+			Build:           buildinfo.Commit(),
 			Config:          resolved.Path,
 			SecretNamespace: os.Getenv(slack.SecretNamespaceVariable),
 		},

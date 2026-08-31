@@ -66,10 +66,22 @@ type Presence struct {
 	// name it rather than matching on a command line that would also match the
 	// sibling project's sink.
 	PID int `json:"pid,omitempty"`
-	// Version is the build. This is the field the stale-sink case turns on: a
-	// sink installed months ago reports what that build knew how to report and
-	// nothing since, and the channel it posts into looks healthy.
+	// Version is the release the sink was built as. This is the field the
+	// stale-sink case turns on: a sink installed months ago reports what that
+	// build knew how to report and nothing since, and the channel it posts into
+	// looks healthy.
 	Version string `json:"version,omitempty"`
+	// Build is the repository revision that release was built from, recorded
+	// beside it because on the installation this matters most for they answer
+	// different questions. A harness developing itself runs unreleased binaries,
+	// so every one of them reports the same version — and two sinks a week apart
+	// then compare as identical while one of them predates the fix somebody is
+	// waiting to see reported. A revision is a place in the history, so the
+	// comparison is exact and a reader can measure how far apart they are.
+	//
+	// It is empty where the binary carries no revision of its own, which is a
+	// comparison nobody can make rather than a sink that is current.
+	Build string `json:"build,omitempty"`
 	// Config is the configuration file this sink loaded, and Channel is where it
 	// posts. A sink reading another project's configuration is reporting the
 	// wrong product's work under this product's lease.

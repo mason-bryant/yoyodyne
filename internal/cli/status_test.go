@@ -646,11 +646,14 @@ func TestStatusSaysWhyEachRunWasChosenAndNamesTheRunsNothingAccountsFor(t *testi
 	}
 }
 
-// The listing says which account a run spent and which configuration set it up.
-// There is one account today, so the line is written for the single-account case
-// and still says something on the day there is a second one; a run recorded
-// before either was carried says so rather than showing a blank.
-func TestStatusSaysWhichAccountAndConfigurationEachRunRanUnder(t *testing.T) {
+// The listing says which account a run spent, which configuration set it up, and
+// which harness dispatched it. There is one account today, so the line is written
+// for the single-account case and still says something on the day there is a
+// second one; a run recorded before any of the three was carried says so rather
+// than showing a blank. The build is on the same line because it answers the same
+// question an operator is asking when they read the others — whether what ran was
+// what was merged.
+func TestStatusSaysWhichAccountConfigurationAndBuildEachRunRanUnder(t *testing.T) {
 	// Not parallel: the state root the command addresses is set here, and the
 	// records it reads are written under it.
 	stateRoot := t.TempDir()
@@ -665,6 +668,7 @@ func TestStatusSaysWhichAccountAndConfigurationEachRunRanUnder(t *testing.T) {
 	attributed := recordedRun(t, store, runstate.StatusSucceeded, "yoyodyne-attributed", started.Add(time.Hour))
 	attributed.AccountAlias = "default"
 	attributed.ConfigRevision = "cfg-0123456789ab"
+	attributed.Build = "9870df6a1b2c3d4e5f60718293a4b5c6d7e8f900"
 	saveRun(t, store, attributed)
 	unattributed := recordedRun(t, store, runstate.StatusSucceeded, "yoyodyne-unattributed", started)
 	saveRun(t, store, unattributed)
@@ -674,8 +678,8 @@ func TestStatusSaysWhichAccountAndConfigurationEachRunRanUnder(t *testing.T) {
 		t.Fatalf("status code = %d, stderr = %q", code, stderr)
 	}
 	for _, want := range []string{
-		"ran under default, configuration cfg-0123456789ab",
-		"ran under an account the record does not name, configuration a configuration the record does not name",
+		"ran under default, configuration cfg-0123456789ab, harness 9870df6a1b2c",
+		"ran under an account the record does not name, configuration a configuration the record does not name, harness a build the record does not name",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
@@ -691,6 +695,7 @@ func TestStatusSaysWhichAccountAndConfigurationEachRunRanUnder(t *testing.T) {
 			WorkItemID     string `json:"work_item_id"`
 			AccountAlias   string `json:"account_alias"`
 			ConfigRevision string `json:"config_revision"`
+			Build          string `json:"build"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
@@ -702,6 +707,12 @@ func TestStatusSaysWhichAccountAndConfigurationEachRunRanUnder(t *testing.T) {
 		}
 		if run.AccountAlias != "default" || run.ConfigRevision != "cfg-0123456789ab" {
 			t.Fatalf("run = %#v, want the account and configuration the record holds", run)
+		}
+		// --json carries the whole object name rather than the prefix the listing
+		// prints, because what somebody automating this hands to Git is the record's
+		// own value.
+		if run.Build != attributed.Build {
+			t.Fatalf("run = %#v, want the whole build the record holds", run)
 		}
 	}
 }

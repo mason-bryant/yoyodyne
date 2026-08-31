@@ -272,9 +272,19 @@ func (d *diagnosis) checkSinkChannel(presence slack.Presence, resolved config.Re
 // the build that is reporting and the build that is installed drift apart with
 // no event between them: nothing fails, nothing is logged, and the milestones
 // added since it started are simply never posted.
+//
+// The version is asked first because it is what an operator installs by, and the
+// revision behind it is asked second because on the installation this matters
+// most for the version cannot answer at all. A harness developing itself runs
+// unreleased binaries, so a sink started last week and the binary diagnosing it
+// both answer "dev" and compare as identical — a clean report over exactly the
+// drift being looked for. Two revisions are two places in one history, so where
+// the versions agree and the revisions do not, the revisions settle it.
 func (d *diagnosis) checkSinkBuild(presence slack.Presence, installed string, productID domain.ProductID) Finding {
 	running := strings.TrimSpace(presence.Version)
 	current := strings.TrimSpace(installed)
+	runningBuild := strings.TrimSpace(presence.Build)
+	currentBuild := strings.TrimSpace(d.env.Build)
 	switch {
 	case running == "":
 		return Finding{
@@ -283,20 +293,63 @@ func (d *diagnosis) checkSinkBuild(presence slack.Presence, installed string, pr
 			Summary: "the running sink did not record which build it is",
 			Remedy:  d.restartCommand(presence, productID),
 		}
-	case current == "" || running == current:
+	case current != "" && running != current:
+		return Finding{
+			Check:   "slack-sink-version",
+			Status:  StatusWarning,
+			Summary: "the running sink is an older build than the installed one, and reports only what that build knew how to report",
+			Detail:  fmt.Sprintf("running: %s; installed: %s", running, current),
+			Remedy:  d.restartCommand(presence, productID),
+		}
+	case runningBuild != "" && currentBuild != "" && runningBuild != currentBuild:
+		// One version, two revisions: the sink is not the binary asking about it,
+		// however alike the two of them are named. This is the whole of the
+		// self-hosted case, and it is a warning rather than a note because what a
+		// sink reports is decided entirely by the code it is running.
+		return Finding{
+			Check:   "slack-sink-version",
+			Status:  StatusWarning,
+			Summary: "the running sink and this build report one version and are two different revisions",
+			Detail: fmt.Sprintf("running: %s built at %s; this build: %s built at %s",
+				running, shortRevision(runningBuild), running, shortRevision(currentBuild)),
+			Remedy: d.restartCommand(presence, productID),
+		}
+	case runningBuild == "" || currentBuild == "":
+		// The versions agree and there is no pair of revisions to check that by.
+		// It is reported as what it is rather than as agreement: on an install
+		// where every build answers one version, a version that matches is not
+		// evidence of anything, and saying so is what keeps somebody from reading
+		// this line as the comparison having been made.
 		return Finding{
 			Check:   "slack-sink-version",
 			Status:  StatusOK,
-			Summary: fmt.Sprintf("the running sink is the installed build, %s", running),
+			Summary: fmt.Sprintf("the running sink reports the installed version, %s, and there is no pair of revisions to check that by", running),
+			Detail:  fmt.Sprintf("running: %s; this build: %s", describeRevision(runningBuild), describeRevision(currentBuild)),
 		}
 	}
 	return Finding{
 		Check:   "slack-sink-version",
-		Status:  StatusWarning,
-		Summary: "the running sink is an older build than the installed one, and reports only what that build knew how to report",
-		Detail:  fmt.Sprintf("running: %s; installed: %s", running, current),
-		Remedy:  d.restartCommand(presence, productID),
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("the running sink is the installed build, %s, built at %s", running, shortRevision(runningBuild)),
 	}
+}
+
+// describeRevision names a revision, or says an absence is one. A blank where a
+// revision would be reads as a revision nobody looked up rather than as a binary
+// that carries none.
+func describeRevision(build string) string {
+	if build == "" {
+		return "no recorded revision"
+	}
+	return shortRevision(build)
+}
+
+// shortRevision names a revision the way somebody quoting one does.
+func shortRevision(build string) string {
+	if len(build) <= 12 {
+		return build
+	}
+	return build[:12]
 }
 
 // checkSinkSecrets asks whether the sink that is running is running against this
