@@ -95,8 +95,20 @@ const (
 
 // steering is what the sink does with what arrives on its connection.
 type steering struct {
-	sink       *Sink
+	sink *Sink
+	// directives is where a reply in one of this sink's threads is recorded. It is
+	// nil on a sink assembled to carry the conversation and nothing else, and a
+	// reply that reaches a nil one is refused in its thread rather than acted on.
 	directives Directives
+	// conversation is the durable product-manager conversation a message
+	// addressed to this app reaches, and is nil on a sink assembled without one.
+	// deadline bounds one turn taken through it; turn guards taking one at a time
+	// and turns is what an ending sink waits on. All four are conversation.go's.
+	conversation Conversation
+	deadline     time.Duration
+	turn         sync.Mutex
+	taking       bool
+	turns        sync.WaitGroup
 	// operators is the allow-list, by Slack member id. It is derived from the
 	// project's operator mapping — the humans granted direct-work who bound a
 	// member id — and an empty one is a product nobody may steer from Slack,
@@ -127,13 +139,19 @@ type steering struct {
 // are three readings of one mapping, and a caller that could pass them
 // separately is a caller that could pass them from different configurations.
 func newSteering(sink *Sink, options Options) *steering {
+	deadline := options.ConversationDeadline
+	if deadline <= 0 {
+		deadline = DefaultConversationDeadline
+	}
 	return &steering{
-		sink:       sink,
-		directives: options.Directives,
-		operators:  membership(options.Operators),
-		recognized: membership(options.Recognized),
-		contacts:   options.Contacts,
-		acted:      map[string]bool{},
+		sink:         sink,
+		directives:   options.Directives,
+		conversation: options.Conversation,
+		deadline:     deadline,
+		operators:    membership(options.Operators),
+		recognized:   membership(options.Recognized),
+		contacts:     options.Contacts,
+		acted:        map[string]bool{},
 	}
 }
 
@@ -281,6 +299,14 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 	// has never heard of them.
 	if !s.operators[message.user] {
 		return refused(topic, at, "the reply is from somebody this project has not granted direct-work with a bound Slack member id, so nothing was recorded; `operators` in .yoyodyne/config.yaml is where that grant lives")
+	}
+	// A sink assembled to carry the conversation and nothing else reads replies —
+	// it has to, or a message addressed to this app inside a thread would reach
+	// nobody — and has nowhere to write one down. That is said here rather than
+	// left as a reply that vanished, which is the failure the whole inbound half
+	// is built not to have.
+	if s.directives == nil {
+		return refused(topic, at, "this sink was assembled without the directive record, so a reply in a thread steers nothing; `yoyo directive record` is how one is recorded")
 	}
 	// A directive from a thread is scoped to the thread's work item, so a thread
 	// that is not about a work item has nothing to scope one to. Recording it

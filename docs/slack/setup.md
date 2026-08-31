@@ -91,8 +91,9 @@ the original manifest back in under *App Manifest*.
 The manifest says what each scope is for. The two that read messages —
 `channels:history` and `groups:history` — are what carries a message in the
 channel back to your machine: a thread reply, which is how the harness is
-steered, and an @-mention of the app, which is answered. An operator who would
-rather not do either from Slack can delete those two scopes and the two
+steered, and an @-mention of the app, which is answered and — for anything that
+is not a question about the standing — taken to the product manager. An operator
+who would rather not do either from Slack can delete those two scopes and the two
 `message.*` events beside them: everything else in this document still works, and
 nothing typed in the channel ever arrives.
 
@@ -719,20 +720,80 @@ two ways:
 ```
 
 Words like `status`, `sitrep`, `what is running`, `what are you doing`, and
-`where do things stand` all ask for it. Anything else gets one sentence saying
-that this is the only question the app answers here yet, and where the work is
-actually driven from — a work item's thread for a directive, and `yoyo` at the
-terminal for everything else.
+`where do things stand` all ask for it. It costs no turn and no money: the
+standing is a derivation the harness already has.
 
-Two things it is not. **No directive is recorded**: a mention changes nothing
-about the work, so a question at the top of the channel — where there is no item
-to scope a directive to — is answered rather than refused. It is not lost either:
-the sink's own log gets a line for every message addressed to the app, with what
-was asked in it, written before the answer goes out, so a question the workspace
-would not let it answer still leaves a record that somebody asked. And **nothing
-is disclosed**: the four lines are already posted to this channel by the
-heartbeat, so the answer tells a reader nothing the channel was not already
-telling them.
+**Everything else goes to the product manager**, and comes back in the product
+manager's own name and face, in the thread you asked in:
+
+```text
+@yoyodyne what is missing from the brief?
+@yoyodyne put the installer epic ahead of the dashboard
+```
+
+With one exception: **the `/` commands are not carried out from here.** `/work`,
+`/stop`, `/backlog`, `/refresh` and the rest are your own authority carried out
+by the harness rather than anything the product manager can do, so a message that
+opens with a slash is answered with where to type it — `yoyo chat`, or `yoyo` at
+the terminal — and nothing is said to the product manager. It costs no turn.
+Slack's composer takes a slash you type at the start of a line, but a mention
+comes first here, so `@yoyodyne /backlog` reaches the app as a command and is
+refused as one rather than read out to the product manager as a sentence.
+
+It is the [same conversation](../conversation.md) `yoyo chat` holds, not a second
+one this channel keeps. There is one durable conversation per agent and both are
+clients of it, so a question you asked at your terminal is answered from your
+phone and carried back: the provider session is resumed rather than restarted,
+the turns accumulate on one record, and a proposal made in one client is decided
+in the other — typing `y` in the channel approves what `yoyo chat` put to you,
+exactly as typing it at the terminal would.
+
+Three things follow from it being one conversation with one holder.
+
+**The channel holds it only while it is answering.** It opens the conversation
+when you ask something and releases it as soon as the answer is in hand, so a
+`yoyo chat` you leave open is never locked out for longer than one turn. If your
+terminal has it when a message arrives, the thread says so rather than failing
+quietly, and you ask again once you have closed it.
+
+**One at a time.** A second message that arrives while a turn is running is told
+so in its own thread rather than queued or dropped.
+
+**The wait is bounded.** A turn gets ten minutes and then the thread is told what
+happened — the wait running out, the conversation held elsewhere, or the
+provider's own reason, which for an exhausted usage limit is that limit in its
+own words. Nothing hangs silently; a run steered from a conversation can wait on
+capacity for hours, and that is a choice you make at a terminal rather than
+something a channel does to you.
+
+It is a bound on what *you* wait for rather than a stop signal the turn obeys, so
+a turn the channel gave up on may still be working — a provider sleeping out a
+usage limit does not hear a cancellation. `yoyo chat` continues the same
+conversation and shows where it actually got to, and until that turn finishes it
+still holds the conversation, so a message you send in the meantime is answered
+with the product manager being busy rather than left waiting behind it.
+
+**Who may.** Talking to the product manager admits work, reorders the queue, and
+spends your money, so it is held to the same `direct-work` grant a thread reply
+is. Somebody your mapping names and granted nothing still gets the four lines —
+those are already in this channel — and is told which grant they are missing for
+anything else.
+
+Two things it is not. **A mention still records no directive**: what it does is
+speak to the product manager, and a question at the top of the channel — where
+there is no item to scope a directive to — is answered rather than refused.
+Nothing said to the app is lost either: the sink's own log gets a line for every
+message addressed to it, with what was asked in it, written before the answer
+goes out, so a question the workspace would not let it answer still leaves a
+record that somebody asked. And **the standing discloses nothing**: those four
+lines are already posted to this channel by the heartbeat, so that answer tells a
+reader nothing the channel was not already telling them.
+
+What the product manager does while it answers — work it admits, an item it
+reprioritizes, a question it puts to another role — reaches this channel the way
+it always has, through the ordinary reporting of the conversation's own record.
+The answer in your thread is the prose; the rest is the channel's normal traffic
+rather than a second account of it.
 
 A message that does not name the app is still left entirely alone, which is what
 keeps a reporting channel a reporting channel rather than a participant in
@@ -844,9 +905,15 @@ command line whenever the digest is not enough.
 | Slack says it is `not displaying some messages sent by this application` | Slack suppressed messages for volume, and suppressed ones are hidden rather than delayed. The sink paces itself below that threshold, so seeing this means something else is posting as the same app into the same channel — a second sink, or another integration sharing the app. What was suppressed is still in the durable records. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | `replies in these threads are acknowledged and not acted on` | Said once when the sink starts: nobody in this project holds `direct-work` with a bound `slack_member_id`, so no reply steers anything. Step 4 is where that is written. |
+| `no human in this project holds direct-work with a bound Slack member id, so nobody may talk to the product manager from here` | The other half of the same line, said once at startup: where things stand is all this channel will answer until somebody holds that grant. Step 4 again. |
 | A reply is answered `the reply is from somebody this project has not granted direct-work` | Your member id is not bound to a human with that grant, or is bound to a different one. Your profile → *Copy member ID*, and check it against `operators` in `.yoyodyne/config.yaml`. |
 | A message is answered `I don't know you` | Your member id is bound to nobody in the `operators` mapping. An entry with a `slack_member_id` and no grants is enough to be recognized; `direct-work` is the separate grant that lets you steer. |
 | A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item. Reply inside the item's thread. It is also what a second message gets from somebody this project does not know: they are told once per thread, and read after that. |
+| A message to the app is answered `Where things stand is what I can tell you` | You are recognized and do not hold `direct-work`, which is what talking to the product manager takes. Asking where things stand still works. Step 4 is where the grant is written. |
+| A message to the app is answered `The product manager's conversation is held by another client` | A `yoyo chat` is open at a terminal and holds it. Close it and ask again; the channel only ever holds the conversation for the length of one answer. |
+| A message to the app is answered `I waited 10m0s for the product manager` | The turn did not finish inside the channel's bound. It is one conversation, so `yoyo chat` shows where it actually got to. A turn that steers work and meets an exhausted usage limit is the usual cause. |
+| A message to the app is answered `The product manager could not answer:` | The provider's own reason follows the colon. An exhausted usage limit says so there, and also reaches this channel as a warning through the ordinary reporting. |
+| A message to the app is answered `That is a command` | You typed one of the `/` commands at the app. They are your own authority rather than the product manager's, and `yoyo chat` or `yoyo` at the terminal is where they are carried out. Nothing was said and no turn was spent. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 
 Every row above is something you saw. What a stopped, stale, or misdirected sink
