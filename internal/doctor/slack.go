@@ -279,7 +279,10 @@ func (d *diagnosis) checkSinkChannel(presence slack.Presence, resolved config.Re
 // unreleased binaries, so a sink started last week and the binary diagnosing it
 // both answer "dev" and compare as identical — a clean report over exactly the
 // drift being looked for. Two revisions are two places in one history, so where
-// the versions agree and the revisions do not, the revisions settle it.
+// the versions agree and the revisions do not, the revisions settle it — and
+// where the `yoyo` on PATH answered the version question with nothing, they are
+// the only comparison there was. Each finding says which of those it made, rather
+// than one sentence that is true of the commonest case and wrong beside it.
 func (d *diagnosis) checkSinkBuild(presence slack.Presence, installed string, productID domain.ProductID) Finding {
 	running := strings.TrimSpace(presence.Version)
 	current := strings.TrimSpace(installed)
@@ -302,28 +305,45 @@ func (d *diagnosis) checkSinkBuild(presence slack.Presence, installed string, pr
 			Remedy:  d.restartCommand(presence, productID),
 		}
 	case runningBuild != "" && currentBuild != "" && runningBuild != currentBuild:
-		// One version, two revisions: the sink is not the binary asking about it,
-		// however alike the two of them are named. This is the whole of the
-		// self-hosted case, and it is a warning rather than a note because what a
-		// sink reports is decided entirely by the code it is running.
+		// Two revisions where the versions did not separate them: the sink is not
+		// the binary asking about it, however alike the two of them are named. This
+		// is the whole of the self-hosted case, and it is a warning rather than a
+		// note because what a sink reports is decided entirely by the code it is
+		// running.
+		//
+		// Whether the versions actually agreed is a second fact, and the two are not
+		// the same. This branch is also where an installed version that could not be
+		// read at all lands — the drift check above cannot fire on an empty one — so
+		// what is said is which of those happened rather than one sentence that is
+		// only true in the commoner case.
+		summary := "the running sink and this build report one version and are two different revisions"
+		if current == "" {
+			summary = "the running sink is a different revision from this build, and no installed version could be read to check against it"
+		}
 		return Finding{
 			Check:   "slack-sink-version",
 			Status:  StatusWarning,
-			Summary: "the running sink and this build report one version and are two different revisions",
+			Summary: summary,
 			Detail: fmt.Sprintf("running: %s built at %s; this build: %s built at %s",
-				running, shortRevision(runningBuild), running, shortRevision(currentBuild)),
+				running, shortRevision(runningBuild), describeInstalledVersion(current), shortRevision(currentBuild)),
 			Remedy: d.restartCommand(presence, productID),
 		}
 	case runningBuild == "" || currentBuild == "":
-		// The versions agree and there is no pair of revisions to check that by.
-		// It is reported as what it is rather than as agreement: on an install
-		// where every build answers one version, a version that matches is not
-		// evidence of anything, and saying so is what keeps somebody from reading
-		// this line as the comparison having been made.
+		// There is no pair of revisions to check the versions by. It is reported as
+		// what it is rather than as agreement: on an install where every build
+		// answers one version, a version that matches is not evidence of anything,
+		// and saying so is what keeps somebody from reading this line as the
+		// comparison having been made. Where the installed version could not be read
+		// either, nothing whatever was compared, and that is said instead of
+		// claiming the sink reports an installed version nobody has.
+		summary := fmt.Sprintf("the running sink reports the installed version, %s, and there is no pair of revisions to check that by", running)
+		if current == "" {
+			summary = fmt.Sprintf("the running sink reports %s, and neither an installed version nor a pair of revisions could be checked against it", running)
+		}
 		return Finding{
 			Check:   "slack-sink-version",
 			Status:  StatusOK,
-			Summary: fmt.Sprintf("the running sink reports the installed version, %s, and there is no pair of revisions to check that by", running),
+			Summary: summary,
 			Detail:  fmt.Sprintf("running: %s; this build: %s", describeRevision(runningBuild), describeRevision(currentBuild)),
 		}
 	}
@@ -342,6 +362,17 @@ func describeRevision(build string) string {
 		return "no recorded revision"
 	}
 	return shortRevision(build)
+}
+
+// describeInstalledVersion names the version the `yoyo` on PATH reported, or says
+// it reported none. An empty one is what a binary that answered the version
+// question with nothing leaves behind, and printing the sink's own version in its
+// place would put the sink on both sides of a comparison it is one half of.
+func describeInstalledVersion(installed string) string {
+	if installed == "" {
+		return "a build that reported no version"
+	}
+	return installed
 }
 
 // shortRevision names a revision the way somebody quoting one does.

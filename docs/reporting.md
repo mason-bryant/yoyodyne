@@ -596,9 +596,18 @@ the **runs still in flight** do — a run's record pins the harness that reserve
 it, so a resident whose own log predates the stamping is still visible through the
 work it is dispatching, and so is a dispatcher that is not a watch session at all.
 Neither is inferred from anything else: both are stamps the process wrote about
-itself, and where the two disagree what is reported is the one that acted most
-recently. A run that has ended says which build made it and is no longer evidence
-about what is running now.
+itself.
+
+A live session's stamp settles it outright, and the runs are consulted only where
+no live session carries one — including where a run in flight was reserved by a
+different binary and started later. That is a precedence rather than a contest of
+which record is newer, because a live watch session is the resident by definition
+while a run reserved by some other binary is usually an operator's `yoyo run` or a
+triage carry-out: a process that has already ended or is about to, whose build is
+not the one that will go on choosing work. Within each source the most recent is
+taken — the newest live session that recorded a build, and the latest-started run
+still in flight. A run that has ended says which build made it and is no longer
+evidence about what is running now.
 
 **It is a self-hosting line, and it says so rather than assuming it.** The
 revision is the one the `yoyo` binary was built from, and the repository it is

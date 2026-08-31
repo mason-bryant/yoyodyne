@@ -333,12 +333,21 @@ func (f *HarnessFeed) residentDeliveries(ctx context.Context, cursor Cursor, ses
 // stamping is still visible through the work it is dispatching, and so is a
 // dispatcher that is not a watch session at all.
 //
-// It is a reading of both rather than a resolution between them. Where two
-// sessions are alive, or a run in flight was reserved by a different binary from
-// the session polling beside it, what is reported is the one that acted most
-// recently — two residents on one product is a state nothing else here has an
-// answer for either, and the honest half of it is that a stale build is still
-// named as stale whichever process is carrying it.
+// A live session's stamp settles it outright, and the runs are consulted only
+// where no live session carries one. That is a precedence rather than a contest
+// of which record is newer, and it is the precedence because the two records
+// answer slightly different questions. A live watch session is the resident by
+// definition; a run reserved by some other binary is usually an operator's `yoyo
+// run` or a triage carry-out, which is a process that has already ended or is
+// about to, and reporting its build as the resident's would name a stale binary
+// that is not the one going on choosing work. So a session that says which binary
+// it is is believed over the runs beside it even where a run started later.
+//
+// Within each source it is the most recent that is taken: the newest live session
+// that recorded a build, and the latest-started run still in flight. Two residents
+// on one product is a state nothing else here has an answer for either, and the
+// honest half of it is that a stale build is still named as stale whichever of
+// them is carrying it.
 func residentBuild(sessions []runstate.WatchTransition, states []runstate.State) (string, bool) {
 	// Live is newest first, so the first session naming a build is the latest one
 	// that recorded which binary it is.

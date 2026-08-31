@@ -337,6 +337,60 @@ func TestASinkOnAnotherRevisionOfOneVersionIsNamedAsStale(t *testing.T) {
 	}
 }
 
+// The version on PATH is not always readable, and the revisions still are. A
+// binary that answers the version question with nothing leaves the drift check
+// above with nothing to compare, so the finding must not go on to describe the
+// sink's own version as the installed one — which would put the sink on both
+// sides of a comparison it is one half of, and claim an agreement nobody checked.
+func TestASinkIsNotComparedAgainstAnInstalledVersionNobodyCouldRead(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = reportingConfig
+	world.build = currentBuild
+	world.runner.reply("yoyo version", succeeded(""))
+	world.sinkRunning(slack.Presence{
+		Version: currentVersion, Build: staleBuild, PID: 4242, SecretNamespace: "yoyodyne", Channel: "C1",
+	})
+
+	finding, found := findingFor(world.diagnose(), "slack-sink-version")
+	if !found {
+		t.Fatalf("Diagnose() never compared the sink's build")
+	}
+	// The revisions differ, which is the whole of what could be compared, so it is
+	// still the warning — said in the words that are true of it.
+	if finding.Status != StatusWarning {
+		t.Fatalf("slack-sink-version = %s, want a warning: %s", finding.Status, finding.Summary)
+	}
+	if strings.Contains(finding.Summary, "report one version") {
+		t.Fatalf("slack-sink-version summary = %q, want it not to claim a version comparison nobody made", finding.Summary)
+	}
+	// The detail names the sink's version once, on the sink's side. Reporting it
+	// on both is what made the line read as two builds of one version.
+	if strings.Count(finding.Detail, currentVersion) != 1 {
+		t.Fatalf("slack-sink-version detail = %q, want the sink's version on the sink's side alone", finding.Detail)
+	}
+	if !strings.Contains(finding.Detail, staleBuild[:12]) || !strings.Contains(finding.Detail, currentBuild[:12]) {
+		t.Fatalf("slack-sink-version detail = %q, want both revisions named", finding.Detail)
+	}
+
+	// And with no revisions either, nothing whatever was compared, which the
+	// finding says rather than reporting an installed version there is none of.
+	blind := newWorld(t)
+	blind.configuration = reportingConfig
+	blind.runner.reply("yoyo version", succeeded(""))
+	blind.sinkRunning(slack.Presence{
+		Version: currentVersion, PID: 4242, SecretNamespace: "yoyodyne", Channel: "C1",
+	})
+	quiet, found := findingFor(blind.diagnose(), "slack-sink-version")
+	if !found || quiet.Status != StatusOK {
+		t.Fatalf("slack-sink-version = %#v, want a comparison nobody could make reported as one", quiet)
+	}
+	if strings.Contains(quiet.Summary, "the installed version") {
+		t.Fatalf("slack-sink-version summary = %q, want it not to name an installed version nobody read", quiet.Summary)
+	}
+}
+
 // TestSecretsAreCheckedForThisInstanceRatherThanForAnyToken is the
 // multi-harness case. "A Slack token exists somewhere on this machine" passes
 // for every project on it and is right for at most one, so what is asked for is
