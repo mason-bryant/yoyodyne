@@ -98,8 +98,7 @@ func (n Node[S]) State() string { return n.state }
 func (n Node[S]) Summary() string { return n.summary }
 
 // Action is the registered action this node performs. Nothing here performs it:
-// compiling resolves the door, and opening it belongs to the runtime that does
-// not exist yet.
+// compiling resolves the door, and opening it belongs to the Executor.
 func (n Node[S]) Action() action.Action[S] { return n.performs }
 
 // Outcomes is every outcome this node handles, in sorted order.
@@ -118,10 +117,10 @@ func (n Node[S]) Next(outcome string) (Destination, bool) {
 // performs, every transition resolved to a destination that exists, and the
 // digest of the definition all of it came from.
 //
-// Nothing executes one yet. What it is for is that an instance can pin itself to
-// the digest here and know that everything the definition asked for was resolved
-// once, before it started, rather than discovered a step at a time while a work
-// item is already claimed.
+// Compiling one performs nothing. What a graph is for is that an instance pins
+// itself to the digest here and knows that everything the definition asked for
+// was resolved once, before it started, rather than discovered a step at a time
+// while a work item is already claimed.
 //
 // It is deterministic for a given definition: the same definition compiled twice,
 // or written down two different ways and compiled once each, produces the same

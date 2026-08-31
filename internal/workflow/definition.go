@@ -12,16 +12,25 @@
 // `internal/action` enforces from the other side, and it is why a definition is
 // safe to read from a project's own repository.
 //
-// Nothing executes a definition yet. This package gives one a shape, a stable
-// serialized form, a content digest an instance can pin itself to, a validation
-// that either produces a definition every later reader can trust or refuses the
-// whole of it, and a loader that compiles what passed into a graph: every state
-// resolved to the action code registered, every transition resolved to a
-// destination that exists, and the whole of it held against the authority it was
-// compiled under and the digest it was pinned to. What is still a later milestone
-// is the runtime that walks such a graph — compiling resolves every door and
-// opens none of them — and until something executes one nothing in the delivery
-// path imports this.
+// This package gives a definition a shape, a stable serialized form, a content
+// digest an instance can pin itself to, a validation that either produces a
+// definition every later reader can trust or refuses the whole of it, a loader
+// that compiles what passed into a graph — every state resolved to the action
+// code registered, every transition resolved to a destination that exists, and
+// the whole of it held against the authority it was compiled under and the digest
+// it was pinned to — and an executor that walks such a graph one durable
+// transition at a time, recording every state boundary it crosses so a process
+// killed at one is resumed exactly there.
+//
+// What an instance durably is lives in `internal/runstate`, beside every other
+// record the harness keeps: this package decides what a transition is and when
+// one has happened, and the state store is what writes it down.
+//
+// Nothing in the delivery path runs on it. The executor is exercised against test
+// graphs, because what makes an action with a side effect safe to re-perform
+// after a death — the step-attempt record, the idempotency key, and the
+// reconciliation the design describes — is a later milestone, and the pipeline
+// still runs the sequence Go control flow puts it in.
 package workflow
 
 import (

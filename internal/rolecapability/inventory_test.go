@@ -323,6 +323,10 @@ var expresses = map[string]expression{
 		question: "none yet: a grant is assembled by its caller",
 		gap:      "no grant is read from a role's bundle today; making the compile-time grant the role's is the call-site conversion this registry precedes",
 	},
+	"workflow.performed-under-grant": {
+		question: "none yet: the grant a transition is performed under is assembled by its caller, exactly as the compile-time one is",
+		gap:      "the same join again, made at the state boundary rather than at the compile. What the executor holds a step against is the action's own declaration and the grant it was handed; no bundle is read, so the authority enforced there is still the caller's rather than the role's",
+	},
 	"cli.conversation-contract-exists": {
 		question: "none: holding a contract for a role is configuration of the conversation",
 		gap:      "whether the harness can address a role at all is upstream of what that role may do",
