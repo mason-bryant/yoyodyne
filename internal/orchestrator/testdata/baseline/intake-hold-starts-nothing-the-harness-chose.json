@@ -1,0 +1,36 @@
+{
+  "scenario": "intake-hold-starts-nothing-the-harness-chose",
+  "freezes": "A hold on intake stops work the harness chose for itself before a run is reserved, and the outcome names the hold rather than a run.",
+  "steps": [
+    {
+      "name": "run",
+      "outcome": {
+        "branch_removed": false,
+        "changes": {
+          "status": ""
+        },
+        "paused": true,
+        "paused_by_intake": {
+          "held_at": "\u003ctime\u003e",
+          "product_id": "yoyodyne",
+          "reason": "the queue is heading somewhere wrong",
+          "schema_version": 1
+        },
+        "run_id": "",
+        "status": "",
+        "work_item_closed": false,
+        "work_item_id": "yoyodyne-task",
+        "worktree_removed": false
+      }
+    }
+  ],
+  "durable_run_record": null,
+  "events": [],
+  "work_item": {
+    "calls": [],
+    "status": "open",
+    "closed": false,
+    "blocked": false
+  },
+  "provider_invocations": []
+}
