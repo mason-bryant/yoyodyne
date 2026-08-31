@@ -30,14 +30,24 @@ func TestScaffoldedProjectLoadsWithoutTheBundle(t *testing.T) {
 	// because the generated file writes down what the harness would have filled
 	// in. This is what the documentation promises an operator reading
 	// `config show --origins`, so it is asserted exactly.
+	//
+	// An agent's capability set is the one thing here that comes from outside the
+	// file, and it is the exception the generated file cannot absorb: what a role
+	// may have done on its behalf is the harness's registry to say, and a
+	// configuration that stated it would be a project deciding its own authority.
 	derived := map[string]string{
 		"product.repository_id":        OriginDerived,
 		"triage.repair_grant_attempts": OriginDerivedRepairGrant,
 	}
 	for key, origin := range resolved.Origins {
 		want := resolved.Path
-		if derivedOrigin, ok := derived[key]; ok {
-			want = derivedOrigin
+		switch {
+		case strings.HasSuffix(key, ".capabilities"):
+			want = OriginRoleCapabilities
+		default:
+			if derivedOrigin, ok := derived[key]; ok {
+				want = derivedOrigin
+			}
 		}
 		if origin != want {
 			t.Errorf("origin[%q] = %q, want %q", key, origin, want)
@@ -115,7 +125,10 @@ func TestScaffoldStatesExactlyWhatTheBundleWouldHaveSupplied(t *testing.T) {
 			t.Fatalf("agent %q is missing from the generated configuration", name)
 		}
 		want.Persona.Source = got.Persona.Source
-		if got != want {
+		// Compared deeply because an agent carries the capability set its role
+		// holds, which is a slice: a generated file that stated a different one
+		// would be exactly what this is here to catch.
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("agent %q = %+v, want %+v", name, got, want)
 		}
 	}

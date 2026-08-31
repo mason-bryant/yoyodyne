@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/research"
@@ -552,6 +553,26 @@ type AgentConfig struct {
 	// may specialize how an agent works; it can never remove a harness
 	// invariant, which is why the immutable contracts stay in Go.
 	Persona Persona `yaml:"persona,omitempty" json:"persona,omitempty"`
+	// Capabilities is everything the harness may do on this agent's behalf,
+	// stated in the closed vocabulary rather than implied by the role's name. It
+	// is read from `internal/rolecapability` as the configuration resolves, so
+	// what a shipped agent holds and what the registry says it holds are one
+	// statement that cannot come apart.
+	//
+	// No layer supplies it and no layer may: there is no `capabilities` key in a
+	// configuration document, so a project naming one is refused by the decoder
+	// exactly as any other unknown key is. That is the design's law rather than
+	// an omission — a role definition says what may be performed at all, and a
+	// file that could widen it would be a project granting itself authority.
+	// Operator-authored bundles are a later step of the same workstream, and they
+	// arrive protected and activated by digest rather than as a key here.
+	//
+	// It is reported like the derived halves of a persona are, because an
+	// operator asking what an agent is has a better answer for seeing it, and it
+	// is part of the configuration's revision for the same reason a bundle
+	// default is: an executable that shipped a role a different capability set
+	// shipped a different configuration.
+	Capabilities []capability.Capability `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
 }
 
 // MaxPersonaBytes bounds a persona so role guidance stays guidance rather than

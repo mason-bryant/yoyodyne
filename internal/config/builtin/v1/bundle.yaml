@@ -126,6 +126,13 @@ approvals:
 # harness default. The "opus" family alias intentionally floats to the backend's
 # current default for that family, and run evidence records both the requested
 # selector and the model the provider reported serving.
+#
+# What each of these agents may have done on its behalf is deliberately not
+# written here. The capability set follows the role, read from the harness's
+# role-capability registry as the configuration resolves, so the shipped
+# defaults and the registry are one statement rather than two that can drift.
+# "yoyo config show" reports the set each agent ends up with; no file states it,
+# and a file that tried to would be refused for a key that does not exist.
 agents:
   product-manager:
     role: product-manager
