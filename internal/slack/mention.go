@@ -19,6 +19,14 @@ package slack
 // already read in this channel — the four lines below are the same four lines
 // the heartbeat posts to the same channel.
 //
+// What it does keep is what was said. A message addressed to this app goes into
+// the sink's own log with the operator's own words in it, before the answer is
+// posted and whether or not the workspace takes the answer, because "not even
+// written down" is half of what the silence cost: an operator who was answered
+// badly can at least be shown what they asked, and one who was not answered at
+// all cannot be shown anything. It is a note of having been heard rather than a
+// directive — nothing reads it, and no work moves because of it.
+//
 // Two answers, and no more than two. A question about where things stand gets
 // the read model's own four lines, because that derivation is the read model's
 // and a surface that assembled its own would be a second answer to the one
@@ -55,6 +63,12 @@ const (
 	// owed the next thing to try rather than an apology.
 	unhandled = "Asking me where things stand is the only thing I can answer here yet — to steer the work, reply inside a work item's thread in this channel, and everything else is driven by `yoyo` at the terminal."
 )
+
+// maxAskedBytes bounds how much of somebody's own words one log line carries. It
+// is generous enough to hold a question whole and short enough that a log stays
+// a log; what was said in full is in the channel, where they said it, and the
+// line points at the person and the moment rather than standing in for either.
+const maxAskedBytes = 300
 
 // standingQuestions is what a question about the standing is asked in. It is a
 // stated list for the reason the pausing kinds of a directive are stated: the
@@ -105,7 +119,7 @@ func (s *steering) mentioned(ctx context.Context, message inboundMessage) {
 		return
 	}
 	member, known := s.identity(ctx)
-	if !known || !strings.Contains(message.text, "<@"+member+">") {
+	if !known || !addresses(message.text, member) {
 		return
 	}
 	if !s.first(message.ts) {
@@ -117,10 +131,12 @@ func (s *steering) mentioned(ctx context.Context, message inboundMessage) {
 	if asksForStanding(said) {
 		answer, subject = s.sink.standingAnswer(ctx), "where the harness stands"
 	}
-	// Said before the answer is posted rather than after it. What the operator
-	// sent is written down whether or not the workspace takes the reply, which is
-	// the whole of what "not even recorded" cost the last time this went wrong.
-	s.sink.log("this app was addressed by %s outside its own threads and is being answered with %s", message.user, subject)
+	// Written down before the answer is posted rather than after it, and carrying
+	// the words rather than only the fact that somebody typed something. A message
+	// the workspace then refuses to carry an answer for is still one this operator
+	// sent, and the line below is the whole of what says so.
+	s.sink.log("this app was addressed by %s outside its own threads, saying %q, and is being answered with %s",
+		message.user, singleLine(message.text, maxAskedBytes), subject)
 	if err := s.sink.answerMention(ctx, message, answer); err != nil {
 		if ctx.Err() != nil {
 			return
@@ -246,6 +262,32 @@ func boundAnswer(answer string) string {
 		cut--
 	}
 	return answer[:cut] + marker
+}
+
+// addresses reports a message naming this app.
+//
+// Slack writes a mention as `<@U0123>`, and in an older labelled form as
+// `<@U0123|name>`. Both are the same member id and both address this app, so
+// both are matched: the labelled form is uncommon in the message events this
+// reads, and a workspace that emits it would otherwise get exactly the silence
+// this whole door exists to remove — the one failure that is invisible from
+// here and indistinguishable from a dead sink from there.
+//
+// The terminator is the whole of the test. A member id is a prefix of longer
+// ids, so `<@U0YOY` matching inside `<@U0YOYODYNE>` would answer messages
+// addressed to somebody else.
+func addresses(text, member string) bool {
+	rest := text
+	for {
+		_, after, found := strings.Cut(rest, "<@"+member)
+		if !found {
+			return false
+		}
+		if strings.HasPrefix(after, ">") || strings.HasPrefix(after, "|") {
+			return true
+		}
+		rest = after
+	}
 }
 
 // asksForStanding reports a message asking where things stand.

@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -235,6 +236,105 @@ func TestMentionsAreTakenOutBeforeWhatWasSaidIsRead(t *testing.T) {
 		if got := withoutMentions(said); got != want {
 			t.Errorf("withoutMentions(%q) = %q, want %q", said, got, want)
 		}
+	}
+}
+
+// Nothing an operator sends to the app goes unrecorded, and the record carries
+// what they said rather than only that somebody said something. It is written
+// before the answer is posted, so a workspace that refuses to carry the answer
+// costs the reply and not the account of having been asked.
+func TestWhatWasAskedIsWrittenDownEvenWhenTheAnswerCannotBePosted(t *testing.T) {
+	t.Parallel()
+
+	sink, _, posts := newSteeringSink(t, testOperator)
+	var noted []string
+	sink.log = func(format string, args ...any) { noted = append(noted, fmt.Sprintf(format, args...)) }
+	// This workspace takes one message and refuses everything after it.
+	posts.allow = 1
+	sink.steering.handle(context.Background(),
+		topLevel(testOperator, "<@"+testApp+"> status", "1750000001.000100"))
+	sink.steering.handle(context.Background(),
+		topLevel(testOperator, "<@"+testApp+"> hold intake until I say otherwise", "1750000002.000100"))
+
+	if len(posts.requests) != 1 {
+		t.Fatalf("posts = %#v, want the second answer refused by the workspace", posts.requests)
+	}
+	log := strings.Join(noted, "\n")
+	for _, said := range []string{"status", "hold intake until I say otherwise"} {
+		if !strings.Contains(log, said) {
+			t.Fatalf("log =\n%s\nwant it to carry %q, which is what the operator said", log, said)
+		}
+	}
+	if !strings.Contains(log, testOperator) {
+		t.Fatalf("log =\n%s\nwant it to name who said it", log)
+	}
+	if !strings.Contains(log, "could not be posted") {
+		t.Fatalf("log =\n%s\nwant the refused answer said as well as the question", log)
+	}
+}
+
+// Slack writes a mention two ways, and the older labelled form is the same
+// member id addressing the same app. Missing it would be silence in exactly the
+// place this exists to remove silence from.
+func TestTheLabelledMentionFormAddressesTheAppToo(t *testing.T) {
+	t.Parallel()
+
+	sink, _, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(),
+		topLevel(testOperator, "<@"+testApp+"|yoyodyne> status", "1750000001.000100"))
+
+	if answer := onlyPost(t, posts); !strings.Contains(answer.Text, "Running:") {
+		t.Fatalf("answer = %q, want the four lines", answer.Text)
+	}
+}
+
+// Which texts name this app. A member id is a prefix of longer ids, so what
+// terminates the mention is the whole of the test: matching without it would
+// answer messages addressed to somebody else entirely.
+func TestWhichTextsAddressThisApp(t *testing.T) {
+	t.Parallel()
+
+	for said, want := range map[string]bool{
+		"<@" + testApp + "> status":          true,
+		"<@" + testApp + "|yoyodyne> status": true,
+		"hey <@" + testApp + "> status":      true,
+		"<@U0SOMEBODYELSE> status":           false,
+		"<@" + testApp + "EXTRA> status":     false,
+		"<@" + testApp:                       false,
+		"status":                             false,
+	} {
+		if got := addresses(said, testApp); got != want {
+			t.Errorf("addresses(%q) = %v, want %v", said, got, want)
+		}
+	}
+}
+
+// Answering is not steering, so it is not gated on the allow-list that decides
+// whose replies record directives. Somebody without `direct-work` who asks the
+// app where things stand is told, because the four lines are already posted to
+// this channel by the heartbeat and refusing them would be the app staying
+// silent about something already on the screen.
+//
+// It is pinned by a test so a later tightening of who may steer cannot quietly
+// put the silence back.
+func TestSomebodyWithoutDirectWorkStillGetsAnAnswer(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(),
+		topLevel(testStranger, "<@"+testApp+"> what is running?", "1750000001.000100"))
+
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "Running:") {
+		t.Fatalf("answer = %q, want the four lines for somebody the project has not granted direct-work", answer.Text)
+	}
+	if !strings.HasPrefix(answer.Text, "<@"+testStranger+"> ") {
+		t.Fatalf("answer = %q, want it addressed to whoever asked", answer.Text)
+	}
+	if recorded, err := directives.List(); err != nil {
+		t.Fatalf("List() error = %v", err)
+	} else if len(recorded) != 0 {
+		t.Fatalf("recorded = %+v, want an answer to record nothing whoever asked", recorded)
 	}
 }
 

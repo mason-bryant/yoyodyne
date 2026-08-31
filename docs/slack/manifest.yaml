@@ -45,11 +45,12 @@
 #                          against that thread's work item, and anybody else's is
 #                          answered saying it was not acted on; and a message
 #                          anywhere else that @-mentions the app is answered
-#                          where it was said and recorded nowhere, because a
-#                          question the app never answers reads as a dead sink.
-#                          An operator who wants neither can remove it and the
-#                          two message events below, and nothing typed in the
-#                          channel then arrives.
+#                          where it was said and noted, with what was asked, in
+#                          the sink's own log — it records no directive and moves
+#                          no work, because a question the app never answers
+#                          reads as a dead sink. An operator who wants neither
+#                          can remove it and the two message events below, and
+#                          nothing typed in the channel then arrives.
 #   groups:history         the same, for a private channel.
 #
 # Socket Mode is on and there is no request URL, which is the point: the harness

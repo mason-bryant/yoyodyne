@@ -658,11 +658,15 @@ that this is the only question the app answers here yet, and where the work is
 actually driven from — a work item's thread for a directive, and `yoyo` at the
 terminal for everything else.
 
-Two things it is not. **Nothing is recorded**: a mention writes no directive and
-changes nothing, so a question at the top of the channel where there is no item
-to scope one to is answered rather than refused. And **nothing is disclosed**:
-the four lines are already posted to this channel by the heartbeat, so the answer
-tells a reader nothing the channel was not already telling them.
+Two things it is not. **No directive is recorded**: a mention changes nothing
+about the work, so a question at the top of the channel — where there is no item
+to scope a directive to — is answered rather than refused. It is not lost either:
+the sink's own log gets a line for every message addressed to the app, with what
+was asked in it, written before the answer goes out, so a question the workspace
+would not let it answer still leaves a record that somebody asked. And **nothing
+is disclosed**: the four lines are already posted to this channel by the
+heartbeat, so the answer tells a reader nothing the channel was not already
+telling them.
 
 A message that does not name the app is still left entirely alone, which is what
 keeps a reporting channel a reporting channel rather than a participant in
