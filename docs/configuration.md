@@ -1475,6 +1475,20 @@ Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
 
+### The environment a check runs in
+
+A check inherits the harness's own environment with one thing added: `GOCACHE`
+is pointed at `.git/yoyodyne/go-build` inside the repository being checked, and
+an inherited value is replaced rather than carried through. Every run the
+harness makes is given the same redirect, so a developer's own execution of the
+checks and the harness's run of them afterwards share one cache.
+
+It is there because the Go toolchain's default cache is under the user's home,
+which a developer run's sandbox does not grant: without the redirect the first
+Go command in a run fails at setup with `operation not permitted`, which reads
+as a broken toolchain. A project whose checks are not Go is unaffected by a
+variable its tools never read.
+
 ### What `init` proposes for `checks`
 
 A project does not start from the empty list unless it has to. `yoyo init` reads

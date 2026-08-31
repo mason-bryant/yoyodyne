@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -1738,5 +1739,36 @@ func TestAWatchedInvocationRecordsAndReturnsWhatAnUnwatchedOneDoes(t *testing.T)
 	}
 	if !reflect.DeepEqual(watchedResult, unwatchedResult) {
 		t.Fatalf("watching changed the result:\nwatched   %#v\nunwatched %#v", watchedResult, unwatchedResult)
+	}
+}
+
+// The build cache the run's own probe will need.
+//
+// A developer's first act is to execute the project's declared checks, and the
+// toolchain writes what it compiles to a directory under the user's home that
+// the run's sandbox does not grant. Left alone, the probe dies at setup with
+// "operation not permitted" and reads as a broken toolchain rather than as a
+// directory nobody granted, which is what five reports across four work items
+// each rediscovered by hand. The invocation carries the redirect instead.
+func TestAnInvocationCarriesABuildCacheTheRunMayWrite(t *testing.T) {
+	t.Parallel()
+
+	worktree := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(worktree, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	stream := `{"type":"result","subtype":"success","session_id":"s","is_error":false,"result":"done","total_cost_usd":0.01}` + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}
+	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: worktree,
+		Prompt:           "implement the task",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := "GOCACHE=" + filepath.Join(worktree, ".git", "yoyodyne", "go-build")
+	if !slices.Contains(runner.commands[0].Env, want) {
+		t.Fatalf("the invocation's environment does not carry %q: %v", want, runner.commands[0].Env)
 	}
 }

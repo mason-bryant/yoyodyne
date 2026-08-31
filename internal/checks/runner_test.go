@@ -3,7 +3,10 @@ package checks
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -199,6 +202,34 @@ func TestRunnerReportsElapsedAgainstTheBudgetOnEveryCheck(t *testing.T) {
 		if !strings.Contains(payload, want) {
 			t.Fatalf("completion payload = %s, want it to contain %s", payload, want)
 		}
+	}
+}
+
+// A check is one of the project's own commands, so a toolchain that cannot
+// write its build cache fails it at setup with nothing about the change to show
+// for it. The redirect is the same one the run's own probe was given, pointed
+// inside the repository being checked, so the two share what is already built.
+func TestEveryCheckIsGivenABuildCacheTheRunMayWrite(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	process := &recordingRunner{}
+	if _, _, err := (Runner{Process: process}).Run(
+		context.Background(),
+		"run-0123456789abcdef0123456789abcdef",
+		directory,
+		[]string{"true"},
+		0,
+		nil,
+	); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := "GOCACHE=" + filepath.Join(directory, ".git", "yoyodyne", "go-build")
+	if !slices.Contains(process.command.Env, want) {
+		t.Fatalf("the check's environment does not carry %q: %v", want, process.command.Env)
 	}
 }
 
