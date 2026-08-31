@@ -13,10 +13,15 @@
 // safe to read from a project's own repository.
 //
 // Nothing executes a definition yet. This package gives one a shape, a stable
-// serialized form, a content digest an instance can pin itself to, and a
-// validation that either produces a definition every later reader can trust or
-// refuses the whole of it. The runtime that loads and runs one is a later
-// milestone, and until it exists nothing in the delivery path imports this.
+// serialized form, a content digest an instance can pin itself to, a validation
+// that either produces a definition every later reader can trust or refuses the
+// whole of it, and a loader that compiles what passed into a graph: every state
+// resolved to the action code registered, every transition resolved to a
+// destination that exists, and the whole of it held against the authority it was
+// compiled under and the digest it was pinned to. What is still a later milestone
+// is the runtime that walks such a graph — compiling resolves every door and
+// opens none of them — and until something executes one nothing in the delivery
+// path imports this.
 package workflow
 
 import (
