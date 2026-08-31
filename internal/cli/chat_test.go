@@ -565,13 +565,17 @@ func TestAPooledConversationRecordsTheAccountItsAgentAnswersOn(t *testing.T) {
 		t.Fatalf("NewConversationStore() error = %v", err)
 	}
 	log := &recordingSpendLog{}
+	provider := &recordingChatBackend{result: backendapi.RunResult{
+		SessionID:     "session-1",
+		ResolvedModel: "claude-opus-5",
+		FinalText:     "More than the ordering assumes.",
+		CostUSD:       0.25,
+		CostReported:  true,
+	}}
 	session, err := chat.Open(chat.Options{
 		Role:         domain.RoleArchitect,
 		Agent:        "architect",
-		Backend: &recordingChatBackend{result: backendapi.RunResult{
-			SessionID: "session-1", ResolvedModel: "claude-opus-5", FinalText: "More than the ordering assumes.",
-			CostUSD: 0.25, CostReported: true,
-		}},
+		Backend:      provider,
 		Store:        store,
 		Spend:        log,
 		Model:        "opus-architect",
