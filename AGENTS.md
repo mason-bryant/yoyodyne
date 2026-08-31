@@ -6,7 +6,8 @@ Which agents can reach it, and what a developer run uses instead, is
 is a developer run.
 
 > **Architecture in one line:** Issues live in a local Dolt database
-> (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
+> (`.beads/embeddeddolt/`, in the primary checkout); cross-machine sync
+> uses `bd dolt push/pull` (a
 > git-compatible protocol), stored under `refs/dolt/data` on your git
 > remote — separate from `refs/heads/*` where your code lives.
 > `.beads/issues.jsonl` is a passive export, not the wire protocol.
