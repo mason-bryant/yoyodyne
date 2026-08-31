@@ -229,7 +229,13 @@ naming one of them reaches that one. What a role may do in that conversation is
 **not** configurable and is not what the persona says: the harness holds one contract and one authority table per role,
 sends the contract ahead of the persona on every turn, and refuses anything
 outside the table. A persona specializes how a role works; it cannot widen what
-the role is allowed to do. The set of role names is fixed for the same reason —
+the role is allowed to do. `yoyo config show` reports each agent's
+`capabilities` — everything the harness may do on that agent's behalf, named in
+the vocabulary the authority is stated in rather than left to be inferred from
+the role's name. It is reported and never written: the set is read off the role
+in the harness's own registry, there is no `capabilities` key to put in a
+configuration, and a file that writes one is refused like any other key that
+does not exist. The set of role names is fixed for the same reason —
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name — so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
@@ -3307,9 +3313,11 @@ nothing in it is implemented and none of the commands it names exist.
    you had overridden. The generated file states each of them in place, so this
    is editing values rather than re-expressing deviations.
 4. Run `yoyo config show --effective --origins` again and diff it against
-   `before.txt`. Every origin should now be the project file, and no effective
-   value should have moved except the persona sources, which are now paths
-   inside your repository.
+   `before.txt`. Every origin should now be the project file, apart from the few
+   a generated file leaves derived — the repository id, the triage repair grant,
+   and each agent's capability set, which is the harness's registry either way —
+   and no effective value should have moved except the persona sources, which are
+   now paths inside your repository.
 
 ## Migrating from `.yoyodyne.yaml`
 
@@ -3358,15 +3366,20 @@ Origins use these values:
 | `builtin:v1` | Inherited from the built-in bundle, by a project that uses `extends`. |
 | a file path | Supplied by that project configuration file. |
 | `derived:product.id` | Computed from another configured value. |
+| `derived:execution.repair_attempts_before_replan` | A triage repair grant no layer stated, which follows the effective repair budget. |
 | `derived:accounts` | An agent's `account` no layer stated, which follows the single account the mapping declares. |
+| `registry:role-capabilities` | An agent's `capabilities`, read off its role in the harness's registry. No layer states it and none may. |
 
 An unexpected effective value is therefore a two-command diagnosis: `--effective`
 says what the value is, and `--origins` says which layer is responsible for it.
 
 In a project `init` wrote, the answer is the project file for every configured
-value, and `derived:product.id` for `product.repository_id` alone — the one
-value the generated file computes rather than states. Nothing reports
-`builtin:v1`, and nothing reports `harness-default`, because the generated file
-writes down every value the harness would otherwise have filled in. So an origin
-that is neither the project file nor that one derivation means the
-configuration is inheriting something, which is worth looking at.
+value. The exceptions are the values the generated file leaves to follow
+something else: `derived:product.id` for `product.repository_id`,
+`derived:execution.repair_attempts_before_replan` for
+`triage.repair_grant_attempts`, and `registry:role-capabilities` for every
+agent's capability set, which is the harness's rather than any file's. Nothing
+reports `builtin:v1`, and nothing reports `harness-default`, because the
+generated file writes down every value the harness would otherwise have filled
+in. So an origin that is none of those means the configuration is inheriting
+something, which is worth looking at.
