@@ -334,8 +334,13 @@ func TestNoSessionChoosingIsARefusal(t *testing.T) {
 		ready:    []beads.WorkItem{{ID: "item-1"}},
 	}}
 	standing := ReadStanding(context.Background(), sources)
-	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "no session is choosing work") {
+	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "no watch session is running") {
 		t.Fatalf("not startable = %+v", standing.NotStartable)
+	}
+	// It is also waiting on somebody. A queue nobody is pulling from will wait
+	// forever without a person, and the attention line is where a person looks.
+	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose, "`yoyo work --watch`") {
+		t.Fatalf("needs a human = %+v", standing.NeedsHuman)
 	}
 }
 
