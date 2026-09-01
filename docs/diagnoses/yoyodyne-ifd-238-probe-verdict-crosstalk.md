@@ -106,22 +106,61 @@ creation-time timestamp `git worktree add` leaves on every file it writes.
 **The shared build cache is not implicated and stays shared.** The diagnostic the
 probe read was produced by a `go vet` that really did run over a tree containing
 that variable, in the worktree that contained it, and reached the reader as text
-in a file rather than as anything the toolchain returned. Deliberate contention
-against one cache did not reproduce a crossed verdict: sixty rounds of two
-modules with the same module path and different content, vetted concurrently
-against one `GOCACHE`, gave each its own verdict every time. Build cache entries
-are keyed by the content compiled, so two worktrees at different content are two
-sets of entries. Isolating the cache per worktree was measured before it was
-dropped: a cold `make check` in this repository is 203s and leaves 688 MB, paid
-once per run instead of once per repository, for a hazard nothing has shown.
+in a file rather than as anything the toolchain returned. Build cache entries are
+keyed by the content compiled, so two worktrees at different content are two sets
+of entries. Isolating the cache per worktree was measured before it was dropped:
+a cold `make check` in this repository is 203s and leaves 688 MB, paid once per
+run instead of once per repository, for a hazard nothing has shown.
+
+Deliberate contention against one cache did not reproduce a crossed verdict
+either. This is the experiment, so that the suspicion can be put to the same test
+rather than argued again — `gocache.go` sends a reader here, and prose alone is
+not something a reader can re-run. Two modules of the same module path and
+different content, one of them carrying exactly the defect the incident named,
+vetted concurrently against one `GOCACHE`, with the uniform timestamps
+`git worktree add` leaves reproduced by hand:
+
+```sh
+R="$TMPDIR/gocache-contention"; rm -rf "$R"; mkdir -p "$R/a/p" "$R/b/p" "$R/cache"
+for d in a b; do printf 'module example.com/m\n\ngo 1.26\n' > "$R/$d/go.mod"; done
+printf 'package p\n\nfunc F() int {\n\thead := 1\n\treturn head\n}\n' > "$R/a/p/p.go"
+printf 'package p\n\nfunc F() int {\n\thead := 1\n\treturn 2\n}\n' > "$R/b/p/p.go"
+touch -t 202609010953.23 "$R"/*/p/p.go "$R"/*/go.mod
+export GOCACHE="$R/cache"
+bad=0
+for i in $(seq 1 60); do
+  ( cd "$R/a" && go vet ./... >/dev/null 2>&1; echo $? > "$R/a.rc" ) &
+  ( cd "$R/b" && go vet ./... >/dev/null 2>&1; echo $? > "$R/b.rc" ) &
+  wait
+  [ "$(cat "$R/a.rc")" = 0 ] && [ "$(cat "$R/b.rc")" = 1 ] || { bad=$((bad+1)); echo "round $i crossed"; }
+done
+echo "crossed rounds: $bad / 60"
+```
+
+Run on 2026-09-01 against go1.26.6 darwin/arm64, it reported `crossed rounds: 0 /
+60`: the clean module vetted clean and the defective one vetted defective, every
+round. That is a floor rather than a proof — a fault seen once in months of runs
+is not one sixty rounds are entitled to find — which is why the attribution
+above, and not this, is what settles the question.
 
 ## What changed
 
 The developer contract now tells every run that the machine's temporary
 directory is shared with the runs beside it, that a scratch path must carry the
 id of the work item that wrote it, and that the alternative is not the worktree —
-a scratch file there is untracked content in the change. `docs/developing-yoyo.md`
-says the same for a session the harness did not make.
+a scratch file there is untracked content in the change. `CLAUDE.md` and
+`AGENTS.md` say the same for a session the harness did not make, which on this
+machine is the operator working in the checkout while two runs execute.
+
+`docs/developing-yoyo.md` is the better home for that second half and could not
+take it. It is one of the eight documents the product manager's context bundle
+carries, whose combined 512 KiB budget had 32 bytes free when this ran, so a
+paragraph added there fails `make test` for a reason that has nothing to do with
+the paragraph. Raising `defaultMaxProductBytes` in
+`internal/contextbundle/product.go`, trimming the guides, or narrowing the set is
+a decision somebody owns and this run does not; two earlier runs reported the
+same wall as a prediction and this is the first documentation it has actually
+turned away. Whoever settles it should move the section there.
 
 That is guidance rather than a wall, deliberately: Claude Code sets `TMPDIR`
 itself in sandbox mode, to a directory it derives per user, so a `TMPDIR` the

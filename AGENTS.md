@@ -158,6 +158,30 @@ not a licence for a developer run to run `bd update`, which
 guard is still wired into developer runs because a hook that is present
 everywhere is one nobody has to remember to install.
 
+## Name every scratch file for the work it belongs to
+
+**`$TMPDIR` is one directory per user on this machine, not one per session or
+per worktree, and this project runs two developer runs at a time beside whatever
+an interactive session is doing.**
+
+So a scratch path that does not carry the name of the work it belongs to is a
+path something else picks too, and a check redirected into it is a log two
+processes write and both read back:
+
+```sh
+make check > "$TMPDIR/check-yoyodyne-ifd-238.log" 2>&1   # yours
+make check > "$TMPDIR/probe-check.log" 2>&1              # and everyone else's
+```
+
+This is not hypothetical. On 2026-09-01 two runs five seconds apart redirected
+`make check` into `$TMPDIR/probe-check.log`; one of them read the other's
+compile error back out of it and reported a broken toolchain, while its own
+`make check` was exiting 0. `docs/diagnoses/yoyodyne-ifd-238-probe-verdict-crosstalk.md`
+is the whole of that.
+
+The worktree is not the alternative: a scratch file there is untracked content
+in the change, which every reviewer is then shown.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 
