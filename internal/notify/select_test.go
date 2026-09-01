@@ -784,10 +784,11 @@ func TestAStoppageRecordedAfterTheRunAlreadyEndedIsStillSaid(t *testing.T) {
 
 // Both lines finish on the reason the record gives, and a run can honestly have
 // none: a cancellation is the operator stopping it without owing anybody a
-// sentence, and a stoppage reconciliation settled on an already-terminal run
-// takes the blocker from the tracker and leaves the run's own failure empty. The
-// line has to stay a sentence in both cases rather than trailing off a colon,
-// and it must not report an ordinary act as a record that lost something.
+// sentence, and a blocker can reach a record whose failure is empty, which is
+// what every stoppage settled onto an already-terminal run left before the sweep
+// began writing its own reason there. The line has to stay a sentence in both
+// cases rather than trailing off a colon, and it must not report an ordinary act
+// as a record that lost something.
 func TestAnEndingWhoseRecordNamesNoReasonIsStillASentence(t *testing.T) {
 	before := running()
 	for _, ending := range []struct {
@@ -797,8 +798,9 @@ func TestAnEndingWhoseRecordNamesNoReasonIsStillASentence(t *testing.T) {
 	}{
 		{runstate.StatusCancelled, "", KindRunEnded},
 		{runstate.StatusTimedOut, "", KindRunEnded},
-		// Reconciliation blocks a run that is already terminal without writing a
-		// failure onto it, so the critical line reaches the same empty reason.
+		// A blocker recorded on a run whose failure is empty reaches the critical
+		// line with the same absence, and a record written before the sweep filled
+		// that reason in is exactly such a run.
 		{runstate.StatusFailed, "the interrupted run left a worktree nothing could settle", KindBlockerRecorded},
 	} {
 		after := endedRun(before, ending.status)

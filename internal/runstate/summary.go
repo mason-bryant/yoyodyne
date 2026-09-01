@@ -202,10 +202,15 @@ type RunSummary struct {
 	// outstanding is waiting on, rather than only that it is waiting.
 	MergeQueued bool `json:"merge_queued,omitempty"`
 	// Failure is the run's own reason for ending, and it is the only one of the
-	// four recorded reasons that says the run failed. The three below happened
-	// around the work rather than to it, and are kept apart here for the reason
-	// they are kept apart in the record: a publication or a cleanup that could
-	// not finish must never be read as a failed piece of work.
+	// four recorded reasons that is about the work itself. The three below
+	// happened around the work rather than to it, and are kept apart here for the
+	// reason they are kept apart in the record: a publication or a cleanup that
+	// could not finish must never be read as a failed piece of work.
+	//
+	// It is the reason and never the verdict, exactly as State.Failure is: what
+	// became of the run is Outcome above, and a reader deciding from this field
+	// that a run failed or stopped is a second classification the listing it
+	// prints beside will contradict.
 	Failure string `json:"failure,omitempty"`
 	// FailingCheck is the deterministic check that was still failing when the
 	// record was last written. It is what a repair attempt was handed, so on a

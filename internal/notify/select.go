@@ -177,11 +177,12 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 //
 // A run ending with no reason recorded is ordinary rather than broken. A
 // cancellation is the plain case: the operator stopped it and owed nobody a
-// sentence about why. So is a stoppage reconciliation settled on a run that was
-// already terminal, which takes the blocker from the tracker and leaves the
-// run's own failure exactly as it found it. Saying the record names no reason is
-// the true account of both; implying one had gone missing would report an
-// ordinary act as a fault in the record.
+// sentence about why. Saying the record names no reason is the true account of
+// it; implying one had gone missing would report an ordinary act as a fault in
+// the record. A stoppage reconciliation settled on a run that was already
+// terminal is no longer such a case: the sweep writes its own reason where the
+// record gives none, so what is read here is either the run's account of how it
+// ended or the sweep's account of settling it.
 func endingReason(state runstate.State) string {
 	if reason := blockerText(state); reason != "" {
 		return reason
