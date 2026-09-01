@@ -71,6 +71,58 @@ func TestResolvingADirectiveStopsItPausingWork(t *testing.T) {
 	}
 }
 
+// Carrying out a standing instruction says what came of it and retires nothing.
+// Every process that decides what still constrains work assembles it from these
+// records, so the disposition has to reach the next reader as an account of the
+// instruction rather than as the end of it: a reader that took the outcome for a
+// lapse would drop the operator's instruction the moment the first item it
+// prompted was admitted, and say nothing about having done so.
+func TestCarryingOutAStandingInstructionLeavesItInForceForEveryProcess(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newDirectives(t, root)
+	standing := operationalDirective(t, "stop opening pull requests for documentation-only changes")
+	if err := store.Record(standing); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	carried, err := store.CarryOut(standing.ID, "admitted yoyodyne-ifd.170 to the backlog", time.Now())
+	if err != nil {
+		t.Fatalf("CarryOut() error = %v", err)
+	}
+	if !carried.Resolved() || !carried.InForce() {
+		t.Fatalf("CarryOut() = %#v, want an instruction that is accounted for and still in force", carried)
+	}
+
+	reader := newDirectives(t, root)
+	listed, err := reader.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 || !listed[0].InForce() || listed[0].Resolution != carried.Resolution {
+		t.Fatalf("List() = %#v, want the standing instruction still in force with what came of it", listed)
+	}
+	// It held nothing up before it was carried out and holds nothing up after: an
+	// operational directive changes how work is done rather than stopping any.
+	pausing, err := reader.Pausing("yoyodyne-anything")
+	if err != nil {
+		t.Fatalf("Pausing() error = %v", err)
+	}
+	if len(pausing) != 0 {
+		t.Fatalf("Pausing() = %#v, want a standing instruction to pause nothing", pausing)
+	}
+	// Withdrawal is the one act that ends it, and it is still available: a
+	// disposition that had ended the directive would have taken this with it.
+	withdrawn, err := reader.Withdraw(standing.ID, "the operator, at a command line",
+		"the change it asked for has shipped", time.Now())
+	if err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	if withdrawn.InForce() || withdrawn.Resolution != carried.Resolution {
+		t.Fatalf("Withdraw() = %#v, want it out of force with what came of it still recorded", withdrawn)
+	}
+}
+
 // Withdrawing is what takes a directive out of force, and it has to be visible
 // to the next process that asks rather than only to the one that did it: a
 // standing instruction the operator no longer means is otherwise still enforced
