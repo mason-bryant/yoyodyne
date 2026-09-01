@@ -239,7 +239,7 @@ func TestAWatchSessionWritesIntoTheProductsOwnWatchLog(t *testing.T) {
 		t.Fatalf("openWatchSession() error = %v", err)
 	}
 	at := time.Now().UTC()
-	if err := sessions.Record(runstate.WatchWatching, at, "watching the backlog until stopped"); err != nil {
+	if err := sessions.Record(orchestrator.SessionState{State: runstate.WatchWatching, At: at, Reason: "watching the backlog until stopped"}); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
 
@@ -266,7 +266,7 @@ func TestAWatchSessionWritesIntoTheProductsOwnWatchLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openWatchSession() error = %v", err)
 	}
-	if err := other.Record(runstate.WatchIdle, at, "the backlog is empty"); err != nil {
+	if err := other.Record(orchestrator.SessionState{State: runstate.WatchIdle, At: at, Reason: "the backlog is empty"}); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
 	recorded, err = watch.List()

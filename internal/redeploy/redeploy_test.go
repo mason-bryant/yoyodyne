@@ -1,6 +1,7 @@
 package redeploy
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,6 +141,12 @@ func TestRunningResolvesTheProcessesOwnBinary(t *testing.T) {
 	t.Parallel()
 
 	binary, err := Running()
+	// A platform that cannot replace a running process says so rather than
+	// resolving anything, and there is nothing here to assert about it: that
+	// refusal is its own case, and the session it happens to watches without this.
+	if errors.Is(err, ErrUnsupported) {
+		t.Skipf("this platform cannot replace a running process: %v", err)
+	}
 	if err != nil {
 		t.Fatalf("Running() error = %v", err)
 	}

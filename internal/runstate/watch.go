@@ -116,6 +116,19 @@ type WatchTransition struct {
 	// It is empty where the binary recorded no revision, which is a comparison
 	// nobody can make rather than a session that is current.
 	Build string `json:"build,omitempty"`
+	// Restarting marks the one stop that is not an ending: the session is being
+	// re-executed into a build deployed over it, having waited out every run it
+	// started, and the process comes straight back watching the same queue. Every
+	// other transition leaves it false.
+	//
+	// It is a field beside the state rather than a state of its own, and that is
+	// deliberate. A state nothing recognizes fails this log's validation, so a
+	// reader from before the field existed — a Slack sink or a `yoyo status` from
+	// an older build, which is exactly what is running while a redeploy is
+	// happening — would stop being able to read the log at all, permanently,
+	// because the entry stays in it. An unknown field is ignored by the same
+	// reader, so what an older one loses is the distinction and not the log.
+	Restarting bool `json:"restarting,omitempty"`
 }
 
 func (t WatchTransition) Validate() error {
@@ -143,6 +156,12 @@ func (t WatchTransition) Validate() error {
 	// reported as unmakeable where it is read.
 	if t.Build != "" && !buildPattern.MatchString(t.Build) {
 		problems = append(problems, fmt.Errorf("watch transition build %q is not a revision", t.Build))
+	}
+	// Only a stop can be a restart. A session marked as coming back while it is
+	// still watching, idle, or braked would have every reader saying a restart is
+	// under way that nothing is going to make.
+	if t.Restarting && t.State != WatchStopped {
+		problems = append(problems, fmt.Errorf("a %s transition cannot be a restart, which is a thing only a stop is", t.State))
 	}
 	return errors.Join(problems...)
 }

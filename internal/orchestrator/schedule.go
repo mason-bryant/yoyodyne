@@ -267,12 +267,27 @@ type ScheduleDeployment interface {
 	Replaced() (bool, error)
 }
 
+// SessionState is one transition a watch session records about itself: what it
+// entered, when, why, and whether the stop it is recording is a session coming
+// straight back rather than a line going down.
+type SessionState struct {
+	State  runstate.WatchState
+	At     time.Time
+	Reason string
+	// Restarting marks the one stop that is not an ending — the session waiting
+	// out its runs to be re-executed into a build deployed over it. It is what
+	// keeps every surface from telling the operator to start a session that is
+	// already on its way back, which is the standing chore this whole mechanism
+	// exists to end rather than reproduce once per deploy.
+	Restarting bool
+}
+
 // WatchSessions is where a watch session says what it is doing, for the reader
 // who is not at its terminal. It is optional: a session wired without one
 // behaves identically and is simply invisible between the runs it starts, which
 // is the state this exists to end.
 type WatchSessions interface {
-	Record(state runstate.WatchState, at time.Time, reason string) error
+	Record(SessionState) error
 }
 
 // Starter runs one chosen item to its end. It is a function rather than the
@@ -952,7 +967,10 @@ pulling:
 		running--
 		settle(done)
 	}
-	session.enter(runstate.WatchStopped, stopping(schedule))
+	// The last line, and whether it is an ending. A session stopping to be
+	// restarted into the build deployed over it is waiting on nothing and nobody,
+	// and a reader told otherwise is being handed the chore this exists to end.
+	session.stop(stopping(schedule), schedule.Redeploying())
 	return schedule, failure
 }
 
@@ -1239,7 +1257,20 @@ func (w *watchSession) enter(state runstate.WatchState, reason string) {
 		return
 	}
 	w.state, w.reason = state, reason
-	w.record(state, reason)
+	w.record(SessionState{State: state, Reason: reason})
+}
+
+// stop records the session's last line, and whether the stop is the session
+// being restarted into a build deployed over it rather than the line going down.
+// The two read identically in the log and mean opposite things to whoever is
+// waiting: one is a session somebody has to start again, and the other is a
+// session that is already on its way back.
+func (w *watchSession) stop(reason string, restarting bool) {
+	if w.to == nil {
+		return
+	}
+	w.state, w.reason = runstate.WatchStopped, reason
+	w.record(SessionState{State: runstate.WatchStopped, Reason: reason, Restarting: restarting})
 }
 
 // resume records the session choosing work again after a wait. It leaves the
@@ -1251,16 +1282,17 @@ func (w *watchSession) resume(reason string) {
 		return
 	}
 	w.state, w.reason = runstate.WatchWatching, reason
-	w.record(runstate.WatchResumed, reason)
+	w.record(SessionState{State: runstate.WatchResumed, Reason: reason})
 }
 
 // record writes one transition. A transition that cannot be written costs the
 // session its visibility and not its work: what is reported is a session nobody
 // can see, which is worth saying out loud and is not worth stopping the work
 // for.
-func (w *watchSession) record(state runstate.WatchState, reason string) {
-	if err := w.to.Record(state, w.now(), reason); err != nil && w.schedule.SessionProblem == "" {
-		w.schedule.SessionProblem = fmt.Sprintf("the session could not record that it was %s, so what it is doing is not readable from anywhere but here: %v", state, err)
+func (w *watchSession) record(transition SessionState) {
+	transition.At = w.now()
+	if err := w.to.Record(transition); err != nil && w.schedule.SessionProblem == "" {
+		w.schedule.SessionProblem = fmt.Sprintf("the session could not record that it was %s, so what it is doing is not readable from anywhere but here: %v", transition.State, err)
 	}
 }
 

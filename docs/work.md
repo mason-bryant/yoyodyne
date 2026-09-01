@@ -349,7 +349,9 @@ process nobody restarted. It had already cost three review rounds against a bug
 that was dead before they started, and then a session found forty-three changes
 old. So when the `yoyo` it is running is written over — you rebuild it, you
 install it — the session stops choosing, waits out every run it already started,
-and restarts into what you deployed.
+and restarts into what you deployed. That stop is recorded as a restart rather
+than as an ending, so `yoyo status` and the Slack sink say a session is coming
+back on the new build instead of telling you to start one.
 
 Nothing outside the process could do that. Killing a session cancels the run it
 is carrying, so an external job may only bounce it while nothing is running; with

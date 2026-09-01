@@ -219,6 +219,53 @@ func TestEveryVoiceNamesTheSameWayOutOfAStaleResident(t *testing.T) {
 	}
 }
 
+// A session stopping to take up a build deployed over it is the one stop nobody
+// has to answer, and every voice has to say it that way.
+//
+// The recorded transition is an ordinary stop, so before this kind existed the
+// restart was posted as a session ending — every voice telling the reader the
+// line was down, and the whose-move clause telling them to start a session
+// again. That is a move they do not have, handed to them once per deploy, which
+// is the standing chore the self-restart was built to end rather than reproduce.
+func TestEveryVoiceSaysARedeployingSessionIsComingBack(t *testing.T) {
+	topic := Product()
+	move, ok := nextMoves[KindWatchRedeploying]
+	if !ok {
+		t.Fatalf("%s says nothing about whose move follows it", KindWatchRedeploying)
+	}
+	if !strings.HasPrefix(move, "nobody's") {
+		t.Fatalf("whose move follows %s is %q, want nobody waiting on anything", KindWatchRedeploying, move)
+	}
+	// Wording that leaves the reader holding a session that has ended. The stopped
+	// kind says all of it and should; this one must not.
+	ended := []string{
+		"until somebody starts it again",
+		"nothing more is chosen until a session is started",
+		"no more changes will arrive",
+		"the watch session ended",
+	}
+	for _, speaker := range speakers() {
+		message, err := Render(topic, speaker, fullyRecorded(KindWatchRedeploying))
+		if err != nil {
+			t.Fatalf("the %s says %s: %v", speaker.Key(), KindWatchRedeploying, err)
+		}
+		account := strings.TrimSuffix(message.Body, nextMoveLead+move)
+		if account == message.Body {
+			t.Fatalf("the %s says %s as %q, which does not end on whose move follows", speaker.Key(), KindWatchRedeploying, message.Body)
+		}
+		said := strings.ToLower(account)
+		if !strings.Contains(said, "restart") && !strings.Contains(said, "back on the build") {
+			t.Fatalf("the %s says %s as %q, which never says the session is coming back", speaker.Key(), KindWatchRedeploying, account)
+		}
+		for _, over := range ended {
+			if strings.Contains(said, over) {
+				t.Fatalf("the %s says %s as %q, which reads as a session that ended rather than one restarting",
+					speaker.Key(), KindWatchRedeploying, account)
+			}
+		}
+	}
+}
+
 func TestNoTwoPersonasSayTheSameEventTheSameWay(t *testing.T) {
 	// This is the whole point of a voice: a reader who has scrolled past the
 	// display name still knows who is talking.

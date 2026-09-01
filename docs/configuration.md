@@ -1735,7 +1735,9 @@ brake off entirely, leaving you as the only thing that holds intake.
 And the session says what it is doing, because an idle session and a dead one are
 otherwise the same silence. Each transition — watching, idle, braked, resumed,
 stopped — is recorded once, where `yoyo status` prints it and the Slack sink
-posts it. A session idling all night writes one line rather than one a minute.
+posts it. A session idling all night writes one line rather than one a minute. A
+stop says whether it is an ending or a restart, so the one below is posted as a
+session coming back rather than as a line waiting for you to start another.
 
 **Beyond the three: a watching session takes up a build deployed over it.** When
 the `yoyo` it is running is written over — you rebuild it, you install it — the

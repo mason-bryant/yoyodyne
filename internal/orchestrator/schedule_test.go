@@ -1474,6 +1474,14 @@ func TestAWatchingSessionStopsToTakeUpTheBuildDeployedOverIt(t *testing.T) {
 	if reason := sessions.said(runstate.WatchStopped); !strings.Contains(reason, "restarting into it") {
 		t.Fatalf("stopped reason = %q, want the restart said where somebody who is not at the terminal reads it", reason)
 	}
+	// And the stop is marked as a restart rather than left to read as an ending.
+	// Every surface takes whose move follows from that mark: a session that ended
+	// is waiting on somebody to start another, and this one is waiting on nothing,
+	// which is the whole difference between ending the operator's chore and
+	// reproducing it once per deploy.
+	if !sessions.restarted() {
+		t.Fatal("the session recorded its stop as an ending, which tells every reader to start a session that is already coming back")
+	}
 }
 
 // The guarantee the whole shape rests on: a run already going is never
@@ -1911,15 +1919,23 @@ type recordedSessions struct {
 type recordedTransition struct {
 	state  runstate.WatchState
 	reason string
+	// restarting is the session marking its last line as a restart rather than an
+	// ending, which is what every surface reads to tell the operator whether
+	// anything is waiting on them.
+	restarting bool
 }
 
-func (r *recordedSessions) Record(state runstate.WatchState, _ time.Time, reason string) error {
+func (r *recordedSessions) Record(transition SessionState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.failure != nil {
 		return r.failure
 	}
-	r.transitions = append(r.transitions, recordedTransition{state: state, reason: reason})
+	r.transitions = append(r.transitions, recordedTransition{
+		state:      transition.State,
+		reason:     transition.Reason,
+		restarting: transition.Restarting,
+	})
 	return nil
 }
 
@@ -1931,6 +1947,19 @@ func (r *recordedSessions) states() []runstate.WatchState {
 		states = append(states, transition.state)
 	}
 	return states
+}
+
+// restarted reports the session having marked a stop as a restart rather than as
+// an ending, which is what a reader takes whose move follows from.
+func (r *recordedSessions) restarted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, transition := range r.transitions {
+		if transition.restarting {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *recordedSessions) said(state runstate.WatchState) string {

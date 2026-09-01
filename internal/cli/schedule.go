@@ -25,7 +25,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
@@ -281,15 +280,18 @@ type watchSessionLog struct {
 	build string
 }
 
-func (w watchSessionLog) Record(state runstate.WatchState, at time.Time, reason string) error {
+func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 	return w.store.Record(runstate.WatchTransition{
 		SchemaVersion: runstate.WatchSchemaVersion,
 		ProductID:     w.productID,
 		SessionID:     w.sessionID,
-		State:         state,
-		At:            at,
-		Reason:        reason,
+		State:         transition.State,
+		At:            transition.At,
+		Reason:        transition.Reason,
 		Build:         w.build,
+		// A stop that is a restart says so, so the reader who is not at this
+		// terminal is told a session is coming back rather than told to start one.
+		Restarting: transition.Restarting,
 	})
 }
 
@@ -432,7 +434,9 @@ running is written over -- installed, rebuilt -- it stops choosing, waits out
 every run it already started, and restarts into what was deployed. A run in
 flight is never interrupted for it, so a fix you build reaches the session at the
 gap after the run that is going now rather than when somebody remembers to
-restart it. The queue is re-read from scratch on the way back in, exactly as it
+restart it. That stop is recorded as a restart rather than as an ending, so
+"yoyo status" and the Slack sink say a session is coming back rather than telling
+you to start one. The queue is re-read from scratch on the way back in, exactly as it
 is at every poll, and the bounds you gave the session cross the restart reduced
 to what is left of them -- --budget less what it has spent, --limit less what it
 has started -- so a deploy never hands a bounded session its cap back. A session
