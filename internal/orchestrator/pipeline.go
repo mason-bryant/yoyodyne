@@ -4220,12 +4220,13 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			reasked = true
 			continue
 		}
-		// A verdict that was actually reached is one round of this work item's
-		// life, and it is counted before it is acted on. Everything above this
-		// point produced no verdict at all — declined, unserved, killed, or
-		// unreadable — and none of those is a round the item spent.
+		// A verdict that was actually reached is recorded against the work item
+		// before it is acted on, and what it costs depends on which way it went.
+		// Everything above this point produced no verdict at all — declined,
+		// unserved, killed, or unreadable — and none of those is anything the item
+		// was answered about.
 		if err == nil {
-			if countErr := a.countReviewRound(ctx); countErr != nil {
+			if countErr := a.recordReviewVerdict(ctx, decision); countErr != nil {
 				return "", countErr
 			}
 		}
@@ -4233,34 +4234,67 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 	}
 }
 
-// countReviewRound records against the work item's durable triage counters that
-// one more reviewer verdict has been produced for it. The count spans every run
-// of the item, which is what makes it the figure a repair grant is truncated
+// recordReviewVerdict records against the work item's durable triage counters
+// that a reviewer has answered about this developer attempt, and charges the
+// item a round where the answer sent the work back. The count spans every run of
+// the item, which is what makes it the figure a repair grant is truncated
 // against: a run's own repair budget starts again at zero each time, so nothing
 // inside a run says what the item has already cost.
 //
-// The round is recorded under the developer attempt that produced the change, so
-// the same attempt judged twice is counted once. That is what keeps two cases
-// off the item's bill. A review re-asked for after an interrupted process
-// re-judges the attempt that was already counted. And a promotion that loses its
-// race replays the same work onto where the target went and obtains a fresh
-// verdict on it, which is the reviewer judging the same developer attempt on
-// moved ground — charging the item for that would charge it for losing a race it
-// did not cause.
+// A verdict that approved the change is recorded and charges nothing. The cap
+// this feeds exists to stop an item buying the same argument another round, and
+// an approval is the end of that argument rather than another turn of it: what
+// happens to an approved change afterwards — a promotion that lost its race, a
+// merge the forge dropped — is not the change disputing with its reviewer, and
+// charging the item for it walks the item toward its cap on its own success.
+// That is not hypothetical. An item whose last permitted round was an approval,
+// and whose promotion then conflicted, arrived at triage with a decision every
+// recorded path refused; it took an operator override and a fresh work item to
+// move.
 //
-// The round is charged under this process as well as under the attempt, because
+// It unbounds nothing, which is what makes the exclusion safe rather than
+// generous, and what holds that is two budgets rather than the rounds. An
+// approval sends the change to promotion rather than back to the developer, so
+// the only thing that asks for another verdict inside one run is a promotion
+// that lost its race and replayed — which spends an integration retry, and
+// execution.integration_retries_before_reconciliation bounds those. A run's
+// uncharged approvals are therefore one plus that budget, not one: the replay
+// obtains a fresh verdict on the same change, and it can approve again. How many
+// runs an item gets is bounded in turn by budgets of its own — one repair grant
+// and one re-run per item — each refused by a counter this one cannot stand in
+// for.
+//
+// An approval is recorded rather than passed over, and that is load-bearing. The
+// verdict is recorded under the developer attempt that produced the change, so
+// an attempt answered about twice is charged at most once, and that is what
+// keeps two cases off the item's bill. A review re-asked for after an
+// interrupted process re-judges an attempt already answered about. And a
+// promotion that loses its race replays the same work onto where the target went
+// and obtains a fresh verdict on it — which is the reviewer judging the same
+// developer attempt on moved ground, and can come back as a repair. An approval
+// nothing recorded would leave that attempt looking unjudged and charge the item
+// for losing a race it did not cause.
+//
+// A round is charged under this process as well as under the attempt, because
 // the attempt does not say which process spent it and only the process that
 // spent one may give it back. The two keys answer different questions: a run
-// re-entered at the review re-judges the attempt already at the head and counts
-// nothing, and the charger is what stops the refusal that follows crediting this
-// process with the round the process before it bought.
-func (a *activeRun) countReviewRound(ctx context.Context) error {
+// re-entered at the review re-judges an attempt the record already holds and
+// charges nothing, and the charger is what stops the refusal that follows
+// crediting this process with the round the process before it bought.
+func (a *activeRun) recordReviewVerdict(ctx context.Context, decision review.Decision) error {
 	attempt := runstate.RoundKey(a.state.RunID, a.state.RepairAttempts)
+	counters := a.pipeline.Store.Triage()
+	if decision == review.DecisionApprove {
+		if _, err := counters.RecordApprovedAttempt(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
+			return fmt.Errorf("record the verdict that approved attempt %s: %w", attempt, err)
+		}
+		return nil
+	}
 	charger, err := a.chargingProcess()
 	if err != nil {
 		return fmt.Errorf("identify the process charging the review round attempt %s produced: %w", attempt, err)
 	}
-	if _, err := a.pipeline.Store.Triage().RecordReviewRound(ctx, a.state.WorkItemID, attempt, charger, a.pipeline.clock().Now()); err != nil {
+	if _, err := counters.RecordReviewRound(ctx, a.state.WorkItemID, attempt, charger, a.pipeline.clock().Now()); err != nil {
 		return fmt.Errorf("count the review round attempt %s produced: %w", attempt, err)
 	}
 	return nil
@@ -4372,14 +4406,19 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if result.Decision == review.DecisionApprove || result.Decision == review.DecisionRepair {
 		a.state.ReviewDecision = string(result.Decision)
 		a.outcome.ReviewDecision = result.Decision
-		// One round with a reviewer is a verdict, whichever way it went, and the
-		// count of them is what triage measures a work item against. It is counted
-		// here rather than derived from the repair attempts because the two are not
-		// the same number: a refused path and a failing check are handed back
-		// without anybody reviewing anything, and an approved change was reviewed
-		// without a repair at all. Unlike the verdict beside it, it is never
-		// cleared: what the next attempt discards is the judgement, not the fact
-		// that this work has been round once more.
+		// One round with a reviewer is a verdict, whichever way it went, and this
+		// is how many of them this run has had. It is counted here rather than
+		// derived from the repair attempts because the two are not the same number:
+		// a refused path and a failing check are handed back without anybody
+		// reviewing anything, and an approved change was reviewed without a repair
+		// at all. Unlike the verdict beside it, it is never cleared: what the next
+		// attempt discards is the judgement, not the fact that this work has been
+		// round once more.
+		//
+		// It is this run's own figure and not the one the triage caps are measured
+		// against. That one is the item's durable counter, which spans every run
+		// and excludes the verdicts that sent nothing back — see
+		// recordReviewVerdict.
 		a.state.ReviewRounds++
 	}
 	if reviewErr != nil {

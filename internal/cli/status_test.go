@@ -1002,6 +1002,20 @@ func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
 	if strings.Contains(rendered, "under the cap of 4") {
 		t.Fatalf("rendered = %q, want no under-cap claim at the boundary", rendered)
 	}
+	// And the way out, beside the dead end. An operator told only that nothing
+	// remains is the operator who answers the escalation in the item's notes,
+	// where no guard reads it.
+	if !strings.Contains(rendered,
+		"`yoyo triage override --budget \"review round\" --cap <n> --by \"<you>\" --reason \"<why>\" yoyodyne-ifd.90` is the only thing that crosses it") {
+		t.Fatalf("rendered = %q, want the command that crosses the cap named beside it", rendered)
+	}
+	// It is said where it applies and nowhere else: an item with rounds to spare
+	// has no cap to cross.
+	var under bytes.Buffer
+	printItemTriage(&under, runstate.TriageCounters{WorkItemID: "yoyodyne-ifd.90", ReviewRounds: 3}, runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
+	if strings.Contains(under.String(), "yoyo triage override") {
+		t.Fatalf("rendered = %q, want no override advice on an item that is not at its cap", under.String())
+	}
 }
 
 // The four lines are a contract rather than a layout: all four print, every

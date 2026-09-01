@@ -937,9 +937,13 @@ A repair and a re-run are each once per item — a second of
 either is an escalation rather than a larger budget — and past the
 [review-round cap](configuration.md#what-one-work-item-has-been-given) even
 the first is refused. What you can do about that is
-[record an override of the cap](configuration.md#crossing-a-cap-the-operator-decides-to-cross),
+[`yoyo triage override`](configuration.md#crossing-a-cap-the-operator-decides-to-cross),
 in your name and with your reason, after which asking for the same decision again
-records it: the caps refuse the machine and not your ruling on it. A merge re-arm is bounded per item by the
+records it: the caps refuse the machine and not your ruling on it. **The command
+is the only thing that crosses a cap**, and the refusal prints it with the budget
+and the item already filled in, because naming the remedy without naming the verb
+sent two of these overrides into the item's notes instead — where no guard reads
+them, and where the resubmitted decision met the identical refusal. A merge re-arm is bounded per item by the
 integration-retry budget rather than the rounds, because it buys no round at
 all; the design's stricter rule — once per publication — arrives with the
 re-arm action itself, whose counter will be keyed to the publication it

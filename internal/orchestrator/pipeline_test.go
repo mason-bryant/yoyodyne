@@ -4969,15 +4969,19 @@ func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
 	if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 1 {
 		t.Fatalf("developer invocations = %d, want 1", len(developers))
 	}
-	// And so the second review is not a round the item spent. It judged the same
-	// developer attempt on moved ground, and charging the item for it would charge
-	// it for losing a race it did not cause.
+	// And so neither review is a round the item spent. Both approved, and an
+	// approval is the end of the argument the cap bounds rather than another turn
+	// of it; the second one also judged the same developer attempt on moved
+	// ground, which would charge the item for losing a race it did not cause. The
+	// case where those two reasons come apart — a replay whose fresh verdict sends
+	// the work back — is next door, in
+	// TestPipelineChargesNoRoundForAReplayedChangeSentBack.
 	counters, err := store.Triage().Counters(tracker.item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
-	if counters.ReviewRounds != 1 {
-		t.Fatalf("review rounds = %d, want 1: the replay's re-review is not a round", counters.ReviewRounds)
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds = %d, want none: two approvals and a replay cost the item nothing", counters.ReviewRounds)
 	}
 	if outcome.RepairAttempts != 0 {
 		t.Fatalf("repair attempts = %d, want the retry to spend none", outcome.RepairAttempts)
@@ -4986,11 +4990,89 @@ func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	// The run's own count is the other half of that: two verdicts were reached
+	// here, and the item was charged for neither, so the zero above is an
+	// exclusion rather than a review that never happened.
+	if state.ReviewRounds != 2 {
+		t.Fatalf("run review rounds = %d, want the two verdicts this run reached", state.ReviewRounds)
+	}
 	if state.IntegrationRetries != 1 || state.BaseCommit != moved {
 		t.Fatalf("durable retry evidence = %#v", state)
 	}
 	if !strings.Contains(tracker.notes, "Integration retries: 1") {
 		t.Fatalf("notes are missing the retry evidence: %q", tracker.notes)
+	}
+}
+
+// The replayed change is judged afresh, and the fresh verdict can disagree with
+// the one that authorized the promotion: the ground moved, and what was right
+// against the old base can be wrong against the new one. That verdict sends the
+// work back, and it is still not a round the item spent — it is the same
+// developer attempt judged twice, and the second judgement is the race's doing.
+//
+// This is the case an approval that went unrecorded would break, and it is why
+// one is recorded. The deduplication is what excludes the replay, and it has
+// nothing to work from unless the approval that preceded the promotion named the
+// attempt it approved.
+func TestPipelineChargesNoRoundForAReplayedChangeSentBack(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	developed := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return err
+		}
+		// The target moves once, after this run's worktree was cut from it, which
+		// is the window a losing promotion opens. The repair that follows the
+		// replay's verdict must not open a second one.
+		developed++
+		if developed > 1 {
+			return nil
+		}
+		writePipelineFile(t, repository, "elsewhere.txt", "somebody else's work\n")
+		runPipelineGit(t, repository, "add", "elsewhere.txt")
+		runPipelineGit(t, repository, "commit", "-m", "concurrent target change")
+		return nil
+	}, approveVerdict, repairVerdict, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("Run() outcome = %#v, want the repaired replay integrated", outcome)
+	}
+	// Three verdicts: the approval that authorized the promotion, the replay's
+	// repair, and the approval of what the repair produced.
+	if reviews := provider.requestsForRole(domain.RoleReviewer); len(reviews) != 3 {
+		t.Fatalf("reviewer invocations = %d, want the approval, the replay's repair, and the approval after it", len(reviews))
+	}
+	if outcome.IntegrationRetries != 1 || outcome.RepairAttempts != 1 {
+		t.Fatalf("outcome = %#v, want one replay and the one repair its verdict asked for", outcome)
+	}
+
+	// And the item was charged for none of them. The two approvals are not rounds,
+	// and the repair verdict in between judged the attempt the first approval had
+	// already been obtained on — so it is the replay exclusion rather than the
+	// approval exclusion doing the work here, which is the whole point.
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds = %d, want none: the repair verdict judged a replayed attempt the item had already been answered about", counters.ReviewRounds)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The run's own count is what says the zero above is an exclusion rather than
+	// a review that never happened.
+	if state.ReviewRounds != 3 {
+		t.Fatalf("run review rounds = %d, want the three verdicts this run reached", state.ReviewRounds)
 	}
 }
 
