@@ -2930,10 +2930,12 @@ func roleBackend(develop func(backend.RunRequest) error, verdicts ...string) *fa
 }
 
 // refusingStore refuses every state that carries review findings, which is the
-// shape a validation refusal has: one field the durable schema will not take,
-// discovered at the moment the run tries to record what it decided. What stays
-// on disk is whichever earlier state validated, and for a run being reviewed that
-// is the snapshot taken with the evidence deliberately cleared.
+// shape a schema refusal has: one field the durable schema will not take,
+// discovered at the moment the run tries to record what it decided. It refuses
+// the way the real store does — with the classified refusal, not a store that
+// happened to be unavailable — because the two are acted on differently. What
+// stays on disk is whichever earlier state validated, and for a run being
+// reviewed that is the snapshot taken with the evidence deliberately cleared.
 type refusingStore struct {
 	StateStore
 	refusals int
@@ -2942,7 +2944,8 @@ type refusingStore struct {
 func (s *refusingStore) Save(state runstate.State) error {
 	if len(state.ReviewFindingDetails) > 0 {
 		s.refusals++
-		return errors.New(`invalid run state: review_finding_details[0]: severity "advisory" must be "blocker", "major", or "minor"`)
+		return runstate.RefusedStateError{Problem: errors.New(
+			`invalid run state: review_finding_details[0]: severity "advisory" must be "blocker", "major", or "minor"`)}
 	}
 	return s.StateStore.Save(state)
 }

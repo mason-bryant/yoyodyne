@@ -192,6 +192,15 @@ func TestARefusedSaveNamesTheFieldAndLeavesTheRecordAsItWas(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("Save() refused state error = %v, want %q named", err, want)
 	}
+	// The refusal is classified as well as worded. A caller has to be able to tell
+	// it from a store that could not be written, because only one of the two is
+	// still true the next time anything tries: an unavailable store leaves an
+	// interrupted run something comes back for, and this leaves a record no later
+	// write ever catches up with.
+	var refused RefusedStateError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Save() error = %v, want a refusal a caller can tell from an unavailable store", err)
+	}
 	loaded, err := store.Load(state.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)

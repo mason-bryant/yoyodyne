@@ -4016,8 +4016,15 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	a.state.Failure = message
 	if saveErr := p.Store.Save(a.state); saveErr != nil {
 		cause = errors.Join(cause, fmt.Errorf("save failed run state: %w", saveErr))
-		if endingErr := a.recordEndingAfterRefusedSave(status, completedAt, saveErr); endingErr != nil {
-			cause = errors.Join(cause, endingErr)
+		// Only a state the store refuses is salvaged, and never a store that could
+		// not be written. The second leaves an interrupted run behind, which is what
+		// it is and what reconciliation exists to settle; ending it here would take
+		// a resumable run away from the process that comes back for it.
+		var refused runstate.RefusedStateError
+		if errors.As(saveErr, &refused) {
+			if endingErr := a.recordEndingAfterRefusedSave(status, completedAt, refused); endingErr != nil {
+				cause = errors.Join(cause, endingErr)
+			}
 		}
 	}
 	a.outcome.Status = status
@@ -4058,7 +4065,7 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 const maxRefusedRecordFailureBytes = 1024
 
 // recordEndingAfterRefusedSave writes the smallest true record of a run whose
-// own terminal state the store would not take.
+// own terminal state the durable schema refused.
 //
 // A refused save leaves on disk whichever earlier state validated, and for a run
 // ending here that is a snapshot of a run still in flight. Everything that reads
@@ -4068,11 +4075,15 @@ const maxRefusedRecordFailureBytes = 1024
 // a run nothing ever judged. The run has already failed; what must not also
 // happen is that it reads as one nothing ever ended.
 //
+// This is only for the refusal that no later write closes. A store that could not
+// be written is left alone: the interrupted run it leaves is a true record of a
+// process that stopped, and something comes back for it.
+//
 // So the ending is carried onto the record that is actually there rather than
 // onto the one the store refused, and the failure names what cost it. The
 // evidence the refused record held is lost from the record, not from the run:
 // the work item carries the blocker and the docket entry carries the findings,
-// both written from this process's own state a few lines below.
+// and the caller writes both from this process's own state.
 //
 // Refused again, there is nothing further to try. The run reports both refusals,
 // and what is left on disk is an interrupted run for reconciliation to settle —
@@ -4083,8 +4094,8 @@ func (a *activeRun) recordEndingAfterRefusedSave(status runstate.Status, complet
 	if err != nil {
 		return fmt.Errorf("load the run state the refused save left behind: %w", err)
 	}
-	// The five resume markers are cleared for the reason the refused record
-	// cleared them: each is an instruction to continue a run that is now over.
+	// The resume markers are cleared for the reason the refused record cleared
+	// them: each is an instruction to continue a run that is now over.
 	durable.UsageLimitResetsAt = nil
 	durable.PauseCause = ""
 	durable.ProviderStop = ""

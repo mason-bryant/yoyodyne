@@ -667,11 +667,36 @@ func encodeEvent(event execution.Event) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+// RefusedStateError is a run state this store will not take: one the durable
+// schema rejects, or one belonging to another product.
+//
+// It is distinguished from every other reason a save can fail because it is the
+// only one that will still be true next time. A store that was unavailable is
+// retried by whoever resumes the run, and what is on disk meanwhile is an
+// interrupted run, which is what it is. A state the schema refuses is refused for
+// as long as the process holds it: no later write closes the gap, so the record
+// stays behind what the process believes and every reader after that process
+// exits believes the record. A caller that gets this back has to end its run over
+// what is actually stored rather than leave it looking resumable.
+//
+// It carries the same words the refusal itself does, because the field it names
+// is the whole of what a caller has to act on.
+type RefusedStateError struct {
+	Problem error
+}
+
+func (e RefusedStateError) Error() string { return e.Problem.Error() }
+
+func (e RefusedStateError) Unwrap() error { return e.Problem }
+
 func (s *Store) validateState(state State) error {
 	if state.ProductID != s.productID {
-		return fmt.Errorf("run product %q does not match store product %q", state.ProductID, s.productID)
+		return RefusedStateError{Problem: fmt.Errorf("run product %q does not match store product %q", state.ProductID, s.productID)}
 	}
-	return state.Validate()
+	if err := state.Validate(); err != nil {
+		return RefusedStateError{Problem: err}
+	}
+	return nil
 }
 
 func (s *Store) statePath(runID string) (string, error) {
