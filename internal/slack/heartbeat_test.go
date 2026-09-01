@@ -241,7 +241,8 @@ func TestAStaleResidentSaysSoWhileTheRoundsAreBeingSpent(t *testing.T) {
 }
 
 // What it says is what somebody has to act on: how far behind the session is,
-// which build it is on, and that a restart is the thing that fixes it.
+// which build it is on, and what closes the gap — installing the build, which
+// the session then takes up itself rather than waiting to be restarted.
 func TestTheResidentLineNamesTheCountAndTheWayOutOfIt(t *testing.T) {
 	t.Parallel()
 
@@ -253,7 +254,7 @@ func TestTheResidentLineNamesTheCountAndTheWayOutOfIt(t *testing.T) {
 	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindResidentStale)
 	harness.now = harness.now.Add(time.Hour)
 	said := harness.say(t, cursors, notify.KindResidentStale)
-	for _, fact := range []string{"7 harness changes", staleResidentBuild[:12], "Restarting it"} {
+	for _, fact := range []string{"7 harness changes", staleResidentBuild[:12], "restarts itself", "installing the build"} {
 		if !strings.Contains(said.Body, fact) {
 			t.Fatalf("body %q does not carry %q", said.Body, fact)
 		}

@@ -195,7 +195,7 @@ var harnessVoice = voice{
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
 		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.\n\n{standing}",
-		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. Restarting it deploys them.",
+		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
 		KindCatchUpDigest:       "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
 	},
 }
@@ -246,7 +246,7 @@ var developerVoice = voice{
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
 		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.\n\n{standing}",
-		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until somebody restarts it, and I'd spend the round finding that out.",
+		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
 		KindCatchUpDigest:       "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
 	},
 }
@@ -449,7 +449,7 @@ var architectVoice = voice{
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
 		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} the tracker calls ready behind it. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
-		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap, said out loud until restart has an owner.",
+		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
 		KindCatchUpDigest:       "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
 	},
 }
@@ -560,11 +560,11 @@ var nextMoves = map[Kind]string{
 	KindWatchResumed:   "the harness's — work is being chosen again.",
 	KindWatchStopped:   "the operator's — nothing more is chosen until a session is started again.",
 	KindLineWaiting:    "the operator's — this stands until somebody clears what stopped it.",
-	// Nothing but a restart clears this, and nothing in the harness performs one:
-	// a session cannot replace the binary it is executing, and until the
-	// supervision design gives restart an owner the only thing that can is a
-	// person.
-	KindResidentStale: "the operator's — the session runs what it was started with until somebody restarts it.",
+	// The restart is no longer anybody's: a watch session takes up a build
+	// installed over it by itself, between the runs it is carrying and without
+	// interrupting one. What is left is the install, which is why this names it
+	// rather than naming a restart nobody has to make.
+	KindResidentStale: "the operator's — installing the build is the whole of it; the session takes it up itself between runs.",
 	KindCatchUpDigest: "nobody's — the record holds all of it, and the thread carries on from here.",
 }
 

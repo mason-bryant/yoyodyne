@@ -110,6 +110,11 @@ func TestWorkUsageSaysWhatWatchingIsAndThatDrainingIsTheDefault(t *testing.T) {
 		// documented: an operator who reads "caps what one session spends" and
 		// meets a stop instead is reading the wrong promise.
 		"--budget fails closed",
+		// A session that restarts itself is a process ending and beginning under
+		// somebody's terminal, which is exactly the behaviour an operator should
+		// not have to discover by watching it happen.
+		"also takes up a build deployed over it",
+		"restarts into what was deployed",
 	} {
 		if !strings.Contains(usage.String(), want) {
 			t.Fatalf("work usage = %q, want it to say %q", usage.String(), want)

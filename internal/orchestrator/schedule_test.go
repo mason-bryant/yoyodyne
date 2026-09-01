@@ -1435,6 +1435,155 @@ func TestWatchingRefusesAPullWithNoInterval(t *testing.T) {
 	}
 }
 
+// --- redeploying ---------------------------------------------------------------
+
+// The whole of what a session redeploying itself is: a build lands over the one
+// it is executing, and it stops choosing and stops, so the caller can restart it
+// into what was deployed. The item still queued proves it stopped choosing
+// rather than merely finishing.
+func TestAWatchingSessionStopsToTakeUpTheBuildDeployedOverIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	sessions := &recordedSessions{}
+	deployment := &deployedOver{}
+	// The build lands while the first item is running, which is the ordinary case:
+	// nobody deploys into an idle machine on purpose.
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if !schedule.Redeploying() || schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the session stopped to be restarted into what was deployed", schedule.Stopped)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-one" {
+		t.Fatalf("started = %#v, want the session to have claimed nothing after the deploy landed", schedule.Started)
+	}
+	// Nothing waited: a session with a build to take up does not spend a poll
+	// interval first, because every interval it waits is an interval the machine
+	// dispatches from the build somebody replaced.
+	if schedule.Polls != 0 {
+		t.Fatalf("polls = %d, want a session that stopped rather than waited", schedule.Polls)
+	}
+	if reason := sessions.said(runstate.WatchStopped); !strings.Contains(reason, "restarting into it") {
+		t.Fatalf("stopped reason = %q, want the restart said where somebody who is not at the terminal reads it", reason)
+	}
+}
+
+// The guarantee the whole shape rests on: a run already going is never
+// interrupted for a redeploy. The session stops claiming immediately and waits
+// out what it started, which is what makes the window an external restart can
+// never find.
+func TestARedeployWaitsOutTheRunsAlreadyGoing(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
+	harness.capacity = 2
+	// Both runs are required to be inside at once, so the deploy below lands with
+	// two live runs rather than with one that has already finished.
+	harness.developersMeet(2)
+	deployment := &deployedOver{}
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if harness.rendezvousFailure != nil {
+		t.Fatalf("the deploy never landed on two live runs: %v", harness.rendezvousFailure)
+	}
+	if schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the session stopped to be restarted", schedule.Stopped)
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %#v, want the two runs already going and nothing claimed after them", schedule.Started)
+	}
+	for _, started := range schedule.Started {
+		if started.Failure != "" || started.Outcome.Status != runstate.StatusSucceeded {
+			t.Fatalf("%s = %#v, want a live run carried to its own end rather than cut off", started.WorkItemID, started)
+		}
+	}
+}
+
+// A session that cannot tell whether it has been deployed over goes on working.
+// Stopping the line because a file could not be read would be a worse failure
+// than the staleness this guards against, and the reading is tried again at
+// every pull.
+func TestASessionThatCannotReadItsOwnBinaryKeepsChoosingWork(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+	deployment := &deployedOver{failure: errors.New("no such file or directory")}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Redeploying() {
+		t.Fatalf("schedule = %#v, want the work done and no restart claimed", schedule.Started)
+	}
+	if !strings.Contains(schedule.RedeployProblem, "no such file or directory") {
+		t.Fatalf("redeploy problem = %q, want the reading that failed reported", schedule.RedeployProblem)
+	}
+}
+
+// A drain is a command somebody is waiting on the return of, so it returns. A
+// pass that restarted itself would run the whole pass again from the top, which
+// is the opposite of what was asked for.
+func TestADrainNeverRedeploysItself(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	deployment := &deployedOver{}
+	deployment.deploy()
+
+	schedule, err := (Scheduler{Open: harness.open, Deployment: deployment}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleDrained {
+		t.Fatalf("stopped = %q, want a drain that ran its pass and returned", schedule.Stopped)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want the queue drained", schedule.Started)
+	}
+}
+
+// deployedOver is the session's own binary: unchanged until a test deploys over
+// it, and unreadable where a test says the reading itself fails.
+type deployedOver struct {
+	mu       sync.Mutex
+	replaced bool
+	failure  error
+}
+
+func (d *deployedOver) deploy() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.replaced = true
+}
+
+func (d *deployedOver) Replaced() (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failure != nil {
+		return false, d.failure
+	}
+	return d.replaced, nil
+}
+
 func sameStates(got, want []runstate.WatchState) bool {
 	if len(got) != len(want) {
 		return false

@@ -1735,6 +1735,15 @@ otherwise the same silence. Each transition — watching, idle, braked, resumed,
 stopped — is recorded once, where `yoyo status` prints it and the Slack sink
 posts it. A session idling all night writes one line rather than one a minute.
 
+**Beyond the three: a watching session takes up a build deployed over it.** When
+the `yoyo` it is running is written over — you rebuild it, you install it — the
+session stops choosing, waits out every run it already started, and restarts into
+what you deployed. A run in flight is never interrupted for it, and nothing is configured:
+a deploy is the whole of the instruction. What that costs is one restart per
+deploy, and the queue is re-read from scratch on the way back in exactly as it is
+at every poll. There is nothing here for a drain, which is a command you are
+waiting on the return of.
+
 **`--budget <usd>`** caps what one session spends, from the same recorded run
 evidence `yoyo cost` prices items from. It is checked between pulls, never during
 a run: the money a running run has spent is already spent, and what stopping it

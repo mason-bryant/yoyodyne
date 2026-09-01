@@ -29,6 +29,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/redeploy"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
 )
@@ -89,6 +90,9 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// than starting a session nothing can see: an unattended session nobody can
 	// tell is alive is the state the whole guard exists to prevent, and it is
 	// better refused at the start than discovered in the morning.
+	// binary is what this session is executing, and it is only ever resolved for a
+	// watch.
+	var binary *redeploy.Binary
 	if *watch {
 		sessions, err := openWatchSession(*configPath)
 		if err != nil {
@@ -96,9 +100,36 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			return 1
 		}
 		scheduler.Sessions = sessions
+		// Which file this process was started from, read before anything runs. A
+		// watching session outlives the deploys that land behind it, and this is
+		// what lets it take one up between runs rather than dispatching from a
+		// build the harness moved past until somebody restarts it. Failing to
+		// resolve it fails the command for the reason the log above does: a session
+		// that cannot take up a deploy is the standing staleness this exists to
+		// end, and it is better refused at the start than discovered after the
+		// first fix has landed behind it.
+		binary, err = redeploy.Running()
+		if err != nil {
+			fmt.Fprintf(stderr, "work failed: %v\n", err)
+			return 1
+		}
+		scheduler.Deployment = binary
 	}
 	schedule, err := scheduler.Schedule(ctx)
-	return reportSchedule(stdout, stderr, *jsonOutput, schedule, err)
+	code := reportSchedule(stdout, stderr, *jsonOutput, schedule, err)
+	if !schedule.Redeploying() {
+		return code
+	}
+	// Every run this session started has already ended, and the queue has been
+	// left alone since the deploy landed. What is left is to become the build that
+	// was deployed: the account of the session that just ended has been printed,
+	// and nothing returns from this when it works — the process goes on as the new
+	// build, watching the same queue with the same arguments.
+	if err := binary.Take(); err != nil {
+		fmt.Fprintf(stderr, "work stopped to restart into the build deployed over it, and could not: %v\n", err)
+		return 1
+	}
+	return code
 }
 
 // openWatchSession names one session of watching and gives it somewhere durable
@@ -286,6 +317,14 @@ lifts it.
 And what the session is doing -- watching, idle, braked, resumed, stopped -- is
 recorded where "yoyo status" and the Slack sink read it, because an idle session
 and a dead one are otherwise the same silence.
+
+A watching session also takes up a build deployed over it. When the yoyo it is
+running is written over -- installed, rebuilt -- it stops choosing, waits out
+every run it already started, and restarts into what was deployed. A run in
+flight is never interrupted for it, so a fix you build reaches the session at the
+gap after the run that is going now rather than when somebody remembers to
+restart it. What that costs is one restart per deploy and nothing else: the queue
+is re-read from scratch on the way back in, exactly as it is at every poll.
 
 --budget fails closed. A pass with no way to price itself is refused before
 anything starts, and a session that meets a run whose recorded evidence will not

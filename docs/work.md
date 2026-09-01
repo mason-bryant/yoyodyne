@@ -342,6 +342,27 @@ doing — watching, idle, braked, resumed, stopped — where `yoyo status` and t
 Slack sink read it, because an idle session and a dead one are otherwise the same
 silence.
 
+**A watching session takes up a build deployed over it.** A session runs the
+binary it was started from, so every fix that lands behind it is a fix the work
+it dispatches is spent without — which reads as agents failing rather than as a
+process nobody restarted. It had already cost three review rounds against a bug
+that was dead before they started, and then a session found forty-three changes
+old. So when the `yoyo` it is running is written over — you rebuild it, you
+install it — the session stops choosing, waits out every run it already started,
+and restarts into what you deployed.
+
+Nothing outside the process could do that. Killing a session cancels the run it
+is carrying, so an external job may only bounce it while nothing is running; with
+two developer slots and a deep queue the next run starts the moment one settles,
+and a poll at any interval never lands in that window. The session declining to
+claim anything more is what makes the window exist, which is why the session is
+the only thing that can close this. A run in flight is never interrupted for it,
+and the queue is re-read from scratch on the way back in exactly as it is at
+every poll, so what a deploy costs the line is one restart and no work.
+
+A drain never does this. It is a command you are waiting on the return of, and
+restarting it would run the pass again from the top.
+
 `--budget <usd>` caps what one session spends, and fails closed: a pass that
 cannot price itself is refused before it starts, and a session that meets a run
 whose evidence will not price stops and names it rather than counting it as free.
