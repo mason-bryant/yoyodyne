@@ -96,7 +96,9 @@ yoyo chat
 
 [Getting started](#getting-started) is the same three steps with what each one
 is for and what it needs; [Install](#install) has the release download and the
-from-source routes, for anyone who would rather not have Go.
+from-source routes, for anyone who would rather not have Go. Running against
+more than one Claude subscription is a two-step configuration:
+[the multi-account quick start](docs/multi-account-quickstart.md).
 
 What exists today is bounded, and the bounds are worth knowing before you start
 rather than after:
