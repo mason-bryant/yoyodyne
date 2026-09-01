@@ -1522,6 +1522,57 @@ func TestWatchingStopsOnceTheHarnessGoesOnBeingUnreadable(t *testing.T) {
 	if said := sessions.said(runstate.WatchStopped); !strings.Contains(said, "5m0s") {
 		t.Fatalf("the session stopped saying %q, want how long it tried", said)
 	}
+	if !strings.Contains(schedule.ReadFailure, "5m0s") {
+		t.Fatalf("read failure = %q, want the reading the session stopped on carried apart from the ones it rode through", schedule.ReadFailure)
+	}
+}
+
+// A session stops as unreadable for a second reason — a pull that assembles and
+// is unusable — and what it says about that stop is about that stop. A contended
+// reading it rode through earlier is a different fact about a different moment,
+// and reporting it as why the session ended would put a store outage in front of
+// an operator whose capacity is misconfigured.
+func TestAReadingRiddenThroughIsNotWhyASessionStoppedForSomethingElse(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	sessions := &recordedSessions{}
+	harness.failList = func(_ *scheduleHarness, lists int) error {
+		if lists == 1 {
+			return errors.New(contendedStore)
+		}
+		return nil
+	}
+	// The configuration is edited to something no pass can be made from between
+	// the reading that failed and the one that would have succeeded.
+	harness.onPull = func(h *scheduleHarness, pulls int) {
+		if pulls == 1 {
+			h.mu.Lock()
+			h.capacity = 0
+			h.mu.Unlock()
+		}
+	}
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 100 }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "developer capacity is 0") {
+		t.Fatalf("Schedule() error = %v, want the unusable pull reported", err)
+	}
+	if schedule.Stopped != ScheduleUnreadable || schedule.ReadFailure != "" {
+		t.Fatalf("schedule = stopped %q on read failure %q, want a stop that was not a reading that failed", schedule.Stopped, schedule.ReadFailure)
+	}
+	if schedule.ReadsRetried != 1 || !strings.Contains(schedule.ReadProblem, contendedStore) {
+		t.Fatalf("schedule = %d retried, problem %q, want the earlier reading still accounted for", schedule.ReadsRetried, schedule.ReadProblem)
+	}
+	// The line the session ends on is the whole of what a reader away from this
+	// terminal gets, so a contended reading from before must not be in it.
+	if said := sessions.said(runstate.WatchStopped); said != ScheduleUnreadable {
+		t.Fatalf("the session stopped saying %q, want %q and nothing about a reading it rode through", said, ScheduleUnreadable)
+	}
+	if rendered := schedule.Render(); !strings.Contains(rendered, "the last of them: ") || !strings.Contains(rendered, contendedStore) {
+		t.Fatalf("rendered = %q, want the reading it rode through still named", rendered)
+	}
 }
 
 // A drain does not wait any of that out. It is a command somebody is waiting on

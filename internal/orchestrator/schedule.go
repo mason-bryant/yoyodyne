@@ -550,14 +550,23 @@ type Schedule struct {
 	// working because nobody could be told it was working.
 	SessionProblem string `json:"session_problem,omitempty"`
 	// ReadsRetried counts the readings of the harness that failed and were made
-	// again rather than stopping the session, and ReadProblem names the last
-	// reading that failed — the one that was ridden through, or the one the
-	// session stopped on. Both are for the reader afterwards: a reading that
-	// succeeded on the second attempt leaves nothing at all behind, so a session
-	// that rode out a store outage overnight would otherwise be a session nobody
-	// could tell had met one.
+	// again rather than stopping the session, and ReadProblem names the last of
+	// them. Both are for the reader afterwards: a reading that succeeded on the
+	// second attempt leaves nothing at all behind, so a session that rode out a
+	// store outage overnight would otherwise be a session nobody could tell had
+	// met one.
 	ReadsRetried int    `json:"reads_retried,omitempty"`
 	ReadProblem  string `json:"read_problem,omitempty"`
+	// ReadFailure is the reading the session finally stopped on, and how long the
+	// harness had gone on being unreadable when it did.
+	//
+	// It is a field of its own rather than the last value of ReadProblem because
+	// the two are facts about different moments, and only this one is why the pass
+	// ended. A pass stops as unreadable for a second reason — a pull that
+	// assembles and is unusable — and a session that had ridden through a
+	// contended reading an hour earlier would otherwise report that reading as
+	// what stopped it, in the log this exists to make worth trusting.
+	ReadFailure string `json:"read_failure,omitempty"`
 }
 
 // Schedule pulls ready work and runs it, up to the capacity the configuration
@@ -721,10 +730,10 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		retries.attempts++
 		if tried := now.Sub(retries.since); tried >= readRetryWindow {
 			schedule.Stopped = ScheduleUnreadable
-			schedule.ReadProblem = fmt.Sprintf(
+			schedule.ReadFailure = fmt.Sprintf(
 				"the harness went on being unreadable for %s across %d reading(s), which is longer than a store somebody else is writing to takes to come back, so the session stopped rather than polling something it cannot read: %v",
 				tried.Round(time.Second), retries.attempts, err)
-			failure = errors.New(schedule.ReadProblem)
+			failure = errors.New(schedule.ReadFailure)
 			return false
 		}
 		schedule.ReadsRetried++
@@ -1093,8 +1102,8 @@ func stopping(schedule Schedule) string {
 	switch {
 	case schedule.Stopped == ScheduleSpendUnreadable && schedule.SpendProblem != "":
 		return schedule.Stopped + ": " + schedule.SpendProblem
-	case schedule.Stopped == ScheduleUnreadable && schedule.ReadProblem != "":
-		return schedule.Stopped + ": " + schedule.ReadProblem
+	case schedule.Stopped == ScheduleUnreadable && schedule.ReadFailure != "":
+		return schedule.Stopped + ": " + schedule.ReadFailure
 	}
 	return schedule.Stopped
 }
@@ -1644,13 +1653,13 @@ func (s Schedule) Render() string {
 	}
 	// A session that rode through readings that failed says so. The reading that
 	// succeeded afterwards leaves nothing behind, so an outage nobody was told
-	// about is one that gets diagnosed from scratch the next time it happens. A
-	// pass that stopped on one says it once, in the failure it stopped with,
-	// rather than twice.
+	// about is one that gets diagnosed from scratch the next time it happens. The
+	// last of them is named except where the session went on to stop on a reading
+	// too, which is said once in the failure it stopped with rather than twice.
 	if s.ReadsRetried > 0 {
 		fmt.Fprintf(&rendered, "%d reading(s) of the harness failed and were made again rather than stopping the session\n", s.ReadsRetried)
 	}
-	if s.ReadProblem != "" && s.Stopped != ScheduleUnreadable {
+	if s.ReadProblem != "" && s.ReadFailure == "" {
 		fmt.Fprintf(&rendered, "the last of them: %s\n", s.ReadProblem)
 	}
 	if s.Braked != nil {
