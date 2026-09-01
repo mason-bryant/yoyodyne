@@ -83,14 +83,28 @@ func (m *Manager) refreshExport(ctx context.Context, path, export string) error 
 
 // readPrimaryExport is the primary checkout's copy of one export, and whether
 // there is one at all: a project whose tracker exports nothing here has nothing
-// to refresh, which is not a reason to refuse it a run.
+// to refresh, which is not a reason to refuse it a run. The exports to refresh
+// are named once for every product the harness manages, so that is the ordinary
+// case for a product tracking its work some other way rather than an unusual
+// one, and it must cost such a product nothing.
+//
+// Absence is taken as absence wherever along the path it is reported. Today it
+// is the read that reports it, because resolving a path that does not exist yet
+// is what lets a writer create a directory and its document in one go — but
+// which of the two answers first is a property of the resolver rather than
+// something this depends on. What is not absence is a component that exists and
+// is not what it has to be: a project that put a file where the export's
+// directory goes is refused rather than passed over.
 func readPrimaryExport(repositoryRoot, export string) ([]byte, bool, error) {
 	primary, err := repowrite.NewRoot(repositoryRoot)
 	if err != nil {
 		return nil, false, fmt.Errorf("resolve the primary checkout: %w", err)
 	}
 	source, err := primary.Resolve(export)
-	if err != nil {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, false, nil
+	case err != nil:
 		return nil, false, err
 	}
 	content, err := os.ReadFile(source)

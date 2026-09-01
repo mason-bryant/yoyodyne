@@ -176,6 +176,34 @@ func TestExportNeitherTrackedNorIgnoredIsLeftAlone(t *testing.T) {
 	}
 }
 
+func TestAProductThatExportsNothingStillGetsAWorktree(t *testing.T) {
+	t.Parallel()
+
+	// The exports to refresh are named once for every product the harness
+	// manages, so a product whose tracker writes none of them reaches this on the
+	// ordinary worktree-creation path rather than on a branch only a beads
+	// project takes. Nothing here has ever written the export, and nothing has
+	// created the directory it would live in either — absence is absence wherever
+	// along the path it starts.
+	repository := newRepository(t)
+	manager := newExportManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-ifd.223", BaseRef: "HEAD", TargetBranch: "main"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktree.Path, ".beads")); !os.IsNotExist(err) {
+		t.Fatalf("worktree carries a .beads directory nobody wrote: %v", err)
+	}
+	inspection, err := manager.Inspect(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+	if inspection.Dirty {
+		t.Fatalf("Inspect() = %#v, want a clean worktree", inspection)
+	}
+}
+
 func TestNewRefusesACurrentExportThatLeavesTheRepository(t *testing.T) {
 	t.Parallel()
 
