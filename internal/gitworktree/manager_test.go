@@ -111,6 +111,52 @@ func TestManagerCreatesWorktreeFromResolvedBaseCommit(t *testing.T) {
 	}
 }
 
+// A developer's first act is to execute the project's checks in the worktree it
+// was handed, so a worktree that is still being filled when the run starts is a
+// probe that judges half a tree and reports a broken toolchain. Create is what
+// stops that: it returns only once every file the base commit carries is on disk
+// with the content it was committed with, and a run is invoked after it returns.
+// A developer on 2026-09-01 read the worktree's uniform creation-time timestamps
+// as a checkout still in flight, which is what this pins as not being one.
+func TestCreateReturnsOnlyAWorktreeThatIsWhole(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	committed := map[string]string{
+		"README.txt":             "test\n",
+		"one.txt":                "the first file\n",
+		"nested/two.txt":         "the second file\n",
+		"nested/deeper/three.go": "package deeper\n\nfunc Three() int { return 3 }\n",
+	}
+	for relative, content := range committed {
+		if relative == "README.txt" {
+			continue
+		}
+		writeFile(t, repository, relative, content)
+	}
+	runGit(t, repository, "add", "--all")
+	runGit(t, repository, "commit", "-m", "content to materialize")
+
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-whole", BaseRef: "main"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	for relative, content := range committed {
+		found, err := os.ReadFile(filepath.Join(worktree.Path, relative))
+		if err != nil {
+			t.Fatalf("Create() returned before %s was written: %v", relative, err)
+		}
+		if string(found) != content {
+			t.Fatalf("%s = %q, want the committed %q", relative, found, content)
+		}
+	}
+	if status := gitOutput(t, worktree.Path, "status", "--porcelain", "--untracked-files=all"); strings.TrimSpace(status) != "" {
+		t.Fatalf("created worktree is not quiescent: %s", status)
+	}
+}
+
 func TestManagerReturnsCreatedIdentityWhenPostCreateInspectionFails(t *testing.T) {
 	t.Parallel()
 

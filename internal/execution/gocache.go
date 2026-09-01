@@ -68,6 +68,18 @@ func WithGoBuildCache(environment []string, workingDirectory string) []string {
 // is the other half of the choice: a cache inside it would be untracked content
 // in somebody's repository, which is a dirty tree to every gate that reads one
 // and unrecognized content to the composition audit.
+//
+// Concurrent runs writing one cache was suspected of crossing their verdicts and
+// is not doing so. A developer's probe on 2026-09-01 reported a compile error at
+// a line of a package that run had never touched; the cache was the only thing
+// that run shared with the concurrent run whose in-progress edit the diagnostic
+// described. yoyodyne-ifd.238 attributed it elsewhere -- the two runs wrote one
+// scratch log in a temporary directory the machine shares, and the reading run's
+// own checks had passed -- and found no crossed verdict in deliberate contention
+// against one cache. The entries are keyed by the content compiled, so two
+// worktrees at different content are two sets of entries.
+// `docs/diagnoses/yoyodyne-ifd-238-probe-verdict-crosstalk.md` is the evidence,
+// and it is what to reopen this against rather than the suspicion alone.
 func goBuildCache(workingDirectory string) (string, bool) {
 	if strings.TrimSpace(workingDirectory) == "" {
 		return "", false
