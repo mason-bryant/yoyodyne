@@ -58,6 +58,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runGoals(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "stale":
 		return reportStaleness(ctx, args[1:], stdout, stderr)
+	case "conformance":
+		return runConformance(ctx, args[1:], stdout, stderr)
 	case "invariant":
 		return runInvariant(args[1:], stdout, stderr)
 	case "directive":
@@ -355,6 +357,7 @@ Commands:
   evaluation        read what the product manager made of the ideas you brought it
   goals             read the goals and what work serves, and witness and guard it
   stale             read what a change upstream left unanswered downstream
+  conformance       check the product against what it records about itself
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives
   exchange          read what the roles have asked each other, and what it cost

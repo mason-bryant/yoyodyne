@@ -96,6 +96,10 @@ var auditedDispositionReads = []dispositionSite{
 		Means: "goal attribution, not a directive: the goal a work item resolved to, or what is wrong with the attribution.",
 	},
 	{
+		File: "internal/conformance/conformance.go", Declaration: "(*Assessment) checkGoals", Read: "Resolved()", Reads: 1,
+		Means: "goal attribution, not a directive: how many admitted items serve a recorded goal, counted for the release-readiness report. What refuses a tag is Divergent, which is the other end of the same judgement and not liveness either.",
+	},
+	{
 		File: "internal/directive/directive.go", Declaration: "(Directive) CarryOut", Read: "Resolved()", Reads: 1,
 		Means: "refuses a second settlement; the outcome already recorded is what somebody would lose.",
 	},

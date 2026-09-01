@@ -214,8 +214,9 @@ make release VERSION=v0.3.0
 git push origin v0.3.0
 ```
 
-It gates on [this release's notes](releases/README.md), walks [the documented
-adoption path](../scripts/walk-adoption.sh), runs
+It gates on [this release's notes](releases/README.md), on [release
+readiness](#release-readiness), walks [the documented adoption
+path](../scripts/walk-adoption.sh), runs
 `check`, builds and verifies the archives for `<tag>`, then tags the commit
 they were built from — in that order, so a red gate refuses the cut, names what
 was red, and leaves nothing to undo. It also refuses a tag that is not
@@ -224,16 +225,22 @@ that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
 over it.
 
-The tracker's own exports — `.beads/interactions.jsonl` and
-`.beads/issues.jsonl` — do not count as a dirty tree. They are derived from a
-store that is authoritative elsewhere, nothing a release ships is built from
-them, and the walkthrough this gate runs rewrites them itself, so refusing on
-them would stall most days of a daily cadence. The cut commits them instead,
-as their own housekeeping commit placed after the last gate is green and before
-the tag, which keeps the tag naming a tree with nothing uncommitted in it
-rather than a clean tree with a footnote. On a day it had to make that commit
-it prints `git push --atomic origin main <tag>` as the publishing command,
-because origin does not have that commit and the branch has to carry it.
+Two things are written before the tag, in one housekeeping commit placed after
+the last gate is green. The tracker's own exports —
+`.beads/interactions.jsonl` and `.beads/issues.jsonl` — do not count as a dirty
+tree: they are derived from a store that is authoritative elsewhere, nothing a
+release ships is built from them, and the walkthrough this gate runs rewrites
+them itself, so refusing on them would stall most days of a daily cadence. The
+readiness result is stamped into `docs/releases/<tag>.md` and goes into the same
+commit, so the notes the tag names carry the conformance result of the tree it
+names rather than one taken on whichever day the notes were drafted; it is
+written only where it differs from the section the notes already carry, so a cut
+that changes neither it nor the exports has nothing to commit. Committing both
+rather than excepting them keeps the tag naming a tree with nothing uncommitted
+in it. On a day it had to make that commit it prints
+`git push --atomic origin main <tag>`, because origin does not have it and the
+branch has to carry it; on a day it had nothing to commit, `git push origin
+<tag>`.
 
 That commit is made with hooks turned off, since a tracker installs a hook that
 exports after every commit and it would rewrite the very files the commit
@@ -247,6 +254,34 @@ deliberately. [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh)
 executes every one of those refusals against fabricated repositories, and
 `make test` runs it, so changing the verb is checked by the same command as
 changing anything else.
+
+## Release readiness
+
+`make check` says the code does what its tests say. A tag says more than that:
+that the system still matches what it records about itself. So the cut runs
+[`yoyo conformance`](artifacts.md#asking-all-of-this-at-once-before-a-tag)
+before it spends the walkthrough — the artifacts and their references, the links
+the documentation makes to itself, the invariants, and every admitted work
+item's attribution to a goal, with staleness surveyed alongside and refusing
+nothing. A divergence refuses the tag and names every mismatch the check that
+found it collected; nothing is written.
+
+The sequence those checks run in is not in the code. It is a
+[workflow definition](configuration.md#the-release-readiness-workflow) — data in
+the project-owned format, selecting actions the harness registered in Go —
+validated and compiled before the first check runs, and walked by the workflow
+runtime one durable transition at a time. It is the first sequence this harness
+runs that never existed as Go control flow, which is the point of it: the same
+checks, ordered by a file a project can read and replace, and no way for that
+file to make the gate perform anything but reads.
+
+The cut asks for it as the Markdown section a release's notes carry, and there
+is one invocation rather than two — a gate read one way and a notes section
+written from a second run would be two results, and only one of them would be
+the one that refused or did not. On a green cut that section is stamped into
+`docs/releases/<tag>.md` between two HTML-comment markers and committed with the
+tag's housekeeping, replacing an earlier one rather than accumulating beside it,
+and leaving everything the product manager wrote around it alone.
 
 ## Every cut writes its notes
 

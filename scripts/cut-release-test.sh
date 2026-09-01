@@ -53,17 +53,47 @@ missing() {
 }
 
 # fabricate builds one scratch repository: $1 names it, $2 is "green", "red", or
-# "dirty-exports" for the walkthrough, $3 is "green", "check-red", or
-# "build-red" for make, $4 is "present" (the default), "absent", or "draft-red"
-# for this release's notes, and $5 is "export-hook" for a repository whose
-# tracker installs a commit hook. Most cases want notes already committed and no
-# hooks at all, because the gate they are about is further down.
+# "dirty-exports" for the walkthrough, $3 is "green", "check-red", "build-red",
+# "no-checksums" or "harness-red" for make, $4 is "present" (the default),
+# "absent", or "draft-red" for this release's notes, $5 is "export-hook" for a
+# repository whose tracker installs a commit hook, and $6 is "green" (the
+# default) or "red" for the release-readiness gate. Most cases want notes
+# already committed, no hooks, and a green gate, because the one they are about
+# is further down.
 fabricate() {
-  local name="$1" walk="$2" mk="$3" notes="${4:-present}" hook="${5:-none}"
+  local name="$1" walk="$2" mk="$3" notes="${4:-present}" hook="${5:-none}" readiness="${6:-green}"
   local project="$scratch/$name"
 
-  mkdir -p "$project/scripts"
+  mkdir -p "$project/scripts" "$project/bin"
   cp "$repository/scripts/cut-release.sh" "$project/scripts/cut-release.sh"
+
+  # A stub harness for the release-readiness gate. The cut builds it and asks it
+  # one question, and what it needs back is the delimited Markdown section
+  # internal/cli/conformance.go renders and an exit status that is the gate's
+  # answer -- so that is the whole of what this answers. What the real checks
+  # find is internal/conformance's own suite to say, not this one's.
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n'
+    printf 'if [ "${1:-}" != "conformance" ]; then echo "stub yoyo: unexpected command ${1:-}" >&2; exit 2; fi\n'
+    printf 'cat <<%s\n' "'MD'"
+    printf '<!-- yoyodyne:release-readiness -->\n'
+    printf '## Release readiness\n\n'
+    if [ "$readiness" = "red" ]; then
+      printf 'The `release-readiness` workflow ended in **mismatch**.\n\n'
+      printf -- '- **goals** — diverges — 1 admitted item(s)\n'
+      printf -- '  - goals: stub-1: names a goal no goals document states\n'
+    else
+      printf 'The `release-readiness` workflow ended in **ready**.\n\n'
+      printf -- '- **artifacts** — conforms — 1 artifact(s) across 1 home(s)\n'
+    fi
+    printf '<!-- /yoyodyne:release-readiness -->\n'
+    printf 'MD\n'
+    if [ "$readiness" = "red" ]; then
+      printf 'exit 1\n'
+    fi
+  } > "$project/bin/yoyo"
+  chmod +x "$project/bin/yoyo"
 
   # A stub notes writer, so the notes gate is exercised without a tracker. The
   # real scripts/release-notes.sh reads bd and renders with python3; what
@@ -128,6 +158,15 @@ SH
   # Tabs matter here, so the recipe lines are written with printf rather than a
   # heredoc an editor could helpfully reformat.
   {
+    # `build` is what the cut runs before its release-readiness gate, because it
+    # asks the harness rather than the repository. The stub binary is already on
+    # disk, so a green build has nothing to do beyond saying it worked.
+    printf 'build:\n'
+    if [ "$mk" = "harness-red" ]; then
+      printf '\t@echo "stub build is red"; exit 1\n'
+    else
+      printf '\t@echo "stub build succeeded"\n'
+    fi
     printf 'check:\n'
     if [ "$mk" = "check-red" ]; then
       printf '\t@echo "stub check is red"; exit 1\n'
@@ -267,14 +306,14 @@ if [ "$(git -C "$project" rev-parse 'v0.3.0^{commit}')" = "$head_after" ] &&
 else
   fail "the tag does not name the housekeeping commit"
 fi
-if [ "$(git -C "$project" log -1 --format=%s)" = "record the tracker's derived exports for v0.3.0" ]; then
+if [ "$(git -C "$project" log -1 --format=%s)" = "record v0.3.0's readiness result and the tracker's derived exports" ]; then
   pass "the housekeeping is its own commit, named for what it is"
 else
   fail "the last commit is: $(git -C "$project" log -1 --format=%s)"
 fi
 committed="$(git -C "$project" diff-tree --no-commit-id --name-only -r HEAD | sort | tr '\n' ' ')"
-if [ "$committed" = ".beads/interactions.jsonl .beads/issues.jsonl " ]; then
-  pass "the housekeeping commit holds the exports and nothing else"
+if [ "$committed" = ".beads/interactions.jsonl .beads/issues.jsonl docs/releases/v0.3.0.md " ]; then
+  pass "the housekeeping commit holds the exports and this tag's readiness result, and nothing else"
 else
   fail "the housekeeping commit holds: $committed"
 fi
@@ -463,6 +502,66 @@ else
   fail "the refused cut left tags behind: $(tags "$project")"
 fi
 
+step "a system that no longer matches what it records refuses the tag"
+# The gate this whole file's newest claim is about: a tag says the system matches
+# its recorded intent, so a divergence refuses it and names what diverged. The
+# notes are left exactly as the operator committed them, because nothing is
+# written until every gate is green.
+project="$(fabricate readiness-red green green present none red)"
+before="$(cat "$project/docs/releases/v0.3.0.md")"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "release readiness is red" "refuses the cut"
+contains "$output" "names a goal no goals document states" "the mismatch is named rather than swallowed"
+contains "$output" "nothing was written" "the refusal says nothing was left behind"
+missing "$output" "documented adoption path works" "refuses before spending the walkthrough"
+missing "$output" "stub built" "refuses before building anything"
+if [ "$(cat "$project/docs/releases/v0.3.0.md")" = "$before" ]; then
+  pass "the notes are exactly as they were committed"
+else
+  fail "the refused cut wrote to the notes"
+fi
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+
+step "a harness that will not build leaves readiness unchecked and the cut refused"
+# The gate asks the harness, so a build that fails is a gate that never ran --
+# which must refuse rather than pass for want of an answer.
+project="$(fabricate readiness-unbuildable green harness-red)"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "release readiness was never checked" "refuses rather than cutting on an unasked question"
+missing "$output" "documented adoption path works" "refuses before spending the walkthrough"
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+
+step "stamping a result over notes that already carry one leaves a single section"
+# The notes are written once and then edited, and a cut writes into a file the
+# product manager owns. Replacing between the markers rather than appending is
+# what keeps a second stamp from leaving two sections that disagree.
+project="$(fabricate readiness-restamped green green)"
+{
+  printf '\n<!-- yoyodyne:release-readiness -->\n## Release readiness\n\n'
+  printf 'A result from an earlier reading.\n'
+  printf '<!-- /yoyodyne:release-readiness -->\n'
+} >> "$project/docs/releases/v0.3.0.md"
+git -C "$project" add docs/releases/v0.3.0.md
+git -C "$project" commit -qm "an earlier readiness result"
+output="$(cut "$project" "v0.3.0")"
+notes="$(cat "$project/docs/releases/v0.3.0.md")"
+sections="$(grep -c '^<!-- yoyodyne:release-readiness -->$' "$project/docs/releases/v0.3.0.md")"
+if [ "$sections" = "1" ]; then
+  pass "the notes carry one readiness section"
+else
+  fail "the notes carry $sections readiness sections"
+fi
+missing "$notes" "A result from an earlier reading" "the earlier result was replaced rather than left below the new one"
+contains "$notes" "ended in **ready**" "and the section that is there is this cut's"
+
 step "a red walkthrough refuses the cut and names the failure"
 project="$(fabricate red-walk red green)"
 output="$(cut "$project" "v0.3.0")"
@@ -505,10 +604,13 @@ contains "$output" "SKIPPED: origin is unreachable" "an origin it cannot reach i
 contains "$output" "docs/releases/v0.3.0.md is present" "the notes gate ran"
 contains "$output" "documented adoption path works" "the walkthrough ran"
 contains "$output" "stub check passed" "the checks ran"
+contains "$output" "Release readiness" "the readiness gate ran and its section was shown"
 contains "$output" "stub built v0.3.0" "the archives were built for the tag"
 contains "$output" "yoyo_v0.3.0_stub.tar.gz" "the checksums are reported"
-contains "$output" "nothing to commit" "a tree that was already clean gets no housekeeping commit"
-contains "$output" "git push origin v0.3.0" "publishing is named as the operator's own next command"
+contains "$output" "committed docs/releases/v0.3.0.md" "the readiness result is committed into this tag's notes"
+contains "$output" "git push --atomic origin main v0.3.0" "publishing pushes the branch with the tag, because the readiness commit is not on origin"
+contains "$(cat "$project/docs/releases/v0.3.0.md")" "ended in **ready**" "the notes the tag names carry the result"
+contains "$(cat "$project/docs/releases/v0.3.0.md")" "The scratch release" "and everything the product manager wrote around it is untouched"
 if [ "$(tags "$project")" = "v0.3.0" ]; then
   pass "the tag was written"
 else
@@ -544,7 +646,7 @@ else
   fail "the cut exited $status after tagging -- got: $output"
 fi
 contains "$output" "is not where it was expected" "it says the checksums were not found"
-contains "$output" "git push origin v0.3.0" "the push the tag needs is still printed"
+contains "$output" "git push --atomic origin main v0.3.0" "the push the tag needs is still printed"
 if [ "$(tags "$project")" = "v0.3.0" ]; then
   pass "the tag it reported is really there"
 else
