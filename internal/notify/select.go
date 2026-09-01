@@ -145,7 +145,19 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	// nobody a decision and are said as themselves rather than as a blocker
 	// nobody recorded. Both state what remains of the change, because the attempt
 	// being over says nothing about whether the work is.
-	if !endedBadly(before) && endedBadly(after) {
+	//
+	// There are two crossings rather than one because the two facts are written in
+	// two saves on a path that matters. Reconciliation settles a run some killed
+	// process already left terminal: it takes a blocker from the tracker and puts
+	// it on a record whose status has not moved since the crash. Watching only for
+	// the run becoming terminal, the sink would have said "failed" at the crash
+	// and then nothing at all when the stoppage arrived — the ending an operator
+	// most needs, silently swallowed by the fact the run was already over. So a
+	// blocker appearing on a run that had already ended is itself a crossing, and
+	// the critical line it says corrects the warning that preceded it.
+	endedNow := !endedBadly(before) && endedBadly(after)
+	stoppageNow := !handedToAPerson(before) && handedToAPerson(after)
+	if endedNow || stoppageNow {
 		remains := Detail{Remains: after.Artifacts().Describe()}
 		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
 			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, endingReason(after))
@@ -637,6 +649,15 @@ func parkSeverity(state runstate.State) report.Severity {
 // one run.
 func endedBadly(state runstate.State) bool {
 	return state.Status.Terminal() && state.Status != runstate.StatusSucceeded
+}
+
+// handedToAPerson reports a run whose ending is a stoppage somebody has to
+// decide about, which is the read model's own reading of it rather than a second
+// one taken here. It is asked of both readings rather than only of the later
+// one, because the blocker can reach a record that is already terminal: the
+// stoppage is then news even though the ending is not.
+func handedToAPerson(state runstate.State) bool {
+	return endedBadly(state) && state.Outcome() == runstate.OutcomeStopped
 }
 
 // blockerText is what the record gives as the reason. A publication that could

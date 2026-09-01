@@ -735,6 +735,53 @@ func TestEachWayARunEndsIsSaidAsItselfWithWhatRemains(t *testing.T) {
 	}
 }
 
+// A stoppage recorded onto a run that had already ended. Reconciliation settles
+// a run some killed process left terminal: it takes a blocker from the tracker
+// and saves it onto a record whose status has not moved since the crash, so the
+// ending and the stoppage are two separate readings in that order. Watching only
+// for a run becoming terminal, the sink said "failed" at the crash and then
+// nothing at all when the stoppage arrived — the one ending an operator has to
+// act on, swallowed because the run was already over.
+func TestAStoppageRecordedAfterTheRunAlreadyEndedIsStillSaid(t *testing.T) {
+	// What the crash left: terminal, a reason, and no blocker. This is the
+	// reading the sink has already reported as a plain failure.
+	crashed := endedRun(running(), runstate.StatusFailed)
+	crashed.Failure = "the process was killed mid-change"
+	if kinds, notifications := crossed(t, running(), crashed); len(kinds) != 1 {
+		t.Fatalf("the crash crossed %v, want the ending said once", kinds)
+	} else if only(t, notifications, KindRunEnded).Event.Severity != report.SeverityWarning {
+		t.Fatal("the crash was not said as a warning, so what follows is not a correction of one")
+	}
+
+	// What reconciliation then writes: the same terminal status, now carrying the
+	// blocker it put on the work item.
+	settled := crashed
+	settled.Blocker = runstate.RecordBlocker("the run was interrupted with nothing integrated and its worktree preserved")
+	kinds, notifications := crossed(t, crashed, settled)
+	stoppage := only(t, notifications, KindBlockerRecorded)
+	if stoppage.Event.Severity != report.SeverityCritical {
+		t.Fatalf("the stoppage is a %s among %v, want it to reach the operator as critical", stoppage.Event.Severity, kinds)
+	}
+	message, err := Render(stoppage.Topic, stoppage.Speaker, stoppage.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(message.Body, "work preserved") {
+		t.Fatalf("the stoppage does not say what remains of the change: %q", message.Body)
+	}
+
+	// And it is still a crossing rather than a state: a sweep that reads the
+	// settled record again says nothing.
+	if kinds, _ := crossed(t, settled, settled); len(kinds) != 0 {
+		t.Fatalf("re-reading the settled run crossed %v, want the stoppage said once", kinds)
+	}
+	// A run that ended without a blocker and never gains one is not re-announced
+	// either, or every reading of the record would repeat the ending.
+	if kinds, _ := crossed(t, crashed, crashed); len(kinds) != 0 {
+		t.Fatalf("re-reading the crashed run crossed %v, want the ending said once", kinds)
+	}
+}
+
 // Both lines finish on the reason the record gives, and a run can honestly have
 // none: a cancellation is the operator stopping it without owing anybody a
 // sentence, and a stoppage reconciliation settled on an already-terminal run

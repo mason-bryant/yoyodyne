@@ -1421,11 +1421,23 @@ func (s Schedule) Render() string {
 
 // state is the one-line account of what became of a started run. A declined
 // start is neither a success nor a failure and is named as itself.
+//
+// A run that reached an ending is named by that ending, in the read model's own
+// vocabulary, rather than by the error the start came back with. Every stoppage
+// returns one: a run handed to a person with its branch and worktree intact
+// comes back to the scheduler as an error exactly as a run that broke does, so
+// reading the error first put "failed" over both. Which of them it was is the
+// pass's to report and not to work out — Ending is the same derivation `yoyo
+// status` and the channel read.
 func (s Started) state() string {
 	switch {
 	case s.Declined != "":
 		return "declined"
+	case endedWithoutSucceeding(s.Outcome.Status):
+		return string(s.Outcome.Ending())
 	case s.Failure != "":
+		// No run reached a status, so there is no ending to name: the start itself
+		// is what failed.
 		return "failed"
 	case s.Outcome.Paused:
 		return "paused"
@@ -1434,6 +1446,12 @@ func (s Started) state() string {
 	default:
 		return string(s.Outcome.Status)
 	}
+}
+
+// endedWithoutSucceeding reports a run that reached a terminal status other than
+// success, which is the whole of where the four-way vocabulary applies.
+func endedWithoutSucceeding(status runstate.Status) bool {
+	return status.Terminal() && status != runstate.StatusSucceeded
 }
 
 // Failed reports a pass with something in it an operator has to act on. A

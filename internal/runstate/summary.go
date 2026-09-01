@@ -67,17 +67,30 @@ const (
 // that has not reached a terminal status keeps its own status word, since
 // "pending" and "running" are already the two facts a reader wants there.
 func (s State) Outcome() RunOutcome {
-	if !s.Status.Terminal() {
-		return RunOutcome(s.Status)
+	return Ending(s.Status, strings.TrimSpace(s.Blocker) != "")
+}
+
+// Ending is the derivation itself, from the two facts that decide it: the status
+// the run reached, and whether it left somebody a blocker to act on. It is
+// exported because the run's durable record is not the only thing that holds
+// those two — the outcome a finished run returns to whatever started it carries
+// them as Status and Blocked — and a caller working them out again is a caller
+// that can come to a different word than `yoyo status` does for one run.
+//
+// A run that has not reached a terminal status keeps its own status word, since
+// "pending" and "running" are already the two facts a reader wants there.
+func Ending(status Status, handedToAPerson bool) RunOutcome {
+	if !status.Terminal() {
+		return RunOutcome(status)
 	}
 	switch {
-	case s.Status == StatusSucceeded:
+	case status == StatusSucceeded:
 		return OutcomeSucceeded
-	case strings.TrimSpace(s.Blocker) != "":
+	case handedToAPerson:
 		return OutcomeStopped
-	case s.Status == StatusCancelled:
+	case status == StatusCancelled:
 		return OutcomeCancelled
-	case s.Status == StatusTimedOut:
+	case status == StatusTimedOut:
 		return OutcomeTimedOut
 	default:
 		return OutcomeFailed
