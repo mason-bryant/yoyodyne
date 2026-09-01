@@ -825,8 +825,14 @@ func TestShippedDocumentationNamesDocumentsThisRepositoryHas(t *testing.T) {
 	// adding it, so the set must not cost the budget twice. This is the figure
 	// that claim is worth checking against, and it is reported either way: what
 	// the reduction bought is only visible as a number.
+	// A run that meets this is not being told to make room. What to do about a
+	// full budget is a decision about what the product manager is given, and
+	// yoyodyne-ifd.240 is the precedent for how it was taken last time: the bound
+	// was raised, rather than the guides trimmed or the set narrowed, because the
+	// guides are what an operator reads. Saying so here is what keeps the next
+	// run from quietly cutting somebody else's prose to get its own change green.
 	if total > defaultMaxProductBytes {
-		t.Errorf("the shipped documentation is %d bytes against a product budget of %d, so some of it cannot be carried", total, defaultMaxProductBytes)
+		t.Errorf("the shipped documentation is %d bytes against a product budget of %d, so some of it cannot be carried; what to do about that is the product manager's decision, and yoyodyne-ifd.240 is the precedent for it", total, defaultMaxProductBytes)
 	}
 	t.Logf("shipped documentation is %d bytes across %d documents, against a product budget of %d", total, len(shippedDocumentation), defaultMaxProductBytes)
 }

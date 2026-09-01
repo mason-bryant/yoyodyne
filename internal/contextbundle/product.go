@@ -22,7 +22,22 @@ import (
 // item's bundle because it carries whole documents rather than one item, and
 // bounded for the same reason: a directory of specifications grows without
 // limit.
-const defaultMaxProductBytes = 512 << 10
+//
+// It is 640 KiB because the product manager decided it should be, in
+// yoyodyne-ifd.240. At 512 KiB the shipped set had reached 524,256 bytes —
+// thirty-two under — so the next paragraph written into any of those eight
+// documents turned `make test` red for a reason having nothing to do with the
+// paragraph, and three runs reported that wall before one was actually turned
+// away by it. The decision was to raise rather than to trim the guides or to
+// narrow the set: the guides are what an operator reads, and narrowing what the
+// product manager is given has cost real decisions twice before.
+//
+// The check that fails near this bound is right and stays, because a test
+// failing here is the early warning working. What ifd.240 settles for the next
+// time it fires is who answers it: a decision about what the product manager is
+// given, taken by the role that owns that question, rather than a raise taken by
+// whichever change happened to meet the ceiling.
+const defaultMaxProductBytes = 640 << 10
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.
