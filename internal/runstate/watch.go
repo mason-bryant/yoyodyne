@@ -60,9 +60,12 @@ const (
 	// WatchWatching is a session choosing work: it has read the queue and is
 	// starting what the configuration leaves room for.
 	WatchWatching WatchState = "watching"
-	// WatchIdle is a session that found nothing to start and is polling. It is
-	// the ordinary state of a drained queue and the one that most needs saying
-	// out loud, because it is indistinguishable from a dead process otherwise.
+	// WatchIdle is a session that started nothing at a poll and is polling again.
+	// It is the ordinary state of a drained queue and the one that most needs
+	// saying out loud, because it is indistinguishable from a dead process
+	// otherwise — and it is also a queue with plenty in it that this session
+	// cannot start, which is why the reason says what was passed over and the two
+	// fields below say what was nonetheless going and who has to act.
 	WatchIdle WatchState = "idle"
 	// WatchBraked is a session choosing nothing because intake is held —
 	// whether the operator held it or the session's own failure-storm brake did.
@@ -116,6 +119,21 @@ type WatchTransition struct {
 	// It is empty where the binary recorded no revision, which is a comparison
 	// nobody can make rather than a session that is current.
 	Build string `json:"build,omitempty"`
+	// Running is how many developer runs the session could see in flight when it
+	// recorded this. It is on the transition because a session idle on one slot
+	// while a run works on the other is the state that was read as the whole line
+	// having stopped: the reason says what was passed over, and this says that the
+	// harness is nonetheless moving. Zero is a session with nothing going, which is
+	// the ordinary idle.
+	Running int `json:"running,omitempty"`
+	// Executor is the conversation that carries the work this session passed over,
+	// where the work it passed over is carried by one. It is the marker an item
+	// itself is marked with, so the role named here is the role the tracker names
+	// rather than one anything derived, and it is what decides whose move follows
+	// an idle poll: a queue whose only unstarted work is an architect's to carry is
+	// waiting on the architect, and telling the reader it waits on an admission
+	// sends them to the one person who can do nothing about it.
+	Executor domain.WorkItemExecutor `json:"executor,omitempty"`
 	// Restarting marks the one stop that is not an ending: the session is being
 	// re-executed into a build deployed over it, having waited out every run it
 	// started, and the process comes straight back watching the same queue. Every
@@ -156,6 +174,19 @@ func (t WatchTransition) Validate() error {
 	// reported as unmakeable where it is read.
 	if t.Build != "" && !buildPattern.MatchString(t.Build) {
 		problems = append(problems, fmt.Errorf("watch transition build %q is not a revision", t.Build))
+	}
+	// A negative count of runs is not a session that saw fewer than none of them,
+	// it is a caller with a bug, and a surface that printed it would be saying
+	// something about the machine that nothing observed.
+	if t.Running < 0 {
+		problems = append(problems, fmt.Errorf("watch transition reports %d runs in flight, which is not a count", t.Running))
+	}
+	// A marker the harness does not recognize names a role nothing can address,
+	// and the whole reason this field is here is to name somebody a reader can go
+	// to. An empty marker is ordinary: it is a session whose idleness no
+	// conversation accounts for.
+	if t.Executor != "" && !t.Executor.Valid() {
+		problems = append(problems, fmt.Errorf("watch transition executor %q is not a marker an item is carried by", t.Executor))
 	}
 	// Only a stop can be a restart. A session marked as coming back while it is
 	// still watching, idle, or braked would have every reader saying a restart is

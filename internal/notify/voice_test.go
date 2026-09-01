@@ -170,6 +170,85 @@ func TestWorkAConversationCarriesIsNeverSaidToBeWaitingForARun(t *testing.T) {
 	}
 }
 
+// A watch idles for opposite reasons, and the clause it used to close on
+// answered for one of them. It named the product manager whatever the session
+// had found, and an operator acted on that three times over a queue whose only
+// unstarted work was the architect's to carry, while a developer run worked on
+// the other slot: nothing was waiting on an admission, and the line had not
+// stopped.
+//
+// So the named actor is the one who can act. The admission clause is what is
+// left when nothing is going and nothing is anybody's to carry, which is the one
+// state admitting ready work actually changes.
+func TestAnIdleWatchNamesTheActorWhoCanActOnIt(t *testing.T) {
+	topic := Product()
+	for _, testCase := range []struct {
+		name   string
+		detail func(*Detail)
+		want   string
+	}{
+		{
+			name:   "carried in an architect's conversation",
+			detail: func(d *Detail) { d.Executor = string(domain.ConversationWith(domain.RoleArchitect)) },
+			want:   "the architect's, in conversation — the work this poll passed over is carried there, and no run will ever start it.",
+		},
+		{
+			// The run in flight answers second: an item somebody has to open is still
+			// waiting on them while the other slot works.
+			name: "a run in flight beside work an architect carries",
+			detail: func(d *Detail) {
+				d.Executor = string(domain.ConversationWith(domain.RoleArchitect))
+				d.Running = 1
+			},
+			want: "the architect's, in conversation — the work this poll passed over is carried there, and no run will ever start it.",
+		},
+		{
+			name:   "a run in flight and nothing anybody carries",
+			detail: func(d *Detail) { d.Running = 1 },
+			want:   "nobody's — the runs in flight carry on, and the queue is read again as each of them finishes.",
+		},
+		{
+			name:   "nothing going and nothing anybody carries",
+			detail: func(*Detail) {},
+			want:   nextMoves[KindWatchIdle],
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			event := fullyRecorded(KindWatchIdle)
+			testCase.detail(&event.Detail)
+			message, err := Render(topic, Harness(), event)
+			if err != nil {
+				t.Fatalf("render an idle watch: %v", err)
+			}
+			if !strings.HasSuffix(message.Body, nextMoveLead+testCase.want) {
+				t.Fatalf("idle reads as %q, want it to close on %q", message.Body, testCase.want)
+			}
+		})
+	}
+}
+
+// The admission pointer is said only where admitting ready work is what changes
+// the answer. A session polling beside a run, or over work only a conversation
+// carries, is not waiting on the product manager for anything.
+func TestAnIdleWatchPointsAtAdmissionOnlyWhenAdmissionIsTheNextAct(t *testing.T) {
+	topic := Product()
+	for _, detail := range []Detail{
+		{Executor: string(domain.ConversationWith(domain.RoleArchitect))},
+		{Running: 2},
+		{Executor: string(domain.ConversationWith(domain.RoleDevelopmentManager)), Running: 1},
+	} {
+		event := fullyRecorded(KindWatchIdle)
+		event.Detail = detail
+		message, err := Render(topic, Harness(), event)
+		if err != nil {
+			t.Fatalf("render an idle watch: %v", err)
+		}
+		if strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindWatchIdle]) {
+			t.Fatalf("idle over %+v reads as %q, want somebody who can act on it named", detail, message.Body)
+		}
+	}
+}
+
 // Every voice names the same way out of a session running an old build, because
 // six accounts of one remedy are six chances to send a reader somewhere else.
 //

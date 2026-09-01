@@ -360,7 +360,7 @@ with nothing landing between them hold intake at
 whole backlog through a failed run overnight. And the session records what it is
 doing — watching, idle, braked, resumed, stopped — where `yoyo status` and the
 Slack sink read it, because an idle session and a dead one are otherwise the same
-silence.
+silence. A poll that starts nothing names the runs going and what it passed over.
 
 **A reading of the harness that fails does not end the session.** The tracker is
 a database a reconcile and every settling run write to, so a reading that fails

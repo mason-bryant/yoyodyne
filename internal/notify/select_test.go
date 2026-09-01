@@ -1096,6 +1096,36 @@ func TestAWatchSessionIsAddressedToTheWholeLine(t *testing.T) {
 	}
 }
 
+// What the session recorded about the state of the line reaches the message
+// that closes on whose move it is. The idle line that misled an operator three
+// times carried only its own sentence, so every surface downstream had to guess
+// at the two facts that decide the answer: whether the harness is nonetheless
+// working, and who carries the work it passed over.
+func TestAnIdleSessionCarriesWhatItSawGoingAndWhoItWaitsOn(t *testing.T) {
+	idle := watchTransition(runstate.WatchIdle,
+		"1 run in flight; 3 items passed over, of 3 admitted: carried in conversation (architect: yoyodyne-ifd.212)")
+	idle.Running = 1
+	idle.Executor = domain.ConversationWith(domain.RoleArchitect)
+
+	notification, err := FromWatch(idle)
+	if err != nil {
+		t.Fatalf("address an idle session: %v", err)
+	}
+	if notification.Event.Detail.Running != 1 {
+		t.Fatalf("detail = %+v, want the run in flight carried", notification.Event.Detail)
+	}
+	if notification.Event.Detail.Executor != string(domain.ConversationWith(domain.RoleArchitect)) {
+		t.Fatalf("detail = %+v, want the conversation the session waits on carried", notification.Event.Detail)
+	}
+	message, err := Render(notification.Topic, notification.Speaker, notification.Event)
+	if err != nil {
+		t.Fatalf("render an idle session: %v", err)
+	}
+	if !strings.HasSuffix(message.Body, nextMoveLead+"the architect's, in conversation — the work this poll passed over is carried there, and no run will ever start it.") {
+		t.Fatalf("body %q does not close on the architect's move", message.Body)
+	}
+}
+
 // The stop that is not an ending. A session being re-executed into a build
 // deployed over it records the same stopped state as a session somebody closed,
 // and the two ask opposite things of a reader — so the mark the session wrote is

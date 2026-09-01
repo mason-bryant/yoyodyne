@@ -1002,6 +1002,101 @@ func TestWatchingPullsWorkAdmittedWhileItWasWaiting(t *testing.T) {
 	}
 }
 
+// The state that misled an operator three times on 2026-09-01, replayed: a
+// session idle on one developer slot while a run works on the other, over a
+// queue whose only unstarted work is the architect's to carry in conversation.
+//
+// What it said then was that nothing among the ready items was startable that
+// the session had not already tried, and that the next move was the product
+// manager's, nothing being chosen until ready work was admitted. Both halves
+// were false. The line had not stopped — a run was in flight — and no admission
+// would have moved any of the three items, because no run will ever start one.
+//
+// So the idle line says what the poll actually found: the runs going, the items
+// it passed over, and the conversation each of them is carried in.
+func TestAnIdleWatchSaysWhatItPassedOverAndWhichConversationCarriesIt(t *testing.T) {
+	t.Parallel()
+
+	architects := []beads.WorkItem{
+		{ID: "yoyodyne-ifd.212", Title: "Amend the invariants", Status: "open", Priority: 1,
+			Executor: domain.ConversationWith(domain.RoleArchitect)},
+		{ID: "yoyodyne-ifd.203", Title: "Settle the design", Status: "open", Priority: 2,
+			Executor: domain.ConversationWith(domain.RoleArchitect)},
+		{ID: "yoyodyne-ifd.162", Title: "Record the decision", Status: "open", Priority: 3,
+			Executor: domain.ConversationWith(domain.RoleArchitect)},
+	}
+	harness := newScheduleHarness(architects...)
+	harness.capacity = 2
+	// The other slot: a run somebody else's process is carrying, which is what
+	// makes the line moving rather than stopped.
+	harness.inFlight["yoyodyne-ifd.236"] = runstate.State{
+		RunID: "run-236", WorkItemID: "yoyodyne-ifd.236", Status: runstate.StatusRunning,
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}.
+		Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want nothing started for work no run can carry", schedule.Started)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded, so nothing said what the session found")
+	}
+	for _, want := range []string{
+		"1 run in flight",
+		"3 items passed over, of 3 admitted",
+		"carried in conversation (architect: yoyodyne-ifd.212, yoyodyne-ifd.203, yoyodyne-ifd.162)",
+	} {
+		if !strings.Contains(idle.reason, want) {
+			t.Fatalf("idle reason = %q, want it to say %q", idle.reason, want)
+		}
+	}
+	// The sentence that was read as a stopped line, gone rather than reworded.
+	if strings.Contains(idle.reason, "this session has not already tried") {
+		t.Fatalf("idle reason = %q, want what was found rather than a count of what was not", idle.reason)
+	}
+	// The two facts whose move follows is derived from. Without them a reader is
+	// back to the clause that named the one person who could do nothing about it.
+	if idle.running != 1 {
+		t.Fatalf("idle running = %d, want the run in flight recorded so the line does not read as stopped", idle.running)
+	}
+	if want := domain.ConversationWith(domain.RoleArchitect); idle.executor != want {
+		t.Fatalf("idle executor = %q, want %q, the conversation that carries the work passed over", idle.executor, want)
+	}
+}
+
+// The other side of the same line: a poll with nothing going and nothing
+// anybody carries says so, and names nobody it should not. The conversation and
+// the runs are what displace the admission clause, so a session that has neither
+// leaves it where it was.
+func TestAnIdleWatchOverAnEmptyBacklogNamesNoConversationAndNoRun(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	if _, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}).
+		Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded over an empty backlog")
+	}
+	if idle.reason != "the backlog is empty" {
+		t.Fatalf("idle reason = %q, want the empty backlog said as itself", idle.reason)
+	}
+	if idle.running != 0 || idle.executor != "" {
+		t.Fatalf("idle = %d run(s), executor %q, want neither over a queue with nothing in it", idle.running, idle.executor)
+	}
+}
+
 // The intake hold is a brake rather than a stop for a session that is watching:
 // it polls, chooses nothing, and resumes in place when the operator releases it.
 // A drain still returns, because a drain is a command somebody is waiting on.
@@ -2094,6 +2189,11 @@ type recordedSessions struct {
 type recordedTransition struct {
 	state  runstate.WatchState
 	reason string
+	// running and executor are what a reader takes whose move follows an idle poll
+	// from: the runs the session could see going, and the conversation carrying the
+	// work it passed over.
+	running  int
+	executor domain.WorkItemExecutor
 	// restarting is the session marking its last line as a restart rather than an
 	// ending, which is what every surface reads to tell the operator whether
 	// anything is waiting on them.
@@ -2109,9 +2209,25 @@ func (r *recordedSessions) Record(transition SessionState) error {
 	r.transitions = append(r.transitions, recordedTransition{
 		state:      transition.State,
 		reason:     transition.Reason,
+		running:    transition.Running,
+		executor:   transition.Executor,
 		restarting: transition.Restarting,
 	})
 	return nil
+}
+
+// entered is the first transition recorded into a state, whole rather than only
+// its reason: a test about what a reader is told has to read the fields the
+// reader's whose-move clause is derived from too.
+func (r *recordedSessions) entered(state runstate.WatchState) (recordedTransition, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, transition := range r.transitions {
+		if transition.state == state {
+			return transition, true
+		}
+	}
+	return recordedTransition{}, false
 }
 
 func (r *recordedSessions) states() []runstate.WatchState {

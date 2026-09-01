@@ -355,7 +355,12 @@ func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 		State:         transition.State,
 		At:            transition.At,
 		Reason:        transition.Reason,
-		Build:         w.build,
+		// What the session could see going, and the conversation it is waiting on
+		// where it is waiting on one. Both are what keep an idle line from reading as
+		// a stopped machine or as a queue nobody has admitted work to.
+		Running:  transition.Running,
+		Executor: transition.Executor,
+		Build:    w.build,
 		// A stop that is a restart says so, so the reader who is not at this
 		// terminal is told a session is coming back rather than told to start one.
 		Restarting: transition.Restarting,
