@@ -842,7 +842,22 @@ type State struct {
 	// be pushed is an outstanding publication rather than a failed run — the same
 	// kind of fact as an outstanding cleanup.
 	PublishFailure string `json:"publish_failure,omitempty"`
-	Failure        string `json:"failure,omitempty"`
+	// Failure is why this run ended, in the words of whoever ended it, and it is
+	// what every surface prints where it answers "why did this stop". It is
+	// written by whatever made the run terminal — the pipeline as it fails a run,
+	// the sweep as it settles one — and a sweep settling a stoppage onto a record
+	// that was already terminal fills it in where that record gives no reason,
+	// because a stoppage nobody can read a reason for is what the surfaces cannot
+	// recover from afterwards.
+	//
+	// It is text and never a test. Whether a run stopped is Blocker's to answer
+	// and Outcome()'s to say: a run can end with a reason and no blocker, which is
+	// a failure nobody has to decide about, and a stoppage can reach a record
+	// whose reason was written before it. A reader inferring a stoppage from a
+	// non-empty Failure is a second classification that will disagree with the
+	// read model's, which is exactly what the fixed outcome vocabulary exists to
+	// prevent.
+	Failure string `json:"failure,omitempty"`
 	// Blocker is the durable blocker exactly as it was recorded on the work item
 	// when this run stopped on something no further attempt of the harness could
 	// resolve. The tracker holds the authoritative copy; this one is kept because
@@ -852,6 +867,10 @@ type State struct {
 	// run must not have to go and find which of the item's notes was this run's.
 	// Absent means this run stopped on nothing anybody has to decide, which is
 	// what every record written before the docket existed means.
+	//
+	// It is the one field a stoppage is inferred from, which is why the words and
+	// the fact are two fields rather than one: Failure above says why a run ended
+	// and this says that somebody now owns it.
 	Blocker string `json:"blocker,omitempty"`
 	// CleanupFailure explains why post-completion cleanup did not finish
 	// cleanly. The run's work is already integrated, closed, and durable when it

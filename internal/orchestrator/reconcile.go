@@ -749,8 +749,15 @@ func (r Reconciler) blockRun(ctx context.Context, state runstate.State, itemStat
 	// The blocker is kept on the run as well as on the item, so what stopped
 	// this run is readable from its own record rather than from whichever of the
 	// item's notes turns out to have been this one's.
+	//
+	// It is written through saveTerminalFailure rather than recordTerminalFailure
+	// because the blocker has to reach disk even for a run some killed process
+	// already made terminal: a stoppage settled onto such a record and skipped is
+	// a run whose durable record never says it stopped, so the docket built after
+	// this sweep, the outcome word every listing derives from the blocker, and the
+	// channel's reading of the record all miss it.
 	state.Blocker = runstate.RecordBlocker(notes)
-	settled, saveErr := r.recordTerminalFailure(state, reason)
+	settled, saveErr := r.saveTerminalFailure(state, reason)
 	result := reconciliationOf(settled, ActionBlocked)
 	result.Detail = reason
 	result.DocketProblem = r.docketStoppedRun(settled)
@@ -810,12 +817,23 @@ func (r Reconciler) recordTerminalFailure(state runstate.State, reason string) (
 // reach disk even when the run was already terminal, and a caller with such a
 // change needs the write rather than the skip.
 func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (runstate.State, error) {
+	reconciled := "reconciled after an interrupted run: " + reason
 	if !state.Status.Terminal() {
 		completedAt := r.clock().Now()
 		state.Status = runstate.StatusFailed
 		state.UpdatedAt = completedAt
 		state.CompletedAt = &completedAt
-		state.Failure = "reconciled after an interrupted run: " + reason
+		state.Failure = reconciled
+	} else if strings.TrimSpace(state.Failure) == "" && strings.TrimSpace(state.PublishFailure) == "" {
+		// A record that was already terminal keeps the status it wrote for itself,
+		// but a record that says nothing about why is what left every surface
+		// answering "why did this stop" with an empty line. So the sweep's own
+		// reason is written exactly where the record gives none. A run that
+		// recorded how it ended keeps its own words, and so does one whose reason
+		// is an outstanding publication: both say more than settling it does, and
+		// a publication that could not be pushed must never be read as a failed
+		// piece of work.
+		state.Failure = reconciled
 	}
 	if err := r.Store.Save(state); err != nil {
 		return state, fmt.Errorf("save reconciled run state for %s: %w", state.RunID, err)

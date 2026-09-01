@@ -139,3 +139,15 @@ docket and `yoyo status`'s reason block both render "why did this stop" from
 a run that was already terminal. Those surfaces show an empty reason for a
 stoppage reconciliation settled late. The Slack lines state the absence rather
 than trailing off; the other two were not checked.
+
+**Closed by yoyodyne-ifd.227**, which also corrected one claim above: the docket
+entry renders the stoppage from `State.Blocker` rather than from `State.Failure`,
+so what was empty there was the blocker rather than the reason. `blockRun`
+settled through `recordTerminalFailure`, which skips the write entirely on a
+terminal record, so the blocker it put on the run never reached disk at all —
+`yoyo status`'s outcome word, a later docket build, and the channel's reading of
+the record all missed the stoppage, not only its reason.
+`saveTerminalFailure` now records the sweep's own reason where the record gives
+none, and the Failure-versus-Blocker rule is written on the two fields in
+`internal/runstate/state.go`: `Blocker` is the one field a stoppage is inferred
+from, and `Failure` is the words and never the test.
