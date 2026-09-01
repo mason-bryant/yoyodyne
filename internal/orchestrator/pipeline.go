@@ -142,6 +142,12 @@ type StateStore interface {
 	// every simultaneous start can lose.
 	LeaseRotation(ctx context.Context) (*runstate.Lease, error)
 	Save(state runstate.State) error
+	// Load reads one run's record back. A run holding its own lease has no reason
+	// to ask what is on disk — its own state is ahead of it — with one exception:
+	// a save the store refused leaves the record behind what this process holds,
+	// and the ending has to be written onto what is actually there rather than
+	// onto the record that was refused.
+	Load(runID string) (runstate.State, error)
 	AppendEvent(event execution.Event) error
 	// ReleasedWait reports whether the operator has said that a run's recorded
 	// usage-limit deadline no longer describes the provider, and ClearRelease
@@ -4010,6 +4016,16 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	a.state.Failure = message
 	if saveErr := p.Store.Save(a.state); saveErr != nil {
 		cause = errors.Join(cause, fmt.Errorf("save failed run state: %w", saveErr))
+		// Only a state the store refuses is salvaged, and never a store that could
+		// not be written. The second leaves an interrupted run behind, which is what
+		// it is and what reconciliation exists to settle; ending it here would take
+		// a resumable run away from the process that comes back for it.
+		var refused runstate.RefusedStateError
+		if errors.As(saveErr, &refused) {
+			if endingErr := a.recordEndingAfterRefusedSave(status, completedAt, refused); endingErr != nil {
+				cause = errors.Join(cause, endingErr)
+			}
+		}
 	}
 	a.outcome.Status = status
 	a.outcome.Phase = a.state.Phase
@@ -4040,6 +4056,61 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	// at less than it cost, which is the whole reason the price is per item.
 	a.recordPrice()
 	return a.outcome, cause
+}
+
+// maxRefusedRecordFailureBytes keeps the failure a salvaged record carries to a
+// readable line. It is bounded rather than joined whole because one reason a
+// record is refused is that it is too big to store, and a salvage that carried
+// the same bytes back would be refused for the same reason.
+const maxRefusedRecordFailureBytes = 1024
+
+// recordEndingAfterRefusedSave writes the smallest true record of a run whose
+// own terminal state the durable schema refused.
+//
+// A refused save leaves on disk whichever earlier state validated, and for a run
+// ending here that is a snapshot of a run still in flight. Everything that reads
+// the run after this process exits reads that snapshot rather than the outcome
+// this process returns — `yoyo status`, reconciliation, the triage docket, cost
+// attribution — so a run that was reviewed and blocked reads back afterwards as
+// a run nothing ever judged. The run has already failed; what must not also
+// happen is that it reads as one nothing ever ended.
+//
+// This is only for the refusal that no later write closes. A store that could not
+// be written is left alone: the interrupted run it leaves is a true record of a
+// process that stopped, and something comes back for it.
+//
+// So the ending is carried onto the record that is actually there rather than
+// onto the one the store refused, and the failure names what cost it. The
+// evidence the refused record held is lost from the record, not from the run:
+// the work item carries the blocker and the docket entry carries the findings,
+// and the caller writes both from this process's own state.
+//
+// Refused again, there is nothing further to try. The run reports both refusals,
+// and what is left on disk is an interrupted run for reconciliation to settle —
+// which is the one reading of it that is not a lie.
+func (a *activeRun) recordEndingAfterRefusedSave(status runstate.Status, completedAt time.Time, refused error) error {
+	p := a.pipeline
+	durable, err := p.Store.Load(a.state.RunID)
+	if err != nil {
+		return fmt.Errorf("load the run state the refused save left behind: %w", err)
+	}
+	// The resume markers are cleared for the reason the refused record cleared
+	// them: each is an instruction to continue a run that is now over.
+	durable.UsageLimitResetsAt = nil
+	durable.PauseCause = ""
+	durable.ProviderStop = ""
+	durable.DirectivePause = nil
+	durable.DependencyPause = nil
+	durable.OperatorHeldSince = nil
+	durable.Status = status
+	durable.UpdatedAt = completedAt
+	durable.CompletedAt = &completedAt
+	durable.Failure = singleLine(fmt.Sprintf("%s (this record carries the run's ending and not its evidence, because the run's own state could not be stored: %s)",
+		a.state.Failure, refused), maxRefusedRecordFailureBytes)
+	if err := p.Store.Save(durable); err != nil {
+		return fmt.Errorf("record the run's ending over the state the store refused: %w", err)
+	}
+	return nil
 }
 
 // maxCostProblemBytes keeps a price that could not be recorded to a readable
