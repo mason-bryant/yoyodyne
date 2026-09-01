@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -110,10 +111,117 @@ func TestWorkUsageSaysWhatWatchingIsAndThatDrainingIsTheDefault(t *testing.T) {
 		// documented: an operator who reads "caps what one session spends" and
 		// meets a stop instead is reading the wrong promise.
 		"--budget fails closed",
+		// A session that restarts itself is a process ending and beginning under
+		// somebody's terminal, which is exactly the behaviour an operator should
+		// not have to discover by watching it happen.
+		"also takes up a build deployed over it",
+		"restarts into what was deployed",
+		// And what a deploy does to a bound the operator set, which is the half
+		// somebody reading "caps what one session spends" would otherwise have to
+		// find out from a bill.
+		"never hands a bounded session its cap back",
 	} {
 		if !strings.Contains(usage.String(), want) {
 			t.Fatalf("work usage = %q, want it to say %q", usage.String(), want)
 		}
+	}
+}
+
+// What a bounded session hands to the build it restarts into. The bound is the
+// operator's and a deploy is not them raising it, so what crosses is the
+// remainder: a session $45 into $50 comes back with $4.99 left rather than with
+// $50 again, and the same for a count of runs.
+func TestARestartCarriesWhatIsLeftOfTheBoundsRatherThanTheWholeOfThem(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		args    []string
+		budget  float64
+		spent   float64
+		limit   int
+		started int
+		want    []string
+	}{
+		"a budget and a limit given as separate arguments": {
+			args:    []string{"/usr/local/bin/yoyo", "work", "--watch", "--budget", "50", "--limit", "10"},
+			budget:  50,
+			spent:   45.01,
+			limit:   10,
+			started: 6,
+			want:    []string{"/usr/local/bin/yoyo", "work", "--watch", "--budget", "4.99", "--limit", "4"},
+		},
+		"the same bounds written with equals signs and one dash": {
+			args:    []string{"./bin/yoyo", "work", "--watch", "--budget=50", "-limit=10"},
+			budget:  50,
+			spent:   12.5,
+			limit:   10,
+			started: 1,
+			want:    []string{"./bin/yoyo", "work", "--watch", "--budget=37.50", "-limit=9"},
+		},
+		"an unbounded session, which has nothing to reduce": {
+			args: []string{"./bin/yoyo", "work", "--watch", "--json"},
+			want: []string{"./bin/yoyo", "work", "--watch", "--json"},
+		},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := continued(test.args, test.budget, test.spent, test.limit, test.started)
+			if strings.Join(got, " ") != strings.Join(test.want, " ") {
+				t.Fatalf("continued() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+// Neither bound is ever written into a restart as zero, because zero is how both
+// of these flags ask for no bound at all -- a cap that came back as its own
+// absence. The scheduler stops a session on the bound it reached before it can
+// redeploy, and this is the guard that says so out loud rather than assuming it.
+func TestARestartIsRefusedWhereABoundHasNothingLeftOfIt(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		budget  float64
+		spent   float64
+		limit   int
+		started int
+		want    string
+	}{
+		"something left of both bounds":     {budget: 50, spent: 45, limit: 10, started: 6, want: ""},
+		"no bounds at all":                  {want: ""},
+		"the budget exactly spent":          {budget: 50, spent: 50, want: "budget"},
+		"more spent than the budget allows": {budget: 50, spent: 51.20, want: "budget"},
+		"the last permitted run started":    {limit: 4, started: 4, want: "runs"},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := exhausted(test.budget, test.spent, test.limit, test.started)
+			if test.want == "" && got != "" {
+				t.Fatalf("exhausted() = %q, want a session that may still be restarted", got)
+			}
+			if test.want != "" && !strings.Contains(got, test.want) {
+				t.Fatalf("exhausted() = %q, want the %s bound named as the one with nothing left of it", got, test.want)
+			}
+		})
+	}
+}
+
+// The remainder is written exactly rather than rounded to cents, because a
+// remainder under a cent rounded to "0.00" is how an unbounded session is asked
+// for -- a bound that quietly became no bound at all.
+func TestARemainderUnderACentIsStillABound(t *testing.T) {
+	t.Parallel()
+
+	got := continued([]string{"yoyo", "work", "--watch", "--budget", "50"}, 50, 49.999, 0, 0)
+	if got[4] == "0.00" || got[4] == "0" {
+		t.Fatalf("continued() left the budget as %q, which asks for an unbounded session", got[4])
+	}
+	if _, err := strconv.ParseFloat(got[4], 64); err != nil {
+		t.Fatalf("budget %q does not read back as a number: %v", got[4], err)
 	}
 }
 
@@ -131,7 +239,7 @@ func TestAWatchSessionWritesIntoTheProductsOwnWatchLog(t *testing.T) {
 		t.Fatalf("openWatchSession() error = %v", err)
 	}
 	at := time.Now().UTC()
-	if err := sessions.Record(runstate.WatchWatching, at, "watching the backlog until stopped"); err != nil {
+	if err := sessions.Record(orchestrator.SessionState{State: runstate.WatchWatching, At: at, Reason: "watching the backlog until stopped"}); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
 
@@ -158,7 +266,7 @@ func TestAWatchSessionWritesIntoTheProductsOwnWatchLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openWatchSession() error = %v", err)
 	}
-	if err := other.Record(runstate.WatchIdle, at, "the backlog is empty"); err != nil {
+	if err := other.Record(orchestrator.SessionState{State: runstate.WatchIdle, At: at, Reason: "the backlog is empty"}); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
 	recorded, err = watch.List()

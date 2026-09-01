@@ -18,10 +18,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"time"
+	"math"
+	"strconv"
+	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
@@ -29,6 +32,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/redeploy"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
 )
@@ -89,6 +93,11 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// than starting a session nothing can see: an unattended session nobody can
 	// tell is alive is the state the whole guard exists to prevent, and it is
 	// better refused at the start than discovered in the morning.
+	//
+	// binary is the file this session is executing, resolved for a watch and for
+	// nothing else, and left nil where the platform cannot replace a running
+	// process.
+	var binary *redeploy.Binary
 	if *watch {
 		sessions, err := openWatchSession(*configPath)
 		if err != nil {
@@ -96,9 +105,139 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			return 1
 		}
 		scheduler.Sessions = sessions
+		// Which file this process was started from, read before anything runs. A
+		// watching session outlives the deploys that land behind it, and this is
+		// what lets it take one up between runs rather than dispatching from a
+		// build the harness moved past until somebody restarts it.
+		//
+		// A platform that cannot replace a running process says so here, and the
+		// session watches without it. That is a session as capable as every session
+		// before this existed, so refusing to watch at all over it would take away
+		// more than this adds — but it is said out loud, because a session that
+		// will not take up a deploy is exactly what somebody would otherwise assume
+		// had happened.
+		binary, err = redeploy.Running()
+		switch {
+		case errors.Is(err, redeploy.ErrUnsupported):
+			fmt.Fprintf(stderr, "this session will not take up a build deployed over it, and has to be restarted by hand for one: %v\n", err)
+		case err != nil:
+			fmt.Fprintf(stderr, "work failed: %v\n", err)
+			return 1
+		default:
+			scheduler.Deployment = binary
+		}
 	}
 	schedule, err := scheduler.Schedule(ctx)
-	return reportSchedule(stdout, stderr, *jsonOutput, schedule, err)
+	code := reportSchedule(stdout, stderr, *jsonOutput, schedule, err)
+	if !schedule.Redeploying() || binary == nil {
+		return code
+	}
+	// A bounded session arrives here with something left of both its bounds: what
+	// it has spent and how many runs it has started are checked at the top of
+	// every pull, ahead of the redeploy, so a bound that is gone stops the session
+	// on that bound rather than restarting it.
+	//
+	// The guard is here because the cost of that ordering ever changing is silent
+	// in one direction and loud in the other, and neither is acceptable: a build
+	// invoked with a negative budget refuses to start and takes the line down,
+	// and a build invoked with "--limit 0" starts an unbounded session, which is
+	// the operator's cap disappearing with nobody told.
+	if spent := exhausted(*budget, schedule.SpentUSD, *limit, len(schedule.Started)); spent != "" {
+		fmt.Fprintf(stderr, "work stopped to restart into the build deployed over it, and did not: %s\n", spent)
+		return code
+	}
+	// Every run this session started has already ended, and the queue has been
+	// left alone since the deploy landed. What is left is to become the build that
+	// was deployed: the account of the session that just ended has been printed,
+	// and nothing returns from this when it works — the process goes on as the new
+	// build, watching the same queue under what is left of the same bounds.
+	if err := binary.Take(continued(binary.Args(), *budget, schedule.SpentUSD, *limit, len(schedule.Started))); err != nil {
+		fmt.Fprintf(stderr, "work stopped to restart into the build deployed over it, and could not: %v\n", err)
+		return 1
+	}
+	return code
+}
+
+// exhausted names a bound a session has nothing left of, and says nothing for a
+// session that may still be restarted.
+//
+// Zero is how both of these flags ask for no bound at all, so a remainder of
+// zero must never be written into a restart: the bound would come back as its
+// own absence. Nothing is expected to reach it — a session that has reached
+// either bound stops on that bound before it can redeploy — which is exactly why
+// it is here rather than assumed, because what a mistake in that ordering costs
+// is the operator's cap, quietly.
+func exhausted(budget, spent float64, limit, started int) string {
+	switch {
+	case budget > 0 && budget-spent <= 0:
+		return "nothing was left of the budget the session was given"
+	case limit > 0 && limit-started <= 0:
+		return "no runs were left of the number the session was given"
+	}
+	return ""
+}
+
+// continued is how a session's own command line crosses a restart: the same
+// invocation, with the bounds the operator gave it reduced to what is left of
+// them.
+//
+// A bound carried whole would be a bound that starts again at every deploy, and
+// on a machine that deploys several times a day that is not a bound at all — a
+// session forty-five dollars into a fifty dollar budget would come back with
+// fifty. Nothing about a deploy is the operator raising a cap they set, so what
+// crosses the restart is the remainder: the budget less what the session spent,
+// and the run count less what it started.
+//
+// Both remainders are strictly positive here: a session that has reached either
+// bound stops on that bound instead of redeploying, and exhausted refuses the
+// restart ahead of this if it ever does not.
+func continued(args []string, budget, spent float64, limit, started int) []string {
+	invocation := append([]string(nil), args...)
+	if budget > 0 {
+		replaceFlagValue(invocation, "budget", remainingBudget(budget-spent))
+	}
+	if limit > 0 {
+		replaceFlagValue(invocation, "limit", strconv.Itoa(limit-started))
+	}
+	return invocation
+}
+
+// remainingBudget writes what is left of a budget as the argument the build this
+// session restarts into is given.
+//
+// It is rounded down to the cent, which is how money is said everywhere else
+// here and is the safe direction: rounded up, the restart would hand back a
+// fraction of a cent the session had already spent. Under a cent it is written
+// exactly instead, because a remainder rounded to "0.00" is how an unbounded
+// session is asked for, and a bound that quietly became no bound at all is the
+// one mistake this must not make.
+func remainingBudget(remaining float64) string {
+	if cents := math.Floor(remaining*100) / 100; cents > 0 {
+		return strconv.FormatFloat(cents, 'f', 2, 64)
+	}
+	return strconv.FormatFloat(remaining, 'f', -1, 64)
+}
+
+// replaceFlagValue rewrites one flag's value wherever a command line gives it,
+// in both spellings the flag package accepts and with either one dash or two. A
+// flag the command line does not carry is left absent rather than added: what is
+// being rewritten is a value the operator wrote, and a bound nobody asked for is
+// not this command's to invent.
+func replaceFlagValue(args []string, name, value string) {
+	for index := 0; index < len(args); index++ {
+		if args[index] == "-"+name || args[index] == "--"+name {
+			if index+1 < len(args) {
+				args[index+1] = value
+				index++
+			}
+			continue
+		}
+		for _, prefix := range []string{"-" + name + "=", "--" + name + "="} {
+			if strings.HasPrefix(args[index], prefix) {
+				args[index] = prefix + value
+			}
+		}
+	}
 }
 
 // openWatchSession names one session of watching and gives it somewhere durable
@@ -141,15 +280,18 @@ type watchSessionLog struct {
 	build string
 }
 
-func (w watchSessionLog) Record(state runstate.WatchState, at time.Time, reason string) error {
+func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 	return w.store.Record(runstate.WatchTransition{
 		SchemaVersion: runstate.WatchSchemaVersion,
 		ProductID:     w.productID,
 		SessionID:     w.sessionID,
-		State:         state,
-		At:            at,
-		Reason:        reason,
+		State:         transition.State,
+		At:            transition.At,
+		Reason:        transition.Reason,
 		Build:         w.build,
+		// A stop that is a restart says so, so the reader who is not at this
+		// terminal is told a session is coming back rather than told to start one.
+		Restarting: transition.Restarting,
 	})
 }
 
@@ -286,6 +428,21 @@ lifts it.
 And what the session is doing -- watching, idle, braked, resumed, stopped -- is
 recorded where "yoyo status" and the Slack sink read it, because an idle session
 and a dead one are otherwise the same silence.
+
+A watching session also takes up a build deployed over it. When the yoyo it is
+running is written over -- installed, rebuilt -- it stops choosing, waits out
+every run it already started, and restarts into what was deployed. A run in
+flight is never interrupted for it, so a fix you build reaches the session at the
+gap after the run that is going now rather than when somebody remembers to
+restart it. That stop is recorded as a restart rather than as an ending, so
+"yoyo status" and the Slack sink say a session is coming back rather than telling
+you to start one. The queue is re-read from scratch on the way back in, exactly as it
+is at every poll, and the bounds you gave the session cross the restart reduced
+to what is left of them -- --budget less what it has spent, --limit less what it
+has started -- so a deploy never hands a bounded session its cap back. A session
+that has reached either bound stops on it rather than restarting. A platform that
+cannot replace a running process says so when the session opens, and that session
+watches without this and is restarted by hand for a deploy.
 
 --budget fails closed. A pass with no way to price itself is refused before
 anything starts, and a session that meets a run whose recorded evidence will not

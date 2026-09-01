@@ -194,8 +194,9 @@ var harnessVoice = voice{
 		KindWatchBraked:         "The watch session is choosing nothing while intake is held: {why}",
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
+		KindWatchRedeploying:    "The watch session is restarting into the build deployed over it, having waited out every run it started: {why}",
 		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.\n\n{standing}",
-		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. Restarting it deploys them.",
+		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
 		KindCatchUpDigest:       "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
 	},
 }
@@ -245,8 +246,9 @@ var developerVoice = voice{
 		KindWatchBraked:         "Nothing is being handed to me while intake is held: {why}",
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
+		KindWatchRedeploying:    "The session that hands me work is restarting into a newer build of itself; work will keep arriving once it is back: {why}",
 		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.\n\n{standing}",
-		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until somebody restarts it, and I'd spend the round finding that out.",
+		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
 		KindCatchUpDigest:       "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
 	},
 }
@@ -296,8 +298,9 @@ var reviewerVoice = voice{
 		KindWatchBraked:         "Nothing new is being started while intake is held, so nothing is coming for a verdict: {why}",
 		KindWatchResumed:        "Work is starting again, so changes will come back to me: {why}",
 		KindWatchStopped:        "No more changes will arrive from this session; what I judged already stands: {why}",
+		KindWatchRedeploying:    "The session sending me changes is restarting into a newer build of itself, so what arrives next was chosen by the build that was deployed: {why}",
 		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.\n\n{standing}",
-		KindResidentStale:       "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back.",
+		KindResidentStale:       "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back, and installing that build is what stops me granting one — the session takes it up itself between runs.",
 		KindCatchUpDigest:       "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
 	},
 }
@@ -346,8 +349,9 @@ var developmentManagerVoice = voice{
 		KindWatchBraked:         "I'm pulling nothing while intake is held, and what was already running finishes: {why}",
 		KindWatchResumed:        "I'm pulling from the top of the queue again: {why}",
 		KindWatchStopped:        "The queue stops being pulled from here; what is in it stays in it: {why}",
+		KindWatchRedeploying:    "The queue stops being pulled from only until the session is back on the build deployed over it, and nothing in it moved: {why}",
 		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.\n\n{standing}",
-		KindResidentStale:       "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does.",
+		KindResidentStale:       "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does, and they stop when that build is installed — the session takes it up itself between runs.",
 		KindCatchUpDigest:       "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
 	},
 }
@@ -397,8 +401,9 @@ var productManagerVoice = voice{
 		KindWatchBraked:         "Spending has stopped while intake is held, and what is in the backlog keeps its place: {why}",
 		KindWatchResumed:        "Work is being chosen again, and what I admit is what gets spent on: {why}",
 		KindWatchStopped:        "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
+		KindWatchRedeploying:    "Choosing and spending pause only while the session restarts into the build deployed over it, and the backlog is untouched by that: {why}",
 		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.\n\n{standing}",
-		KindResidentStale:       "What is being spent on this product was built at {commit}, before {behind} landed. Until it is restarted, some of that spend buys work the system has already paid for once.",
+		KindResidentStale:       "What is being spent on this product was built at {commit}, before {behind} landed. Until that build is installed, some of that spend buys work the system has already paid for once; the session takes it up itself between runs once it is.",
 		KindCatchUpDigest:       "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
 	},
 }
@@ -448,8 +453,9 @@ var architectVoice = voice{
 		KindWatchBraked:         "Selection is stopped by the intake hold, which is the brake working rather than failing: {why}",
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
+		KindWatchRedeploying:    "The selection loop closes and restarts on the build deployed over it; every run it started was waited out rather than abandoned: {why}",
 		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} the tracker calls ready behind it. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
-		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap, said out loud until restart has an owner.",
+		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
 		KindCatchUpDigest:       "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
 	},
 }
@@ -559,12 +565,17 @@ var nextMoves = map[Kind]string{
 	KindWatchBraked:    "the operator's — choosing resumes when intake is released.",
 	KindWatchResumed:   "the harness's — work is being chosen again.",
 	KindWatchStopped:   "the operator's — nothing more is chosen until a session is started again.",
-	KindLineWaiting:    "the operator's — this stands until somebody clears what stopped it.",
-	// Nothing but a restart clears this, and nothing in the harness performs one:
-	// a session cannot replace the binary it is executing, and until the
-	// supervision design gives restart an owner the only thing that can is a
-	// person.
-	KindResidentStale: "the operator's — the session runs what it was started with until somebody restarts it.",
+	// The one stop nobody has to answer. The session waited out its runs and is
+	// being re-executed into the build deployed over it, so telling the reader to
+	// start a session would be handing them a move they do not have — once per
+	// deploy, which is exactly the standing chore self-redeployment removes.
+	KindWatchRedeploying: "nobody's — the session is coming back on the build that was deployed, and the queue is read again when it does.",
+	KindLineWaiting:      "the operator's — this stands until somebody clears what stopped it.",
+	// The restart is no longer anybody's: a watch session takes up a build
+	// installed over it by itself, between the runs it is carrying and without
+	// interrupting one. What is left is the install, which is why this names it
+	// rather than naming a restart nobody has to make.
+	KindResidentStale: "the operator's — installing the build is the whole of it; the session takes it up itself between runs.",
 	KindCatchUpDigest: "nobody's — the record holds all of it, and the thread carries on from here.",
 }
 
