@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -111,6 +113,57 @@ const (
 	SeverityMajor   = "major"
 	SeverityMinor   = "minor"
 )
+
+// The two vocabularies above stated as lists, which is what the validation below
+// reads. Neither is repeated in a switch anywhere in this package, so the list
+// and what a record may carry cannot come to disagree.
+//
+// Both lists are closed and both stay closed. A stored value nothing recognizes
+// is worse than a refused one here: what reads these fields ranks a severity to
+// order a listing, and builds the repair prompt a developer is handed back from
+// them, and neither has an answer for a word it has never seen. Opening them —
+// the tolerant reader, which is right where a record arrives from somewhere this
+// code does not control — would move the refusal out of the save and into those
+// readers, where it is silent.
+//
+// What closing them costs is the trap they once sprang: the reviewer's
+// vocabulary grew, the durable one did not, and the addition was refused at save
+// time in a process that had already reported the verdict to the tracker and the
+// operator. That price is now paid where it can be seen instead.
+// TestTheDurableSchemaStoresEveryVerdictTheReviewerCanProduce holds the review
+// package's vocabularies to being subsets of these, so an addition there fails a
+// check rather than somebody's run.
+var (
+	reviewDecisions   = []string{ReviewApprove, ReviewRepair}
+	findingSeverities = []string{SeverityBlocker, SeverityMajor, SeverityMinor}
+)
+
+// ReviewDecisions and FindingSeverities are those vocabularies as a caller
+// outside this package reads them. Each answers with a copy, because a
+// package-level slice is a vocabulary anybody holding it could rewrite.
+func ReviewDecisions() []string { return slices.Clone(reviewDecisions) }
+
+func FindingSeverities() []string { return slices.Clone(findingSeverities) }
+
+// quotedAlternatives names a vocabulary the way a refusal has to: every value
+// quoted, the last joined with "or". It is derived from the list rather than
+// written out beside it so a value added to one is named by the other.
+func quotedAlternatives(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, strconv.Quote(value))
+	}
+	switch len(quoted) {
+	case 0:
+		return "nothing"
+	case 1:
+		return quoted[0]
+	case 2:
+		return quoted[0] + " or " + quoted[1]
+	default:
+		return strings.Join(quoted[:len(quoted)-1], ", ") + ", or " + quoted[len(quoted)-1]
+	}
+}
 
 // The two ways the harness itself stops a provider invocation on time. They are
 // recorded apart because they describe opposite things: a stalled invocation
@@ -238,10 +291,8 @@ type Finding struct {
 // Validate reports every contract violation in the finding at once.
 func (f Finding) Validate() error {
 	var problems []error
-	switch f.Severity {
-	case SeverityBlocker, SeverityMajor, SeverityMinor:
-	default:
-		problems = append(problems, fmt.Errorf("severity %q must be %q, %q, or %q", f.Severity, SeverityBlocker, SeverityMajor, SeverityMinor))
+	if !slices.Contains(findingSeverities, f.Severity) {
+		problems = append(problems, fmt.Errorf("severity %q must be %s", f.Severity, quotedAlternatives(findingSeverities)))
 	}
 	if strings.TrimSpace(f.Message) == "" {
 		problems = append(problems, errors.New("message is required"))
@@ -1010,7 +1061,7 @@ func (s State) Validate() error {
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))
 	}
-	if s.ReviewDecision != "" && s.ReviewDecision != ReviewApprove && s.ReviewDecision != ReviewRepair {
+	if s.ReviewDecision != "" && !slices.Contains(reviewDecisions, s.ReviewDecision) {
 		problems = append(problems, errors.New("review_decision is invalid"))
 	}
 	if s.ReviewFindings < 0 {

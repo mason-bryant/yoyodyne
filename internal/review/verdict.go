@@ -31,6 +31,29 @@ const (
 	SeverityMinor   Severity = "minor"
 )
 
+// The two vocabularies above as lists, which is what validates a verdict below:
+// a value permitted here and a value the contract accepts are one list rather
+// than two that can drift.
+//
+// Anything added to either has to be added to the durable schema that stores it,
+// which keeps its own copy so a record is checked against what a record may hold
+// rather than against this version of the harness. That is a real trap — the
+// addition is accepted here and refused at the moment a run tries to store what
+// it decided — so the two are held together by
+// TestTheDurableSchemaStoresEveryVerdictTheReviewerCanProduce rather than by
+// whoever adds the value remembering.
+var (
+	decisions  = []Decision{DecisionApprove, DecisionRepair}
+	severities = []Severity{SeverityBlocker, SeverityMajor, SeverityMinor}
+)
+
+// Decisions and Severities are those vocabularies as a caller outside this
+// package reads them, each answered with a copy so nothing holding one can
+// rewrite the contract.
+func Decisions() []Decision { return slices.Clone(decisions) }
+
+func Severities() []Severity { return slices.Clone(severities) }
+
 // Location optionally anchors a finding to a place in the reviewed change.
 type Location struct {
 	File string `json:"file"`
@@ -255,14 +278,9 @@ func uniqueStrings(values []string) []string {
 }
 
 func (d Decision) Valid() bool {
-	return d == DecisionApprove || d == DecisionRepair
+	return slices.Contains(decisions, d)
 }
 
 func (s Severity) Valid() bool {
-	switch s {
-	case SeverityBlocker, SeverityMajor, SeverityMinor:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(severities, s)
 }
