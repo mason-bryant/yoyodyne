@@ -15,8 +15,10 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/action"
@@ -117,6 +119,25 @@ func registered() []action.Action[*Assessment] {
 	}
 }
 
+// answersWith is what each registered check can produce, in sorted order.
+//
+// A registered action declares its capabilities and not yet its outcomes, so the
+// workflow package cannot ask whether a definition handles the outcomes the
+// action it selected can return — its own Validate says so. This package can:
+// the checks are its own, and it knows that four of them answer conforms or
+// diverges and that the staleness survey answers only noted. Holding a
+// definition to it at compile is what keeps "a definition that is wrong is
+// refused whole, before a check runs" true rather than nearly true — the case it
+// closes is a definition that routes the staleness survey on `diverges`, which
+// would otherwise compile, run four checks, and die on the fifth.
+var answersWith = map[string][]string{
+	"conformance.artifacts":  {OutcomeConforms, OutcomeDiverges},
+	"conformance.references": {OutcomeConforms, OutcomeDiverges},
+	"conformance.invariants": {OutcomeConforms, OutcomeDiverges},
+	"conformance.goals":      {OutcomeConforms, OutcomeDiverges},
+	"conformance.staleness":  {OutcomeNoted},
+}
+
 // Grant is the authority a release-readiness workflow is compiled and performed
 // under: reading the repository, and reading the work tracker.
 //
@@ -182,7 +203,40 @@ func Compile(path string) (Definition, error) {
 			return Definition{}, fmt.Errorf("%s declares no %q terminal; the gate reads its answer from the terminal an instance ends in", definition.Source, terminal)
 		}
 	}
+	if err := handlesEveryOutcome(definition); err != nil {
+		return Definition{}, err
+	}
 	return definition, nil
+}
+
+// handlesEveryOutcome refuses a definition whose states do not route exactly the
+// outcomes the checks they selected can produce.
+//
+// Everything wrong is reported together, for the reason the workflow package
+// reports its own problems together: a definition is written by hand, and
+// answering one question per reload is how somebody gives up on a format. The
+// walk is over the graph's sorted states, so one definition refused twice is
+// refused identically.
+func handlesEveryOutcome(definition Definition) error {
+	var problems []error
+	for _, state := range definition.Graph.States() {
+		node, _ := definition.Graph.Node(state)
+		answers, declared := answersWith[node.Action().Name]
+		if !declared {
+			// The registry and the table above are both literals in this package, so
+			// this is a defect in the build rather than in the file being read.
+			problems = append(problems, fmt.Errorf("the state %q selects %q, whose outcomes this build does not declare", state, node.Action().Name))
+			continue
+		}
+		if handled := node.Outcomes(); !slices.Equal(handled, answers) {
+			problems = append(problems, fmt.Errorf("the state %q selects %q, which answers with %s, and handles %s; every outcome a check can produce needs somewhere to go and an outcome it never produces is a transition nothing takes",
+				state, node.Action().Name, strings.Join(answers, " or "), strings.Join(handled, " and ")))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%s: %w", definition.Source, errors.Join(problems...))
+	}
+	return nil
 }
 
 // Result is one assessment, run: which definition was walked, where it ended,

@@ -233,11 +233,14 @@ release ships is built from them, and the walkthrough this gate runs rewrites
 them itself, so refusing on them would stall most days of a daily cadence. The
 readiness result is stamped into `docs/releases/<tag>.md` and goes into the same
 commit, so the notes the tag names carry the conformance result of the tree it
-names rather than one taken on whichever day the notes were drafted. Committing
-both rather than excepting them keeps the tag naming a tree with nothing
-uncommitted in it rather than a clean tree with a footnote, and the cut prints
-`git push --atomic origin main <tag>` as the publishing command, because origin
-does not have that commit and the branch has to carry it.
+names rather than one taken on whichever day the notes were drafted; it is
+written only where it differs from the section the notes already carry, so a cut
+that changes neither it nor the exports has nothing to commit. Committing both
+rather than excepting them keeps the tag naming a tree with nothing uncommitted
+in it. On a day it had to make that commit it prints
+`git push --atomic origin main <tag>`, because origin does not have it and the
+branch has to carry it; on a day it had nothing to commit, `git push origin
+<tag>`.
 
 That commit is made with hooks turned off, since a tracker installs a hook that
 exports after every commit and it would rewrite the very files the commit

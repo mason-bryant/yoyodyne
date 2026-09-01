@@ -25,7 +25,7 @@ func TestConformanceRefusesTheTagAndNamesWhatDiverged(t *testing.T) {
 		"something the system records about itself is no longer true",
 		"references  diverges",
 		"docs/guide.md",
-		"the tag is refused until each mismatch above is reconciled; nothing was written",
+		"the tag is refused until each mismatch above is reconciled; nothing in this repository was changed",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("conformance stdout = %q, want it to contain %q", stdout, want)
@@ -74,8 +74,10 @@ func TestConformanceRunsTheProjectsOwnDefinitionAndShipsTheResultInTheNotes(t *t
 
 	// A sequence of the project's own: the two checks that read the repository
 	// and neither of the two that read the tracker, which is what a project with
-	// no tracker to read would write. Nothing in Go names these states, so a
-	// result that walked only these two is the file deciding the sequence.
+	// no tracker to read would write. The states are named the way this project
+	// would name them rather than the way the shipped definition does, because
+	// `action:` is what selects a check and what the state is called is the
+	// file's business.
 	definition := filepath.Join(project, ".yoyodyne", "workflows", "release-readiness.yaml")
 	if err := os.MkdirAll(filepath.Dir(definition), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -83,14 +85,14 @@ func TestConformanceRunsTheProjectsOwnDefinitionAndShipsTheResultInTheNotes(t *t
 	if err := os.WriteFile(definition, []byte(`schema: 1
 id: release-readiness
 summary: what this project checks before it tags
-initial: artifacts
+initial: check-artifacts
 states:
-  artifacts:
+  check-artifacts:
     action: conformance.artifacts
     on:
-      conforms: references
+      conforms: check-links
       diverges: mismatch
-  references:
+  check-links:
     action: conformance.references
     on:
       conforms: ready
@@ -115,6 +117,13 @@ terminals:
 	if strings.Contains(stdout, "goals") {
 		t.Fatalf("a sequence that names no goals check ran one: %q", stdout)
 	}
+	// The state the project named, with the check behind it, so the reading is
+	// against both the file they wrote and this build.
+	for _, want := range []string{"check-artifacts (artifacts)", "check-links (references)"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("conformance stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
 
 	stdout, stderr, code = runCLI(t, "conformance", "--config", configPath, "--notes")
 	if code != 0 {
@@ -128,7 +137,7 @@ terminals:
 	if !strings.HasSuffix(stdout, "<!-- /yoyodyne:release-readiness -->\n") {
 		t.Fatalf("the section does not close with the marker the cut looks for: %q", stdout)
 	}
-	for _, want := range []string{"## Release readiness", "ended in **ready**", "- **artifacts** — conforms"} {
+	for _, want := range []string{"## Release readiness", "ended in **ready**", "- **check-artifacts (artifacts)** — conforms"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("the notes section = %q, want it to contain %q", stdout, want)
 		}

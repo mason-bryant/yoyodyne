@@ -122,6 +122,48 @@ terminals:
 `,
 			refusal: `declares no "mismatch" terminal`,
 		},
+		{
+			// The staleness survey reports and gates nothing, so it answers only
+			// `noted`. A definition routing it the way the four gating checks are
+			// routed would compile, run, and die on the outcome nothing handled —
+			// which is what this refusal exists to happen instead.
+			name: "outcomes the check it selected never produces",
+			definition: `schema: 1
+id: release-readiness
+initial: artifacts
+states:
+  artifacts:
+    action: conformance.artifacts
+    on:
+      conforms: staleness
+      diverges: mismatch
+  staleness:
+    action: conformance.staleness
+    on:
+      conforms: ready
+      diverges: mismatch
+terminals:
+  ready: {}
+  mismatch: {}
+`,
+			refusal: `which answers with noted, and handles conforms and diverges`,
+		},
+		{
+			name: "a check whose outcome goes nowhere",
+			definition: `schema: 1
+id: release-readiness
+initial: artifacts
+states:
+  artifacts:
+    action: conformance.artifacts
+    on:
+      conforms: ready
+terminals:
+  ready: {}
+  mismatch: {}
+`,
+			refusal: `which answers with conforms or diverges, and handles conforms`,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -179,7 +221,7 @@ terminals:
 	if !result.Conforms {
 		t.Fatalf("the project's own sequence refused: %v", result.Mismatches())
 	}
-	if steps := steps(result.Findings); !slices.Equal(steps, []string{StepArtifacts, StepReferences}) {
+	if steps := steps(result.Findings); !slices.Equal(steps, []string{CheckArtifacts, CheckReferences}) {
 		t.Fatalf("the project's own sequence walked %v", steps)
 	}
 	// The digest is the definition's rather than this build's, which is what an
@@ -190,6 +232,106 @@ terminals:
 	}
 	if result.Digest == shipped.Graph.Digest() {
 		t.Fatal("a different definition digested the same as the shipped one")
+	}
+}
+
+func TestEveryRegisteredCheckSaysWhatItCanAnswerWith(t *testing.T) {
+	t.Parallel()
+	// A check with no entry is one no definition can be held to, so it would
+	// compile against anything and die at execution on whatever it actually
+	// produced — which is the whole class of defect the table closes.
+	for _, registeredAction := range registered() {
+		answers, declared := answersWith[registeredAction.Name]
+		if !declared {
+			t.Fatalf("%s is registered and does not say what it can answer with", registeredAction.Name)
+		}
+		if !slices.IsSorted(answers) {
+			t.Fatalf("%s answers with %v, which the compiler compares against a sorted list", registeredAction.Name, answers)
+		}
+	}
+	if len(answersWith) != len(registered()) {
+		t.Fatalf("%d checks say what they answer with and %d are registered", len(answersWith), len(registered()))
+	}
+}
+
+func TestADefinitionMayNameItsStatesWhateverItLikes(t *testing.T) {
+	t.Parallel()
+	// A project's own sequence, with every state named something this package has
+	// never heard of. `action:` is what selects a check, so this has to run — and
+	// what it reports has to be readable against both the file and this build,
+	// which is why each finding carries the state and the check it came from.
+	path := filepath.Join(t.TempDir(), "release-readiness.yaml")
+	if err := os.WriteFile(path, []byte(`schema: 1
+id: release-readiness
+initial: step-one
+states:
+  step-one:
+    action: conformance.artifacts
+    on:
+      conforms: step-two
+      diverges: mismatch
+  step-two:
+    action: conformance.references
+    on:
+      conforms: ready
+      diverges: mismatch
+terminals:
+  ready: {}
+  mismatch: {}
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	definition, err := Compile(path)
+	if err != nil {
+		t.Fatalf("a definition naming its own states was refused: %v", err)
+	}
+
+	repository := fixture(t)
+	result := assessWith(t, definition, Gather(repository, product(), nil, "the tracker was never asked"))
+	if !result.Conforms || result.Terminal != TerminalReady {
+		t.Fatalf("the run ended in %q, conforms = %t: %v", result.Terminal, result.Conforms, result.Mismatches())
+	}
+	if got := steps(result.Findings); !slices.Equal(got, []string{"step-one", "step-two"}) {
+		t.Fatalf("the findings record the states %v, want the ones the definition named", got)
+	}
+	if got := checks(result.Findings); !slices.Equal(got, []string{CheckArtifacts, CheckReferences}) {
+		t.Fatalf("the findings came from %v, want the checks the definition selected", got)
+	}
+}
+
+func TestARenamedStateIsWhatARefusalNames(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "release-readiness.yaml")
+	if err := os.WriteFile(path, []byte(`schema: 1
+id: release-readiness
+initial: the-links
+states:
+  the-links:
+    action: conformance.references
+    on:
+      conforms: ready
+      diverges: mismatch
+terminals:
+  ready: {}
+  mismatch: {}
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	definition, err := Compile(path)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	repository := fixture(t)
+	write(t, repository, "docs/guide.md", "# Guide\n\nSee [the design](designs/gone.md).\n")
+	result := assessWith(t, definition, Gather(repository, product(), nil, "the tracker was never asked"))
+	if result.Conforms {
+		t.Fatal("a link resolving to nothing did not refuse the tag")
+	}
+	// The refusal names the state the operator wrote, because that is the word in
+	// the file they would go and open.
+	if !mentions(result.Mismatches(), "the-links: docs/guide.md") {
+		t.Fatalf("the refusal reads %v", result.Mismatches())
 	}
 }
 
@@ -219,7 +361,7 @@ func TestEveryTransitionIsRecordedAsItIsCrossed(t *testing.T) {
 	}
 	// The path is the states the definition orders, ending in the terminal it
 	// arrived at. Reading it back is reading exactly what ran.
-	want := []string{StepArtifacts, StepReferences, StepInvariants, StepGoals, StepStaleness, TerminalReady}
+	want := []string{CheckArtifacts, CheckReferences, CheckInvariants, CheckGoals, CheckStaleness, TerminalReady}
 	if got := instance.Path(); !slices.Equal(got, want) {
 		t.Fatalf("the instance walked %v, want %v", got, want)
 	}

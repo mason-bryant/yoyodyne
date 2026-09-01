@@ -1412,9 +1412,13 @@ the actions the build registered — `conformance.artifacts`,
 `conformance.staleness` — and an action nothing registers is refused rather than
 run. Each action's authority is declared in Go, and the gate is compiled under
 `repository.read` and `work-item.read` and nothing else, so no definition can
-make it write anything. Validation and compilation both happen before the first
-check runs, and a definition that is wrong is refused whole rather than half
-adopted:
+make it write anything. Each state must handle exactly the outcomes its check can
+produce — `conforms` and `diverges` for the four that gate, `noted` for
+`conformance.staleness`, which reports and refuses nothing — so an unhandled
+outcome, or a transition on one the check never returns, is refused here rather
+than met halfway through a cut. Validation and compilation both happen before the
+first check runs, and a definition that is wrong is refused whole rather than
+half adopted:
 
 ```yaml
 schema: 1
@@ -1437,9 +1441,16 @@ terminals:
     mismatch: {}
 ```
 
-A run of it is recorded durably, one state boundary at a time, under the same
-state root every other record the harness keeps lives in — so what a release was
-gated on can be read back afterwards rather than only having been printed once.
+A definition names its own states; `action:` is what selects the check. A state
+called `check-artifacts` selecting `conformance.artifacts` is reported as
+`check-artifacts`, with the check named beside it, so a renamed sequence reads
+against both the file and this build.
+
+A run is recorded durably, one state boundary at a time, under the harness's own
+state root, so what a release was gated on can be read back afterwards. That
+record is the one thing `yoyo conformance` writes — it touches neither the
+repository nor the tracker — and nothing prunes them; one is written per
+invocation.
 
 ## Architectural invariants
 

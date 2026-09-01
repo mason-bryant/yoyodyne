@@ -114,6 +114,21 @@ func conformanceDefinition(named, configPath string) string {
 	return ""
 }
 
+// conformanceStep is how one finding is labelled: the state the definition
+// performed it in, and the check behind that state where the two differ.
+//
+// They differ exactly when a project named a state something other than the
+// check it selects, which its own definition is free to do. Naming the state
+// alone would leave a renamed sequence unreadable against this build, and naming
+// the check alone would leave it unreadable against the file the operator wrote,
+// so where they disagree the report carries both.
+func conformanceStep(finding conformance.Finding) string {
+	if finding.Check == "" || finding.Check == finding.Step {
+		return finding.Step
+	}
+	return finding.Step + " (" + finding.Check + ")"
+}
+
 // printConformance is the reading an operator gets: one line per check, and then
 // what the whole of it came to.
 func printConformance(stdout io.Writer, result conformance.Result) {
@@ -124,13 +139,13 @@ func printConformance(stdout io.Writer, result conformance.Result) {
 	}
 	width := 0
 	for _, finding := range result.Findings {
-		if len(finding.Step) > width {
-			width = len(finding.Step)
+		if named := conformanceStep(finding); len(named) > width {
+			width = len(named)
 		}
 	}
 	fmt.Fprintln(stdout)
 	for _, finding := range result.Findings {
-		fmt.Fprintf(stdout, "%-*s  %-8s  %s\n", width, finding.Step, finding.Outcome, finding.Summary)
+		fmt.Fprintf(stdout, "%-*s  %-8s  %s\n", width, conformanceStep(finding), finding.Outcome, finding.Summary)
 		for _, mismatch := range finding.Mismatches {
 			fmt.Fprintf(stdout, "  %s\n", mismatch)
 		}
@@ -146,8 +161,9 @@ func printConformance(stdout io.Writer, result conformance.Result) {
 	if !result.Conforms {
 		// The refusal names what to do rather than only what is wrong: everything
 		// here is a document somebody has to reconcile, and none of it is fixed by
-		// running this again.
-		fmt.Fprintln(stdout, "the tag is refused until each mismatch above is reconciled; nothing was written")
+		// running this again. What it claims is scoped to the checkout, because the
+		// walk itself was recorded — see the usage text.
+		fmt.Fprintln(stdout, "the tag is refused until each mismatch above is reconciled; nothing in this repository was changed")
 	}
 }
 
@@ -165,7 +181,7 @@ func conformanceNotes(result conformance.Result) string {
 	fmt.Fprintf(&rendered, "The `%s` workflow (schema %d, definition %s) ended in **%s** on %s: %s.\n\n",
 		result.Workflow, result.Schema, result.Definition, result.Terminal, result.At.UTC().Format("2006-01-02"), verdict)
 	for _, finding := range result.Findings {
-		fmt.Fprintf(&rendered, "- **%s** — %s — %s\n", finding.Step, finding.Outcome, finding.Summary)
+		fmt.Fprintf(&rendered, "- **%s** — %s — %s\n", conformanceStep(finding), finding.Outcome, finding.Summary)
 		for _, mismatch := range finding.Mismatches {
 			fmt.Fprintf(&rendered, "  - %s\n", mismatch)
 		}
@@ -213,8 +229,15 @@ product states. What a change upstream left unanswered downstream is reported
 too, and refuses nothing -- staleness is a condition to look at rather than a
 broken build.
 
-It writes nothing. A divergence exits 1 and names every mismatch the check that
-found it collected, which is what refuses a tag in `+"`make release`"+`.
+It writes nothing to this repository or to the tracker, so it cannot be what
+changed what it was about to judge. A divergence exits 1 and names every mismatch
+the check that found it collected, which is what refuses a tag in
+`+"`make release`"+`.
+
+One record is written outside both: the run of the workflow itself, under the
+harness's own state root, so what a release was gated on can be read back rather
+than only having been printed. Nothing prunes those, and one is written per
+invocation.
 
 The sequence is a workflow definition rather than code. This build ships one;
 a project that wants its own copies it to

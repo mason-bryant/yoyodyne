@@ -13,9 +13,18 @@
 // workflow definition states rather than one Go control flow puts them in, and
 // that the answer gates a tag.
 //
-// Nothing here writes anything. Every check is a read of the repository or of
-// what was already read out of the tracker, which is what makes this safe to run
-// as a gate: a cut that refuses leaves the checkout exactly as it found it.
+// Nothing here writes to the repository or the tracker. Every check is a read of
+// the checkout or of what was already read out of the tracker, which is what
+// makes this safe to run as a gate: a cut that refuses leaves the checkout
+// exactly as it found it, and the gate cannot be the thing that changed what it
+// was about to judge.
+//
+// One thing is written, and it is outside both: the workflow instance, under the
+// harness's own state root, recorded before the first check and again at every
+// state boundary crossed. That is the runtime's guarantee rather than a check's
+// side effect — see Assess in workflow.go — and it is what makes what a release
+// was gated on readable afterwards instead of only having been printed once.
+// Nothing prunes those records, so one accumulates per invocation.
 //
 // # What a divergence is, and what is only worth reading
 //
@@ -69,8 +78,17 @@ const maxReportedMismatches = 20
 // line saying what was looked at and how it came out, and the detail behind it.
 type Finding struct {
 	// Step is the state the definition performed this check in, which is what a
-	// reader matches against the definition they are holding.
-	Step    string `json:"step"`
+	// reader matches against the definition they are holding. A definition names
+	// its own states — `action:` is what selects the check — so this is whatever
+	// the file called the state rather than anything this package decided, and
+	// Outcome is what stamps it on. Until then it is the check's own name, which
+	// is what a caller performing a check outside a sequence gets.
+	Step string `json:"step"`
+	// Check is the check that produced this finding, by the name this package
+	// knows it under. It is carried beside the state because the two are not the
+	// same fact: the state is the definition's, the check is the build's, and a
+	// report that carried only one of them could not be read against both.
+	Check   string `json:"check"`
 	Outcome string `json:"outcome"`
 	// Summary is what was checked and how it came out, in one line.
 	Summary string `json:"summary"`
@@ -184,13 +202,22 @@ func (a *Assessment) Conforms() bool {
 }
 
 // Outcome is what the state just performed produced, in the form the workflow
-// executor asks for it.
+// executor asks for it, and where the state's own name is put on the finding it
+// produced.
 //
 // It is a function over the subject rather than a return value from the action
 // because that is the shape the runtime has: a registered action performs and
 // returns an error, and the descriptor that would let it declare and return a
 // typed outcome is a later milestone. Reading it here keeps the outcome the
 // definition branches on the same value the report carries.
+//
+// Stamping the state rather than checking it is the whole of what makes a
+// definition free to name its states. A state selects a check with `action:`,
+// and what it is called is the definition's business: a project whose sequence
+// says `check-artifacts: {action: conformance.artifacts}` gets a report that
+// says `check-artifacts`, because that is the word in the file the reader is
+// holding. Comparing the two instead would have made every state name in every
+// project's definition a value this package had to have agreed to in advance.
 func Outcome(state string, assessment *Assessment) (string, error) {
 	if assessment.read >= len(assessment.findings) {
 		// Every check records exactly one finding, so this is a defect in this
@@ -199,19 +226,21 @@ func Outcome(state string, assessment *Assessment) (string, error) {
 		// before it.
 		return "", fmt.Errorf("the state %q performed its check and recorded no finding", state)
 	}
+	assessment.findings[assessment.read].Step = state
 	finding := assessment.findings[assessment.read]
 	assessment.read++
-	if finding.Step != state {
-		return "", fmt.Errorf("the state %q performed its check and what it recorded is %q's", state, finding.Step)
-	}
 	return finding.Outcome, nil
 }
 
 // record appends one finding, deciding its outcome from whether anything
 // mismatched. The decision is here rather than at each check so that "a mismatch
 // refuses the tag" is one sentence in one place.
-func (a *Assessment) record(step, summary string, mismatches, notes []string) {
-	finding := Finding{Step: step, Summary: summary, Notes: notes, Outcome: OutcomeConforms}
+//
+// The step starts as the check's own name and stays that way only for a caller
+// performing a check outside a sequence; inside one, Outcome replaces it with
+// the state the definition actually performed it in.
+func (a *Assessment) record(check, summary string, mismatches, notes []string) {
+	finding := Finding{Step: check, Check: check, Summary: summary, Notes: notes, Outcome: OutcomeConforms}
 	if len(mismatches) > 0 {
 		finding.Outcome = OutcomeDiverges
 		finding.Mismatches = mismatches
@@ -223,16 +252,16 @@ func (a *Assessment) record(step, summary string, mismatches, notes []string) {
 	a.findings = append(a.findings, finding)
 }
 
-// The state names the definition performs each check in. They are constants
-// because the finding a check records carries the state it ran in, and a name
-// that drifted from the definition would be a report nobody could line up
-// against the sequence that produced it.
+// The checks, by the names this package knows them under. They are what a
+// finding carries as its check and what the shipped definition happens to name
+// its states after; a project's own definition may call its states anything, and
+// what selects a check is the registered action rather than either of these.
 const (
-	StepArtifacts  = "artifacts"
-	StepReferences = "references"
-	StepInvariants = "invariants"
-	StepGoals      = "goals"
-	StepStaleness  = "staleness"
+	CheckArtifacts  = "artifacts"
+	CheckReferences = "references"
+	CheckInvariants = "invariants"
+	CheckGoals      = "goals"
+	CheckStaleness  = "staleness"
 )
 
 // checkArtifacts holds the canonical documents to what the chain requires of
@@ -247,7 +276,7 @@ const (
 // everything after it.
 func (a *Assessment) checkArtifacts() error {
 	if reason := a.sources.ArtifactsUnreadable; reason != "" {
-		a.record(StepArtifacts, "the recorded artifacts could not be read, so nothing was held against them",
+		a.record(CheckArtifacts, "the recorded artifacts could not be read, so nothing was held against them",
 			[]string{"the artifacts could not be read: " + reason}, nil)
 		return nil
 	}
@@ -263,7 +292,7 @@ func (a *Assessment) checkArtifacts() error {
 	if len(mismatches) == 0 {
 		summary += ", every reference resolving and every revision recorded by the role that owns it"
 	}
-	a.record(StepArtifacts, summary, mismatches, nil)
+	a.record(CheckArtifacts, summary, mismatches, nil)
 	return nil
 }
 
@@ -273,13 +302,13 @@ func (a *Assessment) checkArtifacts() error {
 func (a *Assessment) checkReferences() error {
 	problems, err := doclink.Check(a.sources.Repository)
 	if err != nil {
-		a.record(StepReferences, "the repository's documents could not be walked, so no link was resolved",
+		a.record(CheckReferences, "the repository's documents could not be walked, so no link was resolved",
 			[]string{"the documentation could not be read: " + err.Error()}, nil)
 		return nil
 	}
 	documents, err := doclink.Documents(a.sources.Repository)
 	if err != nil {
-		a.record(StepReferences, "the repository's documents could not be counted",
+		a.record(CheckReferences, "the repository's documents could not be counted",
 			[]string{"the documentation could not be read: " + err.Error()}, nil)
 		return nil
 	}
@@ -291,7 +320,7 @@ func (a *Assessment) checkReferences() error {
 	if len(mismatches) == 0 {
 		summary += ", every link they make to each other resolving"
 	}
-	a.record(StepReferences, summary, mismatches, nil)
+	a.record(CheckReferences, summary, mismatches, nil)
 	return nil
 }
 
@@ -307,7 +336,7 @@ func (a *Assessment) checkReferences() error {
 func (a *Assessment) checkInvariants() error {
 	set, err := invariant.Store{RepositoryRoot: a.sources.Repository, Directory: a.sources.InvariantsDirectory}.Load()
 	if err != nil {
-		a.record(StepInvariants, "the invariants could not be read, so nothing says which constraints a run would be delivered",
+		a.record(CheckInvariants, "the invariants could not be read, so nothing says which constraints a run would be delivered",
 			[]string{"the invariants could not be read: " + err.Error()}, nil)
 		return nil
 	}
@@ -319,7 +348,7 @@ func (a *Assessment) checkInvariants() error {
 	if len(mismatches) == 0 {
 		summary += ", every one of them readable"
 	}
-	a.record(StepInvariants, summary, mismatches, nil)
+	a.record(CheckInvariants, summary, mismatches, nil)
 	return nil
 }
 
@@ -376,7 +405,7 @@ func (a *Assessment) checkGoals() error {
 	if len(mismatches) == 0 {
 		summary += ", none naming a goal the goals do not state or having lost the one it recorded"
 	}
-	a.record(StepGoals, summary, mismatches, notes)
+	a.record(CheckGoals, summary, mismatches, notes)
 	return nil
 }
 
@@ -407,8 +436,13 @@ func (a *Assessment) surveyStaleness() error {
 		summary = fmt.Sprintf("%d of %d admitted item(s) judged; nothing is downstream of a change nobody has answered",
 			report.Judged, report.Admitted)
 	}
+	// Recorded here rather than through record, which decides between conforming
+	// and diverging: this is the one check that does neither, and routing it
+	// through the decision would have it report as conforming rather than as
+	// having reported.
 	a.findings = append(a.findings, Finding{
-		Step:    StepStaleness,
+		Step:    CheckStaleness,
+		Check:   CheckStaleness,
 		Outcome: OutcomeNoted,
 		Summary: summary,
 		Notes:   notes,

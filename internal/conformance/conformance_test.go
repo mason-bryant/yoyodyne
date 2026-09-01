@@ -31,7 +31,7 @@ func TestADocumentThatIsNotAnArtifactRefusesTheTag(t *testing.T) {
 	repository := fixture(t)
 	write(t, repository, "docs/designs/half-written.md", "# A design with no identity\n\nNothing above this says what it is.\n")
 
-	finding := findingFor(t, assess(t, gather(repository)).Findings(), StepArtifacts)
+	finding := findingFor(t, assess(t, gather(repository)).Findings(), CheckArtifacts)
 	if !finding.Diverges() {
 		t.Fatalf("the artifacts check did not diverge: %q", finding.Summary)
 	}
@@ -45,7 +45,7 @@ func TestALinkThatResolvesToNothingRefusesTheTag(t *testing.T) {
 	repository := fixture(t)
 	write(t, repository, "docs/guide.md", "# Guide\n\nSee [the design](designs/gone.md).\n")
 
-	finding := findingFor(t, assess(t, gather(repository)).Findings(), StepReferences)
+	finding := findingFor(t, assess(t, gather(repository)).Findings(), CheckReferences)
 	if !finding.Diverges() {
 		t.Fatalf("the references check did not diverge: %q", finding.Summary)
 	}
@@ -59,7 +59,7 @@ func TestAFileInTheInvariantsHomeThatIsNotOneRefusesTheTag(t *testing.T) {
 	repository := fixture(t)
 	write(t, repository, "docs/decisions/invariants/nested/buried.md", "# Buried\n")
 
-	finding := findingFor(t, assess(t, gather(repository)).Findings(), StepInvariants)
+	finding := findingFor(t, assess(t, gather(repository)).Findings(), CheckInvariants)
 	if !finding.Diverges() {
 		t.Fatalf("the invariants check did not diverge: %q", finding.Summary)
 	}
@@ -73,7 +73,7 @@ func TestWorkNamingAGoalTheGoalsDoNotStateRefusesTheTag(t *testing.T) {
 	repository := fixture(t)
 	sources := gather(repository, admitted("chasing something else entirely")...)
 
-	finding := findingFor(t, assess(t, sources).Findings(), StepGoals)
+	finding := findingFor(t, assess(t, sources).Findings(), CheckGoals)
 	if !finding.Diverges() {
 		t.Fatalf("the goals check did not diverge: %q", finding.Summary)
 	}
@@ -91,7 +91,7 @@ func TestWorkAdmittedBeforeAttributionsWereCheckedIsGrandfathered(t *testing.T) 
 	// backlog nobody has had the chance to attribute is attributed.
 	sources := gather(repository, beads.WorkItem{ID: "item-1", Title: "older than the check", Status: "open"})
 
-	finding := findingFor(t, assess(t, sources).Findings(), StepGoals)
+	finding := findingFor(t, assess(t, sources).Findings(), CheckGoals)
 	if finding.Diverges() {
 		t.Fatalf("an unattributed item refused the tag: %v", finding.Mismatches)
 	}
@@ -102,7 +102,7 @@ func TestATrackerNobodyCouldReadRefusesTheTagRatherThanPassing(t *testing.T) {
 	repository := fixture(t)
 	sources := Gather(repository, product(), nil, "bd list failed: the store is locked")
 
-	finding := findingFor(t, assess(t, sources).Findings(), StepGoals)
+	finding := findingFor(t, assess(t, sources).Findings(), CheckGoals)
 	if !finding.Diverges() {
 		t.Fatalf("a gate that checked no attribution at all reported %q", finding.Summary)
 	}
@@ -118,7 +118,7 @@ func TestGoalsThatCouldNotBeReadRefuseTheTag(t *testing.T) {
 	// item claims can be checked against anything.
 	sources := gather(repository, admitted("serving the chain")...)
 
-	finding := findingFor(t, assess(t, sources).Findings(), StepGoals)
+	finding := findingFor(t, assess(t, sources).Findings(), CheckGoals)
 	if !finding.Diverges() {
 		t.Fatalf("a gate with no goals to check against reported %q", finding.Summary)
 	}
@@ -134,7 +134,7 @@ func TestStalenessIsReportedAndNeverRefusesTheTag(t *testing.T) {
 		revision("amended", "2026-08-20T00:00:00Z", "the brief now says who it is for")))
 
 	result := run(t, repository, admitted("serving the chain")...)
-	finding := findingFor(t, result.Findings, StepStaleness)
+	finding := findingFor(t, result.Findings, CheckStaleness)
 	if finding.Outcome != OutcomeNoted {
 		t.Fatalf("staleness produced %q rather than %q", finding.Outcome, OutcomeNoted)
 	}
@@ -165,10 +165,10 @@ func TestAMismatchStopsTheSequenceAndNamesWhatItFound(t *testing.T) {
 	for _, finding := range result.Findings {
 		steps = append(steps, finding.Step)
 	}
-	if want := []string{StepArtifacts, StepReferences}; strings.Join(steps, ",") != strings.Join(want, ",") {
+	if want := []string{CheckArtifacts, CheckReferences}; strings.Join(steps, ",") != strings.Join(want, ",") {
 		t.Fatalf("the sequence walked %v, want it to stop at the first divergence: %v", steps, want)
 	}
-	if !mentions(result.Mismatches(), StepReferences+": docs/guide.md") {
+	if !mentions(result.Mismatches(), CheckReferences+": docs/guide.md") {
 		t.Fatalf("the refusal does not name the step and the document: %v", result.Mismatches())
 	}
 }
@@ -176,16 +176,23 @@ func TestAMismatchStopsTheSequenceAndNamesWhatItFound(t *testing.T) {
 func TestOutcomeRefusesAStepThatRecordedNothing(t *testing.T) {
 	t.Parallel()
 	assessment := New(Sources{})
-	if _, err := Outcome(StepArtifacts, assessment); err == nil {
+	if _, err := Outcome(CheckArtifacts, assessment); err == nil {
 		t.Fatal("a state whose check recorded nothing was handed an outcome")
 	}
-	// And a stale finding is not reused for the step after the one it belongs to.
-	assessment.record(StepArtifacts, "read", nil, nil)
-	if _, err := Outcome(StepArtifacts, assessment); err != nil {
+	// A finding is read once. The step after the one it belongs to is refused
+	// rather than handed it again, which is what would send an instance somewhere
+	// on the strength of the step before it.
+	assessment.record(CheckArtifacts, "read", nil, nil)
+	if _, err := Outcome("first", assessment); err != nil {
 		t.Fatalf("Outcome() error = %v", err)
 	}
-	if _, err := Outcome(StepReferences, assessment); err == nil {
+	if _, err := Outcome("second", assessment); err == nil {
 		t.Fatal("the outcome of the step before was reused for the step after it")
+	}
+	// And the state that performed it is what the finding now carries, whatever
+	// the check calls itself.
+	if finding := assessment.Findings()[0]; finding.Step != "first" || finding.Check != CheckArtifacts {
+		t.Fatalf("the finding records step %q and check %q", finding.Step, finding.Check)
 	}
 }
 
@@ -196,7 +203,7 @@ func TestOnlyMismatchesAreListedAndTheRestAreCounted(t *testing.T) {
 	for index := range mismatches {
 		mismatches[index] = "a mismatch"
 	}
-	assessment.record(StepArtifacts, "read", mismatches, nil)
+	assessment.record(CheckArtifacts, "read", mismatches, nil)
 
 	finding := assessment.Findings()[0]
 	if len(finding.Mismatches) != maxReportedMismatches || finding.Truncated != 3 {
@@ -205,21 +212,35 @@ func TestOnlyMismatchesAreListedAndTheRestAreCounted(t *testing.T) {
 }
 
 // findingFor is one step's finding, from an assessment or a result.
-func findingFor(t *testing.T, findings []Finding, step string) Finding {
+// findingFor is one check's finding. It matches on the check rather than on the
+// state, because the state is whatever a definition called it and the check is
+// what this package knows.
+func findingFor(t *testing.T, findings []Finding, check string) Finding {
 	t.Helper()
 	for _, finding := range findings {
-		if finding.Step == step {
+		if finding.Check == check {
 			return finding
 		}
 	}
-	t.Fatalf("the sequence recorded no finding for %q; it recorded %v", step, steps(findings))
+	t.Fatalf("the sequence recorded no finding for the %q check; it recorded %v", check, checks(findings))
 	return Finding{}
 }
 
+// steps is the states a sequence walked, as its findings record them.
 func steps(findings []Finding) []string {
 	named := make([]string, 0, len(findings))
 	for _, finding := range findings {
 		named = append(named, finding.Step)
+	}
+	return named
+}
+
+// checks is which check each finding came from, which is the same list only
+// while a definition names its states after them.
+func checks(findings []Finding) []string {
+	named := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		named = append(named, finding.Check)
 	}
 	return named
 }

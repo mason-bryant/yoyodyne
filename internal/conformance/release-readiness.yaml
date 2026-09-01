@@ -24,8 +24,14 @@
 # .yoyodyne/workflows/release-readiness.yaml and edits it there; `yoyo
 # conformance` prefers that copy and falls back to this one. Either way it is
 # validated and compiled before a single check runs, so a definition selecting an
-# action nothing registers, or authority the gate does not hold, is refused while
-# refusing it still costs nothing.
+# action nothing registers, authority the gate does not hold, or an outcome the
+# check it selected never produces, is refused while refusing it still costs
+# nothing.
+#
+# The state names below are this file's own and mean nothing to the code: they
+# are named after the checks they select because that reads best, and a project
+# renaming them is renaming what its own report says. `action:` is what selects a
+# check.
 schema: 1
 id: release-readiness
 summary: check the system against what it records about itself, before a version is tagged
