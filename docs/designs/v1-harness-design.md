@@ -46,6 +46,10 @@ revisions:
       by: architect
       at: 2026-08-23T18:42:25Z
       reason: the Codex backend subsection now records the operator's 2026-08-22 parking decision via the claude-only-v1-execution record, and the artifact model points at the artifact-contract specification as the normative home of the identity and shape rules, per approved amendment c84e23a5
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:35:00Z
+      reason: approved amendment e0bff82e from yoyodyne-ifd.36, transcribed at ratification of the portable-agent-configuration design - the Configuration section defers to it on ownership, conversion, and bundle improvements
 approvals:
     - revision: 0
       by: operator
@@ -322,7 +326,7 @@ Codex authentication is delegated to the locally installed CLI. It may use ChatG
 
 ## Configuration
 
-Agent definitions and behavior are configurable, while invariants — and role authority, which no configuration can grant or widen — remain enforced in code. The executable ships a versioned, read-only bundle of agent definitions and personas, so a project records only what is genuinely its own and never needs access to the Yoyodyne source checkout. A project inherits the bundle by name and overlays what it changes:
+Agent definitions and behavior are configurable, while invariants — and role authority, which no configuration can grant or widen — remain enforced in code. The executable ships a versioned, read-only bundle of agent definitions and personas, so a project records only what is genuinely its own and never needs access to the Yoyodyne source checkout. What a project owns versus inherits, moving between the explicit and inheriting shapes, and how a bundle improvement reaches a materialized project are governed by [portable-agent-configuration](portable-agent-configuration.md). A project inherits the bundle by name and overlays what it changes:
 
 ```yaml
 version: 1

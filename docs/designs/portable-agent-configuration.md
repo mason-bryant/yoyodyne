@@ -1,20 +1,26 @@
-# Portable agent configuration
+---
+id: portable-agent-configuration
+kind: design
+title: "Portable agent configuration: materialization, the baseline, and bundle boundaries"
+supports:
+    - v1-goals
+status: active
+revisions:
+    - action: created
+      by: architect
+      at: 2026-09-01T19:35:00Z
+      reason: drafted by the developer under yoyodyne-ifd.36, carried whole to the architect, and ratified with amendments recorded in conversation - the authority paragraph rebound to authority-by-capability and configuration-never-grants-authority with role definitions excluded from materialization, draft scaffolding replaced by the ratification decisions, and conversion output placed under the working-tree publication rule. The four questions the draft asked the architect are answered in its Decided-at-ratification section
+---
 
-Drafted for yoyodyne-ifd.36. **Status: draft — the architect has not ratified
-it, and no code should be written against it until they do.** It lives outside
-the artifact homes for the reason [team mode scope](team-mode-scope.md) and
-[the documentation map](docs-map.md) do: a developer may not write into
-`docs/designs/`, and a design recorded there is the architect's to create. The
-proposal accompanying this draft asks for exactly that — promotion into the
-designs home as a governed artifact, with the identity frontmatter and the
-`supports` link this document cannot give itself.
+# Portable agent configuration
 
 It serves the goal "Keep roles, policies, and provider selection configurable
 without making safety invariants optional."
 
 The work item asked four questions and told the developer not to start by
-writing code. This answers the four, states what stays undecided, and names what
-the architect and the operator are each being asked.
+writing code. This answers the four, states what stays undecided, records the
+architect's decisions at ratification, and names what stays open for the
+operator.
 
 ## What already exists, so nothing below re-derives it
 
@@ -24,9 +30,9 @@ effective configuration, later ones winning: harness defaults, a bundle named by
 than concatenated, a `persona` override replaces rather than merges, an agent is
 removed with `disabled: true` rather than by omission, and `version` is never
 inheritable. The rules are stated in
-[Precedence](configuration.md#precedence) and
-[Merge and removal semantics](configuration.md#merge-and-removal-semantics);
-[What fails closed](configuration.md#what-fails-closed) lists what a
+[Precedence](../configuration.md#precedence) and
+[Merge and removal semantics](../configuration.md#merge-and-removal-semantics);
+[What fails closed](../configuration.md#what-fails-closed) lists what a
 configuration is refused for.
 
 `yoyo config show --origins` records, per key, the layer that supplied it. The
@@ -36,7 +42,7 @@ configuration set it up.
 
 Two things are missing rather than broken. There is no way to move a project
 from an explicit configuration to an inheriting one; only
-[the other direction](configuration.md#converting-an-inheriting-configuration-to-an-explicit-one)
+[the other direction](../configuration.md#converting-an-inheriting-configuration-to-an-explicit-one)
 is documented, and it is a manual re-application. And a project that has
 materialized its defaults has no mechanism at all by which a later bundle
 improvement reaches it — the standing advice is to re-run `init` into a scratch
@@ -136,7 +142,7 @@ one. It resolves the effective configuration, writes it as a complete standalone
 file with no `extends`, copies the personas into `.yoyodyne/personas/`, and
 records the baseline of section 4. It writes what is already in force, so it
 cannot lose a project value. This replaces
-[the four manual steps](configuration.md#converting-an-inheriting-configuration-to-an-explicit-one)
+[the four manual steps](../configuration.md#converting-an-inheriting-configuration-to-an-explicit-one)
 documented today, whose step 3 is "re-apply what was yours" and whose failure
 mode is forgetting one.
 
@@ -160,7 +166,11 @@ runs differently from the one it replaced.
 Neither command is destructive without saying so: both refuse to overwrite
 without `--force`, both fail before writing anything, and both go through the
 shared safe-write primitive under the project root, so neither can be walked out
-of the repository by a symlink in `.yoyodyne`.
+of the repository by a symlink in `.yoyodyne`. Both commands' output is subject
+to the same working-tree rule as every other harness write to the primary
+checkout — the operator commits it, and runs refuse over the uncommitted
+change — so conversions land the way approved artifact writes already do rather
+than inventing a third publication shape.
 
 ## 4. How a bundle improvement reaches a project that materialized
 
@@ -229,16 +239,23 @@ consequences are the reason for the rule:
   revision supplied each value, whoever supplied it, so drift and adoption
   behave the same for a plugin bundle as for the built-in one.
 
-**What a bundle may never do, whoever supplies it.** The set of roles is fixed
-in the harness, and every posture derived from a role name is derived in code. A
-persona specializes how a role works and cannot widen what it is allowed to do,
-and the role contract is sent ahead of it on every turn. `checkBundleDocument`
+**What a bundle may never do, whoever supplies it.** Authority *semantics* stay
+in Go, and composition becomes protected operator-activated configuration only
+after parity, per [authority-by-capability](../decisions/authority-by-capability.md)
+and the invariant `configuration-never-grants-authority`. A persona specializes
+how a role works and cannot widen what it is allowed to do, and the role
+contract is sent ahead of it on every turn. A bundle is **ordinary**
+configuration, so materialization never writes role definitions:
+`materialize --from <bundle>` refuses bundle content addressed to
+`.yoyodyne/roles/`, because protected role definitions have their own
+operator-activation path and never arrive by materialization from anyone's
+bundle. `checkBundleDocument`
 already refuses a bundle that declares a `product` or extends another bundle,
 and its checks apply to any bundle rather than to the embedded one. A
 third-party bundle is content, and every write of it passes the shared safe-write
 primitive under a declared root — an unpacked bundle that resolves outside that
 root is refused, per
-[repository-writes-are-physically-confined](decisions/invariants/repository-writes-are-physically-confined.md).
+[repository-writes-are-physically-confined](../decisions/invariants/repository-writes-are-physically-confined.md).
 
 That is the whole of what portability means here: **values travel; authority
 does not.**
@@ -261,25 +278,35 @@ does not.**
   a real wrong answer — reconstructing one is guessing that unedited values were
   never edited — and it is left open.
 
-## What the architect is being asked
+## Decided at ratification
 
-1. **Is "ownership is materialization" the right refusal?** The alternative is a
-   declared `owns` list, which is more expressive and is a second vocabulary for
-   what the file already says by having a value in it. This design refuses it;
-   that refusal is the load-bearing choice and is the one worth overturning if
-   it is wrong.
-2. **Is a lockfile that nothing in the load path reads the right shape for the
-   baseline** — or should the baseline live in the run state directory instead?
-   Committed is proposed, because a baseline that is per-machine tells a
-   collaborator nothing and would drift per checkout.
-3. **Is "materialization source, never a load-time layer" the right boundary for
-   third-party bundles**, and is it a boundary the plugin contract should inherit
-   rather than re-decide?
-4. **Should `drift` be a derivation of the shared read model from the start**, or
-   is a CLI-local computation acceptable until a second surface needs it? This
-   design says from the start, on the operator-surfaces invariant.
+The architect ratified this design with four decisions, recorded in
+conversation (chat-11558d325e9a214ebfd00bb4a0012750, turn 24):
 
-## What the operator is being asked
+1. **"Ownership is materialization" is the right refusal.** An `owns` list is a
+   second vocabulary for what the file already says by having a value in it,
+   and this repository has paid for exactly one such duplication already. A
+   written value is owned; an absent value is inherited; nothing new enters the
+   schema resolution reads. Ratified as the design's spine.
+2. **The committed lockfile is the right shape.** A baseline in the state
+   directory is per-machine, tells a collaborator nothing, and drifts per
+   checkout. The property that makes it safe is kept verbatim: **nothing in the
+   load path reads it.** What the file says is what runs; the lock only makes
+   the three-way comparison possible. Committed, generated, decides nothing.
+3. **"Materialization source, never a load-time layer" is the right boundary,
+   and the plugin contract inherits it rather than re-deciding it.**
+   Third-party content reaching the harness through a diff the operator reads
+   is a categorically different risk from content consulted at load, and no
+   plugin design gets to reopen that; yoyodyne-ifd.32's contract cites this
+   design instead of arguing with it.
+4. **Drift is a read-model derivation from the start.** "Is this project
+   current" is a domain derivation that at least three surfaces will show;
+   `surfaces-project-one-read-model` rules out a CLI-local computation.
+
+The question routed to the operator below stays theirs and stays open; the
+drift report's conversational surfacing is not implemented until they answer.
+
+## Open: for the operator
 
 Whether the four-answer drift report is the right amount of attention to spend.
 It is silent when nothing changed and speaks on commands already being run, but
