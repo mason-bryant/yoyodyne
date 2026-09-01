@@ -131,10 +131,18 @@ const (
 // reconciliation itself could not finish, which leaves the run outstanding for
 // the next attempt rather than silently settled.
 type Reconciliation struct {
-	RunID           string                `json:"run_id"`
-	WorkItemID      string                `json:"work_item_id"`
-	Action          ReconcileAction       `json:"action"`
-	Status          runstate.Status       `json:"status,omitempty"`
+	RunID      string          `json:"run_id"`
+	WorkItemID string          `json:"work_item_id"`
+	Action     ReconcileAction `json:"action"`
+	Status     runstate.Status `json:"status,omitempty"`
+	// Outcome is what became of the run in the read model's fixed vocabulary,
+	// carried beside the status rather than instead of it for the reason the run
+	// history and the price breakdown carry theirs: the status is the durable
+	// value and stays what it always was, and this is the reading of it. Without
+	// it a sweep reported "failed" over a run it had just handed to a person with
+	// its branch and worktree intact, which is the one word that says nothing
+	// about whether the work survived.
+	Outcome         runstate.RunOutcome   `json:"outcome,omitempty"`
 	Phase           runstate.Phase        `json:"phase,omitempty"`
 	Detail          string                `json:"detail,omitempty"`
 	Integration     *runstate.Integration `json:"integration,omitempty"`
@@ -823,6 +831,7 @@ func reconciliationOf(state runstate.State, action ReconcileAction) Reconciliati
 		WorkItemID:      state.WorkItemID,
 		Action:          action,
 		Status:          state.Status,
+		Outcome:         state.Outcome(),
 		Phase:           state.Phase,
 		Integration:     state.Integration,
 		WorktreeRemoved: state.WorktreeRemoved,

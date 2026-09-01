@@ -27,6 +27,11 @@ func refusedRun(t *testing.T, apply func(*runstate.EnvironmentalRefusal)) runsta
 	state.Status = runstate.StatusFailed
 	state.CompletedAt = &completed
 	state.Failure = "the preserved worktree holds none of the change it was picked up to continue"
+	// A refusal like this is handed to a person, so the run carries the durable
+	// blocker that says so. It is what makes the run a stoppage rather than one
+	// the harness merely failed to carry, and the thread says a different thing
+	// about each.
+	state.Blocker = runstate.RecordBlocker("the handback carried none of the change it was continuing")
 	refusal := &runstate.EnvironmentalRefusal{
 		Cause:      runstate.CauseHandbackMissingChange,
 		Detail:     "the worktree holds no change at all against the base commit the run recorded",

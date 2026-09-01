@@ -138,12 +138,35 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	if !parked(before) && parked(after) {
 		say(KindRunParked, parkSeverity(after), Harness(), Detail{Cause: causeOf(after)})
 	}
-	// A run that stopped and stayed stopped is the one thing nobody finds out
-	// about on their own, so it is the one crossing said as critical.
-	if !blocked(before) && blocked(after) {
-		sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), Detail{}, blockerText(after))
+	// A run that ended without succeeding, said in the read model's own outcome
+	// vocabulary rather than in one word over all four. A stoppage somebody has to
+	// decide about is the one thing nobody finds out about on their own, so it
+	// keeps the critical crossing it always had; the other three endings leave
+	// nobody a decision and are said as themselves rather than as a blocker
+	// nobody recorded. Both state what remains of the change, because the attempt
+	// being over says nothing about whether the work is.
+	if !endedBadly(before) && endedBadly(after) {
+		remains := Detail{Remains: after.Artifacts().Describe()}
+		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
+			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, blockerText(after))
+		} else {
+			remains.Ending = string(outcome)
+			sayWith(KindRunEnded, endingSeverity(outcome), Harness(), remains, blockerText(after))
+		}
 	}
 	return crossed, nil
+}
+
+// endingSeverity is how loudly a run ending without a blocker is said. A
+// cancellation is a note because somebody chose it and it is no verdict on the
+// change; a run the harness could not carry and one it stopped on time are
+// warnings, because nobody chose either and what follows both is silence that
+// looks exactly like work in progress.
+func endingSeverity(outcome runstate.RunOutcome) report.Severity {
+	if outcome == runstate.OutcomeCancelled {
+		return report.SeverityNote
+	}
+	return report.SeverityWarning
 }
 
 // FromReport says what an agent noticed while its own work carried on. The
@@ -587,11 +610,13 @@ func parkSeverity(state runstate.State) report.Severity {
 	return report.SeverityWarning
 }
 
-// blocked reports a run that stopped and stayed stopped. It is read from a
-// terminal record carrying a failure rather than from the tracker, for the same
-// reason everything else here is: what is said is what the record says.
-func blocked(state runstate.State) bool {
-	return state.Status.Terminal() && state.Status != runstate.StatusSucceeded && blockerText(state) != ""
+// endedBadly reports a run that reached a terminal status without succeeding,
+// which is the crossing said above however it ended. Which of the four endings
+// it was is the read model's to say, not this one's: a second classification
+// here is a second chance for the channel and `yoyo status` to disagree about
+// one run.
+func endedBadly(state runstate.State) bool {
+	return state.Status.Terminal() && state.Status != runstate.StatusSucceeded
 }
 
 // blockerText is what the record gives as the reason. A publication that could

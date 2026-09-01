@@ -81,6 +81,15 @@ const (
 	// A blocker is work that stopped and stayed stopped, which is the one thing
 	// nobody finds out about on their own.
 	KindBlockerRecorded Kind = "blocker.recorded"
+	// A run that ended without succeeding and without leaving anybody a blocker
+	// to act on: one the harness failed to carry, one something stopped rather
+	// than judged, one it stopped on time. It is separate from the blocker above
+	// for the reason the outcome vocabulary is small and closed at all — "failed"
+	// is accurate about the attempt and says nothing about the work, so a channel
+	// that said one word over all four told an operator the attempt was over and
+	// nothing about whether their change still existed. The ending is named in the
+	// read model's own word and what remains of the change is stated beside it.
+	KindRunEnded Kind = "run.ended"
 	// A provider refusing the harness for want of capacity, somewhere that is not
 	// a run: a conversation turn, an independent review. A run says it by parking,
 	// and this is the same news from every other process — hours in which nothing
@@ -181,6 +190,7 @@ func Kinds() []Kind {
 		KindRunParked,
 		KindRunContinued,
 		KindBlockerRecorded,
+		KindRunEnded,
 		KindUsageLimitExhausted,
 		KindReportFiled,
 		KindProposalRaised,
@@ -216,7 +226,7 @@ func (k Kind) Valid() bool {
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
-		KindRunParked, KindRunContinued, KindBlockerRecorded, KindUsageLimitExhausted,
+		KindRunParked, KindRunContinued, KindBlockerRecorded, KindRunEnded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
@@ -590,6 +600,19 @@ type Detail struct {
 	// how much there is, and therefore how much of the thread's narrative is in
 	// the durable record rather than in the channel.
 	Accumulated int `json:"accumulated,omitempty"`
+	// Ending is what became of a run, in the read model's own fixed vocabulary,
+	// read by KindRunEnded. It is carried as the word rather than derived here for
+	// the reason Standing is carried rendered: the vocabulary is the contract, and
+	// a surface that classified a run for itself is a surface that can come to say
+	// a different word about it than `yoyo status` does.
+	//
+	// Remains is what the record says survives of that run's change, in the three
+	// fixed phrases the same read model renders, and is read by KindRunEnded and
+	// by KindBlockerRecorded. Both kinds state it because "is my work gone" is the
+	// question a run that did not succeed is actually read for, and a stoppage
+	// somebody has to decide about is the case where the answer matters most.
+	Ending  string `json:"ending,omitempty"`
+	Remains string `json:"remains,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
 	// a role changed the backlog, read by the tracker kinds; why proposed work
 	// was turned down, read by KindWorkDeclined; and why a thread reply recorded

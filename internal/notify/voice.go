@@ -175,7 +175,8 @@ var harnessVoice = voice{
 		KindMergeCompleted:      "{pr} merged.",
 		KindRunParked:           "{run} parked on {item}, waiting on {cause}.",
 		KindRunContinued:        "{run} continued on {item}.",
-		KindBlockerRecorded:     "{item} is blocked: {text}",
+		KindBlockerRecorded:     "{item} is blocked, and {remains}: {text}",
+		KindRunEnded:            "The run on {item} {ending}, and {remains}: {text}",
 		KindUsageLimitExhausted: "The provider refused {waiting}: {cause}.",
 		KindReportFiled:         "A report was filed on {item}: {text}",
 		KindProposalRaised:      "A change to {artifact} is proposed: {text}",
@@ -226,7 +227,8 @@ var developerVoice = voice{
 		KindMergeCompleted:      "{pr} is merged, so {item} is out of my hands.",
 		KindRunParked:           "I've stopped mid-change on {item}, waiting on {cause}. The worktree keeps everything.",
 		KindRunContinued:        "Back on {item}, picking the change up where I left it.",
-		KindBlockerRecorded:     "I could not finish {item}: {text}",
+		KindBlockerRecorded:     "I could not finish {item}, and {remains}: {text}",
+		KindRunEnded:            "My attempt at {item} {ending} rather than stopping on anything anybody has to decide, and {remains}: {text}",
 		KindUsageLimitExhausted: "The provider has nothing left for {waiting}: {cause}. None of my work moves until it lifts.",
 		KindReportFiled:         "Something I noticed on {item} while the work itself went fine: {text}",
 		KindProposalRaised:      "{artifact} isn't mine to edit, so I'm proposing the change instead: {text}",
@@ -277,7 +279,8 @@ var reviewerVoice = voice{
 		KindMergeCompleted:      "{pr} is merged, so what I approved is what landed.",
 		KindRunParked:           "{item} stopped before there was a verdict, waiting on {cause}.",
 		KindRunContinued:        "{item} is moving again; I'll see the change when it is ready.",
-		KindBlockerRecorded:     "{item} is blocked and there is no change to judge: {text}",
+		KindBlockerRecorded:     "{item} is blocked and there is no change to judge, though {remains}: {text}",
+		KindRunEnded:            "The run on {item} {ending} before I was given anything to judge, and {remains}: {text}",
 		KindUsageLimitExhausted: "{waiting} was refused for want of provider capacity: {cause}. Nothing arrives for a verdict until it lifts.",
 		KindReportFiled:         "Worth knowing about {item} — what I saw rather than what I judged: {text}",
 		KindProposalRaised:      "{artifact} is not mine to change, so this is an argument about it: {text}",
@@ -327,7 +330,8 @@ var developmentManagerVoice = voice{
 		KindMergeCompleted:      "{pr} merged; {item} is done.",
 		KindRunParked:           "{item} is parked, waiting on {cause}. It keeps its claim.",
 		KindRunContinued:        "{item} is moving again, from where it stopped.",
-		KindBlockerRecorded:     "{item} is blocked, and recorded as blocked rather than left implicit: {text}",
+		KindBlockerRecorded:     "{item} is blocked, and recorded as blocked rather than left implicit, with {remains}: {text}",
+		KindRunEnded:            "The run on {item} {ending} with nothing recorded for anybody to decide, and {remains}: {text}",
 		KindUsageLimitExhausted: "{waiting} is stopped by the provider rather than by the queue: {cause}. Nothing moves until it lifts.",
 		KindReportFiled:         "Filed beside {item} rather than folded into it: {text}",
 		KindProposalRaised:      "{artifact} isn't mine to change, so here is the case for changing it: {text}",
@@ -378,7 +382,8 @@ var productManagerVoice = voice{
 		KindMergeCompleted:      "{pr} merged, so {item} is delivered.",
 		KindRunParked:           "{item} is waiting on {cause}. Nothing about its priority changed while it waits.",
 		KindRunContinued:        "{item} is moving again.",
-		KindBlockerRecorded:     "{item} is blocked and stays in the backlog until somebody decides otherwise: {text}",
+		KindBlockerRecorded:     "{item} is blocked and stays in the backlog until somebody decides otherwise, with {remains}: {text}",
+		KindRunEnded:            "The attempt on {item} {ending}, which is no verdict on what the item is for, and {remains}: {text}",
 		KindUsageLimitExhausted: "Nothing is being spent, because the provider refused {waiting}: {cause}. What is admitted keeps its place.",
 		KindReportFiled:         "Noticed beside {item} and worth the operator's attention: {text}",
 		KindProposalRaised:      "A change to {artifact} is proposed, and I decide it only where the document is mine: {text}",
@@ -429,7 +434,8 @@ var architectVoice = voice{
 		KindMergeCompleted:      "{pr} merged, so the forge's history and the local target agree again.",
 		KindRunParked:           "{item} is parked, waiting on {cause}. A design that cannot survive an interruption is the wrong design.",
 		KindRunContinued:        "{item} resumed from exactly where it stopped.",
-		KindBlockerRecorded:     "{item} is blocked, which is a fact about the system rather than about the attempt: {text}",
+		KindBlockerRecorded:     "{item} is blocked, which is a fact about the system rather than about the attempt, and {remains}: {text}",
+		KindRunEnded:            "The run on {item} {ending}, which is a fact about the attempt rather than about the work, and {remains}: {text}",
 		KindUsageLimitExhausted: "{waiting} met the account's own ceiling rather than a defect: {cause}. Capacity is a boundary condition, and a design that treats it as a failure is the wrong design.",
 		KindReportFiled:         "Recorded beside {item} rather than left in prose nobody surfaces: {text}",
 		KindProposalRaised:      "{artifact} should change, and this is the case: {text}",
@@ -525,6 +531,11 @@ var nextMoves = map[Kind]string{
 	// clears on its own, which is why naming who has to act on it is the whole of
 	// what a reader needs.
 	KindBlockerRecorded: "the development manager's, in triage — nothing moves this item until it is decided.",
+	// A run that ended with no blocker left nobody a decision, so nothing is
+	// waiting on a person and the item is queued exactly as it was. The clause
+	// says so rather than naming a move: sending a reader to triage over a run
+	// that recorded nothing to triage is the same guessing as saying nothing.
+	KindRunEnded: "the harness's — nothing was recorded for anybody to decide, and the item is where the run left it.",
 	// The clause deliberately says nothing about when. Whether the provider named a
 	// moment the capacity comes back is the message's own to say, and a whose-move
 	// clause that implied one would be the sink inventing the fact the record was
@@ -741,11 +752,18 @@ func (e Event) fields(topic Topic) map[string]string {
 		"parent":    stated(detail.Parent, "an item the record does not name"),
 		"priority":  priorityOf(detail),
 		"executor":  stated(carrierOf(detail.Executor), "something the record does not name"),
-		"stopped":   stated(detail.Stopped, "nothing the record names has stopped it"),
-		"age":       ageOf(detail.Since, e.At),
-		"ready":     countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
-		"behind":    countOf(detail.Behind, "harness change", "harness changes", "a number of harness changes the record does not carry"),
-		"events":    countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
+		// What became of a run and what remains of its change, both already said in
+		// the read model's own words. A record that carries neither says so rather
+		// than leaving a blank, for the reason every absence here does — but more
+		// pointedly, because a run whose remains nobody can state is exactly the run
+		// an operator must not read as one whose work is safe.
+		"ending":  stated(detail.Ending, "an ending the record does not name"),
+		"remains": stated(detail.Remains, "what remains of it could not be read"),
+		"stopped": stated(detail.Stopped, "nothing the record names has stopped it"),
+		"age":     ageOf(detail.Since, e.At),
+		"ready":   countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
+		"behind":  countOf(detail.Behind, "harness change", "harness changes", "a number of harness changes the record does not carry"),
+		"events":  countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
 		// The four lines, already rendered by the read model. A surface with no way
 		// to read them says so rather than leaving the block out, because a message
 		// that simply lacks the lines is indistinguishable from a harness with

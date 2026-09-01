@@ -660,11 +660,9 @@ func TestARefusalOutsideARunIsSaidAtWarningAndNamesWhatIsWaiting(t *testing.T) {
 
 func TestARunThatStoppedAndStayedStoppedIsSaidAsCritical(t *testing.T) {
 	before := running()
-	completed := moment.Add(time.Minute)
-	after := before
-	after.Status = runstate.StatusFailed
-	after.CompletedAt = &completed
+	after := endedRun(before, runstate.StatusFailed)
 	after.Failure = "the repair budget was spent with the checks still failing"
+	after.Blocker = runstate.RecordBlocker("the checks kept failing after every repair round it was granted")
 	kinds, notifications := crossed(t, before, after)
 	blockerRecorded := only(t, notifications, KindBlockerRecorded)
 	if blockerRecorded.Event.Severity != report.SeverityCritical {
@@ -680,13 +678,103 @@ func TestARunThatStoppedAndStayedStoppedIsSaidAsCritical(t *testing.T) {
 	if !strings.Contains(message.Body, "Critical") {
 		t.Fatalf("body %q does not say its severity in words", message.Body)
 	}
+	// The whole reason the vocabulary exists: a stoppage keeps the change, and
+	// the thread says so rather than leaving it to be guessed from the word.
+	if !strings.Contains(message.Body, "work preserved") {
+		t.Fatalf("body %q does not say what remains of the change", message.Body)
+	}
 	// A run that succeeded is not a blocker however it is read.
 	succeeded := after
 	succeeded.Status = runstate.StatusSucceeded
 	succeeded.Failure = ""
+	succeeded.Blocker = ""
 	if kinds, _ := crossed(t, before, succeeded); len(kinds) != 0 {
 		t.Fatalf("a successful run crossed %v", kinds)
 	}
+}
+
+// The misreading this exists to end: "failed" is accurate about the attempt and
+// says nothing about the work, so a channel that said one word over all four
+// endings told an operator the attempt was over and nothing about whether their
+// change still existed. Each ending is said in the read model's own word, and
+// each says what remains.
+func TestEachWayARunEndsIsSaidAsItselfWithWhatRemains(t *testing.T) {
+	before := running()
+	for _, ending := range []struct {
+		status   runstate.Status
+		blocker  string
+		kind     Kind
+		word     string
+		severity report.Severity
+	}{
+		{runstate.StatusFailed, "the checks kept failing", KindBlockerRecorded, "blocked", report.SeverityCritical},
+		{runstate.StatusFailed, "", KindRunEnded, string(runstate.OutcomeFailed), report.SeverityWarning},
+		{runstate.StatusCancelled, "", KindRunEnded, string(runstate.OutcomeCancelled), report.SeverityNote},
+		{runstate.StatusTimedOut, "", KindRunEnded, string(runstate.OutcomeTimedOut), report.SeverityWarning},
+	} {
+		after := endedRun(before, ending.status)
+		after.Failure = "what the record gave as the reason"
+		if ending.blocker != "" {
+			after.Blocker = runstate.RecordBlocker(ending.blocker)
+		}
+		_, notifications := crossed(t, before, after)
+		said := only(t, notifications, ending.kind)
+		if said.Event.Severity != ending.severity {
+			t.Fatalf("%s is a %s, want %s", ending.status, said.Event.Severity, ending.severity)
+		}
+		message, err := Render(said.Topic, said.Speaker, said.Event)
+		if err != nil {
+			t.Fatalf("render %s: %v", ending.status, err)
+		}
+		if !strings.Contains(message.Body, ending.word) {
+			t.Fatalf("a %s run is said as %q, which does not name it", ending.status, message.Body)
+		}
+		if !strings.Contains(message.Body, "work preserved") {
+			t.Fatalf("a %s run is said as %q, which does not say what remains", ending.status, message.Body)
+		}
+	}
+}
+
+// A run whose change the harness removed and one whose record names no artifact
+// are opposite answers to "is my work gone", and neither may be said as the
+// other. The three phrases are the read model's, so `yoyo status` and the thread
+// cannot come to say different words about one run.
+func TestWhatRemainsIsSaidAsTheRecordHasItRatherThanGuessed(t *testing.T) {
+	before := running()
+	for remains, apply := range map[string]func(*runstate.State){
+		"work preserved": func(*runstate.State) {},
+		"work removed": func(state *runstate.State) {
+			state.BranchRemoved, state.WorktreeRemoved = true, true
+		},
+		"no artifacts recorded": func(state *runstate.State) {
+			state.Branch, state.WorktreePath = "", ""
+		},
+	} {
+		after := endedRun(before, runstate.StatusFailed)
+		after.Failure = "what the record gave as the reason"
+		apply(&after)
+		_, notifications := crossed(t, before, after)
+		ended := only(t, notifications, KindRunEnded)
+		message, err := Render(ended.Topic, ended.Speaker, ended.Event)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if !strings.Contains(message.Body, remains) {
+			t.Fatalf("a run whose record wanted %q is said as %q", remains, message.Body)
+		}
+	}
+}
+
+// endedRun is one reading of a run that has reached a terminal status, with the
+// artifacts a run that got as far as making a change carries.
+func endedRun(before runstate.State, status runstate.Status) runstate.State {
+	completed := moment.Add(time.Minute)
+	after := before
+	after.Status = status
+	after.CompletedAt = &completed
+	after.Branch = "yoyodyne/yoyodyne-ifd-68-2/4d1f"
+	after.WorktreePath = "/tmp/worktrees/run-4d1f"
+	return after
 }
 
 func TestARunWithNoUsableWorkItemIsRefusedRatherThanMisaddressed(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 var moment = time.Date(2026, 8, 19, 15, 4, 5, 0, time.UTC)
@@ -65,6 +66,8 @@ func fullyRecorded(kind Kind) Event {
 			Ready:           4,
 			Behind:          12,
 			Accumulated:     37,
+			Ending:          string(runstate.OutcomeTimedOut),
+			Remains:         "work preserved",
 		},
 		Text: "the developer's own words, carried through",
 	}

@@ -84,6 +84,64 @@ func (s State) Outcome() RunOutcome {
 	}
 }
 
+// Artifacts is what a run's record says survives of its change: the branch and
+// the worktree it made, and the harness's own record of which of them it
+// removed. It is a type rather than four fields read in place because the
+// question a reader asks of a run that did not succeed is "is my work gone", and
+// an answer assembled separately by each surface is an answer two surfaces can
+// give differently.
+type Artifacts struct {
+	Branch          string
+	BranchRemoved   bool
+	WorktreePath    string
+	WorktreeRemoved bool
+}
+
+// Preserved reports the run's change surviving the run: a branch or a worktree
+// the harness has not recorded as removed. It asks about both because either one
+// on its own still holds the work — a removed worktree whose branch stands is
+// work somebody can still check out.
+//
+// It is false for a run whose record names neither, which is not the same claim
+// as work thrown away and must not be rendered as one. Describe below is what
+// keeps those apart, and is what a surface says rather than this.
+func (a Artifacts) Preserved() bool {
+	return (a.Branch != "" && !a.BranchRemoved) || (a.WorktreePath != "" && !a.WorktreeRemoved)
+}
+
+// Describe is what remains of a run's change, in the three fixed phrases every
+// surface says it in. Two of them are facts the record holds; the third says the
+// record holds neither, rather than turning two empty fields into a claim that
+// the run made nothing — which is exactly the false reassurance the outcome
+// vocabulary exists to stop.
+//
+// It is derived here, in the read model, rather than in each surface, for the
+// reason Outcome is: `yoyo status`, `yoyo cost`, and the channel must not be
+// able to say different words about one run's remains.
+func (a Artifacts) Describe() string {
+	switch {
+	case a.Preserved():
+		return "work preserved"
+	case a.Branch != "" || a.WorktreePath != "":
+		// Something was made and the harness recorded removing it. That is a
+		// different answer from never having made anything, and an operator asking
+		// whether their work is gone is owed the one that is true.
+		return "work removed"
+	default:
+		return "no artifacts recorded"
+	}
+}
+
+// Artifacts is what this run's durable record says survives of its change.
+func (s State) Artifacts() Artifacts {
+	return Artifacts{
+		Branch:          s.Branch,
+		BranchRemoved:   s.BranchRemoved,
+		WorktreePath:    s.WorktreePath,
+		WorktreeRemoved: s.WorktreeRemoved,
+	}
+}
+
 // RunSummary is what one recorded run says about itself: how it ended, where it
 // was when it did, what it gave as the reason, and what it spent getting there.
 type RunSummary struct {
@@ -185,18 +243,19 @@ type RunSummary struct {
 // went wrong is asking about, and each of them records why it ended.
 func (r RunSummary) Failed() bool { return endedBadly(r.Status) }
 
-// Preserved reports the run's change surviving the run: a branch or a worktree
-// the harness has not recorded as removed. It asks about both because either one
-// on its own still holds the work — a removed worktree whose branch stands is
-// work somebody can still check out.
-//
-// It is false for a run whose record names neither, which is not the same claim
-// as work thrown away and must not be rendered as one: what a caller knows from
-// a false answer here is that the record says nothing, and it has to look at the
-// two fields to say which of the two it is.
-func (r RunSummary) Preserved() bool {
-	return (r.Branch != "" && !r.BranchRemoved) || (r.WorktreePath != "" && !r.WorktreeRemoved)
+// Artifacts is what this summary says survives of the run's change.
+func (r RunSummary) Artifacts() Artifacts {
+	return Artifacts{
+		Branch:          r.Branch,
+		BranchRemoved:   r.BranchRemoved,
+		WorktreePath:    r.WorktreePath,
+		WorktreeRemoved: r.WorktreeRemoved,
+	}
 }
+
+// Preserved reports the run's change surviving the run. It is the artifacts'
+// own answer, kept here because a summary is what most callers hold.
+func (r RunSummary) Preserved() bool { return r.Artifacts().Preserved() }
 
 // CostKnown reports a run the recorded evidence could actually price.
 func (r RunSummary) CostKnown() bool { return r.UnknownCost == "" }
