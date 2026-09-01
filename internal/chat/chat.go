@@ -687,6 +687,14 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// returned: the rest of the answer is unaffected by either.
 		s.collectReply(&reply, parsed)
 		if err != nil {
+			// A tracker block the harness would not read is recorded and handed back
+			// to the role that sent it before the turn ends. Everything else about
+			// the failure is unchanged: the answer above is real, the turn is
+			// returned as failed, and nothing in the block was carried out.
+			var refused *TrackerError
+			if errors.As(err, &refused) {
+				err = errors.Join(err, s.recordRefusedTrackerBlock(refused))
+			}
 			return reply, err
 		}
 		// What this role has no authority for is refused before any of it is
@@ -1044,10 +1052,10 @@ type parsedReply struct {
 func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 	rest, reports, reportErr := report.Extract(answer)
 	parsed := parsedReply{Reports: reports, ReportProblem: reportErr}
-	prose, actions, err := extractTrackerActions(rest)
+	prose, actions, requested, err := extractTrackerActions(rest)
 	if err != nil {
 		parsed.Prose = rest
-		return parsed, &TrackerError{Role: role, Err: err}
+		return parsed, &TrackerError{Role: role, Actions: requested, Err: err}
 	}
 	prose, proposals, err := extractProposals(prose)
 	if err != nil {
@@ -1721,7 +1729,10 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		}
 		var unreadableActions *TrackerError
 		if errors.As(err, &unreadableActions) {
-			fmt.Fprintf(out, "%v\nNothing in that block was carried out, so the tracker is unchanged by it; ask again if you want those changes.\n\n", unreadableActions)
+			// The refusal is recorded and put in front of the role's next turn, so
+			// what would have been your errand is its own: say anything to the
+			// conversation and it reads the refusal and issues the actions again.
+			fmt.Fprintf(out, "%v\nNothing in that block was carried out, so the tracker is unchanged by it. The refusal is recorded and reaches it verbatim on its next turn, so it re-issues the actions itself.\n\n", unreadableActions)
 			continue
 		}
 		// An escalation with nothing to reach the operator by is refused rather
