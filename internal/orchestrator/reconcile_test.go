@@ -667,6 +667,79 @@ func TestReconcileBlocksARecordedIntegrationTheTargetDoesNotCarry(t *testing.T) 
 	}
 }
 
+// The same contradiction on a record that already said the run succeeded, which
+// is the shape a process killed after the completing save leaves. The sweep
+// deliberately keeps the status such a record wrote for itself, so what stops it
+// reading as work that landed is the precedence rule in the read model: the
+// blocker this sweep saves outranks the status, and every surface says "stopped".
+func TestReconcileDoesNotLeaveAContradictedPromotionReadingAsSucceeded(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("interrupted Run() error = nil")
+	}
+	interrupted, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if interrupted.Integration == nil {
+		t.Fatalf("interrupted state = %#v, want the recorded integration this test contradicts", interrupted)
+	}
+	// The run reached its terminal status before the process died, short of the
+	// complete phase, which is what leaves the cleanup outstanding.
+	completedAt := interrupted.UpdatedAt
+	interrupted.Status = runstate.StatusSucceeded
+	interrupted.CompletedAt = &completedAt
+	if err := store.Save(interrupted); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	gitOutput(t, repository, "update-ref", "refs/heads/main", interrupted.BaseCommit)
+
+	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+	if len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the uncarried promotion blocked", results)
+	}
+	if !tracker.blocked || tracker.item.Status != "blocked" {
+		t.Fatalf("tracker = %#v, want the item blocked for a person", tracker)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The status stays what the run recorded — the sweep's own rule, unchanged —
+	// and the blocker beside it is what the outcome is read from.
+	if settled.Status != runstate.StatusSucceeded || settled.Integration != nil {
+		t.Fatalf("settled state = %#v, want the recorded status kept and no promotion claimed", settled)
+	}
+	if settled.Outcome() != runstate.OutcomeStopped {
+		t.Fatalf("settled outcome = %q, want a stoppage somebody owns", settled.Outcome())
+	}
+	if !strings.Contains(settled.Failure, "does not contain it") {
+		t.Fatalf("settled failure = %q, want the reason the sweep settled it on", settled.Failure)
+	}
+	if !strings.Contains(settled.Blocker, "does not contain it") {
+		t.Fatalf("settled blocker = %q, want the blocker the item carries", settled.Blocker)
+	}
+	// Nothing the run built was swept away on the strength of a record the
+	// repository denies. The run closed the item when it recorded the promotion,
+	// and the blocker above is what reopens the question.
+	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
+		t.Fatalf("blocked run lost its preserved change: %v", err)
+	}
+	// The settled run owes nothing further, so the next sweep leaves it alone
+	// rather than deciding it again.
+	if again := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(again) != 0 {
+		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
+	}
+}
+
 // Observing the target must not turn every target that moved on into a
 // disagreement. A promotion other work was committed on top of is still in the
 // target, and the run that made it is owed its completion.

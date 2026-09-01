@@ -507,6 +507,46 @@ func TestStatusSaysWhatBecameOfTheWorkRatherThanOneWordForEveryEnding(t *testing
 	}
 }
 
+// The one run whose durable status and whose outcome disagree, listed. A sweep
+// that finds the target does not carry a promotion hands the item back and
+// leaves the status the run recorded for itself, so the listing is reading a
+// record that says "succeeded" and has to say "stopped" over it — with the
+// reason, the phase, and what remains of the change, exactly as every other
+// stoppage is said.
+func TestStatusSaysAContradictedPromotionIsAStoppageRatherThanASuccess(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
+	contradicted := runstate.RunSummary{
+		RunID:        "run-8888888888888888888888888888bb",
+		WorkItemID:   "yoyodyne-ifd.233",
+		Status:       runstate.StatusSucceeded,
+		Outcome:      runstate.OutcomeStopped,
+		Phase:        runstate.PhaseCleaningUp,
+		StartedAt:    completedAt,
+		CompletedAt:  &completedAt,
+		Branch:       "yoyodyne/yoyodyne-ifd.233",
+		WorktreePath: "/state/worktrees/yoyodyne-ifd.233",
+		Failure:      "reconciled after an interrupted run: main does not contain it",
+	}
+
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{contradicted}}, "", true)
+	rendered := out.String()
+	for _, want := range []string{
+		"[stopped, cleaning_up, work preserved]",
+		"reason: reconciled after an interrupted run: main does not contain it",
+		"preserved worktree: /state/worktrees/yoyodyne-ifd.233",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, want)
+		}
+	}
+	if strings.Contains(rendered, string(runstate.OutcomeSucceeded)) {
+		t.Fatalf("a run a person was handed still reads as a success: %q", rendered)
+	}
+}
+
 func TestStatusRefusesArgumentsItCannotHonor(t *testing.T) {
 	t.Parallel()
 

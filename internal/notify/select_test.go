@@ -857,6 +857,53 @@ func TestWhatRemainsIsSaidAsTheRecordHasItRatherThanGuessed(t *testing.T) {
 	}
 }
 
+// The stoppage that reaches a record saying "succeeded". A run promotes its work
+// and records it, the target turns out not to carry the promotion, and the sweep
+// hands the item to a person and leaves the status the run wrote for itself
+// alone. Reading the status here silenced the critical line on the one record
+// where the status is the least true thing about the run: the item is blocked,
+// the docket says a person owns it, and the channel said nothing.
+func TestAStoppageOnARecordThatSaysSucceededIsStillSaid(t *testing.T) {
+	// The run as it was cleaning up, and then the same run recorded as succeeded.
+	// Nothing is said of work that landed, which is what makes the line below the
+	// only thing the channel says about this record.
+	before := running()
+	before.Phase = runstate.PhaseCleaningUp
+	landed := endedRun(before, runstate.StatusSucceeded)
+	if kinds, _ := crossed(t, before, landed); len(kinds) != 0 {
+		t.Fatalf("the successful run crossed %v, want nothing said of work that landed", kinds)
+	}
+
+	settled := landed
+	settled.Failure = "reconciled after an interrupted run: the run recorded commit abc as integrated into main, but main does not contain it"
+	settled.Blocker = runstate.RecordBlocker("the run recorded a promotion main does not carry")
+	kinds, notifications := crossed(t, landed, settled)
+	stoppage := only(t, notifications, KindBlockerRecorded)
+	if stoppage.Event.Severity != report.SeverityCritical {
+		t.Fatalf("the stoppage is a %s among %v, want it to reach the operator as critical", stoppage.Event.Severity, kinds)
+	}
+	message, err := Render(stoppage.Topic, stoppage.Speaker, stoppage.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(message.Body, settled.Failure) {
+		t.Fatalf("the stoppage does not carry the settled reason: %q", message.Body)
+	}
+	if strings.Contains(message.Body, string(runstate.OutcomeSucceeded)) {
+		t.Fatalf("the stoppage still says its work landed: %q", message.Body)
+	}
+	// The item's own status line is read from the same record, and a completion
+	// mark on an item a person was handed is the same false fact in one glyph.
+	if status := StatusOfRun(settled); status != StatusBlocked {
+		t.Fatalf("StatusOfRun() = %q, want the item read as blocked", status)
+	}
+	// And it is a crossing rather than a state: the settled record read again says
+	// nothing.
+	if kinds, _ := crossed(t, settled, settled); len(kinds) != 0 {
+		t.Fatalf("re-reading the settled run crossed %v, want the stoppage said once", kinds)
+	}
+}
+
 // endedRun is one reading of a run that has reached a terminal status, with the
 // artifacts a run that got as far as making a change carries.
 func endedRun(before runstate.State, status runstate.Status) runstate.State {

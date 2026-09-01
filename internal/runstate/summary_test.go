@@ -343,8 +343,14 @@ func TestOutcomeMapsEveryRecordedStatusOntoTheFixedVocabulary(t *testing.T) {
 		// relaunch budget is spent, so this pairing is one the records really
 		// hold: what became of the work is the stoppage, not the clock.
 		{name: "timed out on a blocker", status: StatusTimedOut, blocker: "the item carries this", want: OutcomeStopped},
+		// The run the precedence rule exists for: reconciliation settles a promotion
+		// the target does not carry by handing the item back, and deliberately leaves
+		// the status such a record wrote for itself alone. What became of the work is
+		// the stoppage a person now owns, not the success the status still says.
+		{name: "succeeded on a blocker", status: StatusSucceeded, blocker: "the item carries this", want: OutcomeStopped},
 		// Whitespace is not a blocker anybody was handed.
 		{name: "failed on a blank blocker", status: StatusFailed, blocker: "  \n ", want: OutcomeFailed},
+		{name: "succeeded on a blank blocker", status: StatusSucceeded, blocker: "  \n ", want: OutcomeSucceeded},
 		// A run still in flight is never described as stopped, whatever a blocker
 		// left over from an attempt triage re-entered says.
 		{name: "running with a superseded blocker", status: StatusRunning, blocker: "cleared as it went again", want: RunOutcome(StatusRunning)},
@@ -359,8 +365,94 @@ func TestOutcomeMapsEveryRecordedStatusOntoTheFixedVocabulary(t *testing.T) {
 	}
 }
 
-// The item every run in the test above was made for, named once so the listing
-// can be read back for it.
+// The precedence rule stated as the thing it forbids, over the whole closed set
+// of statuses rather than over the pairings somebody thought to list: no status a
+// record can hold makes a recorded blocker read as anything but a stoppage. It is
+// written this way because the mask it ends was one status escaping one ordered
+// check — "succeeded" returned before the blocker was looked at — and a table of
+// examples is exactly what let that one through.
+func TestNoRecordedStatusMasksABlockerTheItemCarries(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []Status{StatusPending, StatusRunning, StatusSucceeded, StatusFailed, StatusCancelled, StatusTimedOut} {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			// The set above is the closed one the record is validated against, so a
+			// status added to it without being added here fails at the source.
+			if !status.Valid() {
+				t.Fatalf("%q is not a status a record can hold", status)
+			}
+			state := State{Status: status, Blocker: "the item carries this"}
+			outcome := state.Outcome()
+			if outcome == OutcomeSucceeded {
+				t.Fatalf("a %s run holding a blocker reads as %q, which says its work landed", status, outcome)
+			}
+			// A terminal record carrying a blocker is a stoppage whatever the status,
+			// and a run still in flight keeps its own word: a blocker triage cleared
+			// on the way back in is not an ending.
+			want := OutcomeStopped
+			if !status.Terminal() {
+				want = RunOutcome(status)
+			}
+			if outcome != want {
+				t.Fatalf("Outcome() = %q, want %q", outcome, want)
+			}
+		})
+	}
+}
+
+// A stoppage settled onto a record that says "succeeded" is one of the runs that
+// went wrong, so it is in the listing read for those. Selecting on the status
+// would leave it out of the one listing it most needs to be in — the operator
+// asking what has been failing is asking about exactly this run.
+func TestHistorySelectsAStoppageSettledOntoASucceededRecord(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	landed := integratedState(t, PhaseComplete)
+	landed.WorktreeRemoved = true
+	landed.BranchRemoved = true
+	if err := store.Create(landed); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// The sweep found the promotion this run recorded missing from the target,
+	// blocked the item, cleared the promotion, and left the status alone.
+	contradicted := integratedState(t, PhaseCleaningUp)
+	contradicted.RunID = mustRunID(t)
+	contradicted.WorkItemID = "yoyodyne-ifd.233"
+	contradicted.StartedAt = landed.StartedAt.Add(time.Hour)
+	contradicted.UpdatedAt = contradicted.StartedAt
+	contradicted.Integration = nil
+	contradicted.Failure = "reconciled after an interrupted run: main does not contain it"
+	contradicted.Blocker = RecordBlocker("the run recorded a promotion main does not carry")
+	if err := store.Create(contradicted); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	history, err := store.History(RunQuery{FailedOnly: true})
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	if history.Matched != 1 || len(history.Runs) != 1 || history.Runs[0].RunID != contradicted.RunID {
+		t.Fatalf("history = %#v, want the contradicted run among the runs that went wrong", history)
+	}
+	reported := history.Runs[0]
+	if reported.Outcome != OutcomeStopped || !reported.Failed() {
+		t.Fatalf("reported = %#v, want a stoppage somebody owns", reported)
+	}
+	// The reason is what the listing prints under the word, so a reader is never
+	// told a run stopped and left to find out why elsewhere.
+	if reported.Failure != contradicted.Failure {
+		t.Fatalf("reported failure = %q, want the settled reason", reported.Failure)
+	}
+	// The run whose work actually landed is not swept in beside it.
+	if !reported.Preserved() {
+		t.Fatalf("reported = %#v, want the preserved change named", reported)
+	}
+}
+
+// The item every run the stopped-run listing above builds was made for, named
+// once so the listing can be read back for it.
 const stoppedItem = "yoyodyne-ifd.173"
 
 // stoppedState is a terminal run with a worktree and a branch it did not remove,

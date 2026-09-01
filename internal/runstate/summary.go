@@ -79,15 +79,35 @@ func (s State) Outcome() RunOutcome {
 //
 // A run that has not reached a terminal status keeps its own status word, since
 // "pending" and "running" are already the two facts a reader wants there.
+//
+// # The precedence rule
+//
+// A recorded blocker outranks every terminal status, "succeeded" included. That
+// is the one rule here worth stating, because two decisions that are each right
+// on their own meet at it, and this is where one of them yields:
+//
+//   - Reconciliation deliberately leaves a status alone once a record is
+//     terminal. A run that wrote down how it ended said something no later
+//     sweep saw, and settling it must not overwrite that account.
+//   - A blocker on the record means the work item is back in somebody's hands.
+//
+// Both hold at once on the run that recorded a promotion the target turns out
+// not to carry: the sweep puts the item back in a person's hands and clears the
+// promotion, and the status stays the "succeeded" the run wrote for itself. A
+// derivation reading the status first prints "succeeded" over a run a person now
+// owns, which is the one word that is false about it. So the status yields to the
+// blocker here, in the derivation, and the durable record is not moved: the
+// sweep's rule keeps everything it was for, and the surfaces say the true word.
+// Reconciler.saveTerminalFailure cites this from the other side.
 func Ending(status Status, handedToAPerson bool) RunOutcome {
 	if !status.Terminal() {
 		return RunOutcome(status)
 	}
 	switch {
-	case status == StatusSucceeded:
-		return OutcomeSucceeded
 	case handedToAPerson:
 		return OutcomeStopped
+	case status == StatusSucceeded:
+		return OutcomeSucceeded
 	case status == StatusCancelled:
 		return OutcomeCancelled
 	case status == StatusTimedOut:
@@ -259,7 +279,7 @@ type RunSummary struct {
 // Cancelled and timed out belong here beside failed: what they have in common is
 // that the work did not land, which is what somebody looking for the runs that
 // went wrong is asking about, and each of them records why it ended.
-func (r RunSummary) Failed() bool { return endedBadly(r.Status) }
+func (r RunSummary) Failed() bool { return endedBadly(r.Status, r.Outcome) }
 
 // Artifacts is what this summary says survives of the run's change.
 func (r RunSummary) Artifacts() Artifacts {
@@ -278,8 +298,13 @@ func (r RunSummary) Preserved() bool { return r.Artifacts().Preserved() }
 // CostKnown reports a run the recorded evidence could actually price.
 func (r RunSummary) CostKnown() bool { return r.UnknownCost == "" }
 
-func endedBadly(status Status) bool {
-	return status.Terminal() && status != StatusSucceeded
+// endedBadly reports a terminal run whose work did not land. It asks the derived
+// outcome rather than the status alone, because the status alone cannot answer
+// it: by the precedence rule on Ending, a stoppage can be settled onto a record
+// that still says "succeeded", and a selection reading the status would leave
+// that run out of the one listing it most needs to be in.
+func endedBadly(status Status, outcome RunOutcome) bool {
+	return status.Terminal() && outcome != OutcomeSucceeded
 }
 
 // RunQuery narrows which recorded runs a history covers.
@@ -321,7 +346,7 @@ func (s *Store) History(query RunQuery) (RunHistory, error) {
 		if workItemID != "" && state.WorkItemID != workItemID {
 			continue
 		}
-		if query.FailedOnly && !endedBadly(state.Status) {
+		if query.FailedOnly && !endedBadly(state.Status, state.Outcome()) {
 			continue
 		}
 		matched = append(matched, state)
