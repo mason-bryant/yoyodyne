@@ -399,6 +399,12 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 	case counters.RoundsRemaining(caps.ReviewRounds) == 0:
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item — at or past the cap of %d, so no decision that buys a round remains\n",
 			counters.ReviewRounds, caps.ReviewRounds)
+		// The one thing that changes that, said where the operator meets the dead
+		// end rather than left to be found. A cap is crossed by this command and by
+		// nothing else, and an override recorded anywhere else — the item's own
+		// notes included, which is where two of them went — reaches no guard.
+		fmt.Fprintf(writer, "    `yoyo triage override --budget %q --cap <n> --by \"<you>\" --reason \"<why>\" %s` is the only thing that crosses it\n",
+			runstate.TriageReviewRoundBudget, counters.WorkItemID)
 	default:
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item, under the cap of %d\n",
 			counters.ReviewRounds, caps.ReviewRounds)

@@ -2618,10 +2618,17 @@ triage of yoyodyne-ifd.90: triage has spent 2 passes on it
 
 At or past the cap — 4 of 4 exactly included, because a grant needs a round and
 none remains — the same line reads: `review rounds: 6 spent across every run of
-this item — at or past the cap of 4, so no decision that buys a round remains`.
-What may still happen is what the budget lines beside it say: waiting,
-re-scoping, and escalating spend nothing, and a merge re-arm spends only its
-own budget, whatever the rounds say.
+this item — at or past the cap of 4, so no decision that buys a round remains`,
+and the line under it names the one thing that changes that, so the dead end and
+the way out are read in the same breath:
+
+```text
+    `yoyo triage override --budget "review round" --cap <n> --by "<you>" --reason "<why>" yoyodyne-ifd.90` is the only thing that crosses it
+```
+
+What may still happen without crossing anything is what the budget lines beside
+it say: waiting, re-scoping, and escalating spend nothing, and a merge re-arm
+spends only its own budget, whatever the rounds say.
 
 ```text
   repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
@@ -2642,14 +2649,24 @@ counters and these caps, read as the docket is read, so what `yoyo status` says
 about an item, what a docket entry says about it, and what refuses the next
 decision about it are one record rather than three counts of it.
 
-**A round is a reviewer verdict a developer attempt produced**, counted across
-every run of the item. A re-review no developer attempt produced is not one, so a
-promotion that [loses its race](#losing-a-race-for-the-target-branch) and gets a
-fresh verdict on the replayed change is not charged for it — counting that would
-charge an item for losing a race it did not cause. A review re-asked for after an
-interrupted process is the same case and is counted once for the same reason.
-Rounds are recorded whatever a cap says, because a round is something that
-happened rather than something being asked for.
+**A round is a reviewer verdict that sent a developer attempt back**, counted
+across every run of the item. A re-review no developer attempt produced is not
+one, so a promotion that [loses its race](#losing-a-race-for-the-target-branch)
+and gets a fresh verdict on the replayed change is not charged for it — counting
+that would charge an item for losing a race it did not cause. A review re-asked
+for after an interrupted process is the same case and is counted once for the
+same reason. Rounds are recorded whatever a cap says, because a round is
+something that happened rather than something being asked for.
+
+**A verdict that approved the change is not a round either.** The cap stops an
+item buying the same argument another round, and an approval ends that argument
+rather than taking another turn of it; what becomes of an approved change
+afterwards — a promotion that conflicted, a merge the forge dropped — is not the
+change disputing with its reviewer. Charging it walked items toward the cap on
+their own success, and one such item reached triage with every recorded decision
+about it refused. It loosens no bound: an approval ends the review loop of the
+run that produced it, so a run yields at most one, and how many runs an item gets
+is bounded by the repair grant and the re-run, each once per item.
 
 **Each counter is written before the action it counts takes effect**, so a
 process that dies between the two has recorded a grant it did not give rather
@@ -2745,6 +2762,15 @@ manager's triage vocabulary cannot produce one, and the actions that carry
 decisions out read overrides rather than write them. It is a terminal command for
 the reason `yoyo release` is one — the switch that answers an escalation has to
 work with no conversation open.
+
+**This command is the only thing that crosses a cap, and the refusal names it.**
+An override recorded anywhere else — in the work item's notes, in the escalation,
+in the conversation that raised it — crosses nothing, because no guard reads
+prose. That is not a hypothetical misreading: a refusal that said only "the
+operator can record an override against the item" was twice answered in the
+item's notes, exactly as those words directed, and the resubmitted decision came
+back with the identical message. The development manager's refusal now prints the
+command above with the budget that refused and the item already in it.
 
 **It carries nothing out.** Recording an override changes what the guards will
 permit and nothing else. The development manager then records the decision the

@@ -4969,15 +4969,18 @@ func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
 	if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 1 {
 		t.Fatalf("developer invocations = %d, want 1", len(developers))
 	}
-	// And so the second review is not a round the item spent. It judged the same
-	// developer attempt on moved ground, and charging the item for it would charge
-	// it for losing a race it did not cause.
+	// And so neither review is a round the item spent. Both approved, and an
+	// approval is the end of the argument the cap bounds rather than another turn
+	// of it; the second one also judged the same developer attempt on moved
+	// ground, which would charge the item for losing a race it did not cause. That
+	// the same attempt judged twice counts once whatever the verdict is, is proven
+	// against the record itself in the runstate store's own tests.
 	counters, err := store.Triage().Counters(tracker.item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
-	if counters.ReviewRounds != 1 {
-		t.Fatalf("review rounds = %d, want 1: the replay's re-review is not a round", counters.ReviewRounds)
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds = %d, want none: two approvals and a replay cost the item nothing", counters.ReviewRounds)
 	}
 	if outcome.RepairAttempts != 0 {
 		t.Fatalf("repair attempts = %d, want the retry to spend none", outcome.RepairAttempts)
@@ -4985,6 +4988,12 @@ func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
 	state, err := store.Load(outcome.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
+	}
+	// The run's own count is the other half of that: two verdicts were reached
+	// here, and the item was charged for neither, so the zero above is an
+	// exclusion rather than a review that never happened.
+	if state.ReviewRounds != 2 {
+		t.Fatalf("run review rounds = %d, want the two verdicts this run reached", state.ReviewRounds)
 	}
 	if state.IntegrationRetries != 1 || state.BaseCommit != moved {
 		t.Fatalf("durable retry evidence = %#v", state)

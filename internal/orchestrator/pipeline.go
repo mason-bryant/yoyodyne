@@ -4220,11 +4220,12 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			reasked = true
 			continue
 		}
-		// A verdict that was actually reached is one round of this work item's
-		// life, and it is counted before it is acted on. Everything above this
-		// point produced no verdict at all — declined, unserved, killed, or
-		// unreadable — and none of those is a round the item spent.
-		if err == nil {
+		// A verdict that was actually reached and sent the change back is one round
+		// of this work item's life, and it is counted before it is acted on.
+		// Everything above this point produced no verdict at all — declined,
+		// unserved, killed, or unreadable — and none of those is a round the item
+		// spent. Neither is an approval, for the reason countReviewRound gives.
+		if err == nil && decision == review.DecisionRepair {
 			if countErr := a.countReviewRound(ctx); countErr != nil {
 				return "", countErr
 			}
@@ -4234,10 +4235,27 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 }
 
 // countReviewRound records against the work item's durable triage counters that
-// one more reviewer verdict has been produced for it. The count spans every run
+// one more reviewer verdict has sent this work back. The count spans every run
 // of the item, which is what makes it the figure a repair grant is truncated
 // against: a run's own repair budget starts again at zero each time, so nothing
 // inside a run says what the item has already cost.
+//
+// A verdict that approved the change is not one of these, and the caller is what
+// decides that. The cap this feeds exists to stop an item buying the same
+// argument another round, and an approval is the end of that argument rather
+// than another turn of it: what happens to an approved change afterwards — a
+// promotion that lost its race, a merge the forge dropped — is not the change
+// disputing with its reviewer, and charging the item for it walks the item
+// toward its cap on its own success. That is not hypothetical. An item whose
+// last permitted round was an approval, and whose promotion then conflicted,
+// arrived at triage with a decision every recorded path refused; it took an
+// operator override and a fresh work item to move.
+//
+// It unbounds nothing, which is what makes the exclusion safe rather than
+// generous. An approval ends the review loop of the run that produced it, so one
+// run yields at most one, and how many runs an item gets is bounded by budgets of
+// its own — one repair grant and one re-run per item, each refused by a counter
+// this one cannot stand in for.
 //
 // The round is recorded under the developer attempt that produced the change, so
 // the same attempt judged twice is counted once. That is what keeps two cases
@@ -4372,14 +4390,18 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if result.Decision == review.DecisionApprove || result.Decision == review.DecisionRepair {
 		a.state.ReviewDecision = string(result.Decision)
 		a.outcome.ReviewDecision = result.Decision
-		// One round with a reviewer is a verdict, whichever way it went, and the
-		// count of them is what triage measures a work item against. It is counted
-		// here rather than derived from the repair attempts because the two are not
-		// the same number: a refused path and a failing check are handed back
-		// without anybody reviewing anything, and an approved change was reviewed
-		// without a repair at all. Unlike the verdict beside it, it is never
-		// cleared: what the next attempt discards is the judgement, not the fact
-		// that this work has been round once more.
+		// One round with a reviewer is a verdict, whichever way it went, and this
+		// is how many of them this run has had. It is counted here rather than
+		// derived from the repair attempts because the two are not the same number:
+		// a refused path and a failing check are handed back without anybody
+		// reviewing anything, and an approved change was reviewed without a repair
+		// at all. Unlike the verdict beside it, it is never cleared: what the next
+		// attempt discards is the judgement, not the fact that this work has been
+		// round once more.
+		//
+		// It is this run's own figure and not the one the triage caps are measured
+		// against. That one is the item's durable counter, which spans every run
+		// and excludes the verdicts that sent nothing back — see countReviewRound.
 		a.state.ReviewRounds++
 	}
 	if reviewErr != nil {

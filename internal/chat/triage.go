@@ -310,11 +310,38 @@ func (s *Session) refuseTransposedStoppage(ctx context.Context, workItemID, runI
 // cap is crossable now, by the operator and by nobody else, so the refusal says
 // so. A development manager who escalates without knowing the remedy exists
 // escalates into the same silence the escalation is meant to break.
+//
+// It names the command rather than the remedy, and that is the whole of what
+// this text got wrong twice. "The operator can record an override against the
+// item" was read as the item's notes — the only place a conversation writes to
+// an item at all — so the operator answered the escalation there, exactly as the
+// words directed, the same decision was asked for again, and the identical
+// refusal came back. No guard reads a note, and nothing in the sentence named
+// the verb that does. So the refusal prints the command, with the budget that
+// refused and the item already in it, and says plainly that a note is not one.
 func refusedPastCap(err error) error {
 	if !errors.Is(err, runstate.ErrTriageCapReached) {
 		return err
 	}
-	return fmt.Errorf("%w. Nothing in this conversation crosses that cap: escalate, and the operator can record an override of it against the item — after which asking for this same decision again records it", err)
+	return fmt.Errorf("%w. Nothing in this conversation crosses that cap, and nothing written into the item's notes crosses it either — no guard reads prose. Escalate, and the operator crosses it themselves with `%s`; once that record exists, asking for this same decision again records it",
+		err, overrideCommand(err))
+}
+
+// overrideCommand is the command that crosses the cap one refusal came from,
+// with the budget and the work item already filled in, so what reaches the
+// operator is something to run rather than something to reconstruct.
+//
+// A refusal carrying no budget to name falls back to the shape of the command
+// rather than to a description of it. Nothing produces one today — every cap
+// refusal here is a TriageCapError — but a refusal that lost the detail must
+// still leave the operator holding a verb.
+func overrideCommand(err error) string {
+	var capped runstate.TriageCapError
+	if !errors.As(err, &capped) {
+		return `yoyo triage override --budget "<budget>" --cap <n> --by "<operator>" --reason "<why>" <work item>`
+	}
+	return fmt.Sprintf(`yoyo triage override --budget %q --cap <n> --by "<operator>" --reason "<why>" %s`,
+		capped.Budget, capped.WorkItemID)
 }
 
 // spendTriageBudget spends what the decision costs and says what it came to, or

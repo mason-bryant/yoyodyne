@@ -806,11 +806,13 @@ decision itself is recorded on the work item, which is where to read whether
 stopped work has been decided and what was decided; an escalated item is blocked
 there as well.
 
-A **round** is a reviewer verdict a developer attempt produced, counted across
-every run of the item. A re-review no developer attempt produced is not one, so a
-promotion that [loses its race](configuration.md#losing-a-race-for-the-target-branch)
-and gets a fresh verdict on the replayed change is not charged for it. Rounds are
-what runs actually spend, and every run records them.
+A **round** is a reviewer verdict that sent a developer attempt back, counted
+across every run of the item. A re-review no developer attempt produced is not
+one, so a promotion that [loses its race](configuration.md#losing-a-race-for-the-target-branch)
+and gets a fresh verdict on the replayed change is not charged for it. Neither is
+a verdict that approved the change: the cap stops an item buying the same
+argument another round, and an approval ends the argument. Rounds are what runs
+actually spend, and every run records them.
 
 The lines under it are the budget for what triage can decide about work that did
 not land — another go at the change, a re-run, a re-armed merge — and they move

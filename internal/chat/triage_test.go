@@ -519,6 +519,71 @@ func TestTriageIsRefusedOnWorkThatHasClosed(t *testing.T) {
 	}
 }
 
+// A cap refusal has to leave the development manager holding something the
+// operator can run. Naming the remedy without naming the verb is what sent two
+// overrides into a work item's notes — where "record an override against the
+// item" pointed, and where no guard reads — and left the resubmitted decision
+// meeting the identical refusal.
+func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want []string
+	}{
+		{
+			name: "the refusal a cap produces",
+			err: runstate.TriageCapError{
+				Action:     runstate.TriageRerun,
+				Budget:     runstate.TriageReviewRoundBudget,
+				WorkItemID: "yoyodyne-ifd.224",
+				Spent:      4,
+				Cap:        4,
+			},
+			want: []string{
+				"re-run is refused for yoyodyne-ifd.224",
+				`yoyo triage override --budget "review round"`,
+				"--cap <n>",
+				"yoyodyne-ifd.224",
+				"nothing written into the item's notes crosses it either",
+			},
+		},
+		{
+			// Nothing produces this today, and a refusal that lost the detail must
+			// still leave the operator holding a verb rather than a description.
+			name: "a cap refusal carrying no budget to name",
+			err:  fmt.Errorf("the budget is gone: %w", runstate.ErrTriageCapReached),
+			want: []string{
+				`yoyo triage override --budget "<budget>"`,
+				"nothing written into the item's notes crosses it either",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			refusal := refusedPastCap(testCase.err)
+			if !errors.Is(refusal, runstate.ErrTriageCapReached) {
+				t.Fatalf("the refusal stopped being a cap refusal: %v", refusal)
+			}
+			for _, want := range testCase.want {
+				if !strings.Contains(refusal.Error(), want) {
+					t.Fatalf("the refusal is missing %q:\n%s", want, refusal)
+				}
+			}
+		})
+	}
+
+	// Everything else is left exactly as it was: a tracker that would not answer
+	// is not a cap, and dressing it as one sends the operator to a command that
+	// changes nothing.
+	other := errors.New("the tracker could not be reached")
+	if refusedPastCap(other) != other {
+		t.Fatalf("a failure that is not a cap refusal was rewritten: %v", refusedPastCap(other))
+	}
+}
+
 // triageOptions is a development manager's conversation answering with one
 // reply and then closing off, which is the shape every test here needs.
 func triageOptions(t *testing.T, tracker Tracker, budgets TriageBudgets, answer string) Options {

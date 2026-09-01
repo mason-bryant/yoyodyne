@@ -128,15 +128,21 @@ type TriageCounters struct {
 	// accepted and then dropped.
 	Reruns      int `json:"reruns,omitempty"`
 	MergeRearms int `json:"merge_rearms,omitempty"`
-	// ReviewRounds is how many reviewer verdicts this item's developer attempts
-	// have produced, across every run of it. It is the figure a repair grant is
-	// truncated against, because it is the one that says what the item has
-	// actually cost: repair budgets reset with each run and this does not.
+	// ReviewRounds is how many times a reviewer verdict has sent this item's work
+	// back, across every run of it. It is the figure a repair grant is truncated
+	// against, because it is the one that says what the item has actually cost:
+	// repair budgets reset with each run and this does not.
 	//
 	// A re-review that no developer attempt produced is not a round. The
 	// integration replay is the case: a promotion that loses its race replays the
 	// same work onto where the target went and asks for a fresh verdict on it,
 	// and counting that would charge the item for losing a race it did not cause.
+	//
+	// Neither is a verdict that approved the change, and for a version of the same
+	// reason: the cap this feeds stops an item buying the same argument another
+	// round, and an approval ends that argument. What is counted is decided by
+	// whoever calls RecordReviewRound, which is the run that obtained the verdict;
+	// this record counts what it is handed.
 	ReviewRounds int `json:"review_rounds,omitempty"`
 	// LastRound identifies the developer attempt whose verdict was counted last,
 	// and only that one: it is the most recent round rather than a set of every
@@ -461,10 +467,15 @@ func (s *TriageStore) Counters(workItemID string) (TriageCounters, error) {
 	return s.load(id)
 }
 
-// RecordReviewRound counts one reviewer verdict against a work item and reports
-// what the item now stands at. It never refuses: a round is something that
-// happened rather than something being asked for, and a cap that could stop it
-// being written down would only make the record disagree with the world.
+// RecordReviewRound counts one round against a work item and reports what the
+// item now stands at. It never refuses: a round is something that happened
+// rather than something being asked for, and a cap that could stop it being
+// written down would only make the record disagree with the world.
+//
+// Which verdicts are rounds is the caller's, not this record's — an approval is
+// not one, and the run that obtained the verdict is what knows. See ReviewRounds
+// above, and countReviewRound in the orchestrator, which is the only caller in
+// the harness.
 //
 // attemptID identifies the developer attempt whose change was judged, and
 // recording the attempt that is already at the head of the record counts once.
