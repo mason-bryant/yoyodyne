@@ -656,6 +656,18 @@ func renderChanges(changes gitworktree.ChangeDiff) string {
 			rendered.WriteString("- " + file + "\n")
 		}
 	}
+	// A change that comes to nothing over its base while commits sit above it is
+	// the one empty patch that has to explain itself. It is what a developer that
+	// undid its own work leaves behind, and a reviewer told only that the patch is
+	// empty reads it as evidence that was never collected — which is a finding
+	// about the harness rather than about the change, and one this project has
+	// already paid for once.
+	if len(changes.CommitsWithoutEffect) > 0 {
+		rendered.WriteString(fmt.Sprintf("\n## Committed work with no net effect\n\nThe worktree carries %d commit(s) above the commit this change is measured against, and together they leave it exactly as it was: work an earlier attempt committed has since been undone. The empty patch below is the whole change and is what would be promoted, rather than a change that failed to be collected.\n\n", len(changes.CommitsWithoutEffect)))
+		for _, commit := range changes.CommitsWithoutEffect {
+			rendered.WriteString("- " + commit.Commit + " " + commit.Subject + "\n")
+		}
+	}
 	if changes.Truncated {
 		rendered.WriteString("\n## Bounds\n\nThis patch is truncated; it is not the complete change.\n")
 		if len(changes.OmittedFiles) > 0 {

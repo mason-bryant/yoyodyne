@@ -778,6 +778,38 @@ func TestReviewTellsTheReviewerWhenTheChangeIsTruncated(t *testing.T) {
 	}
 }
 
+// An empty patch under commits that undid one another is the one emptiness a
+// reviewer cannot read on its own, and reading it as missing evidence is a
+// finding about the harness rather than about the change. The evidence says
+// which it is.
+func TestReviewTellsTheReviewerWhenCommittedWorkWasUndone(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"the change was undone","findings":[{"severity":"blocker","message":"deliver the work the item asks for"}]}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		CommitsWithoutEffect: []gitworktree.Commit{
+			{Commit: "0927704bd0b8b93f7c04f24c1a0c0b6f4f3f5a11", Subject: "yoyodyne: first attempt"},
+			{Commit: "38bb0a77dad2c10ba0b23c1b4320bc31e9c22bf9", Subject: "yoyodyne: reverted attempt"},
+		},
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		"Committed work with no net effect",
+		"2 commit(s)",
+		"0927704bd0b8b93f7c04f24c1a0c0b6f4f3f5a11 yoyodyne: first attempt",
+		"38bb0a77dad2c10ba0b23c1b4320bc31e9c22bf9 yoyodyne: reverted attempt",
+		"rather than a change that failed to be collected",
+	} {
+		if !strings.Contains(provider.request.Prompt, want) {
+			t.Errorf("prompt is missing %q for an undone change", want)
+		}
+	}
+}
+
 func TestReviewRejectsApprovalWhenTheChangeIsIncomplete(t *testing.T) {
 	t.Parallel()
 

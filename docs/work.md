@@ -72,7 +72,16 @@ has the details.
 Then the configured checks run in that worktree, and an independent reviewer —
 its own provider invocation, with no tools at all — judges the change against
 the work item, its design guidance and acceptance criteria, the invariants
-delivered with it, and the check results. Everything the reviewer is shown is
+delivered with it, and the check results. The change it is shown is measured
+against the commit the run was cut from rather than against what happens to be
+uncommitted, so work an attempt already published — every attempt is committed
+by the harness before the checks run — is in the patch it judges. The one
+emptiness that follows from that is stated rather than left to be read: a
+worktree carrying commits whose combined effect on the base is nothing is a
+change made and then undone, and the evidence says so and lists them, because a
+reviewer told only that the patch is empty concludes the harness lost the
+evidence. [One did](diagnoses/yoyodyne-ifd-236-review-evidence-over-committed-work.md).
+Everything the reviewer is shown is
 treated as evidence rather than instruction, so an instruction the developer
 left in the diff is data to analyze rather than something to follow. A verdict
 of `repair` returns the findings to the same developer, up to
