@@ -55,11 +55,11 @@ func arranged(id string, states ...string) Definition {
 // be.
 //
 // Everything else about that fixture is correct: the schema is this build's,
-// every action it selects is registered, every destination exists, the promotion
-// is reached only through the checks, and the grant confers everything its
-// actions require. It is refused for one reason — the state returning the
-// verdict is the state that wrote the change — and it is refused before an
-// instance exists.
+// every action it selects is registered, every destination exists, the grant
+// confers everything its actions require, and the evidence rule is satisfied —
+// the checks run after the change is written and nothing rewrites it afterwards.
+// It is refused for one reason and one only — the state returning the verdict is
+// the state that wrote the change — and it is refused before an instance exists.
 func TestTheFixtureRoutingReviewToTheAuthorIsRefusedAtCompile(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +82,11 @@ func TestTheFixtureRoutingReviewToTheAuthorIsRefusedAtCompile(t *testing.T) {
 	if !strings.Contains(err.Error(), `the state "develop"`) {
 		t.Errorf("LoadFile() error = %v, and it does not name the state it refused", err)
 	}
+	// And by that policy alone. A fixture refused by two rules at once proves
+	// neither of them, so what it is a fixture for is that this one is enough.
+	if strings.Contains(err.Error(), separation.IntegrationFollowsEvidence) {
+		t.Errorf("LoadFile() error = %v, and the fixture was meant to satisfy the evidence rule", err)
+	}
 	// A refused compile carries nothing, and it performed nothing on the way to
 	// refusing: a definition this build will not run is one nothing was spent on.
 	if states := graph.States(); len(states) != 0 || graph.Digest() != "" {
@@ -92,17 +97,25 @@ func TestTheFixtureRoutingReviewToTheAuthorIsRefusedAtCompile(t *testing.T) {
 	}
 }
 
+// authoring is every state in the sweep below whose action writes the change.
+// Two of them, which is what lets a sequence put one after the verdict.
+var authoring = []string{"develop", "rework"}
+
 // TestIntegrationIsImpossibleWithoutTrustedEvidenceUnderEveryTopology is the
 // epic's acceptance criterion, stated as the test it asks for.
 //
-// It walks every arrangement of the four states that matter — the one that
-// writes the change, the one that runs the project's checks, the one that
-// returns the verdict, and the one that promotes — and, for each, every subset
-// that still contains the promotion. That is 64 sequences, and every one of them
-// is a topology a definition could have chosen. A sequence compiles if and only
-// if the checks and the verdict both come before the promotion. Nothing about
-// the order is privileged and nothing about it is anticipated: the criterion is
-// enforced by the rule rather than by the sequence somebody wrote down first.
+// It walks every arrangement of the five states that matter — two that write the
+// change, one that runs the project's checks, one that returns the verdict, and
+// one that promotes — and, for each, every subset that still contains the
+// promotion. That is 1,920 sequences, and every one of them is a topology a
+// definition could have chosen.
+//
+// A sequence compiles if and only if the checks and the verdict both come
+// between the last state that writes the change and the promotion. Trusted
+// evidence is evidence about the thing being promoted, so a second authoring
+// state after the verdict is exactly as bad as no verdict at all — and that is
+// the arrangement a sweep over four states could not express, which is why there
+// are two authoring states here rather than one.
 func TestIntegrationIsImpossibleWithoutTrustedEvidenceUnderEveryTopology(t *testing.T) {
 	t.Parallel()
 
@@ -113,7 +126,7 @@ func TestIntegrationIsImpossibleWithoutTrustedEvidenceUnderEveryTopology(t *test
 	}
 
 	arrangements := 0
-	for _, order := range permutations([]string{"develop", "check", "review", "integrate"}) {
+	for _, order := range permutations([]string{"develop", "rework", "check", "review", "integrate"}) {
 		for included := 0; included < 1<<len(order); included++ {
 			var states []string
 			for position, state := range order {
@@ -135,13 +148,25 @@ func TestIntegrationIsImpossibleWithoutTrustedEvidenceUnderEveryTopology(t *test
 			}
 			_, err = loader.Compile(validated)
 
+			// The chain runs in order and ends at the terminal, so what stands before
+			// the promotion is exactly the states at lower indices — and what still
+			// describes the change is what came after the last one that rewrote it.
 			promotion := slices.Index(states, "integrate")
-			checked := slices.Index(states, "check")
-			judged := slices.Index(states, "review")
-			earned := checked >= 0 && checked < promotion && judged >= 0 && judged < promotion
+			written := -1
+			for _, author := range authoring {
+				if at := slices.Index(states, author); at >= 0 && at < promotion && at > written {
+					written = at
+				}
+			}
+			since := func(state string) bool {
+				at := slices.Index(states, state)
+				return at > written && at < promotion
+			}
+			earned := since("check") && since("review")
+
 			switch {
 			case earned && err != nil:
-				t.Errorf("Compile(%s) error = %v; the checks and the verdict both come before the promotion", id, err)
+				t.Errorf("Compile(%s) error = %v; the checks and the verdict both come after the change was last written and before the promotion", id, err)
 			case !earned && err == nil:
 				t.Errorf("Compile(%s) compiled a sequence that promotes without the evidence that earns it", id)
 			case !earned && !strings.Contains(err.Error(), separation.IntegrationFollowsEvidence):
@@ -150,10 +175,56 @@ func TestIntegrationIsImpossibleWithoutTrustedEvidenceUnderEveryTopology(t *test
 		}
 	}
 	// The sweep is the claim, so a sweep that quietly stopped covering anything is
-	// worse than no sweep: 4! orders, 2^4 subsets, half of which hold the
+	// worse than no sweep: 5! orders, 2^5 subsets, half of which hold the
 	// promotion.
-	if want := 24 * 8; arrangements != want {
+	if want := 120 * 16; arrangements != want {
 		t.Errorf("the sweep covered %d arrangements, want %d", arrangements, want)
+	}
+}
+
+// TestAChangeRewrittenAfterTheVerdictIsNotJudged is the case the sweep above
+// covers and nobody would find by reading it: the most obvious extra state
+// anybody would add to a correct sequence.
+//
+// Every state here is one the harness already has, in the order it already runs
+// them, with one repair step appended after the review. The evidence was
+// collected; it stopped describing the change when the change was rewritten.
+func TestAChangeRewrittenAfterTheVerdictIsNotJudged(t *testing.T) {
+	t.Parallel()
+
+	loader := deliveryLoader(t, &run{})
+	catalog, err := CatalogFrom(loader.Registry)
+	if err != nil {
+		t.Fatalf("CatalogFrom() error = %v", err)
+	}
+	validated, err := arranged("rework-after-the-verdict", "develop", "check", "review", "rework", "integrate").Validate(catalog)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	_, err = loader.Compile(validated)
+	if err == nil {
+		t.Fatal("Compile() compiled a sequence that rewrites the change after the verdict and then promotes it")
+	}
+	if !strings.Contains(err.Error(), separation.IntegrationFollowsEvidence) {
+		t.Errorf("Compile() error = %v, and it does not name the policy it refused under", err)
+	}
+	// Both kinds of evidence stopped describing the change, so both are reported:
+	// a refusal naming only the verdict would read as though the checks survived.
+	for _, missing := range []string{"checks.execute", "review.verdict"} {
+		if !strings.Contains(err.Error(), missing) {
+			t.Errorf("Compile() error = %v, and it does not name the missing %q", err, missing)
+		}
+	}
+
+	// The same sequence with the repair before the review compiles, so what the
+	// refusal caught is the order rather than the presence of a second authoring
+	// state.
+	repaired, err := arranged("rework-before-the-verdict", "develop", "rework", "check", "review", "integrate").Validate(catalog)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if _, err := loader.Compile(repaired); err != nil {
+		t.Errorf("Compile() error = %v; the change is checked and judged after it was last written", err)
 	}
 }
 

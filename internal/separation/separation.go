@@ -105,7 +105,7 @@ func Policies() []Policy {
 		{
 			Name:    IntegrationFollowsEvidence,
 			Rule:    "two demonstrably independent provider invocations gate an integration",
-			Refuses: "a sequence that can reach a step moving the target branch without having crossed both a step that ran the project's checks and a step that returned a verdict",
+			Refuses: "a sequence that can reach a step moving the target branch without having crossed, since the last step that wrote the change, both a step that ran the project's checks and a step that returned a verdict",
 		},
 	}
 }
@@ -119,7 +119,9 @@ func Policies() []Policy {
 // vocabulary that belongs on one of these lists belongs on it here.
 var (
 	// authorship is every capability that writes the change a review is about. A
-	// step holding one of them could have authored what is being judged.
+	// step holding one of them could have authored what is being judged — which is
+	// why it is both what may not be held alongside the verdict and what
+	// invalidates evidence collected before it.
 	authorship = []capability.Capability{capability.WorktreeMutate}
 	// promotion is the two halves of putting an approved change on the branch it
 	// was promised to. They are apart in the vocabulary because the lease is what
@@ -265,11 +267,11 @@ func CheckTopology(topology Topology) error {
 		}
 		collected := before[step.State]
 		if collected&checked == 0 {
-			problems = append(problems, fmt.Errorf("%s: the state %q performs %q, which moves the target branch, and %s can reach it without having crossed a state that requires %q; integration is impossible without the evidence that earns it, whatever order a definition puts its states in",
+			problems = append(problems, fmt.Errorf("%s: the state %q performs %q, which moves the target branch, and %s can reach it with no state requiring %q between the last state that writes the change and this one; integration is impossible without the evidence that earns it, whatever order a definition puts its states in",
 				IntegrationFollowsEvidence, step.State, step.Performs.Name, describe(topology), checking))
 		}
 		if collected&judged == 0 {
-			problems = append(problems, fmt.Errorf("%s: the state %q performs %q, which moves the target branch, and %s can reach it without having crossed a state that requires %q; a change promoted on nobody's verdict is the one thing no topology may express",
+			problems = append(problems, fmt.Errorf("%s: the state %q performs %q, which moves the target branch, and %s can reach it with no state requiring %q between the last state that writes the change and this one; a change promoted on nobody's verdict, or on a verdict it was rewritten after, is what no topology may express",
 				IntegrationFollowsEvidence, step.State, step.Performs.Name, describe(topology), judgment))
 		}
 	}
@@ -346,17 +348,55 @@ func provides(step Step) evidence {
 	return established
 }
 
-// evidenceBefore is what has been collected on *every* path from the initial
-// state to each step, by the time an instance is about to perform it.
+// invalidates reports whether performing a step makes everything collected
+// before it stop describing the change.
 //
-// Every path rather than some path is the whole point. A definition that reaches
+// Writing the change is what does that, and it is the difference between a rule
+// about which states a path crossed and a rule about what is true of the thing
+// being promoted. A verdict is a judgement on a change, not a token a sequence
+// carries: a step that rewrites the worktree after the review has produced a
+// change nobody judged, however many review states came earlier. So authorship
+// clears, and whatever the authoring step itself establishes is added back
+// afterwards — a step that writes and then runs the checks has checked what it
+// wrote, and one that writes and then judges it is refused outright by
+// `authorship-is-never-judgment` before this is ever asked.
+func invalidates(step Step) bool {
+	for _, authored := range authorship {
+		if step.Performs.requires(authored) {
+			return true
+		}
+	}
+	return false
+}
+
+// carries is what a step hands to everything downstream of it: nothing if it
+// wrote the change, otherwise what reached it, and either way plus what
+// performing it established.
+func carries(step Step, reaching evidence) evidence {
+	if invalidates(step) {
+		reaching = 0
+	}
+	return reaching | provides(step)
+}
+
+// evidenceBefore is what still describes the change on *every* path from the
+// initial state to each step, by the time an instance is about to perform it.
+//
+// Every path rather than some path is half the point. A definition that reaches
 // the promotion by one route that crossed the review and one that did not is a
 // definition that can promote unjudged work, and it is exactly the topology a
 // check that looked for one good route would admit.
 //
+// Still describes rather than was ever collected is the other half. A pure
+// has-crossed analysis admits develop, check, review, rework, integrate — a
+// second authoring state after the verdict — and promotes a change nobody
+// judged. So the transfer function clears at every authoring step, which makes
+// the question "since the change was last written, has it been checked and
+// judged" rather than "did those states appear somewhere behind this one".
+//
 // It is a fixpoint over intersections, run to quiescence: each step starts
 // claiming everything, and every pass narrows it to what all of its predecessors
-// can establish. The initial state is pinned to nothing however many transitions
+// can hand on. The initial state is pinned to nothing however many transitions
 // lead back into it, because an instance starts there with nothing collected. A
 // step no path reaches keeps its claim of everything, which is sound rather than
 // generous: an instance can never stand in it, so no path runs through it.
@@ -386,7 +426,7 @@ func evidenceBefore(topology Topology, steps []Step) map[string]evidence {
 			}
 			narrowest := everything
 			for _, predecessor := range predecessors {
-				narrowest &= before[predecessor.State] | provides(predecessor)
+				narrowest &= carries(predecessor, before[predecessor.State])
 			}
 			if narrowest != before[step.State] {
 				before[step.State] = narrowest

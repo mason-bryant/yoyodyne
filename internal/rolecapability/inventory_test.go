@@ -356,9 +356,10 @@ var expresses = map[string]expression{
 		gap: "which role would perform the operation is not asked at all, which is the point: the refusal is the combination's, so it holds for a role nobody has written a bundle for yet",
 	},
 	"separation.topology": {
-		question: "can a step that moves the target branch be reached without both the checks and a verdict?",
+		question: "can a step that moves the target branch be reached without both the checks and a verdict since the change was last written?",
 		asks: []capability.Capability{
-			capability.TargetBranchMutate, capability.ChecksExecute, capability.ReviewVerdict,
+			capability.TargetBranchMutate, capability.ChecksExecute,
+			capability.ReviewVerdict, capability.WorktreeMutate,
 		},
 		gap: "that the steps either side of it were actually two independent invocations is evidence a run records; a topology can keep them apart and cannot prove they were two",
 	},

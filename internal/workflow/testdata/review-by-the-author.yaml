@@ -1,17 +1,20 @@
-# The delivery loop with the review routed to the author.
+# A delivery sequence with the review routed to the author.
 #
-# It is the topology the first separation policy exists to refuse. Everything
-# else about it is correct: the schema is the one this build reads, every state
-# selects a registered action, every outcome leads somewhere that exists, the
-# promotion is reached only through the checks and a verdict, and the grant it is
-# compiled under confers everything its actions require. The one thing wrong with
-# it is that the state which returns the verdict is the state that wrote the
-# change — `candidate.develop-and-review` is one invocation holding both — and
-# that is a sentence no amount of structural validation asks about.
+# It is the topology the first separation policy exists to refuse, and it is
+# written so that policy is the only thing wrong with it. The schema is the one
+# this build reads, every state selects a registered action, every outcome leads
+# somewhere that exists, and the grant it is compiled under confers everything
+# its actions require. The evidence rule is satisfied too, deliberately: the
+# checks run after the change is written and nothing rewrites the worktree
+# afterwards, so the promotion is reached with both the checks and a verdict
+# still describing what is being promoted.
 #
+# The one thing wrong with it is that the verdict comes back from the invocation
+# that wrote the change — `candidate.develop-and-review` is one action holding
+# both — and that is a sentence no amount of structural validation asks about.
 # So it is refused at compile, by `authorship-is-never-judgment` and by nothing
 # else. The refusal is the policy's rather than an absence in the catalog: the
-# tests register the action deliberately, so a definition selecting it is
+# tests register that action deliberately, so a definition selecting it is
 # selecting something this build could genuinely perform.
 schema: 1
 id: review-by-the-author
@@ -28,13 +31,8 @@ states:
     action: candidate.develop-and-review
     summary: write the change and return the verdict on it, in one invocation
     on:
-      produced: publish
+      produced: check
       produced-nothing: abandoned
-  publish:
-    action: candidate.publish
-    summary: commit the attempt, push the branch, and open or update its pull request
-    on:
-      published: check
   check:
     action: candidate.check
     summary: refuse an ungranted path, then run the project's configured checks

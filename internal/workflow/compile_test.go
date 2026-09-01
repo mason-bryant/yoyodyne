@@ -78,6 +78,11 @@ func deliveryActions[S any](t *testing.T, performing func(name string) func(cont
 		// rather than an absence in the catalog.
 		registered("candidate.develop-and-review", capability.ProviderInvoke, capability.WorktreeMutate, capability.ReviewVerdict),
 		registered("candidate.promote", capability.TargetBranchMutate),
+		// A second authoring action, so a sweep can put one anywhere in a sequence
+		// and not only at the start. It is what the evidence rule is actually about:
+		// a change rewritten after the verdict is a change nobody judged, and a
+		// sequence with two authoring states is where that first becomes expressible.
+		registered("candidate.rework", capability.ProviderInvoke, capability.WorktreeMutate),
 	)
 	if err != nil {
 		t.Fatalf("action.New() error = %v", err)

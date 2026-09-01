@@ -26,6 +26,12 @@ var (
 	review    = performing("candidate.review", capability.RepositoryRead, capability.ProviderInvoke, capability.RunStateMutate, capability.ReviewVerdict)
 	integrate = performing("candidate.integrate", capability.PromotionLease, capability.TargetBranchMutate, capability.ForgePublish, capability.RunStateMutate)
 	cleanUp   = performing("run.clean-up", capability.WorktreeMutate, capability.RunStateMutate)
+	// A second authoring operation. The harness reaches its repair round by
+	// invoking the developer again rather than by a step of its own, so this is
+	// what that round would be if a definition named it — and it is what the
+	// evidence rule is about, because a sequence with two authoring steps is where
+	// "the change was rewritten after the verdict" first becomes expressible.
+	rework = performing("candidate.rework", capability.ProviderInvoke, capability.WorktreeMutate, capability.RunStateMutate)
 )
 
 // delivery is the sequence the harness runs today, as a topology.
@@ -222,6 +228,42 @@ func TestIntegrationIsRefusedWithoutEvidenceOnEveryPath(t *testing.T) {
 				},
 			},
 			missing: capability.ReviewVerdict,
+		},
+		{
+			// The one a has-crossed analysis admits, and the most obvious extra state
+			// anybody would add: everything was collected, and then the change was
+			// rewritten, so none of it describes what is being promoted.
+			name: "the change is rewritten after the verdict",
+			topology: Topology{
+				ID:      "reworked",
+				Initial: "develop",
+				Steps: []Step{
+					{State: "develop", Performs: develop, Next: []string{"check"}},
+					{State: "check", Performs: check, Next: []string{"review"}},
+					{State: "review", Performs: review, Next: []string{"rework"}},
+					{State: "rework", Performs: rework, Next: []string{"integrate"}},
+					{State: "integrate", Performs: integrate},
+				},
+			},
+			missing: capability.ReviewVerdict,
+		},
+		{
+			// The same, reached by one route out of two. The route through the repair
+			// is the only one that matters, and it is the one an analysis over some
+			// path rather than every path would not look at.
+			name: "one route back through a repair and one straight on",
+			topology: Topology{
+				ID:      "sometimes-reworked",
+				Initial: "develop",
+				Steps: []Step{
+					{State: "develop", Performs: develop, Next: []string{"check"}},
+					{State: "check", Performs: check, Next: []string{"review"}},
+					{State: "review", Performs: review, Next: []string{"integrate", "rework"}},
+					{State: "rework", Performs: rework, Next: []string{"integrate"}},
+					{State: "integrate", Performs: integrate},
+				},
+			},
+			missing: capability.ChecksExecute,
 		},
 		{
 			name: "the promotion is the first thing it does",
