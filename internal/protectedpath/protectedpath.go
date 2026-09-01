@@ -50,26 +50,40 @@ const GrantInstruction = "These paths are yours to change only when the work ite
 	"If your work genuinely needs one of these paths, take it back out of your change, and use your summary and an amendment proposal to say which path you need and why. The grant goes into the work item, which is not yours to write."
 
 // Set is the paths one project protects, as repository-relative directory
-// prefixes in slash form.
+// prefixes in slash form, together with the derived exports the harness holds
+// out of a run's change. Both are refused the same way; they are kept apart
+// because a refusal that did not say which of the two it caught would leave a
+// developer looking for the decision behind a file the harness put there.
 type Set struct {
 	directories []string
+	exports     []string
 }
 
 // Protect builds the set a configuration describes: the harness's own project
-// directory and the artifact homes the roles upstream of a developer own. It is
-// derived from the configuration rather than fixed, because a project that keeps
-// its designs somewhere else has not thereby made them a developer's to rewrite.
+// directory and the artifact homes the roles upstream of a developer own, plus
+// whichever derived exports the caller holds out of the change. It is derived
+// from the configuration rather than fixed, because a project that keeps its
+// designs somewhere else has not thereby made them a developer's to rewrite, and
+// the exports are passed rather than configured here because the harness's own
+// worktrees are what decide which paths they are.
 //
 // The invariants home is named separately from the decisions home it sits inside
 // by default, so a project that moves it out still protects it.
-func Protect(cfg config.Config) Set {
-	return protect(
+func Protect(cfg config.Config, heldExports ...string) Set {
+	set := protect(
 		config.DirectoryName,
 		cfg.Product.Specifications,
 		cfg.Product.Designs,
 		cfg.Product.Decisions,
 		cfg.Product.Invariants,
 	)
+	for _, export := range heldExports {
+		if clean, ok := normalize(export); ok {
+			set.exports = appendUnique(set.exports, clean)
+		}
+	}
+	sort.Strings(set.exports)
+	return set
 }
 
 func protect(directories ...string) Set {
@@ -89,10 +103,10 @@ func (s Set) Directories() []string {
 	return append([]string(nil), s.directories...)
 }
 
-// Refused reports which of a change's paths this set protects and the work item
-// did not grant. An empty result is the ordinary answer: most changes touch none
-// of these paths, and a change whose every protected path is granted is as clear
-// as one that touched none.
+// Refused reports which of a change's paths this set protects or holds out, and
+// the work item did not grant. An empty result is the ordinary answer: most
+// changes touch none of these paths, and a change whose every protected path is
+// granted is as clear as one that touched none.
 //
 // Both sides are matched as paths rather than as strings. A grant naming a
 // directory covers what is inside it, and a grant naming a file covers that file
@@ -106,7 +120,10 @@ func (s Set) Refused(changed, granted []string) []string {
 		if !ok {
 			continue
 		}
-		if !within(clean, s.directories) || within(clean, grants) {
+		if !within(clean, s.directories) && !within(clean, s.exports) {
+			continue
+		}
+		if within(clean, grants) {
 			continue
 		}
 		refused = appendUnique(refused, clean)

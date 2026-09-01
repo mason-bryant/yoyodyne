@@ -2551,6 +2551,8 @@ func (partialWorktreeManager) ChangedPaths(context.Context, gitworktree.Worktree
 	return nil, nil
 }
 
+func (partialWorktreeManager) CurrentExports() []string { return nil }
+
 func (partialWorktreeManager) Integrate(context.Context, gitworktree.Worktree, string) (gitworktree.Integration, error) {
 	return gitworktree.Integration{}, errors.New("partial worktree cannot be integrated")
 }
@@ -2720,6 +2722,10 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 		RepositoryRoot:        repository,
 		WorktreeRoot:          worktreeRoot,
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+		// What `yoyo run` configures, so a pipeline built here refreshes and
+		// refuses exactly what a real one does. A repository that carries no such
+		// file is unaffected: there is nothing to copy across and nothing to hold.
+		CurrentExports: []string{".beads/issues.jsonl"},
 	})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)

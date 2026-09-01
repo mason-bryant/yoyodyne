@@ -27,6 +27,16 @@ export is ignored rather than committed, the copy arrives the same way and needs
 no holding; where it is neither committed nor ignored, none is made, because a
 copy there would arrive as a file the developer never wrote.
 
+The hold itself is a bit in the worktree's index, which lives under `.git` — a
+directory a developer's sandbox grants writes to, so one Git command inside the
+run can undo it and hand the refreshed copy back as part of the change. The
+export is therefore refused in the change as well, by the same gate below that
+refuses an upstream artifact home: a diff containing it goes back to the
+developer with the mechanism named, and the promotion carries the export the
+branch already had. What keeps a derived file
+out of your review is a check made against the change rather than an index bit
+surviving whatever ran in the worktree.
+
 What the item waits on is read from the tracker at every point the run is about
 to commit to work — before it is claimed or resumed, at the start of each round
 of the gate, and once more before the promotion — rather than trusted from
@@ -47,7 +57,8 @@ Then the change is gated on what it touched. The project configuration and the
 artifact homes upstream of the work — `.yoyodyne/`, `docs/product/`,
 `docs/designs/`, and `docs/decisions/` by default — are default-deny for a
 developer's diff, because a developer that edits one is redefining what its own
-work is measured against. A change that touches one without the work item
+work is measured against, and so is the refreshed export above, because it is
+the harness's copy of a store no run writes to. A change that touches one without the work item
 granting it is refused before any check runs and before any reviewer is asked,
 and handed back to the same developer in the same repair loop a failing check
 uses. An item grants an exception in its own text, on a line beginning

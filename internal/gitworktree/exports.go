@@ -29,6 +29,27 @@ import (
 // parallel development into a queue of merge conflicts. Git is told to leave the
 // path alone instead, which is what keeps the refreshed copy out of status, out
 // of staging, and out of every diff a reviewer is shown.
+//
+// That bit is where the hold is kept rather than what enforces it. It lives in
+// the worktree's index under `.git`, which a developer's sandbox grants writes
+// to, so a run that flipped it back would hand the harness the refreshed export
+// as part of its change. The change-path gate refuses a diff containing one of
+// these exports for that reason — `internal/protectedpath/export.go` — and what
+// the gate reads is CurrentExports below, so the paths held and the paths
+// refused are one list.
+
+// CurrentExports names the exports this manager refreshes and holds out of a
+// run's change, in the form every path here is compared in.
+//
+// It is read by the gate in front of the checks, which refuses a change that
+// contains one of them. The hold is an index bit inside `.git`, and a developer
+// sandbox grants writes there, so the paths a run may not commit have to be
+// known where the change is judged rather than trusted to survive whatever ran
+// in the worktree. Asking the manager that holds them is what keeps the two
+// lists from being two lists.
+func (m *Manager) CurrentExports() []string {
+	return append([]string(nil), m.currentExports...)
+}
 
 // refreshExports gives a worktree the primary checkout's copy of each declared
 // export. Which of them can be refreshed at all is decided per path below, so a

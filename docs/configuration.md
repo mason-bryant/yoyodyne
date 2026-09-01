@@ -929,6 +929,17 @@ The set follows your configuration rather than the default layout: a project
 that keeps its designs elsewhere has not thereby made them a developer's to
 rewrite.
 
+**The tracker's export is refused the same way.** A worktree is given your
+checkout's own `.beads/issues.jsonl` and that copy is
+[held out of the run's change](work.md) with Git's skip-worktree bit — which
+lives in the worktree's index under `.git`, a directory the developer's sandbox
+grants writes to. One `git update-index --no-skip-worktree` inside the run would
+turn the refreshed export into a modification the harness commits, promotes, and
+conflicts every other run against, so the export joins this gate: a diff
+containing it is refused, and the refusal names what the file is and how it got
+there rather than only the path. The paths refused are the exports the harness
+refreshes, so the two never drift apart.
+
 **How it behaves.** The gate runs in front of the deterministic checks, on every
 attempt, over every path the change touches — tracked, untracked, and both sides
 of a move. A change that touches one of these paths without a grant is refused
