@@ -405,6 +405,13 @@ Into the work item's thread, as they happen:
   three are ordinary facts, since an overload lifts in seconds and a hold or a
   directive is waiting on the person reading the channel
 - the blocker that stopped a run, if one did, said as `critical`
+- the run ending any other way — failed, cancelled, timed out — said in that word
+  rather than in one word for all of them. A run the harness could not carry and
+  one it stopped on time are `warning`s, because nobody chose either; a
+  cancellation is an ordinary fact, since somebody did. Every one of these lines
+  and the blocker line above also say what remains of the change — work
+  preserved, work removed, or no artifacts recorded — because the attempt being
+  over says nothing about whether the work is
 - every report an agent filed against that item, as the agent wrote it
 - every change an agent proposed to a document it does not own, with the
   argument it made for it

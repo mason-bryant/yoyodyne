@@ -606,6 +606,20 @@ type Outcome struct {
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
 }
 
+// Ending is what became of this run, in the fixed vocabulary every surface says
+// it in. It is the read model's own derivation over the two facts an outcome
+// carries — the status the run reached, and whether it left somebody a blocker —
+// rather than a second reading of them here, so a run described from the outcome
+// it returned and the same run described from its durable record cannot be given
+// two different words.
+//
+// Blocked is the outcome's half of State.Blocker: both are written together and
+// only once the tracker has taken the blocker, so a stoppage the tracker refused
+// is not claimed as one on either side.
+func (o Outcome) Ending() runstate.RunOutcome {
+	return runstate.Ending(o.Status, o.Blocked)
+}
+
 type ExistingRunError struct {
 	State runstate.State
 }

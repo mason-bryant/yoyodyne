@@ -138,12 +138,67 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	if !parked(before) && parked(after) {
 		say(KindRunParked, parkSeverity(after), Harness(), Detail{Cause: causeOf(after)})
 	}
-	// A run that stopped and stayed stopped is the one thing nobody finds out
-	// about on their own, so it is the one crossing said as critical.
-	if !blocked(before) && blocked(after) {
-		sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), Detail{}, blockerText(after))
+	// A run that ended without succeeding, said in the read model's own outcome
+	// vocabulary rather than in one word over all four. A stoppage somebody has to
+	// decide about is the one thing nobody finds out about on their own, so it
+	// keeps the critical crossing it always had; the other three endings leave
+	// nobody a decision and are said as themselves rather than as a blocker
+	// nobody recorded. Both state what remains of the change, because the attempt
+	// being over says nothing about whether the work is.
+	//
+	// There are two crossings rather than one because the two facts are written in
+	// two saves on a path that matters. Reconciliation settles a run some killed
+	// process already left terminal: it takes a blocker from the tracker and puts
+	// it on a record whose status has not moved since the crash. Watching only for
+	// the run becoming terminal, the sink would have said "failed" at the crash
+	// and then nothing at all when the stoppage arrived — the ending an operator
+	// most needs, silently swallowed by the fact the run was already over. So a
+	// blocker appearing on a run that had already ended is itself a crossing, and
+	// the critical line it says corrects the warning that preceded it.
+	endedNow := !endedBadly(before) && endedBadly(after)
+	stoppageNow := !handedToAPerson(before) && handedToAPerson(after)
+	if endedNow || stoppageNow {
+		remains := Detail{Remains: after.Artifacts().Describe()}
+		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
+			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, endingReason(after))
+		} else {
+			remains.Ending = string(outcome)
+			sayWith(KindRunEnded, endingSeverity(outcome), Harness(), remains, endingReason(after))
+		}
 	}
 	return crossed, nil
+}
+
+// endingReason is what the record gives as the reason a run ended, or the
+// absence stated as itself. Both lines above finish on it, so an empty one would
+// leave a sentence trailing off a colon — and the generic absence the renderer
+// falls back to is written for an agent's own words going missing, which is a
+// defect, where this is usually not one.
+//
+// A run ending with no reason recorded is ordinary rather than broken. A
+// cancellation is the plain case: the operator stopped it and owed nobody a
+// sentence about why. So is a stoppage reconciliation settled on a run that was
+// already terminal, which takes the blocker from the tracker and leaves the
+// run's own failure exactly as it found it. Saying the record names no reason is
+// the true account of both; implying one had gone missing would report an
+// ordinary act as a fault in the record.
+func endingReason(state runstate.State) string {
+	if reason := blockerText(state); reason != "" {
+		return reason
+	}
+	return "the record names no reason"
+}
+
+// endingSeverity is how loudly a run ending without a blocker is said. A
+// cancellation is a note because somebody chose it and it is no verdict on the
+// change; a run the harness could not carry and one it stopped on time are
+// warnings, because nobody chose either and what follows both is silence that
+// looks exactly like work in progress.
+func endingSeverity(outcome runstate.RunOutcome) report.Severity {
+	if outcome == runstate.OutcomeCancelled {
+		return report.SeverityNote
+	}
+	return report.SeverityWarning
 }
 
 // FromReport says what an agent noticed while its own work carried on. The
@@ -587,11 +642,22 @@ func parkSeverity(state runstate.State) report.Severity {
 	return report.SeverityWarning
 }
 
-// blocked reports a run that stopped and stayed stopped. It is read from a
-// terminal record carrying a failure rather than from the tracker, for the same
-// reason everything else here is: what is said is what the record says.
-func blocked(state runstate.State) bool {
-	return state.Status.Terminal() && state.Status != runstate.StatusSucceeded && blockerText(state) != ""
+// endedBadly reports a run that reached a terminal status without succeeding,
+// which is the crossing said above however it ended. Which of the four endings
+// it was is the read model's to say, not this one's: a second classification
+// here is a second chance for the channel and `yoyo status` to disagree about
+// one run.
+func endedBadly(state runstate.State) bool {
+	return state.Status.Terminal() && state.Status != runstate.StatusSucceeded
+}
+
+// handedToAPerson reports a run whose ending is a stoppage somebody has to
+// decide about, which is the read model's own reading of it rather than a second
+// one taken here. It is asked of both readings rather than only of the later
+// one, because the blocker can reach a record that is already terminal: the
+// stoppage is then news even though the ending is not.
+func handedToAPerson(state runstate.State) bool {
+	return endedBadly(state) && state.Outcome() == runstate.OutcomeStopped
 }
 
 // blockerText is what the record gives as the reason. A publication that could

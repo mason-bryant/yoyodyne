@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
@@ -2004,4 +2005,73 @@ func (h *realScheduleHarness) itemLocked(id string) (beads.WorkItem, error) {
 		}
 	}
 	return beads.WorkItem{}, fmt.Errorf("no work item %s", id)
+}
+
+// Every stoppage comes back to the scheduler as an error, so a pass that read
+// the error first said "failed" over a run handed to a person with its branch
+// and worktree intact — the same word it said over one that broke with nothing
+// to show. The pass reports the ending the run reached, in the read model's
+// vocabulary, and works none of it out for itself.
+func TestAPassNamesEachEndingRatherThanCallingEveryStoppageAFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []struct {
+		named   string
+		started Started
+	}{
+		// The reading this exists to stop: the item is back with a person and the
+		// change is still there, which is not what "failed" says.
+		{"stopped", Started{
+			WorkItemID: "yoyodyne-stopped",
+			Outcome:    Outcome{Status: runstate.StatusFailed, Blocked: true, Branch: "yoyodyne/stopped"},
+			Failure:    "the repair budget was spent with the checks still failing",
+		}},
+		{"failed", Started{
+			WorkItemID: "yoyodyne-broke",
+			Outcome:    Outcome{Status: runstate.StatusFailed},
+			Failure:    "the worktree could not be cut",
+		}},
+		{"cancelled", Started{
+			WorkItemID: "yoyodyne-cancelled",
+			Outcome:    Outcome{Status: runstate.StatusCancelled},
+			Failure:    "context canceled",
+		}},
+		{"timed out", Started{
+			WorkItemID: "yoyodyne-late",
+			Outcome:    Outcome{Status: runstate.StatusTimedOut},
+			Failure:    "context deadline exceeded",
+		}},
+		// The three that are not endings at all keep the words they had: a start
+		// the scheduler lost to another process, a run still in flight, and a run
+		// whose work landed.
+		{"declined", Started{WorkItemID: "yoyodyne-lost", Declined: "the slot went to another process"}},
+		{"paused", Started{WorkItemID: "yoyodyne-parked", Outcome: Outcome{Status: runstate.StatusRunning, Paused: true}}},
+		{"integrated", Started{
+			WorkItemID: "yoyodyne-landed",
+			Outcome:    Outcome{Status: runstate.StatusSucceeded, Integration: integratedOnto("main")},
+		}},
+		// A start that never became a run has no ending to name, so the failure is
+		// still what is said.
+		{"failed", Started{WorkItemID: "yoyodyne-unstarted", Failure: "the store refused the reservation"}},
+	} {
+		if named := want.started.state(); named != want.named {
+			t.Errorf("%s is reported as %q, want %q", want.started.WorkItemID, named, want.named)
+		}
+	}
+
+	// And the word reaches the rendered pass rather than only the helper.
+	rendered := Schedule{Started: []Started{{
+		WorkItemID: "yoyodyne-stopped",
+		Outcome:    Outcome{Status: runstate.StatusFailed, Blocked: true},
+		Failure:    "the repair budget was spent",
+	}}}.Render()
+	if !strings.Contains(rendered, "yoyodyne-stopped: stopped") {
+		t.Errorf("the pass reads:\n%s\nwant the stoppage named as one", rendered)
+	}
+}
+
+// integratedOnto is a promotion onto one branch, which is all the pass's own
+// account of a run reads from it.
+func integratedOnto(branch string) *gitworktree.Integration {
+	return &gitworktree.Integration{TargetBranch: branch}
 }

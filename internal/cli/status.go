@@ -687,13 +687,14 @@ func describeRunSelection(workItemID string, failedOnly bool) string {
 // An operator reading that one word has been told the attempt is over and
 // nothing about whether the work is.
 //
-// Preservation is stated on every run that did not succeed, in one of three
-// fixed phrases, and on no others: a successful run removes what it made on
-// purpose, and a run still in flight holds everything by definition. Two of the
-// three are facts the record holds; the third says the record holds neither,
-// rather than turning two empty fields into a claim that the run made nothing.
-// The outstanding marker keeps the same rule and for the same reason it always
-// had.
+// Preservation is stated on every run that did not succeed, in the three fixed
+// phrases the read model renders, and on no others: a successful run removes
+// what it made on purpose, and a run still in flight holds everything by
+// definition. The phrases are the read model's rather than this file's for the
+// reason the outcome word is — the channel says the same three about the same
+// run — and the same discipline `recorded` below keeps holds inside them: an
+// absence is stated as an absence rather than read as work thrown away. The
+// outstanding marker keeps the same rule and for the same reason it always had.
 func renderRunState(run runstate.RunSummary) string {
 	state := string(run.Outcome)
 	if run.Phase != "" {
@@ -703,23 +704,7 @@ func renderRunState(run runstate.RunSummary) string {
 		state += ", integrated"
 	}
 	if run.Status.Terminal() && run.Outcome != runstate.OutcomeSucceeded {
-		switch {
-		case run.Preserved():
-			state += ", work preserved"
-		case run.Branch != "" || run.WorktreePath != "":
-			// Something was made and the harness recorded removing it. That is a
-			// different answer from never having made anything, and an operator
-			// asking whether their work is gone is owed the one that is true.
-			state += ", work removed"
-		default:
-			// Two empty fields are not a claim that the run made nothing, and this
-			// says which it is: the record names no artifact. It is the same
-			// discipline `recorded` below keeps for the account and the
-			// configuration — an absence stated as an absence — and it matters more
-			// here, because the reading it refuses is exactly the false reassurance
-			// this listing exists to stop.
-			state += ", no artifacts recorded"
-		}
+		state += ", " + run.Artifacts().Describe()
 	}
 	if run.Outstanding && run.Status.Terminal() {
 		state += ", outstanding"

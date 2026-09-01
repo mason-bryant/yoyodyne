@@ -660,11 +660,9 @@ func TestARefusalOutsideARunIsSaidAtWarningAndNamesWhatIsWaiting(t *testing.T) {
 
 func TestARunThatStoppedAndStayedStoppedIsSaidAsCritical(t *testing.T) {
 	before := running()
-	completed := moment.Add(time.Minute)
-	after := before
-	after.Status = runstate.StatusFailed
-	after.CompletedAt = &completed
+	after := endedRun(before, runstate.StatusFailed)
 	after.Failure = "the repair budget was spent with the checks still failing"
+	after.Blocker = runstate.RecordBlocker("the checks kept failing after every repair round it was granted")
 	kinds, notifications := crossed(t, before, after)
 	blockerRecorded := only(t, notifications, KindBlockerRecorded)
 	if blockerRecorded.Event.Severity != report.SeverityCritical {
@@ -680,13 +678,193 @@ func TestARunThatStoppedAndStayedStoppedIsSaidAsCritical(t *testing.T) {
 	if !strings.Contains(message.Body, "Critical") {
 		t.Fatalf("body %q does not say its severity in words", message.Body)
 	}
+	// The whole reason the vocabulary exists: a stoppage keeps the change, and
+	// the thread says so rather than leaving it to be guessed from the word.
+	if !strings.Contains(message.Body, "work preserved") {
+		t.Fatalf("body %q does not say what remains of the change", message.Body)
+	}
 	// A run that succeeded is not a blocker however it is read.
 	succeeded := after
 	succeeded.Status = runstate.StatusSucceeded
 	succeeded.Failure = ""
+	succeeded.Blocker = ""
 	if kinds, _ := crossed(t, before, succeeded); len(kinds) != 0 {
 		t.Fatalf("a successful run crossed %v", kinds)
 	}
+}
+
+// The misreading this exists to end: "failed" is accurate about the attempt and
+// says nothing about the work, so a channel that said one word over all four
+// endings told an operator the attempt was over and nothing about whether their
+// change still existed. Each ending is said in the read model's own word, and
+// each says what remains.
+func TestEachWayARunEndsIsSaidAsItselfWithWhatRemains(t *testing.T) {
+	before := running()
+	for _, ending := range []struct {
+		status   runstate.Status
+		blocker  string
+		kind     Kind
+		word     string
+		severity report.Severity
+	}{
+		{runstate.StatusFailed, "the checks kept failing", KindBlockerRecorded, "blocked", report.SeverityCritical},
+		{runstate.StatusFailed, "", KindRunEnded, string(runstate.OutcomeFailed), report.SeverityWarning},
+		{runstate.StatusCancelled, "", KindRunEnded, string(runstate.OutcomeCancelled), report.SeverityNote},
+		{runstate.StatusTimedOut, "", KindRunEnded, string(runstate.OutcomeTimedOut), report.SeverityWarning},
+	} {
+		after := endedRun(before, ending.status)
+		after.Failure = "what the record gave as the reason"
+		if ending.blocker != "" {
+			after.Blocker = runstate.RecordBlocker(ending.blocker)
+		}
+		_, notifications := crossed(t, before, after)
+		said := only(t, notifications, ending.kind)
+		if said.Event.Severity != ending.severity {
+			t.Fatalf("%s is a %s, want %s", ending.status, said.Event.Severity, ending.severity)
+		}
+		message, err := Render(said.Topic, said.Speaker, said.Event)
+		if err != nil {
+			t.Fatalf("render %s: %v", ending.status, err)
+		}
+		if !strings.Contains(message.Body, ending.word) {
+			t.Fatalf("a %s run is said as %q, which does not name it", ending.status, message.Body)
+		}
+		if !strings.Contains(message.Body, "work preserved") {
+			t.Fatalf("a %s run is said as %q, which does not say what remains", ending.status, message.Body)
+		}
+	}
+}
+
+// A stoppage recorded onto a run that had already ended. Reconciliation settles
+// a run some killed process left terminal: it takes a blocker from the tracker
+// and saves it onto a record whose status has not moved since the crash, so the
+// ending and the stoppage are two separate readings in that order. Watching only
+// for a run becoming terminal, the sink said "failed" at the crash and then
+// nothing at all when the stoppage arrived — the one ending an operator has to
+// act on, swallowed because the run was already over.
+func TestAStoppageRecordedAfterTheRunAlreadyEndedIsStillSaid(t *testing.T) {
+	// What the crash left: terminal, a reason, and no blocker. This is the
+	// reading the sink has already reported as a plain failure.
+	crashed := endedRun(running(), runstate.StatusFailed)
+	crashed.Failure = "the process was killed mid-change"
+	if kinds, notifications := crossed(t, running(), crashed); len(kinds) != 1 {
+		t.Fatalf("the crash crossed %v, want the ending said once", kinds)
+	} else if only(t, notifications, KindRunEnded).Event.Severity != report.SeverityWarning {
+		t.Fatal("the crash was not said as a warning, so what follows is not a correction of one")
+	}
+
+	// What reconciliation then writes: the same terminal status, now carrying the
+	// blocker it put on the work item.
+	settled := crashed
+	settled.Blocker = runstate.RecordBlocker("the run was interrupted with nothing integrated and its worktree preserved")
+	kinds, notifications := crossed(t, crashed, settled)
+	stoppage := only(t, notifications, KindBlockerRecorded)
+	if stoppage.Event.Severity != report.SeverityCritical {
+		t.Fatalf("the stoppage is a %s among %v, want it to reach the operator as critical", stoppage.Event.Severity, kinds)
+	}
+	message, err := Render(stoppage.Topic, stoppage.Speaker, stoppage.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(message.Body, "work preserved") {
+		t.Fatalf("the stoppage does not say what remains of the change: %q", message.Body)
+	}
+
+	// And it is still a crossing rather than a state: a sweep that reads the
+	// settled record again says nothing.
+	if kinds, _ := crossed(t, settled, settled); len(kinds) != 0 {
+		t.Fatalf("re-reading the settled run crossed %v, want the stoppage said once", kinds)
+	}
+	// A run that ended without a blocker and never gains one is not re-announced
+	// either, or every reading of the record would repeat the ending.
+	if kinds, _ := crossed(t, crashed, crashed); len(kinds) != 0 {
+		t.Fatalf("re-reading the crashed run crossed %v, want the ending said once", kinds)
+	}
+}
+
+// Both lines finish on the reason the record gives, and a run can honestly have
+// none: a cancellation is the operator stopping it without owing anybody a
+// sentence, and a stoppage reconciliation settled on an already-terminal run
+// takes the blocker from the tracker and leaves the run's own failure empty. The
+// line has to stay a sentence in both cases rather than trailing off a colon,
+// and it must not report an ordinary act as a record that lost something.
+func TestAnEndingWhoseRecordNamesNoReasonIsStillASentence(t *testing.T) {
+	before := running()
+	for _, ending := range []struct {
+		status  runstate.Status
+		blocker string
+		kind    Kind
+	}{
+		{runstate.StatusCancelled, "", KindRunEnded},
+		{runstate.StatusTimedOut, "", KindRunEnded},
+		// Reconciliation blocks a run that is already terminal without writing a
+		// failure onto it, so the critical line reaches the same empty reason.
+		{runstate.StatusFailed, "the interrupted run left a worktree nothing could settle", KindBlockerRecorded},
+	} {
+		after := endedRun(before, ending.status)
+		if ending.blocker != "" {
+			after.Blocker = runstate.RecordBlocker(ending.blocker)
+		}
+		_, notifications := crossed(t, before, after)
+		said := only(t, notifications, ending.kind)
+		message, err := Render(said.Topic, said.Speaker, said.Event)
+		if err != nil {
+			t.Fatalf("render %s with no reason recorded: %v", ending.status, err)
+		}
+		if !strings.Contains(message.Body, "the record names no reason") {
+			t.Fatalf("a %s run with no reason is said as %q, which does not state the absence", ending.status, message.Body)
+		}
+		// The absence is stated as itself rather than as words that went missing,
+		// which is what the renderer's generic fallback would have said.
+		if strings.Contains(message.Body, "nothing the record could carry") {
+			t.Fatalf("a %s run with no reason reports an ordinary act as a record that lost something: %q", ending.status, message.Body)
+		}
+		if strings.Contains(message.Body, ": .") || strings.Contains(message.Body, ": Next:") {
+			t.Fatalf("a %s run with no reason trails off a colon: %q", ending.status, message.Body)
+		}
+	}
+}
+
+// A run whose change the harness removed and one whose record names no artifact
+// are opposite answers to "is my work gone", and neither may be said as the
+// other. The three phrases are the read model's, so `yoyo status` and the thread
+// cannot come to say different words about one run.
+func TestWhatRemainsIsSaidAsTheRecordHasItRatherThanGuessed(t *testing.T) {
+	before := running()
+	for remains, apply := range map[string]func(*runstate.State){
+		"work preserved": func(*runstate.State) {},
+		"work removed": func(state *runstate.State) {
+			state.BranchRemoved, state.WorktreeRemoved = true, true
+		},
+		"no artifacts recorded": func(state *runstate.State) {
+			state.Branch, state.WorktreePath = "", ""
+		},
+	} {
+		after := endedRun(before, runstate.StatusFailed)
+		after.Failure = "what the record gave as the reason"
+		apply(&after)
+		_, notifications := crossed(t, before, after)
+		ended := only(t, notifications, KindRunEnded)
+		message, err := Render(ended.Topic, ended.Speaker, ended.Event)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if !strings.Contains(message.Body, remains) {
+			t.Fatalf("a run whose record wanted %q is said as %q", remains, message.Body)
+		}
+	}
+}
+
+// endedRun is one reading of a run that has reached a terminal status, with the
+// artifacts a run that got as far as making a change carries.
+func endedRun(before runstate.State, status runstate.Status) runstate.State {
+	completed := moment.Add(time.Minute)
+	after := before
+	after.Status = status
+	after.CompletedAt = &completed
+	after.Branch = "yoyodyne/yoyodyne-ifd-68-2/4d1f"
+	after.WorktreePath = "/tmp/worktrees/run-4d1f"
+	return after
 }
 
 func TestARunWithNoUsableWorkItemIsRefusedRatherThanMisaddressed(t *testing.T) {

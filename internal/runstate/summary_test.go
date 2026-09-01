@@ -403,3 +403,39 @@ func TestHistoryReportsARunWithNoSurvivingLogAsUnpriced(t *testing.T) {
 		t.Fatalf("run = %#v, want an unpriced run", history.Runs[0])
 	}
 }
+
+// What remains of a run's change is said in three phrases and never in two, and
+// the third is the one the vocabulary exists for: a record naming no artifact is
+// an absence stated as an absence rather than a claim the run made nothing.
+// Every surface reads this one derivation, so `yoyo status` and the channel
+// cannot come to say different words about one run.
+func TestWhatRemainsOfARunIsStatedRatherThanInferredFromTwoEmptyFields(t *testing.T) {
+	for _, want := range []struct {
+		artifacts Artifacts
+		preserved bool
+		describes string
+	}{
+		{Artifacts{Branch: "yoyodyne/ifd-226", WorktreePath: "/tmp/run"}, true, "work preserved"},
+		// Either one standing on its own still holds the work: a removed worktree
+		// whose branch stands is a change somebody can check out.
+		{Artifacts{Branch: "yoyodyne/ifd-226", WorktreePath: "/tmp/run", WorktreeRemoved: true}, true, "work preserved"},
+		{Artifacts{Branch: "yoyodyne/ifd-226", BranchRemoved: true, WorktreePath: "/tmp/run"}, true, "work preserved"},
+		{Artifacts{Branch: "yoyodyne/ifd-226", BranchRemoved: true, WorktreePath: "/tmp/run", WorktreeRemoved: true}, false, "work removed"},
+		{Artifacts{}, false, "no artifacts recorded"},
+	} {
+		if want.artifacts.Preserved() != want.preserved {
+			t.Errorf("%#v preserved = %v, want %v", want.artifacts, want.artifacts.Preserved(), want.preserved)
+		}
+		if described := want.artifacts.Describe(); described != want.describes {
+			t.Errorf("%#v describes itself as %q, want %q", want.artifacts, described, want.describes)
+		}
+	}
+	// A run and the summary of it answer identically, because a surface holding
+	// one and a surface holding the other must not be able to disagree.
+	state := testState(t, StatusFailed)
+	state.Branch, state.WorktreePath = "yoyodyne/ifd-226", "/tmp/run"
+	summary := RunSummary{Branch: state.Branch, WorktreePath: state.WorktreePath}
+	if state.Artifacts() != summary.Artifacts() || !summary.Preserved() {
+		t.Errorf("state says %#v and its summary says %#v", state.Artifacts(), summary.Artifacts())
+	}
+}
