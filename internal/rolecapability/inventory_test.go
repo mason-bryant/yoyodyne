@@ -15,8 +15,10 @@ package rolecapability
 // person has to make the same judgement out loud instead of the question never
 // being asked.
 //
-// Nothing here converts a call site. The questions below are what the conversion
-// will ask; today every one of those sites still asks for a role by name.
+// The questions below are what the converted sites now ask. Where a row's question
+// is "none", the site still names what it names and the gap says why no bundle can
+// express it; parity_test.go is where the converted answers are held against the
+// decisions the role names used to give.
 
 import (
 	"slices"
@@ -49,13 +51,23 @@ var expresses = map[string]expression{
 		question: "what does this role's bundle hold?",
 		gap:      "the table carries the contract and the operator-facing title beside the authority; a bundle carries capabilities alone, so what a role is called and what it is sent stay where they are",
 	},
+	"conversation.authority-derived": {
+		question: "which of these does the role's bundle hold, and what follows from that about the conversation?",
+		asks: []capability.Capability{
+			capability.WorkItemRead, capability.WorkItemMutate, capability.BacklogAdmit,
+			capability.BacklogOrder, capability.WorkDecompose, capability.WorkTriage,
+			capability.ProposalRaise, capability.ConcernRaise, capability.ResearchCommission,
+			capability.EvaluationRecord, capability.ExchangeAsk,
+		},
+		gap: "the contract and the title are still written beside the derivation: what a role is sent and what it is called are not authority anybody holds",
+	},
 	"conversation.role-is-known": {
 		question: "is there a bundle for this role at all?",
-		gap:      "the registry refuses an unknown role where it is built; the conversation still refuses one at the call site by looking the role up in its own table",
+		gap:      "the lookup is against the derived table rather than against the registry directly, because a role also needs a contract to be addressable and no bundle carries one",
 	},
 	"conversation.session-opens": {
 		question: "is there a bundle for the role a session is being opened for?",
-		gap:      "same lookup, made a second time; nothing reads this registry at that call site yet",
+		gap:      "the same lookup, made a second time and through the same derived table",
 	},
 	"conversation.authorize-reply": {
 		question: "does the role hold the capability each block in the reply asks for?",
@@ -70,7 +82,7 @@ var expresses = map[string]expression{
 			capability.WorkItemRead, capability.WorkItemMutate, capability.BacklogAdmit,
 			capability.BacklogOrder, capability.WorkDecompose, capability.WorkTriage,
 		},
-		gap: "which of the fourteen named tracker actions falls under which capability is a mapping this registry does not carry; whatever converts that call site writes it down",
+		gap: "which of the fifteen named tracker actions falls under which capability is a mapping this registry does not carry; the conversion wrote it down where the actions are, as `trackerCapabilities`",
 	},
 	"conversation.contract": {
 		question: "none: what is sent to a role is not what the role may do",
@@ -146,7 +158,7 @@ var expresses = map[string]expression{
 	"artifact.owner": {
 		question: "which capability does this kind of document belong to?",
 		asks:     []capability.Capability{capability.ArtifactProductMutate, capability.ArtifactDesignMutate},
-		gap:      "the map from kind to capability lives in the ownership table; the two names here stand in for the artifact-kind scope the design settles, and a third owner would need a third name until scopes exist",
+		gap:      "the map from kind to capability lives in the ownership table, which is the half of it this registry does not carry; the two names here stand in for the artifact-kind scope the design settles, and a third owner would need a third name until scopes exist",
 	},
 	"artifact.authorize": {
 		question: "does the role hold the capability the artifact's kind belongs to?",

@@ -15,6 +15,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
@@ -27,6 +28,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
@@ -4574,12 +4576,17 @@ func (p Pipeline) runsOnCompiledAdapter(named domain.Backend) bool {
 // validateReviewPolicy refuses automatic integration that is not actually
 // gated. An unenforceable policy must stop the run before anything is claimed,
 // rather than integrate work no independent reviewer ever saw.
+//
+// What it asks of the configured agent is whether its role returns the verdict an
+// integration is gated on, rather than whether the role is named "reviewer". The
+// two are one question today, and asking it as the capability is what keeps this
+// gate and the registry from being able to disagree about which role that is.
 func (p Pipeline) validateReviewPolicy() error {
 	if p.Reviewer == nil {
 		return errors.New("automatic integration requires an independent reviewer")
 	}
 	reviewer := p.reviewer()
-	if reviewer.Role != domain.RoleReviewer {
+	if !rolecapability.MustDefault().Holds(reviewer.Role, capability.ReviewVerdict) {
 		return errors.New("automatic integration requires a configured reviewer agent")
 	}
 	if !p.runsOnCompiledAdapter(reviewer.Backend) {

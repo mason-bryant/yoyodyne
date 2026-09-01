@@ -5,9 +5,14 @@ package chat
 // The conversation machinery is the same for every role: the same backend
 // boundary, the same normalized events, the same durable record keyed by role.
 // What separates a product manager from an architect is the contract it carries
-// and the table below, and both live in Go rather than in configuration for the
-// same reason the artifact ownership table does — authority a persona could
+// and what its role holds, and both live in Go rather than in configuration for
+// the same reason the artifact ownership table does — authority a persona could
 // widen is not authority.
+//
+// The table below is built from the role-capability registry rather than written
+// out: every flag on it is one capability, and the tracker actions a role may ask
+// for are the ones whose capability it holds. What a role may do in a conversation
+// and what a role may do are then one statement instead of two that can drift.
 //
 // What the operator may do is deliberately not in here. The commands a
 // conversation carries out are the operator's own, performed by the harness, and
@@ -19,9 +24,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 )
 
 // Authority is what one role may ask for inside a conversation. Everything it
@@ -88,61 +95,81 @@ func (a Authority) MayAct(action string) bool {
 	return slices.Contains(a.TrackerActions, action)
 }
 
-// authorities is the whole of what each role may do. A role that is not here
-// has no conversation: the harness would have no contract to send it and no
-// statement of what it may ask for, and inventing either at the point of use is
-// how authority leaks.
-var authorities = map[domain.AgentRole]Authority{
-	domain.RoleProductManager: {
-		Role:     domain.RoleProductManager,
-		Title:    "product manager",
-		Owns:     "the brief, the goals, and what is admitted to the backlog and in what order",
-		Contract: productManagerContract,
-		TrackerActions: []string{
-			actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate,
-			actionReparent, actionReprioritize, actionPark, actionUnpark,
-			actionLink, actionUnlink, actionClose, actionRetire, actionHandle,
-		},
-		Proposals:   true,
-		Concerns:    true,
-		Research:    true,
-		Evaluations: true,
-		Asks:        true,
-	},
-	domain.RoleArchitect: {
-		Role:           domain.RoleArchitect,
-		Title:          "architect",
-		Owns:           "the designs, the decision records, and the architectural invariants",
-		Contract:       architectContract,
-		TrackerActions: []string{actionRead, actionSurvey},
-		Asks:           true,
-	},
-	domain.RoleDevelopmentManager: {
-		Role:     domain.RoleDevelopmentManager,
-		Title:    "development manager",
-		Owns:     "decomposition, dependency structure, and triage of work that has stopped moving",
-		Contract: developmentManagerContract,
-		TrackerActions: []string{
-			actionRead, actionSurvey, actionCreate, actionUpdate,
-			actionReparent, actionLink, actionUnlink, actionTriage,
-		},
-		ParentRequired: true,
-		Asks:           true,
-	},
-	domain.RoleDeveloper: {
-		Role:           domain.RoleDeveloper,
-		Title:          "developer",
-		Owns:           "no document and no queue; it implements one bounded work item inside a run",
-		Contract:       developerContract,
-		TrackerActions: []string{actionRead, actionSurvey},
-	},
-	domain.RoleReviewer: {
-		Role:           domain.RoleReviewer,
-		Title:          "reviewer",
-		Owns:           "no document and no queue; it judges one change inside a run",
-		Contract:       reviewerContract,
-		TrackerActions: []string{actionRead, actionSurvey},
-	},
+// contracts is the immutable policy each role's conversation carries. It is the
+// one part of the table below that is written here rather than read off the
+// role's capabilities, and deliberately so: a contract is what a role is sent,
+// which is not the same thing as what a role may do. A bundle carries authority
+// alone and cannot say that a persona may not stand in for a contract, so the
+// prose stays where it is.
+//
+// A role with no contract has no conversation: the harness would have nothing to
+// send it, and inventing one at the point of use is how authority leaks.
+var contracts = map[domain.AgentRole]string{
+	domain.RoleProductManager:     productManagerContract,
+	domain.RoleArchitect:          architectContract,
+	domain.RoleDevelopmentManager: developmentManagerContract,
+	domain.RoleDeveloper:          developerContract,
+	domain.RoleReviewer:           reviewerContract,
+}
+
+// authorities is the whole of what each role may do in a conversation, derived
+// from what the role holds rather than stated a second time here.
+var authorities = buildAuthorities()
+
+// buildAuthorities reads each role's conversation authority off its bundle.
+//
+// Every flag below is one capability, and the tracker actions are the actions
+// whose own capability the role holds. That is the whole of the conversion: the
+// answers are the same answers the hand-written table gave, and they are now the
+// registry's rather than this file's, so a role whose authority changes changes in
+// one place. What could not be derived stayed: the contract is prose and the title
+// is what a role is called, neither of which is an authority anybody holds.
+//
+// The parent requirement is the one derived answer that is not a single
+// capability, because it never was one: it is decomposition without admission,
+// which is exactly what the development manager holds and the product manager
+// does not. Stating it that way is what keeps it from drifting into a flag
+// somebody can set.
+func buildAuthorities() map[domain.AgentRole]Authority {
+	registry := rolecapability.MustDefault()
+	built := make(map[domain.AgentRole]Authority, len(contracts))
+	for _, role := range domain.Roles() {
+		contract, addressable := contracts[role]
+		if !addressable {
+			continue
+		}
+		bundle, described := registry.Bundle(role)
+		if !described {
+			continue
+		}
+		built[role] = Authority{
+			Role:           role,
+			Title:          role.Title(),
+			Owns:           bundle.Owns,
+			Contract:       contract,
+			TrackerActions: trackerActionsFor(registry, role),
+			ParentRequired: registry.Holds(role, capability.WorkDecompose) && !registry.Holds(role, capability.BacklogAdmit),
+			Proposals:      registry.Holds(role, capability.ProposalRaise),
+			Concerns:       registry.Holds(role, capability.ConcernRaise),
+			Research:       registry.Holds(role, capability.ResearchCommission),
+			Evaluations:    registry.Holds(role, capability.EvaluationRecord),
+			Asks:           registry.Holds(role, capability.ExchangeAsk),
+		}
+	}
+	return built
+}
+
+// trackerActionsFor is the operations a role may ask for: the ones whose
+// capability it holds, in the order the contract states them, so a refusal names
+// them the way the contract does.
+func trackerActionsFor(registry rolecapability.Registry, role domain.AgentRole) []string {
+	var permitted []string
+	for _, action := range trackerActionNames {
+		if registry.Holds(role, trackerCapabilities[action]) {
+			permitted = append(permitted, action)
+		}
+	}
+	return permitted
 }
 
 // AuthorityFor reports what a role may do in a conversation, and whether the

@@ -15,7 +15,10 @@
 //
 // Ownership follows the model the design already sets out for upstream
 // artifacts: only the architect creates, amends, or retires one, and every other
-// role proposes. Authorize is where that is enforced, and it bounds every
+// role proposes. Which role that is is `internal/rolecapability`'s to say, as the
+// holder of `invariant.mutate`, so this package enforces the boundary without
+// being a second place that decides whose it is. Authorize is where that is
+// enforced, and it bounds every
 // authorized way to write an invariant, because Store is the only thing that
 // writes one. What it does not bound is a developer with a shell in its
 // worktree, which is the same gap the design records for pushing and merging:
@@ -38,7 +41,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 )
 
 // Status is where an invariant is in its lifecycle. Retirement is explicit
@@ -256,8 +261,14 @@ var ErrUnauthorized = errors.New("only the architect may create, amend, or retir
 // prompt is what makes this a rule about the mutation instead of an instruction
 // a well-behaved model happens to respect — for every mutation that comes
 // through this package, which is every authorized one there is.
+//
+// What it asks is who holds `invariant.mutate`, rather than whether the role is
+// the architect by name. The two are the same question today and the second is
+// the one that stays true: which role holds it is the role-capability registry's
+// to say, and a rule that named the architect here would be a second answer this
+// file could give it.
 func Authorize(role domain.AgentRole) error {
-	if role == domain.RoleArchitect {
+	if rolecapability.MustDefault().Holds(role, capability.InvariantMutate) {
 		return nil
 	}
 	if strings.TrimSpace(string(role)) == "" {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -168,6 +169,41 @@ var trackerActionArguments = map[string][]string{
 	actionRetire:       {},
 	actionTriage:       {"run", "decision"},
 	actionHandle:       {"report"},
+}
+
+// trackerCapabilities is which authority each operation belongs to. It is the
+// mapping the capability vocabulary was derived without: the inventory records
+// that a role's tracker actions are a list rather than a set of capabilities, and
+// this is that list read once in the vocabulary so the conversation asks what a
+// role holds instead of which role it is.
+//
+// Every line is a judgement, and the judgements are the ones the existing lists
+// already made. Reading and surveying are the same authority, since a survey is a
+// read of the queue as it stands now. Creating, reparenting, and linking build
+// structure, which is decomposition and belongs to the two roles that decompose.
+// Updating an item's own fields is the tracker write nothing else covers. Priority
+// and parking are what is pulled next. Closing and retiring are admission run
+// backwards, and attribution is the other half of admitting — the goal a creation
+// names, added to work that was admitted before goals were checked. Handling a
+// report is what takes one out of the pile the queue is fed from, which is the
+// same authority as deciding what goes into it. Triage's subject is a stopped run
+// rather than an item, which is why it is its own name and not an update.
+var trackerCapabilities = map[string]capability.Capability{
+	actionRead:         capability.WorkItemRead,
+	actionSurvey:       capability.WorkItemRead,
+	actionCreate:       capability.WorkDecompose,
+	actionAttribute:    capability.BacklogAdmit,
+	actionUpdate:       capability.WorkItemMutate,
+	actionReparent:     capability.WorkDecompose,
+	actionReprioritize: capability.BacklogOrder,
+	actionPark:         capability.BacklogOrder,
+	actionUnpark:       capability.BacklogOrder,
+	actionLink:         capability.WorkDecompose,
+	actionUnlink:       capability.WorkDecompose,
+	actionClose:        capability.BacklogAdmit,
+	actionRetire:       capability.BacklogAdmit,
+	actionTriage:       capability.WorkTriage,
+	actionHandle:       capability.BacklogAdmit,
 }
 
 // trackerActionNames lists the operations in the order the contract states them,

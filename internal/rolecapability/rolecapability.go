@@ -4,10 +4,15 @@
 // The harness asks "is this the architect?" in about sixty places, and the
 // authority inventory is the list of them. This package is the other side of that
 // list: the same authority stated once, as a bundle of capability primitives per
-// role, so that a call site can eventually ask what a role may do rather than who
-// it is. Nothing asks yet — no authorization call site changes here, deliberately,
+// role, so that a call site asks what a role may do rather than who it is. The
+// vocabulary and the bundles were reviewed before anything read them, deliberately,
 // because a vocabulary and a rewiring reviewed together are a vocabulary nobody
-// reviewed.
+// reviewed. The sites that read them now are the rows of the inventory that turn
+// on a role's identity: which role owns a kind of document, which may change an
+// invariant, what a role may ask for in a conversation, and which role's judgement
+// gates an integration. Everything the inventory records as something else — a
+// contract's prose, a path gate, the separation of two invocations, a posture — is
+// answered there with the reason a bundle cannot express it.
 //
 // The bundles are trusted data in Go and configuration never writes them. That is
 // the design's law in the place it is easiest to break: a workflow definition

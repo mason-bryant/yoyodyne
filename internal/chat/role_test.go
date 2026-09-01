@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -439,6 +440,30 @@ func TestTwoAgentsOnOneRoleKeepTwoConversations(t *testing.T) {
 		}
 		if recorded.ProviderSessionID != want.session || recorded.Turns != want.turns {
 			t.Fatalf("Load(%s) = session %q, %d turn(s)", agent, recorded.ProviderSessionID, recorded.Turns)
+		}
+	}
+}
+
+// Every tracker action names the authority it belongs to. A map lookup that
+// misses answers with the empty capability, which no bundle holds, so an action
+// added to the contract and left out of the mapping would quietly become one no
+// role can ask for — a refusal nobody wrote and nothing explains.
+func TestEveryTrackerActionNamesTheCapabilityItBelongsTo(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range trackerActionNames {
+		required, mapped := trackerCapabilities[action]
+		if !mapped {
+			t.Errorf("the %q action names no capability; nothing could ask for it", action)
+			continue
+		}
+		if !required.Known() {
+			t.Errorf("the %q action names %q, which this repository does not declare", action, required)
+		}
+	}
+	for action := range trackerCapabilities {
+		if !slices.Contains(trackerActionNames, action) {
+			t.Errorf("%q is mapped to a capability and is not an action the contract states", action)
 		}
 	}
 }

@@ -768,6 +768,39 @@ func TestValidateReviewPolicyRefusesAReviewerNothingCanLaunch(t *testing.T) {
 	}
 }
 
+// The gate asks which role returns the verdict rather than which role is named
+// "reviewer", and this is the decision it used to make, held to one role at a
+// time: only the role holding `review.verdict` gates an integration, and the other
+// four are refused with the wording the operator already reads.
+func TestValidateReviewPolicyGatesOnTheRoleHoldingTheVerdict(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range domain.Roles() {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+
+			repository := pipelineRepository(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+			pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+			pipeline.Config.Agents["reviewer"] = config.AgentConfig{
+				Role: role, Backend: domain.BackendClaudeCode, Model: testReviewerModel, Instances: 1,
+			}
+
+			err := pipeline.validateReviewPolicy()
+			if role == domain.RoleReviewer {
+				if err != nil {
+					t.Fatalf("validateReviewPolicy() error = %v, want the reviewer to gate an integration", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "requires a configured reviewer agent") {
+				t.Fatalf("validateReviewPolicy() error = %v, want the %s refused as no reviewer", err, role.Title())
+			}
+		})
+	}
+}
+
 func TestPipelineIntegratesReviewedWorkAndClosesTheItem(t *testing.T) {
 	t.Parallel()
 
