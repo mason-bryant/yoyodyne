@@ -30,12 +30,14 @@ const (
 	repositoryConfigPath = "../../.yoyodyne/config.yaml"
 )
 
-// statusToolSuitePath is the status tool's own suite. It fabricates a state
-// directory holding runs, conversations, branch reviews, and exchanges and
-// reads it with YOYODYNE_STATE_HOME pointed there, so it needs no provider, no
-// repository, and never reads an operator's real state — which is what makes it
-// cheap enough to run from here. `bin/yoyo-status` is shell, so before this
-// nothing a run applied executed a line of it.
+// statusToolSuitePath is the status tool's own suite. The tool is a wrapper for
+// `yoyo status` now — it derived run, conversation, branch-review, and exchange
+// state for itself until surfaces-project-one-read-model was ruled to bind it —
+// so the suite stubs `yoyo`, checks what the wrapper passed on, and checks that
+// no derivation has crept back into it. It needs no provider, no repository, and
+// never reads an operator's real state, which is what makes it cheap enough to
+// run from here. `bin/yoyo-status` is shell, so without this nothing a run
+// applied would execute a line of it.
 const statusToolSuitePath = "../../scripts/yoyo-status-test.sh"
 
 // TestThisRepositoryIsAllAccountedFor is the audit. Every file this repository
@@ -109,12 +111,12 @@ func TestEveryWorkflowInThisRepositoryIsShapedLikeOne(t *testing.T) {
 	}
 }
 
-// TestTheStatusToolReportsWhatItClaims runs the status tool's suite, for the
+// TestTheStatusToolDelegatesAsItClaims runs the status tool's suite, for the
 // same reason the release verb's and the notes writer's suites are run from Go:
-// the tool is shell, its claims are what the README and the operations guide
-// tell an operator they can rely on, and a suite that only runs in CI is one
+// the tool is shell, what it does with the old name is what the operations guide
+// tells an operator they can rely on, and a suite that only runs in CI is one
 // whose failure arrives after the change was reviewed and integrated.
-func TestTheStatusToolReportsWhatItClaims(t *testing.T) {
+func TestTheStatusToolDelegatesAsItClaims(t *testing.T) {
 	t.Parallel()
 
 	requireTool(t, "bash")

@@ -29,8 +29,8 @@ package cli
 // It is read-only in the strongest sense. Reading a run is not acting on it, so
 // this holds nothing, adopts nothing, and settles nothing — a run another
 // process is executing is listed exactly as a finished one is. Settling what a
-// run left behind is `yoyo reconcile`, and following one live is
-// `bin/yoyo-status`; this is the record afterwards.
+// run left behind is `yoyo reconcile`; this is the record, of a run in flight as
+// readily as of one that is over.
 
 import (
 	"context"
@@ -803,7 +803,9 @@ authoritative home.
 Reading a run decides nothing about it, so this holds nothing and settles
 nothing, and reporting a failure is not itself a failure: the exit status says
 whether the records could be read. Settling what an interrupted run left behind
-is `+"`yoyo reconcile`"+`; following a live run is `+"`bin/yoyo-status`"+`.
+is `+"`yoyo reconcile`"+`. A run still in flight is listed here with the rest, so
+this is where a live one is read as well; nothing follows its event stream as it
+arrives.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

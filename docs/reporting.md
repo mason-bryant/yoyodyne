@@ -50,12 +50,14 @@ to be left out. The same holds for an
 [exchange](conversation.md#roles-asking-each-other-things): its record names the
 product, the repository, the two roles in it, and the conversation the asker
 spoke from, and nothing that identifies a piece of work, so there is nothing to
-attribute it to rather than a judgement declined. Neither is left out of
-what the harness has spent altogether —
-[`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) prices
-conversations, branch reviews, and exchanges beside runs, and `yoyo cost` carries
-the exchanges into its total on a row of their own, because a total that skipped
-any of them would be wrong rather than merely unattributed.
+attribute it to rather than a judgement declined. An exchange is not left out of
+what the harness has spent altogether: `yoyo cost` carries the exchanges into its
+total on a row of their own, because a total that skipped them would be wrong
+rather than merely unattributed. A conversation and a branch review are left out
+of every total there is, which is a gap rather than a decision — the surface that
+priced them by day is
+[retired](operations.md#what-became-of-binyoyo-status), and what they cost is
+recorded and unreported until `yoyodyne-ifd.63` lands.
 
 `/show` breaks one item's price down by attempt, which is what a single total
 invites:

@@ -48,9 +48,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Mirror runstate.SystemDefaultRoot so this agrees with the harness, exactly as
-# bin/yoyo-status does. An account whose home this script and the harness
-# disagreed about is one the operator signs in and the harness never finds.
+# Mirror runstate.SystemDefaultRoot so this agrees with the harness. An account
+# whose home this script and the harness disagreed about is one the operator
+# signs in and the harness never finds.
 state_root() {
   if [ -n "${YOYODYNE_STATE_HOME:-}" ]; then printf '%s\n' "$YOYODYNE_STATE_HOME"; return; fi
   if [ -n "${XDG_STATE_HOME:-}" ]; then printf '%s\n' "$XDG_STATE_HOME/yoyodyne"; return; fi

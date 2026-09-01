@@ -465,11 +465,11 @@ The verdict is recorded with the same session and model evidence a per-item
 review leaves behind, in the `branch-reviews` directory beside the runs and the
 conversations, and what the reviewer noticed beside its verdict is collected
 with every other report. It is a provider invocation like any other the harness
-makes, so it records the event stream every other one records: it can be
-followed while it runs with
-[`yoyo-status`](operations.md#following-a-run-a-conversation-or-a-branch-review), and what
-the provider reported it cost is priced beside runs and conversations rather
-than quietly missing from the harness's total.
+makes, so it records the event stream every other one records, and what the
+provider reported it cost is recorded in it rather than quietly missing. Nothing
+reads that stream back today: the surface that followed it and priced it is
+[retired](operations.md#what-became-of-binyoyo-status), and `yoyo cost` prices
+work items and exchanges rather than branch reviews.
 
 What a `repair` verdict here does is deliberate and narrow: **nothing to the work
 already integrated.** Every commit under review was checked, reviewed, and
@@ -538,15 +538,15 @@ content, and the numbers cannot make it. A finding only the shadow raised is a
 candidate false positive rather than a proven one — what this measures against is
 the other reviewer, not what is true of the branch.
 
-A shadow review costs money like any other provider invocation, and is priced
-where every other branch review is: it records the same event stream, so
-[`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) counts it
-under `branch reviews`, and `--compare` reports each side's own cost from that
-same log. It is not in `yoyo cost`, which prices work items from the runs made
-for them — a branch review belongs to no run, and a shadow review belongs to no
-work item either. So measuring a reviewer is spend an operator can see, but not
-under the item that prompted it, and it is indistinguishable in the status total
-from a review that gated something.
+A shadow review costs money like any other provider invocation, and is recorded
+where every other branch review is: it writes the same event stream, and
+`--compare` reports each side's own cost from that log. It is not in `yoyo cost`,
+which prices work items from the runs made for them — a branch review belongs to
+no run, and a shadow review belongs to no work item either. Since the surface
+that priced branch reviews by day is
+[retired](operations.md#what-became-of-binyoyo-status), `--compare` is the only
+place this spend is reported at all: it is recorded, and no total the harness
+prints carries it.
 
 The first use of this is recorded in
 [the ifd.92 experiment note](experiments/yoyodyne-ifd-92-shadow-review.md): what the

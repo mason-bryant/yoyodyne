@@ -696,7 +696,7 @@ yoyo doctor
 
 The state directory is `$YOYODYNE_STATE_HOME`, `$XDG_STATE_HOME/yoyodyne`,
 `~/Library/Application Support/Yoyodyne/state` on macOS, or
-`~/.local/state/yoyodyne` on Linux — the same one `bin/yoyo-status` reads. See
+`~/.local/state/yoyodyne` on Linux — the one every `yoyo` verb reads. See
 [provider accounts](docs/configuration.md#provider-accounts) for what the pool
 does with a budget it has spent, why a run stays on the account it started on,
 and why conversations do not rotate.
@@ -807,7 +807,7 @@ a bundle, and migration from `.yoyodyne.yaml`.
 **When something goes wrong**
 
 - [Operations and recovery](docs/operations.md) — pausing and resuming, provider
-  limits and stalls, recovering interrupted runs, and following a run.
+  limits and stalls, recovering interrupted runs, and reading what became of one.
 
 **Reference**
 

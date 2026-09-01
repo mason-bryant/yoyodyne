@@ -135,9 +135,11 @@ verb in the first place.
 Time a run spends held is accounted under its own kind, separately from what a
 provider's refusals are allowed to spend: a hold never eats a run's
 `execution.usage_limit_max_pause` budget, and nothing bounds it, because the
-thing that lifts it is you. Both `bin/yoyo-status` and the conversation's
-`/status` lead with a PAUSED banner naming when the pause was placed, because a
-system somebody paused and forgot looks exactly like a system that died.
+thing that lifts it is you. The conversation's `/status` leads with a PAUSED
+banner naming when the pause was placed, and `yoyo status` names it on the
+[*Needs a human*](#where-the-harness-stands-the-four-lines) line with the same
+moment, because a system somebody paused and forgot looks exactly like a system
+that died.
 
 This is the broad switch, and there is a narrow one beside it. `yoyo pause` stops
 everything including the runs already under way, which park keeping everything
@@ -856,93 +858,55 @@ is. Reporting a failure is not itself a failure either — the exit status says
 whether the records could be read, so a script can read this without guarding
 against the answer.
 
-## Following a run, a conversation, or a branch review
+## What became of `bin/yoyo-status`
 
-`bin/yoyo-status` follows the normalized event stream a run, a conversation, or
-a [branch review](work.md#reviewing-what-a-branch-adds-up-to) records, which is the
-closest thing there is to watching an agent work. It is a different thing from
-the `yoyo status` verb above despite the name: that reads back what the records
-hold now — a run still in flight as readily as one that finished — and this
-follows a run's events as they arrive. It is a shell script that
-lives in a checkout of this repository rather than part of the `yoyo` binary, so
-`go install` and a release download do not carry it; clone the repository, or
-copy the single file out of it, if you want it:
+`bin/yoyo-status` was a shell script that read the state directory itself and
+followed the event stream a run, a conversation, or a
+[branch review](work.md#reviewing-what-a-branch-adds-up-to) records. It is a
+wrapper for `yoyo status` now — it passes its arguments on and does nothing else.
+The architect ruled that it is an operator surface like any other, so
+[surfaces-project-one-read-model](decisions/invariants/surfaces-project-one-read-model.md)
+binds it, and a script deriving run, conversation, branch-review, and exchange
+state for itself in `jq` and `awk` is the second surface that invariant forbids:
+two answers to one question is a disagreement only you can settle. The name is
+kept because it is the one an operator types daily, so typing it still lands on
+the surface that answers now.
 
 ```sh
-./bin/yoyo-status          # follow the newest of any kind
-./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
-./bin/yoyo-status -c       # report the last 7 days of spend, by day and in total
-./bin/yoyo-status -c 30    # report that many days instead of 7
+./bin/yoyo-status            # the same thing as: yoyo status
+./bin/yoyo-status --failed   # every argument is passed on unchanged
 ```
 
-A conversation and a branch review each record the same kind of event stream a
-run does, and "is this alive" is the same question asked of all three, so every
-mode covers all of them and the default never asks which kind you meant.
-Selecting one by id or by a unique id prefix works the same for each. `--runs`,
-`--chats`, and `--reviews` narrow it to one kind when that is what you want.
+The id it takes is a work item's rather than a run's or a conversation's, which
+is the one thing that changed shape: naming a run or a chat by an id prefix was
+this script's own way of selecting a stream, and there is no stream to select.
 
-An [exchange](conversation.md#roles-asking-each-other-things) is the fourth thing
-priced and the only one that is never followed: its record is the thread itself,
-revised as it goes, rather than a stream of events, so it appears in the cost
-report and in no other mode. Naming one by id prices it like anything else, and
-each of the three flags above narrows it out along with the kinds they exclude.
+Its own flags are gone, and typing one says so and says what answers that
+question now rather than failing with an unknown flag:
 
-A run's listed status is the status it recorded. A conversation has no such
-record of its own, so its status is derived and says what an operator is
-actually asking: `answering` while an agent is working on a turn, `waiting`
-between turns, and `ended` once the role has moved on to a later conversation. A
-branch review has no state file either — its verdicts share one log rather than
-having a record each — so its status comes from its own events: `reviewing`
-while the verdict is being made, and `reviewed` once it has been.
+- `-l` is answered by
+  [`yoyo status`](#what-became-of-the-runs-and-what-remains-of-them), which
+  reads back every run — one still in flight included, with the phase it has
+  reached, how long it has been going, and what it has spent so far — and names
+  the conversations with a turn in flight on
+  [its *Working* line](#where-the-harness-stands-the-four-lines). Branch reviews
+  it does not list.
+- `-c` is answered by [`yoyo cost`](reporting.md#what-the-work-cost), which
+  prices each work item from the runs made for it and carries what the roles
+  spent asking each other on a row of their own.
 
-Every mode leads with a PAUSED banner while
-[activity is paused](#pausing-everything-and-resuming-it), naming when the pause
-was placed: a quiet machine somebody paused and a quiet machine that died look
-identical, and this is the one place an operator is already looking.
+**Two things it did are done by nothing now, and are worth knowing before you
+look for them.** It followed an event stream as the events arrived, which is the
+closest thing there was to watching an agent work; `yoyo status` reads the
+records back and does not follow. And it priced conversations and branch reviews
+beside runs, grouped by the day the money was spent on; `yoyo cost` prices work
+items and exchanges, so what a conversation turn or a branch review cost is
+recorded but is no longer reported by any surface. Folding both into the binary
+is `yoyodyne-ifd.63`, which is blocked rather than landed.
 
-It resolves the state directory the same way the harness does, so it keeps
-working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
-of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is every run, every conversation, every
-branch review, and every exchange, and a mixed total says how much of it was
-each — a conversation turn, a branch review, and a round of one role asking
-another something are each a provider invocation like any other, and leaving any
-of them out understated every total it belonged in. An exchange counts each round
-on the day it was answered, so a thread that ran over two days lands in both of
-their totals; its record keeps what the provider charged and not what it used, so
-its rows say nothing in the token columns rather than saying none. An exchange
-record that cannot be read is counted and named under the report rather than
-dropped: every exchange beside it is still priced, and the total it is missing
-from is marked `≥`. [`yoyo cost`](reporting.md#what-the-work-cost) answers the
-same way for the same record — it counts it in the ask row's `unpriced` column,
-prices the rest, and marks its own total — because two surfaces disagreeing about
-what an unknown figure is would be a disagreement only you could settle.
-
-The rows are grouped by the local-timezone day the money was spent on, each
-day's group closing with that day's spend and today's group coming last: what an
-operator budgets against is what today cost, and the day they mean is the one
-their own clock is keeping. What counts on a day is each invocation rather than
-the log it was recorded in, so a conversation that has been open for a fortnight
-appears under today for the turn it was asked this morning and under each
-earlier day it spent on — one row per day it spent, each with the shape a row
-has always had. A report covers the last seven such days, today counting as the
-first of them. A number asks for a different count — `-c 30` — and naming a run,
-a conversation, a review, or an exchange prices that one whatever day it ran on,
-because an id has already chosen what to show; an id prefix that is all digits
-has to carry its `run-`, `chat-`, `review-`, or `exchange-` prefix to be read as
-an id rather than as a count of days. A window with nothing in it says so and
-says since when, rather than reading like a machine that spent nothing.
-
-[`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
-item the runs were for, which is what answers "what did that piece of work
-cost"; it leaves conversations and branch reviews out of the *items*, deliberately
-and for the same reason — a conversation that discussed five items, and a review
-of a branch that carried a dozen, cannot be attributed to any one of them. What it
-does not leave out of its total is what the roles spent asking each other, which
-sits on a row of its own above it.
-
-[`scripts/yoyo-status-test.sh`](../scripts/yoyo-status-test.sh) checks these claims
-against a fabricated state directory holding runs, conversations, branch reviews,
-and exchanges, without a provider or a repository and without reading your real
-state. `make test` runs it, so the tool is held to them by the same command as
-everything else in the repository rather than by one somebody remembers.
+[`scripts/yoyo-status-test.sh`](../scripts/yoyo-status-test.sh) checks that the
+wrapper delegates, that a retired flag says where its capability went, and that
+no derivation has crept back into it. It stubs `yoyo` rather than building one,
+so it needs no provider, no repository, and never reads your real state. `make
+test` runs it, so the tool is held to this by the same command as everything else
+in the repository rather than by one somebody remembers.
