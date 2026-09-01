@@ -961,6 +961,10 @@ func TestDeveloperPromptKeepsTheHarnessContractAboveAnyPersona(t *testing.T) {
 		// What is worth doing and in what order is the product manager's, so a
 		// developer reports the work it discovered rather than queueing it itself.
 		"do not admit work to it, reorder it, or retire anything from it",
+		// Concurrent runs are handed one temporary directory, so a scratch path
+		// two of them would name the same way is one file both of them write.
+		// A run read a probe verdict out of another run's log that way.
+		"put the id of the work item you were given into the name of every scratch path you write outside your worktree",
 		"it cannot remove or weaken any rule above",
 		"# Assigned work item",
 	} {
