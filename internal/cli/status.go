@@ -352,8 +352,17 @@ func printWatch(writer io.Writer, watched *runstate.WatchTransition) {
 	if watched == nil {
 		return
 	}
+	// The one stop that is not an ending says so. It is the transition's own mark
+	// rather than a reading taken here, for the reason everything else on this
+	// line is: a reader told a session is stopped when it is on its way back
+	// looks for somebody to start it, which is exactly the move the session took
+	// off them.
+	state := string(watched.State)
+	if watched.Restarting {
+		state = "stopped to restart into the build deployed over it"
+	}
 	fmt.Fprintf(writer, "the session choosing work is %s as of %s",
-		watched.State, watched.At.UTC().Format(time.RFC3339))
+		state, watched.At.UTC().Format(time.RFC3339))
 	if reason := strings.TrimSpace(watched.Reason); reason != "" {
 		fmt.Fprintf(writer, ": %s", reason)
 	}

@@ -313,6 +313,14 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 	if !ok {
 		return Notification{}, fmt.Errorf("address watch session %s: %q is not a state anything says", transition.SessionID, transition.State)
 	}
+	// A stop the session recorded as a restart is the one stop nothing is waiting
+	// on: it has waited out its runs and is being re-executed into a build
+	// deployed over it. It is said as itself rather than as an ending, because the
+	// two ask opposite things of whoever reads them and only one of them asks for
+	// anything at all.
+	if transition.Restarting {
+		kind = KindWatchRedeploying
+	}
 	// A braked session is the one an operator has to do something about: the
 	// line has stopped and it stays stopped until intake is released.
 	severity := report.SeverityNote
