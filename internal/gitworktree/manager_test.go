@@ -807,6 +807,97 @@ func TestManagerChangedPathsSeesWhatAnAttemptAlreadyCommitted(t *testing.T) {
 	}
 }
 
+func TestManagerUnifiedChangesSeesWhatAnAttemptAlreadyCommitted(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-committed-diff", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "README.txt", "test\nedited\n")
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	// Publishing commits each attempt, so the change a reviewer is handed is
+	// measured against the base commit and not against the index: a patch
+	// collected the other way is empty here while the branch carries the work,
+	// which is the review this repository ran on nothing and then diagnosed.
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: published attempt")
+	// And the attempt that followed it, still uncommitted. The change is both
+	// halves together; either one alone is not what would be promoted.
+	writeFile(t, worktree.Path, "later.txt", "still working\n")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	for _, want := range []string{
+		"diff --git a/README.txt b/README.txt",
+		"+edited",
+		"diff --git a/feature.txt b/feature.txt",
+		"+implemented",
+		"diff --git a/later.txt b/later.txt",
+		"+still working",
+	} {
+		if !strings.Contains(changes.Patch, want) {
+			t.Errorf("patch over a committed attempt is missing %q:\n%s", want, changes.Patch)
+		}
+	}
+	for _, want := range []string{"M README.txt", "A feature.txt", "?? later.txt"} {
+		if !strings.Contains(changes.Status, want) {
+			t.Errorf("status = %q, want it to name %q", changes.Status, want)
+		}
+	}
+	if !strings.Contains(changes.DiffStat, "feature.txt") {
+		t.Errorf("diff stat = %q, want the committed file", changes.DiffStat)
+	}
+	// The commits are described only where the change over the base is nothing,
+	// and this change is plainly something.
+	if len(changes.CommitsWithoutEffect) != 0 {
+		t.Errorf("commits without effect = %#v, want none beside a change", changes.CommitsWithoutEffect)
+	}
+}
+
+func TestManagerUnifiedChangesNamesCommittedWorkThatLeavesTheBaseUnchanged(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-undone", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	harnessCommit(t, worktree.Path, "yoyodyne: first attempt")
+	// The attempt that undid it, published exactly as the one before it was. The
+	// branch carries both commits and the change over the base is nothing.
+	if err := os.Remove(filepath.Join(worktree.Path, "feature.txt")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: reverted attempt")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if changes.Patch != "" || changes.Status != "" {
+		t.Fatalf("changes = %#v, want an empty change over the base", changes)
+	}
+	if len(changes.CommitsWithoutEffect) != 2 {
+		t.Fatalf("commits without effect = %#v, want the two commits above the base", changes.CommitsWithoutEffect)
+	}
+	// Oldest first, and each one named by what it claimed to do, so a reader can
+	// tell an undone change from evidence that was never collected.
+	if changes.CommitsWithoutEffect[0].Subject != "yoyodyne: first attempt" ||
+		changes.CommitsWithoutEffect[1].Subject != "yoyodyne: reverted attempt" {
+		t.Fatalf("commits without effect = %#v, want them oldest first", changes.CommitsWithoutEffect)
+	}
+	if changes.CommitsWithoutEffect[1].Commit != worktree.HarnessCommit {
+		t.Fatalf("last described commit = %q, want the recorded harness commit %q",
+			changes.CommitsWithoutEffect[1].Commit, worktree.HarnessCommit)
+	}
+}
+
 func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 	t.Parallel()
 
@@ -1081,6 +1172,19 @@ func linkedWorktreePaths(t *testing.T, repository string) []string {
 		paths = append(paths, path)
 	}
 	return paths
+}
+
+// harnessCommit commits everything in a worktree the way publishing does, under
+// the harness identity, and reports the commit it made — which is what durable
+// run state records and what the ownership check then permits HEAD to be.
+func harnessCommit(t *testing.T, worktreePath, message string) string {
+	t.Helper()
+	runGit(t, worktreePath, "add", "--all")
+	runGit(t, worktreePath,
+		"-c", "user.name="+harnessCommitAuthorName,
+		"-c", "user.email="+harnessCommitAuthorEmail,
+		"commit", "-m", message)
+	return gitLine(t, worktreePath, "rev-parse", "HEAD")
 }
 
 func runGit(t *testing.T, repository string, args ...string) {

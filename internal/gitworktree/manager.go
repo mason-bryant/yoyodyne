@@ -284,8 +284,10 @@ type DiffLimits struct {
 	// already rendered together and remain bounded by MaxTotalBytes.
 	MaxFiles int
 	// MaxCommits bounds how many commits of an accumulated change are described.
-	// A worktree's change is described against one base commit and has no
-	// history of its own, so this bounds a branch-scope change only.
+	// A worktree's change is measured against one base commit rather than read
+	// out of its history, so this bounds a branch-scope change and the one place
+	// a worktree's own commits are described: a change that leaves the base
+	// unchanged while commits sit above it.
 	MaxCommits int
 }
 
@@ -301,6 +303,13 @@ type ChangeDiff struct {
 	UntrackedFiles []string `json:"untracked_files,omitempty"`
 	OmittedFiles   []string `json:"omitted_files,omitempty"`
 	Truncated      bool     `json:"truncated"`
+	// CommitsWithoutEffect are the commits the worktree carries over its base
+	// where the change against that base is nothing: work an attempt committed
+	// and a later attempt undid. It is filled in that case alone, because that
+	// is the only case where an empty patch says nothing about why — everywhere
+	// else the patch is what the commits did, and listing them beside it would
+	// describe the same change twice.
+	CommitsWithoutEffect []Commit `json:"commits_without_effect,omitempty"`
 }
 
 var (
@@ -596,12 +605,17 @@ func (m *Manager) ChangedPaths(ctx context.Context, worktree Worktree) ([]string
 // untracked, as one bounded patch. It only reads: the untracked half is built
 // from `git diff --no-index` rather than from a staged index, so inspecting a
 // worktree never changes what the developer left behind.
+//
+// Every part of it is measured against the recorded base commit rather than
+// against the index, for the reason the summary beside it is: publishing commits
+// each attempt, so a patch built from what happens to be uncommitted would hand
+// a reviewer an empty change and a published branch full of work.
 func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits DiffLimits) (ChangeDiff, error) {
 	limits, err := limits.resolve()
 	if err != nil {
 		return ChangeDiff{}, err
 	}
-	path, _, err := m.verifyOwnedHead(ctx, worktree)
+	path, head, err := m.verifyOwnedHead(ctx, worktree)
 	if err != nil {
 		return ChangeDiff{}, err
 	}
@@ -650,6 +664,25 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 		changes.UntrackedFiles = append(changes.UntrackedFiles, relative)
 	}
 	changes.Patch = patch.String()
+
+	// An empty change over the base is evidence only once it says what the
+	// commits above that base did. A published attempt's work lives in commits
+	// here, so an empty patch under a HEAD that has moved reads two ways — a
+	// change made and then undone, or a change the assembly failed to collect —
+	// and a reviewer with no way to tell them apart reads the second, which is
+	// the report yoyodyne-ifd.236 was filed on. The commits are described the way
+	// a branch review describes its own, because it is the same question about
+	// the same thing.
+	//
+	// A truncated change is left alone: a patch the bounds emptied is not a change
+	// that came to nothing, and the reviewer is already told which of those it has.
+	if head != worktree.BaseCommit && changes.Patch == "" && !changes.Truncated &&
+		len(changes.UntrackedFiles) == 0 && len(changes.OmittedFiles) == 0 {
+		changes.CommitsWithoutEffect, err = m.describeCommits(ctx, worktree.BaseCommit, head, limits.MaxCommits)
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+	}
 	return changes, nil
 }
 
