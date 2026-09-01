@@ -670,9 +670,44 @@ question about one piece of work is a different question. `--json` carries the
 same derivation under `standing`, so a second surface reads the answer rather
 than parsing the rendering.
 
+## When nothing happened at all
+
+Under the four lines, `yoyo status` reads back every stretch in which this
+product went quiet: nothing started at all, while the tracker reported work
+ready, and no hold, no full machine and no run in flight accounted for it.
+
+```text
+nothing started on this product for 7h30m0s from 2026-09-01T06:05:00Z, with 3 items ready; it cleared at 2026-09-01T13:35:00Z
+  the session choosing work last recorded watching at 2026-09-01T06:05:00Z, and has said nothing since
+  cleared by: 1 developer run(s) are in flight
+```
+
+The second line is the one to act on. A stall cannot say why it happened —
+it is precisely the absence of anything having been written down — so what is
+recorded beside it is the last thing the watch log holds, and that is what tells a
+scheduler that died from one that is wedged: a session whose last word was
+`stopped` wants starting, and one still claiming to be `watching` wants killing
+first.
+
+This is the one history in the harness that nothing else keeps, and the reason it
+exists is that the process which would have recorded a stall is the process a
+stall means has died. A session that crashes writes no stop, so every other
+surface reads a dead machine as a quiet one — which is exactly what happened on
+2026-09-01, for seven and a half hours, until a person noticed. What notices now
+is the Slack sink's own loop, which outlives the scheduler; it records the stall
+and
+[sends it as a direct message once](reporting.md#reporting-into-slack),
+never once per check. A product with no sink running records nothing, so this
+listing is empty on one.
+
+A product that has never gone quiet says nothing here at all. The five most
+recent stalls are printed, newest first, and `--json` carries every one of them
+under `stalls`; naming an item leaves them out, because a stall is about the
+product rather than about any piece of work.
+
 ## What became of the runs, and what remains of them
 
-Under the four lines, `yoyo status` reads back what the runs themselves recorded
+Under the stalls, `yoyo status` reads back what the runs themselves recorded
 — newest first, the work item, the outcome and the phase the run reached, what
 remains of it, what it cost, why the item was chosen, and the reasons its record
 kept:

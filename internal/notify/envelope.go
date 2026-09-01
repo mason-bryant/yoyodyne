@@ -169,6 +169,21 @@ const (
 	// bugs that were fixed on the main line hours earlier — which reads as an agent
 	// failing rather than as a process nobody restarted.
 	KindResidentStale Kind = "resident.stale"
+	// The harness having started nothing at all while work was ready to start.
+	// It is the opposite reading from the line above it: that one is derived from
+	// a record something wrote about itself, and this one from the absence of any
+	// such record — nothing has started since a moment the runs themselves date,
+	// and nothing accounts for it. That is why it exists separately. A scheduler
+	// that crashes writes no stop and a wedged one goes on claiming to watch, so
+	// the state where everything has quietly gone dead is precisely the state no
+	// process is left to announce; on 2026-09-01 it ran seven and a half hours and
+	// was found by a person rather than by anything here.
+	//
+	// It is said once per stall rather than again while it stands. The repetition
+	// the line above needs is for a state somebody may have to sit with; this one
+	// is either acted on or it is not, and the durable stall record is what makes
+	// once mean once across restarts.
+	KindStallNoticed Kind = "stall.noticed"
 	// What one topic gathered while nothing was posting it. Every kind above is
 	// something the record says happened; this one is what a surface does with a
 	// backlog it cannot say one message at a time — a long gap replayed in full
@@ -228,6 +243,7 @@ func Kinds() []Kind {
 		KindWatchRedeploying,
 		KindLineWaiting,
 		KindResidentStale,
+		KindStallNoticed,
 		KindCatchUpDigest,
 	}
 }
@@ -248,7 +264,7 @@ func (k Kind) Valid() bool {
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
-		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindCatchUpDigest:
+		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -597,6 +613,14 @@ type Detail struct {
 	// the event's own moment rather than carried as a phrase, because a state
 	// that is said again every hour has a different age every time it is said and
 	// a timestamp a reader has to subtract from is not the fact they need.
+	//
+	// All three are read again by KindStallNoticed, where they say the same three
+	// facts about the opposite reading: what the record last said about the thing
+	// that chooses work, the moment the harness last started anything, and how
+	// much was ready through the silence that followed. They are the same fields
+	// rather than a second set because a reader is being told one thing — nothing
+	// is happening, since when, over how much — and two vocabularies for it would
+	// be two ways to say it differently.
 	//
 	// Since is read a second time by KindCatchUpDigest, where it is the first of
 	// the events the digest stands for: the same subtraction against the event's

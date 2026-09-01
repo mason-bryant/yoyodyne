@@ -644,8 +644,12 @@ type testHarness struct {
 	since time.Time
 	// now is when the feed thinks it is. It moves, because what the sink says
 	// about a state rather than an event depends on how long that state has stood.
-	now     time.Time
-	feed    *HarnessFeed
+	now  time.Time
+	feed *HarnessFeed
+	// root is the state root every store below is rooted at, kept so a test that
+	// needs a store the harness does not build by default can open one beside
+	// them rather than in a directory of its own.
+	root    string
 	runs    *runstate.Store
 	chats   *runstate.ConversationStore
 	reports *runstate.ReportStore
@@ -707,6 +711,7 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 	}
 	harness := &testHarness{
 		since:      since,
+		root:       root,
 		now:        moment.Add(time.Hour),
 		runs:       runs,
 		chats:      chats,
