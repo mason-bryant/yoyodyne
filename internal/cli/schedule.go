@@ -496,6 +496,16 @@ And what the session is doing -- watching, idle, braked, resumed, stopped -- is
 recorded where "yoyo status" and the Slack sink read it, because an idle session
 and a dead one are otherwise the same silence.
 
+A reading of the harness that fails does not end a watching session. The tracker
+is a store a reconcile and every settling run write to, so a reading that fails
+is usually contention: the session waits and reads it again, two seconds doubling
+to thirty, and stops only once the readings have gone on failing for five
+minutes, saying how long it tried. What it rode through is reported on the pass
+and said in the watch log while it happens. A drain stops on the first one, and
+so does either kind of pass on a pull that assembles and is unusable -- a
+capacity of zero, a --budget with nothing to price it -- which is a decision
+about the configuration rather than a reading that failed.
+
 A watching session also takes up a build deployed over it. When the yoyo it is
 running is written over -- installed, rebuilt -- it stops choosing, waits out
 every run it already started, and restarts into what was deployed. A run in

@@ -353,6 +353,23 @@ doing — watching, idle, braked, resumed, stopped — where `yoyo status` and t
 Slack sink read it, because an idle session and a dead one are otherwise the same
 silence.
 
+**A reading of the harness that fails does not end the session.** The tracker is
+a database a reconcile and every settling run write to, so a reading that fails
+is contention far more often than it is a store that is broken. The one that
+ended a session on 2026-09-01 succeeded again in 0.4s a few minutes later, and
+what it cost was the session: it stopped on that single reading, and the queue
+sat idle until an external job noticed the process was gone. So a watching
+session waits and reads again — two seconds, then four, doubling to thirty — and
+stops only once the readings have gone on failing for five minutes, saying how
+long it tried and what the last failure was. What it rode through is on the pass
+it returns and in the watch log while it is happening, because a reading that
+succeeds on the second attempt leaves nothing at all behind. A drain does none of
+this: it is a command you are waiting on the return of, and one that slept
+through an outage would be one that hung. A pull that is assembled and unusable —
+a capacity of zero, a `--budget` with nothing to price it — is a decision about
+the configuration rather than a reading that failed, and stops either kind of
+pass at once.
+
 **A watching session takes up a build deployed over it.** A session runs the
 binary it was started from, so every fix that lands behind it is a fix the work
 it dispatches is spent without — which reads as agents failing rather than as a

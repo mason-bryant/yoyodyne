@@ -1436,6 +1436,114 @@ func TestWatchingRefusesAPullWithNoInterval(t *testing.T) {
 	}
 }
 
+// --- readings of the harness that fail ------------------------------------------
+
+// contendedStore is the reading that ended a session on 2026-09-01: the tracker
+// refusing a listing while something else was writing to the same store, which
+// succeeded again minutes later.
+const contendedStore = "bd list failed with status cancelled and exit code -1"
+
+// The observed sequence, replayed: one tracker reading fails and the next one
+// succeeds. The session used to exit on the first of those and leave the queue
+// to an external job; it now waits, reads again, pulls the work, and says that
+// it did.
+func TestWatchingReadsTheHarnessAgainAfterAReadingThatFails(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	sessions := &recordedSessions{}
+	harness.failList = func(_ *scheduleHarness, lists int) error {
+		if lists == 1 {
+			return errors.New(contendedStore)
+		}
+		return nil
+	}
+	// The first wait is the retry and the session carries on; the second is the
+	// drained queue after the item ran, which is where the operator stops it.
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 2 }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v, want a contended reading ridden through", err)
+	}
+	if schedule.Stopped != ScheduleCancelled {
+		t.Fatalf("stopped = %q, want the session ended by its operator rather than by one failed reading", schedule.Stopped)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-one" {
+		t.Fatalf("started = %#v, want the work pulled at the reading that succeeded", schedule.Started)
+	}
+	if schedule.ReadsRetried != 1 || !strings.Contains(schedule.ReadProblem, contendedStore) {
+		t.Fatalf("schedule = %d retried, problem %q, want the one failed reading counted and named", schedule.ReadsRetried, schedule.ReadProblem)
+	}
+	if rendered := schedule.Render(); !strings.Contains(rendered, "1 reading(s) of the harness failed and were made again") {
+		t.Fatalf("rendered = %q, want the reading it rode through reported", rendered)
+	}
+	// The session says it while it is happening, not only in the report it
+	// returns when it is over: a session nobody is sitting at is read from the
+	// watch log or not at all.
+	if said := sessions.said(runstate.WatchIdle); !strings.Contains(said, contendedStore) || !strings.Contains(said, "read again") {
+		t.Fatalf("the session said %q while it retried, want the failed reading and that it is being made again", said)
+	}
+}
+
+// A store that stays unreadable is not contention, and the session stops on it —
+// saying how long it went on failing, which is the whole of what tells an
+// operator which of the two they are looking at.
+func TestWatchingStopsOnceTheHarnessGoesOnBeingUnreadable(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	sessions := &recordedSessions{}
+	harness.failList = func(*scheduleHarness, int) error { return errors.New(contendedStore) }
+	// The operator never stops this one: what ends it is the window, and a session
+	// that did not have one would back off here forever.
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 100 }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err == nil || !strings.Contains(err.Error(), contendedStore) {
+		t.Fatalf("Schedule() error = %v, want the store that would not be read reported", err)
+	}
+	if schedule.Stopped != ScheduleUnreadable {
+		t.Fatalf("stopped = %q, want the unreadable harness named", schedule.Stopped)
+	}
+	if !strings.Contains(err.Error(), "5m0s") {
+		t.Fatalf("Schedule() error = %v, want it to say how long the session tried", err)
+	}
+	if schedule.ReadsRetried < 2 {
+		t.Fatalf("retried = %d, want a session that tried again rather than stopping on the first reading", schedule.ReadsRetried)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want nothing pulled from a queue that was never read", schedule.Started)
+	}
+	// The duration travels with the stop into the log, because the reader who has
+	// to tell a broken store from one bad minute is not at this terminal.
+	if said := sessions.said(runstate.WatchStopped); !strings.Contains(said, "5m0s") {
+		t.Fatalf("the session stopped saying %q, want how long it tried", said)
+	}
+}
+
+// A drain does not wait any of that out. It is a command somebody is waiting on
+// the return of, and one that slept through an outage would be one that hung.
+func TestADrainStopsOnTheFirstReadingThatFails(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.failList = func(*scheduleHarness, int) error { return errors.New(contendedStore) }
+
+	schedule, err := (Scheduler{Open: harness.open, Sleep: harness.sleep, Now: harness.clock}).Schedule(context.Background())
+	if err == nil || !strings.Contains(err.Error(), contendedStore) {
+		t.Fatalf("Schedule() error = %v, want the failed reading reported at once", err)
+	}
+	if schedule.Stopped != ScheduleUnreadable || schedule.ReadsRetried != 0 {
+		t.Fatalf("schedule = stopped %q after %d retried reading(s), want a drain that did not wait", schedule.Stopped, schedule.ReadsRetried)
+	}
+	if harness.sleeps != 0 {
+		t.Fatalf("the drain waited %d time(s), want none", harness.sleeps)
+	}
+}
+
 // --- redeploying ---------------------------------------------------------------
 
 // The whole of what a session redeploying itself is: a build lands over the one
@@ -1695,6 +1803,16 @@ type scheduleHarness struct {
 	// made, which is how a test changes the configuration under a running
 	// scheduler.
 	onPull func(*scheduleHarness, int)
+	// failList decides whether a tracker listing fails, with the number of
+	// listings already made. It stands in for the store contention a reconcile or
+	// a settling run makes, which is a reading that fails and then does not.
+	lists    int
+	failList func(*scheduleHarness, int) error
+	// now is the clock a watching session stamps its retries against. The fake
+	// sleep below advances it by exactly the interval it was asked to wait, so a
+	// test that drives a session through a store outage spends no real time
+	// reaching the window the session gives up at.
+	now time.Time
 	// run stands in for the pipeline. The default completes the item; a test
 	// that cares about a refusal or a failure replaces it.
 	run func(*scheduleHarness, string) (Outcome, error)
@@ -1722,6 +1840,9 @@ func newScheduleHarness(items ...beads.WorkItem) *scheduleHarness {
 		prices:     map[string]float64{},
 		capacity:   1,
 		gate:       make(chan struct{}),
+		// The morning the session that provoked the retry died, so a test reading
+		// its own timings reads the ones in the report.
+		now: time.Date(2026, 9, 1, 5, 40, 0, 0, time.UTC),
 	}
 	for _, item := range items {
 		harness.ready[item.ID] = true
@@ -1805,10 +1926,12 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 
 // sleep stands in for waiting out a poll interval. It spends no time at all: a
 // test that wants a session to end says so by returning false, which is the
-// operator stopping it.
-func (h *scheduleHarness) sleep(context.Context, time.Duration) bool {
+// operator stopping it. The clock moves by what the wait asked for, so a session
+// backing off through an outage reaches the window it gives up at.
+func (h *scheduleHarness) sleep(_ context.Context, interval time.Duration) bool {
 	h.mu.Lock()
 	h.sleeps++
+	h.now = h.now.Add(interval)
 	sleeps, onSleep := h.sleeps, h.onSleep
 	h.mu.Unlock()
 	if onSleep == nil {
@@ -1974,7 +2097,24 @@ func (r *recordedSessions) said(state runstate.WatchState) string {
 	return ""
 }
 
+// clock is what a scheduler stamps its own timings with, moved only by the fake
+// sleep above.
+func (h *scheduleHarness) clock() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.now
+}
+
 func (h *scheduleHarness) List(_ context.Context, status string) ([]beads.WorkItem, error) {
+	h.mu.Lock()
+	h.lists++
+	lists, failList := h.lists, h.failList
+	h.mu.Unlock()
+	if failList != nil {
+		if err := failList(h, lists); err != nil {
+			return nil, err
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var matching []beads.WorkItem
