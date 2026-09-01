@@ -25,6 +25,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
@@ -97,13 +98,20 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// binary is the file this session is executing, resolved for a watch and for
 	// nothing else, and left nil where the platform cannot replace a running
 	// process.
+	//
+	// sessions is held past the block that opens it because the last thing this
+	// command may have to say about the session is said after the scheduler has
+	// returned: a stop recorded as a restart that then does not happen has to be
+	// corrected in the same log it was claimed in.
 	var binary *redeploy.Binary
+	var sessions orchestrator.WatchSessions
 	if *watch {
-		sessions, err := openWatchSession(*configPath)
+		opened, err := openWatchSession(*configPath)
 		if err != nil {
 			fmt.Fprintf(stderr, "work failed: %v\n", err)
 			return 1
 		}
+		sessions = opened
 		scheduler.Sessions = sessions
 		// Which file this process was started from, read before anything runs. A
 		// watching session outlives the deploys that land behind it, and this is
@@ -132,6 +140,29 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if !schedule.Redeploying() || binary == nil {
 		return code
 	}
+	return takeUpTheDeploy(binary, sessions, stderr, code, *budget, schedule.SpentUSD, *limit, len(schedule.Started))
+}
+
+// deployedBinary is what taking up a deploy needs of the file this session is
+// executing: the invocation to carry across, and the re-execution itself. It is
+// an interface so that the half of this which only happens when the restart does
+// not is reachable from a test — a re-execution that works never returns, so the
+// failures are the only part of it a test can ever observe.
+type deployedBinary interface {
+	Args() []string
+	Take([]string) error
+}
+
+// takeUpTheDeploy is everything the command does after the scheduler has stopped
+// the session in order to become the build deployed over it. It returns only
+// where the restart did not happen, with the code the command exits on.
+//
+// Both of its refusals correct the durable record before returning. The stop is
+// already in the watch log marked as a restart — the scheduler writes it as it
+// stops, which is the only moment there is, because a re-execution that works
+// never comes back to write anything — so a refusal that said nothing would
+// leave every surface telling a reader that a stopped line is on its way back.
+func takeUpTheDeploy(binary deployedBinary, sessions orchestrator.WatchSessions, stderr io.Writer, code int, budget, spent float64, limit, started int) int {
 	// A bounded session arrives here with something left of both its bounds: what
 	// it has spent and how many runs it has started are checked at the top of
 	// every pull, ahead of the redeploy, so a bound that is gone stops the session
@@ -142,8 +173,9 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// invoked with a negative budget refuses to start and takes the line down,
 	// and a build invoked with "--limit 0" starts an unbounded session, which is
 	// the operator's cap disappearing with nobody told.
-	if spent := exhausted(*budget, schedule.SpentUSD, *limit, len(schedule.Started)); spent != "" {
-		fmt.Fprintf(stderr, "work stopped to restart into the build deployed over it, and did not: %s\n", spent)
+	if gone := exhausted(budget, spent, limit, started); gone != "" {
+		fmt.Fprintf(stderr, "work stopped to restart into the build deployed over it, and did not: %s\n", gone)
+		endedInstead(sessions, stderr, "the session stopped to restart into the build deployed over it and did not: "+gone)
 		return code
 	}
 	// Every run this session started has already ended, and the queue has been
@@ -151,11 +183,46 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// was deployed: the account of the session that just ended has been printed,
 	// and nothing returns from this when it works — the process goes on as the new
 	// build, watching the same queue under what is left of the same bounds.
-	if err := binary.Take(continued(binary.Args(), *budget, schedule.SpentUSD, *limit, len(schedule.Started))); err != nil {
+	if err := binary.Take(continued(binary.Args(), budget, spent, limit, started)); err != nil {
 		fmt.Fprintf(stderr, "work stopped to restart into the build deployed over it, and could not: %v\n", err)
+		endedInstead(sessions, stderr, fmt.Sprintf("the session stopped to restart into the build deployed over it and could not: %v", err))
 		return 1
 	}
 	return code
+}
+
+// endedInstead corrects the durable account of a session that stopped in order
+// to restart and then did not.
+//
+// The claim it corrects is not a mistake, and it cannot be avoided by writing it
+// later: a restart that works never returns, so the moment the session stops is
+// the only moment there is to record why. What that costs is this window — the
+// stop is already in the log marked as a restart, and both refusals below it
+// leave the process exiting with the log saying it is coming back. Every reader
+// who is not at this terminal would be told a stopped line needs nothing from
+// them, which is precisely the standing chore the self-redeploy exists to end
+// rather than to reproduce in a rarer place.
+//
+// So the correction is a second stop, marked as the ending it turned out to be
+// and carrying why. The log is append-only and read forward, so what the
+// surfaces get is the same shape as every other correction here: the line that
+// said the session was coming back, and then the line saying it is not.
+//
+// A correction that cannot be written costs the session its visibility and not
+// its work, exactly as the transitions the scheduler writes do, so it is said
+// here rather than turned into a second failure of a process that has already
+// stopped.
+func endedInstead(sessions orchestrator.WatchSessions, stderr io.Writer, why string) {
+	if sessions == nil {
+		return
+	}
+	if err := sessions.Record(orchestrator.SessionState{
+		State:  runstate.WatchStopped,
+		At:     time.Now().UTC(),
+		Reason: why,
+	}); err != nil {
+		fmt.Fprintf(stderr, "the session could not record that it ended rather than restarting, so the log still says it is coming back: %v\n", err)
+	}
 }
 
 // exhausted names a bound a session has nothing left of, and says nothing for a
@@ -440,9 +507,12 @@ you to start one. The queue is re-read from scratch on the way back in, exactly 
 is at every poll, and the bounds you gave the session cross the restart reduced
 to what is left of them -- --budget less what it has spent, --limit less what it
 has started -- so a deploy never hands a bounded session its cap back. A session
-that has reached either bound stops on it rather than restarting. A platform that
-cannot replace a running process says so when the session opens, and that session
-watches without this and is restarted by hand for a deploy.
+that has reached either bound stops on it rather than restarting, and a restart
+that does not happen -- a bound with nothing left of it, a re-execution the
+operating system refuses -- is recorded as the ending it turned out to be, so
+neither surface is left saying a stopped session is on its way back. A platform
+that cannot replace a running process says so when the session opens, and that
+session watches without this and is restarted by hand for a deploy.
 
 --budget fails closed. A pass with no way to price itself is refused before
 anything starts, and a session that meets a run whose recorded evidence will not

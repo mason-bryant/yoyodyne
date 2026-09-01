@@ -353,6 +353,13 @@ and restarts into what you deployed. That stop is recorded as a restart rather
 than as an ending, so `yoyo status` and the Slack sink say a session is coming
 back on the new build instead of telling you to start one.
 
+A restart has to be recorded before it is known to have happened, because one
+that works never comes back to record anything. So on the rare occasion it does
+not happen — the operating system refuses the re-execution, or a bound turns out
+to have nothing left of it — the session writes a second stop saying it ended
+after all, and both surfaces correct themselves. What you never get is a stopped
+line that both places tell you needs nothing from you.
+
 Nothing outside the process could do that. Killing a session cancels the run it
 is carrying, so an external job may only bounce it while nothing is running; with
 two developer slots and a deep queue the next run starts the moment one settles,

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -225,6 +226,113 @@ func TestARemainderUnderACentIsStillABound(t *testing.T) {
 	}
 }
 
+// A restart that does not happen leaves nothing in the log saying the session is
+// coming back.
+//
+// The stop is marked as a restart before the restart is known to happen, and it
+// has to be: a restart that works never returns to write anything, so the moment
+// the session stops is the only moment there is. Both branches that then decline
+// to re-execute -- a bound with nothing left of it, and a re-execution the
+// operating system refuses -- correct that claim in the same log, rather than
+// exiting on a line of stderr that only whoever is at the terminal ever reads.
+func TestARestartThatDoesNotHappenLeavesNoRecordSayingTheSessionIsComingBack(t *testing.T) {
+	// Not parallel: the state root the log is written under is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	sessions, err := openWatchSession(configPath)
+	if err != nil {
+		t.Fatalf("openWatchSession() error = %v", err)
+	}
+	// The scheduler's own last line, exactly as it writes it: a stop that says the
+	// session is on its way back.
+	if err := sessions.Record(orchestrator.SessionState{
+		State:      runstate.WatchStopped,
+		At:         time.Now().UTC(),
+		Reason:     orchestrator.ScheduleRedeployed,
+		Restarting: true,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	// The operating system refusing the re-execution, which is the case the
+	// redeploy package's own tests reach for real: a replaced image that is not
+	// executable, a path that went away between the stat and the exec.
+	refused := &refusedRestart{args: []string{"/usr/local/bin/yoyo", "work", "--watch"}}
+	var said strings.Builder
+	if code := takeUpTheDeploy(refused, sessions, &said, 0, 0, 0, 0, 0); code != 1 {
+		t.Fatalf("takeUpTheDeploy() = %d, want the failed restart to fail the command", code)
+	}
+	if !strings.Contains(said.String(), "could not") {
+		t.Fatalf("stderr = %q, want whoever is at the terminal told the restart did not happen", said.String())
+	}
+
+	watch, err := runstate.NewWatchStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewWatchStore() error = %v", err)
+	}
+	latest, found, err := watch.Latest()
+	if err != nil {
+		t.Fatalf("Latest() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("Latest() found nothing, want the correction the command recorded")
+	}
+	if latest.State != runstate.WatchStopped || latest.Restarting {
+		t.Fatalf("latest = %#v, want a stop that is an ending rather than one claiming a restart", latest)
+	}
+	if !strings.Contains(latest.Reason, "could not") {
+		t.Fatalf("reason = %q, want it to say why the restart did not happen", latest.Reason)
+	}
+	// The claim it corrects stays where it was. The log is append-only and read
+	// forward, so what a surface gets is the line saying the session is coming
+	// back and then the line saying it is not -- rather than a rewritten history
+	// in which the claim was never made.
+	recorded, err := watch.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 || !recorded[0].Restarting {
+		t.Fatalf("recorded = %#v, want the restart claim kept and the ending appended after it", recorded)
+	}
+
+	// The other refusal: a bound with nothing left of it, which declines the
+	// restart before the re-execution is attempted at all. It leaves the same
+	// correction behind, and the command exits on the schedule's own code rather
+	// than on a failure, because nothing failed.
+	unspent := &refusedRestart{args: []string{"/usr/local/bin/yoyo", "work", "--watch", "--budget", "50"}}
+	said.Reset()
+	if code := takeUpTheDeploy(unspent, sessions, &said, 0, 50, 50, 0, 0); code != 0 {
+		t.Fatalf("takeUpTheDeploy() = %d, want a session stopped on its bound rather than a failure", code)
+	}
+	if unspent.attempts != 0 {
+		t.Fatalf("Take() was called %d time(s), want a bound that is gone to refuse the restart before it", unspent.attempts)
+	}
+	latest, _, err = watch.Latest()
+	if err != nil {
+		t.Fatalf("Latest() error = %v", err)
+	}
+	if latest.Restarting || !strings.Contains(latest.Reason, "budget") {
+		t.Fatalf("latest = %#v, want an ending naming the bound that refused the restart", latest)
+	}
+}
+
+// refusedRestart is a deployed binary whose re-execution the operating system
+// will not make. It is the only shape of this a test can observe: a Take that
+// works never returns.
+type refusedRestart struct {
+	args     []string
+	attempts int
+}
+
+func (r *refusedRestart) Args() []string { return append([]string(nil), r.args...) }
+
+func (r *refusedRestart) Take(args []string) error {
+	r.attempts++
+	return fmt.Errorf("re-execute %s: permission denied", args[0])
+}
+
 // The session's account of itself lands in the product's own watch log, under
 // an identifier nothing else is using. It is the seam between a scheduler that
 // knows nothing about products and a record that is keyed by one.
@@ -339,6 +447,66 @@ func TestStatusReportsWhereTheSessionChoosingWorkGotTo(t *testing.T) {
 	}
 	if output.Watch == nil || output.Watch.State != runstate.WatchIdle {
 		t.Fatalf("watch = %#v, want the session's state carried machine-readably too", output.Watch)
+	}
+}
+
+// `yoyo status` says the one stop that is not an ending as itself. Both of the
+// two places that read the watch log have to, and this is the other one: a
+// reader told only that the session is "stopped" goes looking for somebody to
+// start it, which is precisely the move the session took off them by restarting
+// itself.
+func TestStatusSaysAStopThatIsARestartIsNotAnEnding(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	watch, err := runstate.NewWatchStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewWatchStore() error = %v", err)
+	}
+	sessionID, err := runstate.NewWatchSessionID()
+	if err != nil {
+		t.Fatalf("NewWatchSessionID() error = %v", err)
+	}
+	at := time.Now().UTC()
+	record := func(restarting bool, reason string, when time.Time) {
+		t.Helper()
+		if err := watch.Record(runstate.WatchTransition{
+			SchemaVersion: runstate.WatchSchemaVersion,
+			ProductID:     "yoyodyne",
+			SessionID:     sessionID,
+			State:         runstate.WatchStopped,
+			At:            when,
+			Reason:        reason,
+			Restarting:    restarting,
+		}); err != nil {
+			t.Fatalf("Record() error = %v", err)
+		}
+	}
+
+	record(true, orchestrator.ScheduleRedeployed, at)
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "stopped to restart into the build deployed over it") {
+		t.Fatalf("status stdout = %q, want the stop said as a session coming back", stdout)
+	}
+
+	// The same log with an ordinary ending on the end of it reads as one. Without
+	// this the line above would pass on a command that called every stop a
+	// restart, which is the same false reassurance in the other direction.
+	record(false, "the operator stopped the session", at.Add(time.Minute))
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, "stopped to restart") {
+		t.Fatalf("status stdout = %q, want an ending said as an ending", stdout)
+	}
+	if !strings.Contains(stdout, "the session choosing work is stopped") {
+		t.Fatalf("status stdout = %q, want the session reported as stopped", stdout)
 	}
 }
 
