@@ -208,6 +208,13 @@ const providerConfigDirVariable = "CLAUDE_CONFIG_DIR"
 // reporting sink's credentials must never reach an agent's subprocess tree, and
 // the environment an invocation is given is the one place that can be true by
 // construction rather than by how somebody launched their shell.
+//
+// This is the only environment any agent process is ever given: this adapter is
+// the only one that spawns one — the declarative plugin shape is data and
+// decides nothing, and the metered wrapper delegates — so what the setup and
+// configuration documents claim about an agent never holding a token rests here
+// and nowhere else. Another adapter that spawns an agent has to come through
+// this function or repeat what it does, or those documents stop being true.
 func environmentFor(configDir string) []string {
 	environment := execution.WithoutSinkCredentials(nil)
 	if strings.TrimSpace(configDir) == "" {

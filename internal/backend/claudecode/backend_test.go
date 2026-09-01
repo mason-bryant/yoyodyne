@@ -1783,30 +1783,52 @@ func TestAnInvocationCarriesABuildCacheTheRunMayWrite(t *testing.T) {
 // environment can post as any persona in the channel. So the invocation is given
 // an environment with the two taken out of it, whatever this process holds.
 //
-// The working directory is deliberately in no repository, which is the sharper
-// case: there is no build cache to redirect, so nothing else is rebuilding the
-// environment and an invocation would otherwise inherit this process's whole.
+// Both shapes an invocation's environment is built in are asserted, because the
+// build cache rebuilds it and a redirect that reintroduced the pair would be
+// invisible in the other case. A working directory in no repository has no cache
+// to point anywhere, so the environment is what environmentFor made; one inside a
+// repository goes through WithGoBuildCache on the way out.
+//
+// An account is named in both, because that is the branch that appends and so
+// the one where a stale slice could come back.
 func TestAnInvocationNeverCarriesTheReportingSinksCredentials(t *testing.T) {
-	t.Setenv(execution.SlackBotTokenVariable, "xoxb-not-for-agents")
-	t.Setenv(execution.SlackAppTokenVariable, "xapp-not-for-agents")
+	repository := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repository, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	for _, testCase := range []struct {
+		name             string
+		workingDirectory string
+		account          string
+	}{
+		{name: "in no repository, so no build cache is added", workingDirectory: t.TempDir()},
+		{name: "in a repository, so the build cache rebuilds the environment", workingDirectory: repository},
+		{name: "under a named account", workingDirectory: repository, account: "/state/accounts/second"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv(execution.SlackBotTokenVariable, "xoxb-not-for-agents")
+			t.Setenv(execution.SlackAppTokenVariable, "xapp-not-for-agents")
 
-	stream := `{"type":"result","subtype":"success","session_id":"s","is_error":false,"result":"done","total_cost_usd":0.01}` + "\n"
-	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}
-	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
-		RunID:            testRunID,
-		Role:             domain.RoleDeveloper,
-		WorkingDirectory: t.TempDir(),
-		Prompt:           "implement the task",
-	}); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if len(runner.commands[0].Env) == 0 {
-		t.Fatal("the invocation was given no environment, so it inherited this process's whole")
-	}
-	for _, entry := range runner.commands[0].Env {
-		name, _, _ := strings.Cut(entry, "=")
-		if name == execution.SlackBotTokenVariable || name == execution.SlackAppTokenVariable {
-			t.Fatalf("an agent invocation carried %s", name)
-		}
+			stream := `{"type":"result","subtype":"success","session_id":"s","is_error":false,"result":"done","total_cost_usd":0.01}` + "\n"
+			runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}
+			if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+				RunID:            testRunID,
+				Role:             domain.RoleDeveloper,
+				WorkingDirectory: testCase.workingDirectory,
+				AccountConfigDir: testCase.account,
+				Prompt:           "implement the task",
+			}); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if len(runner.commands[0].Env) == 0 {
+				t.Fatal("the invocation was given no environment, so it inherited this process's whole")
+			}
+			for _, entry := range runner.commands[0].Env {
+				name, _, _ := strings.Cut(entry, "=")
+				if name == execution.SlackBotTokenVariable || name == execution.SlackAppTokenVariable {
+					t.Fatalf("an agent invocation carried %s", name)
+				}
+			}
+		})
 	}
 }

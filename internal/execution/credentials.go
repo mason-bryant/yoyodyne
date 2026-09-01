@@ -16,6 +16,11 @@ package execution
 // environment a subprocess is given, because that is the only place it can be
 // one. An environment assembled by inheritance is an environment whose contents
 // nobody decided; naming this one is deciding it.
+//
+// Nothing about the credential model changes: agents still never hold the token
+// and the sink is still the only process that does. What changes is that the
+// rule is now enforced where it was previously only described, which is a
+// strengthening of the boundary rather than a revision of it.
 
 import (
 	"os"
