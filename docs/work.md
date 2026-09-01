@@ -340,15 +340,37 @@ time it chooses something, rather than at the next restart. Runs already in
 flight keep the configuration they started under.
 [Configuration](configuration.md#scheduling-ready-work) has the rest.
 
+**A pass also puts stopped work in front of the development manager.** A run
+that ended with its reviewer still requiring repair used to sit on the triage
+docket until somebody opened her conversation and told her. The pull delivers it
+instead: one stoppage per pull, oldest first, into her own conversation, naming
+the docket entry. She decides there and it is recorded exactly as when you carry
+her one by hand — nothing is carried out by the delivery, so `yoyo triage repair`
+and `yoyo triage rerun` still act on what she decided, under every condition they
+already ask. Each stoppage is delivered once, and one she has already been
+granted a repair or a re-run for is not delivered at all; her decisions that
+spend nothing — escalating to you, re-scoping, waiting — leave no counter for the
+harness to read, so a stoppage settled that way can reach her once more, which
+costs a turn and tells her nothing the entry does not. A turn that may have
+reached her and failed is made again a quarter of an hour later, three times, and
+then left for a person; one that provably reached her with nothing — her
+conversation would not open, the provider had no capacity — keeps its attempt and
+is tried again until it gets through, because those reasons clear. Pausing covers
+a delivery and `--budget` counts it; holding intake does not stop it, because it
+chooses no work and starts nothing. Every pass says what it did. The other
+stoppages — a failing check, a refused path, a replay conflict — still wait to be
+read.
+
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
 until you stop it. Nothing else about the pass changes and nothing needed to:
 every pull already re-reads the configuration and the queue, so work you admit is
 picked up at the next poll and a reprioritization at the next pull, with no change
 detection anywhere in it. An idle session costs one local tracker read per
-interval and asks no provider anything. Holding intake brakes a watching session
-in place rather than stopping it — it keeps polling, chooses nothing, and resumes
-when you release it.
+interval and asks no provider anything, unless it has a stopped run to put to the
+development manager. Holding intake brakes a watching session in place rather
+than stopping it — it keeps polling, chooses nothing, and resumes when you
+release it.
 
 Three things guard a loop that no longer ends. A session does not start the same
 item twice unless the item has changed — what it says, what it is for, its
@@ -418,7 +440,8 @@ and no work, and it costs a bounded session nothing of its cap.
 A drain never does this. It is a command you are waiting on the return of, and
 restarting it would run the pass again from the top.
 
-`--budget <usd>` caps what one session spends, and fails closed: a pass that
+`--budget <usd>` caps what one session spends — its runs, and the turns it takes
+putting stopped work to the development manager — and fails closed: a pass that
 cannot price itself is refused before it starts, and a session that meets a run
 whose evidence will not price stops and names it rather than counting it as free.
 A session that stops that way is a stopped line like any other: with work still

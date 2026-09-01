@@ -1775,7 +1775,10 @@ There is no change detection anywhere in it, because nothing between the reading
 is cached. A run already in flight is never preempted by any of that.
 
 An idle session costs one local tracker read per `work_poll` and asks no provider
-anything, so a queue that is empty overnight spends nothing.
+anything, so a queue that is empty overnight spends nothing — unless it has a
+stopped run to [put to the development
+manager](work.md#letting-the-harness-choose-the-work), which is a turn in her
+conversation and is charged as one.
 
 **The intake hold is the remote brake.** Holding intake does not stop a watching
 session; it brakes it in place. The session keeps polling, chooses nothing, and
@@ -1850,10 +1853,11 @@ either one stops on the bound instead of restarting: you set that number, and
 taking up a build is not you raising it. There is nothing here for a drain, which
 is a command you are waiting on the return of.
 
-**`--budget <usd>`** caps what one session spends, from the same recorded run
-evidence `yoyo cost` prices items from. It is checked between pulls, never during
-a run: the money a running run has spent is already spent, and what stopping it
-would lose is the work it bought.
+**`--budget <usd>`** caps what one session spends: the runs it starts, priced
+from the same recorded run evidence `yoyo cost` prices items from, and the turns
+it takes putting stopped work to the development manager. It is checked between
+pulls, never during a run or a turn: money already spent is spent, and what
+stopping part way would lose is the work it bought.
 
 A budget the harness cannot measure is not a smaller budget, it is no budget, so
 it fails closed at both ends. A pass given `--budget` with no way to price itself
