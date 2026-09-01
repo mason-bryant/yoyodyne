@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,43 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+)
+
+// trackerExport is the path `yoyo run` declares as the export a worktree is
+// given the primary checkout's copy of, which the fixtures here configure too.
+const trackerExport = ".beads/issues.jsonl"
+
+// writeTrackerExport puts content where the tracker's export lives, in whichever
+// checkout it is given: the primary one, whose copy a new worktree is handed, or
+// a worktree, which is where a developer would find it.
+func writeTrackerExport(t *testing.T, checkout, content string) {
+	t.Helper()
+	full := filepath.Join(checkout, filepath.FromSlash(trackerExport))
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+}
+
+// exportingRepository is a checkout whose branch carries the tracker's export
+// and whose working copy of it is newer, which is the ordinary state of a
+// checkout between release cuts: the store moves every time an item is admitted,
+// and the export is committed on a cadence of its own.
+func exportingRepository(t *testing.T) string {
+	t.Helper()
+	repository := pipelineRepository(t)
+	writeTrackerExport(t, repository, committedExport)
+	runPipelineGit(t, repository, "add", trackerExport)
+	runPipelineGit(t, repository, "commit", "-m", "export the tracker's items")
+	writeTrackerExport(t, repository, refreshedExport)
+	return repository
+}
+
+const (
+	committedExport = "{\"id\":\"yoyodyne-1\"}\n"
+	refreshedExport = "{\"id\":\"yoyodyne-1\"}\n{\"id\":\"yoyodyne-2\"}\n"
 )
 
 // writeUpstream puts a file where an upstream artifact lives, which is what a
@@ -160,6 +198,117 @@ func TestAChangeTouchingAnUngrantedProtectedPathIsRefusedBeforeAnythingJudgesIt(
 	}
 	if _, err := attemptPipelineGit(repository, "show", "main:docs/product/brief.md"); err == nil {
 		t.Fatal("the refused edit reached the target branch")
+	}
+}
+
+// The refreshed export is kept out of a run's change by Git's skip-worktree bit,
+// which lives in the worktree's index under `.git` — a directory a developer's
+// sandbox grants writes to. So the bit is where the hold is kept rather than what
+// enforces it: one `git update-index --no-skip-worktree` turns the copy the
+// harness put there into a modification the harness would otherwise commit,
+// promote, and conflict every other run against. What refuses it is this gate,
+// which reads the change rather than the index, and it is the case the read-only
+// posture already takes seriously — an agent following injected instructions is
+// exactly who would flip the bit.
+func TestARefreshedExportInTheChangeIsRefusedHoweverTheIndexBitEnded(t *testing.T) {
+	t.Parallel()
+
+	repository := exportingRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return err
+		}
+		if attempts == 1 {
+			// The whole of the attack: the file's content is the harness's own
+			// refresh, and lifting the hold is what makes it this run's change.
+			if output, err := attemptPipelineGit(request.WorkingDirectory, "update-index", "--no-skip-worktree", "--", trackerExport); err != nil {
+				return fmt.Errorf("lift the hold on %s: %v: %s", trackerExport, err, output)
+			}
+			return nil
+		}
+		// The repair takes it back out by putting the file at what the base commit
+		// carries, which is what the refusal asks for.
+		writeTrackerExport(t, request.WorkingDirectory, committedExport)
+		return nil
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || outcome.RepairAttempts != 1 {
+		t.Fatalf("the repaired change was not integrated on one refusal: %#v", outcome)
+	}
+	// No reviewer was asked about the attempt carrying the export, and no
+	// promotion carried it: the export on the target is the one the branch had.
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 1 {
+		t.Fatalf("reviews = %d, want only the attempt that carried no export", reviews)
+	}
+	if promoted := gitOutput(t, repository, "show", "main:"+trackerExport); promoted != committedExport {
+		t.Fatalf("the promoted export = %q, want the committed copy %q", promoted, committedExport)
+	}
+	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 2 {
+		t.Fatalf("developer invocations = %d, want the first attempt and its repair", len(developerRequests))
+	}
+	// A developer refused for a file it never wrote can act on the refusal only
+	// if the refusal says what the file is and how it got there.
+	for _, want := range []string{
+		trackerExport,
+		"Held out of every run's change by the harness: " + trackerExport,
+		"derived from a store outside Git",
+		"the hold was lifted",
+	} {
+		if !strings.Contains(developerRequests[1].Prompt, want) {
+			t.Fatalf("the refusal is missing %q:\n%s", want, developerRequests[1].Prompt)
+		}
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.PathRefusal != nil {
+		t.Fatalf("integrated run kept the refusal it repaired: %#v", state.PathRefusal)
+	}
+}
+
+// The other half of the same rule: the export a run leaves held is not part of
+// its change, so a run that reads it and writes its own work costs nothing. A
+// gate that refused the ordinary case would refuse every run this project makes.
+func TestAnExportLeftHeldIsNotRefusedThoughTheWorktreeCarriesTheRefreshedCopy(t *testing.T) {
+	t.Parallel()
+
+	repository := exportingRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	var read string
+	provider := roleBackend(func(request backend.RunRequest) error {
+		content, err := os.ReadFile(filepath.Join(request.WorkingDirectory, filepath.FromSlash(trackerExport)))
+		if err != nil {
+			return err
+		}
+		read = string(content)
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || outcome.RepairAttempts != 0 {
+		t.Fatalf("a run that only read the export was refused: %#v", outcome)
+	}
+	// It read the current export rather than the copy its base commit carried,
+	// which is the reason the refresh exists at all.
+	if read != refreshedExport {
+		t.Fatalf("the developer read %q, want the refreshed export %q", read, refreshedExport)
+	}
+	if promoted := gitOutput(t, repository, "show", "main:"+trackerExport); promoted != committedExport {
+		t.Fatalf("the promoted export = %q, want the committed copy %q", promoted, committedExport)
 	}
 }
 

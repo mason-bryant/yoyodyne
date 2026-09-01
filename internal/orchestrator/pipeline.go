@@ -66,6 +66,12 @@ type WorktreeManager interface {
 	// patch above: those are bounded for a reader, and a gate that saw a bounded
 	// listing would pass whatever the bound had cut.
 	ChangedPaths(ctx context.Context, worktree gitworktree.Worktree) ([]string, error)
+	// CurrentExports names the derived files the manager refreshes into a
+	// worktree and holds out of the change. The same gate refuses them, so the
+	// list is asked of the thing that holds them rather than restated here: an
+	// export the harness stopped holding must not go on being refused, and one it
+	// began holding must not go on being committable.
+	CurrentExports() []string
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	// RebaseOntoTarget re-prepares a change whose promotion lost a race, by
 	// replaying it onto wherever the target branch went. It is the only thing
@@ -1248,7 +1254,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
 		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text,
-			protectedpath.Protect(p.Config), run.repairBudget())
+			protectedpath.Protect(p.Config, p.Worktrees.CurrentExports()...), run.repairBudget())
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
@@ -3512,11 +3518,17 @@ func (a *activeRun) verify(ctx context.Context) error {
 
 // gateProtectedPaths refuses a change that touched an upstream artifact this
 // work item never admitted into its scope. The paths are the harness's own
-// configuration and the artifact homes the roles above the developer own, and
-// the grants are read from the work item's own text — which is the whole point
-// of doing it this way. An exception written into an item was decided before the
-// run started and reviewed with the rest of it; an exception the run discovers
-// is the developer deciding what its work was allowed to redefine.
+// configuration, the artifact homes the roles above the developer own, and the
+// derived exports the worktree manager refreshes and holds out of every run's
+// change; the grants are read from the work item's own text — which is the whole
+// point of doing it this way. An exception written into an item was decided
+// before the run started and reviewed with the rest of it; an exception the run
+// discovers is the developer deciding what its work was allowed to redefine.
+//
+// The exports are asked of the manager at each round rather than remembered,
+// because their hold is an index bit under `.git` that a developer's sandbox can
+// write: what makes the refreshed export stay out of a change is this comparison
+// and not that bit surviving whatever ran in the worktree.
 //
 // It answers with a refusal rather than a verdict. Nothing here says the change
 // is wrong, only that part of it is not this run's to make, so it goes back to
@@ -3527,7 +3539,7 @@ func (a *activeRun) gateProtectedPaths(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list the paths this change touches: %w", err)
 	}
-	protected := protectedpath.Protect(a.pipeline.Config)
+	protected := protectedpath.Protect(a.pipeline.Config, a.pipeline.Worktrees.CurrentExports()...)
 	granted := protectedpath.Grants(grantEvidence(a.item)...)
 	refused := protected.Refused(changed, granted)
 	if len(refused) == 0 {
@@ -4718,6 +4730,8 @@ Work only inside the current assigned worktree. Do not create, remove, or switch
 
 That boundary is enforced rather than trusted. The project's configuration directory and the homes its product artifacts, designs, and decision records live in are refused in your change: the harness compares what you touched against them before any check runs and before any reviewer sees the work, and hands the change back to you if it touches one of them. The only exception is a path this work item grants, on a line beginning ` + "`" + protectedpath.GrantMarker + "`" + ` in its title, description, design guidance, or acceptance criteria. Nothing you write grants a path, and neither does anything written into the item's notes, which is where a run's own record goes. If your work genuinely needs one, leave it alone and say so — the refusal you would get names the same thing this does.
 
+The same gate refuses the work tracker's export where your worktree carries one. The harness copies it in from the checkout your worktree was cut from, so you read the work around your own rather than the copy your base commit carried, and holds it out of your change: it is derived from a store outside Git that nothing you write reaches, and every run is given its own copy, so the same file in two changes is a merge conflict between runs rather than a contribution. Read it and leave it alone. A change containing it is handed back to you whatever became of the bit that holds it.
+
 A grant lifts the harness's refusal and never somebody else's. Claude Code refuses your writes to ".claude/settings.json" and ".claude/settings.local.json" above anything this harness permits: the editing tools are denied there however this run is configured, and the shell sandbox names the file and cannot be disabled. No grant reaches those paths, and an item that tries to grant one is refused before a run starts, so the case you can actually meet is work that needs one of them changed and says so in prose. Those files are the operator's to change by hand. Do the rest of the work, say in your summary exactly what has to go into the file and that a person has to put it there, and do not spend attempts finding another way in — there is not one.
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
@@ -4811,12 +4825,22 @@ func pathRefusalRepairPrompt(invariants string, refusal runstate.PathRefusal, pr
 		fmt.Fprintf(&prompt, "- and %d further refused path(s) not listed here\n", refusal.Omitted)
 	}
 	fmt.Fprintf(&prompt, "\nProtected by this project: %s\n", strings.Join(protected.Directories(), ", "))
+	if held := protected.HeldExports(); len(held) > 0 {
+		fmt.Fprintf(&prompt, "Held out of every run's change by the harness: %s\n", strings.Join(held, ", "))
+	}
 	if len(refusal.Grants) > 0 {
 		fmt.Fprintf(&prompt, "Granted by this work item: %s\n", strings.Join(refusal.Grants, ", "))
 	} else {
 		prompt.WriteString("Granted by this work item: nothing\n")
 	}
 	prompt.WriteString("\n" + protectedpath.GrantInstruction + "\n")
+	// Said only when one of these was actually caught. A developer refused for an
+	// artifact home has no use for an explanation of a file it never touched, and
+	// a repair prompt that explains everything is one nothing in particular stands
+	// out of.
+	if len(protected.HeldExportsAmong(refusal.Paths)) > 0 {
+		prompt.WriteString("\n" + protectedpath.ExportInstruction + "\n")
+	}
 	prompt.WriteString("\nRestore each refused path to what it held before your change, finish the work you were assigned within the paths that are yours, and finish with a concise summary of what you changed. The harness applies this gate again afterwards; the checks, review, and integration stay out of reach until the change touches nothing it was not granted.")
 	return prompt.String()
 }
@@ -4943,6 +4967,15 @@ func renderPathRefusalBlockerNotes(outcome Outcome, refused pathRefusal, limit i
 		lines = append(lines, fmt.Sprintf("Further refused paths not listed: %d", refused.refusal.Omitted))
 	}
 	lines = append(lines, "Protected by this project: "+strings.Join(refused.set.Directories(), ", "))
+	// A refused export is a different decision from a refused document, so the
+	// note says which one this is. Granting the path would admit derived state
+	// into the change rather than settle anything: the file is the harness's copy
+	// of a store outside Git, and a change carrying it means the hold that keeps
+	// it out of every run's change was lifted inside this one.
+	if held := refused.set.HeldExportsAmong(refused.refusal.Paths); len(held) > 0 {
+		lines = append(lines, "Held out of every run's change by the harness: "+strings.Join(held, ", "),
+			"That is a derived export the harness refreshes into each worktree and holds out of its change, so a change carrying one is a lifted hold rather than a missing grant.")
+	}
 	if len(refused.refusal.Grants) > 0 {
 		lines = append(lines, "Granted by this work item: "+strings.Join(refused.refusal.Grants, ", "))
 	} else {
