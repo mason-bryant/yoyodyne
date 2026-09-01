@@ -419,8 +419,11 @@ Into the work item's thread, as they happen:
 At the top level of the channel, unthreaded, goes what is about the whole line
 rather than any one item: the operator holding and releasing intake, the
 operator holding and lifting all harness activity, proposed work you turned
-down — there is no item, because nothing was created — and anything an agent
-filed with no work item attached. Burying those in one item's thread would
+down — there is no item, because nothing was created — a block of tracker actions
+the harness refused whole, said as a `warning` with the role that asked, how many
+actions it asked for, and the refusal itself, because none of them happened and
+the role that asked for them believed they had — and anything an agent filed with
+no work item attached. Burying those in one item's thread would
 misfile them. That list is what is *addressed* to the channel rather than
 everything that appears in it: a thread reply asking for attention is shown there
 as well, which is what the severity rule below does.

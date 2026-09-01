@@ -159,6 +159,7 @@ var harnessVoice = voice{
 		KindItemDecomposed:      "{item} was created under {parent}, decomposing it: {title}",
 		KindItemAttributed:      "{item} was attributed to a goal: {goal}",
 		KindItemReprioritized:   "{item} was set to {priority}.",
+		KindTrackerBlockRefused: "The {asking} asked for {refused} in one reply and the harness refused the block whole, so none of them happened: {why}",
 		KindWorkApproved:        "The operator approved proposed work, and it was admitted as {item}: {title}. It serves: {goal}",
 		KindWorkDeclined:        "The operator declined proposed work — {title} — because: {why}",
 		KindWorkHandedOff:       "{item} was handed to {executor} rather than to a developer run: {why}",
@@ -212,6 +213,7 @@ var developerVoice = voice{
 		KindItemDecomposed:      "{parent} was broken down, and {item} is one of the pieces I could be handed: {title}.",
 		KindItemAttributed:      "{item} now says what it is for: {goal}. That is the intent I'd be building against.",
 		KindItemReprioritized:   "{item} sits at {priority} now. What I build doesn't change with the order it is queued in.",
+		KindTrackerBlockRefused: "A block the {asking} sent was refused together — {refused} — and nothing in the queue moved for any of it: {why}",
 		KindWorkApproved:        "The operator approved that one, so {item} is work somebody will be given: {title}, for {goal}.",
 		KindWorkDeclined:        "Proposed work was turned down before it reached anybody — {title} — because: {why}",
 		KindWorkHandedOff:       "{item} will never reach me: it is carried by {executor} rather than by a run, because {why}",
@@ -265,6 +267,7 @@ var reviewerVoice = voice{
 		KindItemDecomposed:      "{item} was cut out of {parent}: {title}. Narrower work is work I can judge as finished or not.",
 		KindItemAttributed:      "{item} records the goal it serves: {goal}. Intent I can read beats intent I have to infer.",
 		KindItemReprioritized:   "{item} moved to {priority}. The order work arrives in changes nothing about the standard it meets.",
+		KindTrackerBlockRefused: "The {asking} asked for {refused} and the harness read none of them, so what the queue says now is what it said before: {why}",
 		KindWorkApproved:        "Approved and admitted as {item}: {title}, serving {goal}. I'll see it when a change comes back from it.",
 		KindWorkDeclined:        "{title} was declined, so there is no change coming and nothing for me to judge: {why}",
 		KindWorkHandedOff:       "{item} left the run queue for {executor}, so no change on it will come to me: {why}",
@@ -317,6 +320,7 @@ var developmentManagerVoice = voice{
 		KindItemDecomposed:      "I've broken {parent} down, and {item} is a bounded piece of it: {title}.",
 		KindItemAttributed:      "{item} now carries the goal it serves: {goal}. Work I cannot say the purpose of is work I cannot order honestly.",
 		KindItemReprioritized:   "{item} is at {priority} now, so that is where it gets pulled from.",
+		KindTrackerBlockRefused: "A block from the {asking} never reached the queue I pull from — {refused} — so its order and its contents are unchanged: {why}",
 		KindWorkApproved:        "{item} was approved and is in my queue: {title}, for {goal}.",
 		KindWorkDeclined:        "{title} was declined, so nothing about it ever reaches my queue: {why}",
 		KindWorkHandedOff:       "{item} is out of what I pull: it is carried by {executor}, so a run would only spend itself on it — {why}",
@@ -370,6 +374,7 @@ var productManagerVoice = voice{
 		KindItemDecomposed:      "{parent} was decomposed into {item}: {title}. What the work is for stays what the parent was admitted for.",
 		KindItemAttributed:      "I've recorded what {item} is for: {goal}. Work that says nothing about intent is work nobody can decide to stop doing.",
 		KindItemReprioritized:   "I've put {item} at {priority}: {why}",
+		KindTrackerBlockRefused: "A block I sent was refused whole — {refused} — so nothing I meant to change about the backlog changed: {why}",
 		KindWorkApproved:        "The operator approved the work I proposed, and it is admitted as {item}: {title}, serving {goal}.",
 		KindWorkDeclined:        "The operator turned down work I proposed — {title}, which would have served {goal} — because: {why}. Nothing was created.",
 		KindWorkHandedOff:       "{item} is work {executor} carries rather than a run, and it is marked as such so nothing spends a run on it: {why}",
@@ -423,6 +428,7 @@ var architectVoice = voice{
 		KindItemDecomposed:      "{item} was carved out of {parent}: {title}. Decomposition is structure, and structure is where a design holds or does not.",
 		KindItemAttributed:      "{item} was traced back to {goal}. A queue nobody can trace is a system nobody can reason about.",
 		KindItemReprioritized:   "{item} moved to {priority}, which changes the order and nothing about the design it derives from.",
+		KindTrackerBlockRefused: "A block of {refused} from the {asking} was refused whole rather than partly applied, which is the contract holding: {why}",
 		KindWorkApproved:        "Approved and admitted as {item}: {title}, under {goal}. What it may become is bounded by the design it derives from.",
 		KindWorkDeclined:        "{title} was declined, and the shape of the system is unchanged by work nobody started: {why}",
 		KindWorkHandedOff:       "{item} is executed by {executor} rather than by a run, and saying so is what keeps a run from discovering it by refusing an empty diff: {why}",
@@ -507,8 +513,14 @@ var nextMoves = map[Kind]string{
 	KindItemDecomposed:    "the harness's, when this reaches the top of the queue and a run is free.",
 	KindItemAttributed:    "the harness's, when this reaches the top of the queue and a run is free.",
 	KindItemReprioritized: "the harness's, and this is where it now gets pulled from.",
-	KindWorkApproved:      "the harness's, when this reaches the top of the queue and a run is free.",
-	KindWorkDeclined:      "nobody's — nothing was created, and nothing follows.",
+	// A refused block is the one item here whose move belongs to the role that
+	// asked. The refusal reaches it verbatim at the start of its next turn, so the
+	// actions come back if that role issues them again — and nothing at all
+	// happens if nobody says anything to that conversation, which is the half a
+	// reader has to know.
+	KindTrackerBlockRefused: "the role that asked — the refusal opens its next turn, and the actions happen only if it issues them again.",
+	KindWorkApproved:        "the harness's, when this reaches the top of the queue and a run is free.",
+	KindWorkDeclined:        "nobody's — nothing was created, and nothing follows.",
 	// Work a conversation carries. The handoff is the one state where the thread
 	// waits on a person opening a conversation rather than on anything the harness
 	// will do by itself, which is exactly the silence this exists to name.
@@ -807,6 +819,11 @@ func (e Event) fields(topic Topic) map[string]string {
 		"parent":    stated(detail.Parent, "an item the record does not name"),
 		"priority":  priorityOf(detail),
 		"executor":  stated(carrierOf(detail.Executor), "something the record does not name"),
+		// What a refused block asked for, and who asked. The count states an absence
+		// rather than reading as none: a block whose actions nobody could count is
+		// not a block that asked for nothing, and the two are opposite news.
+		"refused": countOf(detail.Refused, "tracker action", "tracker actions", "a number of tracker actions the record does not count"),
+		"asking":  stated(detail.Asking, "a role the record does not name"),
 		// What became of a run and what remains of its change, both already said in
 		// the read model's own words. A record that carries neither says so rather
 		// than leaving a blank, for the reason every absence here does — but more

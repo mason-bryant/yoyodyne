@@ -61,6 +61,8 @@ func fullyRecorded(kind Kind) Event {
 			Goal:            "Work the harness runs on its own is visible while it runs",
 			Parent:          "yoyodyne-ifd.68",
 			Priority:        1,
+			Refused:         12,
+			Asking:          "product manager",
 			Reason:          "reordering the backlog first",
 			Since:           moment.Add(-3 * time.Hour),
 			Ready:           4,

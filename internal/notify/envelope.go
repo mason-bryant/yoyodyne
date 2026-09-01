@@ -32,6 +32,13 @@ const (
 	KindItemDecomposed    Kind = "backlog.decomposed"
 	KindItemAttributed    Kind = "backlog.attributed"
 	KindItemReprioritized Kind = "backlog.reprioritized"
+	// A block of tracker actions the harness would not read, and therefore the
+	// backlog not moving when a role meant it to. It is here beside the kinds that
+	// say the queue moved because it is the same news photographed from the other
+	// side: the actions are refused whole, so what a reader is being told is that
+	// several admissions, closes, or reorderings they might have expected did not
+	// happen and the role that asked for them believed they had.
+	KindTrackerBlockRefused Kind = "tracker.block-refused"
 	// What the operator decided about work an agent proposed. It is two kinds
 	// rather than one with a field, for the reason the reviewer's verdict is:
 	// work entering the backlog and work turned down are different news, and
@@ -181,6 +188,7 @@ func Kinds() []Kind {
 		KindItemDecomposed,
 		KindItemAttributed,
 		KindItemReprioritized,
+		KindTrackerBlockRefused,
 		KindWorkApproved,
 		KindWorkDeclined,
 		KindWorkHandedOff,
@@ -230,7 +238,7 @@ func Kinds() []Kind {
 func (k Kind) Valid() bool {
 	switch k {
 	case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized,
-		KindWorkApproved, KindWorkDeclined,
+		KindTrackerBlockRefused, KindWorkApproved, KindWorkDeclined,
 		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut,
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
@@ -632,11 +640,23 @@ type Detail struct {
 	// somebody has to decide about is the case where the answer matters most.
 	Ending  string `json:"ending,omitempty"`
 	Remains string `json:"remains,omitempty"`
+	// Refused is how many tracker actions a block the harness would not read asked
+	// for, and Asking is the role that asked, both read by
+	// KindTrackerBlockRefused. The count is the size of what did not happen, and
+	// it is negative where the record did not carry one, exactly as the priority
+	// above is: a block the harness could not decode says nothing about how much
+	// was in it, and no actions and an uncounted number of them are different
+	// things to be told. The role is carried because the harness speaks this
+	// message: a refusal is the harness's own act, and the only thing that says
+	// whose actions were lost is the record.
+	Refused int    `json:"refused,omitempty"`
+	Asking  string `json:"asking,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
 	// a role changed the backlog, read by the tracker kinds; why proposed work
-	// was turned down, read by KindWorkDeclined; and why a thread reply recorded
-	// nothing, read by KindDirectiveRefused. An operator who holds in a hurry
-	// owes nobody an explanation, so absence is ordinary.
+	// was turned down, read by KindWorkDeclined; why a thread reply recorded
+	// nothing, read by KindDirectiveRefused; and why a block of tracker actions
+	// was refused whole, read by KindTrackerBlockRefused. An operator who holds in
+	// a hurry owes nobody an explanation, so absence is ordinary.
 	Reason string `json:"reason,omitempty"`
 }
 
