@@ -509,8 +509,11 @@ that ended with its independent reviewer still requiring repair after every
 permitted attempt is delivered into her conversation by the pass, once, with the
 docket entry it is about. One stoppage per pull, oldest first, so a backlog of
 them reaches her over several polls rather than holding the queue closed while
-she reads, and a stoppage she has already decided is passed over whether or not
-her decision has been carried out yet. She decides there and the decision is
+she reads, and a stoppage she has already been granted a repair or a re-run for is
+passed over whether or not that decision has been carried out yet. Her decisions that
+spend nothing -- escalating to you, re-scoping, waiting -- leave no counter to
+read, so a stoppage settled one of those ways can reach her once more; the docket
+entry she is shown says what has been decided about it. She decides there and the decision is
 recorded against the item's triage budget exactly as it is when somebody brings
 her a stoppage by hand; nothing is carried out by this, so "yoyo triage repair"
 and "yoyo triage rerun" still act on what she decided. A turn that may have reached her and

@@ -50,11 +50,14 @@ package orchestrator
 // it looks, and the loop that does today looks once per pull, so three attempts
 // counted and not paced would be three attempts inside one command.
 //
-// And a stoppage she has already judged is left alone, whether or not the
-// harness has carried the decision out. Her decision is recorded the moment she
-// makes it and acted on later, so between the two the stopped run still reads as
-// untouched to anything looking only at the run — which is where every stoppage
-// somebody carried to her by hand also sits.
+// And a stoppage she has already been given a repair grant or a re-run for is
+// left alone, whether or not the harness has carried that decision out. Both are
+// recorded against the item's budget the moment she decides, and acted on later,
+// so between the two the stopped run still reads as untouched to anything looking
+// only at the run — which is where every stoppage somebody carried to her by hand
+// also sits. What that cannot see is a decision costing nothing, which leaves no
+// counter anywhere the harness reads; see alreadyJudged for what follows from
+// that.
 //
 // # Why the spending pause and not the intake hold
 //
@@ -111,7 +114,9 @@ type EscalationRecords interface {
 
 // EscalationDecisions is the durable per-item record of what triage has already
 // decided, which is the record the triage guards spend and refuse against. It is
-// read to leave alone a stoppage the development manager has already judged.
+// read to leave alone a stoppage the development manager has already given a
+// repair grant or a re-run for — the two decisions that leave a mark the harness
+// can read.
 //
 // Deciding and carrying out are two acts with a gap between them, and that gap
 // is where this matters. A repair grant is recorded the moment she decides, and
@@ -463,10 +468,11 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 		FirstAttemptedAt: e.now(),
 	})
 	if err != nil {
-		// A stoppage another process delivered between the reading above and this
-		// claim is not a failure of either: one of them delivered it, which is what
-		// the record is for.
-		if errors.Is(err, runstate.ErrEscalationSpent) {
+		// A stoppage another process claimed between the reading above and this one
+		// is not a failure of either: the record refused the second, which is what
+		// it is for. Both refusals mean the same thing here — one of them delivered
+		// it, or one of them is about to — and neither is this pass's to report.
+		if errors.Is(err, runstate.ErrEscalationSpent) || errors.Is(err, runstate.ErrEscalationCooling) {
 			return Escalated{}, false, nil
 		}
 		return Escalated{}, false, fmt.Errorf("record that the stoppage of run %s is being put to the development manager: %w", entry.RunID, err)

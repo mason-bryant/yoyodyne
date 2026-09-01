@@ -22,12 +22,21 @@ func newEscalationStore(t *testing.T) *EscalationStore {
 	return store
 }
 
+var firstAttemptAt = time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+
 func attemptedEscalation() Escalation {
+	return attemptedAt(firstAttemptAt)
+}
+
+// attemptedAt is the same attempt made at a given moment. The moment matters
+// because an attempt made too soon after the last one is refused, so a test
+// making several has to say when each of them was.
+func attemptedAt(at time.Time) Escalation {
 	return Escalation{
 		DocketKey:        escalationDocketKey,
 		RunID:            "run-0123456789abcdef0123456789abcdef",
 		WorkItemID:       "yoyodyne-ifd.209.16",
-		FirstAttemptedAt: time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC),
+		FirstAttemptedAt: at,
 	}
 }
 
@@ -70,8 +79,9 @@ func TestDeliveriesThatFailAreBounded(t *testing.T) {
 	t.Parallel()
 
 	store := newEscalationStore(t)
+	at := firstAttemptAt
 	for attempt := 1; attempt <= MaxEscalationAttempts; attempt++ {
-		recorded, err := store.Attempt(context.Background(), attemptedEscalation())
+		recorded, err := store.Attempt(context.Background(), attemptedAt(at))
 		if err != nil {
 			t.Fatalf("attempt %d: Attempt() error = %v", attempt, err)
 		}
@@ -81,8 +91,9 @@ func TestDeliveriesThatFailAreBounded(t *testing.T) {
 		if _, err := store.Settle(context.Background(), escalationDocketKey, Delivery{Problem: "the conversation could not be held"}); err != nil {
 			t.Fatalf("attempt %d: Settle() error = %v", attempt, err)
 		}
+		at = at.Add(EscalationRetryDelay)
 	}
-	_, err := store.Attempt(context.Background(), attemptedEscalation())
+	_, err := store.Attempt(context.Background(), attemptedAt(at))
 	if !errors.Is(err, ErrEscalationSpent) {
 		t.Fatalf("Attempt() past the bound error = %v, want it refused", err)
 	}
@@ -91,9 +102,11 @@ func TestDeliveriesThatFailAreBounded(t *testing.T) {
 	}
 }
 
-// Two processes delivering one stoppage at the same instant are one delivery and
-// one refusal, because the read and the write are under the stoppage's own lock.
-func TestConcurrentAttemptsAtOneStoppageDoNotExceedTheBound(t *testing.T) {
+// Two sessions polling one docket at the same instant are one attempt and the
+// rest refused, because the pacing is decided where the lock is rather than by
+// whoever was about to make the attempt. Deciding it outside would be a read and
+// a write with a window between them, which is the window both of them land in.
+func TestConcurrentAttemptsAtOneStoppageLeaveOne(t *testing.T) {
 	t.Parallel()
 
 	store := newEscalationStore(t)
@@ -115,16 +128,46 @@ func TestConcurrentAttemptsAtOneStoppageDoNotExceedTheBound(t *testing.T) {
 		switch {
 		case err == nil:
 			taken++
-			if attempts[index] < 1 || attempts[index] > MaxEscalationAttempts {
-				t.Fatalf("attempt recorded as %d of %d permitted", attempts[index], MaxEscalationAttempts)
+			if attempts[index] != 1 {
+				t.Fatalf("attempt recorded as number %d, want the one attempt this moment permits", attempts[index])
 			}
-		case errors.Is(err, ErrEscalationSpent):
+		case errors.Is(err, ErrEscalationCooling):
 		default:
-			t.Fatalf("Attempt() error = %v, want either the attempt or the refusal", err)
+			t.Fatalf("Attempt() error = %v, want either the attempt or the pacing refusal", err)
 		}
 	}
-	if taken != MaxEscalationAttempts {
-		t.Fatalf("attempts taken = %d, want the %d the bound permits", taken, MaxEscalationAttempts)
+	if taken != 1 {
+		t.Fatalf("attempts taken = %d, want exactly one turn taken between them", taken)
+	}
+}
+
+// The refusal says which stoppage and when the next attempt is due, so a caller
+// that meets it can tell it from every other reason a delivery does not happen.
+func TestAnAttemptTooSoonIsRefusedUnderTheLock(t *testing.T) {
+	t.Parallel()
+
+	store := newEscalationStore(t)
+	if _, err := store.Attempt(context.Background(), attemptedEscalation()); err != nil {
+		t.Fatalf("Attempt() error = %v", err)
+	}
+	_, err := store.Attempt(context.Background(), attemptedAt(firstAttemptAt.Add(EscalationRetryDelay-time.Second)))
+	if !errors.Is(err, ErrEscalationCooling) {
+		t.Fatalf("Attempt() error = %v, want the attempt refused as too soon", err)
+	}
+	var cooling EscalationCoolingError
+	if !errors.As(err, &cooling) || cooling.Existing.Attempts != 1 {
+		t.Fatalf("refusal = %#v, want it to carry the attempt that is still cooling", err)
+	}
+	if !strings.Contains(err.Error(), "not due until 2026-09-01T09:15:00Z") {
+		t.Fatalf("refusal = %q, want it to say when the next attempt is due", err)
+	}
+	// And the moment it is due, it is taken.
+	recorded, err := store.Attempt(context.Background(), attemptedAt(firstAttemptAt.Add(EscalationRetryDelay)))
+	if err != nil {
+		t.Fatalf("Attempt() when it was due error = %v", err)
+	}
+	if recorded.Attempts != 2 {
+		t.Fatalf("attempts = %d, want the second attempt taken once its delay had passed", recorded.Attempts)
 	}
 }
 
@@ -156,9 +199,9 @@ func TestAnUndeliveredAttemptIsWithdrawn(t *testing.T) {
 	if !strings.Contains(given.Problem, "already held") {
 		t.Fatalf("problem = %q, want what stopped the delivery kept on the record", given.Problem)
 	}
-	// And the stoppage may be delivered again, which is the whole point of giving
-	// the attempt back.
-	recorded, err := store.Attempt(context.Background(), attemptedEscalation())
+	// And the stoppage may be delivered again once the delay has passed, which is
+	// the whole point of giving the attempt back.
+	recorded, err := store.Attempt(context.Background(), attemptedAt(firstAttemptAt.Add(EscalationRetryDelay)))
 	if err != nil {
 		t.Fatalf("Attempt() after a withdrawal error = %v", err)
 	}

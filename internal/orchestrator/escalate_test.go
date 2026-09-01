@@ -755,3 +755,64 @@ type costingJudge struct {
 func (j costingJudge) Judge(context.Context, triage.Entry) (Judgment, error) {
 	return Judgment{ConversationID: "chat-abc", CostUSD: j.cost}, j.err
 }
+
+// coolingRecords is the escalation record as the loser of a race meets it: the
+// claim refused because another session took it a moment ago. It cannot be
+// produced with the real store from one process, because the pass reads the
+// pacing from the same clock it claims with.
+type coolingRecords struct {
+	EscalationRecords
+}
+
+func (coolingRecords) Attempt(context.Context, runstate.Escalation) (runstate.Escalation, error) {
+	return runstate.Escalation{}, runstate.EscalationCoolingError{
+		Existing: runstate.Escalation{RunID: docketedRunID, Attempts: 1, LastAttemptedAt: escalationNow},
+		At:       escalationNow,
+	}
+}
+
+// The loser of that race says nothing and takes no turn. Another session is
+// delivering this stoppage, which is the record doing its job rather than
+// anything this pass has to report.
+func TestAStoppageAnotherSessionJustClaimedIsLeftToIt(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc", Decision: "repair"}}
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	escalator.Records = coolingRecords{EscalationRecords: escalator.Records}
+
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 0 || len(judge.shown) != 0 {
+		t.Fatalf("sweep = %#v, want the stoppage left to the session that claimed it", sweep.Escalated)
+	}
+}
+
+// The limit of what the harness can see, held here so it cannot drift from what
+// the documents promise. Escalating to the operator, re-scoping, and waiting
+// spend nothing, so they leave no counter anywhere this reads — and a stoppage
+// she settled one of those ways is delivered to her once more. What that costs is
+// a turn and a paragraph she has read before: the docket entry says what has been
+// decided about the item, and the delivery spends no budget and carries nothing
+// out.
+func TestAStoppageSettledWithoutSpendingIsDeliveredAgain(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	// The rounds the item has cost, and nothing committed or re-run: what the
+	// record looks like after she escalated it, re-scoped it, or said to wait.
+	escalator.Decisions = judgedItems{counters: map[string]runstate.TriageCounters{
+		docketedItem: {ReviewRounds: 2},
+	}}
+
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || !sweep.Escalated[0].Delivered {
+		t.Fatalf("sweep = %#v, want the stoppage delivered, which is what the documents say happens", sweep.Escalated)
+	}
+}

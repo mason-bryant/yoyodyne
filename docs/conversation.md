@@ -917,9 +917,15 @@ nothing is carried out by the delivery. One stoppage per pull, oldest first, so 
 morning's worth of them reaches her over several polls instead of holding the
 queue closed while she reads all of them. Each is delivered once — the same
 evidence in front of her twice is how one authorized recovery becomes two
-decisions — and one she has already decided is not delivered at all, whether or
-not the harness has carried that decision out yet, which is what keeps a stoppage
-somebody brought her by hand from arriving a second time by machine. A turn that
+decisions — and one she has already been granted a repair or a re-run for is not
+delivered at all, whether or not the harness has carried that decision out yet, which is
+what keeps a stoppage somebody brought her by hand from arriving a second time by
+machine. The three decisions that spend nothing — escalating to you, re-scoping,
+waiting — leave no counter anywhere the harness reads, so a stoppage she settled
+that way can still be delivered once. What she is shown then is the docket entry,
+which says what has already been decided about the item, and the delivery spends
+no budget and carries nothing out: what it costs is a turn and a paragraph she
+has read before. A turn that
 may have reached her and then failed is made again, no sooner than a quarter of
 an hour later and at most three times, and then left for a person, which every
 pass afterwards goes on saying out loud rather than leaving to the quiet. A turn

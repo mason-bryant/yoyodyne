@@ -349,10 +349,15 @@ about. She decides there, and the decision is recorded against the item's triage
 budget exactly as it is when you carry her a stoppage by hand — nothing is
 carried out by the delivery, so `yoyo triage repair` and `yoyo triage rerun`
 still act on what she decided, under every condition they already ask. Each
-stoppage is delivered once, and a stoppage she has already decided is not
-delivered at all — a decision is recorded the moment she makes it and carried out
-later, so in between the stopped run still reads as untouched, which is where
-every stoppage anybody carries to her by hand also sits.
+stoppage is delivered once, and a stoppage she has already been granted a repair or
+a re-run for is not delivered at all — both are recorded against the item's budget the
+moment she decides and carried out later, so in between the stopped run still
+reads as untouched, which is where every stoppage anybody carries to her by hand
+also sits. Her other three decisions — escalating to you, re-scoping, waiting —
+spend nothing and so leave nothing the harness can read, and a stoppage settled
+that way can be delivered to her once more. It costs a turn and tells her nothing
+she cannot see: the docket entry she is shown says what has been decided about
+the item, and the delivery spends no budget and carries nothing out.
 
 Deliveries that do not land are treated by what they can prove. A turn that
 **may have reached her** and then failed is made again no sooner than a quarter

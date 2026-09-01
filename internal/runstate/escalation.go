@@ -10,6 +10,15 @@ package runstate
 // thing to judge however much budget the item has left — and a claim already
 // delivered is refused to whoever asks second.
 //
+// The claim is what serializes two processes delivering at once, and it does it
+// under the record's own lock: an attempt too recent to repeat is refused there
+// rather than only skipped by whoever was about to make it, so two sessions
+// polling the same docket produce one attempt and one refusal instead of two
+// turns. The conversation lease is a second boundary behind it — the loser of
+// that race cannot open her conversation while the winner holds it — but a
+// guarantee that rested only on the lease would be one this record claims and
+// something else keeps.
+//
 // It is not a decision and records none of its own. What the development manager
 // decides is recorded where every triage decision is recorded, on the work item
 // and against the item's durable triage budget; this carries her decision only
@@ -266,6 +275,29 @@ func (e EscalationSpentError) Error() string {
 
 func (e EscalationSpentError) Unwrap() error { return ErrEscalationSpent }
 
+// ErrEscalationCooling is what an attempt made too soon after the last one
+// unwraps to. It is not a refusal of the delivery: the stoppage keeps every
+// attempt it is owed, and what the caller is being told is that this is not the
+// moment to make one.
+var ErrEscalationCooling = errors.New("this stoppage was put to the development manager too recently to try again")
+
+// EscalationCoolingError names the attempt that is still cooling and when the
+// next one is due, so a caller that meets it can say which it was rather than
+// only that something refused.
+type EscalationCoolingError struct {
+	Existing Escalation
+	At       time.Time
+}
+
+func (e EscalationCoolingError) Error() string {
+	return fmt.Sprintf("the stoppage of run %s was put to the development manager at %s, and the next attempt is not due until %s",
+		e.Existing.RunID,
+		e.Existing.LastAttemptedAt.UTC().Format(time.RFC3339),
+		e.Existing.LastAttemptedAt.Add(EscalationRetryDelay).UTC().Format(time.RFC3339))
+}
+
+func (e EscalationCoolingError) Unwrap() error { return ErrEscalationCooling }
+
 // EscalationStore is where the escalations live: one directory under the
 // product, beside the re-runs and the counters, and one file per docketed
 // stoppage inside it. A file each rather than one shared record is what keeps
@@ -330,6 +362,13 @@ func (s *EscalationStore) Attempt(ctx context.Context, escalation Escalation) (E
 	if found {
 		if attempted.Spent() {
 			return Escalation{}, EscalationSpentError{Existing: attempted}
+		}
+		// Refused here rather than only where the delay is read, because here is
+		// where the lock is. A caller that checked the pacing itself and then
+		// claimed would be two reads and a write with a window between them, which
+		// is exactly the window two concurrent sessions land in.
+		if attempted.Cooling(at) {
+			return Escalation{}, EscalationCoolingError{Existing: attempted, At: at}
 		}
 	} else {
 		attempted = escalation
