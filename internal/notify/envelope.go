@@ -602,6 +602,10 @@ type Detail struct {
 	// working, and a message that said only "nothing is startable" was read three
 	// times as a line that had stopped.
 	Running int `json:"running,omitempty"`
+	// Unreadable is a poll that chose nothing because the harness could not be
+	// read, read by KindWatchIdle. It is the other state whose next move is not an
+	// admission: nothing a person admits reaches a store that will not answer.
+	Unreadable bool `json:"unreadable,omitempty"`
 	// Standing is where the harness stands, already rendered into the four lines
 	// the read model produces, and read by KindLineWaiting. It is carried as the
 	// rendered text rather than as the state it came from, because the format is

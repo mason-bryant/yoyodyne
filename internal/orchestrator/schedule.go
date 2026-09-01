@@ -303,6 +303,12 @@ type SessionState struct {
 	// nonetheless working, and who has to act before the answer changes.
 	Running  int
 	Executor domain.WorkItemExecutor
+	// Unreadable marks the poll that chose nothing because the harness could not
+	// be read at all. It travels for the same reason the two above do: nothing a
+	// person admits, releases, or opens changes the answer while the store will
+	// not answer, so a reader told to admit work would be told to do the one thing
+	// that cannot help.
+	Unreadable bool
 	// Restarting marks the one stop that is not an ending — the session waiting
 	// out its runs to be re-executed into a build deployed over it. It is what
 	// keeps every surface from telling the operator to start a session that is
@@ -747,12 +753,22 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		schedule.ReadProblem = fmt.Sprintf(
 			"reading %d, failing for %s, read again in %s: %v",
 			retries.attempts, now.Sub(retries.since).Round(time.Second), retries.delay, err)
-		// What the session says about itself leaves the changing numbers out, so an
+		// What the session says about itself leaves the changing numbers of the
+		// outage out — which attempt this is, how long it has been failing — so an
 		// outage is one line in the log rather than one per attempt. What they are
 		// is on the schedule, which is where a reader afterwards looks.
-		session.enter(runstate.WatchIdle, account{reason: fmt.Sprintf(
+		//
+		// The runs it already has going are not one of those numbers. They are the
+		// difference between a line that has stopped and a line that is working
+		// while one reading fails, and they are named for the same reason the idle
+		// account below names them.
+		outage := fmt.Sprintf(
 			"the harness could not be read and is being read again for up to %s before the session gives up on it: %v",
-			readRetryWindow, err)})
+			readRetryWindow, err)
+		if running > 0 {
+			outage = fmt.Sprintf("%s in flight; %s", plural(running, "run", "runs"), outage)
+		}
+		session.enter(runstate.WatchIdle, account{reason: outage, running: running, unreadable: true})
 		if !s.sleep(ctx, retries.delay) {
 			schedule.Stopped = ScheduleCancelled
 			return false
@@ -1577,9 +1593,15 @@ func (s Scheduler) session(schedule *Schedule) *watchSession {
 // move follows an idle poll is a fact a channel closes its message on — derived
 // from these fields rather than parsed back out of the words.
 type account struct {
-	reason   string
-	running  int
-	executor domain.WorkItemExecutor
+	reason  string
+	running int
+	// executor is the conversation the session is waiting on, and unreadable marks
+	// the poll that chose nothing because the harness itself could not be read.
+	// They are the two states whose next move is not an admission, and they are
+	// carried as facts rather than left in the prose because the clause a channel
+	// closes on is derived from them.
+	executor   domain.WorkItemExecutor
+	unreadable bool
 }
 
 type watchSession struct {
@@ -1592,12 +1614,26 @@ type watchSession struct {
 
 // enter records the session arriving in a state. The same state said the same
 // way is the session still being in it, which is not news.
+//
+// "The same way" is the whole account rather than the reason alone, so a poll
+// that finds what the poll before it found writes nothing however many times it
+// is made — a session idling all night over an unchanging queue is still one
+// line. What does write a second line is the account changing: an item passed
+// over for a different reason, or a run starting or finishing. Both are news to
+// somebody reading an idle line, and both are bounded by the poll interval,
+// because a pass records at most one transition per poll.
 func (w *watchSession) enter(state runstate.WatchState, said account) {
 	if w.to == nil || (w.state == state && w.said == said) {
 		return
 	}
 	w.state, w.said = state, said
-	w.record(SessionState{State: state, Reason: said.reason, Running: said.running, Executor: said.executor})
+	w.record(SessionState{
+		State:      state,
+		Reason:     said.reason,
+		Running:    said.running,
+		Executor:   said.executor,
+		Unreadable: said.unreadable,
+	})
 }
 
 // stop records the session's last line, and whether the stop is the session

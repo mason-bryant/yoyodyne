@@ -333,9 +333,10 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 	// waiting on an admission, and one whose only unstarted work is a role's to
 	// carry is waiting on that role.
 	notification := productNotification(kind, transition.At, Detail{
-		Reason:   transition.Reason,
-		Running:  transition.Running,
-		Executor: string(transition.Executor),
+		Reason:     transition.Reason,
+		Running:    transition.Running,
+		Executor:   string(transition.Executor),
+		Unreadable: transition.Unreadable,
 	})
 	notification.Event.Severity = severity
 	return notification, nil

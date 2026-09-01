@@ -134,6 +134,12 @@ type WatchTransition struct {
 	// waiting on the architect, and telling the reader it waits on an admission
 	// sends them to the one person who can do nothing about it.
 	Executor domain.WorkItemExecutor `json:"executor,omitempty"`
+	// Unreadable marks the poll that chose nothing because the harness could not
+	// be read at all, which is the third state whose next move is nobody's to
+	// make: a store that will not answer is not waiting on an admission, a
+	// release, or a conversation, and it is read again until it answers or the
+	// session gives up on it. Every other transition leaves it false.
+	Unreadable bool `json:"unreadable,omitempty"`
 	// Restarting marks the one stop that is not an ending: the session is being
 	// re-executed into a build deployed over it, having waited out every run it
 	// started, and the process comes straight back watching the same queue. Every

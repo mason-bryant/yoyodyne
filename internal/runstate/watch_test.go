@@ -143,6 +143,24 @@ func TestASessionRecordsWhatItSawGoingAndWhoItIsWaitingOn(t *testing.T) {
 	if recorded[0].Running != 1 || recorded[0].Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("transition = %#v, want the runs it saw and the conversation it waits on carried", recorded[0])
 	}
+	if recorded[0].Unreadable {
+		t.Fatalf("transition = %#v, want a queue it read left unmarked", recorded[0])
+	}
+
+	// The other poll that chose nothing, and the one no admission would change:
+	// the store would not answer, so what is in the queue is not what stopped it.
+	outage := testWatchTransition(testWatchSessionID, WatchIdle, "the harness could not be read and is being read again")
+	outage.Unreadable = true
+	if err := store.Record(outage); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	reread, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(reread) != 2 || !reread[1].Unreadable {
+		t.Fatalf("transitions = %#v, want the reading that failed marked as one", reread)
+	}
 }
 
 // A session that stays open runs whatever binary it was started with, and

@@ -572,11 +572,11 @@ var nextMoves = map[Kind]string{
 	KindHoldPlaced:     "the operator's — nothing runs until the hold is lifted.",
 	KindHoldLifted:     "the harness's — every parked run resumes from its own record.",
 	KindWatchStarted:   "the harness's — the queue is pulled from until somebody stops it.",
-	// The idle poll with nothing else to say: no run going, and nothing passed
-	// over that a person carries. Admitting ready work is then genuinely the act
-	// that changes the answer, which is the only case this clause is said in — see
-	// idleMove, which chooses between this and the two states it used to be said
-	// over wrongly.
+	// The idle poll with nothing else to say: the queue was read, no run is going,
+	// and nothing passed over is a person's to carry. Admitting ready work is then
+	// genuinely the act that changes the answer, which is the only case this clause
+	// is said in — see idleMove, which answers for the three states it used to be
+	// said over wrongly before it reaches this.
 	KindWatchIdle:    "the product manager's — nothing is chosen until work that is ready is admitted.",
 	KindWatchBraked:  "the operator's — choosing resumes when intake is released.",
 	KindWatchResumed: "the harness's — work is being chosen again.",
@@ -643,10 +643,17 @@ func nextMove(event Event) (string, bool) {
 // found, and an operator acted on that three times over a queue whose only
 // unstarted work was the architect's to carry, while a developer run worked on
 // the other slot. Both halves of that were wrong: nothing was waiting on an
-// admission, and the line had not stopped. So the two states that are not an
-// admission answer first, and the admission clause is left to the case where
+// admission, and the line had not stopped. So every state that is not an
+// admission answers first — a store that would not answer, work a conversation
+// carries, runs still going — and the admission clause is left to the case where
 // admitting ready work is genuinely what changes the answer.
 func idleMove(detail Detail) string {
+	// A store that will not answer. Nothing a person admits, releases, or opens
+	// reaches it, so this answers before anything else: the queue was not read, so
+	// what is in it is not what stopped the choosing.
+	if detail.Unreadable {
+		return "the harness's — the queue could not be read, and it is read again until it answers or the session gives up on it."
+	}
 	// Work only a conversation carries. No admission and no run moves it, and the
 	// marker names who does.
 	if role := domain.WorkItemExecutor(strings.TrimSpace(detail.Executor)).Role(); role != "" {

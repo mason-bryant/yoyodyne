@@ -208,6 +208,21 @@ func TestAnIdleWatchNamesTheActorWhoCanActOnIt(t *testing.T) {
 			want:   "nobody's — the runs in flight carry on, and the queue is read again as each of them finishes.",
 		},
 		{
+			// The queue was never read, so nothing that is in it stopped the choosing
+			// and nothing anybody admits reaches a store that will not answer.
+			name:   "a queue that could not be read",
+			detail: func(d *Detail) { d.Unreadable = true },
+			want:   "the harness's — the queue could not be read, and it is read again until it answers or the session gives up on it.",
+		},
+		{
+			name: "a queue that could not be read while a run carries on",
+			detail: func(d *Detail) {
+				d.Unreadable = true
+				d.Running = 1
+			},
+			want: "the harness's — the queue could not be read, and it is read again until it answers or the session gives up on it.",
+		},
+		{
 			name:   "nothing going and nothing anybody carries",
 			detail: func(*Detail) {},
 			want:   nextMoves[KindWatchIdle],
@@ -236,6 +251,8 @@ func TestAnIdleWatchPointsAtAdmissionOnlyWhenAdmissionIsTheNextAct(t *testing.T)
 		{Executor: string(domain.ConversationWith(domain.RoleArchitect))},
 		{Running: 2},
 		{Executor: string(domain.ConversationWith(domain.RoleDevelopmentManager)), Running: 1},
+		{Unreadable: true},
+		{Unreadable: true, Running: 1},
 	} {
 		event := fullyRecorded(KindWatchIdle)
 		event.Detail = detail

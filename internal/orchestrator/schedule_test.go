@@ -1070,6 +1070,36 @@ func TestAnIdleWatchSaysWhatItPassedOverAndWhichConversationCarriesIt(t *testing
 	}
 }
 
+// The idle line names items and counts runs, and it is said again when either
+// changes — so what it must not do is say itself again when neither has. A
+// session polling an unchanged queue writes one line however many polls it
+// makes, which is what the reporting promises a reader for a quiet night.
+func TestAnUnchangedIdlePollSaysItselfOnce(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(beads.WorkItem{
+		ID: "yoyodyne-ifd.212", Title: "Amend the invariants", Status: "open", Priority: 1,
+		Executor: domain.ConversationWith(domain.RoleArchitect),
+	})
+	sessions := &recordedSessions{}
+	// Four polls over a queue nothing touches between them.
+	harness.onSleep = func(*scheduleHarness, int) bool { return harness.sleeps < 4 }
+
+	if _, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}).
+		Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	idles := 0
+	for _, state := range sessions.states() {
+		if state == runstate.WatchIdle {
+			idles++
+		}
+	}
+	if idles != 1 {
+		t.Fatalf("recorded %d idle transitions across %d polls, want the unchanged account said once", idles, harness.sleeps)
+	}
+}
+
 // The other side of the same line: a poll with nothing going and nothing
 // anybody carries says so, and names nobody it should not. The conversation and
 // the runs are what displace the admission clause, so a session that has neither
@@ -1579,6 +1609,63 @@ func TestWatchingReadsTheHarnessAgainAfterAReadingThatFails(t *testing.T) {
 	// watch log or not at all.
 	if said := sessions.said(runstate.WatchIdle); !strings.Contains(said, contendedStore) || !strings.Contains(said, "read again") {
 		t.Fatalf("the session said %q while it retried, want the failed reading and that it is being made again", said)
+	}
+	// And it says so as a reading that failed rather than as a queue it read and
+	// found nothing in. Nothing anybody admits reaches a store that will not
+	// answer, so this is the mark that keeps the message off the admission clause.
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded || !idle.unreadable {
+		t.Fatalf("idle transition = %#v, want the poll marked as a reading that failed", idle)
+	}
+}
+
+// A reading that fails while this session has a run of its own going. The line
+// is moving and the store is not answering, and both have to be said: the runs
+// are what stop it reading as a stopped machine, and the failed reading is what
+// stops it reading as a queue somebody has to admit work to.
+func TestAReadingThatFailsBesideARunSaysBothRatherThanNeither(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-held")...)
+	harness.capacity = 2
+	sessions := &recordedSessions{}
+	// The run is held open across the pull whose reading fails, so the session
+	// genuinely has one going when it records the outage.
+	holding := make(chan struct{})
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		<-holding
+		return h.complete(id), nil
+	}
+	// Which pull is being made, so the reading that fails is the one after the
+	// run started rather than a listing counted by hand.
+	pulls := 0
+	harness.onPull = func(_ *scheduleHarness, made int) { pulls = made }
+	harness.failList = func(*scheduleHarness, int) error {
+		if pulls == 1 {
+			return errors.New(contendedStore)
+		}
+		return nil
+	}
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool {
+		if sleeps == 1 {
+			close(holding)
+		}
+		return sleeps < 3
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	if _, err := scheduler.Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v, want a contended reading ridden through", err)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded while the reading failed")
+	}
+	if !strings.Contains(idle.reason, "1 run in flight") || !strings.Contains(idle.reason, contendedStore) {
+		t.Fatalf("idle reason = %q, want the run it had going and the reading that failed", idle.reason)
+	}
+	if idle.running != 1 || !idle.unreadable {
+		t.Fatalf("idle transition = %#v, want %d run(s) and the reading marked as failed", idle, 1)
 	}
 }
 
@@ -2189,11 +2276,12 @@ type recordedSessions struct {
 type recordedTransition struct {
 	state  runstate.WatchState
 	reason string
-	// running and executor are what a reader takes whose move follows an idle poll
-	// from: the runs the session could see going, and the conversation carrying the
-	// work it passed over.
-	running  int
-	executor domain.WorkItemExecutor
+	// running, executor, and unreadable are what a reader takes whose move follows
+	// an idle poll from: the runs the session could see going, the conversation
+	// carrying the work it passed over, and a reading of the harness that failed.
+	running    int
+	executor   domain.WorkItemExecutor
+	unreadable bool
 	// restarting is the session marking its last line as a restart rather than an
 	// ending, which is what every surface reads to tell the operator whether
 	// anything is waiting on them.
@@ -2211,6 +2299,7 @@ func (r *recordedSessions) Record(transition SessionState) error {
 		reason:     transition.Reason,
 		running:    transition.Running,
 		executor:   transition.Executor,
+		unreadable: transition.Unreadable,
 		restarting: transition.Restarting,
 	})
 	return nil

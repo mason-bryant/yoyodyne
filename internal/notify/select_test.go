@@ -1124,6 +1124,26 @@ func TestAnIdleSessionCarriesWhatItSawGoingAndWhoItWaitsOn(t *testing.T) {
 	if !strings.HasSuffix(message.Body, nextMoveLead+"the architect's, in conversation — the work this poll passed over is carried there, and no run will ever start it.") {
 		t.Fatalf("body %q does not close on the architect's move", message.Body)
 	}
+
+	// The poll that read nothing at all travels the same way. Admitting work to a
+	// store that will not answer changes nothing, so the mark has to reach the
+	// clause rather than staying in the session's own prose.
+	outage := watchTransition(runstate.WatchIdle, "the harness could not be read and is being read again")
+	outage.Unreadable = true
+	failed, err := FromWatch(outage)
+	if err != nil {
+		t.Fatalf("address a session that could not read the harness: %v", err)
+	}
+	if !failed.Event.Detail.Unreadable {
+		t.Fatalf("detail = %+v, want the reading that failed carried", failed.Event.Detail)
+	}
+	said, err := Render(failed.Topic, failed.Speaker, failed.Event)
+	if err != nil {
+		t.Fatalf("render a session that could not read the harness: %v", err)
+	}
+	if strings.HasSuffix(said.Body, nextMoveLead+nextMoves[KindWatchIdle]) {
+		t.Fatalf("body %q sends the reader to an admission over a store that would not answer", said.Body)
+	}
 }
 
 // The stop that is not an ending. A session being re-executed into a build
