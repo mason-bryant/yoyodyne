@@ -278,7 +278,9 @@ func withinGrant[S any](grant Grant, state string, node Node[S]) error {
 // It is a worst case rather than the real thing because the real thing is not
 // known until the action has been performed, which is after the point where
 // knowing it is any use. A step that fits the widest boundary fits whichever one
-// it actually produces.
+// it actually produces. That holds for the time as well as for the names: a
+// checkpoint's timestamp is written to a fixed width, so the instant recorded
+// after the action costs exactly what the one measured here does.
 func widestCheckpoint[S any](instance runstate.WorkflowInstance, node Node[S], at time.Time) runstate.WorkflowCheckpoint {
 	widest := runstate.WorkflowCheckpoint{
 		Sequence: len(instance.Checkpoints),
