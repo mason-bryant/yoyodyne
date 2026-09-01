@@ -156,6 +156,28 @@ const maxScheduleReasonBytes = 240
 // falls back to counting them. The count stays exact either way.
 const maxCoveringChildrenNamed = 3
 
+// How a watch session rides through a reading of the harness that failed.
+//
+// The tracker is a database a reconcile and every settling run write to, so a
+// reading that fails is contention far more often than it is a store that is
+// broken. The one that ended a session on 2026-09-01 succeeded again in 0.4s a
+// few minutes later, and what it cost was the session: it stopped on that single
+// reading, and the queue sat until an external job noticed the process was gone
+// and started another. A session that dies on one contended read defeats
+// everything built on the session outliving the work it starts, the
+// self-redeploy above first among it.
+//
+// So a watch waits and reads again, doubling the wait from the first delay to
+// the longest, and stops only once the readings have gone on failing for the
+// window. The window is the whole of what separates contention from breakage,
+// which is why a session that stops on one says how long it tried rather than
+// only what failed.
+const (
+	firstReadRetryDelay   = 2 * time.Second
+	longestReadRetryDelay = 30 * time.Second
+	readRetryWindow       = 5 * time.Minute
+)
+
 // Why the scheduler stopped pulling. Each is a different thing for an operator
 // to do about it, which is why they are stated apart rather than folded into one
 // "nothing more was started".
@@ -527,6 +549,24 @@ type Schedule struct {
 	// pass rather than failing it — the alternative is a session that stops
 	// working because nobody could be told it was working.
 	SessionProblem string `json:"session_problem,omitempty"`
+	// ReadsRetried counts the readings of the harness that failed and were made
+	// again rather than stopping the session, and ReadProblem names the last of
+	// them. Both are for the reader afterwards: a reading that succeeded on the
+	// second attempt leaves nothing at all behind, so a session that rode out a
+	// store outage overnight would otherwise be a session nobody could tell had
+	// met one.
+	ReadsRetried int    `json:"reads_retried,omitempty"`
+	ReadProblem  string `json:"read_problem,omitempty"`
+	// ReadFailure is the reading the session finally stopped on, and how long the
+	// harness had gone on being unreadable when it did.
+	//
+	// It is a field of its own rather than the last value of ReadProblem because
+	// the two are facts about different moments, and only this one is why the pass
+	// ended. A pass stops as unreadable for a second reason — a pull that
+	// assembles and is unusable — and a session that had ridden through a
+	// contended reading an hour earlier would otherwise report that reading as
+	// what stopped it, in the log this exists to make worth trusting.
+	ReadFailure string `json:"read_failure,omitempty"`
 }
 
 // Schedule pulls ready work and runs it, up to the capacity the configuration
@@ -602,6 +642,11 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// already started, which is the whole of how a restart reaches the machine
 	// without cancelling a run.
 	redeploying := false
+	// retries is the run of harness readings that have failed with none
+	// succeeding between them. See readRetries: it is what lets a watch ride
+	// through the store contention a reconcile or a settling run makes, and what
+	// stops the session once the failures have gone on too long to be contention.
+	var retries readRetries
 	running := 0
 
 	// settle takes one finished run into the schedule: what became of it, what it
@@ -660,10 +705,65 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		return s.sleep(ctx, pull.Poll)
 	}
 
-	session.enter(runstate.WatchWatching, s.opening())
 	var failure error
+	// unreadable takes a reading of the harness that failed and says whether the
+	// pass carries on. It sets what stopped the pass, and the failure it stopped
+	// with, wherever it does not — so a caller handed false has only to break.
+	//
+	// A drain stops on the first one, exactly as it always has: it is a command
+	// somebody is waiting on the return of, and one that slept through a store
+	// outage would be one that hung. A watch waits and reads again, and stops only
+	// once the readings have gone on failing past the window. See the retry
+	// constants for what that is worth and what it cost to find out.
+	unreadable := func(err error) bool {
+		if !s.Watching {
+			schedule.Stopped = ScheduleUnreadable
+			failure = err
+			return false
+		}
+		retries.failed = true
+		now := s.now()
+		if retries.since.IsZero() {
+			retries.since = now
+			retries.delay = firstReadRetryDelay
+		}
+		retries.attempts++
+		if tried := now.Sub(retries.since); tried >= readRetryWindow {
+			schedule.Stopped = ScheduleUnreadable
+			schedule.ReadFailure = fmt.Sprintf(
+				"the harness went on being unreadable for %s across %d reading(s), which is longer than a store somebody else is writing to takes to come back, so the session stopped rather than polling something it cannot read: %v",
+				tried.Round(time.Second), retries.attempts, err)
+			failure = errors.New(schedule.ReadFailure)
+			return false
+		}
+		schedule.ReadsRetried++
+		schedule.ReadProblem = fmt.Sprintf(
+			"reading %d, failing for %s, read again in %s: %v",
+			retries.attempts, now.Sub(retries.since).Round(time.Second), retries.delay, err)
+		// What the session says about itself leaves the changing numbers out, so an
+		// outage is one line in the log rather than one per attempt. What they are
+		// is on the schedule, which is where a reader afterwards looks.
+		session.enter(runstate.WatchIdle, fmt.Sprintf(
+			"the harness could not be read and is being read again for up to %s before the session gives up on it: %v",
+			readRetryWindow, err))
+		if !s.sleep(ctx, retries.delay) {
+			schedule.Stopped = ScheduleCancelled
+			return false
+		}
+		retries.delay = min(retries.delay*2, longestReadRetryDelay)
+		return true
+	}
+
+	session.enter(runstate.WatchWatching, s.opening())
 pulling:
 	for {
+		// A pull that read everything it needed clears the failures behind it. What
+		// the window measures is a store that has gone on being unreadable, rather
+		// than a count of the contended readings one session met over a long life.
+		if !retries.failed {
+			retries = readRetries{}
+		}
+		retries.failed = false
 		if s.Limit > 0 && len(schedule.Started) >= s.Limit {
 			schedule.Stopped = ScheduleLimitReached
 			break
@@ -717,10 +817,17 @@ pulling:
 			break
 		}
 		pull, err := s.Open(ctx)
-		if err == nil {
-			err = pull.validate(pullNeeds{waits: s.Watching, bounded: s.Budget > 0})
-		}
 		if err != nil {
+			if !unreadable(fmt.Errorf("open a pull: %w", err)) {
+				break
+			}
+			continue
+		}
+		// A pull that was assembled and is not usable is a decision somebody made
+		// about the configuration rather than a reading that failed, so it stops the
+		// pass at once. Waiting out a window for a capacity of zero to become
+		// something else is a session that hangs, not one that rides out contention.
+		if err := pull.validate(pullNeeds{waits: s.Watching, bounded: s.Budget > 0}); err != nil {
 			failure = fmt.Errorf("open a pull: %w", err)
 			schedule.Stopped = ScheduleUnreadable
 			break
@@ -742,9 +849,10 @@ pulling:
 		// reading would keep choosing work for as long as it lasted.
 		hold, held, err := pull.Intake.Held()
 		if err != nil {
-			failure = fmt.Errorf("read whether the operator has held intake: %w", err)
-			schedule.Stopped = ScheduleUnreadable
-			break
+			if !unreadable(fmt.Errorf("read whether the operator has held intake: %w", err)) {
+				break
+			}
+			continue
 		}
 		if held {
 			schedule.IntakeHeld = &hold
@@ -766,9 +874,10 @@ pulling:
 
 		occupied, err := occupiedItems(pull.Runs)
 		if err != nil {
-			failure = err
-			schedule.Stopped = ScheduleUnreadable
-			break
+			if !unreadable(err) {
+				break
+			}
+			continue
 		}
 		for id := range mine {
 			occupied[id] = struct{}{}
@@ -797,9 +906,10 @@ pulling:
 
 		read, err := pull.queue(ctx)
 		if err != nil {
-			failure = err
-			schedule.Stopped = ScheduleUnreadable
-			break
+			if !unreadable(err) {
+				break
+			}
+			continue
 		}
 		queue := read.queue
 		schedule.Admitted = len(queue.Entries)
@@ -878,9 +988,13 @@ pulling:
 			// saying which directive it was.
 			pausing, err := pull.Directives.Pausing(entry.ID)
 			if err != nil {
-				failure = fmt.Errorf("read the directives that pause %s: %w", entry.ID, err)
-				schedule.Stopped = ScheduleUnreadable
-				break pulling
+				if !unreadable(fmt.Errorf("read the directives that pause %s: %w", entry.ID, err)) {
+					break pulling
+				}
+				// The items this pull already started keep running and are collected
+				// like any other; the pull that follows re-reads the queue and passes
+				// over them because they are in flight.
+				continue pulling
 			}
 			if len(pausing) > 0 {
 				// The directive is re-read at every pull rather than remembered,
@@ -979,11 +1093,36 @@ pulling:
 // that stopped because it could not price itself is read in a channel rather
 // than in this process's terminal, so the run nothing could price has to travel
 // with the reason rather than staying on a schedule nobody there sees.
+//
+// A session that stopped because the harness would not be read travels the same
+// way and for a sharper reason: what tells an operator whether they are looking
+// at a broken store or at one bad minute is how long it went on failing, and the
+// reason alone says neither.
 func stopping(schedule Schedule) string {
-	if schedule.Stopped == ScheduleSpendUnreadable && schedule.SpendProblem != "" {
+	switch {
+	case schedule.Stopped == ScheduleSpendUnreadable && schedule.SpendProblem != "":
 		return schedule.Stopped + ": " + schedule.SpendProblem
+	case schedule.Stopped == ScheduleUnreadable && schedule.ReadFailure != "":
+		return schedule.Stopped + ": " + schedule.ReadFailure
 	}
 	return schedule.Stopped
+}
+
+// readRetries is the run of harness readings that have failed with none
+// succeeding between them: when the first of them was, how many there have been,
+// and how long the next wait is.
+//
+// It is cleared by a pull that read everything it needed rather than by a single
+// successful reading, because what the window measures is a store that has gone
+// on being unreadable — a pull whose queue read succeeds and whose directive read
+// fails is not a store that came back.
+type readRetries struct {
+	since    time.Time
+	attempts int
+	delay    time.Duration
+	// failed marks the pull being made now as having had a reading fail, which is
+	// what keeps a pull that failed from clearing itself at the top of the loop.
+	failed bool
 }
 
 // cooling reports an item this pass has already started and should not start
@@ -1511,6 +1650,17 @@ func (s Schedule) Render() string {
 	// running.
 	if s.Watched && s.Polls > 0 {
 		fmt.Fprintf(&rendered, "waited out %d poll interval(s) with nothing to start\n", s.Polls)
+	}
+	// A session that rode through readings that failed says so. The reading that
+	// succeeded afterwards leaves nothing behind, so an outage nobody was told
+	// about is one that gets diagnosed from scratch the next time it happens. The
+	// last of them is named except where the session went on to stop on a reading
+	// too, which is said once in the failure it stopped with rather than twice.
+	if s.ReadsRetried > 0 {
+		fmt.Fprintf(&rendered, "%d reading(s) of the harness failed and were made again rather than stopping the session\n", s.ReadsRetried)
+	}
+	if s.ReadProblem != "" && s.ReadFailure == "" {
+		fmt.Fprintf(&rendered, "the last of them: %s\n", s.ReadProblem)
 	}
 	if s.Braked != nil {
 		// The brake places a hold nobody chose, so the line that reports it carries

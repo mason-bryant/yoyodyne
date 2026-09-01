@@ -1750,6 +1750,18 @@ posts it. A session idling all night writes one line rather than one a minute. A
 stop says whether it is an ending or a restart, so the one below is posted as a
 session coming back rather than as a line waiting for you to start another.
 
+**Beyond the three: a reading of the harness that fails does not end the
+session.** The tracker is a database a reconcile and every settling run write to,
+so a reading that fails is contention far more often than a store that is broken
+— and a session that exited on one left the queue idle until an external job
+noticed. A watching session waits and reads again, two seconds doubling to
+thirty, and stops only once the readings have gone on failing for five minutes,
+saying how long it tried. None of it is configured: the numbers are the harness's
+and the same for every product. A drain still stops on the first one, and so does
+either kind of pass on a pull that assembles and is unusable — a capacity of
+zero, or a `--budget` with nothing to price it — because that is a decision about
+the configuration rather than a reading that failed.
+
 **Beyond the three: a watching session takes up a build deployed over it.** When
 the `yoyo` it is running is written over — you rebuild it, you install it — the
 session stops choosing, waits out every run it already started, and restarts into
