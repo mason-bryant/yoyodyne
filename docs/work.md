@@ -15,6 +15,18 @@ developer for the change:
 On success, the JSON result reports the run ID, branch, worktree, base commit,
 change summary, checks, and agent summary.
 
+The new worktree is given your checkout's own `.beads/issues.jsonl` rather than
+the copy its base commit carried. That export is derived from a store Git is not
+authoritative for and it is committed on a cadence of its own — a release cut,
+not a run — so between cuts every commit carries a copy some number of items
+behind, and a developer reading it for the work around its own would find items
+admitted since simply absent. The copy is held out of the change the run makes:
+it is not in the diff you review, it is not in what gets promoted, and it does
+not conflict against another run that was given its own. Where your tracker's
+export is ignored rather than committed, the copy arrives the same way and needs
+no holding; where it is neither committed nor ignored, none is made, because a
+copy there would arrive as a file the developer never wrote.
+
 What the item waits on is read from the tracker at every point the run is about
 to commit to work — before it is claimed or resumed, at the start of each round
 of the gate, and once more before the promotion — rather than trusted from
