@@ -349,11 +349,16 @@ about. She decides there, and the decision is recorded against the item's triage
 budget exactly as it is when you carry her a stoppage by hand — nothing is
 carried out by the delivery, so `yoyo triage repair` and `yoyo triage rerun`
 still act on what she decided, under every condition they already ask. Each
-stoppage is delivered once; a delivery that failed is made again a bounded number
-of times and then left for a person, and either way the pass says what it did.
-Pausing covers it like any other provider call, and holding intake does not,
-because it chooses no work and starts nothing. The other stoppages — a failing
-check, a refused path, a replay conflict — still wait to be read.
+stoppage is delivered once, and a stoppage she has already decided is not
+delivered at all — a decision is recorded the moment she makes it and carried out
+later, so in between the stopped run still reads as untouched, which is where
+every stoppage anybody carries to her by hand also sits. A delivery that failed
+is made again, no sooner than a quarter of an hour later and at most three times,
+and then left for a person, which every later pass goes on saying rather than
+falling quiet about it. Pausing covers it like any other provider call, and
+holding intake does not, because it chooses no work and starts nothing. The other
+stoppages — a failing check, a refused path, a replay conflict — still wait to be
+read.
 [Conversation](conversation.md#deciding-what-becomes-of-stopped-work) has what
 she does with one.
 

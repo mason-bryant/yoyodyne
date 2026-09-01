@@ -59,6 +59,13 @@ type escalationClock struct{}
 
 func (escalationClock) Now() time.Time { return escalationNow }
 
+// movingClock is for the tests about pacing, which are the ones that have to be
+// able to say what happens a minute later and what happens a quarter of an hour
+// later without spending either.
+type movingClock struct{ now time.Time }
+
+func (c *movingClock) Now() time.Time { return c.now }
+
 // reviewStoppedState is the 2-of-2 stoppage: a run that ended on a durable
 // blocker with its reviewer still requiring repair, and its change preserved.
 func reviewStoppedState(runID, workItemID string) runstate.State {
@@ -105,6 +112,33 @@ func stoppedEntry(state runstate.State) triage.Entry {
 	}
 }
 
+// judgedItems is the item's durable triage record: what the development manager
+// has already decided about it.
+type judgedItems struct {
+	counters map[string]runstate.TriageCounters
+	err      error
+}
+
+func (d judgedItems) Counters(workItemID string) (runstate.TriageCounters, error) {
+	if d.err != nil {
+		return runstate.TriageCounters{}, d.err
+	}
+	return d.counters[workItemID], nil
+}
+
+// claimedReruns is what the harness has carried out of those decisions.
+type claimedReruns struct {
+	claimed map[string][]runstate.Rerun
+	err     error
+}
+
+func (r claimedReruns) Claimed(workItemID string) ([]runstate.Rerun, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.claimed[workItemID], nil
+}
+
 func escalationRecords(t *testing.T) *runstate.EscalationStore {
 	t.Helper()
 	store, err := runstate.NewEscalationStore(t.TempDir(), domain.ProductID("yoyodyne"))
@@ -128,9 +162,14 @@ func escalatorOver(t *testing.T, states []runstate.State, judge *standingJudge, 
 		Docket:  docket,
 		Runs:    loadable,
 		Records: escalationRecords(t),
-		Manager: judge,
-		Holds:   holds,
-		Clock:   escalationClock{},
+		// Nothing decided and nothing carried out, which is what a stoppage nobody
+		// has looked at reads as. The tests about what she has already decided
+		// replace these.
+		Decisions: judgedItems{},
+		Reruns:    claimedReruns{},
+		Manager:   judge,
+		Holds:     holds,
+		Clock:     escalationClock{},
 	}
 }
 
@@ -280,6 +319,9 @@ func TestAnUnreachableConversationKeepsTheDelivery(t *testing.T) {
 	judge := &standingJudge{err: fmt.Errorf("%w: the conversation is already held", ErrConversationUnreachable)}
 	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
 
+	clock := &movingClock{now: escalationNow}
+	escalator.Clock = clock
+
 	sweep, err := escalator.Escalate(context.Background())
 	if err != nil {
 		t.Fatalf("Escalate() error = %v", err)
@@ -287,12 +329,25 @@ func TestAnUnreachableConversationKeepsTheDelivery(t *testing.T) {
 	if len(sweep.Escalated) != 1 || sweep.Escalated[0].Delivered {
 		t.Fatalf("escalated = %#v, want a delivery that did not happen", sweep.Escalated)
 	}
-	if !strings.Contains(sweep.Escalated[0].Problem, "will be at the next pass") {
+	if !strings.Contains(sweep.Escalated[0].Problem, "will be once") {
 		t.Fatalf("problem = %q, want it to say the stoppage keeps its delivery", sweep.Escalated[0].Problem)
 	}
 
 	judge.err = nil
 	judge.judgment = Judgment{ConversationID: "chat-abc", Decision: "rerun"}
+	// The attempt was given back and the pacing was not: a conversation somebody
+	// else is holding and a provider with no capacity both last longer than a
+	// pull, so asking again at once would meet the same refusal several times a
+	// minute.
+	waiting, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() before the delay error = %v", err)
+	}
+	if len(waiting.Escalated) != 0 || len(judge.shown) != 1 {
+		t.Fatalf("before the delay = %#v, want the stoppage waiting rather than asked again", waiting.Escalated)
+	}
+
+	clock.now = escalationNow.Add(runstate.EscalationRetryDelay)
 	next, err := escalator.Escalate(context.Background())
 	if err != nil {
 		t.Fatalf("next Escalate() error = %v", err)
@@ -300,17 +355,28 @@ func TestAnUnreachableConversationKeepsTheDelivery(t *testing.T) {
 	if len(next.Escalated) != 1 || !next.Escalated[0].Delivered {
 		t.Fatalf("next pass = %#v, want the stoppage delivered once the conversation opened", next.Escalated)
 	}
+	// And the attempt it gave back is not one of the three: the bound counts what
+	// was asked of her, and nothing was.
+	recorded, found, err := escalator.Records.Find(next.Escalated[0].DocketKey)
+	if err != nil || !found {
+		t.Fatalf("Find() = found %v, error %v", found, err)
+	}
+	if recorded.Attempts != 1 {
+		t.Fatalf("attempts = %d, want the turn nobody took left uncounted", recorded.Attempts)
+	}
 }
 
 // A turn that may have been taken is one nothing can claim was not, so the
 // attempt stands and the delivery does not. It is tried again, and the trying is
-// bounded: past the bound the stoppage needs a person, and the pass says so
-// rather than spending every poll on it.
+// bounded: past the bound the stoppage needs a person, and every pass afterwards
+// says so rather than falling quiet about it.
 func TestADeliveryThatKeepsFailingStopsBeingTried(t *testing.T) {
 	t.Parallel()
 
 	judge := &standingJudge{err: errors.New("the provider refused the turn")}
 	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	clock := &movingClock{now: escalationNow}
+	escalator.Clock = clock
 
 	for attempt := 1; attempt <= runstate.MaxEscalationAttempts; attempt++ {
 		sweep, err := escalator.Escalate(context.Background())
@@ -323,16 +389,69 @@ func TestADeliveryThatKeepsFailingStopsBeingTried(t *testing.T) {
 		if !strings.Contains(sweep.Escalated[0].Problem, fmt.Sprintf("attempt %d of %d", attempt, runstate.MaxEscalationAttempts)) {
 			t.Fatalf("attempt %d problem = %q, want it to say which attempt this was", attempt, sweep.Escalated[0].Problem)
 		}
+		clock.now = clock.now.Add(runstate.EscalationRetryDelay)
 	}
-	spent, err := escalator.Escalate(context.Background())
-	if err != nil {
-		t.Fatalf("Escalate() past the bound error = %v", err)
-	}
-	if len(spent.Escalated) != 0 {
-		t.Fatalf("past the bound = %#v, want the harness to have stopped trying", spent.Escalated)
+	// Past the bound the harness has stopped trying, and every pass from here on
+	// says so: a stoppage that reached nobody and is reported nowhere is the
+	// silence this exists to end, and nothing else in the harness will mention it.
+	for _, pass := range []string{"the pass that finds it spent", "the pass after that"} {
+		spent, err := escalator.Escalate(context.Background())
+		if err != nil {
+			t.Fatalf("%s: Escalate() error = %v", pass, err)
+		}
+		if len(spent.Escalated) != 1 || spent.Escalated[0].Delivered {
+			t.Fatalf("%s = %#v, want the abandoned stoppage reported and not delivered", pass, spent.Escalated)
+		}
+		if !strings.Contains(spent.Escalated[0].Problem, "needs a person") {
+			t.Fatalf("%s problem = %q, want it to say the stoppage needs a person", pass, spent.Escalated[0].Problem)
+		}
+		clock.now = clock.now.Add(runstate.EscalationRetryDelay)
 	}
 	if len(judge.shown) != runstate.MaxEscalationAttempts {
 		t.Fatalf("turns taken = %d, want the %d the bound permits", len(judge.shown), runstate.MaxEscalationAttempts)
+	}
+}
+
+// The bound is a span of time rather than a burst. Whatever drives the delivery
+// decides how often it looks, and the loop that does today looks once per pull —
+// so three attempts counted and not paced would be three attempts inside one
+// command, and a provider that was restarting would cost the stoppage every
+// delivery it had.
+func TestAFailedDeliveryIsNotRepeatedUntilItsDelayHasPassed(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{err: errors.New("the provider refused the turn")}
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	clock := &movingClock{now: escalationNow}
+	escalator.Clock = clock
+
+	if _, err := escalator.Escalate(context.Background()); err != nil {
+		t.Fatalf("Escalate() error = %v", err)
+	}
+	// The pulls a drain makes back to back, which is what this is about.
+	for _, elapsed := range []time.Duration{0, time.Second, runstate.EscalationRetryDelay - time.Second} {
+		clock.now = escalationNow.Add(elapsed)
+		sweep, err := escalator.Escalate(context.Background())
+		if err != nil {
+			t.Fatalf("Escalate() at %s error = %v", elapsed, err)
+		}
+		if len(sweep.Escalated) != 0 {
+			t.Fatalf("at %s the pass reported %#v, want the attempt left for its delay", elapsed, sweep.Escalated)
+		}
+	}
+	if len(judge.shown) != 1 {
+		t.Fatalf("turns taken = %d, want the one attempt the delay permits", len(judge.shown))
+	}
+
+	clock.now = escalationNow.Add(runstate.EscalationRetryDelay)
+	judge.err = nil
+	judge.judgment = Judgment{ConversationID: "chat-abc", Decision: "repair"}
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after the delay error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || !sweep.Escalated[0].Delivered {
+		t.Fatalf("after the delay = %#v, want the stoppage tried again and delivered", sweep.Escalated)
 	}
 }
 
@@ -371,20 +490,6 @@ func TestEscalatingRequiresWhatItDeliversWith(t *testing.T) {
 	}
 }
 
-// claimedReruns is what the harness has already carried out against a stoppage.
-type claimedReruns struct {
-	claimed map[string]runstate.Rerun
-	err     error
-}
-
-func (r claimedReruns) Find(docketKey string) (runstate.Rerun, bool, error) {
-	if r.err != nil {
-		return runstate.Rerun{}, false, r.err
-	}
-	claimed, found := r.claimed[docketKey]
-	return claimed, found, nil
-}
-
 // A stoppage somebody already had run again is not one nobody has looked at: the
 // decision was made and carried out, and the one re-run it gets is spent.
 func TestAStoppageAlreadyRunAgainIsNotDelivered(t *testing.T) {
@@ -393,8 +498,10 @@ func TestAStoppageAlreadyRunAgainIsNotDelivered(t *testing.T) {
 	stopped := reviewStoppedState(docketedRunID, docketedItem)
 	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}
 	escalator := escalatorOver(t, []runstate.State{stopped}, judge, nil)
-	escalator.Reruns = claimedReruns{claimed: map[string]runstate.Rerun{
-		triage.Key(triage.ClassStoppedRun, stopped.RunID): {DocketKey: triage.Key(triage.ClassStoppedRun, stopped.RunID)},
+	key := triage.Key(triage.ClassStoppedRun, stopped.RunID)
+	escalator.Decisions = judgedItems{counters: map[string]runstate.TriageCounters{docketedItem: {Reruns: 1}}}
+	escalator.Reruns = claimedReruns{claimed: map[string][]runstate.Rerun{
+		docketedItem: {{DocketKey: key}},
 	}}
 
 	sweep, err := escalator.Escalate(context.Background())
@@ -403,6 +510,68 @@ func TestAStoppageAlreadyRunAgainIsNotDelivered(t *testing.T) {
 	}
 	if len(sweep.Escalated) != 0 || len(judge.shown) != 0 {
 		t.Fatalf("delivered %#v, want a stoppage already acted on left alone", sweep.Escalated)
+	}
+}
+
+// The window this closes. She decides, the decision is recorded against the
+// item's budget, and the carry-out happens whenever the harness or an operator
+// gets to it — and in between the stopped run's own record still says exactly
+// what it said before she looked at it. Every stoppage carried to her by hand
+// passes through that window, tonight's two among them.
+func TestAStoppageSheHasDecidedIsNotDeliveredAgain(t *testing.T) {
+	t.Parallel()
+
+	for _, judged := range []struct {
+		name     string
+		counters runstate.TriageCounters
+	}{
+		{
+			// A repair grant recorded and not yet spent: the rounds the item is
+			// committed to exceed the rounds it has cost.
+			name:     "a repair grant she recorded that nothing has carried out",
+			counters: runstate.TriageCounters{RepairGrants: 1, ReviewRounds: 2, CommittedRounds: 3},
+		},
+		{
+			// A re-run recorded and not yet claimed. The claim is what says the
+			// harness acted on it, and there is none.
+			name:     "a re-run she recorded that nothing has carried out",
+			counters: runstate.TriageCounters{Reruns: 1, ReviewRounds: 2},
+		},
+	} {
+		t.Run(judged.name, func(t *testing.T) {
+			t.Parallel()
+
+			judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}
+			escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+			escalator.Decisions = judgedItems{counters: map[string]runstate.TriageCounters{docketedItem: judged.counters}}
+
+			sweep, err := escalator.Escalate(context.Background())
+			if err != nil {
+				t.Fatalf("Escalate() error = %v", err)
+			}
+			if len(sweep.Escalated) != 0 || len(judge.shown) != 0 {
+				t.Fatalf("delivered %#v, want a stoppage she has already judged left alone", sweep.Escalated)
+			}
+		})
+	}
+}
+
+// A decision that cannot be read is not a decision that is absent. Delivering on
+// a record nobody could read is exactly the second delivery this guards against,
+// so the pass says what it could not read and puts nothing to her.
+func TestAnUnreadableDecisionRecordDeliversNothing(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	escalator.Decisions = judgedItems{err: errors.New("the triage record is unreadable")}
+
+	sweep, err := escalator.Escalate(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "already decided") {
+		t.Fatalf("Escalate() error = %v, want it to say what it could not read", err)
+	}
+	if len(sweep.Escalated) != 0 || len(judge.shown) != 0 {
+		t.Fatalf("delivered %#v, want nothing put to her on a record nobody could read", sweep.Escalated)
 	}
 }
 
@@ -421,11 +590,13 @@ func TestARepairedStoppageIsNotDelivered(t *testing.T) {
 	}
 	judge := &standingJudge{}
 	escalator := Escalator{
-		Docket:  docket,
-		Runs:    loadableRuns{states: map[string]runstate.State{repaired.RunID: repaired}},
-		Records: escalationRecords(t),
-		Manager: judge,
-		Clock:   escalationClock{},
+		Docket:    docket,
+		Runs:      loadableRuns{states: map[string]runstate.State{repaired.RunID: repaired}},
+		Records:   escalationRecords(t),
+		Decisions: judgedItems{},
+		Reruns:    claimedReruns{},
+		Manager:   judge,
+		Clock:     escalationClock{},
 	}
 
 	sweep, err := escalator.Escalate(context.Background())
@@ -434,5 +605,69 @@ func TestARepairedStoppageIsNotDelivered(t *testing.T) {
 	}
 	if len(sweep.Escalated) != 0 || len(judge.shown) != 0 {
 		t.Fatalf("delivered %#v, want the repaired run left alone", sweep.Escalated)
+	}
+}
+
+// The item's own replay: the two runs that stopped at 2-of-2 on the night this
+// was asked for, reaching her judgment with nobody carrying them.
+//
+// It is the closest a test can stand to that replay, and it is written here
+// because the real one cannot be run from a developer's worktree: the two runs
+// are records in the operator's own state root, and replaying them means opening
+// her conversation against a real provider account and spending real money on a
+// turn. What this holds is the whole of the flow those relays performed — the
+// docketed stoppage reaching her, her decision coming back recorded, and the
+// stoppage then being left alone while the carry-out is still owed — with the
+// couriers removed and nothing else changed.
+func TestTheTwoHandRelayedStoppagesReachHerWithNobodyCarryingThem(t *testing.T) {
+	t.Parallel()
+
+	// Two runs, each stopped on its reviewer with its change preserved, exactly
+	// as the pair on that night were.
+	first := reviewStoppedState(docketedRunID, "yoyodyne-ifd.224")
+	second := reviewStoppedState("run-4444444444444444444444444444dddd", "yoyodyne-ifd.226")
+	judge := &standingJudge{judgment: Judgment{
+		ConversationID: "chat-91253e0e070c17b0663651cc48602122",
+		Decision:       "repair",
+		Reason:         "the findings are narrow and the change is preserved, so one more bounded attempt is worth it",
+	}}
+	escalator := escalatorOver(t, []runstate.State{first, second}, judge, nil)
+
+	// Two passes, two deliveries, and a recorded decision on each. The relays
+	// that stood here were: somebody opening her conversation to tell her, and
+	// somebody carrying her answer back to be written down.
+	for pass, stopped := range []runstate.State{first, second} {
+		sweep, err := escalator.Escalate(context.Background())
+		if err != nil {
+			t.Fatalf("pass %d: Escalate() error = %v", pass+1, err)
+		}
+		if len(sweep.Escalated) != 1 {
+			t.Fatalf("pass %d delivered %#v, want the one stoppage", pass+1, sweep.Escalated)
+		}
+		escalated := sweep.Escalated[0]
+		if !escalated.Delivered || escalated.RunID != stopped.RunID || escalated.WorkItemID != stopped.WorkItemID {
+			t.Fatalf("pass %d = %#v, want %s of %s delivered", pass+1, escalated, stopped.RunID, stopped.WorkItemID)
+		}
+		if escalated.Decision != "repair" || escalated.Problem != "" {
+			t.Fatalf("pass %d = %#v, want her decision recorded and nothing gone wrong", pass+1, escalated)
+		}
+	}
+	if len(judge.shown) != 2 {
+		t.Fatalf("shown = %#v, want both stoppages put to her", judge.shown)
+	}
+
+	// And then the state those two were actually left in: a repair grant recorded
+	// against each item and the carry-out still owed. Neither is put to her a
+	// second time, which is what the relayed version could not promise.
+	escalator.Decisions = judgedItems{counters: map[string]runstate.TriageCounters{
+		"yoyodyne-ifd.224": {RepairGrants: 1, ReviewRounds: 2, CommittedRounds: 3},
+		"yoyodyne-ifd.226": {RepairGrants: 1, ReviewRounds: 2, CommittedRounds: 3},
+	}}
+	settled, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after her decisions error = %v", err)
+	}
+	if len(settled.Escalated) != 0 || len(judge.shown) != 2 {
+		t.Fatalf("after her decisions the pass reported %#v, want both stoppages left alone", settled.Escalated)
 	}
 }

@@ -1306,25 +1306,40 @@ func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) 
 		return
 	}
 	sweep, err := pull.Escalations.Escalate(ctx)
-	problem := ""
+	var problems []string
 	if err != nil {
-		problem = fmt.Sprintf("stopped work could not be put to the development manager, so it is waiting on somebody carrying it to her: %v", err)
+		problems = append(problems, fmt.Sprintf("stopped work could not be put to the development manager, so it is waiting on somebody carrying it to her: %v", err))
 	}
+	delivered := false
 	for _, escalated := range sweep.Escalated {
 		// A delivery that happened is kept, because it is one of the things this
 		// pass did and there are as many of them as there were stoppages. One that
-		// did not happen is a problem rather than an event, and only the latest is
-		// kept: a session polling all night against a conversation nothing can open
-		// would otherwise report the same failure a thousand times, and a pass that
-		// eventually got through would still be carrying every attempt before it.
+		// did not happen is a problem rather than an event, and the problems are
+		// this sweep's rather than every sweep's: a session polling all night
+		// against a conversation nothing can open would otherwise report the same
+		// failure a thousand times.
 		if escalated.Delivered {
 			schedule.Escalated = append(schedule.Escalated, escalated)
+			delivered = true
 		}
 		if escalated.Problem != "" {
-			problem = escalated.Problem
+			problems = append(problems, escalated.Problem)
 		}
 	}
-	schedule.EscalationProblem = problem
+	// What the pass says is replaced by what this sweep found, and cleared only by
+	// a delivery that actually happened. A sweep that found nothing to say is not
+	// evidence that the failure before it was resolved — the stoppage may simply
+	// be waiting out its retry delay — and a pass that erased its own account of
+	// having failed to reach her would end reporting nothing at all about stopped
+	// work, which is the silence this exists to end. A stoppage the harness has
+	// given up on is restated by every sweep, so what stands at the end of a pass
+	// is what is still true.
+	switch {
+	case len(problems) > 0:
+		schedule.EscalationProblem = strings.Join(problems, "; ")
+	case delivered:
+		schedule.EscalationProblem = ""
+	}
 }
 
 // priceRun is what one finished run cost, from the recorded evidence. A run that

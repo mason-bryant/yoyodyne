@@ -509,12 +509,15 @@ that ended with its independent reviewer still requiring repair after every
 permitted attempt is delivered into her conversation by the pass, once, with the
 docket entry it is about. One stoppage per pull, oldest first, so a backlog of
 them reaches her over several polls rather than holding the queue closed while
-she reads. She decides there and the decision is recorded against the item's
-triage budget exactly as it is when somebody brings her a stoppage by hand;
-nothing is carried out by this, so "yoyo triage repair" and "yoyo triage rerun"
-still act on what she decided. A pause covers it like any other provider call,
-and holding intake does not: the judgment a held queue is waiting on is what the
-delivery produces. What it did, and any delivery that failed, is on the pass.
+she reads, and a stoppage she has already decided is passed over whether or not
+her decision has been carried out yet. She decides there and the decision is
+recorded against the item's triage budget exactly as it is when somebody brings
+her a stoppage by hand; nothing is carried out by this, so "yoyo triage repair"
+and "yoyo triage rerun" still act on what she decided. A delivery that failed is
+made again a quarter of an hour later, three times in all, and then left for a
+person. A pause covers it like any other provider call, and holding intake does
+not: the judgment a held queue is waiting on is what the delivery produces. What
+it did, and anything still waiting on a person, is on the pass.
 
 A watching session guards itself three ways. It does not start the same item
 twice unless the item has changed -- what it says, what it is for, its priority,

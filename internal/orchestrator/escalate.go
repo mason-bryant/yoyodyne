@@ -35,7 +35,7 @@ package orchestrator
 // classification made by matching words is one that changes when somebody
 // rewrites a sentence.
 //
-// # One at a time
+// # One at a time, and only what nobody has judged
 //
 // A pass delivers one stoppage. A delivery is a conversation turn, and a pass
 // that delivered a backlog of them at once would hold the queue closed for as
@@ -43,6 +43,18 @@ package orchestrator
 // goes first, and the next pass takes the next. What that costs is that a
 // morning with five stopped runs reaches her over five passes, which is the
 // right trade for a loop that goes on choosing work while she reads.
+//
+// A delivery that failed is made again, up to the record's bound and no faster
+// than its retry delay. The pacing is the half that is easy to leave out and
+// makes the bound meaningless without it: whatever drives this decides how often
+// it looks, and the loop that does today looks once per pull, so three attempts
+// counted and not paced would be three attempts inside one command.
+//
+// And a stoppage she has already judged is left alone, whether or not the
+// harness has carried the decision out. Her decision is recorded the moment she
+// makes it and acted on later, so between the two the stopped run still reads as
+// untouched to anything looking only at the run — which is where every stoppage
+// somebody carried to her by hand also sits.
 //
 // # Why the spending pause and not the intake hold
 //
@@ -93,25 +105,41 @@ type EscalationRuns interface {
 type EscalationRecords interface {
 	Attempt(ctx context.Context, escalation runstate.Escalation) (runstate.Escalation, error)
 	Settle(ctx context.Context, docketKey string, delivery runstate.Delivery) (runstate.Escalation, error)
-	Withdraw(ctx context.Context, docketKey string) error
+	Withdraw(ctx context.Context, docketKey, problem string) error
 	Find(docketKey string) (runstate.Escalation, bool, error)
 }
 
-// EscalationReruns is what the harness has already carried out against one
-// docketed stoppage. It is read to leave alone a stoppage somebody has already
-// acted on: a re-run claimed against this entry is a decision made and carried
-// out, and asking her to judge it again would be asking about a stoppage whose
-// one re-run the guards would now refuse.
+// EscalationDecisions is the durable per-item record of what triage has already
+// decided, which is the record the triage guards spend and refuse against. It is
+// read to leave alone a stoppage the development manager has already judged.
 //
-// The other carry-out needs nothing here. A repair continues the stopped run
-// itself and clears its blocker as it does, so a repaired stoppage stops being
-// one this delivers by the same rule that decides every other run.
+// Deciding and carrying out are two acts with a gap between them, and that gap
+// is where this matters. A repair grant is recorded the moment she decides, and
+// the stopped run's blocker is not cleared until `yoyo triage repair` acts on
+// it, so a stoppage she settled an hour ago still looks exactly like one nobody
+// has seen — to anything that reads the run alone. Delivering it again is the
+// same evidence in front of her twice under two decisions, which is the harm
+// this whole record exists to prevent, and it is the state every stoppage
+// somebody carries to her by hand passes through.
 //
-// It is optional: an escalator wired without one delivers a stoppage that was
-// re-run as though nobody had looked at it, which is a turn spent and no harm
-// past that.
+// It is satisfied by runstate.TriageStore.
+type EscalationDecisions interface {
+	Counters(workItemID string) (runstate.TriageCounters, error)
+}
+
+// EscalationReruns is what the harness has already carried out of those
+// decisions: the re-runs claimed for one work item. It is the other half of the
+// same question — a decision recorded and a decision acted on are both reasons
+// to leave a stoppage alone, and only the two records together tell either from
+// a stoppage nobody has looked at.
+//
+// The repair carry-out needs neither: it continues the stopped run itself and
+// clears its blocker as it does, so a repaired stoppage stops being one this
+// delivers by the same rule that decides every other run.
+//
+// It is satisfied by runstate.RerunStore.
 type EscalationReruns interface {
-	Find(docketKey string) (runstate.Rerun, bool, error)
+	Claimed(workItemID string) ([]runstate.Rerun, error)
 }
 
 // DevelopmentManager is her conversation as the harness reaches it: one stoppage
@@ -152,10 +180,14 @@ type Escalator struct {
 	// Records is what makes a delivery at most once. Required: a delivery nothing
 	// records is one every pass makes again.
 	Records EscalationRecords
-	// Reruns is what has already been carried out against a stoppage. Optional;
-	// see EscalationReruns.
-	Reruns  EscalationReruns
-	Manager DevelopmentManager
+	// Decisions and Reruns are what triage has already decided about the item and
+	// what has been carried out of it. Both required: a delivery made without
+	// reading them is one made to a development manager who settled this stoppage
+	// an hour ago, which is the failure this is here to avoid rather than one to
+	// degrade gracefully into.
+	Decisions EscalationDecisions
+	Reruns    EscalationReruns
+	Manager   DevelopmentManager
 	// Holds is the operator's pause over everything the harness would spend.
 	// Optional, and an escalator wired without one is one nothing can pause,
 	// which is what every provider invocation was before the switch existed.
@@ -217,78 +249,169 @@ func (e Escalator) Escalate(ctx context.Context) (EscalationSweep, error) {
 	if err != nil {
 		return EscalationSweep{}, fmt.Errorf("read the triage docket: %w", err)
 	}
+	var sweep EscalationSweep
 	var problems []error
+	// delivering is this pass still having its one delivery to make. It goes false
+	// as soon as one is made, and on a store that would not record one: the
+	// delivery this pass would make next is the one the next pass makes, and a
+	// turn spent on a record nothing bounds is what the record exists to prevent.
+	// The scan carries on either way, because the stoppages behind it may need
+	// saying even where none of them is being delivered.
+	delivering := true
 	for _, entry := range entries {
-		deliver, err := e.awaitingJudgment(entry)
+		standing, recorded, err := e.standingOf(entry)
 		if err != nil {
 			problems = append(problems, err)
 			continue
 		}
-		if !deliver {
-			continue
+		switch standing {
+		case standingAbandoned:
+			// Said on every pass, for as long as it is true. The harness has stopped
+			// trying and nothing else will notice: a stoppage that reached nobody and
+			// is reported nowhere is precisely the silence this exists to end.
+			sweep.Escalated = append(sweep.Escalated, abandoned(entry, recorded))
+		case standingAwaiting:
+			if !delivering {
+				continue
+			}
+			escalated, attempted, err := e.deliver(ctx, entry)
+			if err != nil {
+				problems = append(problems, err)
+				delivering = false
+				continue
+			}
+			if !attempted {
+				// Another process delivered this stoppage between the reading and the
+				// claim, which is the record doing its job. The next entry is this
+				// pass's to look at.
+				continue
+			}
+			sweep.Escalated = append(sweep.Escalated, escalated)
+			delivering = false
+		case standingSettled, standingCooling:
+			// Nothing to do and nothing to say. A settled stoppage is somebody
+			// else's business now, and a cooling one was reported by the pass that
+			// attempted it — saying it again on every pull between here and its next
+			// attempt would bury what the pass actually did.
 		}
-		escalated, attempted, err := e.deliver(ctx, entry)
-		if err != nil {
-			problems = append(problems, err)
-			// A stoppage the store would not record is not one to deliver: the
-			// delivery this pass would make is the one the next pass would make
-			// again, and a turn spent on a record nothing bounds is exactly what the
-			// record exists to prevent. The next entry is left for the next pass,
-			// which reads the same store and meets the same failure or does not.
-			break
-		}
-		if !attempted {
-			// Another process delivered this stoppage between the reading and the
-			// claim, which is the record doing its job. The next entry is this pass's
-			// to look at.
-			continue
-		}
-		return EscalationSweep{Escalated: []Escalated{escalated}}, errors.Join(problems...)
 	}
-	return EscalationSweep{}, errors.Join(problems...)
+	return sweep, errors.Join(problems...)
 }
 
-// awaitingJudgment reports one docket entry being a stoppage the development
-// manager has not been shown and the harness will still deliver.
+// What one docket entry is to this pass.
+type escalationStanding int
+
+const (
+	// standingSettled is a stoppage this pass has nothing to do or say about:
+	// not the stoppage this delivers, one she has already been shown, or one she
+	// has already judged.
+	standingSettled escalationStanding = iota
+	// standingAwaiting is a stoppage nobody has put to her and the harness still
+	// will.
+	standingAwaiting
+	// standingCooling is one whose last attempt failed too recently to be worth
+	// repeating yet. The pass that made that attempt is what said so; repeating
+	// the sentence every pull would bury it.
+	standingCooling
+	// standingAbandoned is one the harness tried and stopped trying. It is said
+	// out loud rather than skipped, because what it needs now is a person and
+	// nothing else in the harness is going to mention it.
+	standingAbandoned
+)
+
+// abandoned is what a pass says about a stoppage the harness has given up
+// delivering. The words are the store's own refusal, so what the pass says and
+// what a second attempt would be refused with are one sentence rather than two.
+func abandoned(entry triage.Entry, recorded runstate.Escalation) Escalated {
+	return Escalated{
+		WorkItemID: entry.WorkItemID,
+		RunID:      entry.RunID,
+		DocketKey:  entry.Key,
+		Problem:    runstate.EscalationSpentError{Existing: recorded}.Error(),
+	}
+}
+
+// standingOf reports what one docket entry is to this pass, and the escalation
+// record behind that answer.
 //
 // It asks the run's own record rather than the entry, for the reason every
 // triage action does: the entry says what was true when it was written, and what
 // decides whether this is the 2-of-2 stoppage is what the run recorded about how
 // it ended.
-func (e Escalator) awaitingJudgment(entry triage.Entry) (bool, error) {
+func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, runstate.Escalation, error) {
 	if entry.Class != triage.ClassStoppedRun {
-		return false, nil
+		return standingSettled, runstate.Escalation{}, nil
 	}
 	recorded, found, err := e.Records.Find(entry.Key)
 	if err != nil {
-		return false, fmt.Errorf("read whether the stoppage of run %s has been put to the development manager: %w", entry.RunID, err)
+		return standingSettled, runstate.Escalation{}, fmt.Errorf("read whether the stoppage of run %s has been put to the development manager: %w", entry.RunID, err)
 	}
-	if found && recorded.Spent() {
-		return false, nil
+	if found && recorded.Delivered() {
+		return standingSettled, recorded, nil
 	}
 	state, err := e.Runs.Load(entry.RunID)
 	if err != nil {
-		return false, fmt.Errorf("read the run the docket entry is about: %w", err)
+		return standingSettled, recorded, fmt.Errorf("read the run the docket entry is about: %w", err)
 	}
 	if !reviewRepairStoppage(state) {
-		return false, nil
+		return standingSettled, recorded, nil
 	}
-	return e.notActedOn(entry)
+	// Asked before the record's own state, so a stoppage she has since judged
+	// stops being this pass's business whether the harness delivered it, gave up
+	// delivering it, or never reached it at all.
+	judged, err := e.alreadyJudged(entry)
+	if err != nil {
+		return standingSettled, recorded, err
+	}
+	if judged {
+		return standingSettled, recorded, nil
+	}
+	switch {
+	case found && recorded.Spent():
+		return standingAbandoned, recorded, nil
+	case found && recorded.Cooling(e.now()):
+		return standingCooling, recorded, nil
+	default:
+		return standingAwaiting, recorded, nil
+	}
 }
 
-// notActedOn reports a stoppage nobody has carried anything out against. A
-// stoppage that was re-run has had a decision made and acted on, and the one
-// re-run it gets is spent, so putting it in front of her would be asking about
-// work whose recovery has already happened.
-func (e Escalator) notActedOn(entry triage.Entry) (bool, error) {
-	if e.Reruns == nil {
+// alreadyJudged reports a stoppage the development manager has settled, whether
+// or not the harness has carried her decision out.
+//
+// Three states say she has, and the item's own durable triage record is where
+// all three live. A repair grant recorded and not yet spent is a decision
+// standing: she gave the item another round, and until `yoyo triage repair`
+// takes it the stopped run still carries the blocker that makes it look
+// untouched. A re-run recorded and not yet claimed is the same fact for the
+// other carry-out. And a re-run already claimed against this entry is her
+// decision acted on, which the run's record cannot say either, because a re-run
+// starts a fresh run and leaves the stopped one exactly as it was.
+//
+// What it deliberately cannot see is a decision that spends nothing — an
+// escalation to the operator, a re-scope, a wait. Those leave no counter, so a
+// stoppage she settled that way is delivered again if the harness ever reaches
+// it. The docket entry she is shown says what has been decided about the item,
+// so the second delivery costs a turn and tells her nothing she cannot see; what
+// it must never do is spend a budget, and nothing here can.
+func (e Escalator) alreadyJudged(entry triage.Entry) (bool, error) {
+	counters, err := e.Decisions.Counters(entry.WorkItemID)
+	if err != nil {
+		return false, fmt.Errorf("read what triage has already decided about %s: %w", entry.WorkItemID, err)
+	}
+	if counters.CommittedRounds > counters.ReviewRounds {
 		return true, nil
 	}
-	_, found, err := e.Reruns.Find(entry.Key)
+	claimed, err := e.Reruns.Claimed(entry.WorkItemID)
 	if err != nil {
-		return false, fmt.Errorf("read whether the stoppage of run %s has already been run again: %w", entry.RunID, err)
+		return false, fmt.Errorf("read the re-runs already taken of %s: %w", entry.WorkItemID, err)
 	}
-	return !found, nil
+	for _, existing := range claimed {
+		if existing.DocketKey == entry.Key {
+			return true, nil
+		}
+	}
+	return counters.Reruns > len(claimed), nil
 }
 
 // reviewRepairStoppage reports the stoppage this delivers: a run that ended on a
@@ -338,8 +461,9 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 	}
 	judgment, judgeErr := e.Manager.Judge(ctx, entry)
 	if errors.Is(judgeErr, ErrConversationUnreachable) {
-		escalated.Problem = fmt.Sprintf("the stoppage of run %s was not put to the development manager and will be at the next pass: %v", entry.RunID, judgeErr)
-		if err := e.Records.Withdraw(ctx, entry.Key); err != nil {
+		escalated.Problem = fmt.Sprintf("the stoppage of run %s was not put to the development manager and will be once %s has passed: %v",
+			entry.RunID, runstate.EscalationRetryDelay, judgeErr)
+		if err := e.Records.Withdraw(ctx, entry.Key, judgeErr.Error()); err != nil {
 			escalated.Problem = fmt.Sprintf("the stoppage of run %s was not put to the development manager, and the attempt taken for it could not be given back, so it has spent one of %d on a turn nobody took: %v",
 				entry.RunID, runstate.MaxEscalationAttempts, err)
 		}
@@ -391,6 +515,12 @@ func (e Escalator) validate() error {
 	}
 	if e.Records == nil {
 		problems = append(problems, errors.New("escalating requires the record that bounds it to one delivery per docketed stoppage"))
+	}
+	if e.Decisions == nil {
+		problems = append(problems, errors.New("escalating requires the item's durable triage record, because a stoppage the development manager has already decided must not be put to her again"))
+	}
+	if e.Reruns == nil {
+		problems = append(problems, errors.New("escalating requires the re-runs already carried out, which is the other half of what says a stoppage has been judged"))
 	}
 	if e.Manager == nil {
 		problems = append(problems, errors.New("escalating requires the development manager's conversation to deliver into"))

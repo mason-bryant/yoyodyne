@@ -129,7 +129,9 @@ func TestConcurrentAttemptsAtOneStoppageDoNotExceedTheBound(t *testing.T) {
 }
 
 // An attempt whose turn provably never happened is given back, so the stoppage
-// keeps every delivery it is owed.
+// keeps every delivery it is owed — and what is given back is the attempt rather
+// than the pacing, because the failures this is for last minutes or hours and
+// asking again at once would meet the same refusal.
 func TestAnUndeliveredAttemptIsWithdrawn(t *testing.T) {
 	t.Parallel()
 
@@ -137,11 +139,22 @@ func TestAnUndeliveredAttemptIsWithdrawn(t *testing.T) {
 	if _, err := store.Attempt(context.Background(), attemptedEscalation()); err != nil {
 		t.Fatalf("Attempt() error = %v", err)
 	}
-	if err := store.Withdraw(context.Background(), escalationDocketKey); err != nil {
+	if err := store.Withdraw(context.Background(), escalationDocketKey, "the conversation is already held"); err != nil {
 		t.Fatalf("Withdraw() error = %v", err)
 	}
-	if _, found, err := store.Find(escalationDocketKey); err != nil || found {
-		t.Fatalf("Find() = found %v, error %v, want the attempt gone", found, err)
+	given, found, err := store.Find(escalationDocketKey)
+	if err != nil || !found {
+		t.Fatalf("Find() = found %v, error %v, want the record kept to pace the next attempt", found, err)
+	}
+	if given.Attempts != 0 || given.Spent() {
+		t.Fatalf("recorded = %#v, want the attempt given back and the stoppage still deliverable", given)
+	}
+	if !given.Cooling(given.LastAttemptedAt.Add(EscalationRetryDelay-time.Second)) ||
+		given.Cooling(given.LastAttemptedAt.Add(EscalationRetryDelay)) {
+		t.Fatalf("recorded = %#v, want the next attempt paced exactly as a failed one is", given)
+	}
+	if !strings.Contains(given.Problem, "already held") {
+		t.Fatalf("problem = %q, want what stopped the delivery kept on the record", given.Problem)
 	}
 	// And the stoppage may be delivered again, which is the whole point of giving
 	// the attempt back.
@@ -167,7 +180,7 @@ func TestADeliveredEscalationIsNotWithdrawn(t *testing.T) {
 	if _, err := store.Settle(context.Background(), escalationDocketKey, delivered()); err != nil {
 		t.Fatalf("Settle() error = %v", err)
 	}
-	err := store.Withdraw(context.Background(), escalationDocketKey)
+	err := store.Withdraw(context.Background(), escalationDocketKey, "")
 	if err == nil || !strings.Contains(err.Error(), "delivered to the development manager") {
 		t.Fatalf("Withdraw() error = %v, want a delivered escalation refused", err)
 	}
@@ -257,5 +270,53 @@ func TestAnEscalationOfAnotherProductIsRefused(t *testing.T) {
 	other := &EscalationStore{root: store.Root(), productID: domain.ProductID("elsewhere")}
 	if _, _, err := other.Find(escalationDocketKey); err == nil || !strings.Contains(err.Error(), "belongs to product") {
 		t.Fatalf("Find() error = %v, want another product's record refused", err)
+	}
+}
+
+// The retry delay is measured from the attempt rather than from the write, so
+// pacing is read against the clock that makes the deliveries rather than the
+// store's own.
+func TestAnAttemptIsPacedFromWhenItWasMade(t *testing.T) {
+	t.Parallel()
+
+	store := newEscalationStore(t)
+	attempted, err := store.Attempt(context.Background(), attemptedEscalation())
+	if err != nil {
+		t.Fatalf("Attempt() error = %v", err)
+	}
+	if !attempted.LastAttemptedAt.Equal(attemptedEscalation().FirstAttemptedAt) {
+		t.Fatalf("last attempted at = %v, want the moment the caller said it attempted", attempted.LastAttemptedAt)
+	}
+	if _, err := store.Settle(context.Background(), escalationDocketKey, Delivery{Problem: "the provider refused the turn"}); err != nil {
+		t.Fatalf("Settle() error = %v", err)
+	}
+	settled, _, err := store.Find(escalationDocketKey)
+	if err != nil {
+		t.Fatalf("Find() error = %v", err)
+	}
+	// Settling stamps the record, and leaves what the pacing is read against
+	// alone: the two are different clocks and a delay measured across them would
+	// be nonsense in whichever direction they disagree.
+	if !settled.LastAttemptedAt.Equal(attempted.LastAttemptedAt) {
+		t.Fatalf("last attempted at after settling = %v, want the attempt's own moment", settled.LastAttemptedAt)
+	}
+	at := attempted.LastAttemptedAt
+	if !settled.Cooling(at.Add(EscalationRetryDelay - time.Second)) {
+		t.Fatal("an attempt made a moment ago is not cooling, so the bound would be spent in a burst")
+	}
+	if settled.Cooling(at.Add(EscalationRetryDelay)) {
+		t.Fatal("an attempt is still cooling once its delay has passed, so it would never be made again")
+	}
+	// And the next attempt moves it, so a delivery that failed twice waits twice
+	// rather than being abandoned on a clock that started before anybody knew
+	// there was a problem.
+	again := attemptedEscalation()
+	again.FirstAttemptedAt = at.Add(EscalationRetryDelay)
+	second, err := store.Attempt(context.Background(), again)
+	if err != nil {
+		t.Fatalf("second Attempt() error = %v", err)
+	}
+	if !second.LastAttemptedAt.Equal(again.FirstAttemptedAt) || !second.FirstAttemptedAt.Equal(at) {
+		t.Fatalf("second attempt = %#v, want the latest attempt moved and the first left where it was", second)
 	}
 }

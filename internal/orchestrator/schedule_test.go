@@ -2864,3 +2864,87 @@ func TestRepeatedDeliveryFailuresAreOneProblemOnThePass(t *testing.T) {
 		t.Fatalf("schedule = %#v, want the delivery kept and the failure behind it cleared", schedule)
 	}
 }
+
+// A pass does not erase its own account of stopped work. A pull that finds
+// nothing to say about a stoppage is not evidence that the last one's failure
+// was resolved — the stoppage may be waiting out its retry delay — so what the
+// pass said stands until a delivery actually happens.
+func TestAPassDoesNotEraseWhatItSaidAboutStoppedWork(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		switch passes {
+		case 1:
+			return EscalationSweep{Escalated: []Escalated{{
+				WorkItemID: "yoyodyne-stopped",
+				RunID:      "run-0123456789abcdef0123456789abcdef",
+				Problem:    "the provider refused the turn on attempt 1 of 3",
+			}}}, nil
+		case 2, 3:
+			// The pulls a drain makes while the stoppage waits out its delay.
+			return EscalationSweep{}, nil
+		default:
+			return EscalationSweep{Escalated: []Escalated{{
+				WorkItemID: "yoyodyne-stopped",
+				RunID:      "run-0123456789abcdef0123456789abcdef",
+				Delivered:  true,
+				Decision:   "repair",
+			}}}, nil
+		}
+	}
+	scheduler := Scheduler{}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	scheduler.escalate(context.Background(), &schedule, pull)
+	if schedule.EscalationProblem == "" {
+		t.Fatal("the pass said nothing about a delivery that failed")
+	}
+	for pass := 2; pass <= 3; pass++ {
+		scheduler.escalate(context.Background(), &schedule, pull)
+		if schedule.EscalationProblem == "" {
+			t.Fatalf("pass %d erased what the pass had already said about stopped work", pass)
+		}
+	}
+
+	// And a delivery that actually happened is what clears it.
+	scheduler.escalate(context.Background(), &schedule, pull)
+	if schedule.EscalationProblem != "" || len(schedule.Escalated) != 1 {
+		t.Fatalf("schedule = %#v, want the delivery kept and the failure behind it cleared", schedule)
+	}
+}
+
+// A stoppage the harness has given up delivering is said on every pass for as
+// long as it is true, so a pass that ends hours later still names what needs a
+// person.
+func TestAnAbandonedStoppageIsSaidByEveryPass(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Problem:    "the stoppage of run run-0123456789abcdef0123456789abcdef could not be put to the development manager in 3 attempt(s), so the harness stopped trying and it needs a person",
+		}}}, nil
+	}
+	scheduler := Scheduler{}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	for pass := 1; pass <= 3; pass++ {
+		scheduler.escalate(context.Background(), &schedule, pull)
+		if !strings.Contains(schedule.EscalationProblem, "needs a person") {
+			t.Fatalf("pass %d says %q, want the abandoned stoppage still named", pass, schedule.EscalationProblem)
+		}
+	}
+	// Said once, however many passes have found it: what a reader needs is the
+	// standing fact rather than one line per pull.
+	if strings.Count(schedule.EscalationProblem, "needs a person") != 1 {
+		t.Fatalf("the pass says %q, want the standing fact once rather than once per pull", schedule.EscalationProblem)
+	}
+	if len(schedule.Escalated) != 0 {
+		t.Fatalf("escalated = %#v, want nothing reported as delivered", schedule.Escalated)
+	}
+}

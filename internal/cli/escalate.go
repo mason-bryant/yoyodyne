@@ -42,10 +42,13 @@ func escalatorFrom(parts components, configPath string, stderr io.Writer) *orche
 		// Where the delivery is claimed, so one stoppage reaches her once however
 		// many passes walk past it.
 		Records: parts.store.Escalations(),
-		// And what has already been carried out against a stoppage, so one
-		// somebody has already had run again is left alone.
-		Reruns:  parts.store.Reruns(),
-		Manager: developmentManagerConversation{configPath: configPath, stderr: stderr},
+		// What triage has already decided about the item and what has been carried
+		// out of it — the same two records the docket she reads joins onto every
+		// entry — so a stoppage she settled an hour ago is not put to her again
+		// while the harness has yet to act on it.
+		Decisions: parts.store.Triage(),
+		Reruns:    parts.store.Reruns(),
+		Manager:   developmentManagerConversation{configPath: configPath, stderr: stderr},
 		// The same pause every run and every turn reads. A delivery is a provider
 		// invocation, so `yoyo pause` covers it exactly as it covers them.
 		Holds: parts.holds,
@@ -70,7 +73,7 @@ type developmentManagerConversation struct {
 //
 // A conversation that could not be opened is reported as unreachable rather than
 // as a failed delivery, and the difference is what the caller does about it:
-// nothing was asked of her, so the attempt is given back and the next pass makes
+// nothing was asked of her, so the attempt is given back and a later pass makes
 // it. That covers the ordinary reasons opening fails — the operator has her
 // conversation open, the provider is not signed in, no agent fills the role —
 // none of which is a reason to spend a stoppage's delivery.
@@ -103,10 +106,16 @@ func (d developmentManagerConversation) Judge(ctx context.Context, entry triage.
 // Two of them. A provider that declined the turn for want of capacity never put
 // the message in front of her, and the limit it met is recorded where every
 // process outside a run records one — so the right answer is to ask again once
-// it resets, which is what the next pass does. A pause the operator placed
-// between the escalator reading it and this turn is the same fact a moment
-// later: the turn was refused before the provider was reached, and the stoppage
-// is delivered when the pause lifts.
+// it resets, which a later pass does. A pause the operator placed between the
+// escalator reading it and this turn is the same fact a moment later: the turn
+// was refused before the provider was reached, and the stoppage is delivered
+// after the pause lifts.
+//
+// Neither is a reason to ask again immediately, and the record is what stops
+// that: the attempt comes back and the pacing does not, so the next delivery
+// waits out the same delay a failed one does. Both of these last minutes or
+// hours, and a pull that asked again at once would meet the same refusal several
+// times a minute for the whole of it.
 //
 // Everything else is left as it is. A turn that reached her and then failed is
 // one nothing here can prove she did not read, and the bounded retry is what

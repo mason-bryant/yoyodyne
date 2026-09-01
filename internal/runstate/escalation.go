@@ -56,6 +56,22 @@ const EscalationSchemaVersion = 1
 // where the attempts run out rather than left to be inferred from the quiet.
 const MaxEscalationAttempts = 3
 
+// EscalationRetryDelay is how long a failed delivery is left alone before it is
+// made again.
+//
+// The bound above is worth nothing without it. Whatever drives the delivery
+// decides how often it looks, and the loop that does today looks once per pull —
+// which on a busy queue is several times a minute, so three attempts counted and
+// not paced would be three attempts inside one command and a stoppage abandoned
+// in the time the provider took to restart. Paced, the same three span
+// three quarters of an hour, which is what "briefly unreachable" is worth
+// riding out.
+//
+// It is measured from the last attempt rather than the first, so a delivery that
+// failed, waited, and failed again waits again rather than being abandoned on a
+// clock that started before anybody knew there was a problem.
+const EscalationRetryDelay = 15 * time.Minute
+
 // maxEscalationTextBytes bounds the prose one record carries: the decision's
 // reasoning as it came back, and the problem that stopped a delivery. Both are
 // written by something outside this package, and a record that could not be
@@ -75,13 +91,22 @@ type Escalation struct {
 	DocketKey  string `json:"docket_key"`
 	RunID      string `json:"run_id"`
 	WorkItemID string `json:"work_item_id"`
-	// Attempts counts the deliveries begun, including the one in progress. It is
-	// what the bound above is read against, and it counts an attempt whatever
-	// became of it: a delivery that may have reached her is spent whether or not
-	// the harness could write down what came back.
+	// Attempts counts the deliveries begun and not given back, including the one
+	// in progress. It is what the bound above is read against, and it counts an
+	// attempt whatever became of it: a delivery that may have reached her is spent
+	// whether or not the harness could write down what came back. Zero is a
+	// record whose only attempt was given back — nothing was asked of her, and
+	// what the record is still here for is to pace the next one.
 	Attempts         int       `json:"attempts"`
 	FirstAttemptedAt time.Time `json:"first_attempted_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	// LastAttemptedAt is when the most recent attempt was made, which is what the
+	// retry delay is measured from. It is a field of its own rather than the
+	// record's UpdatedAt because the two are stamped by different clocks: this one
+	// by whatever is making the deliveries, and UpdatedAt by the store as it
+	// writes. A pacing rule measured against the second would be comparing one
+	// clock's reading with another's.
+	LastAttemptedAt time.Time `json:"last_attempted_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 	// DeliveredAt is when a turn was actually taken, and is absent while every
 	// attempt so far failed before the development manager was asked anything.
 	// It is what makes this record at-most-once rather than at-least-once: past
@@ -114,6 +139,14 @@ func (e Escalation) Delivered() bool { return e.DeliveredAt != nil }
 // stoppage needs nothing more, and one whose attempts are gone needs a person.
 func (e Escalation) Spent() bool { return e.Delivered() || e.Attempts >= MaxEscalationAttempts }
 
+// Cooling reports an attempt too recent to be worth repeating yet. It is what
+// makes the bound above a span of time rather than a burst: whatever drives the
+// delivery decides how often it asks, and this decides how often asking does
+// anything.
+func (e Escalation) Cooling(now time.Time) bool {
+	return now.Sub(e.LastAttemptedAt) < EscalationRetryDelay
+}
+
 // Validate reports every contract violation in the record at once.
 func (e Escalation) Validate() error {
 	var problems []error
@@ -132,11 +165,18 @@ func (e Escalation) Validate() error {
 	if strings.TrimSpace(e.WorkItemID) == "" {
 		problems = append(problems, errors.New("work item id is required"))
 	}
-	if e.Attempts < 1 {
-		problems = append(problems, fmt.Errorf("attempts is %d, and a record exists because one was made", e.Attempts))
+	if e.Attempts < 0 {
+		problems = append(problems, fmt.Errorf("attempts is %d, and a delivery cannot be begun a negative number of times", e.Attempts))
 	}
 	if e.FirstAttemptedAt.IsZero() {
 		problems = append(problems, errors.New("first attempted at is required"))
+	}
+	// Required for the reason the retry delay is measured from it: a record that
+	// could not say when it was last tried is one nothing can pace, and the
+	// pacing is what keeps a bound counted in attempts from being spent in a
+	// burst.
+	if e.LastAttemptedAt.IsZero() {
+		problems = append(problems, errors.New("last attempted at is required"))
 	}
 	if e.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("updated at is required"))
@@ -290,6 +330,10 @@ func (s *EscalationStore) Attempt(ctx context.Context, escalation Escalation) (E
 	attempted.ProductID = s.productID
 	attempted.DocketKey = key
 	attempted.Attempts++
+	// Stamped from the caller's clock, which is the same one the delay is read
+	// against. The store's own UpdatedAt below is the wall clock and says when
+	// this file was written, which is a different question.
+	attempted.LastAttemptedAt = at
 	attempted.UpdatedAt = at
 	if err := attempted.Validate(); err != nil {
 		return Escalation{}, err
@@ -348,12 +392,20 @@ func (s *EscalationStore) Settle(ctx context.Context, docketKey string, delivery
 // being recorded, and the one case where giving it back is sound is an attempt
 // whose turn provably never happened — a conversation that could not be opened
 // asks the development manager nothing. A record carrying a delivery is
-// therefore refused rather than removed: something was said to her on it, and a
-// second delivery of it is the thing this record exists to prevent.
+// therefore refused rather than given back: something was said to her on it, and
+// a second delivery of it is the thing this record exists to prevent.
+//
+// What it gives back is the attempt and not the pacing. The record stays, with
+// its moment on it, so the next delivery waits out the same delay a failed one
+// does — because the two failures this is for are a provider with no capacity and
+// a conversation somebody else is holding, and both of those last minutes or
+// hours. A give-back that erased the record would put the next pull straight back
+// into the same refusal, which on a busy queue is several a minute for as long as
+// the limit lasts.
 //
 // A stoppage nothing has been recorded about is already what this would leave
 // behind, so withdrawing one is not an error.
-func (s *EscalationStore) Withdraw(ctx context.Context, docketKey string) error {
+func (s *EscalationStore) Withdraw(ctx context.Context, docketKey, problem string) error {
 	key := strings.TrimSpace(docketKey)
 	if key == "" {
 		return errors.New("a docket entry is required to withdraw its escalation")
@@ -376,10 +428,12 @@ func (s *EscalationStore) Withdraw(ctx context.Context, docketKey string) error 
 		return fmt.Errorf("the stoppage keyed %s was delivered to the development manager at %s, so its attempt was acted on and is not one to give back",
 			key, attempted.DeliveredAt.UTC().Format(time.RFC3339))
 	}
-	if err := os.Remove(s.path(key)); err != nil {
-		return fmt.Errorf("withdraw the escalation of %s: %w", key, err)
+	if attempted.Attempts > 0 {
+		attempted.Attempts--
 	}
-	return syncDirectory(s.root)
+	attempted.Problem = strings.TrimSpace(problem)
+	attempted.UpdatedAt = time.Now().UTC()
+	return s.save(key, attempted)
 }
 
 // Find reports the escalation of one docketed stoppage. A stoppage nothing has
