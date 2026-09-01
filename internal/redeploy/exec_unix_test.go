@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 	}
 	// Nothing below this runs when the restart works: this process stops being
 	// this process. Reaching the exit at all is the failure the parent reads.
-	fmt.Fprintln(os.Stderr, binary.Take())
+	fmt.Fprintln(os.Stderr, binary.Take(binary.Args()))
 	os.Exit(3)
 }
 

@@ -358,7 +358,16 @@ and a poll at any interval never lands in that window. The session declining to
 claim anything more is what makes the window exist, which is why the session is
 the only thing that can close this. A run in flight is never interrupted for it,
 and the queue is re-read from scratch on the way back in exactly as it is at
-every poll, so what a deploy costs the line is one restart and no work.
+every poll.
+
+**The bounds you set cross the restart reduced to what is left of them.** A
+session given `--budget 50` that has spent $45.01 comes back with $4.99, and one
+given `--limit 10` that has started six comes back with four — because a bound
+carried whole would start again at every deploy, and a machine that deploys
+several times a day would have no bound at all. A session that has reached
+either bound stops on it instead of restarting: you set that number, and taking
+up a build is not you raising it. So what a deploy costs the line is one restart
+and no work, and it costs a bounded session nothing of its cap.
 
 A drain never does this. It is a command you are waiting on the return of, and
 restarting it would run the pass again from the top.

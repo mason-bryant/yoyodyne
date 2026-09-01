@@ -102,8 +102,34 @@ func TestTakeReportsABinaryItCannotExecute(t *testing.T) {
 		t.Fatalf("remove the executable: %v", err)
 	}
 
-	if err := binary.Take(); err == nil {
+	if err := binary.Take(binary.Args()); err == nil {
 		t.Fatal("Take() error = nil, want a restart that could not be made reported")
+	}
+	// And an invocation with nothing in it is refused rather than handed to the
+	// operating system, because argv[0] is the program's own name and a caller
+	// that lost it has lost the invocation.
+	if err := binary.Take(nil); err == nil {
+		t.Fatal("Take(nil) error = nil, want an invocation naming no program refused")
+	}
+}
+
+// The invocation is the caller's to change: what a session was started as, in a
+// copy, so reducing a bound it has spent part of cannot reach back into the
+// binary this was read from.
+func TestArgsHandsBackACopyOfTheInvocation(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "yoyo")
+	writeBinary(t, path, "the build the session started from", time.Now())
+	binary, err := at(path, []string{path, "work", "--watch", "--budget", "50"}, os.Environ())
+	if err != nil {
+		t.Fatalf("at() error = %v", err)
+	}
+
+	args := binary.Args()
+	args[4] = "4.99"
+	if again := binary.Args(); again[4] != "50" {
+		t.Fatalf("Args() = %v, want the recorded invocation unchanged by what a caller did to its copy", again)
 	}
 }
 

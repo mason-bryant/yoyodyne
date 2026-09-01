@@ -1515,6 +1515,37 @@ func TestARedeployWaitsOutTheRunsAlreadyGoing(t *testing.T) {
 	}
 }
 
+// A bound the session has reached wins over a deploy waiting to be taken up. The
+// operator gave this session a number to stay inside, and a restart is a session
+// starting that number again — so a budget that is gone stops the session as
+// spent, and what takes the build up is the next session somebody starts.
+func TestASpentBudgetStopsTheSessionRatherThanRedeployingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	harness.prices["yoyodyne-one"] = 2.50
+	deployment := &deployedOver{}
+	// The deploy lands while the run that spends the budget is still going, so
+	// both are true at the pull that follows it.
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		h.close(id)
+		return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Budget: 2, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleBudgetSpent {
+		t.Fatalf("stopped = %q, want the bound the operator set to end the session: %s", schedule.Stopped, schedule.Render())
+	}
+	if schedule.Redeploying() {
+		t.Fatal("the session asked to be restarted with its budget spent, which is the bound starting over")
+	}
+}
+
 // A session that cannot tell whether it has been deployed over goes on working.
 // Stopping the line because a file could not be read would be a worse failure
 // than the staleness this guards against, and the reading is tried again at

@@ -4,11 +4,11 @@ package redeploy
 
 import "errors"
 
-// imageReplacement is false where a process cannot be replaced by another
-// binary in place. A session there is refused a redeploy when it is opened
-// rather than told at the end, which is the honest answer: the platform cannot
-// do this, and a session that had already drained itself to find that out would
-// have paid for the discovery with the queue.
+// imageReplacement is false where a process cannot be replaced by another binary
+// in place. It is answered when a session opens rather than at the end, so a
+// session there watches exactly as it always did and simply never redeploys —
+// rather than draining itself first and only then finding out that the platform
+// cannot do the thing it drained for.
 const imageReplacement = false
 
 func replaceImage(string, []string, []string) error {

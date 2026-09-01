@@ -26,6 +26,13 @@ import (
 	"time"
 )
 
+// ErrUnsupported is a platform where a process cannot be replaced by another
+// binary in place. It is named so a caller can tell it from a reading that
+// failed: a session here cannot redeploy itself and can do everything else it
+// ever did, and refusing to watch at all over it would take away more than this
+// package was ever asked to add.
+var ErrUnsupported = errors.New("a process cannot replace its own image on this platform")
+
 // Binary is the executable a process is running: where it was resolved from, and
 // what the file looked like at the moment the process asked.
 //
@@ -54,7 +61,7 @@ type Binary struct {
 // build that is actually running.
 func Running() (*Binary, error) {
 	if !imageReplacement {
-		return nil, errors.New("a process cannot replace its own image on this platform, so a session started here could never take up a build that replaced it")
+		return nil, ErrUnsupported
 	}
 	path, err := os.Executable()
 	if err != nil {
@@ -81,6 +88,17 @@ func at(path string, args, env []string) (*Binary, error) {
 // file it means.
 func (b *Binary) Path() string { return b.path }
 
+// Args is the invocation this process was started as, copied so a caller can
+// change it and hand it back to Take.
+//
+// Handing it back rather than replaying it from here is the whole of how a bound
+// survives a restart. A session given a budget or a count of runs has spent some
+// of it by the time a build lands, and the same command line run again is that
+// bound starting over — which on a machine that deploys several times a day is
+// not a bound at all. What to reduce and how is the caller's, because the flags
+// belong to the command rather than to this.
+func (b *Binary) Args() []string { return append([]string(nil), b.args...) }
+
 // Replaced reports the file this process was started from having been written
 // since it started, which is what a deploy does to it.
 //
@@ -102,17 +120,24 @@ func (b *Binary) Replaced() (bool, error) {
 	return !info.ModTime().Equal(b.modTime) || info.Size() != b.size, nil
 }
 
-// Take re-executes this process from the same path, with the arguments and the
-// environment it was started with. It does not return when it succeeds: the
-// process image is replaced where it stands, keeping the process identifier, the
-// terminal, and anything watching this process from outside.
+// Take re-executes this process from the same path, as the invocation given and
+// with the environment it was started with. It does not return when it succeeds:
+// the process image is replaced where it stands, keeping the process identifier,
+// the terminal, and anything watching this process from outside.
 //
 // It is a replacement rather than a child for exactly that reason. A session
 // that spawned a successor and exited would be two processes choosing work for
 // the moment they overlapped, and would leave whatever started the first one —
 // a terminal, a supervisor — holding a process that is no longer the session.
-func (b *Binary) Take() error {
-	if err := replaceImage(b.path, b.args, b.env); err != nil {
+//
+// The invocation is the caller's rather than the one this recorded, because a
+// caller that has spent part of a bound has to say so; Args is where the
+// original comes from.
+func (b *Binary) Take(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("re-execute %s: an invocation with no arguments names no program", b.path)
+	}
+	if err := replaceImage(b.path, args, b.env); err != nil {
 		return fmt.Errorf("re-execute %s: %w", b.path, err)
 	}
 	// Reached only where the operating system returned from a call that replaces

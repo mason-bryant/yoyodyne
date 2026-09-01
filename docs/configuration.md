@@ -1721,7 +1721,9 @@ notes of an item it has claimed, blocked, or closed.
 
 An item this session has already run and that nothing has touched since is
 therefore left alone for the life of the session. Restarting the session, or
-touching the item, is what asks for another attempt.
+touching the item, is what asks for another attempt — and the restart the session
+makes for itself when you deploy counts, which is usually what you want, since a
+build you just installed is the likeliest reason the attempt would go differently.
 
 `blocked_runs_before_intake_hold` is the failure-storm brake, and it is a
 different thing from that cooldown: it is aimed at a broken machine rather than a
@@ -1738,11 +1740,17 @@ posts it. A session idling all night writes one line rather than one a minute.
 **Beyond the three: a watching session takes up a build deployed over it.** When
 the `yoyo` it is running is written over — you rebuild it, you install it — the
 session stops choosing, waits out every run it already started, and restarts into
-what you deployed. A run in flight is never interrupted for it, and nothing is configured:
-a deploy is the whole of the instruction. What that costs is one restart per
-deploy, and the queue is re-read from scratch on the way back in exactly as it is
-at every poll. There is nothing here for a drain, which is a command you are
-waiting on the return of.
+what you deployed. A run in flight is never interrupted for it, and nothing is
+configured: a deploy is the whole of the instruction. What that costs is one
+restart per deploy, and the queue is re-read from scratch on the way back in
+exactly as it is at every poll.
+
+The bounds cross the restart reduced to what is left of them — `--budget` less
+what the session has spent, `--limit` less what it has started — because a bound
+carried whole would start again at every deploy. A session that has reached
+either one stops on the bound instead of restarting: you set that number, and
+taking up a build is not you raising it. There is nothing here for a drain, which
+is a command you are waiting on the return of.
 
 **`--budget <usd>`** caps what one session spends, from the same recorded run
 evidence `yoyo cost` prices items from. It is checked between pulls, never during
