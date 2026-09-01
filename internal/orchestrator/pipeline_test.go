@@ -1411,53 +1411,103 @@ func TestPipelineBlocksTheItemWhenTheRepairBudgetIsSpent(t *testing.T) {
 	}
 }
 
-// A run whose terminal record the store refuses must not read afterwards as a
-// run nothing ever ended.
+// A run whose record the durable schema refuses must not read afterwards as a
+// run nothing ever ended, whichever way its review went.
 //
-// The refusal is real: the durable schema rejects one field, the save fails, and
-// what survives on disk is the pre-review snapshot with the evidence cleared. The
-// run itself carries on knowing better — it blocks the item and reports the
-// verdict correctly — so the divergence is invisible from the process that caused
-// it, and everything that reads the record afterwards believes the snapshot. So
-// the ending is written onto the record that is there, and the run fails with the
-// refused field named.
-func TestARefusedTerminalRecordStillEndsTheRunOnDisk(t *testing.T) {
+// The refusal is real: the schema rejects one field, the save fails, and what
+// survives on disk is the pre-review snapshot with the evidence cleared. The run
+// itself carries on knowing better — it reports the verdict to the tracker and
+// the operator exactly as it would have — so the divergence is invisible from the
+// process that caused it, and everything that reads the record afterwards
+// believes the snapshot.
+//
+// Both verdicts are here because they end the run down different routes, and only
+// one of them ends it directly. A repair verdict that spends the budget goes
+// straight to the failure that ends the run. An approval goes to the promotion it
+// authorized, whose own first save carries the refused field and hands the run to
+// that same failure — so the guarantee covers the approved run through the route
+// it actually takes rather than by assertion. What makes that work is the field:
+// a schema refusal follows it into every later write, so the write that ends the
+// run is refused for the reason the first one was.
+func TestARefusedRecordStillEndsTheRunOnDisk(t *testing.T) {
 	t.Parallel()
 
-	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
-		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
-	}, repairVerdict)
-	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
-	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
-	refusing := &refusingStore{StateStore: pipeline.Store}
-	pipeline.Store = refusing
+	for _, test := range []struct {
+		name     string
+		verdict  string
+		refuse   func(runstate.State) bool
+		problem  string
+		field    string
+		blocks   bool
+		refusals int
+	}{
+		{
+			name:     "the reviewer required repair",
+			verdict:  repairVerdict,
+			refuse:   func(state runstate.State) bool { return len(state.ReviewFindingDetails) > 0 },
+			problem:  `invalid run state: review_finding_details[0]: severity "advisory" must be "blocker", "major", or "minor"`,
+			field:    "review_finding_details[0]",
+			blocks:   true,
+			refusals: 1,
+		},
+		{
+			// The verdict itself is what the schema will not take here, which is the
+			// same trap one field over: a decision vocabulary that grew where the
+			// durable one did not.
+			name:    "the reviewer approved",
+			verdict: approveVerdict,
+			refuse:  func(state runstate.State) bool { return state.ReviewDecision != "" },
+			problem: "invalid run state: review_decision is invalid",
+			field:   "review_decision",
+			// The promotion's own record is refused, and then the record that ends
+			// the run over it.
+			refusals: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			repository := pipelineRepository(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := roleBackend(func(request backend.RunRequest) error {
+				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+			}, test.verdict)
+			pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+			pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
+			refusing := &refusingStore{StateStore: pipeline.Store, refuse: test.refuse, problem: test.problem}
+			pipeline.Store = refusing
+			before := gitLine(t, repository, "rev-parse", "refs/heads/main")
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
-	if err == nil || !strings.Contains(err.Error(), "review_finding_details[0]") {
-		t.Fatalf("Run() error = %v, want the refused field named", err)
-	}
-	if refusing.refusals == 0 {
-		t.Fatal("nothing was refused, so this proves nothing about a refusal")
-	}
-	// The run reported the verdict everywhere else exactly as it would have,
-	// which is what made the divergence silent.
-	if !outcome.Blocked || !tracker.blocked {
-		t.Fatalf("the refused save changed what the run reported: outcome = %t, tracker = %t", outcome.Blocked, tracker.blocked)
-	}
+			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			if err == nil || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("Run() error = %v, want the refused field %q named", err, test.field)
+			}
+			if refusing.refusals != test.refusals {
+				t.Fatalf("refusals = %d, want %d", refusing.refusals, test.refusals)
+			}
+			// Nothing is promoted over a record nothing could store.
+			if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != before {
+				t.Fatalf("main moved: %q, want %q", head, before)
+			}
+			// The run reported the verdict everywhere else exactly as it would have,
+			// which is what made the divergence silent.
+			if outcome.Blocked != test.blocks || tracker.blocked != test.blocks {
+				t.Fatalf("the refused save changed what the run reported: outcome = %t, tracker = %t, want %t",
+					outcome.Blocked, tracker.blocked, test.blocks)
+			}
 
-	state, err := store.Load(outcome.RunID)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !state.Status.Terminal() || state.CompletedAt == nil {
-		t.Fatalf("a refused save left the run readable as one still in flight: %#v", state)
-	}
-	for _, want := range []string{"could not be stored", "review_finding_details[0]"} {
-		if !strings.Contains(state.Failure, want) {
-			t.Fatalf("the record does not say what the store refused (%q missing):\n%s", want, state.Failure)
-		}
+			state, err := store.Load(outcome.RunID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if !state.Status.Terminal() || state.CompletedAt == nil {
+				t.Fatalf("a refused save left the run readable as one still in flight: %#v", state)
+			}
+			for _, want := range []string{"could not be stored", test.field} {
+				if !strings.Contains(state.Failure, want) {
+					t.Fatalf("the record does not say what the store refused (%q missing):\n%s", want, state.Failure)
+				}
+			}
+		})
 	}
 }
 
@@ -2929,23 +2979,29 @@ func roleBackend(develop func(backend.RunRequest) error, verdicts ...string) *fa
 	return provider
 }
 
-// refusingStore refuses every state that carries review findings, which is the
+// refusingStore refuses every state one chosen field appears on, which is the
 // shape a schema refusal has: one field the durable schema will not take,
 // discovered at the moment the run tries to record what it decided. It refuses
 // the way the real store does — with the classified refusal, not a store that
 // happened to be unavailable — because the two are acted on differently. What
 // stays on disk is whichever earlier state validated, and for a run being
 // reviewed that is the snapshot taken with the evidence deliberately cleared.
+//
+// It is keyed on a field rather than on a status or a phase because that is what
+// a schema refusal is keyed on, and the difference decides the case: a field
+// follows the run into every later write, including the write that ends it, so
+// the refusal is still there when the run tries to record its own ending.
 type refusingStore struct {
 	StateStore
+	refuse   func(runstate.State) bool
+	problem  string
 	refusals int
 }
 
 func (s *refusingStore) Save(state runstate.State) error {
-	if len(state.ReviewFindingDetails) > 0 {
+	if s.refuse(state) {
 		s.refusals++
-		return runstate.RefusedStateError{Problem: errors.New(
-			`invalid run state: review_finding_details[0]: severity "advisory" must be "blocker", "major", or "minor"`)}
+		return runstate.RefusedStateError{Problem: errors.New(s.problem)}
 	}
 	return s.StateStore.Save(state)
 }
