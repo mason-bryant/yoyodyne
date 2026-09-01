@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -147,6 +148,199 @@ func TestPipelinePublishesEveryAttemptOntoOnePullRequest(t *testing.T) {
 		t.Errorf("published head = %q, want the integrated commit %q", outcome.PullRequest.HeadCommit, outcome.Integration.SourceCommit)
 	}
 	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
+}
+
+// The request the forge is actually asked for says what it contains: the work
+// item's own text and the shape of the change, rather than the boilerplate a
+// reader of PR #314 got. Both are wired from what the run already holds — the
+// claimed item and the summary the harness computed of its worktree — so this
+// goes through the pipeline rather than through the rendering alone.
+func TestPipelineOpensAPullRequestThatSaysWhatItContains(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID:                 "yoyodyne-task",
+		Title:              "Task",
+		Description:        "The published body says nothing a reader wants.",
+		AcceptanceCriteria: "A reader can tell what the request contains.",
+		Notes:              "Admitted to the backlog by the product manager.",
+		Status:             "open",
+	}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(forge.opened) != 1 {
+		t.Fatalf("pull requests opened = %d, want exactly one", len(forge.opened))
+	}
+	body := forge.opened[0].Body
+	for _, want := range []string{
+		tracker.item.Description,
+		tracker.item.AcceptanceCriteria,
+		"feature.txt",
+		"Run: `" + outcome.RunID + "`",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("published body omits %q:\n%s", want, body)
+		}
+	}
+	// The notes are where a run's own record goes, so they are the one part of a
+	// work item a published body must not republish.
+	if strings.Contains(body, tracker.item.Notes) {
+		t.Errorf("published body carries the item's notes:\n%s", body)
+	}
+}
+
+// What the body carries, and what it still must not: the item's governed text
+// and the computed change, with nothing the developer wrote and nothing from
+// the notes a run records itself in.
+func TestPullRequestBodyCarriesGovernedTextAndComputedFacts(t *testing.T) {
+	t.Parallel()
+
+	item := beads.WorkItem{
+		ID:                 "yoyodyne-ifd.222",
+		Title:              "A pull request says what it contains",
+		Description:        "The body is identical on every request and says nothing about the change.",
+		AcceptanceCriteria: "A reader can tell what the request contains without opening the tracker.",
+		Notes:              "Goal served: publish that work as pull requests the harness opens.",
+	}
+	outcome := Outcome{
+		RunID:      "run-222",
+		WorkItemID: item.ID,
+		Branch:     "yoyodyne/yoyodyne-ifd-222",
+		BaseCommit: "1a2b3c4",
+		Summary:    "I rewrote the body, and I think it reads very well now.",
+		Changes: gitworktree.ChangeSummary{
+			Status:   "M internal/orchestrator/publish.go\nA internal/orchestrator/publish_test.go",
+			DiffStat: " internal/orchestrator/publish.go | 40 ++++++---\n 1 file changed, 30 insertions(+), 10 deletions(-)",
+		},
+	}
+
+	body := pullRequestBody(item, outcome, "main")
+	for _, want := range []string{
+		item.Description,
+		item.AcceptanceCriteria,
+		"M internal/orchestrator/publish.go",
+		"1 file changed, 30 insertions(+), 10 deletions(-)",
+		"- Run: `run-222`",
+		"- Branch: `yoyodyne/yoyodyne-ifd-222` into `main`",
+		"- Base commit: `1a2b3c4`",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body omits %q:\n%s", want, body)
+		}
+	}
+	// The rationale the item preserved: the body is governed text and computed
+	// fact, so what an agent wrote is not in it.
+	for _, unwanted := range []string{outcome.Summary, item.Notes} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("body carries unreviewed text %q:\n%s", unwanted, body)
+		}
+	}
+	// The merge mechanics is one line rather than the paragraph it was.
+	mechanics := 0
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, string(mergeMethod)+"` method") {
+			mechanics++
+		}
+	}
+	if mechanics != 1 {
+		t.Errorf("lines describing the merge mechanics = %d, want exactly one:\n%s", mechanics, body)
+	}
+}
+
+// An item with no description, and a run whose change was never summarized,
+// leave their sections out entirely: an empty heading reads as a work item that
+// says nothing and a change that touched nothing.
+func TestPullRequestBodyOmitsWhatItHasNothingToSay(t *testing.T) {
+	t.Parallel()
+
+	body := pullRequestBody(beads.WorkItem{ID: "yoyodyne-task", Title: "Task"},
+		Outcome{RunID: "run-1", WorkItemID: "yoyodyne-task", Branch: "run", BaseCommit: "1a2b3c4"}, "main")
+	for _, unwanted := range []string{"## What the work item asks for", "## Acceptance criteria", "## What changed"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("body carries an empty %q section:\n%s", unwanted, body)
+		}
+	}
+	if !strings.Contains(body, "- Run: `run-1`") {
+		t.Errorf("body omits the harness evidence it always carries:\n%s", body)
+	}
+}
+
+// A forge refuses a body past its own limit, so a long item or a change
+// touching hundreds of files must not be what stops a run publishing.
+func TestPullRequestBodyStaysInsideWhatAForgeAccepts(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("a line of the work item, written at length\n", 2000)
+	item := beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Description: long, AcceptanceCriteria: long}
+	outcome := Outcome{
+		RunID:      "run-1",
+		WorkItemID: item.ID,
+		Changes:    gitworktree.ChangeSummary{Status: long, DiffStat: long},
+	}
+
+	body := pullRequestBody(item, outcome, "main")
+	// GitHub refuses a body over 65536 bytes, and a body that fits is worth
+	// nothing if it does not say it was cut.
+	if len(body) > 64<<10 {
+		t.Fatalf("body is %d bytes, want it inside what the forge accepts", len(body))
+	}
+	if strings.Count(body, "cut to keep this body") != 4 {
+		t.Errorf("body does not say each of its four cut blocks was cut:\n%s", body[:2000])
+	}
+}
+
+// The defect PR #314 showed: a title cut at the commit-subject bound ended
+// mid-word, at "regist".
+func TestPullRequestTitleCutsAtAWordBoundary(t *testing.T) {
+	t.Parallel()
+
+	long := "Every Resolved() call site means has-a-disposition, proven by an audit that names the registry it walked"
+	for _, test := range []struct {
+		name  string
+		title string
+		want  string
+	}{
+		{name: "keeps a title that fits", title: "Wire the\n happy path\t", want: "yoyodyne-ifd.222 Wire the happy path"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := pullRequestTitle(beads.WorkItem{Title: test.title}, Outcome{WorkItemID: "yoyodyne-ifd.222"}); got != test.want {
+				t.Fatalf("pullRequestTitle() = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	got := pullRequestTitle(beads.WorkItem{Title: long}, Outcome{WorkItemID: "yoyodyne-ifd.222"})
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("pullRequestTitle() = %q, want a cut title to say it was cut", got)
+	}
+	cut := strings.TrimSuffix(strings.TrimPrefix(got, "yoyodyne-ifd.222 "), "…")
+	if len(cut) > maxPullRequestTitleBytes {
+		t.Errorf("pullRequestTitle() carried %d bytes of the title, want at most %d", len(cut), maxPullRequestTitleBytes)
+	}
+	if !strings.HasPrefix(long, cut+" ") {
+		t.Errorf("pullRequestTitle() = %q, which cuts %q inside a word", got, long)
+	}
+	// A pull request title is not a commit subject, so the bound that produced
+	// "regist" is not the bound used here.
+	if len(cut) <= maxCommitSubjectBytes {
+		t.Errorf("pullRequestTitle() carried %d bytes, want more than a commit subject's %d", len(cut), maxCommitSubjectBytes)
+	}
+	// A single word longer than the bound has no boundary to cut at, and is cut
+	// on a rune boundary rather than left whole or left invalid.
+	oneWord := pullRequestTitle(beads.WorkItem{Title: strings.Repeat("é", 200)}, Outcome{WorkItemID: "yoyodyne-ifd.222"})
+	if !utf8.ValidString(oneWord) || len(oneWord) > maxPullRequestTitleBytes+len("yoyodyne-ifd.222 ") {
+		t.Errorf("pullRequestTitle() = %q, want a valid title inside the bound", oneWord)
+	}
 }
 
 // A repository with no remote is the degradation the design requires: the run
