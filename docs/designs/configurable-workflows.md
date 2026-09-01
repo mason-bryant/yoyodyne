@@ -10,6 +10,14 @@ revisions:
       by: architect
       at: 2026-08-31T15:56:14Z
       reason: promoted from the operator's configurable-workflows brief (yoyodyne-ifd.210) with the twenty open questions settled; the authority model's reconciliation with the fixed-roles ruling is recorded in the authority-by-capability decision record
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:15:00Z
+      reason: approved amendment 8f75545e from yoyodyne-ifd.209.10 - the question the developer had to decide alone is answered in the design; a capability is harness-exercised on the role's behalf, and call-site conversion proceeds on that reading
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:15:00Z
+      reason: approved amendment 2268eabc from yoyodyne-ifd.209.15 - settled question 19 now distinguishes agent-judged gate evidence, which needs an assessor contract, from deterministic action outputs, which do not; the release-readiness gate is complete under this reading
 ---
 
 # Configurable workflows: a declarative runtime over trusted actions
@@ -21,6 +29,8 @@ The delivery loop's topology is Go control flow: a project can configure checks,
 ## The trust model
 
 Five layers, in descending configurability. A **workflow definition** (project-owned) selects step names, registered actions, schema-permitted parameters, outcome transitions, budgets, and terminals. An **agent profile** (project-owned) binds a logical agent to a role contract, backend, model, persona, context policy, triggers, and workflow participation — narrowing its role, never widening it. A **role definition** (protected, operator-controlled) composes named capability primitives with scopes and separation constraints. **Capabilities and actions** (Go, not configurable) define what reading, mutating, evidencing, publishing, and integrating *mean* and enforce it. The **runtime envelope** (Go, not configurable) wraps every action in leases, holds, directives, cancellation, persistence, redaction, idempotency, and revision binding — guarantees around actions, never optional steps. Configuration selects sequence; it cannot grant capability. That sentence is enforced by the invariant `configuration-never-grants-authority`.
+
+A capability is authority the harness exercises on the role's behalf, never authority the agent wields. A capability in a bundle means: when this role, through a registered action, requests that class of operation, the harness performs it subject to the capability's scope and the runtime separation policy. Roles decide, the harness performs — the same boundary the Git model states — and the authority workstream's call-site conversion proceeds on this reading.
 
 ## Definitions and validation
 
@@ -72,5 +82,5 @@ Delivery first — it is bounded, tested, safety-critical, and durable — behin
 16. Event subscriptions and workflow bindings are project configuration; schedules are operator-local policy, like account pools; both activate at the same explicit reload boundary, new invocations only.
 17. An alert is a distinct record projected into the report stream — reports are write-once and decide nothing, and grafting delivery state and feedback onto the simplest channel we have would complicate it for everything else.
 18. Preferences promote product-to-global by an explicit operator command that copies the derived preference and never the evidence; the global profile records provenance by ID reference only.
-19. Any output a workflow relies on as gate evidence requires a registered assessor contract whose bundle grants that evidence authority; the compiler enforces the pairing. Everything else is advisory.
+19. The registered-assessor pairing binds gate evidence produced by an agent's judgment: such evidence requires an assessor contract granting that evidence authority, and the compiler enforces the pairing. Evidence minted by a deterministic registered action needs no assessor contract — the action registry is its authority and its output is typed evidence like any other — so a gate built entirely from deterministic actions is complete as built. An agent output no workflow gates on is advisory.
 20. Never. An in-flight step attempt keeps the authority that authorized it; role-definition changes reach new invocations only.

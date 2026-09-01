@@ -14,6 +14,10 @@ revisions:
       by: architect
       at: 2026-08-23T18:42:25Z
       reason: the autonomous-management-loop brief promoted as the companion management-loop-protocol design; this contract now points at it as the owner of the protocol vocabulary, keeping one dispatcher and one contract with the detail one level down
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:15:00Z
+      reason: approved amendment b52bd247 from yoyodyne-ifd.224 - restart-on-deploy owned in one place, with the takeover bounded to idle boundaries, normal lease reattachment, and pinned instances unaffected
 ---
 
 # Management and supervision: the typed request contract and process residency
@@ -49,6 +53,8 @@ A role resolves what its own authority covers, and requests the role that owns w
 ## Process residency and the service shape
 
 The long-term shape is **one durable interaction and state service**, with local chat, Slack, and the CLI as conversational clients and the dashboard as a read-only projection — "one pane" means shared state and supervision, not one literal interface. The residency direction: `yoyo chat` is the single entry point; the **product manager supervises the resident subprocesses, the Slack sink included**; today's chat-spawns-subprocesses shape is explicitly interim, on the way to a headless product-manager service — under launchd on macOS, the tested platform — with chat as a thin attach-detach client. The supervising process holds the Slack tokens and **constructs every child's environment by allowlist, never inheritance**, so no provider subprocess ever receives them; that construction is the enforced boundary and is covered by a test. Separately started services are acceptable while they keep clean service boundaries and health/readiness hooks; model sessions are execution details and are never the durable conversation record. Process separation now must not force a new state model later.
+
+A watch session takes up a build installed over it by itself: between runs, never interrupting one. The takeover happens only at a boundary where the process has nothing in flight; the new process reattaches through the normal lease machinery; and pinned workflow instances continue on their pinned definitions and authority — a new binary changes the executor, never in-flight work's contract. This is settled here rather than deferred: a later headless supervisor inherits this behavior rather than re-deciding it.
 
 ## Recovery
 
