@@ -671,3 +671,87 @@ func TestTheTwoHandRelayedStoppagesReachHerWithNobodyCarryingThem(t *testing.T) 
 		t.Fatalf("after her decisions the pass reported %#v, want both stoppages left alone", settled.Escalated)
 	}
 }
+
+// A conversation nothing can open asks her nothing, so its attempt comes back
+// and the stoppage is never abandoned. The reasons are all reasons that clear —
+// a signed-out provider, a conversation somebody has open, a role nobody has
+// configured — and a stoppage given up on while the harness was misconfigured is
+// one nothing re-delivers when somebody fixes it.
+func TestAnUnreachableConversationIsNeverAbandoned(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{err: fmt.Errorf("%w: no agent fills the development-manager role", ErrConversationUnreachable)}
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	clock := &movingClock{now: escalationNow}
+	escalator.Clock = clock
+
+	// Well past the bound that abandons a turn which may have been taken.
+	for attempt := 1; attempt <= runstate.MaxEscalationAttempts+3; attempt++ {
+		sweep, err := escalator.Escalate(context.Background())
+		if err != nil {
+			t.Fatalf("attempt %d: Escalate() error = %v", attempt, err)
+		}
+		if len(sweep.Escalated) != 1 || sweep.Escalated[0].Delivered {
+			t.Fatalf("attempt %d = %#v, want the stoppage still being tried", attempt, sweep.Escalated)
+		}
+		if strings.Contains(sweep.Escalated[0].Problem, "needs a person") {
+			t.Fatalf("attempt %d was abandoned: %q", attempt, sweep.Escalated[0].Problem)
+		}
+		clock.now = clock.now.Add(runstate.EscalationRetryDelay)
+	}
+	if len(judge.shown) != runstate.MaxEscalationAttempts+3 {
+		t.Fatalf("attempts made = %d, want one per delay for as long as the conversation stays shut", len(judge.shown))
+	}
+
+	// And it lands the moment the conversation opens.
+	judge.err = nil
+	judge.judgment = Judgment{ConversationID: "chat-abc", Decision: "repair"}
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() once the conversation opened error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || !sweep.Escalated[0].Delivered {
+		t.Fatalf("once the conversation opened = %#v, want the stoppage delivered", sweep.Escalated)
+	}
+}
+
+// What a delivery cost comes back on the sweep, because the pass that made it is
+// the only thing that can count it: a turn is not a run, and a session bounded by
+// a budget has nothing else to read it from.
+func TestWhatADeliveryCostComesBackOnTheSweep(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc", Decision: "repair", CostUSD: 0.42}}
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || sweep.Escalated[0].CostUSD != 0.42 {
+		t.Fatalf("escalated = %#v, want what the turn cost carried back", sweep.Escalated)
+	}
+
+	// And a turn that failed cost what it cost: the provider charged for it
+	// exactly as it charges for one that answered.
+	spent := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, &standingJudge{}, nil)
+	spent.Manager = costingJudge{cost: 0.17, err: errors.New("the reply could not be read")}
+	sweep, err = spent.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || sweep.Escalated[0].Delivered || sweep.Escalated[0].CostUSD != 0.17 {
+		t.Fatalf("escalated = %#v, want a failed turn reporting what it cost", sweep.Escalated)
+	}
+}
+
+// costingJudge is a turn that cost money and then failed, which is the one shape
+// standingJudge cannot express: its failure returns no judgment at all.
+type costingJudge struct {
+	cost float64
+	err  error
+}
+
+func (j costingJudge) Judge(context.Context, triage.Entry) (Judgment, error) {
+	return Judgment{ConversationID: "chat-abc", CostUSD: j.cost}, j.err
+}

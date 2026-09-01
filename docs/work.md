@@ -352,13 +352,25 @@ still act on what she decided, under every condition they already ask. Each
 stoppage is delivered once, and a stoppage she has already decided is not
 delivered at all — a decision is recorded the moment she makes it and carried out
 later, so in between the stopped run still reads as untouched, which is where
-every stoppage anybody carries to her by hand also sits. A delivery that failed
-is made again, no sooner than a quarter of an hour later and at most three times,
-and then left for a person, which every later pass goes on saying rather than
-falling quiet about it. Pausing covers it like any other provider call, and
-holding intake does not, because it chooses no work and starts nothing. The other
-stoppages — a failing check, a refused path, a replay conflict — still wait to be
-read.
+every stoppage anybody carries to her by hand also sits.
+
+Deliveries that do not land are treated by what they can prove. A turn that
+**may have reached her** and then failed is made again no sooner than a quarter
+of an hour later, three times in all, and then left for a person — which every
+later pass goes on saying rather than falling quiet about it. A turn that
+**provably reached her with nothing** — her conversation could not be opened
+because you have it open, or no agent fills the role, or the provider is signed
+out or out of capacity — keeps its attempt and is tried again every quarter of an
+hour for as long as that lasts, because nothing was said to her and every one of
+those reasons is one that clears. It is never abandoned: the alternative is a
+stoppage given up on while the harness was misconfigured, and nothing to
+re-deliver it once you fix the configuration. Each attempt is said on the pass
+either way.
+
+Pausing covers a delivery like any other provider call, and `--budget` counts
+what it spent against the session's bound. Holding intake does not stop it,
+because it chooses no work and starts nothing. The other stoppages — a failing
+check, a refused path, a replay conflict — still wait to be read.
 [Conversation](conversation.md#deciding-what-becomes-of-stopped-work) has what
 she does with one.
 
@@ -442,9 +454,11 @@ and no work, and it costs a bounded session nothing of its cap.
 A drain never does this. It is a command you are waiting on the return of, and
 restarting it would run the pass again from the top.
 
-`--budget <usd>` caps what one session spends, and fails closed: a pass that
-cannot price itself is refused before it starts, and a session that meets a run
-whose evidence will not price stops and names it rather than counting it as free.
+`--budget <usd>` caps what one session spends — the runs it starts and the turns
+it takes putting stopped work to the development manager, which are the two
+things a session spends on — and fails closed: a pass that cannot price itself is
+refused before it starts, and a session that meets a run whose evidence will not
+price stops and names it rather than counting it as free.
 A session that stops that way is a stopped line like any other: with work still
 ready, [the Slack sink](reporting.md#reporting-into-slack) says so again every hour until
 somebody starts one, rather than saying it once at the moment nobody was reading.

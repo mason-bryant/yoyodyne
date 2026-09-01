@@ -438,11 +438,11 @@ type Scheduler struct {
 	// reached, or when the harness can no longer be read.
 	Watching bool
 	// Budget caps what one session may spend, in the provider's own reported
-	// dollars, over the runs the session started. Zero is unbounded, which is
-	// what a drain has always been. The bound is checked between pulls rather
-	// than during a run: a run already under way is never stopped part way for
-	// money, because the spend is already made and what it would lose is the
-	// work it bought.
+	// dollars, over everything the session spends on: the runs it starts, and the
+	// turns it takes itself putting stopped work in front of the development
+	// manager. Zero is unbounded, which is what a drain has always been. The bound
+	// is checked between pulls rather than during a run or a turn: what is already
+	// spent is spent, and what stopping part way would lose is the work it bought.
 	Budget float64
 	// Sessions is where the session's state transitions are recorded. Optional;
 	// see WatchSessions.
@@ -564,9 +564,10 @@ type Schedule struct {
 	// still reported, because a brake that failed is exactly the thing an
 	// operator must not find out about by inferring it from the silence.
 	BrakeProblem string `json:"brake_problem,omitempty"`
-	// SpentUSD is what the runs this pass started cost, as the provider reported
-	// it, and Budget is what it was allowed. Both are absent from a pass nobody
-	// bounded and nothing priced.
+	// SpentUSD is what this pass spent, as the provider reported it: the runs it
+	// started, and the turns it took itself putting stopped work in front of the
+	// development manager. Budget is what it was allowed. Both are absent from a
+	// pass nobody bounded and nothing priced.
 	SpentUSD float64 `json:"spent_usd,omitempty"`
 	Budget   float64 `json:"budget,omitempty"`
 	// SpendProblem names run evidence that could not be priced. On an unbounded
@@ -1312,6 +1313,14 @@ func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) 
 	}
 	delivered := false
 	for _, escalated := range sweep.Escalated {
+		// What the delivery cost is the session's spend, exactly as a run's is. It
+		// is counted whichever way the turn went and before anything else is
+		// decided about it, because the provider charged for it either way — and a
+		// session bounded by a budget that spent past it on turns nothing counted
+		// would be the operator's cap disappearing quietly, which is the one thing
+		// a bound must not do. The bound itself is read at the top of the next
+		// pull, like every other spend this session makes.
+		schedule.SpentUSD += escalated.CostUSD
 		// A delivery that happened is kept, because it is one of the things this
 		// pass did and there are as many of them as there were stoppages. One that
 		// did not happen is a problem rather than an event, and the problems are

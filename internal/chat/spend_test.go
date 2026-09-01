@@ -115,3 +115,35 @@ func (l *recordingSpendLog) Append(line runstate.Spend) error {
 	l.lines = append(l.lines, line)
 	return l.failure
 }
+
+// What a turn cost is handed back to whoever asked for it. The harness takes
+// turns nobody is sitting in front of now — a stopped run put to the development
+// manager — and a `yoyo work` session given a budget counts what it spent doing
+// that, so an accessor that under-reported would be the operator's cap
+// disappearing quietly.
+func TestATurnReportsWhatItCost(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "Noted.", CostUSD: 0.02, CostReported: true},
+		{SessionID: "session-1", IsError: true, StopReason: "max_turns", CostUSD: 0.03, CostReported: true},
+	}})
+	session := openTestSession(t, options)
+
+	if _, err := session.Send(context.Background(), "what is next?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if session.TurnCostUSD() != 0.02 {
+		t.Fatalf("TurnCostUSD() = %v, want what the provider charged for the turn", session.TurnCostUSD())
+	}
+
+	// A turn that failed was charged for exactly as one that answered, and says
+	// so: a caller that counted only successful turns would spend past a bound on
+	// the failures.
+	if _, err := session.Send(context.Background(), "and now?"); err == nil {
+		t.Fatal("Send() error = nil, want the failed turn still failed")
+	}
+	if session.TurnCostUSD() != 0.03 {
+		t.Fatalf("TurnCostUSD() = %v, want what the failed turn cost rather than the turn before it", session.TurnCostUSD())
+	}
+}

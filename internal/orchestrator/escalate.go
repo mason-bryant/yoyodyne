@@ -152,10 +152,17 @@ type DevelopmentManager interface {
 	Judge(ctx context.Context, entry triage.Entry) (Judgment, error)
 }
 
-// Judgment is what came back from one delivery: her conversation, and the triage
-// decision she recorded about the stoppage, where she recorded one.
+// Judgment is what came back from one delivery: her conversation, the triage
+// decision she recorded about the stoppage where she recorded one, and what the
+// turn cost.
 type Judgment struct {
 	ConversationID string `json:"conversation_id,omitempty"`
+	// CostUSD is what the provider charged for the turn, as it reported it. It is
+	// carried back because the delivery is a spend the caller made rather than one
+	// a run made, so a session counting what it has spent has no other way to see
+	// it. A turn that failed carries what it cost too: the provider charged for it
+	// exactly as it charges for one that answered.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 	// Decision is the triage decision she recorded about this stoppage, in the
 	// vocabulary the conversation records decisions in, and Reason the reasoning
 	// she gave for it. Both are empty where she decided nothing, which is an
@@ -207,6 +214,11 @@ type Escalated struct {
 	// Decision is what she recorded about the stoppage, and is empty where she
 	// recorded nothing.
 	Decision string `json:"decision,omitempty"`
+	// CostUSD is what the turn cost, as the provider reported it. It is on the
+	// sweep so that whatever drives the delivery can count it: a delivery is a
+	// spend made by the caller rather than by a run, and a session bounded by a
+	// budget must not spend past it on turns nothing counted.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 	// Problem is what stopped a delivery, and says whether the stoppage will be
 	// tried again.
 	Problem string `json:"problem,omitempty"`
@@ -460,6 +472,9 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 		return Escalated{}, false, fmt.Errorf("record that the stoppage of run %s is being put to the development manager: %w", entry.RunID, err)
 	}
 	judgment, judgeErr := e.Manager.Judge(ctx, entry)
+	// What the turn cost is carried whichever way it went, because the provider
+	// charges for a turn that failed exactly as for one that answered.
+	escalated.CostUSD = judgment.CostUSD
 	if errors.Is(judgeErr, ErrConversationUnreachable) {
 		escalated.Problem = fmt.Sprintf("the stoppage of run %s was not put to the development manager and will be once %s has passed: %v",
 			entry.RunID, runstate.EscalationRetryDelay, judgeErr)

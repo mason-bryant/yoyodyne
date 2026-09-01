@@ -85,9 +85,13 @@ func (d developmentManagerConversation) Judge(ctx context.Context, entry triage.
 	defer lease.Release()
 
 	reply, err := session.Send(ctx, escalationMessage(entry))
-	// The conversation is named whichever way the turn went, because a turn that
-	// failed still happened in a conversation somebody can go and read.
-	judgment := orchestrator.Judgment{ConversationID: session.Evidence().ConversationID}
+	// The conversation and what the turn cost are carried whichever way it went: a
+	// turn that failed still happened in a conversation somebody can go and read,
+	// and the provider charged for it exactly as it charges for one that answered.
+	judgment := orchestrator.Judgment{
+		ConversationID: session.Evidence().ConversationID,
+		CostUSD:        session.TurnCostUSD(),
+	}
 	if err != nil {
 		return judgment, notReached(err)
 	}

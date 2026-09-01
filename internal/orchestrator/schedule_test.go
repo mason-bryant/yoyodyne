@@ -2948,3 +2948,70 @@ func TestAnAbandonedStoppageIsSaidByEveryPass(t *testing.T) {
 		t.Fatalf("escalated = %#v, want nothing reported as delivered", schedule.Escalated)
 	}
 }
+
+// A delivery is a spend the pass makes itself, so it counts against the bound
+// the session was given. A turn is not a run and nothing else in the pass would
+// see it, and a session that spent past its cap on turns nobody counted is the
+// operator's cap disappearing quietly.
+func TestWhatADeliveryCostCountsAgainstTheSessionsBudget(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  passes == 1,
+			CostUSD:    0.40,
+			// The second pass is a turn that failed, which the provider charged
+			// for exactly as it charged for the first.
+			Problem: map[bool]string{true: "", false: "the reply could not be read"}[passes == 1],
+		}}}, nil
+	}
+	scheduler := Scheduler{Budget: 1}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	scheduler.escalate(context.Background(), &schedule, pull)
+	scheduler.escalate(context.Background(), &schedule, pull)
+
+	if schedule.SpentUSD != 0.80 {
+		t.Fatalf("spent = %.2f, want both turns counted against the session", schedule.SpentUSD)
+	}
+}
+
+// And a session stops on its budget over deliveries alone. A watching session
+// with an empty queue starts nothing and used to spend nothing; it can now spend
+// a turn per poll, so the bound has to be able to end it on that spend by itself.
+func TestASessionStopsOnItsBudgetOverDeliveriesAlone(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+			CostUSD:    0.40,
+		}}}, nil
+	}
+	// The session keeps polling; what stops it is the bound rather than the
+	// operator.
+	harness.onSleep = func(*scheduleHarness, int) bool { return true }
+
+	schedule, err := Scheduler{
+		Open: harness.open, Watching: true, Budget: 1, Sleep: harness.sleep, Now: harness.clock,
+	}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleBudgetSpent {
+		t.Fatalf("stopped = %q, want the session stopped on its budget", schedule.Stopped)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want a session that spent its budget on deliveries alone", schedule.Started)
+	}
+	if schedule.SpentUSD < 1 {
+		t.Fatalf("spent = %.2f, want the deliveries counted up to the bound", schedule.SpentUSD)
+	}
+}

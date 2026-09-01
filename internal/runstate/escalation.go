@@ -50,10 +50,20 @@ const EscalationSchemaVersion = 1
 //
 // It is small on purpose. Every attempt past the first is a turn spent on
 // evidence she may already have read, so a bound of three is what separates
-// riding out a provider that was briefly unreachable from a loop that spends
-// every poll on a conversation nothing can open. A stoppage that exhausts it is
+// riding out a provider that briefly failed mid-turn from a loop that spends
+// every poll saying the same thing to her again. A stoppage that exhausts it is
 // still on the docket, and what it then needs is a person — which is stated
 // where the attempts run out rather than left to be inferred from the quiet.
+//
+// What it bounds is turns that may have been taken, and only those. A delivery
+// that provably asked her nothing gives its attempt back through Withdraw, so a
+// conversation nothing can open is retried at the pace below for as long as it
+// stays unopenable rather than counting down to abandonment. That is deliberate
+// and it is the safer direction: the reasons a conversation cannot be opened are
+// a signed-out provider, a conversation somebody has open, a role nobody has
+// configured — every one of them something that clears — and a stoppage
+// abandoned while the harness was misconfigured is one nothing re-delivers when
+// the configuration is fixed.
 const MaxEscalationAttempts = 3
 
 // EscalationRetryDelay is how long a failed delivery is left alone before it is

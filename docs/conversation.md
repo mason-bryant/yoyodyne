@@ -919,10 +919,14 @@ queue closed while she reads all of them. Each is delivered once — the same
 evidence in front of her twice is how one authorized recovery becomes two
 decisions — and one she has already decided is not delivered at all, whether or
 not the harness has carried that decision out yet, which is what keeps a stoppage
-somebody brought her by hand from arriving a second time by machine. A delivery
-that failed is made again, no sooner than a quarter of an hour later and at most
-three times, and then left for a person, which every pass afterwards goes on
-saying out loud rather than leaving to the quiet. Your pause covers it as it covers every provider call; holding intake
+somebody brought her by hand from arriving a second time by machine. A turn that
+may have reached her and then failed is made again, no sooner than a quarter of
+an hour later and at most three times, and then left for a person, which every
+pass afterwards goes on saying out loud rather than leaving to the quiet. A turn
+that provably reached her with nothing — her conversation could not be opened, or
+the provider had no capacity — keeps its attempt instead and is tried again every
+quarter of an hour until it gets through, because nothing was said to her and
+those reasons clear. Your pause covers it as it covers every provider call; holding intake
 does not, because the delivery chooses no work and starts nothing, and the
 judgment it produces is usually what a held queue is waiting on. The other
 stoppages — a failing check, a refused path, a replay conflict — still reach her

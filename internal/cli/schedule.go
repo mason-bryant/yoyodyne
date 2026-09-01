@@ -56,7 +56,7 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	limit := flags.Int("limit", 0, "stop after starting this many runs (default: no bound on how many)")
 	watch := flags.Bool("watch", false, "keep pulling work as it becomes ready, until stopped")
 	untilDrained := flags.Bool("until-drained", false, "return once nothing more is ready to pull (the default)")
-	budget := flags.Float64("budget", 0, "stop once the runs this session started have cost this many dollars (default: unbounded)")
+	budget := flags.Float64("budget", 0, "stop once this session has spent this many dollars (default: unbounded)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -513,11 +513,16 @@ she reads, and a stoppage she has already decided is passed over whether or not
 her decision has been carried out yet. She decides there and the decision is
 recorded against the item's triage budget exactly as it is when somebody brings
 her a stoppage by hand; nothing is carried out by this, so "yoyo triage repair"
-and "yoyo triage rerun" still act on what she decided. A delivery that failed is
-made again a quarter of an hour later, three times in all, and then left for a
-person. A pause covers it like any other provider call, and holding intake does
-not: the judgment a held queue is waiting on is what the delivery produces. What
-it did, and anything still waiting on a person, is on the pass.
+and "yoyo triage rerun" still act on what she decided. A turn that may have reached her and
+then failed is made again a quarter of an hour later, three times in all, and
+then left for a person. One that provably reached her with nothing -- her
+conversation could not be opened, the provider had no capacity -- keeps its
+attempt and is tried again every quarter of an hour until it gets through, since
+nothing was said to her and every reason for it clears. A pause covers a delivery
+like any other provider call and --budget counts what it spent; holding intake
+does not stop it, because the judgment a held queue is waiting on is what the
+delivery produces. What it did, and anything still waiting on a person, is on the
+pass.
 
 A watching session guards itself three ways. It does not start the same item
 twice unless the item has changed -- what it says, what it is for, its priority,
@@ -559,16 +564,18 @@ neither surface is left saying a stopped session is on its way back. A platform
 that cannot replace a running process says so when the session opens, and that
 session watches without this and is restarted by hand for a deploy.
 
---budget fails closed. A pass with no way to price itself is refused before
-anything starts, and a session that meets a run whose recorded evidence will not
-price stops and says which run it was rather than counting it as free and
-carrying on inside a bound it can no longer hold.
+--budget fails closed, and it bounds everything the session spends: the runs it
+starts, and the turns it takes putting stopped work to the development manager. A
+pass with no way to price itself is refused before anything starts, and a session
+that meets a run whose recorded evidence will not price stops and says which run
+it was rather than counting it as free and carrying on inside a bound it can no
+longer hold.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --limit <n>       stop after starting this many runs (default: no bound)
   --watch           keep pulling work as it becomes ready, until stopped
   --until-drained   return once nothing more is ready to pull (the default)
-  --budget <usd>    stop once this session's runs have cost this much (default: unbounded)
+  --budget <usd>    stop once this session has spent this much (default: unbounded)
   --json            emit machine-readable JSON`)
 }

@@ -358,8 +358,15 @@ type Session struct {
 	// turnCostUSD is what the provider charged for the message being answered,
 	// summed across the rounds it took, and sessionCostUSD is what this process
 	// has spent on the conversation. Both are what the provider reported rather
-	// than anything the harness worked out, and neither is recorded: they are
-	// shown to an operator watching their spend and nothing else reads them.
+	// than anything the harness worked out, and neither is the record of the
+	// spend: the cost log is, and these are the same figures as they are handed
+	// back to whoever asked for the turn.
+	//
+	// The per-turn figure is read by more than the operator's status line now.
+	// A `yoyo work` session takes turns of its own — a stopped run put to the
+	// development manager — and a session given a budget has to count what it
+	// spent doing that, so TurnCostUSD below hands this back. The session figure
+	// stays what it always was: nothing reads it but the screen.
 	//
 	// Summing treats each invocation's reported cost as that invocation's own.
 	// If a provider ever reported a running total for a resumed session instead,
@@ -615,6 +622,22 @@ func Open(options Options) (*Session, error) {
 
 // Resumed reports whether this session continued a recorded conversation.
 func (s *Session) Resumed() bool { return s.resumed }
+
+// TurnCostUSD is what the provider charged for the message this conversation
+// last answered, as the provider reported it, summed across the rounds that
+// message took.
+//
+// It is here because a turn is not always something an operator asked for. The
+// harness takes one itself when it puts a stopped run in front of the
+// development manager, and a `yoyo work` session given a budget has to count
+// that against the bound it was given — a session that spends past its cap on
+// turns nobody counted is the cap disappearing quietly, which is the one thing
+// a bound must not do.
+//
+// It says nothing about what was recorded. The cost log is where the spend is
+// durable, written as the invocation is taken and independent of whether anybody
+// reads this.
+func (s *Session) TurnCostUSD() float64 { return s.turnCostUSD }
 
 // Evidence reports the conversation as it currently stands.
 func (s *Session) Evidence() Evidence {
