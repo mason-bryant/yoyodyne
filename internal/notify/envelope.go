@@ -140,6 +140,14 @@ const (
 	KindWatchBraked  Kind = "watch.braked"
 	KindWatchResumed Kind = "watch.resumed"
 	KindWatchStopped Kind = "watch.stopped"
+	// A session stopping to be restarted into a build deployed over it. It is the
+	// same recorded stop as the one above and it is said apart from it, because
+	// the two mean opposite things to whoever reads them: a session that ended is
+	// a line waiting on somebody to start another, and this is a session that has
+	// waited out its runs and is coming straight back on the new build. Saying
+	// them the same way would hand the operator a move they do not have, once per
+	// deploy, which is the standing chore self-redeployment exists to end.
+	KindWatchRedeploying Kind = "watch.redeploying"
 	// A line that is choosing nothing while work is ready to be chosen. Every
 	// kind above is a transition said once; this one is a state said again while
 	// it stands, because the fact somebody needs is not that it began but that it
@@ -209,6 +217,7 @@ func Kinds() []Kind {
 		KindWatchBraked,
 		KindWatchResumed,
 		KindWatchStopped,
+		KindWatchRedeploying,
 		KindLineWaiting,
 		KindResidentStale,
 		KindCatchUpDigest,
@@ -231,7 +240,7 @@ func (k Kind) Valid() bool {
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
-		KindLineWaiting, KindResidentStale, KindCatchUpDigest:
+		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindCatchUpDigest:
 		return true
 	default:
 		return false

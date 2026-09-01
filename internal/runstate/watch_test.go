@@ -139,6 +139,51 @@ func TestASessionRecordsTheBuildItIsRunning(t *testing.T) {
 	}
 }
 
+// A session that stopped to be restarted into a build deployed over it says so
+// on the stop, because the state alone cannot tell that apart from a line
+// somebody closed — and the two ask opposite things of whoever reads the log.
+//
+// The mark is a field rather than a state of its own on purpose: a reader from
+// before it existed ignores an unknown field and refuses an unknown state, and
+// the reader running while a redeploy happens is exactly the older one.
+func TestASessionSaysWhenItsStopIsARestart(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	restarting := testWatchTransition(testWatchSessionID, WatchStopped, "a build was deployed over the one this session was started from")
+	restarting.Restarting = true
+	if err := store.Record(restarting); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	ended := testWatchTransition(testWatchSessionID, WatchStopped, "the operator stopped it")
+	if err := store.Record(ended); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	recorded, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 {
+		t.Fatalf("List() = %#v, want both stops", recorded)
+	}
+	if !recorded[0].Restarting {
+		t.Fatal("the stop that was a restart reads back as an ending")
+	}
+	if recorded[1].Restarting {
+		t.Fatal("the stop the operator asked for reads back as a restart")
+	}
+	// Only a stop can be one. A session marked as coming back while it is still
+	// watching would have every surface announcing a restart nothing is going to
+	// make.
+	watching := testWatchTransition(testWatchSessionID, WatchWatching, "watching the backlog until stopped")
+	watching.Restarting = true
+	if err := store.Record(watching); err == nil {
+		t.Fatal("Record() error = nil, want a restart marked on something that is not a stop refused")
+	}
+}
+
 // A log that cannot be read is an error rather than an absence, for the reason
 // every other record here is: a session nobody can read must not be reported as
 // a session that never ran.

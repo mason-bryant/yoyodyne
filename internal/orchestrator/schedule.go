@@ -92,6 +92,33 @@ package orchestrator
 // would otherwise put the whole backlog through a failed run each. And a session
 // says what it is doing where somebody who is not at its terminal can read it,
 // because an idle session and a dead one are the same silence.
+//
+// # A session that redeploys itself
+//
+// The fourth thing watching adds is the one failure the loop is itself. A
+// session goes on choosing and dispatching from the binary it was started with
+// while fixes land behind it, so the work it dispatches is spent against defects
+// that were fixed hours before — which reads as agents failing rather than as a
+// process nobody restarted. It cost three review rounds on 2026-08-30 against a
+// bug that had been dead for a day, and on 2026-08-31 the session choosing work
+// was found forty-three changes old.
+//
+// Nothing outside the process can close that. Killing a session cancels the run
+// it is carrying, so an external job may only bounce it while nothing is
+// running; with more than one developer slot and a deep queue the next run
+// starts the moment one settles, and a poll at any interval never lands in that
+// window. The session is the only thing standing in it.
+//
+// So the session takes the deploy up itself. When it finds that the binary it
+// was started from has been replaced, it stops choosing, waits out the runs it
+// already started, and stops with ScheduleRedeployed — which is the caller's
+// signal to re-execute. A live run is never interrupted for it, and that is why
+// this wins the race an external restart loses rather than being the same thing
+// moved inside: the session declining to claim anything more is what makes the
+// window exist at all, and nothing but the session can decline.
+//
+// A drain never does any of this. It is a command somebody is waiting on the
+// return of, and restarting it would run the pass again from the beginning.
 
 import (
 	"context"
@@ -159,6 +186,11 @@ const (
 	// harness running out of anything, which is why it reads like the limit
 	// above rather than like a failure.
 	ScheduleBudgetSpent = "the session spent the budget it was given"
+	// ScheduleRedeployed reports a session that stopped to take up the binary
+	// deployed over the one it was started from. It is not the end of the line:
+	// the caller re-executes, and the session that comes back is watching the
+	// same queue from the build that was deployed.
+	ScheduleRedeployed = "a build was deployed over the one this session was started from, and the session is restarting into it"
 	// ScheduleSpendUnreadable reports a bounded session that stopped because it
 	// could not tell what it had spent. A budget measured against evidence
 	// nobody can read is not a smaller budget, it is no budget at all, so the
@@ -223,12 +255,39 @@ type ScheduleSpend interface {
 	Price(workItemID string) (runstate.ItemPrice, error)
 }
 
+// ScheduleDeployment reports whether the binary this session is executing has
+// been deployed over since it started. It is satisfied by redeploy.Binary.
+//
+// It is optional, and a session wired without one behaves exactly as every
+// session did before: it goes on running what it was started with until somebody
+// restarts it, which is the state the package comment above describes the cost
+// of. It is asked once per pull and answers from one file reading, so an idle
+// session pays for it what it pays for reading the queue.
+type ScheduleDeployment interface {
+	Replaced() (bool, error)
+}
+
+// SessionState is one transition a watch session records about itself: what it
+// entered, when, why, and whether the stop it is recording is a session coming
+// straight back rather than a line going down.
+type SessionState struct {
+	State  runstate.WatchState
+	At     time.Time
+	Reason string
+	// Restarting marks the one stop that is not an ending — the session waiting
+	// out its runs to be re-executed into a build deployed over it. It is what
+	// keeps every surface from telling the operator to start a session that is
+	// already on its way back, which is the standing chore this whole mechanism
+	// exists to end rather than reproduce once per deploy.
+	Restarting bool
+}
+
 // WatchSessions is where a watch session says what it is doing, for the reader
 // who is not at its terminal. It is optional: a session wired without one
 // behaves identically and is simply invisible between the runs it starts, which
 // is the state this exists to end.
 type WatchSessions interface {
-	Record(state runstate.WatchState, at time.Time, reason string) error
+	Record(SessionState) error
 }
 
 // Starter runs one chosen item to its end. It is a function rather than the
@@ -340,6 +399,11 @@ type Scheduler struct {
 	// Sessions is where the session's state transitions are recorded. Optional;
 	// see WatchSessions.
 	Sessions WatchSessions
+	// Deployment is how a watching session finds out that the binary it is
+	// executing has been deployed over. Optional; see ScheduleDeployment. It is
+	// consulted only while watching, because a drain is a command somebody is
+	// waiting on the return of rather than a process that outlives a deploy.
+	Deployment ScheduleDeployment
 	// Sleep waits out one poll interval and reports false when the context ended
 	// first. It is injected so a test does not have to spend real seconds, and
 	// defaults to a timer.
@@ -451,6 +515,13 @@ type Schedule struct {
 	// number; on a bounded one it is why the session stopped, because a budget
 	// measured against evidence nobody can read is no budget at all.
 	SpendProblem string `json:"spend_problem,omitempty"`
+	// RedeployProblem names a reading of the session's own binary that failed, so
+	// whether a build has been deployed over it is a question nobody answered. It
+	// costs the session its self-redeployment and nothing else, so it is reported
+	// beside the pass rather than stopping it: a session that stopped choosing
+	// work because it could not stat a file would be a worse failure than the
+	// staleness it is guarding against.
+	RedeployProblem string `json:"redeploy_problem,omitempty"`
 	// SessionProblem names a transition that could not be recorded. It costs the
 	// session its visibility rather than its work, so it is reported beside the
 	// pass rather than failing it — the alternative is a session that stops
@@ -526,6 +597,11 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// pull that could be opened. It is held outside the loop because a run
 	// collected after the final pull still cost what it cost.
 	var spend ScheduleSpend
+	// redeploying is the session having found a build deployed over the one it is
+	// executing. From that point it claims nothing more and waits out what it
+	// already started, which is the whole of how a restart reaches the machine
+	// without cancelling a run.
+	redeploying := false
 	running := 0
 
 	// settle takes one finished run into the schedule: what became of it, what it
@@ -607,6 +683,37 @@ pulling:
 		}
 		if ctx.Err() != nil {
 			schedule.Stopped = ScheduleCancelled
+			break
+		}
+		// Whether a build has been deployed over this one, asked before anything
+		// is chosen and before the configuration is even read. It is asked here
+		// rather than after a run settles because those are the same moment seen
+		// from either side — this is the top of the loop a settled run returns to,
+		// and it is the last point before the next item is claimed.
+		if !redeploying && s.Watching && s.Deployment != nil {
+			replaced, err := s.Deployment.Replaced()
+			switch {
+			case err != nil:
+				if schedule.RedeployProblem == "" {
+					schedule.RedeployProblem = fmt.Sprintf("whether a build has been deployed over this session could not be read, so it goes on running what it was started with: %v", err)
+				}
+			case replaced:
+				redeploying = true
+			}
+		}
+		if redeploying {
+			// A live run is never interrupted for a redeploy. Waiting one out is
+			// bounded by the run rather than by the queue, because the session has
+			// already stopped claiming: the window an external restart could never
+			// find is one this makes rather than waits for.
+			if running > 0 {
+				if !collect() {
+					schedule.Stopped = ScheduleCancelled
+					break
+				}
+				continue
+			}
+			schedule.Stopped = ScheduleRedeployed
 			break
 		}
 		pull, err := s.Open(ctx)
@@ -860,7 +967,10 @@ pulling:
 		running--
 		settle(done)
 	}
-	session.enter(runstate.WatchStopped, stopping(schedule))
+	// The last line, and whether it is an ending. A session stopping to be
+	// restarted into the build deployed over it is waiting on nothing and nobody,
+	// and a reader told otherwise is being handed the chore this exists to end.
+	session.stop(stopping(schedule), schedule.Redeploying())
 	return schedule, failure
 }
 
@@ -1147,7 +1257,20 @@ func (w *watchSession) enter(state runstate.WatchState, reason string) {
 		return
 	}
 	w.state, w.reason = state, reason
-	w.record(state, reason)
+	w.record(SessionState{State: state, Reason: reason})
+}
+
+// stop records the session's last line, and whether the stop is the session
+// being restarted into a build deployed over it rather than the line going down.
+// The two read identically in the log and mean opposite things to whoever is
+// waiting: one is a session somebody has to start again, and the other is a
+// session that is already on its way back.
+func (w *watchSession) stop(reason string, restarting bool) {
+	if w.to == nil {
+		return
+	}
+	w.state, w.reason = runstate.WatchStopped, reason
+	w.record(SessionState{State: runstate.WatchStopped, Reason: reason, Restarting: restarting})
 }
 
 // resume records the session choosing work again after a wait. It leaves the
@@ -1159,16 +1282,17 @@ func (w *watchSession) resume(reason string) {
 		return
 	}
 	w.state, w.reason = runstate.WatchWatching, reason
-	w.record(runstate.WatchResumed, reason)
+	w.record(SessionState{State: runstate.WatchResumed, Reason: reason})
 }
 
 // record writes one transition. A transition that cannot be written costs the
 // session its visibility and not its work: what is reported is a session nobody
 // can see, which is worth saying out loud and is not worth stopping the work
 // for.
-func (w *watchSession) record(state runstate.WatchState, reason string) {
-	if err := w.to.Record(state, w.now(), reason); err != nil && w.schedule.SessionProblem == "" {
-		w.schedule.SessionProblem = fmt.Sprintf("the session could not record that it was %s, so what it is doing is not readable from anywhere but here: %v", state, err)
+func (w *watchSession) record(transition SessionState) {
+	transition.At = w.now()
+	if err := w.to.Record(transition); err != nil && w.schedule.SessionProblem == "" {
+		w.schedule.SessionProblem = fmt.Sprintf("the session could not record that it was %s, so what it is doing is not readable from anywhere but here: %v", transition.State, err)
 	}
 }
 
@@ -1410,6 +1534,9 @@ func (s Schedule) Render() string {
 	if s.SessionProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.SessionProblem)
 	}
+	if s.RedeployProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.RedeployProblem)
+	}
 	if s.StalenessProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.StalenessProblem)
 	}
@@ -1452,6 +1579,18 @@ func (s Started) state() string {
 // success, which is the whole of where the four-way vocabulary applies.
 func endedWithoutSucceeding(status runstate.Status) bool {
 	return status.Terminal() && status != runstate.StatusSucceeded
+}
+
+// Redeploying reports a session that stopped in order to be restarted into the
+// build deployed over it, with every run it started waited out first.
+//
+// It is read from why the session stopped rather than from a flag of its own,
+// because the two can disagree and only one of them is the truth: a session that
+// had decided to redeploy and was then stopped by its operator stopped for the
+// operator, and restarting it would be this loop overriding the person who
+// closed it.
+func (s Schedule) Redeploying() bool {
+	return s.Stopped == ScheduleRedeployed
 }
 
 // Failed reports a pass with something in it an operator has to act on. A

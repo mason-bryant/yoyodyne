@@ -1049,6 +1049,38 @@ func TestAWatchSessionIsAddressedToTheWholeLine(t *testing.T) {
 	}
 }
 
+// The stop that is not an ending. A session being re-executed into a build
+// deployed over it records the same stopped state as a session somebody closed,
+// and the two ask opposite things of a reader — so the mark the session wrote is
+// what the kind is taken from, rather than the state alone.
+func TestAStopMarkedAsARestartIsSaidAsOneRatherThanAsAnEnding(t *testing.T) {
+	stopped := watchTransition(runstate.WatchStopped, "the operator stopped it")
+	ending, err := FromWatch(stopped)
+	if err != nil {
+		t.Fatalf("address a stopped session: %v", err)
+	}
+	if ending.Event.Kind != KindWatchStopped {
+		t.Fatalf("a session that ended was said as %q, want %q", ending.Event.Kind, KindWatchStopped)
+	}
+
+	restarting := watchTransition(runstate.WatchStopped, "a build was deployed over the one this session was started from")
+	restarting.Restarting = true
+	coming, err := FromWatch(restarting)
+	if err != nil {
+		t.Fatalf("address a session restarting into a deployed build: %v", err)
+	}
+	if coming.Event.Kind != KindWatchRedeploying {
+		t.Fatalf("a session restarting itself was said as %q, want %q", coming.Event.Kind, KindWatchRedeploying)
+	}
+	message, err := Render(coming.Topic, coming.Speaker, coming.Event)
+	if err != nil {
+		t.Fatalf("render a restarting session: %v", err)
+	}
+	if strings.Contains(message.Body, nextMoves[KindWatchStopped]) {
+		t.Fatalf("body %q hands the operator the move a session that ended would", message.Body)
+	}
+}
+
 // A line that is choosing nothing over ready work is the one thing said as a
 // state rather than as a crossing, so what it says has to carry the three facts
 // somebody woken by it needs: what stopped it, how long that has been true, and

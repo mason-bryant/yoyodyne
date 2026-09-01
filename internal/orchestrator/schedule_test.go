@@ -1436,6 +1436,221 @@ func TestWatchingRefusesAPullWithNoInterval(t *testing.T) {
 	}
 }
 
+// --- redeploying ---------------------------------------------------------------
+
+// The whole of what a session redeploying itself is: a build lands over the one
+// it is executing, and it stops choosing and stops, so the caller can restart it
+// into what was deployed. The item still queued proves it stopped choosing
+// rather than merely finishing.
+func TestAWatchingSessionStopsToTakeUpTheBuildDeployedOverIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	sessions := &recordedSessions{}
+	deployment := &deployedOver{}
+	// The build lands while the first item is running, which is the ordinary case:
+	// nobody deploys into an idle machine on purpose.
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if !schedule.Redeploying() || schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the session stopped to be restarted into what was deployed", schedule.Stopped)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-one" {
+		t.Fatalf("started = %#v, want the session to have claimed nothing after the deploy landed", schedule.Started)
+	}
+	// Nothing waited: a session with a build to take up does not spend a poll
+	// interval first, because every interval it waits is an interval the machine
+	// dispatches from the build somebody replaced.
+	if schedule.Polls != 0 {
+		t.Fatalf("polls = %d, want a session that stopped rather than waited", schedule.Polls)
+	}
+	if reason := sessions.said(runstate.WatchStopped); !strings.Contains(reason, "restarting into it") {
+		t.Fatalf("stopped reason = %q, want the restart said where somebody who is not at the terminal reads it", reason)
+	}
+	// And the stop is marked as a restart rather than left to read as an ending.
+	// Every surface takes whose move follows from that mark: a session that ended
+	// is waiting on somebody to start another, and this one is waiting on nothing,
+	// which is the whole difference between ending the operator's chore and
+	// reproducing it once per deploy.
+	if !sessions.restarted() {
+		t.Fatal("the session recorded its stop as an ending, which tells every reader to start a session that is already coming back")
+	}
+}
+
+// The guarantee the whole shape rests on: a run already going is never
+// interrupted for a redeploy. The session stops claiming immediately and waits
+// out what it started, which is what makes the window an external restart can
+// never find.
+func TestARedeployWaitsOutTheRunsAlreadyGoing(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
+	harness.capacity = 2
+	// Both runs are required to be inside at once, so the deploy below lands with
+	// two live runs rather than with one that has already finished.
+	harness.developersMeet(2)
+	deployment := &deployedOver{}
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if harness.rendezvousFailure != nil {
+		t.Fatalf("the deploy never landed on two live runs: %v", harness.rendezvousFailure)
+	}
+	if schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the session stopped to be restarted", schedule.Stopped)
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %#v, want the two runs already going and nothing claimed after them", schedule.Started)
+	}
+	for _, started := range schedule.Started {
+		if started.Failure != "" || started.Outcome.Status != runstate.StatusSucceeded {
+			t.Fatalf("%s = %#v, want a live run carried to its own end rather than cut off", started.WorkItemID, started)
+		}
+	}
+}
+
+// A bound the session has reached wins over a deploy waiting to be taken up. The
+// operator gave this session a number to stay inside, and a restart is a session
+// starting that number again — so a budget that is gone stops the session as
+// spent, and what takes the build up is the next session somebody starts.
+func TestASpentBudgetStopsTheSessionRatherThanRedeployingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	harness.prices["yoyodyne-one"] = 2.50
+	deployment := &deployedOver{}
+	// The deploy lands while the run that spends the budget is still going, so
+	// both are true at the pull that follows it.
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		h.close(id)
+		return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Budget: 2, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleBudgetSpent {
+		t.Fatalf("stopped = %q, want the bound the operator set to end the session: %s", schedule.Stopped, schedule.Render())
+	}
+	if schedule.Redeploying() {
+		t.Fatal("the session asked to be restarted with its budget spent, which is the bound starting over")
+	}
+}
+
+// The count of runs is the other bound, and it holds the same way. A session
+// that has started the last run it was allowed stops on the number rather than
+// restarting into the build: the restart would be that number starting again,
+// which is not what the operator asked for by writing it.
+func TestALastPermittedRunStopsTheSessionRatherThanRedeployingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	deployment := &deployedOver{}
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Limit: 1, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleLimitReached {
+		t.Fatalf("stopped = %q, want the number of runs the operator asked for to end the session: %s", schedule.Stopped, schedule.Render())
+	}
+	if schedule.Redeploying() {
+		t.Fatal("the session asked to be restarted having started every run it was allowed, which is the bound starting over")
+	}
+}
+
+// A session that cannot tell whether it has been deployed over goes on working.
+// Stopping the line because a file could not be read would be a worse failure
+// than the staleness this guards against, and the reading is tried again at
+// every pull.
+func TestASessionThatCannotReadItsOwnBinaryKeepsChoosingWork(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+	deployment := &deployedOver{failure: errors.New("no such file or directory")}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Redeploying() {
+		t.Fatalf("schedule = %#v, want the work done and no restart claimed", schedule.Started)
+	}
+	if !strings.Contains(schedule.RedeployProblem, "no such file or directory") {
+		t.Fatalf("redeploy problem = %q, want the reading that failed reported", schedule.RedeployProblem)
+	}
+}
+
+// A drain is a command somebody is waiting on the return of, so it returns. A
+// pass that restarted itself would run the whole pass again from the top, which
+// is the opposite of what was asked for.
+func TestADrainNeverRedeploysItself(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	deployment := &deployedOver{}
+	deployment.deploy()
+
+	schedule, err := (Scheduler{Open: harness.open, Deployment: deployment}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleDrained {
+		t.Fatalf("stopped = %q, want a drain that ran its pass and returned", schedule.Stopped)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want the queue drained", schedule.Started)
+	}
+}
+
+// deployedOver is the session's own binary: unchanged until a test deploys over
+// it, and unreadable where a test says the reading itself fails.
+type deployedOver struct {
+	mu       sync.Mutex
+	replaced bool
+	failure  error
+}
+
+func (d *deployedOver) deploy() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.replaced = true
+}
+
+func (d *deployedOver) Replaced() (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failure != nil {
+		return false, d.failure
+	}
+	return d.replaced, nil
+}
+
 func sameStates(got, want []runstate.WatchState) bool {
 	if len(got) != len(want) {
 		return false
@@ -1705,15 +1920,23 @@ type recordedSessions struct {
 type recordedTransition struct {
 	state  runstate.WatchState
 	reason string
+	// restarting is the session marking its last line as a restart rather than an
+	// ending, which is what every surface reads to tell the operator whether
+	// anything is waiting on them.
+	restarting bool
 }
 
-func (r *recordedSessions) Record(state runstate.WatchState, _ time.Time, reason string) error {
+func (r *recordedSessions) Record(transition SessionState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.failure != nil {
 		return r.failure
 	}
-	r.transitions = append(r.transitions, recordedTransition{state: state, reason: reason})
+	r.transitions = append(r.transitions, recordedTransition{
+		state:      transition.State,
+		reason:     transition.Reason,
+		restarting: transition.Restarting,
+	})
 	return nil
 }
 
@@ -1725,6 +1948,19 @@ func (r *recordedSessions) states() []runstate.WatchState {
 		states = append(states, transition.state)
 	}
 	return states
+}
+
+// restarted reports the session having marked a stop as a restart rather than as
+// an ending, which is what a reader takes whose move follows from.
+func (r *recordedSessions) restarted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, transition := range r.transitions {
+		if transition.restarting {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *recordedSessions) said(state runstate.WatchState) string {
