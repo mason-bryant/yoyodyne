@@ -717,11 +717,20 @@ comes from a small fixed set:
 
 `stopped` covers every ending the harness hands to somebody: an unrepaired
 review, a check that kept failing, refused protected paths, a replay the target
-branch outran, and a provider that would not carry the run. The phase beside the
-word says where it stopped and the `reason` under it says what stopped it, so the
-one word never has to carry all five. This used to be one word — `failed` — for
-all of them and for the two below it, which is how three preserved runs came to
-read as three discarded ones.
+branch outran, a provider that would not carry the run, and a promotion the
+target branch turns out not to carry. The phase beside the word says where it
+stopped and the `reason` under it says what stopped it, so the one word never has
+to carry all six. This used to be one word — `failed` — for all of them and for
+the two below it, which is how three preserved runs came to read as three
+discarded ones.
+
+A blocker outranks the run's own status, `succeeded` included. The last of those
+endings is the one where that shows: a run promotes its work, records it, and
+`yoyo reconcile` then finds the target does not carry the promotion, so the item
+goes back into a person's hands while the run's record keeps the status it wrote
+for itself before anything contradicted it. `--json` shows both — a `status` of
+`succeeded` beside an `outcome` of `stopped` — and the outcome is what became of
+the work.
 
 Beside it, every run that did not succeed says what remains: `work preserved`,
 `work removed` where the harness recorded removing the artifacts, or `no

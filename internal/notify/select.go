@@ -665,8 +665,15 @@ func endedBadly(state runstate.State) bool {
 // one taken here. It is asked of both readings rather than only of the later
 // one, because the blocker can reach a record that is already terminal: the
 // stoppage is then news even though the ending is not.
+//
+// It asks nothing of the status, because the outcome already answers everything
+// the status could: the read model only ever says "stopped" of a terminal record
+// carrying a blocker. Reading the status as well is what silenced this line on
+// the record it matters most on — a run whose promotion a sweep contradicted
+// keeps the "succeeded" it wrote for itself, so a status test here dropped the
+// critical line for a stoppage a person already owns.
 func handedToAPerson(state runstate.State) bool {
-	return endedBadly(state) && state.Outcome() == runstate.OutcomeStopped
+	return state.Outcome() == runstate.OutcomeStopped
 }
 
 // blockerText is what the record gives as the reason. A publication that could

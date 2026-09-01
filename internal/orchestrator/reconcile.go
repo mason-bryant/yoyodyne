@@ -816,6 +816,16 @@ func (r Reconciler) recordTerminalFailure(state runstate.State, reason string) (
 // recordTerminalFailure because settling can change durable state that has to
 // reach disk even when the run was already terminal, and a caller with such a
 // change needs the write rather than the skip.
+//
+// A record that was already terminal keeps the status it wrote for itself, and
+// that includes "succeeded": a run that promoted work and then had the promotion
+// contradicted said something about itself no sweep witnessed, and rewriting it
+// would lose that account. What stops the kept status reading as a run whose work
+// landed is the precedence rule on runstate.Ending — the blocker this saves
+// outranks every terminal status there, so the outcome every surface prints is
+// "stopped" while the durable status stays what the run recorded. The blocker
+// reaching disk is what that rule depends on, which is why this path writes even
+// where recordTerminalFailure would skip.
 func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (runstate.State, error) {
 	reconciled := "reconciled after an interrupted run: " + reason
 	if !state.Status.Terminal() {

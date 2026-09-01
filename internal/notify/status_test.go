@@ -100,6 +100,19 @@ func TestAnItemsStatusFollowsWhatItsRunRecordSays(t *testing.T) {
 			want:  StatusCompleted,
 		},
 		{
+			// The status says the run succeeded and the blocker says a person was
+			// handed the work: a sweep that found the promotion missing from the
+			// target leaves both on the record, and what is true of the item is the
+			// second one.
+			name: "a run whose promotion was contradicted is blocked",
+			state: runstate.State{
+				Status:  runstate.StatusSucceeded,
+				Phase:   runstate.PhaseCleaningUp,
+				Blocker: "the run recorded a promotion main does not carry",
+			},
+			want: StatusBlocked,
+		},
+		{
 			name:  "a run that failed is blocked",
 			state: runstate.State{Status: runstate.StatusFailed, Phase: runstate.PhaseDeveloping},
 			want:  StatusBlocked,
