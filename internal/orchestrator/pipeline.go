@@ -4253,10 +4253,16 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // move.
 //
 // It unbounds nothing, which is what makes the exclusion safe rather than
-// generous. An approval ends the review loop of the run that produced it, so one
-// run yields at most one, and how many runs an item gets is bounded by budgets of
-// its own — one repair grant and one re-run per item, each refused by a counter
-// this one cannot stand in for.
+// generous, and what holds that is two budgets rather than the rounds. An
+// approval sends the change to promotion rather than back to the developer, so
+// the only thing that asks for another verdict inside one run is a promotion
+// that lost its race and replayed — which spends an integration retry, and
+// execution.integration_retries_before_reconciliation bounds those. A run's
+// uncharged approvals are therefore one plus that budget, not one: the replay
+// obtains a fresh verdict on the same change, and it can approve again. How many
+// runs an item gets is bounded in turn by budgets of its own — one repair grant
+// and one re-run per item — each refused by a counter this one cannot stand in
+// for.
 //
 // An approval is recorded rather than passed over, and that is load-bearing. The
 // verdict is recorded under the developer attempt that produced the change, so

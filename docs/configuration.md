@@ -2664,9 +2664,18 @@ rather than taking another turn of it; what becomes of an approved change
 afterwards — a promotion that conflicted, a merge the forge dropped — is not the
 change disputing with its reviewer. Charging it walked items toward the cap on
 their own success, and one such item reached triage with every recorded decision
-about it refused. It loosens no bound: an approval ends the review loop of the
-run that produced it, so a run yields at most one, and how many runs an item gets
-is bounded by the repair grant and the re-run, each once per item.
+about it refused.
+
+**It loosens no bound**, and what holds that is two budgets rather than the
+rounds. An approval sends the change to promotion rather than back to the
+developer, so the only thing that asks for another verdict inside the same run is
+a promotion that lost its race and replayed — and
+`execution.integration_retries_before_reconciliation` bounds those, so a run's
+uncharged approvals are one plus that budget rather than one. How many runs an
+item gets is bounded in turn by the repair grant and the re-run, each once per
+item.
+Neither of those budgets is the round cap and neither can be spent through it,
+which is what stops the exclusion turning into a budget nothing bounds.
 
 **It is recorded without being counted**, and that is what keeps the replay
 exclusion above true rather than nearly true. Both exclusions are one mechanism:
