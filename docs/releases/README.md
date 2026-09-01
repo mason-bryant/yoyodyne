@@ -52,6 +52,24 @@ enhancement, and which fix is critical enough to go to the top is the product
 manager's judgement**, until the post-v1 release-manager role exists. Edit the
 file, then commit it.
 
+## The readiness section
+
+One section is not the product manager's and is written by the cut itself: the
+**Release readiness** result, between the markers
+`<!-- yoyodyne:release-readiness -->` and `<!-- /yoyodyne:release-readiness -->`
+at the end of the file. It is what
+[`yoyo conformance`](../artifacts.md#asking-all-of-this-at-once-before-a-tag)
+found when the tag was cut — the artifacts, the references, the links, the
+invariants, the goal every admitted item serves, and what a change upstream left
+unanswered downstream — so a published release says what was true of the tree it
+names rather than only that its tests passed.
+
+The cut replaces what is between those two markers and leaves everything around
+them alone, so a second stamp does not leave two results that disagree. Editing
+inside them is editing a record of what a check found, which the next cut
+overwrites; everything you want to say about the release goes in the sections
+above.
+
 [Cutting a release](../developing-yoyo.md#cutting-a-release) gates on this file
 being present: `make release VERSION=<tag>` with no notes for `<tag>` drafts
 them and refuses, so the judgement happens before the tag rather than after the

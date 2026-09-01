@@ -424,20 +424,21 @@ func ProjectDirectory(configPath string) string {
 	return directory
 }
 
-// personaDirectories are the directories a configuration file's project personas
-// may be in, in the order they are looked for.
+// ConfigurationDirectories are the directories a configuration file keeps the
+// project's own files in — its personas, and the workflow definitions it owns —
+// in the order they are looked for.
 //
 // A configuration inside .yoyodyne uses that directory, and a legacy
 // .yoyodyne.yaml uses the .yoyodyne directory of the same project, which is
 // where migrating it would put them. Both are one place.
 //
 // A config.yaml somewhere else — the layout `init --external` writes — keeps its
-// personas beside it, which is what makes that directory self-contained and
+// files beside it, which is what makes that directory self-contained and
 // movable. The .yoyodyne sibling is still looked in after it, and only after it:
 // somebody who placed a configuration by hand before this existed and named it
 // with --config kept their personas there, and a rule that stopped reading them
 // would break a working installation to tidy up a layout.
-func personaDirectories(configPath string) []string {
+func ConfigurationDirectories(configPath string) []string {
 	directory := filepath.Dir(configPath)
 	if filepath.Base(directory) == DirectoryName {
 		return []string{directory}
@@ -446,6 +447,13 @@ func personaDirectories(configPath string) []string {
 		return []string{directory, filepath.Join(directory, DirectoryName)}
 	}
 	return []string{filepath.Join(directory, DirectoryName)}
+}
+
+// personaDirectories are where one configuration file's project personas live,
+// which is where everything else it owns lives: a project has one place its
+// configuration keeps what belongs to it rather than a rule per kind of file.
+func personaDirectories(configPath string) []string {
+	return ConfigurationDirectories(configPath)
 }
 
 // personaLoaderFor reads the personas of one configuration file, from wherever

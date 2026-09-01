@@ -66,7 +66,12 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 // acts on runs shares. They are built once here so a pipeline and a reconciler
 // always address the same state root, worktree root, and repository.
 type components struct {
-	config     config.Config
+	config config.Config
+	// configPath is the configuration file these parts were built from, kept so
+	// a command that reads something else the project keeps beside it — a
+	// workflow definition of its own — looks in the directory this configuration
+	// actually came from rather than guessing at one.
+	configPath string
 	repository string
 	// stateRoot is where everything durable that is not the repository lives.
 	// It is kept here so a command that needs another store built on it — the
@@ -231,6 +236,7 @@ func buildComponents(configPath string) (components, error) {
 	}
 	return components{
 		config:        cfg,
+		configPath:    resolved.Path,
 		repository:    repository,
 		stateRoot:     stateRoot,
 		runner:        processRunner,

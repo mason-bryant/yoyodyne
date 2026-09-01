@@ -1,0 +1,67 @@
+# Release readiness: the checks a version is tagged behind, as a definition.
+#
+# This is the first sequence the harness runs that never existed as Go control
+# flow. Nothing below is a new capability: every action it selects is a second
+# door onto a check this repository already had, registered in
+# internal/conformance with the authority performing it requires. What this file
+# decides is the order they are asked in and where each answer goes, which is the
+# whole of what a definition is allowed to decide.
+#
+# The order is cheapest-and-most-local first. The three repository-only checks
+# run before the two that need the work tracker, so a repository whose documents
+# contradict themselves is refused without anybody's tracker being read; and the
+# staleness survey runs last, when everything else has conformed, because it is
+# the one step that reports rather than gates and its place in a release is the
+# notes rather than the refusal.
+#
+# Every check leads to `mismatch` on `diverges`, so the first divergence ends the
+# run and names what it found — each check gathers all of its own mismatches
+# before answering, so what a refusal reports is the whole of one check's finding
+# rather than the first line of it. That is the same shape the release cut has
+# around it: a red gate refuses, names what was red, and writes nothing.
+#
+# A project that wants its own sequence copies this file to
+# .yoyodyne/workflows/release-readiness.yaml and edits it there; `yoyo
+# conformance` prefers that copy and falls back to this one. Either way it is
+# validated and compiled before a single check runs, so a definition selecting an
+# action nothing registers, or authority the gate does not hold, is refused while
+# refusing it still costs nothing.
+schema: 1
+id: release-readiness
+summary: check the system against what it records about itself, before a version is tagged
+initial: artifacts
+states:
+  artifacts:
+    action: conformance.artifacts
+    summary: every file in an artifact home is an artifact, every reference reaches something, and every revision was recorded by the role that owns the document
+    on:
+      conforms: references
+      diverges: mismatch
+  references:
+    action: conformance.references
+    summary: every link the documentation makes to itself resolves, both the path and the heading it names
+    on:
+      conforms: invariants
+      diverges: mismatch
+  invariants:
+    action: conformance.invariants
+    summary: every constraint the repository records is one a run would actually be delivered
+    on:
+      conforms: goals
+      diverges: mismatch
+  goals:
+    action: conformance.goals
+    summary: the goals are readable and every admitted work item's attribution resolves to one of them
+    on:
+      conforms: staleness
+      diverges: mismatch
+  staleness:
+    action: conformance.staleness
+    summary: what a change to an upstream document left unanswered downstream, for the notes to carry
+    on:
+      noted: ready
+terminals:
+  ready:
+    summary: the system matches what it records about itself, and the tag may be cut
+  mismatch:
+    summary: something the system records about itself is no longer true; the tag is refused and the mismatch named

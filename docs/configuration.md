@@ -1379,6 +1379,68 @@ A tracker that cannot be read costs the work half of the report rather than all
 of it: the documents still report, and the report says the queue was not read
 instead of rendering it as one nothing has moved under.
 
+### The release-readiness workflow
+
+Every check above answers for one thing, and `yoyo conformance` asks the whole
+set together — which is what [cutting a
+release](developing-yoyo.md#cutting-a-release) gates on.
+
+```sh
+yoyo conformance          # what a release is tagged behind
+yoyo conformance --json   # machine-readable
+yoyo conformance --notes  # the Markdown section a release's notes carry
+```
+
+The order the checks run in is not code. It is a **workflow definition**: a
+state machine in YAML that selects actions the harness registered in Go, maps
+each outcome to where the sequence goes next, and ends in one of two terminals —
+`ready`, which lets a tag be cut, and `mismatch`, which refuses it. This build
+ships one, and a project that wants its own writes it here:
+
+```
+.yoyodyne/workflows/release-readiness.yaml
+```
+
+Nothing is merged between the two. A project that writes one owns the whole
+sequence from then on, which is the only arrangement where reading the file
+tells you what actually ran; `yoyo conformance` names which of the two it read,
+and the content digest it pinned, in everything it prints.
+
+What a definition can change is the sequence and nothing else. It selects among
+the actions the build registered — `conformance.artifacts`,
+`conformance.references`, `conformance.invariants`, `conformance.goals` and
+`conformance.staleness` — and an action nothing registers is refused rather than
+run. Each action's authority is declared in Go, and the gate is compiled under
+`repository.read` and `work-item.read` and nothing else, so no definition can
+make it write anything. Validation and compilation both happen before the first
+check runs, and a definition that is wrong is refused whole rather than half
+adopted:
+
+```yaml
+schema: 1
+id: release-readiness
+summary: what this project checks before it tags
+initial: artifacts
+states:
+    artifacts:
+        action: conformance.artifacts
+        on:
+            conforms: references
+            diverges: mismatch
+    references:
+        action: conformance.references
+        on:
+            conforms: ready
+            diverges: mismatch
+terminals:
+    ready: {}
+    mismatch: {}
+```
+
+A run of it is recorded durably, one state boundary at a time, under the same
+state root every other record the harness keeps lives in — so what a release was
+gated on can be read back afterwards rather than only having been printed once.
+
 ## Architectural invariants
 
 The architect's durable constraints live in a second configured directory:

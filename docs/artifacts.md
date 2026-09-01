@@ -304,3 +304,38 @@ Retirement is explicit and recorded rather than a deletion: the file stays, the
 constraint stops being delivered, and the reason it was lifted is readable by
 whoever read the invariant last month. A repository with no invariants directory
 simply has none, and runs are unaffected.
+
+## Asking all of this at once, before a tag
+
+Each check above answers for one thing. `yoyo conformance` asks the whole set
+together, which is what a release is gated on: the artifacts and their
+references, the links the documentation makes to itself, the invariants, and
+every admitted work item's attribution to a goal — with staleness surveyed
+alongside.
+
+```sh
+./bin/yoyo conformance          # what the release cut runs before it tags
+./bin/yoyo conformance --json   # machine-readable
+./bin/yoyo conformance --notes  # the Markdown section a release's notes carry
+```
+
+It writes nothing and exits 1 on a divergence, naming every mismatch the check
+that found it collected. Staleness is reported and never refuses, for the reason
+[stale is not cancelled](#what-a-change-upstream-leaves-stale); work that names
+no goal at all is likewise reported and not refused, because that is what work
+admitted before attributions were checked looks like. What does refuse is a
+claim that is wrong — a file in an artifact home that is not an artifact, a
+reference or a link reaching nothing, an item naming a goal no goals document
+states or having lost the one it recorded — and having checked nothing at all,
+which is what an unreadable tracker or unreadable goals amount to.
+
+The order the checks run in is not in the code. It is a
+[workflow definition](configuration.md#the-release-readiness-workflow) —
+project-owned data selecting actions the harness registered in Go — validated
+and compiled before a single check runs. A project that wants a different
+sequence writes its own; nothing it writes can make the gate perform anything
+beyond reading this repository and the tracker.
+
+[Cutting a release](developing-yoyo.md#cutting-a-release) runs this before it
+tags, and the passing result is stamped into that tag's notes, so a published
+release says what was true of the tree it names.
