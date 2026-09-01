@@ -1772,3 +1772,41 @@ func TestAnInvocationCarriesABuildCacheTheRunMayWrite(t *testing.T) {
 		t.Fatalf("the invocation's environment does not carry %q: %v", want, runner.commands[0].Env)
 	}
 }
+
+// The credential boundary the Slack design calls structural, at the one point it
+// can be tested: the environment an agent process is actually given.
+//
+// The sink is a separate process so that no agent ever holds a token, and until
+// this was named rather than inherited that held only while nobody exported the
+// pair. An operator who does — to try something, or in a profile — hands them to
+// everything the harness starts, and an agent with a Slack token in its
+// environment can post as any persona in the channel. So the invocation is given
+// an environment with the two taken out of it, whatever this process holds.
+//
+// The working directory is deliberately in no repository, which is the sharper
+// case: there is no build cache to redirect, so nothing else is rebuilding the
+// environment and an invocation would otherwise inherit this process's whole.
+func TestAnInvocationNeverCarriesTheReportingSinksCredentials(t *testing.T) {
+	t.Setenv(execution.SlackBotTokenVariable, "xoxb-not-for-agents")
+	t.Setenv(execution.SlackAppTokenVariable, "xapp-not-for-agents")
+
+	stream := `{"type":"result","subtype":"success","session_id":"s","is_error":false,"result":"done","total_cost_usd":0.01}` + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}
+	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: t.TempDir(),
+		Prompt:           "implement the task",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(runner.commands[0].Env) == 0 {
+		t.Fatal("the invocation was given no environment, so it inherited this process's whole")
+	}
+	for _, entry := range runner.commands[0].Env {
+		name, _, _ := strings.Cut(entry, "=")
+		if name == execution.SlackBotTokenVariable || name == execution.SlackAppTokenVariable {
+			t.Fatalf("an agent invocation carried %s", name)
+		}
+	}
+}

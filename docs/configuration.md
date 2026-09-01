@@ -3278,9 +3278,11 @@ message naming the entry to write instead.
 `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` from its own process environment and
 from nowhere else: never from this file, never from a work item, never from a
 prompt. That is what keeps the boundary structural rather than behavioral — one
-separate process posts, so no run process, and therefore no agent's subprocess
-tree, has a Slack token in its environment at all. Exporting them in a shell
-profile every process inherits would undo exactly that, so they are read from a
+separate process posts, and an agent invocation is given a named environment
+with the pair removed, so no agent's subprocess tree has a Slack token in it
+whatever the process that started the harness holds. Exporting them in a shell
+profile every process inherits undoes the rest of it — every other subprocess
+the harness starts, and the harness itself — so they are read from a
 store only the sink's own launch looks at, under names that carry the product —
 `yoyo-slack-bot.<product id>` and `yoyo-slack-app.<product id>`. The product is
 in the name because a machine running more than one harness has more than one

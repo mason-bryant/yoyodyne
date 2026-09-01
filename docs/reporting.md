@@ -522,7 +522,8 @@ export SLACK_APP_TOKEN=xapp-...
 ```
 
 That is the shape of it, and it is not the shape to leave running. Tokens
-exported into a shell are inherited by everything started from it, and on a
+exported into a shell are inherited by everything started from it bar the agent
+invocations, which are given an environment with the pair removed, and on a
 machine running more than one harness the sink you start second reads whichever
 pair that shell happened to have — it connects, authenticates, and posts this
 project's work into another project's channel. So the supported arrangement is a
@@ -681,9 +682,10 @@ down delays messages rather than losing them, because the sink reads the same
 durable records the verbs above read and catches up from its own cursors when it
 returns. The moment its history starts from is written down the first time you
 ever run it and never taken again, so time the sink itself spent stopped is a gap
-it reads across rather than a gap in what it says. It is also the reason no run
-holds a Slack token — one separate process posts, so no agent's subprocess tree
-ever has a credential for your workspace in it.
+it reads across rather than a gap in what it says. It is also the reason no agent
+holds a Slack token — one separate process posts, and an agent invocation is
+given an environment with the pair removed, so no agent's subprocess tree ever
+has a credential for your workspace in it.
 
 Replies go the other way. A reply in a work item's thread, from somebody this
 project granted `direct-work` with a bound Slack member id, is recorded as a

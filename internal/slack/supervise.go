@@ -45,9 +45,14 @@ const KeychainAccount = "yoyo"
 // credentials from. They are deliberately the names Slack's own documentation
 // uses, so the setup document can say "export the two tokens the app page shows
 // you" and mean it literally.
+//
+// They are taken from the execution package rather than written again here.
+// That package is where an agent invocation's environment is built, and it has
+// to recognize these two names to keep them out of one; a second spelling is a
+// rename that silently stops removing anything.
 const (
-	BotTokenVariable = "SLACK_BOT_TOKEN"
-	AppTokenVariable = "SLACK_APP_TOKEN"
+	BotTokenVariable = execution.SlackBotTokenVariable
+	AppTokenVariable = execution.SlackAppTokenVariable
 )
 
 // sinkLogFile is where a sink started by supervision says what it is doing. It

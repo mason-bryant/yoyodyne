@@ -164,11 +164,16 @@ func TestEachAccountIsAskedInTheHomeTheHarnessWouldInvokeIn(t *testing.T) {
 	if len(world.runner.invocations) != 4 {
 		t.Fatalf("checkAccounts() ran %d command(s), want two probes for each of two accounts", len(world.runner.invocations))
 	}
-	// The first two are the default alias, which imposes no environment at all:
-	// the account that was already signed in keeps the login it had.
+	// The first two are the default alias, which names no home at all: the
+	// account that was already signed in keeps the login it had. What is asserted
+	// is the absence of the variable rather than of an environment, because the
+	// invocation is given a named one either way — this process's, less the
+	// reporting sink's credentials, which an agent may never hold.
 	for _, command := range world.runner.invocations[:2] {
-		if command.Env != nil {
-			t.Fatalf("the default alias was asked with an environment: %v", command.Env)
+		for _, entry := range command.Env {
+			if strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+				t.Fatalf("the default alias was pointed at a provider home: %q", entry)
+			}
 		}
 	}
 	want := "CLAUDE_CONFIG_DIR=" + filepath.Join(world.stateRoot, "accounts", "second")
