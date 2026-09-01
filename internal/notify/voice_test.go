@@ -167,6 +167,58 @@ func TestWorkAConversationCarriesIsNeverSaidToBeWaitingForARun(t *testing.T) {
 	}
 }
 
+// Every voice names the same way out of a session running an old build, because
+// six accounts of one remedy are six chances to send a reader somewhere else.
+//
+// The remedy moved: a watching session takes up a build installed over it by
+// itself, so what is left for a person is the install, and the whose-move clause
+// says exactly that. A voice still telling the reader to restart the session
+// would be contradicting the clause printed underneath it in the same message.
+// This is the guard against a table left behind — one voice was, and the sink
+// speaks this kind as the harness, so nothing about the sink could ever have
+// caught it.
+func TestEveryVoiceNamesTheSameWayOutOfAStaleResident(t *testing.T) {
+	topic := Product()
+	// Wording that puts the restart on a person. The session restarting itself is
+	// the thing being said, so it is what somebody has to do that is looked for
+	// rather than the word "restart".
+	handedToAPerson := []string{
+		"somebody restarts",
+		"until it is restarted",
+		"restarting it",
+		"until restart has an owner",
+	}
+	move, ok := nextMoves[KindResidentStale]
+	if !ok {
+		t.Fatalf("%s says nothing about whose move follows it", KindResidentStale)
+	}
+	for _, speaker := range speakers() {
+		message, err := Render(topic, speaker, fullyRecorded(KindResidentStale))
+		if err != nil {
+			t.Fatalf("the %s says %s: %v", speaker.Key(), KindResidentStale, err)
+		}
+		// The persona's own words, with the whose-move clause taken off. Reading
+		// the whole body would pass every voice on the strength of the one clause
+		// they all share, which is the drift this exists to catch rather than a
+		// thing it may lean on.
+		account := strings.TrimSuffix(message.Body, nextMoveLead+move)
+		if account == message.Body {
+			t.Fatalf("the %s says %s as %q, which does not end on whose move follows", speaker.Key(), KindResidentStale, message.Body)
+		}
+		said := strings.ToLower(account)
+		if !strings.Contains(said, "install") {
+			t.Fatalf("the %s says %s as %q, which never names installing the build -- the one thing left for a person to do",
+				speaker.Key(), KindResidentStale, account)
+		}
+		for _, handed := range handedToAPerson {
+			if strings.Contains(said, handed) {
+				t.Fatalf("the %s says %s as %q, which asks for a restart the session now makes for itself",
+					speaker.Key(), KindResidentStale, account)
+			}
+		}
+	}
+}
+
 func TestNoTwoPersonasSayTheSameEventTheSameWay(t *testing.T) {
 	// This is the whole point of a voice: a reader who has scrolled past the
 	// display name still knows who is talking.

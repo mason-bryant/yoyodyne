@@ -175,6 +175,41 @@ func TestARestartCarriesWhatIsLeftOfTheBoundsRatherThanTheWholeOfThem(t *testing
 	}
 }
 
+// Neither bound is ever written into a restart as zero, because zero is how both
+// of these flags ask for no bound at all -- a cap that came back as its own
+// absence. The scheduler stops a session on the bound it reached before it can
+// redeploy, and this is the guard that says so out loud rather than assuming it.
+func TestARestartIsRefusedWhereABoundHasNothingLeftOfIt(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		budget  float64
+		spent   float64
+		limit   int
+		started int
+		want    string
+	}{
+		"something left of both bounds":     {budget: 50, spent: 45, limit: 10, started: 6, want: ""},
+		"no bounds at all":                  {want: ""},
+		"the budget exactly spent":          {budget: 50, spent: 50, want: "budget"},
+		"more spent than the budget allows": {budget: 50, spent: 51.20, want: "budget"},
+		"the last permitted run started":    {limit: 4, started: 4, want: "runs"},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := exhausted(test.budget, test.spent, test.limit, test.started)
+			if test.want == "" && got != "" {
+				t.Fatalf("exhausted() = %q, want a session that may still be restarted", got)
+			}
+			if test.want != "" && !strings.Contains(got, test.want) {
+				t.Fatalf("exhausted() = %q, want the %s bound named as the one with nothing left of it", got, test.want)
+			}
+		})
+	}
+}
+
 // The remainder is written exactly rather than rounded to cents, because a
 // remainder under a cent rounded to "0.00" is how an unbounded session is asked
 // for -- a bound that quietly became no bound at all.

@@ -1546,6 +1546,33 @@ func TestASpentBudgetStopsTheSessionRatherThanRedeployingIt(t *testing.T) {
 	}
 }
 
+// The count of runs is the other bound, and it holds the same way. A session
+// that has started the last run it was allowed stops on the number rather than
+// restarting into the build: the restart would be that number starting again,
+// which is not what the operator asked for by writing it.
+func TestALastPermittedRunStopsTheSessionRatherThanRedeployingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	deployment := &deployedOver{}
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Limit: 1, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleLimitReached {
+		t.Fatalf("stopped = %q, want the number of runs the operator asked for to end the session: %s", schedule.Stopped, schedule.Render())
+	}
+	if schedule.Redeploying() {
+		t.Fatal("the session asked to be restarted having started every run it was allowed, which is the bound starting over")
+	}
+}
+
 // A session that cannot tell whether it has been deployed over goes on working.
 // Stopping the line because a file could not be read would be a worse failure
 // than the staleness this guards against, and the reading is tried again at

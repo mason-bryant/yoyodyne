@@ -133,14 +133,18 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if !schedule.Redeploying() || binary == nil {
 		return code
 	}
-	// A bounded session arrives here with something left of its bound: what it has
-	// spent is checked against the bound at the top of every pull, ahead of the
-	// redeploy, so a bound that is gone stops the session as spent rather than
-	// restarting it. The guard is here because the cost of that ordering ever
-	// changing is a build invoked with a negative budget, which refuses to start
-	// at all and takes the line down with it.
-	if *budget > 0 && *budget-schedule.SpentUSD <= 0 {
-		fmt.Fprintln(stderr, "work stopped to restart into the build deployed over it, and did not: nothing was left of the budget the session was given")
+	// A bounded session arrives here with something left of both its bounds: what
+	// it has spent and how many runs it has started are checked at the top of
+	// every pull, ahead of the redeploy, so a bound that is gone stops the session
+	// on that bound rather than restarting it.
+	//
+	// The guard is here because the cost of that ordering ever changing is silent
+	// in one direction and loud in the other, and neither is acceptable: a build
+	// invoked with a negative budget refuses to start and takes the line down,
+	// and a build invoked with "--limit 0" starts an unbounded session, which is
+	// the operator's cap disappearing with nobody told.
+	if spent := exhausted(*budget, schedule.SpentUSD, *limit, len(schedule.Started)); spent != "" {
+		fmt.Fprintf(stderr, "work stopped to restart into the build deployed over it, and did not: %s\n", spent)
 		return code
 	}
 	// Every run this session started has already ended, and the queue has been
@@ -155,6 +159,25 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	return code
 }
 
+// exhausted names a bound a session has nothing left of, and says nothing for a
+// session that may still be restarted.
+//
+// Zero is how both of these flags ask for no bound at all, so a remainder of
+// zero must never be written into a restart: the bound would come back as its
+// own absence. Nothing is expected to reach it — a session that has reached
+// either bound stops on that bound before it can redeploy — which is exactly why
+// it is here rather than assumed, because what a mistake in that ordering costs
+// is the operator's cap, quietly.
+func exhausted(budget, spent float64, limit, started int) string {
+	switch {
+	case budget > 0 && budget-spent <= 0:
+		return "nothing was left of the budget the session was given"
+	case limit > 0 && limit-started <= 0:
+		return "no runs were left of the number the session was given"
+	}
+	return ""
+}
+
 // continued is how a session's own command line crosses a restart: the same
 // invocation, with the bounds the operator gave it reduced to what is left of
 // them.
@@ -166,8 +189,9 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 // crosses the restart is the remainder: the budget less what the session spent,
 // and the run count less what it started.
 //
-// Both are strictly positive here, because a session that has reached either
-// bound stops on that bound instead of redeploying.
+// Both remainders are strictly positive here: a session that has reached either
+// bound stops on that bound instead of redeploying, and exhausted refuses the
+// restart ahead of this if it ever does not.
 func continued(args []string, budget, spent float64, limit, started int) []string {
 	invocation := append([]string(nil), args...)
 	if budget > 0 {
