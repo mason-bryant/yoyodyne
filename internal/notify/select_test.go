@@ -735,6 +735,49 @@ func TestEachWayARunEndsIsSaidAsItselfWithWhatRemains(t *testing.T) {
 	}
 }
 
+// Both lines finish on the reason the record gives, and a run can honestly have
+// none: a cancellation is the operator stopping it without owing anybody a
+// sentence, and a stoppage reconciliation settled on an already-terminal run
+// takes the blocker from the tracker and leaves the run's own failure empty. The
+// line has to stay a sentence in both cases rather than trailing off a colon,
+// and it must not report an ordinary act as a record that lost something.
+func TestAnEndingWhoseRecordNamesNoReasonIsStillASentence(t *testing.T) {
+	before := running()
+	for _, ending := range []struct {
+		status  runstate.Status
+		blocker string
+		kind    Kind
+	}{
+		{runstate.StatusCancelled, "", KindRunEnded},
+		{runstate.StatusTimedOut, "", KindRunEnded},
+		// Reconciliation blocks a run that is already terminal without writing a
+		// failure onto it, so the critical line reaches the same empty reason.
+		{runstate.StatusFailed, "the interrupted run left a worktree nothing could settle", KindBlockerRecorded},
+	} {
+		after := endedRun(before, ending.status)
+		if ending.blocker != "" {
+			after.Blocker = runstate.RecordBlocker(ending.blocker)
+		}
+		_, notifications := crossed(t, before, after)
+		said := only(t, notifications, ending.kind)
+		message, err := Render(said.Topic, said.Speaker, said.Event)
+		if err != nil {
+			t.Fatalf("render %s with no reason recorded: %v", ending.status, err)
+		}
+		if !strings.Contains(message.Body, "the record names no reason") {
+			t.Fatalf("a %s run with no reason is said as %q, which does not state the absence", ending.status, message.Body)
+		}
+		// The absence is stated as itself rather than as words that went missing,
+		// which is what the renderer's generic fallback would have said.
+		if strings.Contains(message.Body, "nothing the record could carry") {
+			t.Fatalf("a %s run with no reason reports an ordinary act as a record that lost something: %q", ending.status, message.Body)
+		}
+		if strings.Contains(message.Body, ": .") || strings.Contains(message.Body, ": Next:") {
+			t.Fatalf("a %s run with no reason trails off a colon: %q", ending.status, message.Body)
+		}
+	}
+}
+
 // A run whose change the harness removed and one whose record names no artifact
 // are opposite answers to "is my work gone", and neither may be said as the
 // other. The three phrases are the read model's, so `yoyo status` and the thread

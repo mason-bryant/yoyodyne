@@ -383,7 +383,11 @@ state onto what the forge has:
 ```
 
 It compares the recorded run against the repository and Beads, and then finishes
-the run's own remaining step or hands the item to you. It also builds the triage
+the run's own remaining step or hands the item to you. Each run it settled into
+an ending is reported twice over: what the sweep did with it, and — in the same
+words `yoyo status` uses — what became of the run and what remains of its change.
+Those are different facts, and only the second answers whether your work is still
+there. It also builds the triage
 docket on the way past, so a run it stopped and a publication the forge quietly
 never merged reach the development manager rather than waiting for somebody to
 go looking. A run whose work reached

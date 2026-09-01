@@ -148,13 +148,33 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	if !endedBadly(before) && endedBadly(after) {
 		remains := Detail{Remains: after.Artifacts().Describe()}
 		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
-			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, blockerText(after))
+			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, endingReason(after))
 		} else {
 			remains.Ending = string(outcome)
-			sayWith(KindRunEnded, endingSeverity(outcome), Harness(), remains, blockerText(after))
+			sayWith(KindRunEnded, endingSeverity(outcome), Harness(), remains, endingReason(after))
 		}
 	}
 	return crossed, nil
+}
+
+// endingReason is what the record gives as the reason a run ended, or the
+// absence stated as itself. Both lines above finish on it, so an empty one would
+// leave a sentence trailing off a colon — and the generic absence the renderer
+// falls back to is written for an agent's own words going missing, which is a
+// defect, where this is usually not one.
+//
+// A run ending with no reason recorded is ordinary rather than broken. A
+// cancellation is the plain case: the operator stopped it and owed nobody a
+// sentence about why. So is a stoppage reconciliation settled on a run that was
+// already terminal, which takes the blocker from the tracker and leaves the
+// run's own failure exactly as it found it. Saying the record names no reason is
+// the true account of both; implying one had gone missing would report an
+// ordinary act as a fault in the record.
+func endingReason(state runstate.State) string {
+	if reason := blockerText(state); reason != "" {
+		return reason
+	}
+	return "the record names no reason"
 }
 
 // endingSeverity is how loudly a run ending without a blocker is said. A

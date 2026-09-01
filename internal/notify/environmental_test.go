@@ -30,7 +30,11 @@ func refusedRun(t *testing.T, apply func(*runstate.EnvironmentalRefusal)) runsta
 	// A refusal like this is handed to a person, so the run carries the durable
 	// blocker that says so. It is what makes the run a stoppage rather than one
 	// the harness merely failed to carry, and the thread says a different thing
-	// about each.
+	// about each. That the production path actually records it is not this
+	// fixture's word for it: blockOnMissingPreservedChange calls block(), and
+	// TestAnEmptyDiffRoundTheEnvironmentRefusedSpendsNothing in
+	// internal/orchestrator asserts the blocker and the stopped outcome on the run
+	// the pipeline itself wrote.
 	state.Blocker = runstate.RecordBlocker("the handback carried none of the change it was continuing")
 	refusal := &runstate.EnvironmentalRefusal{
 		Cause:      runstate.CauseHandbackMissingChange,

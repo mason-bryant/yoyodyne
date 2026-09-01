@@ -142,14 +142,23 @@ type Reconciliation struct {
 	// it a sweep reported "failed" over a run it had just handed to a person with
 	// its branch and worktree intact, which is the one word that says nothing
 	// about whether the work survived.
-	Outcome         runstate.RunOutcome   `json:"outcome,omitempty"`
-	Phase           runstate.Phase        `json:"phase,omitempty"`
-	Detail          string                `json:"detail,omitempty"`
-	Integration     *runstate.Integration `json:"integration,omitempty"`
-	WorktreeRemoved bool                  `json:"worktree_removed"`
-	BranchRemoved   bool                  `json:"branch_removed"`
-	CleanupFailure  string                `json:"cleanup_failure,omitempty"`
-	Failure         string                `json:"failure,omitempty"`
+	Outcome     runstate.RunOutcome   `json:"outcome,omitempty"`
+	Phase       runstate.Phase        `json:"phase,omitempty"`
+	Detail      string                `json:"detail,omitempty"`
+	Integration *runstate.Integration `json:"integration,omitempty"`
+	// Branch and WorktreePath are what the run made, beside the two flags saying
+	// which of them the harness removed. They are named rather than only counted
+	// because a sweep that says a branch was removed without saying which one has
+	// told an operator something they cannot check, and because the three phrases
+	// below cannot be read off two booleans: a record naming no artifact at all
+	// and one whose artifacts were removed are opposite answers to "is my work
+	// gone", and the flags alone are false for both.
+	Branch          string `json:"branch,omitempty"`
+	WorktreePath    string `json:"worktree_path,omitempty"`
+	WorktreeRemoved bool   `json:"worktree_removed"`
+	BranchRemoved   bool   `json:"branch_removed"`
+	CleanupFailure  string `json:"cleanup_failure,omitempty"`
+	Failure         string `json:"failure,omitempty"`
 	// DocketProblem names a stoppage this sweep settled and could not put on the
 	// triage docket. It is deliberately not a settlement failure: the run is
 	// settled and its blocker is on the work item either way, and the blocker is
@@ -163,6 +172,27 @@ type Reconciliation struct {
 	// it is idempotent and owned by no run, so a held one is a fact to read
 	// rather than a debt to carry.
 	Catchup *gitworktree.Catchup `json:"catchup,omitempty"`
+}
+
+// Artifacts is what this sweep says survives of the run's change, assembled
+// from the record it settled. A surface asks it for the phrase rather than
+// reading the four fields itself, so the recovery view says what remains in the
+// same words `yoyo status` and the channel do.
+func (r Reconciliation) Artifacts() runstate.Artifacts {
+	return runstate.Artifacts{
+		Branch:          r.Branch,
+		BranchRemoved:   r.BranchRemoved,
+		WorktreePath:    r.WorktreePath,
+		WorktreeRemoved: r.WorktreeRemoved,
+	}
+}
+
+// Settled reports a run this sweep left in a terminal state that is not
+// success, which is where the outcome word and what remains of the change are
+// worth saying. A run still owed a step has neither yet, and a run whose work
+// landed removed its artifacts on purpose.
+func (r Reconciliation) Settled() bool {
+	return r.Status.Terminal() && r.Outcome != runstate.OutcomeSucceeded && r.Outcome != ""
 }
 
 // Reconcile settles every run that still owes a step. One run that cannot be
@@ -834,6 +864,8 @@ func reconciliationOf(state runstate.State, action ReconcileAction) Reconciliati
 		Outcome:         state.Outcome(),
 		Phase:           state.Phase,
 		Integration:     state.Integration,
+		Branch:          state.Branch,
+		WorktreePath:    state.WorktreePath,
 		WorktreeRemoved: state.WorktreeRemoved,
 		BranchRemoved:   state.BranchRemoved,
 		CleanupFailure:  state.CleanupFailure,

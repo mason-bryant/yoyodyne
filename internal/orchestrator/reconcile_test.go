@@ -376,6 +376,15 @@ func TestReconcileFailsARunThatLeftNothingBehind(t *testing.T) {
 	if len(results) != 1 || results[0].Action != ActionFailed || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want a plain terminal failure", results)
 	}
+	// What the sweep did and what became of the run are different facts, and the
+	// second is what says whether anybody's work is gone. This run made nothing,
+	// which is stated as itself rather than as work thrown away.
+	if outcome := results[0].Outcome; outcome != runstate.OutcomeFailed {
+		t.Errorf("outcome = %q, want %q", outcome, runstate.OutcomeFailed)
+	}
+	if remains := results[0].Artifacts().Describe(); remains != "no artifacts recorded" {
+		t.Errorf("what remains = %q, want the absence stated rather than work reported as removed", remains)
+	}
 	if tracker.blocked {
 		t.Fatal("reconciliation blocked an item that has nothing preserved")
 	}
@@ -420,6 +429,16 @@ func TestReconcileBlocksAnUnapprovedPromotionItFinds(t *testing.T) {
 	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
 	if len(results) != 1 || results[0].Action != ActionBlocked {
 		t.Fatalf("reconciliation = %#v, want an unapproved promotion blocked", results)
+	}
+	// The run is handed to a person with its change intact, and the sweep says
+	// both. Reporting the durable status alone would put "failed" over a branch
+	// and worktree that are still there, which is the reading this vocabulary
+	// exists to stop.
+	if outcome := results[0].Outcome; outcome != runstate.OutcomeStopped {
+		t.Errorf("outcome = %q, want %q", outcome, runstate.OutcomeStopped)
+	}
+	if remains := results[0].Artifacts().Describe(); remains != "work preserved" {
+		t.Errorf("what remains = %q, want the preserved change named", remains)
 	}
 	if !tracker.blocked || tracker.closed {
 		t.Fatalf("tracker = %#v, want a blocked and unclosed item", tracker)
