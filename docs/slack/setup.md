@@ -453,10 +453,12 @@ goes quiet and says nothing.
 What a watching `yoyo work` session is doing goes there too, and it is the one
 thing here that is news precisely because nothing is happening: a session that
 has gone quiet and a session that has died are the same silence otherwise. It
-says when it opens, when it goes idle over a queue with nothing pullable in it,
-when a held intake brakes it — as a `warning`, because that one needs somebody —
-when it resumes, and when it ends. Each of those is said once, so a session
-idling overnight posts one message rather than one a minute.
+says when it opens, when a poll starts nothing — with the runs it can see going
+and the items it passed over grouped by why, so an idle slot beside a working one
+does not read as a stopped line — when a held intake brakes it, as a `warning`,
+because that one needs somebody, when it resumes, and when it ends. Each of those
+is said once, so a session idling overnight posts one message rather than one a
+minute.
 
 **And one thing is a state rather than an event.** Everything above is said once,
 when it happens, which is right for a narrative and wrong for a night: intake

@@ -327,7 +327,17 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 	if kind == KindWatchBraked {
 		severity = report.SeverityWarning
 	}
-	notification := productNotification(kind, transition.At, Detail{Reason: transition.Reason})
+	// The runs the session could see and the conversation it is waiting on travel
+	// with the reason, because whose move follows an idle poll is derived from them
+	// rather than from the words: a session polling beside a run in flight is not
+	// waiting on an admission, and one whose only unstarted work is a role's to
+	// carry is waiting on that role.
+	notification := productNotification(kind, transition.At, Detail{
+		Reason:     transition.Reason,
+		Running:    transition.Running,
+		Executor:   string(transition.Executor),
+		Unreadable: transition.Unreadable,
+	})
 	notification.Event.Severity = severity
 	return notification, nil
 }

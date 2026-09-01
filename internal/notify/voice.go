@@ -191,7 +191,7 @@ var harnessVoice = voice{
 		KindHoldPlaced:          "All harness activity is held.",
 		KindHoldLifted:          "The hold on harness activity is lifted.",
 		KindWatchStarted:        "A watch session is open on this product: {why}",
-		KindWatchIdle:           "The watch session found nothing to start and is polling: {why}",
+		KindWatchIdle:           "The watch session started nothing at this poll and is polling again: {why}",
 		KindWatchBraked:         "The watch session is choosing nothing while intake is held: {why}",
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
@@ -244,7 +244,7 @@ var developerVoice = voice{
 		KindHoldPlaced:          "Held before my next provider call. Nothing of the change is lost.",
 		KindHoldLifted:          "The hold is lifted; I'm carrying on.",
 		KindWatchStarted:        "Work can reach me without anybody typing an identifier now: {why}",
-		KindWatchIdle:           "There's nothing queued for me to pick up, so I'm waiting rather than working: {why}",
+		KindWatchIdle:           "Nothing was handed to me at this poll, so I'm waiting rather than working: {why}",
 		KindWatchBraked:         "Nothing is being handed to me while intake is held: {why}",
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
@@ -297,7 +297,7 @@ var reviewerVoice = voice{
 		KindHoldPlaced:          "Held before my next review. Nothing already judged changes.",
 		KindHoldLifted:          "The hold is lifted; reviews resume.",
 		KindWatchStarted:        "Changes will keep arriving for a verdict without anybody starting them: {why}",
-		KindWatchIdle:           "Nothing is being worked on, so there is no change coming to judge: {why}",
+		KindWatchIdle:           "Nothing new was started at this poll, so no further change is coming to me from it: {why}",
 		KindWatchBraked:         "Nothing new is being started while intake is held, so nothing is coming for a verdict: {why}",
 		KindWatchResumed:        "Work is starting again, so changes will come back to me: {why}",
 		KindWatchStopped:        "No more changes will arrive from this session; what I judged already stands: {why}",
@@ -349,7 +349,7 @@ var developmentManagerVoice = voice{
 		KindHoldPlaced:          "Everything is held. Nothing new starts, and nothing in flight is lost.",
 		KindHoldLifted:          "The hold is lifted; the work in flight carries on.",
 		KindWatchStarted:        "The queue is being pulled from until somebody stops it, rather than once: {why}",
-		KindWatchIdle:           "The queue has nothing pullable in it, so the line is waiting on admissions rather than on work: {why}",
+		KindWatchIdle:           "Nothing was pulled from the queue at this poll: {why}",
 		KindWatchBraked:         "I'm pulling nothing while intake is held, and what was already running finishes: {why}",
 		KindWatchResumed:        "I'm pulling from the top of the queue again: {why}",
 		KindWatchStopped:        "The queue stops being pulled from here; what is in it stays in it: {why}",
@@ -402,7 +402,7 @@ var productManagerVoice = voice{
 		KindHoldPlaced:          "The operator holds all harness activity.",
 		KindHoldLifted:          "The operator lifted the hold.",
 		KindWatchStarted:        "What is admitted is now what is spent on, since the queue is pulled from until somebody stops it: {why}",
-		KindWatchIdle:           "Nothing is being spent, because nothing admitted is ready to be worked on: {why}",
+		KindWatchIdle:           "No new spending was started at this poll: {why}",
 		KindWatchBraked:         "Spending has stopped while intake is held, and what is in the backlog keeps its place: {why}",
 		KindWatchResumed:        "Work is being chosen again, and what I admit is what gets spent on: {why}",
 		KindWatchStopped:        "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
@@ -455,7 +455,7 @@ var architectVoice = voice{
 		KindHoldPlaced:          "All harness activity is held, at the provider-call boundary rather than mid-generation.",
 		KindHoldLifted:          "The hold is lifted, and every parked run resumes from its own record.",
 		KindWatchStarted:        "Selection is now a loop rather than a pass, and nothing between its readings is cached: {why}",
-		KindWatchIdle:           "Selection is polling an empty queue, which costs a tracker read and no provider call: {why}",
+		KindWatchIdle:           "Selection read the queue and started nothing, which costs a tracker read and no provider call: {why}",
 		KindWatchBraked:         "Selection is stopped by the intake hold, which is the brake working rather than failing: {why}",
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
@@ -572,10 +572,15 @@ var nextMoves = map[Kind]string{
 	KindHoldPlaced:     "the operator's — nothing runs until the hold is lifted.",
 	KindHoldLifted:     "the harness's — every parked run resumes from its own record.",
 	KindWatchStarted:   "the harness's — the queue is pulled from until somebody stops it.",
-	KindWatchIdle:      "the product manager's — nothing is chosen until work that is ready is admitted.",
-	KindWatchBraked:    "the operator's — choosing resumes when intake is released.",
-	KindWatchResumed:   "the harness's — work is being chosen again.",
-	KindWatchStopped:   "the operator's — nothing more is chosen until a session is started again.",
+	// The idle poll with nothing else to say: the queue was read, no run is going,
+	// and nothing passed over is a person's to carry. Admitting ready work is then
+	// genuinely the act that changes the answer, which is the only case this clause
+	// is said in — see idleMove, which answers for the three states it used to be
+	// said over wrongly before it reaches this.
+	KindWatchIdle:    "the product manager's — nothing is chosen until work that is ready is admitted.",
+	KindWatchBraked:  "the operator's — choosing resumes when intake is released.",
+	KindWatchResumed: "the harness's — work is being chosen again.",
+	KindWatchStopped: "the operator's — nothing more is chosen until a session is started again.",
 	// The one stop nobody has to answer. The session waited out its runs and is
 	// being re-executed into the build deployed over it, so telling the reader to
 	// start a session would be handing them a move they do not have — once per
@@ -620,8 +625,47 @@ func nextMove(event Event) (string, bool) {
 	if event.Kind == KindDirectiveRecorded && strings.TrimSpace(event.Detail.Unresolved) == "" {
 		return directiveInForceMove, true
 	}
+	// A watch that started nothing idles for opposite reasons, and the fixed clause
+	// answered for one of them.
+	if event.Kind == KindWatchIdle {
+		return idleMove(event.Detail), true
+	}
 	move, ok := nextMoves[event.Kind]
 	return move, ok
+}
+
+// idleMove is whose move follows a poll that started nothing. It is derived from
+// what the session recorded rather than taken from the table, because a watch
+// idles for opposite reasons and one fixed clause can only be right about one of
+// them.
+//
+// The clause it replaced named the product manager whatever the session had
+// found, and an operator acted on that three times over a queue whose only
+// unstarted work was the architect's to carry, while a developer run worked on
+// the other slot. Both halves of that were wrong: nothing was waiting on an
+// admission, and the line had not stopped. So every state that is not an
+// admission answers first — a store that would not answer, work a conversation
+// carries, runs still going — and the admission clause is left to the case where
+// admitting ready work is genuinely what changes the answer.
+func idleMove(detail Detail) string {
+	// A store that will not answer. Nothing a person admits, releases, or opens
+	// reaches it, so this answers before anything else: the queue was not read, so
+	// what is in it is not what stopped the choosing.
+	if detail.Unreadable {
+		return "the harness's — the queue could not be read, and it is read again until it answers or the session gives up on it."
+	}
+	// Work only a conversation carries. No admission and no run moves it, and the
+	// marker names who does.
+	if role := domain.WorkItemExecutor(strings.TrimSpace(detail.Executor)).Role(); role != "" {
+		return "the " + role.Title() + "'s, in conversation — the work this poll passed over is carried there, and no run will ever start it."
+	}
+	// A run in flight is the harness working. Naming anybody's move over it would
+	// be reporting a stall while the chain moves, which is what sent an operator to
+	// look at a line that was not stopped.
+	if detail.Running > 0 {
+		return "nobody's — the runs in flight carry on, and the queue is read again as each of them finishes."
+	}
+	return nextMoves[KindWatchIdle]
 }
 
 // handedOffMove is whose move follows work only a conversation will carry. It
