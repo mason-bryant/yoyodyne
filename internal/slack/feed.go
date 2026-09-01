@@ -40,6 +40,7 @@ const (
 	usageLimitStream = "usage-limits"
 	heartbeatStream  = "heartbeat"
 	residentStream   = "resident"
+	stallStream      = "stall"
 	directiveStream  = "directives"
 )
 
@@ -65,6 +66,10 @@ const (
 	// is already the cursor's standing state: a different build is a different
 	// cursor, and the mark goes with it.
 	escalatedMark = "escalated"
+	// stallMark names the stall this cursor has already said something about. It
+	// names the stall rather than the state for the reason the build mark names a
+	// build: a second stall is a second thing to say, and the same one is not.
+	stallMark = "stall:"
 	// unrelatedMark records having said, in the sink's own log, that the build a
 	// session is running belongs to a repository this sink is not pointed at. It
 	// is marked for the same reason the escalation is: it is true for as long as
@@ -194,6 +199,23 @@ type HarnessFeed struct {
 	// operators are told directly rather than in the channel alone. Zero takes
 	// DefaultStaleBuildThreshold.
 	StaleBuildThreshold int
+	// Stalls is the durable record of this product having gone quiet — nothing
+	// started, over work the tracker calls ready, with nothing accounting for it.
+	// It is the only record here this feed writes to, and it writes to it because
+	// there is nothing else left alive to: the state it records is precisely the
+	// one in which the process that would have recorded it is dead or wedged.
+	//
+	// What it decides is still not the sink's. The reading is the read model's and
+	// one stall at a time is the record's own rule; this holds the store so that
+	// the loop which outlives a dead scheduler is the loop that asks.
+	//
+	// It is optional, and a feed assembled without one says everything else and
+	// never notices a stall — which is the seven and a half hours that asked for
+	// this, so every sink the harness builds is given one.
+	Stalls *runstate.StallStore
+	// StallThreshold is how long nothing may start before that is a stall rather
+	// than a gap between runs. Zero takes readmodel.DefaultStallThreshold.
+	StallThreshold time.Duration
 	// Standing is where the harness stands, as the read model derives it: the same
 	// four lines `yoyo status` prints, said with the heartbeat so a channel and a
 	// terminal answer one question one way. It is optional, and a feed assembled
@@ -355,6 +377,23 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, resident...)
+
+	// Whether anything is happening at all, from the same three readings again:
+	// the runs, for when one last started; the watch log, for whether anything was
+	// ever choosing and what it last said; and the switches, for whether somebody
+	// stopped it on purpose. It is last because it is the only one here that can
+	// write, and everything it writes is about what the whole pass just read.
+	//
+	// It is a separate stream from the heartbeat above for the reason the resident
+	// is: the heartbeat says a state something wrote down, and this says the
+	// absence of anything having been written down at all — which is the state the
+	// heartbeat structurally cannot see, because the thing that feeds it is what
+	// has died.
+	stalled, err := f.stallDeliveries(ctx, cursors, held, sessions, states, inFlight, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, stalled...)
 	return batch, nil
 }
 

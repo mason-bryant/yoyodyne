@@ -1135,3 +1135,91 @@ func TestStatusCarriesTheFourLinesInJSON(t *testing.T) {
 		t.Fatalf("a line is absent rather than empty: %+v", decoded.Standing)
 	}
 }
+
+// A stall is the one history nothing else keeps: the process that would have
+// recorded it is the process a stall means has died. So `yoyo status` reads it
+// back — the stretch, what was waiting through it, and what the thing that
+// chooses work last said before it went silent.
+func TestStatusReadsBackWhatTheProductRecordedAboutGoingQuiet(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	stalls, err := runstate.NewStallStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStallStore() error = %v", err)
+	}
+	dead := time.Date(2026, 9, 1, 6, 5, 0, 0, time.UTC)
+	if _, err := stalls.Reconcile(runstate.StallObservation{
+		Stalled: true,
+		Since:   dead,
+		Ready:   3,
+		Chooser: "the session choosing work last recorded watching at 2026-09-01T06:05:00Z, and has said nothing since",
+		At:      dead.Add(35 * time.Minute),
+	}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if _, err := stalls.Reconcile(runstate.StallObservation{
+		Explains: "1 developer run(s) are in flight",
+		At:       dead.Add(7*time.Hour + 30*time.Minute),
+	}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	for _, fact := range []string{
+		"nothing started on this product for 7h30m0s",
+		"2026-09-01T06:05:00Z",
+		"3 items",
+		"has said nothing since",
+		"cleared by: 1 developer run(s) are in flight",
+	} {
+		if !strings.Contains(stdout, fact) {
+			t.Fatalf("stdout does not carry %q:\n%s", fact, stdout)
+		}
+	}
+
+	// And the same record is in the machine-readable answer, so a second surface
+	// reads it rather than parsing the rendering.
+	encoded, stderr, code := runCLI(t, "status", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	var decoded statusOutput
+	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+		t.Fatalf("decode status JSON: %v (%q)", err, encoded)
+	}
+	if len(decoded.Stalls) != 1 || decoded.Stalls[0].Open() {
+		t.Fatalf("status JSON carries %+v, want the one closed stall", decoded.Stalls)
+	}
+
+	// A question about one item is a different question, and a stall is about the
+	// product rather than about any piece of work.
+	scoped, stderr, code := runCLI(t, "status", "--config", configPath, "yoyodyne-ifd.1")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(scoped, "nothing started on this product") {
+		t.Fatalf("an item-scoped status carried the product's stalls:\n%s", scoped)
+	}
+}
+
+// A product that has never gone quiet says nothing at all about it: the absence
+// is the ordinary state, and a line asserting it on every reading is one every
+// reader learns to skip.
+func TestStatusSaysNothingAboutStallsOnAProductThatHasHadNone(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, "gone quiet") || strings.Contains(stdout, "nothing started on this product") {
+		t.Fatalf("stdout asserts something about stalls on a product that has had none:\n%s", stdout)
+	}
+}

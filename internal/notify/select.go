@@ -445,6 +445,58 @@ func FromResident(resident Resident, severity report.Severity, at time.Time) Not
 	return notification
 }
 
+// Stall is the harness having started nothing at all while work was ready to
+// start: since when, over how much, and what the record last said about the
+// thing that chooses work.
+//
+// It is the third state here rather than a crossing, and it is the one that is
+// derived from an absence. The waiting line reads a record somebody wrote — a
+// hold, a session saying it is idle — and a stale resident reads a build stamp;
+// both need the process they are about to have been well enough to write
+// something down. This needs nothing to be alive: what it reads is the last time
+// any run started, which the runs themselves date, against a queue the tracker
+// says has work in it. That is why it catches the case the other two structurally
+// cannot — a scheduler that crashed writes no stop, and a wedged one goes on
+// recording that it is watching.
+//
+// The chooser's last word rides along because it is the whole of what an
+// operator has to decide between at three in the morning: a session whose last
+// word was "stopped" wants starting, and one still claiming to be watching wants
+// killing first.
+type Stall struct {
+	// Since is when the harness last started anything.
+	Since time.Time
+	// Ready is how much admitted work the tracker called ready through it.
+	Ready int
+	// Chooser is what the record last said about the thing that chooses work.
+	Chooser string
+	// Standing is where the harness stands, in the four lines the read model
+	// renders, said for the reason the waiting line says them: somebody reading
+	// this was woken by it, and reconstructing the machine's state from one
+	// sentence is what they would otherwise have to do.
+	Standing string
+}
+
+// FromStall says that nothing at all has started while work was ready to start.
+// It is addressed to the product and spoken by the harness for the reason the
+// line and the holds are: it is about every item rather than any one of them.
+//
+// It is a warning rather than a note, and that is the whole difference between
+// this and the hourly line. A line waiting on a hold somebody placed is a state
+// they already know about; a machine that has silently stopped doing anything is
+// a degraded harness, which is the one class of thing this surface takes to
+// somebody directly.
+func FromStall(stall Stall, at time.Time) Notification {
+	notification := productNotification(KindStallNoticed, at, Detail{
+		Stopped:  strings.TrimSpace(stall.Chooser),
+		Since:    stall.Since,
+		Ready:    stall.Ready,
+		Standing: strings.TrimRight(stall.Standing, "\n"),
+	})
+	notification.Event.Severity = report.SeverityWarning
+	return notification
+}
+
 // Accumulation is what one topic gathered while nothing was posting its events:
 // how many there were, the first and last of them, and the most attention any
 // one of them asked for.
