@@ -59,11 +59,14 @@ found the refusal the expensive way
   authoritative statement of what the run is for. No `bd show` is needed to get
   it, and none would work.
 - **Surrounding tracker state** is `.beads/issues.jsonl` in the worktree, the
-  tracker's derived export, read with ordinary file tools. It is written from the
-  store elsewhere and arrives with the commit the worktree was made from, so it
-  is current as of that commit and no fresher: an item admitted since — very
-  possibly including the run's own — is not in it. Where the export and the
-  delivered work item disagree, the delivered item wins.
+  tracker's derived export, read with ordinary file tools. The harness copies the
+  primary checkout's own export into the worktree when it cuts it, rather than
+  leaving whatever the base commit carried, so it holds every item admitted up to
+  the moment this run started — the run's own included. It is a copy and not a
+  live view: an item admitted while the run works is not in it, and neither is
+  anything the store gained after the copy was taken. The copy is held out of the
+  run's change, so it is not something to edit and an edit to it reaches nobody.
+  Where the export and the delivered work item disagree, the delivered item wins.
 - **Tracking the run's own progress** is the run itself. Do not open, claim,
   update, or close items to record what you are doing, and do not file work you
   discover. Discovered work goes in the run's summary, named plainly, for the

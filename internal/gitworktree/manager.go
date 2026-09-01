@@ -70,6 +70,7 @@ type Manager struct {
 	remote                string
 	pushRemote            string
 	allowedPrimaryChanges map[string]struct{}
+	currentExports        []string
 	timeout               time.Duration
 }
 
@@ -93,7 +94,13 @@ type Options struct {
 	// AllowedPrimaryChanges lists repository-relative control-plane files that
 	// may be updated after preflight without becoming part of the worktree base.
 	AllowedPrimaryChanges []string
-	Timeout               time.Duration
+	// CurrentExports lists repository-relative files derived from a store that is
+	// authoritative outside Git, which a new worktree is given the primary
+	// checkout's copy of rather than the copy its base commit happened to carry.
+	// They are read by a run and never written by one, so each is held out of the
+	// change the run makes.
+	CurrentExports []string
+	Timeout        time.Duration
 }
 
 type CreateRequest struct {
@@ -362,6 +369,10 @@ func New(options Options) (*Manager, error) {
 		}
 		allowedPrimaryChanges[filepath.ToSlash(clean)] = struct{}{}
 	}
+	currentExports, err := cleanExportPaths(options.CurrentExports)
+	if err != nil {
+		return nil, err
+	}
 	return &Manager{
 		runner:                options.Runner,
 		gitBinary:             binary,
@@ -370,6 +381,7 @@ func New(options Options) (*Manager, error) {
 		remote:                remote,
 		pushRemote:            pushRemote,
 		allowedPrimaryChanges: allowedPrimaryChanges,
+		currentExports:        currentExports,
 		timeout:               timeout,
 	}, nil
 }
@@ -463,12 +475,25 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 		BaseCommit:   baseCommit,
 		TargetBranch: request.TargetBranch,
 	}
+	// The worktree is cut from a commit, so anything in it that a store outside
+	// Git is authoritative for is only as current as the last commit that carried
+	// it. Those files are refreshed from the primary checkout here, before
+	// anything has read one, and held out of the change this run will make.
+	if err := m.refreshExports(ctx, path); err != nil {
+		return worktree, fmt.Errorf("refresh the current exports in the created worktree: %w", err)
+	}
 	inspection, err := m.Inspect(ctx, worktree)
 	if err != nil {
 		return worktree, fmt.Errorf("verify created worktree: %w", err)
 	}
 	if !inspection.Registered || inspection.Branch != branch {
 		return worktree, errors.New("created worktree is not registered with the expected branch")
+	}
+	// Nothing has been developed here yet, so a worktree that already carries a
+	// change carries the refresh above. Proving it does not is what keeps a
+	// fresher export from becoming a file every run commits and promotes.
+	if inspection.Dirty {
+		return worktree, errors.New("created worktree already carries uncommitted changes")
 	}
 	return worktree, nil
 }
@@ -1185,6 +1210,18 @@ func (m *Manager) RebaseOntoTarget(ctx context.Context, worktree Worktree, messa
 // makes a conflict safe to hand over is that the branch and the worktree were
 // put back, and that is precisely what did not happen.
 func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, targetCommit string) error {
+	// A refreshed export is a path this worktree's index has been told to leave
+	// alone, and Git refuses to move a HEAD across one. The branch's own copies go
+	// back first so the replay sees an ordinary worktree, and they are refreshed
+	// again below however the replay went.
+	if err := m.restoreExports(ctx, path); err != nil {
+		return fmt.Errorf("put the current exports back before the replay: %w", err)
+	}
+	// A refresh that fails after the replay leaves the branch's own exports in
+	// place, which is what this worktree held before any of this existed: older
+	// than the store rather than wrong. Failing the replay over it would throw
+	// away work that landed, so it is not reported here.
+	defer func() { _ = m.refreshExports(ctx, path) }()
 	rebased, err := m.runWithEnvironment(ctx, harnessCommitEnvironment(), "-C", path,
 		"-c", "core.hooksPath="+os.DevNull,
 		"-c", "user.name="+harnessCommitAuthorName,

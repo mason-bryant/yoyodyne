@@ -220,6 +220,11 @@ func buildComponents(configPath string) (components, error) {
 		Remote:                cfg.Execution.Remote,
 		PushRemote:            cfg.Execution.PushRemote,
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+		// The tracker's export of the work items themselves is what a run reads to
+		// see the work around its own, so a worktree is given the primary
+		// checkout's copy rather than the one its base commit carried. The
+		// interactions export is not here because nothing in a run reads it.
+		CurrentExports: []string{".beads/issues.jsonl"},
 	})
 	if err != nil {
 		return components{}, err
