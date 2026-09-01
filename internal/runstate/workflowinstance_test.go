@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -196,6 +197,50 @@ func TestAWorkflowInstanceWhosePositionAndHistoryDisagreeIsRefused(t *testing.T)
 	}
 }
 
+// TestACheckpointCostsTheSameWhateverPrecisionTheClockHad. Whether one more
+// boundary fits is answered before the boundary exists, from a timestamp taken
+// before the action rather than the one the action will be stamped with, so a
+// checkpoint whose width moved with the clock would make that answer a guess.
+func TestACheckpointCostsTheSameWhateverPrecisionTheClockHad(t *testing.T) {
+	t.Parallel()
+
+	encode := func(at time.Time) []byte {
+		encoded, err := json.Marshal(WorkflowCheckpoint{Sequence: 1, State: "develop", From: "claim", Outcome: "claimed", At: at})
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		return encoded
+	}
+	whole := time.Date(2026, time.August, 31, 12, 0, 0, 0, time.UTC)
+	onTheSecond := encode(whole)
+	if !strings.Contains(string(onTheSecond), `"at":"2026-08-31T12:00:00.000000000Z"`) {
+		t.Fatalf("a checkpoint encoded to %s, want its time written to a fixed width", onTheSecond)
+	}
+	for _, precision := range []time.Duration{100 * time.Millisecond, 1234 * time.Microsecond, 123456789 * time.Nanosecond} {
+		at := whole.Add(precision)
+		encoded := encode(at)
+		if len(encoded) != len(onTheSecond) {
+			t.Errorf("a checkpoint at %s encoded to %d bytes and one on the second to %d; a checkpoint costs the same either way",
+				at, len(encoded), len(onTheSecond))
+		}
+		// Padding the fraction narrows what is written rather than what the
+		// instant is: the record still says the moment it was handed.
+		var read WorkflowCheckpoint
+		if err := json.Unmarshal(encoded, &read); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		if !read.At.Equal(at) {
+			t.Errorf("the checkpoint read back at %s, want %s", read.At, at)
+		}
+	}
+
+	// A time stamped somewhere else is written as the same instant in UTC,
+	// because an offset costs six bytes where "Z" costs one.
+	if elsewhere := encode(whole.In(time.FixedZone("nowhere", 2*60*60))); string(elsewhere) != string(onTheSecond) {
+		t.Errorf("a checkpoint stamped outside UTC encoded to %s, want %s", elsewhere, onTheSecond)
+	}
+}
+
 // TestAnInstanceWithNoRoomLeftSaysSoBeforeTheStepThatWouldFill it. A record is
 // bounded and a history only grows, so the question has to be answerable before
 // the boundary is produced rather than when it is being written.
@@ -225,10 +270,20 @@ func TestAnInstanceWithNoRoomLeftSaysSoBeforeTheStepThatWouldFill(t *testing.T) 
 	grown := instance
 	grown.Checkpoints = append(slices.Clone(instance.Checkpoints), next())
 	// The per-checkpoint cost is rounded up, so the estimate stops short of the
-	// limit rather than over it and the loop below finishes the job exactly.
+	// limit rather than over it and the loop below finishes the job exactly. What
+	// it has to be rounded up past is the sequence number's digits, which is the
+	// only part of a checkpoint that grows as the history does — the timestamp is
+	// written to a fixed width, so a checkpoint stamped by the clock costs what
+	// the one measured here did rather than up to ten bytes more.
 	each := measure(grown) - measure(instance) + 8
 	for fits := (maxEncodedStateBytes - measure(instance)) / each; fits > 0; fits-- {
 		instance.Checkpoints = append(instance.Checkpoints, next())
+	}
+	// If that ever stops being true the fill overshoots, and the failure it
+	// produces further down is the store refusing a record this test believes
+	// still fits. Say what actually happened instead.
+	if filled := measure(instance); filled > maxEncodedStateBytes {
+		t.Fatalf("filling by an estimate of %d bytes each produced a record of %d bytes against a limit of %d; a checkpoint costs more than it was measured to", each, filled, maxEncodedStateBytes)
 	}
 	for instance.RoomForAnotherCheckpoint(next()) == nil {
 		instance.Checkpoints = append(instance.Checkpoints, next())

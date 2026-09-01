@@ -98,6 +98,33 @@ type WorkflowCheckpoint struct {
 	At time.Time `json:"at"`
 }
 
+// checkpointTimestamp is how a checkpoint's time is written: RFC 3339 in UTC
+// with the fractional second always nine digits, so one checkpoint costs the
+// same number of bytes as the next whatever the clock behind it produced.
+//
+// Go's own encoding trims trailing zeros off the fraction, which makes an
+// instant cost anywhere between twenty and thirty bytes depending on where the
+// clock happened to land. That is not cosmetic here. RoomForAnotherCheckpoint
+// is asked before the action that produces the checkpoint, with a timestamp
+// taken then, and the checkpoint eventually recorded carries a later one: a
+// width that moves with the clock makes "the widest boundary this step could
+// produce" a claim that can be ten bytes short of what is written. Padding the
+// fraction is a narrowing of what this writes rather than of what can be read,
+// so a record written by earlier code still reads back the same way.
+const checkpointTimestamp = "2006-01-02T15:04:05.000000000Z"
+
+// MarshalJSON writes the checkpoint with that fixed-width timestamp and changes
+// nothing else about it. The rest of the record is encoded from the struct
+// itself rather than restated here, so a field added above is carried without
+// this method being remembered.
+func (c WorkflowCheckpoint) MarshalJSON() ([]byte, error) {
+	type checkpoint WorkflowCheckpoint // without this method, so encoding it is not recursive
+	return json.Marshal(struct {
+		checkpoint
+		At string `json:"at"`
+	}{checkpoint(c), c.At.UTC().Format(checkpointTimestamp)})
+}
+
 // Done reports whether this instance has reached a terminal, which is the one
 // question a caller asks before deciding whether to step it again.
 func (i WorkflowInstance) Done() bool { return i.Terminal }
