@@ -12,9 +12,13 @@ package cli
 // It drains by default and watches when asked. That way round is deliberate and
 // it is temporary: watching is the shape the loop is meant to have, and it waits
 // on stopped work having an owner before it becomes what an operator gets
-// without asking for it. `--until-drained` states today's default out loud so
-// that flipping it is one line here rather than a behaviour change nobody wrote
-// down.
+// without asking for it. One stoppage has one now — a run that failed
+// independent review after every permitted attempt is put in front of the
+// development manager by the pass itself, one per pull — and the rest of them,
+// a failing check and a refused path and a replay conflict among them, still
+// wait on somebody reading the docket. `--until-drained` states today's default
+// out loud so that flipping it is one line here rather than a behaviour change
+// nobody wrote down.
 
 import (
 	"context"
@@ -87,7 +91,7 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		// one every other command already gives and matches how the backlog is
 		// steered. A run already in flight keeps the configuration its own pull
 		// read, because a run's parameters are fixed when it is reserved.
-		Open: func(context.Context) (orchestrator.Pull, error) { return openPull(*configPath) },
+		Open: func(context.Context) (orchestrator.Pull, error) { return openPull(*configPath, stderr) },
 	}
 	// A session that stays open says so where somebody who is not at this
 	// terminal can read it. Failing to open that log fails the command rather
@@ -371,7 +375,11 @@ func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 // openPull builds everything one pull acts through from one reading of the
 // configuration. The parts are captured by the starter it returns, so each run
 // this pull begins uses the configuration this pull read.
-func openPull(configPath string) (orchestrator.Pull, error) {
+//
+// stderr is where the conversation this pull may open says what it could not
+// read, and is used for nothing else: everything the pull itself did is on the
+// schedule the command reports.
+func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 	parts, err := buildComponents(configPath)
 	if err != nil {
 		return orchestrator.Pull{}, err
@@ -397,6 +405,11 @@ func openPull(configPath string) (orchestrator.Pull, error) {
 		// `yoyo cost` prices items from, so a bounded session and a ledger can
 		// never disagree about what a run cost.
 		Spend: parts.store,
+		// Where a run that stopped on its reviewer reaches the development
+		// manager. It is wired here rather than into the run that stopped for the
+		// reason escalate.go gives: a delivery is a conversation turn, and a run
+		// waiting out one would hold a developer slot open on its way out.
+		Escalations: escalatorFrom(parts, configPath, stderr),
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record
@@ -487,8 +500,21 @@ With --watch it does not return when the queue empties: it waits out
 execution.work_poll and reads the queue again, until you stop it with Ctrl-C.
 Nothing is cached between readings, so work you admit or reorder is picked up at
 the next poll, and an idle session costs one tracker read per interval and no
-provider call at all. Holding intake brakes a watching session in place -- it
+provider call at all, unless it has a stopped run to put in front of the
+development manager. Holding intake brakes a watching session in place -- it
 keeps polling and chooses nothing -- and "yoyo release" resumes it.
+
+Every pull also puts stopped work in front of the development manager: a run
+that ended with its independent reviewer still requiring repair after every
+permitted attempt is delivered into her conversation by the pass, once, with the
+docket entry it is about. One stoppage per pull, oldest first, so a backlog of
+them reaches her over several polls rather than holding the queue closed while
+she reads. She decides there and the decision is recorded against the item's
+triage budget exactly as it is when somebody brings her a stoppage by hand;
+nothing is carried out by this, so "yoyo triage repair" and "yoyo triage rerun"
+still act on what she decided. A pause covers it like any other provider call,
+and holding intake does not: the judgment a held queue is waiting on is what the
+delivery produces. What it did, and any delivery that failed, is on the pass.
 
 A watching session guards itself three ways. It does not start the same item
 twice unless the item has changed -- what it says, what it is for, its priority,

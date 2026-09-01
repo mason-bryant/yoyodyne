@@ -45,7 +45,10 @@ var providerInvocations = map[string]string{
 	"internal/review/reviewer.go": "a review: the refusal travels back on review.Result, and whoever asked for the " +
 		"review accounts for it — the pipeline by parking the run, BranchReviewer by recording it",
 	"internal/chat/chat.go": "a conversation turn: Session.noteUsageLimit records the refusal against the " +
-		"conversation, because a turn has no run to park and fails at the operator's terminal",
+		"conversation, because a turn has no run to park. A turn an operator typed then fails at their " +
+		"terminal; one the harness took to put a stopped run to the development manager fails carrying " +
+		"chat.ErrProviderCapacity, and the stoppage keeps its delivery for after the limit resets rather " +
+		"than counting as having been put to her",
 	"internal/cli/exchange.go": "an inter-role ask exchange answering a round: exchangeVoice.noteUsageLimit " +
 		"records the refusal naming the exchange it stopped, because an answering round has neither a run " +
 		"to park nor a conversation of its own to fail at anybody's terminal",
@@ -54,11 +57,12 @@ var providerInvocations = map[string]string{
 // TestEveryProviderInvocationAccountsForAnExhaustedLimit fails when the tree
 // grows a provider invocation this table does not name. The scheduler is the
 // case worth stating out loud: a watching `yoyo work` session reads the tracker
-// and starts runs, and makes no provider call of its own, so it is absent here
-// because there is nothing on it to record rather than because it was
-// overlooked. Teaching selection to ask a provider anything — triage on the
-// scheduler's own side, a model choosing between ready items — fails this test
-// until that call says what becomes of a refusal.
+// and starts runs, and the one thing it asks a provider itself is a conversation
+// turn — a stopped run put in front of the development manager — which is
+// accounted for as a conversation turn above rather than as a call site of its
+// own, because it is the conversation's own invocation. Teaching selection to
+// ask a provider anything else — a model choosing between ready items — fails
+// this test until that call says what becomes of a refusal.
 func TestEveryProviderInvocationAccountsForAnExhaustedLimit(t *testing.T) {
 	t.Parallel()
 

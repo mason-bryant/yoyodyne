@@ -325,6 +325,16 @@ type WatchSessions interface {
 	Record(SessionState) error
 }
 
+// ScheduleEscalations puts stopped work in front of the development manager,
+// once per docketed stoppage. It is satisfied by Escalator.
+//
+// It is optional, and a pull wired without one pulls exactly the same work: what
+// is lost is the delivery, so a run that stopped waits on somebody carrying it
+// to her, which is what every pass did before this existed.
+type ScheduleEscalations interface {
+	Escalate(ctx context.Context) (EscalationSweep, error)
+}
+
 // Starter runs one chosen item to its end. It is a function rather than the
 // pipeline itself because a pull hands each run the configuration that pull
 // read, and because what the scheduler needs from a run is only its outcome.
@@ -364,7 +374,10 @@ type Pull struct {
 	// Spend prices what the session has spent. It is required of a pass that was
 	// given a budget and of no other; see ScheduleSpend.
 	Spend ScheduleSpend
-	Start Starter
+	// Escalations delivers stopped work to the development manager. Optional; see
+	// ScheduleEscalations.
+	Escalations ScheduleEscalations
+	Start       Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -530,6 +543,17 @@ type Schedule struct {
 	// schedule read afterwards would otherwise be missing.
 	Watched bool `json:"watched,omitempty"`
 	Polls   int  `json:"polls,omitempty"`
+	// Escalated is the stopped work this pass put in front of the development
+	// manager, and what she recorded about it. It is on the schedule for the
+	// reason the started runs are: a pass that woke a role and spent a turn doing
+	// it is a pass that did something, and an operator reading what the session
+	// did must not have to infer it from her conversation.
+	Escalated []Escalated `json:"escalated,omitempty"`
+	// EscalationProblem names a delivery that did not reach her. It costs the
+	// pass nothing it was doing, so it is reported beside the pull rather than
+	// stopping it — but never left unsaid, because stopped work nobody was told
+	// about is exactly what the delivery exists to prevent.
+	EscalationProblem string `json:"escalation_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -856,6 +880,13 @@ pulling:
 			break
 		}
 		spend = pull.Spend
+		// Stopped work reaches the development manager here, rather than by
+		// somebody carrying it to her. It is done before the brake and before the
+		// hold, because it chooses nothing and starts nothing: what it produces is
+		// her judgment about work that has already stopped, which is exactly what a
+		// held or braked queue is usually waiting on. What it delivers is bounded to
+		// one stoppage per pass; see Escalator.
+		s.escalate(ctx, &schedule, pull)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -1251,6 +1282,49 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 		return
 	}
 	schedule.Braked = &held
+}
+
+// escalate puts the oldest stopped run the development manager has not been
+// shown in front of her, and records what came back on the schedule.
+//
+// Nothing here stops the pass. A delivery that failed costs the pass nothing it
+// was doing — no work was chosen by it and none is withheld for it — so it is
+// reported beside the pull rather than in place of it, exactly as a staleness
+// reading or a brake that could not be placed is. What must not happen is
+// silence: a stoppage that reached nobody is the state this exists to end.
+//
+// What it does cost is the pull's own thread while the turn is taken, which is
+// the one thing worth knowing before reading further: runs already going are
+// untouched, but one that finishes mid-delivery is collected when the delivery
+// returns rather than at once, so a free slot is refilled a turn later than it
+// would have been. That is bounded by the turn and by one delivery per pass, and
+// it is the trade the placement was chosen for — a run that delivered its own
+// stoppage would hold a developer slot instead, which is the same wait taken out
+// of the scarcer thing.
+func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) {
+	if pull.Escalations == nil {
+		return
+	}
+	sweep, err := pull.Escalations.Escalate(ctx)
+	problem := ""
+	if err != nil {
+		problem = fmt.Sprintf("stopped work could not be put to the development manager, so it is waiting on somebody carrying it to her: %v", err)
+	}
+	for _, escalated := range sweep.Escalated {
+		// A delivery that happened is kept, because it is one of the things this
+		// pass did and there are as many of them as there were stoppages. One that
+		// did not happen is a problem rather than an event, and only the latest is
+		// kept: a session polling all night against a conversation nothing can open
+		// would otherwise report the same failure a thousand times, and a pass that
+		// eventually got through would still be carrying every attempt before it.
+		if escalated.Delivered {
+			schedule.Escalated = append(schedule.Escalated, escalated)
+		}
+		if escalated.Problem != "" {
+			problem = escalated.Problem
+		}
+	}
+	schedule.EscalationProblem = problem
 }
 
 // priceRun is what one finished run cost, from the recorded evidence. A run that
@@ -1874,6 +1948,13 @@ func (s Schedule) Render() string {
 	}
 	for _, deferred := range s.Deferred {
 		fmt.Fprintf(&rendered, "%s was not pulled: %s\n", deferred.WorkItemID, deferred.Reason)
+	}
+	// What the pass put in front of the development manager, said beside what it
+	// pulled: a run stopped hours ago reaching her now is the other half of what
+	// this session did with its time.
+	rendered.WriteString(EscalationSweep{Escalated: s.Escalated}.Render())
+	if s.EscalationProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.EscalationProblem)
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))

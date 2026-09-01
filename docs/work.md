@@ -340,13 +340,32 @@ time it chooses something, rather than at the next restart. Runs already in
 flight keep the configuration they started under.
 [Configuration](configuration.md#scheduling-ready-work) has the rest.
 
+**A pass also puts stopped work in front of the development manager.** A run
+that ended with its independent reviewer still requiring repair after every
+permitted attempt used to sit on the triage docket until somebody opened her
+conversation and told her about it. The pull delivers it instead: one stoppage
+per pull, oldest first, into her own conversation, naming the docket entry it is
+about. She decides there, and the decision is recorded against the item's triage
+budget exactly as it is when you carry her a stoppage by hand — nothing is
+carried out by the delivery, so `yoyo triage repair` and `yoyo triage rerun`
+still act on what she decided, under every condition they already ask. Each
+stoppage is delivered once; a delivery that failed is made again a bounded number
+of times and then left for a person, and either way the pass says what it did.
+Pausing covers it like any other provider call, and holding intake does not,
+because it chooses no work and starts nothing. The other stoppages — a failing
+check, a refused path, a replay conflict — still wait to be read.
+[Conversation](conversation.md#deciding-what-becomes-of-stopped-work) has what
+she does with one.
+
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
 until you stop it. Nothing else about the pass changes and nothing needed to:
 every pull already re-reads the configuration and the queue, so work you admit is
 picked up at the next poll and a reprioritization at the next pull, with no change
 detection anywhere in it. An idle session costs one local tracker read per
-interval and asks no provider anything. Holding intake brakes a watching session
+interval and asks no provider anything — unless it has a stopped run to put in
+front of the development manager, which is a turn in her conversation and is the
+one provider call a pass makes of its own. Holding intake brakes a watching session
 in place rather than stopping it — it keeps polling, chooses nothing, and resumes
 when you release it.
 

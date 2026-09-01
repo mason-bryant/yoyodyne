@@ -1775,7 +1775,11 @@ There is no change detection anywhere in it, because nothing between the reading
 is cached. A run already in flight is never preempted by any of that.
 
 An idle session costs one local tracker read per `work_poll` and asks no provider
-anything, so a queue that is empty overnight spends nothing.
+anything, so a queue that is empty overnight spends nothing. The exception is
+stopped work: a run that ended with its reviewer still requiring repair is
+[delivered into the development manager's
+conversation](work.md#letting-the-harness-choose-the-work) by the pull, one per
+poll and once each, which is a turn in her conversation and is charged as one.
 
 **The intake hold is the remote brake.** Holding intake does not stop a watching
 session; it brakes it in place. The session keeps polling, chooses nothing, and

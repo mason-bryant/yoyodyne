@@ -193,6 +193,7 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/cli/amendment.go` | `listAmendments` | Lists proposals by owning role for an operator to read. |
 | `internal/cli/chat.go` | `conversationAgent` | Picks the configured agent for a role and refuses one filling a different role. That is which agent, not what the role may do. |
 | `internal/cli/chat.go` | `openChat` | Builds the conversation's components and refuses a backend this build cannot launch. |
+| `internal/cli/escalate.go` | `(developmentManagerConversation).Judge` | Opens the development manager's own conversation and puts a stopped run in front of her. Which role is addressed is whose judgement the stoppage needs, not a decision about what that role may do; what she may decide once she is there is `conversation.authority-table`. |
 | `internal/gitworktree/registry.go` | `(*Manager).leaseRegistry` | A file lock over the worktree registry, held so two processes do not rewrite it at once. |
 | `internal/gitworktree/registry.go` | `registryLease` | The handle for the lock above. |
 | `internal/notify/conversation.go` | `fromExchange` | Turns a recorded exchange into something the operator is told. |

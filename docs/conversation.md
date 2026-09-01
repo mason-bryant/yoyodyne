@@ -906,6 +906,25 @@ nothing happening is not something anything can be present for. Two things scan:
 scheduled process behind either, so the configured age is a floor rather than a
 promise about when the entry appears.
 
+One stoppage no longer waits to be read. **A run that ended with its independent
+reviewer still requiring repair after every permitted attempt is delivered into
+the development manager's conversation by the harness**, from the pull that
+[`yoyo work`](work.md#letting-the-harness-choose-the-work) makes, rather than by somebody opening
+her conversation to tell her. What that changes is the courier and nothing else:
+what she is shown is the docket entry she would have read anyway, the decision is
+hers and is recorded exactly as below, the caps refuse what they refused, and
+nothing is carried out by the delivery. One stoppage per pull, oldest first, so a
+morning's worth of them reaches her over several polls instead of holding the
+queue closed while she reads all of them. Each is delivered once — the same
+evidence in front of her twice is how one authorized recovery becomes two
+decisions — and a delivery that failed is made again a bounded number of times
+and then left for a person, which the pass says out loud rather than leaving to
+the quiet. Your pause covers it as it covers every provider call; holding intake
+does not, because the delivery chooses no work and starts nothing, and the
+judgment it produces is usually what a held queue is waiting on. The other
+stoppages — a failing check, a refused path, a replay conflict — still reach her
+by her opening a conversation, which is what every stoppage did before this.
+
 ### Deciding what becomes of stopped work
 
 An entry decides nothing, and the development manager is the role that does. It

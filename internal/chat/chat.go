@@ -949,6 +949,12 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// rather than about this conversation, and nothing else in the record would
 	// ever say it happened.
 	refusal := s.noteUsageLimit(result, err)
+	// And it says so in the error the turn fails with. To a person at a terminal
+	// that changes nothing — they are told what happened either way — but a caller
+	// that is not a person has to be able to tell "the role was never asked" from
+	// "the role answered badly", because the two are owed opposite things: one is
+	// worth asking again once the limit resets, and the other is not.
+	declined := providerDeclined(result, err)
 	// A failed invocation is exactly the case a reply shown as it formed must not
 	// be left looking whole: whatever prose reached the screen was the start of
 	// an answer nobody finished. The two failures below are the only ones that
@@ -957,12 +963,13 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// wherever the error is eventually reported.
 	if err != nil {
 		s.stream.cutOff()
-		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), refusal, s.record())
+		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), declined, refusal, s.record())
 	}
 	if result.IsError {
 		s.stream.cutOff()
 		return "", errors.Join(
 			fmt.Errorf("%s reported failure: %s", RoleTitle(s.state.Role), result.DescribeFailure()),
+			declined,
 			refusal,
 			s.record(),
 		)
