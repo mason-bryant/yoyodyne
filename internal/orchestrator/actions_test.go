@@ -586,7 +586,7 @@ var notAStep = map[string]string{
 	// separately orderable and must not become so.
 	"attemptDevelopment":      "one provider invocation inside candidate.develop",
 	"attemptReview":           "one provider invocation inside candidate.review",
-	"countReviewRound":        "charges the item for a verdict inside candidate.review",
+	"recordReviewVerdict":     "records a verdict against the item, charging a round where it sent the work back, inside candidate.review",
 	"gateProtectedPaths":      "the scope refusal candidate.check makes before it spends a suite",
 	"settleRemoteTarget":      "the pre-promotion remote check inside candidate.integrate",
 	"publishIntegration":      "the merge candidate.integrate asks the forge for once the promotion stands",

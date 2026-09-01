@@ -2668,6 +2668,14 @@ about it refused. It loosens no bound: an approval ends the review loop of the
 run that produced it, so a run yields at most one, and how many runs an item gets
 is bounded by the repair grant and the re-run, each once per item.
 
+**It is recorded without being counted**, and that is what keeps the replay
+exclusion above true rather than nearly true. Both exclusions are one mechanism:
+an attempt a reviewer has already answered about is charged at most once,
+whichever way either answer went. A promotion only follows an approval, so an
+approval nothing recorded would leave the replayed attempt looking unjudged — and
+the replay's fresh verdict can be a repair, because the ground moved — which is
+the race charged to the item after all.
+
 **Each counter is written before the action it counts takes effect**, so a
 process that dies between the two has recorded a grant it did not give rather
 than given one it did not record — an unspent attempt rather than a duplicated

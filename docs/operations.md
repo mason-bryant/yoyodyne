@@ -809,9 +809,12 @@ there as well.
 A **round** is a reviewer verdict that sent a developer attempt back, counted
 across every run of the item. A re-review no developer attempt produced is not
 one, so a promotion that [loses its race](configuration.md#losing-a-race-for-the-target-branch)
-and gets a fresh verdict on the replayed change is not charged for it. Neither is
-a verdict that approved the change: the cap stops an item buying the same
-argument another round, and an approval ends the argument. Rounds are what runs
+and gets a fresh verdict on the replayed change is not charged for it, whichever
+way that verdict goes. Neither is a verdict that approved the change: the cap
+stops an item buying the same argument another round, and an approval ends the
+argument. An approval is still recorded rather than passed over, because the two
+exclusions are one mechanism — an attempt already answered about is charged at
+most once — and a promotion only ever follows an approval. Rounds are what runs
 actually spend, and every run records them.
 
 The lines under it are the budget for what triage can decide about work that did

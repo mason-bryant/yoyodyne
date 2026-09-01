@@ -112,6 +112,105 @@ func TestAReviewRoundIsCountedOncePerConsecutiveDeveloperAttempt(t *testing.T) {
 	}
 }
 
+// An approval costs the item nothing and is still recorded, and that record is
+// what excludes the one thing that re-reviews an approved attempt: the
+// integration replay. A promotion that lost its race replays the change and asks
+// for a fresh verdict on the same developer attempt, and that verdict can be a
+// repair because the ground moved. Charging it would charge the item for a race
+// it did not cause, so the attempt has to be one the record already holds.
+func TestAnApprovedAttemptIsRememberedAndTheReplayOfItIsFree(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	approved, err := store.RecordApprovedAttempt(context.Background(), "yoyodyne-ifd.224", "run-a#0", time.Now())
+	if err != nil {
+		t.Fatalf("RecordApprovedAttempt() error = %v", err)
+	}
+	if approved.ReviewRounds != 0 || approved.LastRound != "" || approved.LastRoundCharger != "" {
+		t.Fatalf("counters after an approval = %#v, want nothing charged", approved)
+	}
+	if approved.LastJudged != "run-a#0" {
+		t.Fatalf("LastJudged = %q, want the attempt the reviewer answered about", approved.LastJudged)
+	}
+
+	// The replay's fresh verdict, sending the same attempt back.
+	replayed, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.224", "run-a#0", countingProcess, time.Now())
+	if err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	if replayed.ReviewRounds != 0 {
+		t.Fatalf("ReviewRounds = %d, want none: the replay judged an attempt the item had already been answered about", replayed.ReviewRounds)
+	}
+
+	// The repair that verdict asked for is a new attempt, and it is chargeable
+	// like any other: the exclusion is about one attempt, not about the item.
+	repaired, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.224", "run-a#1", countingProcess, time.Now())
+	if err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	if repaired.ReviewRounds != 1 || repaired.LastRound != "run-a#1" {
+		t.Fatalf("counters after the repair was judged = %#v, want the one round it cost", repaired)
+	}
+}
+
+// A record written before approvals were remembered names its attempt only at
+// the round it charged, and an item mid-flight when the executable changed under
+// it must not have its resumed review charged a second time. So the
+// deduplication asks the counted round as well as the judged attempt.
+func TestARecordWrittenBeforeApprovalsWereRememberedStillDeduplicates(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", countingProcess, time.Now()); err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	// The shape such a record has: a counted round and nothing saying which
+	// attempt was judged.
+	aged, err := store.Counters("yoyodyne-ifd.7")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	aged.LastJudged = ""
+	if err := store.save("yoyodyne-ifd.7", aged); err != nil {
+		t.Fatalf("save() error = %v", err)
+	}
+
+	resumed, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", countingProcess, time.Now())
+	if err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	if resumed.ReviewRounds != 1 {
+		t.Fatalf("ReviewRounds = %d, want the one round the aged record already held", resumed.ReviewRounds)
+	}
+}
+
+// A round given back is a round the environment refused, so the attempt is going
+// to be judged again and has to be chargeable when it is. The judged attempt is
+// cleared with the round for the same reason the head is: leaving it named would
+// make the next review of that attempt free by the other door.
+func TestAReturnedRoundLeavesTheAttemptChargeableAgain(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", countingProcess, time.Now()); err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	returned, outcome, err := store.ReturnReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", countingProcess, time.Now())
+	if err != nil {
+		t.Fatalf("ReturnReviewRound() error = %v", err)
+	}
+	if !outcome.Returned || returned.LastJudged != "" {
+		t.Fatalf("counters after the return = %#v (returned %v), want the judged attempt cleared with the round", returned, outcome.Returned)
+	}
+	recharged, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", countingProcess, time.Now())
+	if err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	if recharged.ReviewRounds != 1 {
+		t.Fatalf("ReviewRounds = %d, want the re-judged attempt charged once", recharged.ReviewRounds)
+	}
+}
+
 // The truncation rule, at the harness defaults the architect stated: an item
 // that has been through its repair budget once has spent three rounds of four,
 // so the configured grant of two attempts is cut to the one round that is left.
