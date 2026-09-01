@@ -20,6 +20,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/separation"
 )
 
 const runstatePackage = "../runstate"
@@ -196,6 +197,41 @@ func TestEveryCapabilityTheseActionsRequireHasAHolder(t *testing.T) {
 			t.Errorf("%q requires %q and nothing holds it: no role's bundle carries it and it is not recorded as the harness's own",
 				step.action.Name, required)
 		}
+	}
+}
+
+// TestEveryRegisteredActionPassesTheSeparationPolicies is the parity claim for
+// the separation workstream, made where a definition cannot reach: the compiler
+// holds the actions a definition selects to these policies, and this holds every
+// action the harness registers to them whether a definition selects it or not.
+//
+// It is worth having separately because the compiler only ever sees what was
+// selected. An action registered with a combination the policies refuse would sit
+// in the registry unnoticed until the first definition named it, and the point of
+// writing the rules over the vocabulary is that they can be asked of the table
+// itself.
+func TestEveryRegisteredActionPassesTheSeparationPolicies(t *testing.T) {
+	t.Parallel()
+
+	for _, step := range deliverySteps() {
+		operation := separation.Operation{Name: step.action.Name, Requires: step.action.Capabilities}
+		if err := separation.CheckOperation("the registered action", operation); err != nil {
+			t.Errorf("%q: %v", step.action.Name, err)
+		}
+	}
+}
+
+// TestTheRolesThatAuthorizeAPromotionCannotPerformOne is the role half of the
+// same rule, held against the bundles this repository ships.
+func TestTheRolesThatAuthorizeAPromotionCannotPerformOne(t *testing.T) {
+	t.Parallel()
+
+	holders, err := rolecapability.Default()
+	if err != nil {
+		t.Fatalf("rolecapability.Default() error = %v", err)
+	}
+	if err := separation.CheckHolders(holders); err != nil {
+		t.Errorf("CheckHolders() error = %v", err)
 	}
 }
 

@@ -22,7 +22,7 @@ func deliveryCatalog(t *testing.T) Catalog {
 		CatalogEntry{Action: "candidate.develop", Capabilities: []capability.Capability{capability.ProviderInvoke, capability.WorktreeMutate}},
 		CatalogEntry{Action: "candidate.publish", Capabilities: []capability.Capability{capability.ForgePublish}},
 		CatalogEntry{Action: "candidate.check", Capabilities: []capability.Capability{capability.ChecksExecute}},
-		CatalogEntry{Action: "candidate.review", Capabilities: []capability.Capability{capability.ProviderInvoke}},
+		CatalogEntry{Action: "candidate.review", Capabilities: []capability.Capability{capability.ProviderInvoke, capability.ReviewVerdict}},
 		CatalogEntry{Action: "candidate.integrate", Capabilities: []capability.Capability{capability.PromotionLease, capability.TargetBranchMutate}},
 		CatalogEntry{Action: "run.clean-up", Capabilities: []capability.Capability{capability.WorktreeMutate}},
 	)

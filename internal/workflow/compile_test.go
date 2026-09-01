@@ -61,9 +61,28 @@ func deliveryActions[S any](t *testing.T, performing func(name string) func(cont
 		registered("candidate.develop", capability.ProviderInvoke, capability.WorktreeMutate),
 		registered("candidate.publish", capability.ForgePublish),
 		registered("candidate.check", capability.ChecksExecute),
-		registered("candidate.review", capability.ProviderInvoke),
+		registered("candidate.review", capability.ProviderInvoke, capability.ReviewVerdict),
 		registered("candidate.integrate", capability.PromotionLease, capability.TargetBranchMutate),
 		registered("run.clean-up", capability.WorktreeMutate),
+		// Two actions no delivery definition selects and no fixture but the
+		// separation ones names. They are here rather than in a registry of their
+		// own because the fixtures that select them are read through this same
+		// loader, and a registry per fixture would be a second table to keep in
+		// step with this one.
+		//
+		// Neither is a thing the harness registers. `candidate.develop-and-review`
+		// is the combination the first separation policy exists to refuse — one
+		// invocation that writes the change and returns the verdict on it — and
+		// `candidate.promote` is a promotion with no lease, which is the third.
+		// Registering them is what lets a test prove the refusal is the policy's
+		// rather than an absence in the catalog.
+		registered("candidate.develop-and-review", capability.ProviderInvoke, capability.WorktreeMutate, capability.ReviewVerdict),
+		registered("candidate.promote", capability.TargetBranchMutate),
+		// A second authoring action, so a sweep can put one anywhere in a sequence
+		// and not only at the start. It is what the evidence rule is actually about:
+		// a change rewritten after the verdict is a change nobody judged, and a
+		// sequence with two authoring states is where that first becomes expressible.
+		registered("candidate.rework", capability.ProviderInvoke, capability.WorktreeMutate),
 	)
 	if err != nil {
 		t.Fatalf("action.New() error = %v", err)
@@ -181,6 +200,7 @@ func TestAValidDefinitionCompilesToRegisteredActions(t *testing.T) {
 		capability.ProviderInvoke,
 		capability.ChecksExecute,
 		capability.ForgePublish,
+		capability.ReviewVerdict,
 	}
 	if required := graph.Capabilities(); !slices.Equal(required, want) {
 		t.Errorf("Capabilities() = %v, want %v", required, want)

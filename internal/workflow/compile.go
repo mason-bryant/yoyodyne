@@ -9,6 +9,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/capability"
+	"github.com/mason-bryant/yoyodyne/internal/separation"
 )
 
 // Grant is the authority a workflow is compiled under: the capabilities the
@@ -175,13 +176,23 @@ func (g Graph[S]) Capabilities() []capability.Capability { return slices.Clone(g
 // Compile turns a validated definition into the graph an instance runs, or
 // refuses the whole of it.
 //
-// This is where the two things validation could not do happen. Every action the
-// definition selects is resolved against the registry this build actually holds,
-// and every capability those actions declare is checked against the grant this
-// workflow is compiled under. Both are refusals rather than warnings, and both
-// happen here — before an instance exists, before a work item is claimed, and
-// before a worktree is made. That ordering is what the loader is for: a
-// definition that cannot run is refused while refusing it still costs nothing.
+// This is where the three things validation could not do happen. Every action
+// the definition selects is resolved against the registry this build actually
+// holds, every capability those actions declare is checked against the grant this
+// workflow is compiled under, and the topology the definition chose is held to
+// the separation policies in `internal/separation`. All three are refusals rather
+// than warnings, and all three happen here — before an instance exists, before a
+// work item is claimed, and before a worktree is made. That ordering is what the
+// loader is for: a definition that cannot run is refused while refusing it still
+// costs nothing.
+//
+// The separation policies are the reason a definition may choose any topology at
+// all. A grant answers whether the thing running this may perform what it
+// selected; separation answers whether the sequence it selected keeps authorship
+// and judgment apart and reaches the promotion only through the evidence that
+// earns it. A definition can widen neither, and a topology nobody anticipated is
+// refused by the rule rather than by the sequence somebody happened to write
+// down first.
 //
 // The registry is authoritative about what an action requires even where a
 // definition was validated against a catalog built from something else: the
@@ -249,8 +260,52 @@ func (l Loader[S]) Compile(validated Validated) (Graph[S], error) {
 	if len(problems) > 0 {
 		return Graph[S]{}, errors.Join(problems...)
 	}
+	// Separation is asked of the resolved graph rather than of the definition,
+	// because what it is about is what each state actually performs: the
+	// capabilities it reads are the registry's own declaration, exactly as the
+	// grant check above reads them, and never anything the definition said. It is
+	// asked after the loop rather than inside it because one of the policies is
+	// about paths, and a path through a state whose action did not resolve is not
+	// a path anybody can be told anything true about.
+	if err := separation.CheckTopology(topologyOf(graph)); err != nil {
+		return Graph[S]{}, err
+	}
 	graph.requires = inDeclaredOrder(required)
 	return graph, nil
+}
+
+// topologyOf is a compiled graph in the form the separation policies read: where
+// it starts, and what each state performs and leads to.
+//
+// Terminals are left out of every step's destinations. A terminal performs
+// nothing and leads nowhere, so it can neither carry evidence nor need any, and
+// including them would only give the path analysis states it has nothing to say
+// about.
+func topologyOf[S any](graph Graph[S]) separation.Topology {
+	topology := separation.Topology{
+		ID:      graph.ID(),
+		Initial: graph.Initial(),
+		Steps:   make([]separation.Step, 0, len(graph.states)),
+	}
+	for _, state := range graph.states {
+		node, _ := graph.Node(state)
+		step := separation.Step{
+			State: state,
+			Performs: separation.Operation{
+				Name:     node.Action().Name,
+				Requires: node.Action().Capabilities,
+			},
+		}
+		for _, outcome := range node.Outcomes() {
+			destination, _ := node.Next(outcome)
+			if destination.Terminal {
+				continue
+			}
+			step.Next = append(step.Next, destination.Name)
+		}
+		topology.Steps = append(topology.Steps, step)
+	}
+	return topology
 }
 
 // destinations resolves one state's transitions. Validation has already refused a

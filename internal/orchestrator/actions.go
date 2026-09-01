@@ -141,6 +141,14 @@ func deliverySteps() []deliveryStep {
 					capability.RepositoryRead,
 					capability.ProviderInvoke,
 					capability.RunStateMutate,
+					// The verdict is what performing this produces, and naming it is what
+					// makes the separation policies askable of any sequence that selects
+					// this step: `internal/separation` reads a topology in capabilities, so
+					// a review step that did not declare the verdict would be one no rule
+					// could tell from a step that merely reads the change and invokes a
+					// provider. It is the reviewer's alone, and this action is where the
+					// harness exercises it on the reviewer's behalf.
+					capability.ReviewVerdict,
 				},
 				// The verdict itself is not returned through this door, and nothing is
 				// lost by that: reviewChange records the decision on the run's durable

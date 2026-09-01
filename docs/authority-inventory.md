@@ -76,6 +76,23 @@ and `converge.catch-up-under-lease` below already say and as
 [`one-promotion-per-target-branch`](decisions/invariants/one-promotion-per-target-branch.md)
 requires: no agent performs a promotion, so no role's bundle confers one.
 
+## What holds the separation rules
+
+Three of the rows below enforce a rule about two things rather than about one
+role: the reviewer is never the author, two demonstrably independent provider
+invocations gate an integration, and the roles that authorize a promotion cannot
+perform one. Each is true today because of where Go control flow puts things —
+`review.independent-invocation`, `run.independent-invocations`, and the three
+lease rows — and none of that survives a sequence read out of a file.
+
+[`internal/separation`](../internal/separation/separation.go) is those rules
+written as named policies over the same vocabulary the bundles are written in,
+held against whatever topology a workflow definition chooses. The `separation.*`
+rows below are those policies, and `workflow.separation-at-compile` is where a
+definition meets them. They do not replace the rows they come from: those bind
+the one sequence the harness runs, and these bind every sequence a definition
+could ask for.
+
 ## The inventory
 
 | Check | Binds | File | Declaration | Refuses |
@@ -144,6 +161,11 @@ requires: no agent performs a promotion, so no role's bundle confers one.
 | workflow.catalog-closed | every role | `internal/workflow/validate.go` | `NewCatalog` | A catalog entry naming a capability the repository does not declare, which would be a claim about authority nothing grants. |
 | workflow.compiled-under-grant | every role | `internal/workflow/compile.go` | `Grant` | A definition selecting an action that requires a capability the grant it is compiled under does not confer, and a compile under a grant that confers nothing at all. It is refused before an instance exists and before any work is claimed, so a definition never widens the authority it was bound with. The refusal is made by the loader's `Compile`, whose generic receiver this inventory cannot name, so the row pins the grant it is made against. |
 | workflow.performed-under-grant | every role | `internal/workflow/execute.go` | `withinGrant` | A transition whose action requires a capability the grant performing it does not confer. It is the refusal above made again at every state boundary, against the authority held now rather than the authority the graph was compiled under, so an instance that started under a wider grant does not carry it. What it holds the grant against is the registry's own declaration, carried on the compiled node, and never anything the definition said. The instance stays in the state it stood in. |
+| separation.policies | the developer, the reviewer | `internal/separation/separation.go` | `Policies` | Nothing, by itself: it is the separation rules stated as named policies over the capability vocabulary, each carrying the rule it is the capability form of. It is listed because the refusals below name one of them, and a policy nothing describes is a refusal nobody can look up. |
+| separation.operation | the developer, the reviewer | `internal/separation/separation.go` | `CheckOperation` | One operation that both writes the change and returns the verdict the change is gated on, one that both returns a verdict and promotes, and one that moves a target branch without the lease that admits the move. It is about the combination rather than about who performs it, so it refuses the same combination whoever would have held it. |
+| separation.topology | the developer, the reviewer | `internal/separation/separation.go` | `CheckTopology` | A sequence that can reach a step moving the target branch without having crossed, on every path to it and since the last step that writes the change, both a step that runs the project's configured checks and a step that returns a verdict. Every path rather than some path: one route through the review and one around it is a sequence that can promote unjudged work. Since the change was last written rather than anywhere behind it: a step that rewrites the worktree after the verdict has produced a change nobody judged, however many review states came earlier. |
+| separation.holders | the harness | `internal/separation/separation.go` | `CheckHolders` | A role holding either half of the promotion. No sequence can answer this — a role's authority is not part of any topology — and `one-promotion-per-target-branch` is what makes it worth asking separately: a bundle conferring the lease or the branch move is a role that could take one whatever the sequence around it says. |
+| workflow.separation-at-compile | every role | `internal/workflow/compile.go` | `topologyOf` | A definition whose chosen topology any separation policy refuses, before an instance exists and before a work item is claimed. What the policies are asked about is the resolved graph — the registry's own declaration of what each state requires, never anything the definition said. The refusal is made by the loader's `Compile`, whose generic receiver this inventory cannot name, so the row pins the projection it is made over. |
 | rolecapability.role-bundles | every role | `internal/rolecapability/bundles.go` | `bundles` | Nothing, by itself: it is the statement of what each of the five roles holds, derived from this inventory and written in Go so that configuration cannot widen it. It is listed because it is the other half of this document, and a change to it is a change to what the harness says a role may do. |
 | rolecapability.bundles-closed | every role | `internal/rolecapability/rolecapability.go` | `New` | A bundle for a role the harness does not have, two bundles for one role, a role no bundle describes, a bundle holding nothing or holding a capability nothing declares, and a declared capability that neither a role nor the harness holds. All of it at construction, from a literal table. |
 | rolecapability.harness-held | the harness | `internal/rolecapability/bundles.go` | `harnessHeld` | A role bundle conferring the promotion. The lease and the branch move it admits are recorded as the harness's own, each with the reason no role holds it, and a bundle claiming one is refused where the registry is built. |
@@ -190,4 +212,5 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/runstate/store.go` | `Lease` | The handle every lease here is held through. |
 | `internal/runstate/store.go` | `leaseGrace` | How long a run's lease is waited for before it is treated as gone. |
 | `internal/runstate/store.go` | `leaseGracePoll` | How often that wait looks again. |
+| `internal/separation/separation.go` | `PromotionIsNeverUnleased` | The name one of the separation policies refuses under. The check is `separation.operation`, and the lease it defends is `promotion.lease`. |
 | `internal/slack/state.go` | `(*Store).Lease` | Serializes the Slack process against a second copy of itself. |

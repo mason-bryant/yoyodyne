@@ -343,6 +343,34 @@ var expresses = map[string]expression{
 		question: "none: holding a contract for a role is configuration of the conversation",
 		gap:      "whether the harness can address a role at all is upstream of what that role may do",
 	},
+	"separation.policies": {
+		question: "none: a policy is a rule over the vocabulary rather than a statement of who holds what",
+		gap:      "each policy names capabilities that must not meet in one place; no bundle says whether two of them meet, because a bundle is about one role and a separation rule is about two things",
+	},
+	"separation.operation": {
+		question: "does one thing require two capabilities that must never be held at once?",
+		asks: []capability.Capability{
+			capability.WorktreeMutate, capability.ReviewVerdict,
+			capability.TargetBranchMutate, capability.PromotionLease,
+		},
+		gap: "which role would perform the operation is not asked at all, which is the point: the refusal is the combination's, so it holds for a role nobody has written a bundle for yet",
+	},
+	"separation.topology": {
+		question: "can a step that moves the target branch be reached without both the checks and a verdict since the change was last written?",
+		asks: []capability.Capability{
+			capability.TargetBranchMutate, capability.ChecksExecute,
+			capability.ReviewVerdict, capability.WorktreeMutate,
+		},
+		gap: "that the steps either side of it were actually two independent invocations is evidence a run records; a topology can keep them apart and cannot prove they were two",
+	},
+	"separation.holders": {
+		question: "does any role hold either half of the promotion?",
+		asks:     []capability.Capability{capability.PromotionLease, capability.TargetBranchMutate},
+	},
+	"workflow.separation-at-compile": {
+		question: "none: this is where the policies above are asked of a definition",
+		gap:      "the projection a compiled graph is read as carries capabilities and no role at all, which is what lets one set of rules be asked of a definition, of a registry, and of a bundle",
+	},
 	"rolecapability.role-bundles": {
 		question: "this is the answer rather than a question: each role's bundle, in Go",
 		gap:      "what a bundle cannot yet carry is scope — the artifact kind, the evidence class, the tool permission set the design settles",
