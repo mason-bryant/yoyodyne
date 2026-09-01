@@ -341,43 +341,25 @@ flight keep the configuration they started under.
 [Configuration](configuration.md#scheduling-ready-work) has the rest.
 
 **A pass also puts stopped work in front of the development manager.** A run
-that ended with its independent reviewer still requiring repair after every
-permitted attempt used to sit on the triage docket until somebody opened her
-conversation and told her about it. The pull delivers it instead: one stoppage
-per pull, oldest first, into her own conversation, naming the docket entry it is
-about. She decides there, and the decision is recorded against the item's triage
-budget exactly as it is when you carry her a stoppage by hand — nothing is
-carried out by the delivery, so `yoyo triage repair` and `yoyo triage rerun`
-still act on what she decided, under every condition they already ask. Each
-stoppage is delivered once, and a stoppage she has already been granted a repair or
-a re-run for is not delivered at all — both are recorded against the item's budget the
-moment she decides and carried out later, so in between the stopped run still
-reads as untouched, which is where every stoppage anybody carries to her by hand
-also sits. Her other three decisions — escalating to you, re-scoping, waiting —
-spend nothing and so leave nothing the harness can read, and a stoppage settled
-that way can be delivered to her once more. It costs a turn and tells her nothing
-she cannot see: the docket entry she is shown says what has been decided about
-the item, and the delivery spends no budget and carries nothing out.
-
-Deliveries that do not land are treated by what they can prove. A turn that
-**may have reached her** and then failed is made again no sooner than a quarter
-of an hour later, three times in all, and then left for a person — which every
-later pass goes on saying rather than falling quiet about it. A turn that
-**provably reached her with nothing** — her conversation could not be opened
-because you have it open, or no agent fills the role, or the provider is signed
-out or out of capacity — keeps its attempt and is tried again every quarter of an
-hour for as long as that lasts, because nothing was said to her and every one of
-those reasons is one that clears. It is never abandoned: the alternative is a
-stoppage given up on while the harness was misconfigured, and nothing to
-re-deliver it once you fix the configuration. Each attempt is said on the pass
-either way.
-
-Pausing covers a delivery like any other provider call, and `--budget` counts
-what it spent against the session's bound. Holding intake does not stop it,
-because it chooses no work and starts nothing. The other stoppages — a failing
-check, a refused path, a replay conflict — still wait to be read.
-[Conversation](conversation.md#deciding-what-becomes-of-stopped-work) has what
-she does with one.
+that ended with its reviewer still requiring repair used to sit on the triage
+docket until somebody opened her conversation and told her. The pull delivers it
+instead: one stoppage per pull, oldest first, into her own conversation, naming
+the docket entry. She decides there and it is recorded exactly as when you carry
+her one by hand — nothing is carried out by the delivery, so `yoyo triage repair`
+and `yoyo triage rerun` still act on what she decided, under every condition they
+already ask. Each stoppage is delivered once, and one she has already been
+granted a repair or a re-run for is not delivered at all; her decisions that
+spend nothing — escalating to you, re-scoping, waiting — leave no counter for the
+harness to read, so a stoppage settled that way can reach her once more, which
+costs a turn and tells her nothing the entry does not. A turn that may have
+reached her and failed is made again a quarter of an hour later, three times, and
+then left for a person; one that provably reached her with nothing — her
+conversation would not open, the provider had no capacity — keeps its attempt and
+is tried again until it gets through, because those reasons clear. Pausing covers
+a delivery and `--budget` counts it; holding intake does not stop it, because it
+chooses no work and starts nothing. Every pass says what it did. The other
+stoppages — a failing check, a refused path, a replay conflict — still wait to be
+read.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
@@ -385,9 +367,8 @@ until you stop it. Nothing else about the pass changes and nothing needed to:
 every pull already re-reads the configuration and the queue, so work you admit is
 picked up at the next poll and a reprioritization at the next pull, with no change
 detection anywhere in it. An idle session costs one local tracker read per
-interval and asks no provider anything — unless it has a stopped run to put in
-front of the development manager, which is a turn in her conversation and is the
-one provider call a pass makes of its own. Holding intake brakes a watching session
+interval and asks no provider anything, unless it has a stopped run to put to the
+development manager. Holding intake brakes a watching session
 in place rather than stopping it — it keeps polling, chooses nothing, and resumes
 when you release it.
 
@@ -459,11 +440,10 @@ and no work, and it costs a bounded session nothing of its cap.
 A drain never does this. It is a command you are waiting on the return of, and
 restarting it would run the pass again from the top.
 
-`--budget <usd>` caps what one session spends — the runs it starts and the turns
-it takes putting stopped work to the development manager, which are the two
-things a session spends on — and fails closed: a pass that cannot price itself is
-refused before it starts, and a session that meets a run whose evidence will not
-price stops and names it rather than counting it as free.
+`--budget <usd>` caps what one session spends — its runs, and the turns it takes
+putting stopped work to the development manager — and fails closed: a pass that
+cannot price itself is refused before it starts, and a session that meets a run
+whose evidence will not price stops and names it rather than counting it as free.
 A session that stops that way is a stopped line like any other: with work still
 ready, [the Slack sink](reporting.md#reporting-into-slack) says so again every hour until
 somebody starts one, rather than saying it once at the moment nobody was reading.

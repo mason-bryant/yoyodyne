@@ -22,7 +22,22 @@ import (
 // item's bundle because it carries whole documents rather than one item, and
 // bounded for the same reason: a directory of specifications grows without
 // limit.
-const defaultMaxProductBytes = 512 << 10
+//
+// It was 512 KiB, and the shipped documentation had reached 524,256 bytes of it
+// — thirty-two under. That is not headroom, it is a ceiling met: the set is read
+// after the specifications have taken what they need, so at that figure the last
+// documents were already being dropped from a real bundle and named as omitted,
+// and the next sentence written into any of those eight documents made the whole
+// set uncarriable. Correcting a document is not something to price out, so the
+// figure moved rather than the documentation being cut to fit it.
+//
+// What it has to hold is the shipped set plus what wins the budget ahead of it,
+// which is why it is not simply set to the set's current size: at 544 KiB the
+// eight documents fit with roughly the specifications directory to spare. It is
+// a ceiling that will be met again — the honest answer to that is a decision
+// about what the product manager is given rather than another raise, and this
+// comment is where the next person meets the question.
+const defaultMaxProductBytes = 544 << 10
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.

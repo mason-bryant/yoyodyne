@@ -908,35 +908,14 @@ promise about when the entry appears.
 
 One stoppage no longer waits to be read. **A run that ended with its independent
 reviewer still requiring repair after every permitted attempt is delivered into
-the development manager's conversation by the harness**, from the pull that
-[`yoyo work`](work.md#letting-the-harness-choose-the-work) makes, rather than by somebody opening
-her conversation to tell her. What that changes is the courier and nothing else:
-what she is shown is the docket entry she would have read anyway, the decision is
-hers and is recorded exactly as below, the caps refuse what they refused, and
-nothing is carried out by the delivery. One stoppage per pull, oldest first, so a
-morning's worth of them reaches her over several polls instead of holding the
-queue closed while she reads all of them. Each is delivered once — the same
-evidence in front of her twice is how one authorized recovery becomes two
-decisions — and one she has already been granted a repair or a re-run for is not
-delivered at all, whether or not the harness has carried that decision out yet, which is
-what keeps a stoppage somebody brought her by hand from arriving a second time by
-machine. The three decisions that spend nothing — escalating to you, re-scoping,
-waiting — leave no counter anywhere the harness reads, so a stoppage she settled
-that way can still be delivered once. What she is shown then is the docket entry,
-which says what has already been decided about the item, and the delivery spends
-no budget and carries nothing out: what it costs is a turn and a paragraph she
-has read before. A turn that
-may have reached her and then failed is made again, no sooner than a quarter of
-an hour later and at most three times, and then left for a person, which every
-pass afterwards goes on saying out loud rather than leaving to the quiet. A turn
-that provably reached her with nothing — her conversation could not be opened, or
-the provider had no capacity — keeps its attempt instead and is tried again every
-quarter of an hour until it gets through, because nothing was said to her and
-those reasons clear. Your pause covers it as it covers every provider call; holding intake
-does not, because the delivery chooses no work and starts nothing, and the
-judgment it produces is usually what a held queue is waiting on. The other
-stoppages — a failing check, a refused path, a replay conflict — still reach her
-by her opening a conversation, which is what every stoppage did before this.
+this conversation by the harness**, from the pull
+[`yoyo work`](work.md#letting-the-harness-choose-the-work) makes, rather than by
+somebody opening it to tell her. That changes the courier and nothing else: the
+entry is the one she would have read anyway, the decision below is hers, and
+nothing is carried out by the delivery. What it is bounded by — one per pull,
+once each, what a failed delivery is owed, and which of her decisions stop it
+being delivered again — is in
+[work.md](work.md#letting-the-harness-choose-the-work).
 
 ### Deciding what becomes of stopped work
 
