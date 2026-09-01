@@ -2049,6 +2049,11 @@ type scheduleHarness struct {
 	// run stands in for the pipeline. The default completes the item; a test
 	// that cares about a refusal or a failure replaces it.
 	run func(*scheduleHarness, string) (Outcome, error)
+	// escalate stands in for putting stopped work to the development manager,
+	// with the number of passes already made. A pull is wired with one only where
+	// a test asks for it, so every other test's pass is what it always was.
+	escalations int
+	escalate    func(*scheduleHarness, int) (EscalationSweep, error)
 
 	pulls      int
 	order      []string
@@ -2143,10 +2148,14 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	}
 	h.mu.Lock()
 	blockedRuns := h.blockedRuns
+	var escalations ScheduleEscalations
+	if h.escalate != nil {
+		escalations = h
+	}
 	h.mu.Unlock()
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
-		Capacity: capacity, Start: h.start,
+		Capacity: capacity, Start: h.start, Escalations: escalations,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.
@@ -2155,6 +2164,17 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		Brake:                       h,
 		Spend:                       h,
 	}, nil
+}
+
+// Escalate stands in for delivering one stopped run to the development
+// manager's conversation, which is a provider turn the scheduler never makes
+// itself.
+func (h *scheduleHarness) Escalate(context.Context) (EscalationSweep, error) {
+	h.mu.Lock()
+	h.escalations++
+	passes, escalate := h.escalations, h.escalate
+	h.mu.Unlock()
+	return escalate(h, passes)
 }
 
 // sleep stands in for waiting out a poll interval. It spends no time at all: a
@@ -2706,4 +2726,292 @@ func TestAPassNamesEachEndingRatherThanCallingEveryStoppageAFailure(t *testing.T
 // account of a run reads from it.
 func integratedOnto(branch string) *gitworktree.Integration {
 	return &gitworktree.Integration{TargetBranch: branch}
+}
+
+// Stopped work reaches the development manager from the pass rather than from
+// somebody carrying it to her, and what the pass did about it is on the schedule
+// beside what it pulled.
+func TestAPassPutsStoppedWorkToTheDevelopmentManager(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		if passes > 1 {
+			return EscalationSweep{}, nil
+		}
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			DocketKey:  "stopped_run:run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+			Decision:   "repair",
+		}}}, nil
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Escalated) != 1 || !schedule.Escalated[0].Delivered {
+		t.Fatalf("escalated = %#v, want the stoppage this pass delivered", schedule.Escalated)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want the pass to have gone on choosing work", schedule.Started)
+	}
+	if !strings.Contains(schedule.Render(), "escalated the stoppage of run run-0123456789abcdef0123456789abcdef") {
+		t.Fatalf("rendered = %q, want the delivery said beside what the pass pulled", schedule.Render())
+	}
+}
+
+// A delivery that failed costs the pass nothing it was doing, so it is reported
+// beside the pull rather than stopping it — and never left unsaid.
+func TestADeliveryThatFailedDoesNotStopThePass(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{}, errors.New("the conversation could not be opened")
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Stopped != ScheduleDrained {
+		t.Fatalf("schedule = %#v, want a pass that carried on choosing work", schedule)
+	}
+	if !strings.Contains(schedule.EscalationProblem, "waiting on somebody carrying it to her") {
+		t.Fatalf("escalation problem = %q, want the failed delivery said out loud", schedule.EscalationProblem)
+	}
+	if !strings.Contains(schedule.Render(), "could not be opened") {
+		t.Fatalf("rendered = %q, want the failure in the pass's own account", schedule.Render())
+	}
+}
+
+// Held intake stops the harness choosing work. It does not stop stopped work
+// reaching the development manager, because the judgment a held queue is waiting
+// on is exactly what that delivery produces.
+func TestAHeldPassStillPutsStoppedWorkToTheDevelopmentManager(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.held = &runstate.IntakeHold{
+		SchemaVersion: runstate.IntakeHoldSchemaVersion,
+		ProductID:     "yoyodyne",
+		HeldAt:        time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC),
+		Reason:        "three runs blocked in a row",
+	}
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+		}}}, nil
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleIntakeHeld || len(schedule.Started) != 0 {
+		t.Fatalf("schedule = %#v, want a held pass that chose nothing", schedule)
+	}
+	if len(schedule.Escalated) != 1 {
+		t.Fatalf("escalated = %#v, want the stoppage delivered while intake was held", schedule.Escalated)
+	}
+}
+
+// A delivery that keeps failing is one problem rather than a thousand. A
+// watching session polls all night, so a pass that accumulated every failed
+// attempt would report the same sentence once a minute and bury what it did.
+func TestRepeatedDeliveryFailuresAreOneProblemOnThePass(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Problem:    fmt.Sprintf("the conversation could not be opened, attempt %d", passes),
+		}}}, nil
+	}
+	scheduler := Scheduler{}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	scheduler.escalate(context.Background(), &schedule, pull)
+	scheduler.escalate(context.Background(), &schedule, pull)
+
+	if len(schedule.Escalated) != 0 {
+		t.Fatalf("escalated = %#v, want a delivery that did not happen kept as a problem rather than an event", schedule.Escalated)
+	}
+	if schedule.EscalationProblem != "the conversation could not be opened, attempt 2" {
+		t.Fatalf("escalation problem = %q, want the latest attempt and only it", schedule.EscalationProblem)
+	}
+
+	// And a pass that gets through says so, rather than going on reporting a
+	// failure that is over.
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+			Decision:   "repair",
+		}}}, nil
+	}
+	scheduler.escalate(context.Background(), &schedule, pull)
+	if len(schedule.Escalated) != 1 || schedule.EscalationProblem != "" {
+		t.Fatalf("schedule = %#v, want the delivery kept and the failure behind it cleared", schedule)
+	}
+}
+
+// A pass does not erase its own account of stopped work. A pull that finds
+// nothing to say about a stoppage is not evidence that the last one's failure
+// was resolved — the stoppage may be waiting out its retry delay — so what the
+// pass said stands until a delivery actually happens.
+func TestAPassDoesNotEraseWhatItSaidAboutStoppedWork(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		switch passes {
+		case 1:
+			return EscalationSweep{Escalated: []Escalated{{
+				WorkItemID: "yoyodyne-stopped",
+				RunID:      "run-0123456789abcdef0123456789abcdef",
+				Problem:    "the provider refused the turn on attempt 1 of 3",
+			}}}, nil
+		case 2, 3:
+			// The pulls a drain makes while the stoppage waits out its delay.
+			return EscalationSweep{}, nil
+		default:
+			return EscalationSweep{Escalated: []Escalated{{
+				WorkItemID: "yoyodyne-stopped",
+				RunID:      "run-0123456789abcdef0123456789abcdef",
+				Delivered:  true,
+				Decision:   "repair",
+			}}}, nil
+		}
+	}
+	scheduler := Scheduler{}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	scheduler.escalate(context.Background(), &schedule, pull)
+	if schedule.EscalationProblem == "" {
+		t.Fatal("the pass said nothing about a delivery that failed")
+	}
+	for pass := 2; pass <= 3; pass++ {
+		scheduler.escalate(context.Background(), &schedule, pull)
+		if schedule.EscalationProblem == "" {
+			t.Fatalf("pass %d erased what the pass had already said about stopped work", pass)
+		}
+	}
+
+	// And a delivery that actually happened is what clears it.
+	scheduler.escalate(context.Background(), &schedule, pull)
+	if schedule.EscalationProblem != "" || len(schedule.Escalated) != 1 {
+		t.Fatalf("schedule = %#v, want the delivery kept and the failure behind it cleared", schedule)
+	}
+}
+
+// A stoppage the harness has given up delivering is said on every pass for as
+// long as it is true, so a pass that ends hours later still names what needs a
+// person.
+func TestAnAbandonedStoppageIsSaidByEveryPass(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Problem:    "the stoppage of run run-0123456789abcdef0123456789abcdef could not be put to the development manager in 3 attempt(s), so the harness stopped trying and it needs a person",
+		}}}, nil
+	}
+	scheduler := Scheduler{}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	for pass := 1; pass <= 3; pass++ {
+		scheduler.escalate(context.Background(), &schedule, pull)
+		if !strings.Contains(schedule.EscalationProblem, "needs a person") {
+			t.Fatalf("pass %d says %q, want the abandoned stoppage still named", pass, schedule.EscalationProblem)
+		}
+	}
+	// Said once, however many passes have found it: what a reader needs is the
+	// standing fact rather than one line per pull.
+	if strings.Count(schedule.EscalationProblem, "needs a person") != 1 {
+		t.Fatalf("the pass says %q, want the standing fact once rather than once per pull", schedule.EscalationProblem)
+	}
+	if len(schedule.Escalated) != 0 {
+		t.Fatalf("escalated = %#v, want nothing reported as delivered", schedule.Escalated)
+	}
+}
+
+// A delivery is a spend the pass makes itself, so it counts against the bound
+// the session was given. A turn is not a run and nothing else in the pass would
+// see it, and a session that spent past its cap on turns nobody counted is the
+// operator's cap disappearing quietly.
+func TestWhatADeliveryCostCountsAgainstTheSessionsBudget(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  passes == 1,
+			CostUSD:    0.40,
+			// The second pass is a turn that failed, which the provider charged
+			// for exactly as it charged for the first.
+			Problem: map[bool]string{true: "", false: "the reply could not be read"}[passes == 1],
+		}}}, nil
+	}
+	scheduler := Scheduler{Budget: 1}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	scheduler.escalate(context.Background(), &schedule, pull)
+	scheduler.escalate(context.Background(), &schedule, pull)
+
+	if schedule.SpentUSD != 0.80 {
+		t.Fatalf("spent = %.2f, want both turns counted against the session", schedule.SpentUSD)
+	}
+}
+
+// And a session stops on its budget over deliveries alone. A watching session
+// with an empty queue starts nothing and used to spend nothing; it can now spend
+// a turn per poll, so the bound has to be able to end it on that spend by itself.
+func TestASessionStopsOnItsBudgetOverDeliveriesAlone(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+			CostUSD:    0.40,
+		}}}, nil
+	}
+	// The session keeps polling; what stops it is the bound rather than the
+	// operator.
+	harness.onSleep = func(*scheduleHarness, int) bool { return true }
+
+	schedule, err := Scheduler{
+		Open: harness.open, Watching: true, Budget: 1, Sleep: harness.sleep, Now: harness.clock,
+	}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleBudgetSpent {
+		t.Fatalf("stopped = %q, want the session stopped on its budget", schedule.Stopped)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want a session that spent its budget on deliveries alone", schedule.Started)
+	}
+	if schedule.SpentUSD < 1 {
+		t.Fatalf("spent = %.2f, want the deliveries counted up to the bound", schedule.SpentUSD)
+	}
 }

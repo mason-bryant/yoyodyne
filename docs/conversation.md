@@ -906,6 +906,17 @@ nothing happening is not something anything can be present for. Two things scan:
 scheduled process behind either, so the configured age is a floor rather than a
 promise about when the entry appears.
 
+One stoppage no longer waits to be read. **A run that ended with its independent
+reviewer still requiring repair after every permitted attempt is delivered into
+this conversation by the harness**, from the pull
+[`yoyo work`](work.md#letting-the-harness-choose-the-work) makes, rather than by
+somebody opening it to tell her. That changes the courier and nothing else: the
+entry is the one she would have read anyway, the decision below is hers, and
+nothing is carried out by the delivery. What it is bounded by — one per pull,
+once each, what a failed delivery is owed, and which of her decisions stop it
+being delivered again — is in
+[work.md](work.md#letting-the-harness-choose-the-work).
+
 ### Deciding what becomes of stopped work
 
 An entry decides nothing, and the development manager is the role that does. It

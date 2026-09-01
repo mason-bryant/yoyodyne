@@ -701,3 +701,45 @@ func (b *triageBudgetGate) RecordMergeRearm(ctx context.Context, workItemID stri
 }
 
 func (b *triageBudgetGate) now() time.Time { return b.clock.Now() }
+
+// What the harness writes down after delivering a stoppage is what she actually
+// recorded, read from the applied actions rather than from the prose of the
+// reply.
+func TestAReplySaysWhichStoppageItDecided(t *testing.T) {
+	t.Parallel()
+
+	reply := Reply{Actions: []TrackerOutcome{
+		{
+			// A decision about a different stoppage, which is exactly what a
+			// conversation working a docket of several entries produces.
+			Applied: true,
+			Action:  TrackerAction{Action: actionTriage, ID: "yoyodyne-other", Run: otherStoppedRun, Decision: decisionRerun},
+		},
+		{
+			// A refused decision changed nothing, so nothing here may report it as
+			// one.
+			Applied: false,
+			Action:  TrackerAction{Action: actionTriage, ID: "yoyodyne-task", Run: stoppedRun, Decision: decisionRerun},
+		},
+		{
+			Applied: true,
+			Action: TrackerAction{
+				Action: actionTriage, ID: "yoyodyne-task", Run: stoppedRun, Decision: decisionRepair,
+				Reason: "the findings are narrow and the change is preserved",
+			},
+		},
+	}}
+
+	decision, reason, found := reply.TriageDecision(stoppedRun)
+	if !found || decision != decisionRepair || !strings.Contains(reason, "the findings are narrow") {
+		t.Fatalf("TriageDecision() = %q, %q, %v, want the applied decision about this stoppage", decision, reason, found)
+	}
+	if _, _, found := reply.TriageDecision("run-9999999999999999999999999999ffff"); found {
+		t.Fatalf("TriageDecision() found a decision about a stoppage nothing in the reply names")
+	}
+	// A turn that answered and decided nothing is an answer rather than a
+	// failure, and reports as one.
+	if _, _, found := (Reply{}).TriageDecision(stoppedRun); found {
+		t.Fatalf("TriageDecision() found a decision in a reply that recorded none")
+	}
+}

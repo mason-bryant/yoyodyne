@@ -358,8 +358,15 @@ type Session struct {
 	// turnCostUSD is what the provider charged for the message being answered,
 	// summed across the rounds it took, and sessionCostUSD is what this process
 	// has spent on the conversation. Both are what the provider reported rather
-	// than anything the harness worked out, and neither is recorded: they are
-	// shown to an operator watching their spend and nothing else reads them.
+	// than anything the harness worked out, and neither is the record of the
+	// spend: the cost log is, and these are the same figures as they are handed
+	// back to whoever asked for the turn.
+	//
+	// The per-turn figure is read by more than the operator's status line now.
+	// A `yoyo work` session takes turns of its own — a stopped run put to the
+	// development manager — and a session given a budget has to count what it
+	// spent doing that, so TurnCostUSD below hands this back. The session figure
+	// stays what it always was: nothing reads it but the screen.
 	//
 	// Summing treats each invocation's reported cost as that invocation's own.
 	// If a provider ever reported a running total for a resumed session instead,
@@ -615,6 +622,22 @@ func Open(options Options) (*Session, error) {
 
 // Resumed reports whether this session continued a recorded conversation.
 func (s *Session) Resumed() bool { return s.resumed }
+
+// TurnCostUSD is what the provider charged for the message this conversation
+// last answered, as the provider reported it, summed across the rounds that
+// message took.
+//
+// It is here because a turn is not always something an operator asked for. The
+// harness takes one itself when it puts a stopped run in front of the
+// development manager, and a `yoyo work` session given a budget has to count
+// that against the bound it was given — a session that spends past its cap on
+// turns nobody counted is the cap disappearing quietly, which is the one thing
+// a bound must not do.
+//
+// It says nothing about what was recorded. The cost log is where the spend is
+// durable, written as the invocation is taken and independent of whether anybody
+// reads this.
+func (s *Session) TurnCostUSD() float64 { return s.turnCostUSD }
 
 // Evidence reports the conversation as it currently stands.
 func (s *Session) Evidence() Evidence {
@@ -949,6 +972,12 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// rather than about this conversation, and nothing else in the record would
 	// ever say it happened.
 	refusal := s.noteUsageLimit(result, err)
+	// And it says so in the error the turn fails with. To a person at a terminal
+	// that changes nothing — they are told what happened either way — but a caller
+	// that is not a person has to be able to tell "the role was never asked" from
+	// "the role answered badly", because the two are owed opposite things: one is
+	// worth asking again once the limit resets, and the other is not.
+	declined := providerDeclined(result, err)
 	// A failed invocation is exactly the case a reply shown as it formed must not
 	// be left looking whole: whatever prose reached the screen was the start of
 	// an answer nobody finished. The two failures below are the only ones that
@@ -957,12 +986,13 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// wherever the error is eventually reported.
 	if err != nil {
 		s.stream.cutOff()
-		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), refusal, s.record())
+		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), declined, refusal, s.record())
 	}
 	if result.IsError {
 		s.stream.cutOff()
 		return "", errors.Join(
 			fmt.Errorf("%s reported failure: %s", RoleTitle(s.state.Role), result.DescribeFailure()),
+			declined,
 			refusal,
 			s.record(),
 		)

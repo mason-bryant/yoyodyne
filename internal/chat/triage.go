@@ -180,6 +180,34 @@ func (a TrackerAction) triageProblems() []error {
 	return problems
 }
 
+// TriageDecision reports what this reply recorded about the stoppage of one
+// run: the decision, in the vocabulary above, and the reasoning recorded with
+// it. It reports nothing for a turn that decided nothing about that stoppage,
+// which is an answer rather than a failure — a development manager who read a
+// stoppage and left it alone has answered.
+//
+// It is exported because the harness now delivers a stoppage into this
+// conversation rather than waiting for somebody to carry it here, and what it
+// has to write down afterwards is what came back. Reading the recorded actions
+// is the only honest way to know: the prose of a reply can say anything, and
+// what a decision is worth is that it was carried out against the item's durable
+// triage budget. Only applied actions are read, so nothing here can report a
+// decision the tracker refused.
+func (r Reply) TriageDecision(runID string) (decision, reason string, found bool) {
+	run := strings.TrimSpace(runID)
+	if run == "" {
+		return "", "", false
+	}
+	for _, outcome := range r.Actions {
+		action := outcome.Action
+		if !outcome.Applied || action.Action != actionTriage || strings.TrimSpace(action.Run) != run {
+			continue
+		}
+		return strings.TrimSpace(action.Decision), strings.TrimSpace(action.Reason), true
+	}
+	return "", "", false
+}
+
 // escalates reports a decision that asks a person for something, which is the
 // one decision the harness holds to a further condition than the action itself
 // carries.

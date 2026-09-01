@@ -222,8 +222,10 @@ in which nothing will happen is the one message a channel nobody is watching mos
 needs to carry, and it must not weigh the same as checks passing.
 
 Selection is not a fourth place. A watching `yoyo work` session reads the tracker
-and starts runs and makes no provider call of its own, so a limit it meets is met
-by a run it started. That the three above are all of them is checked rather than
+and starts runs, so a limit met while it is choosing is met by a run it started.
+The one call a pass makes itself is putting a stopped run to the development
+manager, which is a conversation turn and is recorded as one; the stoppage keeps
+its delivery for after the limit resets. That the three above are all of them is checked rather than
 asserted — `TestEveryProviderInvocationAccountsForAnExhaustedLimit` sweeps the
 tree and fails on a provider invocation with no account of what an exhausted
 limit does to it.
