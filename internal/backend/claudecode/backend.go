@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -195,32 +196,17 @@ type Backend struct {
 // AccountConfigDir; what does not is that this provider reads it from here.
 const providerConfigDirVariable = "CLAUDE_CONFIG_DIR"
 
-// environmentFor is the environment one invocation is made in: this process's
-// own, less what an agent may not hold, plus what the account contributes.
-// Naming no directory names no provider home at all — so an installation with
-// one account still authenticates where the machine is signed in, and the
-// account plumbing costs it nothing. What the invocation is finally given is
-// this plus the run's build cache, which every run gets whether or not it named
-// an account.
-//
-// It is named rather than inherited even when there is no account to name,
-// which is the whole of why it returns an environment instead of nil. The
-// reporting sink's credentials must never reach an agent's subprocess tree, and
-// the environment an invocation is given is the one place that can be true by
-// construction rather than by how somebody launched their shell.
-//
-// This is the only environment any agent process is ever given: this adapter is
-// the only one that spawns one — the declarative plugin shape is data and
-// decides nothing, and the metered wrapper delegates — so what the setup and
-// configuration documents claim about an agent never holding a token rests here
-// and nowhere else. Another adapter that spawns an agent has to come through
-// this function or repeat what it does, or those documents stop being true.
+// environmentFor is what an account contributes to the environment one
+// invocation is made in. Naming no directory returns nil, which names no
+// provider home at all — so an installation with one account still authenticates
+// where the machine is signed in, and the account plumbing costs it nothing.
+// What the invocation is finally given is this plus the run's build cache, which
+// every run gets whether or not it named an account.
 func environmentFor(configDir string) []string {
-	environment := execution.WithoutSinkCredentials(nil)
 	if strings.TrimSpace(configDir) == "" {
-		return environment
+		return nil
 	}
-	return append(environment, providerConfigDirVariable+"="+configDir)
+	return append(os.Environ(), providerConfigDirVariable+"="+configDir)
 }
 
 // dialect is what reads this invocation's stream: whatever the caller resolved

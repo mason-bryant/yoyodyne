@@ -876,13 +876,10 @@ yoyo doctor
 Never put either token in `.yoyodyne/config.yaml`, in a work item, in a prompt,
 or in a shell profile that every process on your machine inherits. The sink is a
 separate process precisely so that the credential boundary is structural: the
-harness posts, and agents have no path to a token. Two things hold that. One is
-the separate process. The other is the one an `export` cannot undo — an agent
-invocation is given a named environment with the pair taken out of it, whatever
-the process that started the harness happens to hold, so no agent's subprocess
-tree ever has a Slack token in it. Everything else the harness starts does
-inherit what you exported, which is why exporting them globally is still the
-wrong thing to do.
+harness posts, and agents have no path to a token because no run process ever
+has one in its environment. Exporting the tokens globally would hand them to
+every subprocess the harness starts, which is the one thing this arrangement
+exists to prevent.
 
 Steps 5 and 6 above are where they should go instead: a store only the sink's own
 launch reads, under names that carry the product. The launcher form matters as
