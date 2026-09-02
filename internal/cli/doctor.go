@@ -68,6 +68,17 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, ver
 	} else {
 		renderDiagnosis(stdout, report, *quiet)
 	}
+	// What the project's template has improved since its configuration was
+	// generated, said without being asked for it.
+	//
+	// It is not a finding. A finding is something about whether work can run
+	// here, and every one that is not healthy carries a remedy and counts toward
+	// the verdict line; an improvement available is neither wrong nor a
+	// diagnosis, and counting it as a warning would put a persona that got better
+	// in the same list as a provider nobody authenticated. So it goes to standard
+	// error beside the report, in both forms -- the JSON on standard output is
+	// still exactly the report -- and it is silent unless there is something.
+	printDriftNotice(stderr, report.Config)
 	// A broken installation exits nonzero whichever form it was reported in, so a
 	// script does not have to read the findings to notice. A warning does not:
 	// this is work that can run with something worth knowing about it, and an
@@ -77,6 +88,29 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, ver
 		return 1
 	}
 	return 0
+}
+
+// printDriftNotice says what the project's template has improved that nobody
+// here edited, and says nothing at all otherwise -- which is the ordinary case
+// and the reason it can be printed on every run.
+//
+// A configuration the diagnosis could not load has nothing to compare, and so
+// does one with no baseline beside it. Both are silent: the first is already the
+// report's first finding, and the second is a project that predates the record,
+// which decides nothing about how it runs and is not something to be told about
+// on every invocation.
+func printDriftNotice(stderr io.Writer, configPath string) {
+	if configPath == "" {
+		return
+	}
+	resolved, err := config.LoadResolved(configPath)
+	if err != nil {
+		return
+	}
+	drift, _ := config.ReadDrift(resolved)
+	if notice := drift.Notice(); notice != "" {
+		fmt.Fprintln(stderr, notice)
+	}
 }
 
 // renderDiagnosis prints the findings in the order they were made, with each
@@ -150,6 +184,11 @@ rather than parsing this output.
 It changes nothing. Nothing here installs, authenticates, restarts, or edits a
 configuration, and no credential is read: whether a secret is stored is asked in
 the form that answers without producing the value.
+
+Beside the report, on standard error, it says one line where the template this
+project was generated from has since improved a value nobody here edited. That is
+not a finding and not a diagnosis: it is silent when there is nothing, it never
+changes the exit code, and `+"`yoyo config drift`"+` is where the whole comparison is.
 
 It exits 1 when something would stop work running, and 0 otherwise. That 1 is the
 diagnosis rather than a failure of the command, so it always comes with the report
