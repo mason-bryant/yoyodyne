@@ -242,8 +242,58 @@ func TestConfigDriftAnswersUnknownForAProjectWithNoBaseline(t *testing.T) {
 	if code := Run([]string{"config", "drift", "--config", path}, &stdout, &stderr, "test"); code != 0 {
 		t.Fatalf("Run() code = %d, want a project with no baseline to be reported rather than refused; stderr = %q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "no baseline") {
-		t.Errorf("stdout = %q, want it to say there is no baseline", stdout.String())
+	report := stdout.String()
+	if !strings.Contains(report, "no baseline") {
+		t.Errorf("stdout = %q, want it to say there is no baseline", report)
+	}
+	// `yoyo init --force` is the only thing that writes a baseline, and it
+	// regenerates the configuration and every persona from the template while it
+	// does. Offering it as "regenerate one" would send an operator to discard the
+	// edits this report exists to surface, so its cost is stated where it is
+	// named.
+	if !strings.Contains(report, "init --force") {
+		t.Fatalf("stdout = %q, want the only command that writes a baseline named", report)
+	}
+	for _, want := range []string{"every persona", "regenerate whole"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("stdout = %q, want it to say %q about `yoyo init --force`", report, want)
+		}
+	}
+}
+
+// A baseline that is on disk and cannot be used is a different situation from
+// one that was never written, and the operator can see the file. Reporting it as
+// missing would tell them the opposite of the facts, and would point them at a
+// remedy for the wrong problem.
+func TestConfigDriftTellsAnUnusableBaselineApartFromAMissingOne(t *testing.T) {
+	t.Parallel()
+
+	path := writeProjectConfig(t, portableConfig)
+	// A baseline whose revision does not digest its values: what a hand edit
+	// leaves behind.
+	if err := os.WriteFile(config.LockPath(path),
+		[]byte("version: 1\nbundle: builtin:v1\nrevision: bnd-000000000000\nvalues:\n  agents.developer.model: \"opus\"\n"), 0o600); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "drift", "--config", path}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, want an unusable baseline reported rather than refused; stderr = %q", code, stderr.String())
+	}
+	report := stdout.String()
+	if strings.Contains(report, "no baseline") {
+		t.Errorf("stdout = %q, want a baseline that is present and refused not called missing", report)
+	}
+	if !strings.Contains(report, "unusable baseline") {
+		t.Errorf("stdout = %q, want the headline to say the baseline cannot be used", report)
+	}
+	// The remedy for a corrupt record is the copy in version control, not a
+	// regeneration that takes the configuration and the personas with it.
+	if !strings.Contains(report, "version control") {
+		t.Errorf("stdout = %q, want the non-destructive way back named first", report)
+	}
+	if strings.Contains(report, "init --force") && !strings.Contains(report, "every persona") {
+		t.Errorf("stdout = %q, names `yoyo init --force` without saying what it overwrites", report)
 	}
 }
 
@@ -279,9 +329,9 @@ func TestInitWritesTheBaselineBesideTheConfigurationItGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadResolved() error = %v", err)
 	}
-	drift, reason := config.ReadDrift(resolved)
+	drift, unknown := config.ReadDrift(resolved)
 	if !drift.Current() {
-		t.Fatalf("a project generated a moment ago is not current: %s", reason)
+		t.Fatalf("a project generated a moment ago is not current: %s", unknown.Reason)
 	}
 	if notice := drift.Notice(); notice != "" {
 		t.Errorf("Notice() = %q, want silence", notice)

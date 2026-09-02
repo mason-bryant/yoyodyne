@@ -92,8 +92,45 @@ func TestAnEditedBaselineIsRefusedRatherThanComparedAgainst(t *testing.T) {
 	if err == nil {
 		t.Fatal("DecodeLock() accepted a baseline whose revision does not digest its values")
 	}
-	if !strings.Contains(err.Error(), "yoyo init --force") {
-		t.Errorf("DecodeLock() error = %v, want it to name the way back", err)
+	// The way back is version control, and it has to be, because the obvious
+	// alternative is destructive: `yoyo init --force` writes a fresh baseline and
+	// regenerates the configuration and every persona from the template in the
+	// same pass. An operator here has a corrupt record and intact edits, and
+	// sending them to that command costs them the edits.
+	if !strings.Contains(err.Error(), "version control") {
+		t.Errorf("DecodeLock() error = %v, want it to name the non-destructive way back", err)
+	}
+	if strings.Contains(err.Error(), "init --force") && !strings.Contains(err.Error(), "every persona") {
+		t.Errorf("DecodeLock() error = %v, names `yoyo init --force` without saying what it overwrites", err)
+	}
+}
+
+// The header is committed with the baseline and reaches every collaborator, so
+// what it says about regenerating the file outlives this run and every operator
+// who reads it. Advice to run `yoyo init --force` without its cost beside it is
+// advice to discard the configuration edits this record exists to protect.
+func TestTheCommittedHeaderNeverOffersARegenerationWithoutItsCost(t *testing.T) {
+	t.Parallel()
+
+	lock, err := NewLock(BuiltinV1)
+	if err != nil {
+		t.Fatalf("NewLock() error = %v", err)
+	}
+	header, _, _ := strings.Cut(string(lock.Render()), "\nversion:")
+	// Matched against the prose rather than the file, because the header is
+	// wrapped: a sentence this is looking for can be true and still be split
+	// across two comment lines.
+	prose := strings.Join(strings.Fields(strings.ReplaceAll(header, "#", " ")), " ")
+	if !strings.Contains(prose, "init --force") {
+		t.Skip("the header no longer names a regeneration command, which is also a way to be right")
+	}
+	for _, want := range []string{"every persona", "regenerate whole"} {
+		if !strings.Contains(prose, want) {
+			t.Errorf("the committed header names `yoyo init --force` without saying %q:\n%s", want, header)
+		}
+	}
+	if !strings.Contains(prose, "version control") {
+		t.Errorf("the committed header never names the non-destructive way back:\n%s", header)
 	}
 }
 

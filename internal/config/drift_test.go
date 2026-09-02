@@ -222,12 +222,15 @@ func TestAProjectWithNoBaselineIsUnknownRatherThanCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadResolved() error = %v", err)
 	}
-	drift, reason := ReadDrift(resolved)
+	drift, unknown := ReadDrift(resolved)
 	if drift.Known || drift.Current() {
 		t.Fatalf("drift = %+v, want an unknown baseline rather than a current project", drift)
 	}
-	if !strings.Contains(reason, LockFileName) {
-		t.Errorf("reason = %q, want it to name the file that is missing", reason)
+	if !unknown.Absent {
+		t.Errorf("unknown = %+v, want a project with no baseline reported as an absence", unknown)
+	}
+	if !strings.Contains(unknown.Reason, LockFileName) {
+		t.Errorf("reason = %q, want it to name the file that is missing", unknown.Reason)
 	}
 	// Unknown is silent on the surfaces that speak unprompted: a project that
 	// predates the record decides nothing about how it runs, and being told so on
@@ -252,12 +255,26 @@ func TestAnUnreadableBaselineIsReportedRatherThanRaised(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadResolved() error = %v", err)
 	}
-	drift, reason := ReadDrift(resolved)
+	drift, unknown := ReadDrift(resolved)
 	if drift.Known {
-		t.Fatalf("drift = %+v, want a baseline that does not digest its own values treated as none", drift)
+		t.Fatalf("drift = %+v, want a baseline that does not digest its own values refused", drift)
 	}
-	if !strings.Contains(reason, "edited") {
-		t.Errorf("reason = %q, want it to say the baseline was edited", reason)
+	// A baseline that is on disk and is being refused is not an absence, and
+	// saying it was would tell its operator the opposite of what they can see.
+	if unknown.Absent {
+		t.Errorf("unknown = %+v, want a baseline that exists reported as unusable rather than missing", unknown)
+	}
+	if !strings.Contains(unknown.Reason, "edited") {
+		t.Errorf("reason = %q, want it to say the baseline was edited", unknown.Reason)
+	}
+	// The way back is version control. `yoyo init --force` regenerates the
+	// configuration and every persona from the template, so sending somebody
+	// there over a corrupt record costs them the edits this exists to protect.
+	if !strings.Contains(unknown.Reason, "version control") {
+		t.Errorf("reason = %q, want it to name the non-destructive way back", unknown.Reason)
+	}
+	if strings.Contains(unknown.Reason, "init --force") && !strings.Contains(unknown.Reason, "every persona") {
+		t.Errorf("reason = %q, names `yoyo init --force` without saying what it overwrites", unknown.Reason)
 	}
 }
 

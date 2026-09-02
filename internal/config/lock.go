@@ -188,8 +188,13 @@ func (l Lock) Render() []byte {
 # a diff: with it, "yoyo config drift" can tell a value you changed from one the
 # template improved. What config.yaml says is still exactly what runs.
 #
-# Commit it beside the configuration. Editing it by hand only makes the
-# comparison lie; regenerate it with "yoyo init --force" instead.
+# Commit it beside the configuration and leave it alone. Editing it changes
+# nothing that runs and only makes the comparison lie, and restoring it from
+# version control is the way back: nothing rewrites this file on its own.
+# "yoyo init --force" does write a fresh one, but it regenerates config.yaml and
+# every persona from the template in the same pass and discards your edits to
+# them, so it is the right answer only for a project you mean to regenerate
+# whole.
 version: %d
 bundle: %s
 revision: %s
@@ -224,9 +229,17 @@ func DecodeLock(reader io.Reader) (Lock, error) {
 	// rewritten is not a record. It is refused here rather than compared: an
 	// answer computed from it would be confidently wrong, which is the one thing
 	// worse than having no baseline at all.
+	//
+	// The way back it names is version control, and deliberately not a command.
+	// Nothing rewrites the baseline on its own; the one thing that writes a fresh
+	// one is `yoyo init --force`, which regenerates the configuration and every
+	// persona from the template in the same pass -- so an operator sent there over
+	// a corrupted record would lose the edits this comparison exists to protect.
+	// What that costs belongs beside the command, which is the surface's to print,
+	// rather than half-said in an error somebody may see on its own.
 	if recomputed := baselineRevision(lock.Values); recomputed != lock.Revision {
 		return Lock{}, fmt.Errorf("decode %s: the baseline says %s and its values digest to %s, so it has been edited since it was written; "+
-			"regenerate it with `yoyo init --force`", LockFileName, lock.Revision, recomputed)
+			"restore it from version control", LockFileName, lock.Revision, recomputed)
 	}
 	return lock, nil
 }

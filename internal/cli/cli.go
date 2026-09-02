@@ -241,18 +241,41 @@ func runConfigDrift(args []string, stdout, stderr io.Writer) int {
 	drift, unknown := config.ReadDrift(resolved)
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{
-			"config": resolved.Path,
-			"drift":  drift,
-			"reason": unknown,
+			"config":  resolved.Path,
+			"drift":   drift,
+			"unknown": unknown,
 		})
 	}
 	if !drift.Known {
-		fmt.Fprintf(stdout, "no baseline: %s\n", unknown)
-		fmt.Fprintf(stdout, "regenerate one with `yoyo init --force` if this project was generated from %s and you have not moved its values\n", config.BuiltinV1)
+		renderUnknownBaseline(stdout, unknown)
 		return 0
 	}
 	renderDrift(stdout, drift, *all)
 	return 0
+}
+
+// renderUnknownBaseline says why there is no comparison and what to do about it,
+// which is a different answer for each of the two reasons there can be none.
+//
+// Neither answer is `yoyo init --force` on its own. That command does write a
+// fresh baseline, and it regenerates the configuration and every persona from
+// the template in the same pass -- so an operator who reached this report because
+// their baseline is missing or corrupt, and followed it, would discard exactly
+// the edits the report exists to surface. What it costs is said wherever it is
+// named, rather than left to be discovered by running it.
+func renderUnknownBaseline(stdout io.Writer, unknown config.Unknown) {
+	if unknown.Absent {
+		fmt.Fprintf(stdout, "no baseline: %s\n", unknown.Reason)
+		fmt.Fprintf(stdout, "nothing writes one on its own, and this costs the project nothing else: what %s says is what runs either way.\n", config.FileName)
+		fmt.Fprintf(stdout, "`yoyo init --force` would write one, but it regenerates %s and every persona from %s in the same pass and discards\n",
+			config.FileName, config.BuiltinV1)
+		fmt.Fprintln(stdout, "your edits to them, so it is the right answer only for a project you mean to regenerate whole.")
+		return
+	}
+	fmt.Fprintf(stdout, "unusable baseline: %s\n", unknown.Reason)
+	fmt.Fprintf(stdout, "the file is there and is being refused rather than missing, so the copy in version control is what puts it back.\n")
+	fmt.Fprintf(stdout, "`yoyo init --force` is the only thing that writes a fresh one, and it regenerates %s and every persona from the\n", config.FileName)
+	fmt.Fprintln(stdout, "template in the same pass, so reaching for it here would discard the edits this report exists to surface.")
 }
 
 // renderDrift prints the comparison a class at a time, most actionable first.

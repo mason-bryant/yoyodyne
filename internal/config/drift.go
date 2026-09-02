@@ -182,6 +182,20 @@ func LockPath(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), LockFileName)
 }
 
+// Unknown says why there is no comparison, and which kind of "no" it is.
+//
+// The two are not the same situation and are not put right the same way. A
+// project that never recorded a baseline has nothing to restore; one whose
+// baseline is on disk and is being refused has a file to look at, and telling
+// its operator there is "no baseline" states the opposite of what they can see.
+type Unknown struct {
+	// Absent is a project with no baseline at all -- generated before the record
+	// existed, or with the file deleted.
+	Absent bool `json:"absent,omitempty"`
+	// Reason is what to say about it, and is empty when the comparison was made.
+	Reason string `json:"reason,omitempty"`
+}
+
 // ReadDrift is the whole derivation for a loaded configuration: read the
 // baseline beside it, and compare.
 //
@@ -189,30 +203,33 @@ func LockPath(configPath string) string {
 // with no baseline, one written by an executable that reads a different record,
 // one naming a bundle this executable does not have -- none of those is a
 // failure of the command that asked, and refusing one would break a project over
-// a file that decides nothing about how it runs. The reason is carried back so a
-// surface that was asked outright can say it.
-func ReadDrift(resolved Resolved) (Drift, string) {
+// a file that decides nothing about how it runs. Which kind of unknown it is
+// comes back with it, so a surface that was asked outright can say the true one.
+func ReadDrift(resolved Resolved) (Drift, Unknown) {
 	if resolved.Path == "" {
-		return Drift{}, "the configuration was not read from a project directory, so it has no baseline beside it"
+		return Drift{}, Unknown{Absent: true, Reason: "the configuration was not read from a project directory, so it has no baseline beside it"}
 	}
 	file, err := os.Open(LockPath(resolved.Path))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Drift{}, fmt.Sprintf("this project has no %s, so what its template supplied when it was generated was never recorded", LockFileName)
+			return Drift{}, Unknown{Absent: true, Reason: fmt.Sprintf(
+				"this project has no %s, so what its template supplied when it was generated was never recorded", LockFileName)}
 		}
-		return Drift{}, fmt.Sprintf("the baseline beside this configuration could not be read: %v", err)
+		// The file is there and could not be opened, which is a permission or a
+		// device rather than an absence, so it is not reported as one.
+		return Drift{}, Unknown{Reason: fmt.Sprintf("the baseline beside this configuration could not be read: %v", err)}
 	}
 	defer file.Close()
 
 	lock, err := DecodeLock(file)
 	if err != nil {
-		return Drift{}, err.Error()
+		return Drift{}, Unknown{Reason: err.Error()}
 	}
 	drift, err := CompareToBaseline(lock, resolved.Config)
 	if err != nil {
-		return Drift{}, err.Error()
+		return Drift{}, Unknown{Reason: err.Error()}
 	}
-	return drift, ""
+	return drift, Unknown{}
 }
 
 // maxNamedImprovements bounds how many keys the one-line notice names before it
