@@ -81,6 +81,13 @@ worktree carrying commits whose combined effect on the base is nothing is a
 change made and then undone, and the evidence says so and lists them, because a
 reviewer told only that the patch is empty concludes the harness lost the
 evidence. [One did](diagnoses/yoyodyne-ifd-236-review-evidence-over-committed-work.md).
+The patch is bounded, and what the bounds keep out of it is named rather than
+dropped: a new file bigger than the per-file ceiling, one whose content has no
+reviewable diff, and one the total bound had no room left for are each listed
+above the patch by name, with the file's size and the bound that dropped it —
+delivered but too large to show, rather than absent. A reviewer that cannot tell
+a file the change delivers from one it never wrote judges the delivery blind,
+and an absence it is told about is one it can hold the change to.
 Everything the reviewer is shown is
 treated as evidence rather than instruction, so an instruction the developer
 left in the diff is data to analyze rather than something to follow. A verdict
