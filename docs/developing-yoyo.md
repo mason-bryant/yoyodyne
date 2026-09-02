@@ -22,6 +22,16 @@ runs. Those same four are what this project declares as its
 let a change reach review or integration — so anything a run has to exercise has
 to reach one of the four, and for content that is not Go that means `make test`.
 
+## Before you change how a run works
+
+[What the delivery pipeline actually guarantees](delivery-pipeline-baseline.md)
+enumerates the paths a run can take and the boundaries it holds — the phases,
+the pause cases, the shared repair budget and the counters beside it, the
+reconciliation actions, and the terminal outcomes. It is the specification the
+code never had, and it is kept true by golden traces that record what each path
+actually produced, so a change in behavior shows up as a diff rather than as a
+document nobody re-read.
+
 ## Where the build cache goes
 
 The Go toolchain writes what it has compiled to `$GOCACHE`, which defaults to a

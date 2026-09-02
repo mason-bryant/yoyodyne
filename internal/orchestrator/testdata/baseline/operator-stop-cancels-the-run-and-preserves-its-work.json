@@ -1,0 +1,104 @@
+{
+  "scenario": "operator-stop-cancels-the-run-and-preserves-its-work",
+  "freezes": "A stop the operator asked for ends the run at its next provider-call boundary as cancelled rather than failed, before a verdict is bought, and leaves the worktree and branch for reconciliation to settle.",
+  "steps": [
+    {
+      "name": "run",
+      "error": "the operator stopped this run at \u003ctime\u003e: it is rewriting the wrong file",
+      "outcome": {
+        "base_commit": "\u003ccommit-1\u003e",
+        "branch": "yoyodyne/yoyodyne-task/01234567",
+        "branch_removed": false,
+        "changes": {
+          "status": "?? feature.txt"
+        },
+        "checks": [
+          {
+            "command": "test -f feature.txt",
+            "passed": true,
+            "process": {
+              "ExitCode": 0,
+              "FinishedAt": "\u003ctime\u003e",
+              "StartedAt": "\u003ctime\u003e",
+              "Status": "succeeded",
+              "Stderr": "",
+              "Stdout": ""
+            },
+            "timeout": 1800000000000
+          }
+        ],
+        "failure": "the operator stopped this run at \u003ctime\u003e: it is rewriting the wrong file",
+        "phase": "checking",
+        "provider_model": "opus",
+        "provider_resolved_model": "claude-opus-5-developer",
+        "provider_session_id": "developer-session",
+        "run_id": "run-0123456789abcdef0123456789abcdef",
+        "status": "cancelled",
+        "summary": "implemented the work item",
+        "work_item_closed": false,
+        "work_item_id": "yoyodyne-task",
+        "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+        "worktree_removed": false
+      }
+    }
+  ],
+  "durable_run_record": {
+    "account_alias": "default",
+    "backend": "claude-code",
+    "base_commit": "\u003ccommit-1\u003e",
+    "branch": "yoyodyne/yoyodyne-task/01234567",
+    "changes": {
+      "files": "?? feature.txt"
+    },
+    "completed_at": "\u003ctime\u003e",
+    "config_revision": "\u003cconfig-revision\u003e",
+    "failure": "the operator stopped this run at \u003ctime\u003e: it is rewriting the wrong file",
+    "last_sequence": 2,
+    "phase": "checking",
+    "product_id": "yoyodyne",
+    "provider_model": "opus",
+    "provider_resolved_model": "claude-opus-5-developer",
+    "provider_session_id": "developer-session",
+    "repository_id": "yoyodyne",
+    "run_id": "run-0123456789abcdef0123456789abcdef",
+    "schema_version": 1,
+    "started_at": "\u003ctime\u003e",
+    "status": "cancelled",
+    "target_branch": "main",
+    "updated_at": "\u003ctime\u003e",
+    "work_item_id": "yoyodyne-task",
+    "work_item_title": "Task",
+    "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567"
+  },
+  "events": [
+    "command.started",
+    "command.completed"
+  ],
+  "work_item": {
+    "calls": [
+      "claim",
+      "record"
+    ],
+    "status": "in_progress",
+    "closed": false,
+    "blocked": false,
+    "notes": [
+      [
+        "Yoyodyne bootstrap run failed; branch and worktree are preserved when present.",
+        "Run: run-0123456789abcdef0123456789abcdef",
+        "Failure: the operator stopped this run at \u003ctime\u003e: it is rewriting the wrong file",
+        "Phase: checking",
+        "Branch: yoyodyne/yoyodyne-task/01234567",
+        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+        "Base commit: \u003ccommit-1\u003e",
+        "Claude session: developer-session",
+        "Developer model: opus (resolved: claude-opus-5-developer)",
+        "Preserved changes:",
+        "?? feature.txt"
+      ]
+    ]
+  },
+  "provider_invocations": [
+    "developer: the assigned work item, new session"
+  ]
+}

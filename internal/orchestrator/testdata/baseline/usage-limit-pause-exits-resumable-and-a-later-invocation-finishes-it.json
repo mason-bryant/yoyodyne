@@ -1,0 +1,177 @@
+{
+  "scenario": "usage-limit-pause-exits-resumable-and-a-later-invocation-finishes-it",
+  "freezes": "An exhausted provider usage limit parks the run on the deadline the provider named, exits without making it terminal, and a later invocation past that deadline resumes the same run, worktree, branch, and developer session and finishes it.",
+  "steps": [
+    {
+      "name": "paused invocation",
+      "outcome": {
+        "base_commit": "\u003ccommit-1\u003e",
+        "branch": "yoyodyne/yoyodyne-task/01234567",
+        "branch_removed": false,
+        "changes": {
+          "status": ""
+        },
+        "pause_cause": "usage_limit",
+        "paused": true,
+        "phase": "developing",
+        "provider_model": "opus",
+        "provider_session_id": "developer-session",
+        "run_id": "run-0123456789abcdef0123456789abcdef",
+        "status": "running",
+        "usage_limit_kind": "five_hour",
+        "usage_limit_resets_at": "\u003cusage-limit-reset\u003e",
+        "work_item_closed": false,
+        "work_item_id": "yoyodyne-task",
+        "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+        "worktree_removed": false
+      }
+    },
+    {
+      "name": "resumed invocation",
+      "outcome": {
+        "base_commit": "\u003ccommit-1\u003e",
+        "branch": "yoyodyne/yoyodyne-task/01234567",
+        "branch_removed": true,
+        "changes": {
+          "status": "?? feature.txt"
+        },
+        "checks": [
+          {
+            "command": "test -f feature.txt",
+            "passed": true,
+            "process": {
+              "ExitCode": 0,
+              "FinishedAt": "\u003ctime\u003e",
+              "StartedAt": "\u003ctime\u003e",
+              "Status": "succeeded",
+              "Stderr": "",
+              "Stdout": ""
+            },
+            "timeout": 1800000000000
+          }
+        ],
+        "integration": {
+          "branch": "yoyodyne/yoyodyne-task/01234567",
+          "previous_target_commit": "\u003ccommit-1\u003e",
+          "source_commit": "\u003ccommit-2\u003e",
+          "target_branch": "main",
+          "target_commit": "\u003ccommit-2\u003e"
+        },
+        "pause_cause": "usage_limit",
+        "phase": "complete",
+        "provider_model": "opus",
+        "provider_resolved_model": "claude-opus-5-developer",
+        "provider_session_id": "developer-session",
+        "review_decision": "approve",
+        "review_model": "opus",
+        "review_resolved_model": "claude-opus-5-reviewer",
+        "review_session_id": "reviewer-session",
+        "review_summary": "the change matches the acceptance criteria",
+        "run_id": "run-0123456789abcdef0123456789abcdef",
+        "status": "succeeded",
+        "summary": "implemented the work item",
+        "usage_limit_kind": "five_hour",
+        "work_item_closed": true,
+        "work_item_id": "yoyodyne-task",
+        "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+        "worktree_removed": true
+      }
+    }
+  ],
+  "durable_run_record": {
+    "account_alias": "default",
+    "backend": "claude-code",
+    "base_commit": "\u003ccommit-1\u003e",
+    "branch": "yoyodyne/yoyodyne-task/01234567",
+    "branch_removed": true,
+    "changes": {
+      "files": "?? feature.txt"
+    },
+    "completed_at": "\u003ctime\u003e",
+    "config_revision": "\u003cconfig-revision\u003e",
+    "integration": {
+      "previous_target_commit": "\u003ccommit-1\u003e",
+      "source_commit": "\u003ccommit-2\u003e",
+      "target_branch": "main",
+      "target_commit": "\u003ccommit-2\u003e"
+    },
+    "last_sequence": 4,
+    "phase": "complete",
+    "product_id": "yoyodyne",
+    "provider_model": "opus",
+    "provider_resolved_model": "claude-opus-5-developer",
+    "provider_session_id": "developer-session",
+    "repository_id": "yoyodyne",
+    "review_decision": "approve",
+    "review_model": "opus",
+    "review_resolved_model": "claude-opus-5-reviewer",
+    "review_rounds": 1,
+    "review_session_id": "reviewer-session",
+    "review_summary": "the change matches the acceptance criteria",
+    "run_id": "run-0123456789abcdef0123456789abcdef",
+    "schema_version": 1,
+    "started_at": "\u003ctime\u003e",
+    "status": "succeeded",
+    "target_branch": "main",
+    "updated_at": "\u003ctime\u003e",
+    "usage_limit_kind": "five_hour",
+    "work_item_id": "yoyodyne-task",
+    "work_item_title": "Task",
+    "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+    "worktree_removed": true
+  },
+  "events": [
+    "command.started",
+    "command.completed",
+    "review.started",
+    "review.completed"
+  ],
+  "work_item": {
+    "calls": [
+      "claim",
+      "record",
+      "record",
+      "complete"
+    ],
+    "status": "closed",
+    "closed": true,
+    "blocked": false,
+    "notes": [
+      [
+        "Yoyodyne paused this run: the provider refused the attempt without judging the work, so the run is waiting rather than failing.",
+        "Run: run-0123456789abcdef0123456789abcdef",
+        "Waiting out: an exhausted five_hour usage limit",
+        "Asks again by: \u003cusage-limit-reset\u003e",
+        "Branch: yoyodyne/yoyodyne-task/01234567",
+        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+        "Claude session: developer-session",
+        "This item stays claimed and its branch, worktree, and developer session are all preserved.",
+        "Running Yoyodyne on this item again continues the same run; nothing needs to be restarted. The time above bounds the wait rather than gating it: the run asks the provider again at its configured probe interval, and `yoyo resume` moves the next probe to now if what refused it has stopped being true."
+      ],
+      [
+        "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically.",
+        "Run: run-0123456789abcdef0123456789abcdef",
+        "Branch: yoyodyne/yoyodyne-task/01234567",
+        "Worktree (cleanup pending): \u003cworktrees\u003e/yoyodyne-task-01234567",
+        "Base commit: \u003ccommit-1\u003e",
+        "Claude session: developer-session",
+        "Developer model: opus (resolved: claude-opus-5-developer)",
+        "Changes:",
+        "?? feature.txt",
+        "Check: test -f feature.txt (passed=true, exit=0, \u003celapsed\u003e of 30m0s)",
+        "Reviewer session: reviewer-session",
+        "Reviewer model: opus (resolved: claude-opus-5-reviewer)",
+        "Review decision: approve",
+        "Review summary: the change matches the acceptance criteria",
+        "Integrated into: main",
+        "Integrated commit: \u003ccommit-2\u003e",
+        "Previous target commit: \u003ccommit-1\u003e"
+      ]
+    ]
+  },
+  "provider_invocations": [
+    "developer: the assigned work item, new session",
+    "developer: the assigned work item, continues session",
+    "reviewer: review of the change, new session"
+  ]
+}

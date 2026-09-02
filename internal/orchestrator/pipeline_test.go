@@ -2675,9 +2675,14 @@ func TestPipelineKeepsCompletionOrderingWhenPersistenceOrTheTrackerFails(t *test
 }
 
 type fakeTracker struct {
-	item        beads.WorkItem
-	claimed     bool
-	notes       string
+	item    beads.WorkItem
+	claimed bool
+	notes   string
+	// noteRecords is each note as it was recorded, kept beside the accumulated
+	// text above so a reader can tell one account from the next one's. A run that
+	// pauses and is resumed writes two, and the concatenation alone cannot say
+	// where the first ended.
+	noteRecords []string
 	closed      bool
 	closeReason string
 	blocked     bool
@@ -2775,6 +2780,7 @@ func (f *fakeTracker) Claim(context.Context, string) (beads.WorkItem, error) {
 
 func (f *fakeTracker) RecordOutcome(_ context.Context, _ string, notes string) (beads.WorkItem, error) {
 	f.notes += notes
+	f.noteRecords = append(f.noteRecords, notes)
 	f.calls = append(f.calls, "record")
 	return f.item, nil
 }

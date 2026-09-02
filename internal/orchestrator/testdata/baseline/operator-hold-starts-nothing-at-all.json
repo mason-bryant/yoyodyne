@@ -1,0 +1,35 @@
+{
+  "scenario": "operator-hold-starts-nothing-at-all",
+  "freezes": "The operator's hold on harness activity is read before anything else: nothing is claimed, no run is reserved, and the provider is not asked so much as whether it is installed.",
+  "steps": [
+    {
+      "name": "run",
+      "outcome": {
+        "branch_removed": false,
+        "changes": {
+          "status": ""
+        },
+        "pause_cause": "operator_hold",
+        "paused": true,
+        "paused_by_operator": {
+          "held_at": "\u003ctime\u003e",
+          "schema_version": 1
+        },
+        "run_id": "",
+        "status": "",
+        "work_item_closed": false,
+        "work_item_id": "yoyodyne-task",
+        "worktree_removed": false
+      }
+    }
+  ],
+  "durable_run_record": null,
+  "events": [],
+  "work_item": {
+    "calls": [],
+    "status": "open",
+    "closed": false,
+    "blocked": false
+  },
+  "provider_invocations": []
+}
