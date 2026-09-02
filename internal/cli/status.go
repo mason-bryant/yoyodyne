@@ -84,8 +84,26 @@ type statusOutput struct {
 	// does: an unreadable watch log costs this answer a line rather than the runs
 	// it found.
 	WatchError string `json:"watch_error,omitempty"`
+	// Stalls is the product's record of having gone quiet: stretches where nothing
+	// started at all while the tracker reported work ready and nothing accounted
+	// for it. It is the one history here that is not about a run, and it is here
+	// because it is the history nothing else keeps — the process that would have
+	// recorded a stall is the process a stall means has died, so the record
+	// outlives it or there is no answer afterwards to how long it was dead.
+	//
+	// It is absent when one item was named, for the reason the four lines are: a
+	// stall is about the product rather than about any one piece of work.
+	Stalls []runstate.StallEvent `json:"stalls,omitempty"`
+	// StallError accompanies a successful listing, for the reason the two above
+	// do.
+	StallError string `json:"stall_error,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
+
+// defaultStatusStalls is how many recorded stalls are printed. It is a handful
+// rather than the whole history because the question a stall listing answers is
+// whether this has been happening lately; --json carries every one of them.
+const defaultStatusStalls = 5
 
 // defaultStatusRuns is how many runs are reported when nobody says. It is a
 // screenful rather than the whole history, because the question this answers is
@@ -159,9 +177,16 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	// asking a different question, and answering both would put a screen of
 	// product-wide state in front of the run they came here to read.
 	var standing *readmodel.Standing
+	var stalls []runstate.StallEvent
+	var stallFailure string
 	if workItemID == "" {
 		read := readmodel.ReadStanding(context.Background(), standingSources(*configPath))
 		standing = &read
+		// What the product recorded about having gone quiet, read for the whole
+		// product for the reason the four lines are: a stall is a fact about the
+		// line rather than about any item, and the item that was not started during
+		// one has no record of the stall on it.
+		stalls, stallFailure = recordedStalls(*configPath)
 	}
 
 	if *jsonOutput {
@@ -172,6 +197,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 			Recorded: history.Recorded,
 			Triage:   counters,
 			Watch:    watched,
+			Stalls:   stalls,
 		}
 		if counters != nil {
 			// The caps as this item's own recorded overrides leave them, which is what
@@ -182,6 +208,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 		}
 		output.TriageError = triageFailure
 		output.WatchError = watchFailure
+		output.StallError = stallFailure
 		return writeJSON(stdout, stderr, output)
 	}
 	// The four lines come first and are separated from the history by a blank
@@ -192,6 +219,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout)
 	}
 	printWatch(stdout, watched)
+	printStalls(stdout, stalls)
 	printRunHistory(stdout, history, workItemID, *failedOnly)
 	if counters != nil {
 		printItemTriage(stdout, *counters, caps.Overridden(counters.Overrides))
@@ -201,6 +229,9 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	if watchFailure != "" {
 		fmt.Fprintln(stderr, watchFailure)
+	}
+	if stallFailure != "" {
+		fmt.Fprintln(stderr, stallFailure)
 	}
 	// A failed run is what this exists to report, so reporting one is this
 	// command working. An exit status that treated the answer as a failure would
@@ -367,6 +398,86 @@ func printWatch(writer io.Writer, watched *runstate.WatchTransition) {
 		fmt.Fprintf(writer, ": %s", reason)
 	}
 	fmt.Fprintln(writer)
+}
+
+// recordedStalls reads the product's record of having gone quiet. It resolves
+// its own store for the reason the run records and the watch log do: reading
+// what happened needs no repository and no worktree, and a verb reached for when
+// something looks wrong must not refuse to answer over where a checkout happens
+// to sit.
+func recordedStalls(configPath string) ([]runstate.StallEvent, string) {
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		return nil, fmt.Sprintf("what this product recorded about going quiet could not be read: %v", err)
+	}
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return nil, fmt.Sprintf("what this product recorded about going quiet could not be read: %v", err)
+	}
+	store, err := runstate.NewStallStore(stateRoot, resolved.Config.Product.ID)
+	if err != nil {
+		return nil, fmt.Sprintf("what this product recorded about going quiet could not be read: %v", err)
+	}
+	events, err := store.List()
+	if err != nil {
+		return nil, fmt.Sprintf("what this product recorded about going quiet could not be read: %v", err)
+	}
+	return events, ""
+}
+
+// printStalls says what the product recorded about having gone quiet, newest
+// first, above the runs.
+//
+// A product that has never gone quiet says nothing at all rather than saying so:
+// the absence is the ordinary state, and a line asserting it on every reading is
+// a line every reader learns to skip. A stall that is still standing leads,
+// because it is the one thing on this whole listing that is happening now.
+func printStalls(writer io.Writer, events []runstate.StallEvent) {
+	if len(events) == 0 {
+		return
+	}
+	shown := 0
+	for index := len(events) - 1; index >= 0 && shown < defaultStatusStalls; index-- {
+		event := events[index]
+		// The age is said as well as the moments, because the moments are what a
+		// reader would have to subtract and the age is the fact they are after.
+		if event.Open() {
+			fmt.Fprintf(writer, "nothing has started on this product since %s (%s ago), noticed %s, with %s ready\n",
+				event.Since.UTC().Format(time.RFC3339), event.For().Round(time.Minute),
+				event.OpenedAt.UTC().Format(time.RFC3339), stalledItems(event.Ready))
+		} else {
+			fmt.Fprintf(writer, "nothing started on this product for %s from %s, with %s ready; it cleared at %s\n",
+				event.For().Round(time.Minute), event.Since.UTC().Format(time.RFC3339),
+				stalledItems(event.Ready), event.ClosedAt.UTC().Format(time.RFC3339))
+		}
+		// What the thing that chooses work last said is the whole of what tells a
+		// dead scheduler from a wedged one, so it is under the stall rather than
+		// left to --json.
+		if chooser := strings.TrimSpace(event.Chooser); chooser != "" {
+			fmt.Fprintf(writer, "  %s\n", chooser)
+		}
+		if cleared := strings.TrimSpace(event.Cleared); cleared != "" {
+			fmt.Fprintf(writer, "  cleared by: %s\n", cleared)
+		}
+		shown++
+	}
+	if remaining := len(events) - shown; remaining > 0 {
+		fmt.Fprintf(writer, "%d further recorded stall(s) are not listed here; --json carries all of them\n", remaining)
+	}
+}
+
+// stalledItems says how much work waited through a stall, and states an
+// uncounted queue as uncounted: a stall recorded before the count was carried is
+// not a stall over an empty queue, and the two are opposite news.
+func stalledItems(ready int) string {
+	switch {
+	case ready <= 0:
+		return "a number of items the record does not carry"
+	case ready == 1:
+		return "1 item"
+	default:
+		return fmt.Sprintf("%d items", ready)
+	}
 }
 
 // printItemTriage says what triage has spent on the named item and what the
@@ -767,7 +878,14 @@ could not be read says that instead of saying nothing. Naming an item leaves the
 out: they are about the product, and a question about one item is a different
 question.
 
-Under them, what became of the runs the harness made, newest first: the work item, the
+Under them, what this product recorded about having gone quiet: each stretch where
+nothing started at all while the tracker reported work ready and no hold, no full
+machine and no run in flight accounted for it, with what the thing that chooses
+work last said before it went silent. A product that has never gone quiet says
+nothing here. It is the one history nothing else keeps: the process that would
+have recorded a stall is the process a stall means has died.
+
+Under that, what became of the runs the harness made, newest first: the work item, the
 outcome it reached, the phase it was in, what it cost, and the reasons its record
 kept. Naming an item reports only its runs, and under them what triage has spent
 on that item: the review rounds it has cost across every run of it, against the
