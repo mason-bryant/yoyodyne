@@ -214,22 +214,20 @@ provider for work in three places: inside a run, which parks as above; a
 conversation turn; and an independent `yoyo review`, which uses the same reviewer
 with no run around it. The last two have no run to park, so each records the
 refusal instead — what was stopped, the limit the provider named, and when it
-said it lifts. Nothing waits on it: the turn or the review fails at your terminal
-exactly as it did before. What the record buys is that
-[reporting into Slack](reporting.md#reporting-into-slack) says it as a `warning` without you
-there, and a run that parks on the same limit is said at that weight too. Hours
-in which nothing will happen is the one message a channel nobody is watching most
-needs to carry, and it must not weigh the same as checks passing.
+lifts. Nothing waits on it: the turn or the review fails at your terminal exactly
+as before. What the record buys is that
+[reporting into Slack](reporting.md#reporting-into-slack) says it as a `warning`
+without you there, and a run that parks on the same limit is said at that weight
+too. Hours in which nothing will happen is the one message a channel nobody is
+watching most needs to carry, and it must not weigh the same as checks passing.
 
 Selection is not a fourth place. A watching `yoyo work` session reads the tracker
-and starts runs, so a limit met while it is choosing is met by a run it started.
-The one call a pass makes itself is putting a stopped run to the development
-manager, which is a conversation turn and is recorded as one; the stoppage keeps
-its delivery for after the limit resets. That the three above are all of them is
-checked rather than asserted —
+and starts runs, so a limit it meets is met by a run it started, bar the turn it
+takes delivering a stopped run to the development manager. That the three above
+are all of them is checked rather than asserted —
 `TestEveryProviderInvocationAccountsForAnExhaustedLimit` sweeps the tree and
-fails on a provider invocation with no account of what an exhausted limit does
-to it.
+fails on a provider invocation with no account of what an exhausted limit does to
+it.
 
 ## Waiting out an overloaded provider
 

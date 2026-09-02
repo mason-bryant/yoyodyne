@@ -1766,24 +1766,23 @@ execution:
   blocked_runs_before_intake_hold: 3   # the default
 ```
 
-Nothing else about the pass changes, and nothing needed to. Every pull already
-re-reads the configuration, re-reads the intake hold, takes the queue in the
-order you set, and records why it chose what it chose — so work you admit is
-picked up at the next poll, a reprioritization is honored at the next pull, and
-an item whose dependency landed becomes pullable because the tracker says so.
-There is no change detection anywhere in it, because nothing between the readings
-is cached. A run already in flight is never preempted by any of that.
+Nothing else about the pass changes, and nothing needed to. Every pull re-reads
+the configuration and the intake hold, takes the queue in the order you set, and
+records why it chose what it chose — so work you admit is picked up at the next
+poll, a reprioritization at the next pull, and an item whose dependency landed
+becomes pullable because the tracker says so. There is no change detection in it:
+nothing between the readings is cached, and a run already in flight is never
+preempted by any of it.
 
 An idle session costs one local tracker read per `work_poll` and asks no provider
 anything, so a queue that is empty overnight spends nothing — unless it has a
-stopped run to [put to the development
-manager](work.md#letting-the-harness-choose-the-work), which is a turn in her
-conversation and is charged as one.
+stopped run to [deliver](work.md#letting-the-harness-choose-the-work), which is a
+turn and is charged as one.
 
-**The intake hold is the remote brake.** Holding intake does not stop a watching
-session; it brakes it in place. The session keeps polling, chooses nothing, and
-resumes where it was when you release it. `yoyo pause` — the wider switch — parks
-the runs too, and lifting it resumes them from their own records.
+**The intake hold is the remote brake.** It does not stop a watching session; it
+brakes it in place — the session keeps polling, chooses nothing, and resumes
+where it was when you release it. `yoyo pause`, the wider switch, parks the runs
+too, and lifting it resumes them from their own records.
 
 **Three guards, because the loop no longer ends.**
 
@@ -1799,32 +1798,33 @@ that way, because the other cases that leave an item pullable with nothing
 recorded — a run the intake hold or your `yoyo pause` stopped before it claimed
 anything — would spin the same way. What lifts it is the item changing: what the
 work says, what it is for, its priority, its status, what it depends on, and its
-notes. The notes are what make the ordinary recovery work. A run that stops on a
-blocker takes the item out of the ready queue and writes the blocker into its
-notes, so when you release that item without editing anything else, the session
-sees an item it has not tried and pulls it. Nothing the harness writes can clear
-the cooldown of an item that stayed pullable, because it only ever appends to the
-notes of an item it has claimed, blocked, or closed.
+notes. The notes make the ordinary recovery work: a run that stops on a blocker
+takes the item out of the ready queue and writes the blocker into its notes, so
+when you release that item without editing anything else, the session sees an
+item it has not tried and pulls it. Nothing the harness writes can clear the
+cooldown of an item that stayed pullable, because it only appends to the notes of
+an item it has claimed, blocked, or closed.
 
-An item this session has already run and that nothing has touched since is
-therefore left alone for the life of the session. Restarting the session, or
-touching the item, is what asks for another attempt — and the restart the session
-makes for itself when you deploy counts, which is usually what you want, since a
-build you just installed is the likeliest reason the attempt would go differently.
+An item this session has already run and nothing has touched since is left alone
+for the life of the session. Restarting the session, or touching the item, asks
+for another attempt — and the restart it makes for itself when you deploy counts,
+which is usually what you want, since a build you just installed is the likeliest
+reason the attempt would go differently.
 
-`blocked_runs_before_intake_hold` is the failure-storm brake, and it is a
-different thing from that cooldown: it is aimed at a broken machine rather than a
-broken item. That many runs blocking one after another, with nothing landing
-between them, holds intake — the same hold you would place — and it stays held
-until you release it, with `yoyo release` or the conversation's `/release`. Any run that lands clears the count, and `0` turns the
-brake off entirely, leaving you as the only thing that holds intake.
+`blocked_runs_before_intake_hold` is the failure-storm brake, a different thing
+from that cooldown: it is aimed at a broken machine rather than a broken item.
+That many runs blocking one after another, with nothing landing between them,
+holds intake — the same hold you would place — and it stays held until you
+release it, with `yoyo release` or the conversation's `/release`. Any run that
+lands clears the count, and `0` turns the brake off, leaving you as the only
+thing that holds intake.
 
 And the session says what it is doing, because an idle session and a dead one are
 otherwise the same silence. Each transition — watching, idle, braked, resumed,
 stopped — is recorded once, where `yoyo status` prints it and the Slack sink
 posts it. A session idling all night writes one line rather than one a minute. A
-stop says whether it is an ending or a restart, so the one below is posted as a
-session coming back rather than as a line waiting for you to start another.
+stop says whether it is an ending or a restart, so the one below reads as a
+session coming back rather than a line waiting for you to start another.
 
 **Beyond the three: a reading of the harness that fails does not end the
 session.** The tracker is a database a reconcile and every settling run write to,
@@ -1855,18 +1855,16 @@ is a command you are waiting on the return of.
 
 **`--budget <usd>`** caps what one session spends: the runs it starts, priced
 from the same recorded run evidence `yoyo cost` prices items from, and the turns
-it takes putting stopped work to the development manager. It is checked between
-pulls, never during a run or a turn: money already spent is spent, and what
-stopping part way would lose is the work it bought.
+it takes delivering stopped work. It is checked between pulls, never part way:
+money already spent is spent, and what stopping would lose is the work it bought.
 
-A budget the harness cannot measure is not a smaller budget, it is no budget, so
-it fails closed at both ends. A pass given `--budget` with no way to price itself
-is refused before anything starts. A session that has started and then meets a
-run whose recorded evidence will not price — the run's event log gone, or a
-record it cannot read — stops there and says which run it was, rather than
-counting it as free and carrying on inside a bound it can no longer hold. The
-stop is announced like every other transition, so you find out while it matters
-rather than in the morning.
+A budget the harness cannot measure is no budget, so it fails closed at both
+ends. A pass given `--budget` with no way to price itself is refused before
+anything starts. A session that has started and then meets a run whose recorded
+evidence will not price — the event log gone, or a record it cannot read — stops
+there and says which run it was, rather than counting it as free and carrying on
+inside a bound it can no longer hold. The stop is announced like every other
+transition, so you find out while it matters rather than in the morning.
 
 **The default is still the drain**, and `--until-drained` says so explicitly.
 That is deliberate: watching is the shape this loop is meant to have, and turning
