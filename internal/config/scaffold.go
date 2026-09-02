@@ -34,13 +34,21 @@ type Scaffold struct {
 	Bundle   string
 	Config   ScaffoldFile
 	Personas []ScaffoldFile
+	// Lock records what the template supplied, so a later executable that
+	// improves one of these values can say so rather than being invisible to a
+	// project that owns its file outright. It is generated and committed, and
+	// nothing reads it when the configuration loads.
+	Lock ScaffoldFile
 }
 
-// Files lists everything the scaffold writes, configuration first.
+// Files lists everything the scaffold writes, configuration first and the
+// baseline last: the configuration is what a caller reports and loads back, and
+// the baseline is the one file here that decides nothing.
 func (s Scaffold) Files() []ScaffoldFile {
-	files := make([]ScaffoldFile, 0, len(s.Personas)+1)
+	files := make([]ScaffoldFile, 0, len(s.Personas)+2)
 	files = append(files, s.Config)
-	return append(files, s.Personas...)
+	files = append(files, s.Personas...)
+	return append(files, s.Lock)
 }
 
 // NewScaffold renders a complete project configuration from a built-in bundle.
@@ -84,10 +92,19 @@ func NewScaffold(bundleName string, options ScaffoldOptions) (Scaffold, error) {
 	if err != nil {
 		return Scaffold{}, err
 	}
+	// The baseline is taken from the same template, at the same moment, so what
+	// it records is exactly what the file beside it was generated from. Taking it
+	// later -- from a rerun, or from a project's own values -- would record a
+	// guess about where those values came from.
+	lock, err := NewLock(template.name)
+	if err != nil {
+		return Scaffold{}, err
+	}
 	return Scaffold{
 		Bundle:   template.name,
 		Config:   ScaffoldFile{Path: FileName, Content: renderScaffoldConfig(effective, template.name, options.Detection)},
 		Personas: personas,
+		Lock:     ScaffoldFile{Path: LockFileName, Content: lock.Render()},
 	}, nil
 }
 
@@ -134,9 +151,12 @@ func renderScaffoldConfig(effective Config, bundleName string, detection Detecti
 # project's to edit now.
 #
 # That ownership has a price worth knowing up front: a later Yoyodyne that
-# improves a persona or corrects a model selector does not reach this project.
-# Run "yoyo init" again in a scratch directory and merge what changed if you
-# want those improvements.
+# improves a persona or corrects a model selector does not change this project,
+# because nothing here is inherited. What it does instead is tell you. The
+# config.lock beside this file records what the template supplied when this was
+# generated, "yoyo doctor" and "yoyo config validate" say so on any run where
+# something you never edited has improved, and "yoyo config drift" shows what
+# each value was and is so you can take the ones you want.
 #
 # "yoyo config show --effective --origins" reports the resolved values and
 # where each one came from.

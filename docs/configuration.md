@@ -14,13 +14,11 @@ source checkout, and nobody reading its configuration has to be told where a
 value came from.
 
 **What owning your defaults costs.** A later Yoyodyne that improves a persona or
-corrects a model selector does not reach a project that already has its own
-copy. There is no mechanism that reconciles the two: re-run `yoyo init` in a
-scratch directory, diff it against yours, and merge what you want. That is a
-deliberate trade for a tool whose operator reads and edits the file often — the
-effect of an edit is obvious, which matters more here than shared improvement.
-Inheritance is still supported for projects that would rather have the other
-half of that trade; see [Extending a built-in bundle](#extending-a-built-in-bundle).
+corrects a model selector does not change a project that already has its own
+copy — nothing is inherited, so nothing arrives. It does say so, and moving a
+value stays yours. That report, and inheritance for projects wanting the other
+half of the trade, are both under
+[Extending a built-in bundle](#extending-a-built-in-bundle).
 
 ## Creating a project configuration
 
@@ -38,11 +36,10 @@ healthy, and it will not touch a configuration that is already there — one tha
 does not load is handed back with the command to edit it rather than
 regenerated. Everything below is what it writes on your behalf.
 
-`init` writes `.yoyodyne/config.yaml` and one Markdown file per persona under
-`.yoyodyne/personas/`, then loads what it wrote and fails if the result is not
-usable. Without `--product`, the product is named after the directory being
-configured; a directory name that is not a valid identifier is refused rather
-than mangled, and `--product` names one instead. Nothing is overwritten without
+`init` writes what [Layout](#layout) lists, then loads what it wrote and fails if
+the result is not usable. Without `--product`, the product is named after the
+directory being configured; a directory name that is not a valid identifier is
+refused rather than mangled, and `--product` names one instead. Nothing is overwritten without
 `--force`, and a refusal happens before any file is written, so a project is
 never left half-configured.
 
@@ -136,6 +133,7 @@ A project keeps its configuration in a `.yoyodyne` directory at its root:
 ```text
 .yoyodyne/
   config.yaml          # the project configuration
+  config.lock          # what the template supplied; compared, not read
   personas/            # one Markdown file per agent persona
     product-manager.md
     architect.md
@@ -3453,20 +3451,23 @@ lives: both travel with the repository, and neither needs the Yoyodyne source.
 
 Yoyodyne ships the explicit shape because its operator edits agent properties
 often and wants the effect of an edit obvious. A fleet of projects that should
-improve together is the case `extends` is for. A more portable configuration
-system than either is still wanted, and neither shape is it.
-[Portable agent configuration](portable-agent-configuration.md) is the draft
-that answers what a project should own versus inherit, how the two shapes
-convert into each other, and how a bundle improvement reaches a project that
-materialized its defaults. It is a draft the architect has not ratified, so
-nothing in it is implemented and none of the commands it names exist.
+improve together is the case `extends` is for.
+[Portable agent configuration](portable-agent-configuration.md) is the design
+that answers what a project owns versus inherits, how the two shapes convert,
+and how a bundle improvement reaches a project that materialized its defaults.
+Its baseline and drift report are built. `config.lock` records what the template
+supplied; `yoyo config drift` sorts each value against it into `unchanged`,
+`yours`, `available`, or `conflicting`. `doctor` and `config validate` speak the
+`available` ones unprompted on standard error, silently when there are none and
+without changing exit codes. Nothing is adopted for you, and `materialize`,
+`extract`, and `adopt` do not exist.
 
 ### Converting an inheriting configuration to an explicit one
 
 1. Record what you have now:
    `yoyo config show --effective --origins > before.txt`.
-2. Run `yoyo init --force`. This overwrites `.yoyodyne/config.yaml` and the
-   personas under `.yoyodyne/personas/`, so commit or stash first.
+2. Run `yoyo init --force`. It overwrites everything `init` writes, so commit or
+   stash first.
 3. Re-apply what was yours: `checks`, your approval policy, and any agent field
    you had overridden. The generated file states each of them in place, so this
    is editing values rather than re-expressing deviations.
@@ -3501,6 +3502,7 @@ yoyo config show --effective              # the values actually in force
 yoyo config show --origins                # where each value came from
 yoyo config show --effective --origins    # both
 yoyo config show --effective --json       # machine-readable
+yoyo config drift                         # what the template improved
 ```
 
 `config show` prints the layers it applied, the revision of the configuration in

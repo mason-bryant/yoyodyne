@@ -128,6 +128,8 @@ func runConfig(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return runConfigValidate(ctx, args[1:], stdout, stderr)
 	case "show":
 		return runConfigShow(args[1:], stdout, stderr)
+	case "drift":
+		return runConfigDrift(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown config command %q\n\n", args[0])
 		printConfigUsage(stderr)
@@ -170,6 +172,12 @@ func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Wri
 	// not a validity failure and does not become one: the exit code is what it
 	// would have been, and the warning is on the stream a warning belongs on.
 	ignored := configurationIgnored(ctx, execution.OSProcessRunner{}, configuredRepository(resolved), resolved.Path)
+	// What the project's template has improved since this configuration was
+	// generated, said without being asked for it. It is silent unless there is
+	// something, it is on the stream an aside belongs on, and it never moves the
+	// exit code: an improvement available is a fact about a valid configuration
+	// rather than something wrong with one.
+	drift, _ := config.ReadDrift(resolved)
 
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{
@@ -180,13 +188,111 @@ func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Wri
 			"agents":     len(resolved.Config.Agents),
 			"revision":   resolved.Config.Revision(),
 			"ignored":    ignored,
+			"drift":      drift,
 		})
 	}
 	fmt.Fprintf(stdout, "configuration valid: %s (revision %s)\n", resolved.Path, resolved.Config.Revision())
 	if ignored.Ignored {
 		fmt.Fprintln(stderr, describeIgnoredConfiguration(ignored))
 	}
+	if notice := drift.Notice(); notice != "" {
+		fmt.Fprintln(stderr, notice)
+	}
 	return 0
+}
+
+// runConfigDrift is the report the notices point at: the whole three-way
+// comparison, including the two classes the unprompted surfaces deliberately
+// stay quiet about.
+//
+// A project with no baseline is told it has none and exits 0. It is a project
+// that predates the record or deleted it, which decides nothing about how it
+// runs, and refusing would break it over a file nothing loads.
+func runConfigDrift(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("config drift", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	path := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
+	all := flags.Bool("all", false, "print every compared value, including the ones neither side moved")
+	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "config drift does not accept positional arguments")
+		return 2
+	}
+
+	resolved, err := loadConfiguration(*path)
+	if err != nil {
+		if *jsonOutput {
+			if code := writeJSON(stdout, stderr, map[string]any{
+				"status": "invalid",
+				"config": reportedPath(*path, resolved),
+				"error":  err.Error(),
+			}); code != 0 {
+				return code
+			}
+		} else {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+
+	drift, unknown := config.ReadDrift(resolved)
+	if *jsonOutput {
+		return writeJSON(stdout, stderr, map[string]any{
+			"config": resolved.Path,
+			"drift":  drift,
+			"reason": unknown,
+		})
+	}
+	if !drift.Known {
+		fmt.Fprintf(stdout, "no baseline: %s\n", unknown)
+		fmt.Fprintf(stdout, "regenerate one with `yoyo init --force` if this project was generated from %s and you have not moved its values\n", config.BuiltinV1)
+		return 0
+	}
+	renderDrift(stdout, drift, *all)
+	return 0
+}
+
+// renderDrift prints the comparison a class at a time, most actionable first.
+// Every value carries what it was and what it is, because the report's job is to
+// let the operator decide rather than to tell them a verdict.
+func renderDrift(stdout io.Writer, drift config.Drift, all bool) {
+	fmt.Fprintf(stdout, "template: %s\n", drift.Bundle)
+	if drift.Current() {
+		fmt.Fprintf(stdout, "current: nothing this project inherited has moved since it was generated (%s)\n", drift.BaselineRevision)
+	} else {
+		fmt.Fprintf(stdout, "moved: %s when generated, %s now\n", drift.BaselineRevision, drift.BundleRevision)
+	}
+	printed := 0
+	for _, group := range []struct {
+		class  config.Class
+		header string
+	}{
+		{config.ClassAvailable, "available -- improved by the template, never edited here"},
+		{config.ClassConflicting, "conflicting -- both moved; nothing is adopted until you settle it"},
+		{config.ClassYours, "yours -- changed here and not by the template; never touched"},
+		{config.ClassUnchanged, "unchanged -- neither side moved it"},
+	} {
+		if !all && (group.class == config.ClassUnchanged || group.class == config.ClassYours) {
+			continue
+		}
+		matched := drift.OfClass(group.class)
+		if len(matched) == 0 {
+			continue
+		}
+		fmt.Fprintf(stdout, "\n%s\n", group.header)
+		for _, value := range matched {
+			fmt.Fprintf(stdout, "  %s\n", value.Key)
+			fmt.Fprintf(stdout, "    yours:    %s\n", value.Yours)
+			fmt.Fprintf(stdout, "    template: %s\n", value.Bundle)
+		}
+		printed += len(matched)
+	}
+	if printed == 0 {
+		fmt.Fprintln(stdout, "\nnothing to report")
+	}
 }
 
 func runConfigShow(args []string, stdout, stderr io.Writer) int {
@@ -352,6 +458,7 @@ Commands:
   agent             read the configured agents and their state, and address one
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
+  config drift      compare this project against the template it was generated from
   artifact          read the canonical artifacts, and record your approval of one
   amendment         read changes proposed to artifacts, and decide them
   evaluation        read what the product manager made of the ideas you brought it
@@ -379,7 +486,7 @@ Commands:
 }
 
 func printConfigUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo config <validate|show> [options]
+	fmt.Fprintln(writer, `Usage: yoyo config <validate|show|drift> [options]
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
@@ -387,5 +494,15 @@ Options:
 
 config show options:
   --effective       print the effective configuration after inheritance (default)
-  --origins         print where every effective value came from`)
+  --origins         print where every effective value came from
+
+config drift compares three sides -- what this project's template supplied when
+the configuration was generated, what it says now, and what the project says
+today -- so a value you changed and a value the template improved are told apart
+rather than both reported as differences. It changes nothing, and it reads the
+config.lock beside the configuration, which nothing consults when work runs.
+A project with no baseline says so and exits 0.
+
+config drift options:
+  --all             print every compared value, including the ones neither side moved`)
 }
