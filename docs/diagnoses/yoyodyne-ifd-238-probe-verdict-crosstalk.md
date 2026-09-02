@@ -145,12 +145,13 @@ above, and not this, is what settles the question.
 
 ## What changed
 
-The developer contract now tells every run that the machine's temporary
+The developer contract was changed to tell every run that the machine's temporary
 directory is shared with the runs beside it, that a scratch path must carry the
 id of the work item that wrote it, and that the alternative is not the worktree —
 a scratch file there is untracked content in the change. `CLAUDE.md` and
-`AGENTS.md` say the same for a session the harness did not make, which on this
-machine is the operator working in the checkout while two runs execute.
+`AGENTS.md` were given the same for a session the harness did not make, which on
+this machine is the operator working in the checkout while two runs execute.
+None of that stands now; the section below says what took its place.
 
 `docs/developing-yoyo.md` is the better home for that second half and could not
 take it. It is one of the eight documents the product manager's context bundle
@@ -168,3 +169,33 @@ harness passed in would be replaced before the run's first command ran. The
 directory a run may write and the directory a run is given are the provider's to
 reconcile; what the harness can do is make sure no run picks a name another run
 would pick.
+
+## What replaced it
+
+The guidance above is gone, and none of the paragraphs it describes are in the
+contract or in `CLAUDE.md` and `AGENTS.md` any more. yoyodyne-ifd.247 took the
+reviewer's point that a convention holds exactly as far as each run's reading of
+it: the harness now cuts every developer run its own scratch directory and names
+that directory in the contract, so two runs cannot see each other's output
+because they are never handed the same directory.
+
+It goes in the Git directory of the run's own worktree —
+`<worktree gitdir>/yoyodyne/scratch/<run-id>`, beside the build cache this
+document leaves shared — for the two reasons that placed the cache there. It is
+outside the working tree, so nothing written in it can enter the change or leave
+the tree dirty; and the Git directory is one of the three places a run's sandbox
+actually grants, which the harness's own state tree is not: a `mkdir` under
+`…/state/products/<product>/runs` from inside a developer run is refused with
+"Operation not permitted". Git creates that directory with the worktree and
+removes it with the worktree, so nothing accumulates and no cleanup step has to
+remember it. `internal/execution/scratch.go` is where that is decided.
+
+The creation itself goes through `internal/repowrite` with the repository's own
+Git directory as its declared root, like every other harness-owned write. That
+matters more here than it looks: the path is worked out from the `.git` pointer
+inside the run's own worktree, which is a file the run being handed the
+directory can write. So the worktree's administrative directory is named as a
+path relative to a root derived from the repository root the harness was
+configured with — a pointer aimed anywhere else climbs out of that root and is
+refused before anything is created, and every existing component below it is
+resolved against the filesystem on the way down.

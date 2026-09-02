@@ -96,7 +96,7 @@ func deliverySteps() []deliveryStep {
 				// different parameters — and parameters are the runtime's, so this door
 				// opens onto the first attempt and the pipeline still makes the rest.
 				Perform: func(ctx context.Context, a *activeRun) error {
-					return a.develop(ctx, developerPrompt(a.pipeline.developer().Persona.Text, a.deliveredInvariants().Text(), a.context), "")
+					return a.develop(ctx, developerPrompt(a.pipeline.developer().Persona.Text, a.deliveredInvariants().Text(), a.context, a.scratch), "")
 				},
 			},
 			phases: []runstate.Phase{runstate.PhaseDeveloping},

@@ -276,6 +276,64 @@ func TestAppendingRefusesALinkStandingAtTheTargetItself(t *testing.T) {
 	}
 }
 
+// A directory is created with the same confinement a document is written with,
+// and creating one that is already there is the same answer rather than a
+// failure: the caller this exists for is a run resumed by a second process,
+// which has to be handed the directory the first process made.
+func TestMakingADirectoryCreatesItAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	made, err := root.MakeDirectory("yoyodyne/scratch/run-one", 0o700)
+	if err != nil {
+		t.Fatalf("MakeDirectory() error = %v", err)
+	}
+	if want := filepath.Join(root.Path(), "yoyodyne", "scratch", "run-one"); made != want {
+		t.Fatalf("MakeDirectory() = %q, want %q", made, want)
+	}
+	writeFile(t, filepath.Join(made, "check.log"), "what the run wrote")
+
+	again, err := root.MakeDirectory("yoyodyne/scratch/run-one", 0o700)
+	if err != nil {
+		t.Fatalf("MakeDirectory() again error = %v", err)
+	}
+	if again != made {
+		t.Fatalf("MakeDirectory() = %q, want the same %q", again, made)
+	}
+	if content := readFile(t, filepath.Join(made, "check.log")); content != "what the run wrote" {
+		t.Fatalf("the directory read %q after being made again", content)
+	}
+}
+
+// The refusal the entry point exists for: a link along the way pointing out of
+// the root is refused rather than followed, so nothing is created outside it.
+func TestMakingADirectoryThroughASymlinkOutOfTheRepositoryIsRefused(t *testing.T) {
+	t.Parallel()
+
+	root, outside := repository(t)
+	link(t, outside, filepath.Join(root.Path(), "yoyodyne"))
+
+	made, err := root.MakeDirectory("yoyodyne/scratch/run-one", 0o700)
+	var refused *EscapeError
+	if !errors.As(err, &refused) {
+		t.Fatalf("MakeDirectory() = %q, error = %v, want an EscapeError", made, err)
+	}
+	assertUnchanged(t, outside)
+}
+
+// And the paths that cannot name anything inside a root are refused here for the
+// same reason they are refused for a document: before the filesystem is touched.
+func TestMakingADirectoryRefusesAPathThatNamesNothingInside(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	for _, value := range []string{"", "   ", "..", "../elsewhere", ".", "/absolute"} {
+		if made, err := root.MakeDirectory(value, 0o700); err == nil {
+			t.Errorf("MakeDirectory(%q) = %q, want a refusal", value, made)
+		}
+	}
+}
+
 func TestARootThatIsNotAUsableRepositoryIsRefused(t *testing.T) {
 	t.Parallel()
 
