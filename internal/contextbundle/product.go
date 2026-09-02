@@ -26,16 +26,22 @@ import (
 // It was 512 KiB, and the eight shipped documents had grown to within 32 bytes
 // of it — so documenting any new behaviour at all pushed the set past the whole
 // budget, with nothing left for the specifications, the tracker state, or the
-// docket that share it. The bound that this figure exists for is the one on a
-// directory nobody counts; a fixed list of eight documents that grows with the
+// docket that share it. Three runs reported that wall and one was turned away by
+// it, and the product manager settled it in yoyodyne-ifd.240: raise the figure
+// to 640 KiB. Not trim the guides, which serve operators and are not prose to
+// squeeze to fit a constant; not narrow the shipped set, which exists because
+// narrowing the product manager's evidence cost real decisions twice — the
+// ifd.20 and ifd.52 history. The bound that this figure exists for is the one on
+// a directory nobody counts; a fixed list of eight documents that grows with the
 // product is not it, and squeezing them was costing the product manager the
-// specifications rather than saving anything. So the figure moved once, far
-// enough that the shipped set has room to grow and the rest of the context is
-// not competing with it for the last few kilobytes.
+// specifications rather than saving anything.
 //
-// It is still a bound and still deliberately finite. What it does not answer is
-// whether eight whole documents is the right thing to carry in full at all,
-// which is a product question rather than a constant.
+// It is still a bound and still deliberately finite, and the check that reports
+// the margin against it stays: a test failing near the bound is the early
+// warning working rather than a nuisance. What neither answers is whether eight
+// whole documents is the right thing to carry in full at all, which is a product
+// question rather than a constant — so the next raise is the product manager's
+// too, with ifd.240 as the precedent for taking it that way.
 const defaultMaxProductBytes = 640 << 10
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is

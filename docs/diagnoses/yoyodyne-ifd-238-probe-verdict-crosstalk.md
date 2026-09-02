@@ -162,6 +162,10 @@ a decision somebody owns and this run does not; two earlier runs reported the
 same wall as a prediction and this is the first documentation it has actually
 turned away. Whoever settles it should move the section there.
 
+That decision has since been taken, in yoyodyne-ifd.240: the budget is 640 KiB
+and the guides were not trimmed, so the wall this section describes is no longer
+in the way of moving it.
+
 That is guidance rather than a wall, deliberately: Claude Code sets `TMPDIR`
 itself in sandbox mode, to a directory it derives per user, so a `TMPDIR` the
 harness passed in would be replaced before the run's first command ran. The
