@@ -346,11 +346,14 @@ func (s *RerunStore) Settle(ctx context.Context, docketKey, runID string, preser
 // the re-run a decision authorized rather than having spent it on nothing.
 //
 // It is not a general undo, and everything about it is narrow on purpose: a
-// claim is spent by being taken, and the one case where giving it back is sound
-// is a claim whose fresh run provably never existed. A run refused a developer
-// slot is that case — the reservation refuses before the run's record exists,
-// before the work item is claimed and before any agent runs — so there is a
-// claim here and demonstrably nothing it caused. A record carrying a run is
+// claim is spent by being taken, and the only claim it is sound to give back is
+// one whose fresh run provably never existed. Two things leave that behind. A run
+// refused a developer slot is the first — the reservation refuses before the
+// run's record exists, before the work item is claimed and before any agent runs
+// — and a run that met a pause where it would have started is the second: the
+// operator's hold, an unresolved directive, work the item waits on and a held
+// intake all stop the pipeline at or before that same point. Either way there is
+// a claim here and demonstrably nothing it caused. A record carrying a run is
 // therefore refused rather than removed: whatever became of that run, something
 // happened on this claim, and a second re-run of it is the thing the claim
 // exists to prevent.
