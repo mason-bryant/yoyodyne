@@ -220,6 +220,52 @@ func (e RerunTakenError) Error() string {
 
 func (e RerunTakenError) Unwrap() error { return ErrRerunTaken }
 
+// ErrRerunDecisionSpent is what a claim taken against a decision that has
+// already been carried out unwraps to, so a caller can tell "this item's
+// decisions are all spent" from a store that could not be read without matching
+// on the words of either.
+var ErrRerunDecisionSpent = errors.New("every re-run decided for this item has already been claimed")
+
+// RerunDecisionSpentError names the claims that spent the item's decisions. It
+// is the once-per-stoppage guard's other half: that one refuses a second claim
+// of one stoppage, and this refuses a second claim of one decision — which is
+// what two un-claimed stoppages of an item with one recorded re-run would
+// otherwise be, one claim each and the budget spent twice.
+//
+// It carries the claims rather than only the counts, because what the asker
+// needs is which re-run took the decision: the refusal names the most recent,
+// which on the item this guard exists for is the only one.
+type RerunDecisionSpentError struct {
+	WorkItemID string
+	// Decided is how many re-runs of the item triage has recorded, which is how
+	// many claims there are to take.
+	Decided int
+	// Claimed is what has already been claimed of them, oldest first.
+	Claimed []Rerun
+}
+
+func (e RerunDecisionSpentError) Error() string {
+	if len(e.Claimed) == 0 {
+		return fmt.Sprintf("triage has recorded no re-run of %s, so there is no decision to claim against: the development manager records the decision, which spends the item's re-run budget, before the harness claims anything on it",
+			e.WorkItemID)
+	}
+	return fmt.Sprintf("triage has decided %d re-run(s) of %s and the harness has carried out %d, most recently %s; one recorded decision authorizes one re-run, so this stoppage has no decision of its own to act on: a further stoppage of an item that has already been run again needs a further decision, which past the cap is an escalation rather than a larger budget",
+		e.Decided, e.WorkItemID, len(e.Claimed), e.Claimed[len(e.Claimed)-1].Describe())
+}
+
+func (e RerunDecisionSpentError) Unwrap() error { return ErrRerunDecisionSpent }
+
+// Describe names one claim for a refusal that has to say which re-run took the
+// decision. A claim whose fresh run never got as far as being reserved is still
+// a claim, and says so rather than naming a run nobody could go and look at.
+func (r Rerun) Describe() string {
+	if strings.TrimSpace(r.RunID) == "" {
+		return fmt.Sprintf("the stoppage of run %s, claimed at %s with no fresh run recorded",
+			r.PriorRunID, r.ClaimedAt.UTC().Format(time.RFC3339))
+	}
+	return fmt.Sprintf("the stoppage of run %s, re-run as %s", r.PriorRunID, r.RunID)
+}
+
 // RerunStore is where the re-runs live: one directory under the product,
 // beside the counters that bound them, and one file per docketed stoppage inside
 // it. A file each rather than one shared record is what keeps two re-runs of two
@@ -259,7 +305,18 @@ func (s *RerunStore) Root() string { return s.root }
 // stoppage that already has a re-run. It is written before the fresh run is
 // started, which is what makes the refusal mean anything: a claim taken after
 // the run would leave the window where two of them start at once open.
-func (s *RerunStore) Claim(ctx context.Context, rerun Rerun) (Rerun, error) {
+//
+// decided is how many re-runs of this work item triage has recorded, and it is
+// the second thing refused against: a decision spends the item's re-run budget
+// as it is made and authorizes exactly one carry-out, so an item whose claims
+// have caught up with its decisions is refused however many un-claimed stoppages
+// it has. That is asked here rather than only by the caller because the two
+// questions have different identities — the stoppage is one docket entry and the
+// decision is one work item — and a count read outside the write it bounds is a
+// count two carry-outs of one decision can both pass. It is the caller's number
+// rather than one read here for the reason a cap is the caller's: this record
+// counts what triage has claimed, and what triage has decided lives beside it.
+func (s *RerunStore) Claim(ctx context.Context, rerun Rerun, decided int) (Rerun, error) {
 	key := strings.TrimSpace(rerun.DocketKey)
 	if key == "" {
 		return Rerun{}, errors.New("a docket entry is required to record its re-run")
@@ -268,6 +325,10 @@ func (s *RerunStore) Claim(ctx context.Context, rerun Rerun) (Rerun, error) {
 	claimed.SchemaVersion = RerunSchemaVersion
 	claimed.ProductID = s.productID
 	claimed.DocketKey = key
+	// The work item is the identity the decisions are counted under, so it is
+	// normalized here rather than only where it is validated: a claim stored under
+	// a padded identifier is one the item's own count never finds.
+	claimed.WorkItemID = strings.TrimSpace(rerun.WorkItemID)
 	if claimed.ClaimedAt.IsZero() {
 		claimed.ClaimedAt = time.Now().UTC()
 	}
@@ -284,6 +345,16 @@ func (s *RerunStore) Claim(ctx context.Context, rerun Rerun) (Rerun, error) {
 		return Rerun{}, err
 	}
 
+	// The item's lock is taken first and the entry's inside it, so the count of
+	// what has been claimed for the item cannot go stale between being read and
+	// being added to. Two stoppages of one item never meet in the entry lock,
+	// which is exactly the shape one decision was claimed twice in.
+	releaseItem, err := s.lockItem(ctx, claimed.WorkItemID)
+	if err != nil {
+		return Rerun{}, err
+	}
+	defer releaseItem()
+
 	release, err := s.lock(ctx, key)
 	if err != nil {
 		return Rerun{}, err
@@ -296,6 +367,19 @@ func (s *RerunStore) Claim(ctx context.Context, rerun Rerun) (Rerun, error) {
 	}
 	if found {
 		return Rerun{}, RerunTakenError{Existing: existing}
+	}
+	// This stoppage having its own claim is the more particular answer and is
+	// given first; this is the one that bounds the item across its stoppages.
+	taken, err := s.Claimed(claimed.WorkItemID)
+	if err != nil {
+		return Rerun{}, err
+	}
+	if len(taken) >= decided {
+		return Rerun{}, RerunDecisionSpentError{
+			WorkItemID: claimed.WorkItemID,
+			Decided:    decided,
+			Claimed:    taken,
+		}
 	}
 	if err := s.save(key, claimed); err != nil {
 		return Rerun{}, err
@@ -560,6 +644,38 @@ func (s *RerunStore) lock(ctx context.Context, docketKey string) (func(), error)
 		return nil, fmt.Errorf("lock the triage re-run of %s: %w", docketKey, err)
 	}
 	return func() { file.Close() }, nil
+}
+
+// lockItem serializes the claims taken across one work item's stoppages, which
+// is a different question from the record lock above: that one keeps two claims
+// of one stoppage apart, and two stoppages of one item never meet in it. One
+// recorded decision authorizes one claim, so the count that enforces it has to be
+// read and written under a lock the item's other stoppages take as well.
+//
+// It is taken before the record's lock and never after, so the two can make no
+// cycle: Settle and Withdraw take the record's alone. The lock file outlives the
+// claim for the reason every other one here does — removing it while another
+// process held it would let a third take a lock on a file nobody else can see.
+func (s *RerunStore) lockItem(ctx context.Context, workItemID string) (func(), error) {
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return nil, fmt.Errorf("create triage re-run directory: %w", err)
+	}
+	file, err := os.OpenFile(s.itemPath(workItemID), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open triage re-run item lock: %w", err)
+	}
+	if err := lockStateFile(ctx, file); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("lock the re-runs claimed for %s: %w", workItemID, err)
+	}
+	return func() { file.Close() }, nil
+}
+
+// itemPath names one work item's lock. It is built like a record's name and
+// cannot collide with one: a record's lock is the record's name with `.json.lock`
+// after it, and List reads neither, because neither ends in `.json`.
+func (s *RerunStore) itemPath(workItemID string) string {
+	return filepath.Join(s.root, triageKey(workItemID)+".item.lock")
 }
 
 // path names one stoppage's record. The name is built the same way a counter

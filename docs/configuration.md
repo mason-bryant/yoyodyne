@@ -2545,6 +2545,16 @@ opposite order holds past the claim, deliberately: the claim is taken before the
 run is started, so a process that dies between the two has spent a re-run nobody
 took rather than taken one nobody recorded.
 
+**One recorded decision is one claim, and the claim itself is what enforces it.**
+The reading above is the early half: it refuses before anything is spent and can
+say which re-run took the last decision. But a stoppage is one docket entry and a
+decision is one work item, so two un-claimed stoppages of an item with one
+recorded re-run pass the once-per-stoppage guard separately — that guard keeps
+two claims of one stoppage apart, and the two entries never meet in it. So the
+claim takes the count again under the item's own lock and refuses there, naming
+the re-run that spent the decision. Two carry-outs of one decision at the same
+instant are therefore one claim and one refusal, however they interleave.
+
 **A full harness is a state rather than a refusal.** `execution.max_concurrent_developers`
 is read before the claim, from the same runs in flight the reservation counts, and
 every slot being taken neither refuses the carry-out nor fails it: nothing is

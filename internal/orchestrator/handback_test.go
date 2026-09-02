@@ -253,7 +253,7 @@ func TestAClaimedReRunStartsFreshWhereARepairIsOwed(t *testing.T) {
 		PriorRunID: stopped.RunID,
 		WorkItemID: tracker.item.ID,
 		Reason:     "the ground under this change moved, so it is the item that needs running again rather than the change that needs repairing",
-	}); err != nil {
+	}, 1); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 

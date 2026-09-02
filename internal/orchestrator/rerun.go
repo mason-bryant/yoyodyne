@@ -152,7 +152,11 @@ type RerunDecisions interface {
 //
 // It is satisfied by runstate.RerunStore.
 type RerunRecords interface {
-	Claim(ctx context.Context, rerun runstate.Rerun) (runstate.Rerun, error)
+	// Claim takes the one re-run this stoppage gets, against the re-runs recorded
+	// for its work item. The count travels with the claim rather than being read
+	// beside it, so the same lock that keeps two claims of one stoppage apart is
+	// what bounds two stoppages of one item to the decisions it has.
+	Claim(ctx context.Context, rerun runstate.Rerun, decided int) (runstate.Rerun, error)
 	Settle(ctx context.Context, docketKey, runID string, preserved runstate.PreservedArtifacts) (runstate.Rerun, error)
 	Claimed(workItemID string) ([]runstate.Rerun, error)
 	// Withdraw gives the claim back, for the two cases where the run it was taken
@@ -357,7 +361,7 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 		Reason:     result.Reason,
 		ClaimedAt:  r.now(),
 		Preserved:  result.Preserved,
-	})
+	}, decided.Reruns)
 	if err != nil {
 		return result, err
 	}
@@ -449,11 +453,14 @@ func stoppageIsOver(prior runstate.State) error {
 // which past the cap is an escalation rather than a larger budget — which is
 // exactly what the development manager's own workflow says.
 //
-// The count is read before the claim is taken, so two processes carrying out one
-// decision at the same instant could both pass it. What that costs is bounded by
-// the reservation rather than by this: the second run of one item is refused
-// where it is reserved, so the loser spends a claim rather than putting a second
-// developer on the work.
+// The count is read here before the claim is taken, which is what keeps a
+// refused carry-out free: an item whose decisions are spent is refused before
+// anything is claimed, and the refusal can say what became of the re-run that
+// spent the last one. It is not what enforces the rule — two processes carrying
+// out one decision at the same instant would both pass a count read this early.
+// The claim itself takes the same count under the item's own lock and refuses
+// there, so one recorded decision is one claim however the two are interleaved;
+// this reading is the early, cheaper half of that guard rather than a second one.
 //
 // What it returns is the whole record rather than the one counter, because the
 // reason this run records has to be able to say what the decision stands on: an
@@ -485,9 +492,11 @@ func (r Rerunner) decided(entry triage.Entry) (decided runstate.TriageCounters, 
 		}
 	}
 	if len(claimed) >= counters.Reruns {
-		return runstate.TriageCounters{}, 0, fmt.Errorf(
-			"triage has decided %d re-run(s) of %s and the harness has carried out %d, so this stoppage has no decision of its own to act on: a further stoppage of an item that has already been run again needs a further decision, which past the cap is an escalation rather than a larger budget",
-			counters.Reruns, entry.WorkItemID, len(claimed))
+		return runstate.TriageCounters{}, 0, runstate.RerunDecisionSpentError{
+			WorkItemID: entry.WorkItemID,
+			Decided:    counters.Reruns,
+			Claimed:    claimed,
+		}
 	}
 	return counters, len(claimed), nil
 }
