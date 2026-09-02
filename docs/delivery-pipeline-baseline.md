@@ -33,7 +33,12 @@ Each trace drives one path end to end against a real Git repository and a fake
 provider, and writes down everything the path produced: the outcome the caller
 was handed, the durable run record left on disk, the run's event log, every
 tracker call and the words the run left on the work item, and each provider
-invocation with the prompt it was given. Temporary directories, commit
+invocation said as the three things that tell one from another: which role it
+was made as, what it was asked for — the assigned work item, a review, or a
+repair of findings, of a failing check, or of a refused path — and whether it
+continued a session an earlier attempt established. The prompt itself is
+classified rather than recorded, so what a diff shows is a run asking for a
+different thing or losing a session, not a wording change. Temporary directories, commit
 identifiers, timestamps, the configuration digest, and elapsed times are
 replaced by stable placeholders, so what a trace holds is the behavior rather
 than the machine it ran on.
@@ -52,6 +57,14 @@ go test ./internal/orchestrator -run TestDeliveryPipelineBaseline -update-baseli
 
 The diff is the review. An intended change reads as the fields it moved; an
 unintended one reads as the fields nobody meant to move.
+
+The section at the end, naming what no trace holds, is held to that promise by a
+check rather than by a reader: `TestBaselineDocumentDisclosesEveryFieldNoTraceHolds`
+fails when this document states a durable field that no trace carries and the
+gap list does not name. It is a floor rather than a fence — it recognizes field
+names, so a behavior stated only in prose is still a reviewer's to catch — and
+it reports rather than decides: recording a trace satisfies it, and so does
+naming the field below.
 
 ## The entry points
 
@@ -120,6 +133,33 @@ anything more has been spent.
     context bundle is re-assembled from it.
 16. **The worktree**, cut from the target branch, and the run's state written as
     `running` in the `developing` phase.
+
+**Nine of those sixteen steps have a trace; seven do not.** Traced are the
+operator's hold (2), loading the item (5), the directive and dependency
+questions (6, 7), continuing a run already in flight (8), the intake hold (9),
+fixing the integration target (12), the claim (15), and the worktree (16) — each
+by the scenario named for it, or by every scenario that reaches it.
+
+Untraced are the refusals, and they are the half of this sequence a parity
+harness is most likely to under-measure, because a refusal that never fires
+looks exactly like a step that is not there. Nothing here holds: the wiring and
+configuration refusals (1) — a missing collaborator, a configuration that does
+not validate, a backend with no compiled adapter, an unpinned model selector, no
+configured checks, or a review policy that does not gate automatic integration;
+publishing settled before the claim (3), which belongs to the publishing half
+listed below; provider availability (4); the `ExistingRunError` refusal of a run
+in flight whose remaining work durable state does not fully describe (8); the
+refusal of a clean start where a repair is owed (10); item readiness, the
+context bundle, the invariants, and the repository's readiness (11); an account
+pool with nothing left to spend (13); and the `execution.max_concurrent_developers`
+bound reservation enforces (14).
+
+**The order is a guarantee no trace holds either.** Each refusal above is
+asserted somewhere in `internal/orchestrator`, but that a held harness refuses
+before the provider is asked, and that the provider is asked before the tracker
+is, is a property of the sequence rather than of any one step — so a new
+executor could satisfy every individual refusal and still ask them in an order
+that spends more before refusing. Measuring that needs its own harness.
 
 ## The steps of a run
 
@@ -372,6 +412,11 @@ is unmeasured. Most of these are asserted somewhere in
   `internal/orchestrator/publish_test.go`.
 - `yoyo triage repair` and `yoyo triage rerun`, which re-enter a stopped run
   through their own preconditions.
+- **Seven of the sixteen pre-claim steps, and the order of all sixteen.** The
+  refusals in steps 1, 3, 4, 8, 10, 11, 13, and 14 are enumerated where they are
+  asked, with the untraced ones named there rather than only here, because a
+  reader deciding what to measure reads the sequence rather than this list. The
+  ordering itself is a guarantee no single trace can hold.
 - Five of the seven reconciliation actions. `completed` and `blocked` have
   traces, and a second sweep finding nothing is recorded beside them; `held`,
   `resumable`, `queued`, `failed`, and `unsettled` do not.

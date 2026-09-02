@@ -91,6 +91,123 @@ func TestBaselineCoversEveryRecordedScenario(t *testing.T) {
 	}
 }
 
+// baselineDocument is the enumeration these traces are the executable half of.
+const baselineDocument = "../../docs/delivery-pipeline-baseline.md"
+
+// baselineGapHeading opens the section where the document names what it states
+// and no trace holds. The check below reads it as data, so moving or renaming
+// the heading is a change to the check as much as to the document.
+const baselineGapHeading = "## What this baseline does not yet cover"
+
+// baselineFencedBlock is a fenced code block, which is a command to run rather
+// than a claim about the pipeline. The terms register's own sweep skips these
+// for the same reason.
+var baselineFencedBlock = regexp.MustCompile("(?s)```.*?```")
+
+// baselineQuoted is a span the document set in backticks, kept to one line so a
+// stray backtick cannot swallow a paragraph and read as one enormous name.
+var baselineQuoted = regexp.MustCompile("`([^`\n]+)`")
+
+// baselineFieldName recognizes a durable field: lower snake_case, and no dot,
+// because a dotted name is a configuration key rather than something a trace
+// would carry.
+var baselineFieldName = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)+$`)
+
+// TestBaselineDocumentDisclosesEveryFieldNoTraceHolds holds the document to its
+// own promise: that what it lists as not covered is every behavior it states and
+// no trace holds, so a parity harness measuring against this baseline knows what
+// it is not measuring.
+//
+// It exists because that promise was broken three times in a row while every
+// other check was green, each time by a field the document names in one section
+// and the gap list forgot -- and each time it was a reviewer reading prose who
+// caught it, which is not a thing to rely on twice, let alone four times. A
+// document that overstates its coverage is worse than one that claims none: it
+// is the coverage a later migration would trust.
+//
+// The check is deliberately narrow. It recognizes the durable field names, which
+// is the half that is mechanical; a behavior stated only in prose -- an ordering,
+// a refusal, a step nothing writes a field for -- it cannot see, and those stay
+// a reviewer's to catch. The document decides and the check only reports:
+// recording a trace for a field satisfies it, and so does naming the field in
+// the gap list, neither of which is a change to any code.
+func TestBaselineDocumentDisclosesEveryFieldNoTraceHolds(t *testing.T) {
+	t.Parallel()
+
+	document, err := os.ReadFile(baselineDocument)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", baselineDocument, err)
+	}
+	prose := baselineFencedBlock.ReplaceAllString(string(document), "")
+	body, gaps, found := strings.Cut(prose, baselineGapHeading)
+	if !found {
+		t.Fatalf("%s carries no %q section, which is where it says what it does not measure", baselineDocument, baselineGapHeading)
+	}
+
+	held := baselineRecordedNames(t)
+	named := map[string]bool{}
+	for _, quoted := range baselineQuoted.FindAllStringSubmatch(body, -1) {
+		name := quoted[1]
+		if !baselineFieldName.MatchString(name) || named[name] {
+			continue
+		}
+		named[name] = true
+		if held[name] || strings.Contains(gaps, name) {
+			continue
+		}
+		t.Errorf("%s states %q and no trace holds it: record a trace that carries the field, or name it under %q",
+			baselineDocument, name, baselineGapHeading)
+	}
+	// A document naming no fields at all would pass every assertion above while
+	// measuring nothing, which is the way this check could quietly stop working.
+	if len(named) == 0 {
+		t.Errorf("%s named no durable fields, so this check compared nothing", baselineDocument)
+	}
+}
+
+// baselineRecordedNames is every key and every string value in every recorded
+// trace. Values count as well as keys because what the document names is not
+// always a field -- `provider_stop` and `timed_out` are values a field carries --
+// and a parity harness diffing the document field by field would find them
+// either way.
+func baselineRecordedNames(t *testing.T) map[string]bool {
+	t.Helper()
+
+	recorded, err := filepath.Glob(filepath.Join(baselineDirectory, "*.json"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	names := map[string]bool{}
+	for _, path := range recorded {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		var trace any
+		if err := json.Unmarshal(content, &trace); err != nil {
+			t.Fatalf("Unmarshal(%s) error = %v", path, err)
+		}
+		baselineCollectNames(trace, names)
+	}
+	return names
+}
+
+func baselineCollectNames(value any, into map[string]bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			into[key] = true
+			baselineCollectNames(nested, into)
+		}
+	case []any:
+		for _, nested := range typed {
+			baselineCollectNames(nested, into)
+		}
+	case string:
+		into[typed] = true
+	}
+}
+
 // baselineScenario is one delivery path, driven end to end. freezes is the
 // sentence the trace beneath it stands for, recorded with the trace so a
 // reviewer reading the file knows what it is supposed to be evidence of.
