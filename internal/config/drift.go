@@ -94,7 +94,7 @@ func (d Drift) OfClass(class Class) []Value {
 }
 
 // Current reports whether the bundle has moved at all since the project
-// materialized, which is what `config show` says in one word.
+// materialized, which is the header line `yoyo config drift` opens with.
 func (d Drift) Current() bool { return d.Known && d.BaselineRevision == d.BundleRevision }
 
 // CompareToBaseline sorts every value the baseline recorded into one of the four
@@ -246,6 +246,20 @@ const maxNamedImprovements = 5
 // has not been asked for, and an unprompted line about either would be the
 // harness asking for attention it was told not to ask for. Both are still there
 // for anybody who runs `yoyo config drift`.
+//
+// The surfaces that say it are the CLI's, and deliberately not Slack's yet. The
+// operator asked (2026-09-01, yoyodyne-ifd.241) for each newly-available
+// improvement to be sent as a direct message too, once per improvement and
+// deduplicated through a durable record rather than once per check pass -- but
+// the slack-reporting design reserves its direct-message tier for states where
+// the system is stopped and waiting on a human, and an advisory notice widens
+// that addressing rule deliberately or not at all. That is the architect's
+// ruling to make and it has not been made, so nothing here is wired to the sink
+// and there is no dedup record to wire. Whoever adds one is adding it after the
+// ruling, not around it: this derivation is computed as a command runs, while
+// the sink posts from durable streams, so the improvement has to become a
+// record on a stream the feed reads before it can be sent once and proved to
+// have been sent once.
 func (d Drift) Notice() string {
 	available := d.Available()
 	if len(available) == 0 {

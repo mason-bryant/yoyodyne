@@ -163,7 +163,9 @@ func TestDoctorSpeaksTheSameNoticeAsConfigValidate(t *testing.T) {
 	var doctorOut, doctorErr bytes.Buffer
 	// doctor exits 1 here: this temporary project has no repository, no tracker,
 	// and no authenticated provider. What is asserted is the notice beside that
-	// diagnosis, which the diagnosis neither suppresses nor changes.
+	// diagnosis, which the diagnosis neither suppresses nor changes. That the
+	// exit code is the same one either way is
+	// TestDoctorsExitCodeIsTheSameWithAndWithoutANotice below.
 	Run([]string{"doctor", "--config", path, "--quiet"}, &doctorOut, &doctorErr, "test")
 
 	notice := strings.TrimSpace(validateErr.String())
@@ -621,4 +623,91 @@ func driftClassOf(drift config.Drift, key string) config.Class {
 		}
 	}
 	return ""
+}
+
+// The operator's condition on the whole notice: it never changes what the
+// command it rides on reported. `config validate` is asserted where it is
+// printed, because it exits 0 there either way; doctor's exit code is whatever
+// the installation deserves, so what has to be pinned is that it is the same
+// number with a notice and without one.
+//
+// The same project answers both times and only the baseline moves between them,
+// so nothing but the notice differs: any change in the code would be the notice
+// having moved it.
+func TestDoctorsExitCodeIsTheSameWithAndWithoutANotice(t *testing.T) {
+	t.Parallel()
+
+	path := driftingProject(t, "agents.developer.model")
+
+	var withOut, withErr bytes.Buffer
+	speaking := Run([]string{"doctor", "--config", path, "--quiet"}, &withOut, &withErr, "test")
+	if !strings.Contains(withErr.String(), "agents.developer.model") {
+		t.Fatalf("doctor said nothing about the improvement (stderr = %q), so the comparison below is empty", withErr.String())
+	}
+
+	// Level the project with its template, which is the only difference: the
+	// baseline now records what the bundle actually supplies, so there is
+	// nothing available and nothing to say.
+	level, err := config.NewLock(config.BuiltinV1)
+	if err != nil {
+		t.Fatalf("NewLock() error = %v", err)
+	}
+	if err := os.WriteFile(config.LockPath(path), level.Render(), 0o600); err != nil {
+		t.Fatalf("write the levelled baseline: %v", err)
+	}
+	var silentOut, silentErr bytes.Buffer
+	silent := Run([]string{"doctor", "--config", path, "--quiet"}, &silentOut, &silentErr, "test")
+	if strings.Contains(silentErr.String(), "agents.developer.model") {
+		t.Fatalf("doctor still speaks with nothing available (stderr = %q)", silentErr.String())
+	}
+
+	if speaking != silent {
+		t.Errorf("doctor exited %d with a notice and %d without one; the notice must not move the exit code", speaking, silent)
+	}
+	// And the diagnosis itself is the same, so the notice is not reaching the
+	// report by another route either.
+	if withOut.String() != silentOut.String() {
+		t.Errorf("doctor's report differs with a notice present:\nwith:\n%s\nwithout:\n%s", withOut.String(), silentOut.String())
+	}
+}
+
+// The report the notice points at shows both classes the notice stays quiet
+// about, without a flag. Hiding `yours` behind --all would leave the on-demand
+// command as quiet about it as the line that sent you here.
+func TestConfigDriftShowsWhatTheNoticeStaysQuietAboutWithoutAFlag(t *testing.T) {
+	t.Parallel()
+
+	path := driftingProject(t, "agents.developer.model")
+	// agents.reviewer.model is "opus" in this project and in the template; move
+	// the project's so it reads as the project's own.
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read configuration: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(current), "    model: opus", "    model: haiku", 1)), 0o600); err != nil {
+		t.Fatalf("write configuration: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "drift", "--config", path}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	report := stdout.String()
+	for _, want := range []string{"available", "agents.developer.model", "yours", "agents.reviewer.model", "haiku"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("stdout = %q, want %q printed without --all", report, want)
+		}
+	}
+	// The fourth class is what --all adds, and what it holds back by default.
+	if strings.Contains(report, "unchanged") {
+		t.Errorf("stdout = %q, want the values neither side moved held back until --all", report)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"config", "drift", "--config", path, "--all"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() --all code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "unchanged") {
+		t.Errorf("stdout = %q, want --all to add the values neither side moved", stdout.String())
+	}
 }

@@ -396,6 +396,11 @@ func reportBaselineFailure(stdout, stderr io.Writer, jsonOutput bool, path strin
 // renderDrift prints the comparison a class at a time, most actionable first.
 // Every value carries what it was and what it is, because the report's job is to
 // let the operator decide rather than to tell them a verdict.
+//
+// Three of the four classes print by default and `--all` adds the fourth, which
+// is the one where neither side moved: a value the project and the template
+// agree on asks nothing of anybody, and a report that opened with a hundred of
+// them would bury the handful that do.
 func renderDrift(stdout io.Writer, drift config.Drift, all bool) {
 	fmt.Fprintf(stdout, "template: %s\n", drift.Bundle)
 	if drift.Current() {
@@ -413,7 +418,13 @@ func renderDrift(stdout io.Writer, drift config.Drift, all bool) {
 		{config.ClassYours, "yours -- changed here and not by the template; never touched"},
 		{config.ClassUnchanged, "unchanged -- neither side moved it"},
 	} {
-		if !all && (group.class == config.ClassUnchanged || group.class == config.ClassYours) {
+		// Everything either side moved is printed. Only the values nobody moved
+		// are held back, because a project's whole configuration listed as
+		// agreeing with its template is the one thing here that says nothing:
+		// this command is what the unprompted line points at precisely so that
+		// `yours` and `conflicting` can be seen, and hiding `yours` behind a flag
+		// would make the report quiet about the same class the notice is.
+		if !all && group.class == config.ClassUnchanged {
 			continue
 		}
 		matched := drift.OfClass(group.class)
