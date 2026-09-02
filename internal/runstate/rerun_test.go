@@ -43,10 +43,10 @@ func TestOneStoppageIsClaimedOnce(t *testing.T) {
 	t.Parallel()
 
 	store := newRerunStore(t)
-	if _, err := store.Claim(context.Background(), claimedRerun()); err != nil {
+	if _, err := store.Claim(context.Background(), claimedRerun(), 1); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
-	_, err := store.Claim(context.Background(), claimedRerun())
+	_, err := store.Claim(context.Background(), claimedRerun(), 1)
 	if !errors.Is(err, ErrRerunTaken) {
 		t.Fatalf("second Claim() error = %v, want the re-run refused", err)
 	}
@@ -68,7 +68,7 @@ func TestConcurrentClaimsOfOneStoppageLeaveOneRerun(t *testing.T) {
 		group.Add(1)
 		go func(index int) {
 			defer group.Done()
-			_, claimed[index] = store.Claim(context.Background(), claimedRerun())
+			_, claimed[index] = store.Claim(context.Background(), claimedRerun(), 1)
 		}(index)
 	}
 	group.Wait()
@@ -87,6 +87,104 @@ func TestConcurrentClaimsOfOneStoppageLeaveOneRerun(t *testing.T) {
 	}
 }
 
+// The other bound, and the one the stoppage's own lock cannot enforce: a
+// decision authorizes one re-run, so an item with two un-claimed stoppages and
+// one recorded decision gets one claim between them. Each stoppage has a docket
+// key of its own, so nothing in the once-per-stoppage guard is asked twice — the
+// second claim is refused against what the item has already spent.
+func TestOneDecisionIsClaimedOnceAcrossTwoStoppages(t *testing.T) {
+	t.Parallel()
+
+	store := newRerunStore(t)
+	first, err := store.Claim(context.Background(), claimedRerun(), 1)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if _, err := store.Settle(context.Background(), rerunDocketKey, "run-fedcba9876543210fedcba9876543210",
+		PreservedArtifacts{Disposition: PreservedKept, Branch: "yoyodyne/task/abc"}); err != nil {
+		t.Fatalf("Settle() error = %v", err)
+	}
+
+	second := claimedRerun()
+	second.DocketKey = "stopped_run:run-11112222333344445555666677778888"
+	second.PriorRunID = "run-11112222333344445555666677778888"
+	second.ClaimedAt = second.ClaimedAt.Add(time.Hour)
+	_, err = store.Claim(context.Background(), second, 1)
+	if !errors.Is(err, ErrRerunDecisionSpent) {
+		t.Fatalf("second Claim() error = %v, want the spent decision refused", err)
+	}
+	// The refusal names the re-run that took the decision, because what the asker
+	// has to know is which one it was rather than only that there was one.
+	var spent RerunDecisionSpentError
+	if !errors.As(err, &spent) || spent.WorkItemID != first.WorkItemID || spent.Decided != 1 || len(spent.Claimed) != 1 {
+		t.Fatalf("refusal = %#v, want it to carry the claim that spent the decision", err)
+	}
+	for _, want := range []string{first.PriorRunID, "run-fedcba9876543210fedcba9876543210", "has carried out 1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal is missing %q: %v", want, err)
+		}
+	}
+	if _, found, _ := store.Find(second.DocketKey); found {
+		t.Fatal("the refused stoppage was claimed anyway")
+	}
+	// A second decision is what makes the second stoppage claimable, which is the
+	// whole of what this guard leaves to the development manager.
+	if _, err := store.Claim(context.Background(), second, 2); err != nil {
+		t.Fatalf("Claim() against a second decision error = %v", err)
+	}
+}
+
+// Two carry-outs of one decision at the same instant are one claim and one
+// refusal. Two stoppages of one item never meet in the stoppage's own lock, so
+// the count has to be read and written under the item's.
+func TestConcurrentClaimsOfTwoStoppagesSpendOneDecisionOnce(t *testing.T) {
+	t.Parallel()
+
+	store := newRerunStore(t)
+	second := claimedRerun()
+	second.DocketKey = "stopped_run:run-11112222333344445555666677778888"
+	second.PriorRunID = "run-11112222333344445555666677778888"
+	stoppages := []Rerun{claimedRerun(), second}
+	var group sync.WaitGroup
+	claimed := make([]error, len(stoppages))
+	for index, stoppage := range stoppages {
+		group.Add(1)
+		go func(index int, stoppage Rerun) {
+			defer group.Done()
+			_, claimed[index] = store.Claim(context.Background(), stoppage, 1)
+		}(index, stoppage)
+	}
+	group.Wait()
+	granted := 0
+	for _, err := range claimed {
+		switch {
+		case err == nil:
+			granted++
+		case errors.Is(err, ErrRerunDecisionSpent):
+		default:
+			t.Fatalf("Claim() error = %v, want either the claim or the refusal", err)
+		}
+	}
+	if granted != 1 {
+		t.Fatalf("claims granted = %d, want the one decision spent once", granted)
+	}
+	taken, err := store.Claimed("yoyodyne-ifd.102.6")
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("Claimed() = %d re-run(s), error = %v, want one record for one decision", len(taken), err)
+	}
+}
+
+// An item nobody decided a re-run of has nothing to claim, and the refusal says
+// so rather than naming a re-run there is none of.
+func TestAStoppageOfAnUndecidedItemIsNotClaimed(t *testing.T) {
+	t.Parallel()
+
+	_, err := newRerunStore(t).Claim(context.Background(), claimedRerun(), 0)
+	if !errors.Is(err, ErrRerunDecisionSpent) || !strings.Contains(err.Error(), "recorded no re-run") {
+		t.Fatalf("Claim() error = %v, want a refusal naming the absent decision", err)
+	}
+}
+
 // What the stopped run preserved outlives the process that claimed the re-run,
 // which is the whole reason it is written down rather than reported.
 func TestARerunsDispositionSurvivesTheProcessThatRecordedIt(t *testing.T) {
@@ -97,7 +195,7 @@ func TestARerunsDispositionSurvivesTheProcessThatRecordedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRerunStore() error = %v", err)
 	}
-	if _, err := first.Claim(context.Background(), claimedRerun()); err != nil {
+	if _, err := first.Claim(context.Background(), claimedRerun(), 1); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 	retired := time.Date(2026, 8, 19, 13, 0, 0, 0, time.UTC)
@@ -144,8 +242,10 @@ func TestTheClaimsOfOneItemAreReadBackFromEveryStoppage(t *testing.T) {
 	other.DocketKey = "stopped_run:run-11112222333344445555666677778888"
 	other.PriorRunID = "run-11112222333344445555666677778888"
 	other.WorkItemID = "yoyodyne-ifd.119"
+	// Two decisions each, because the item with two stoppages claimed against both
+	// of them: one decision buys one claim, which is the guard beside this one.
 	for _, rerun := range []Rerun{claimedRerun(), second, other} {
-		if _, err := store.Claim(context.Background(), rerun); err != nil {
+		if _, err := store.Claim(context.Background(), rerun, 2); err != nil {
 			t.Fatalf("Claim() error = %v", err)
 		}
 	}
@@ -225,7 +325,7 @@ func TestAClaimWhoseRunNeverExistedIsGivenBack(t *testing.T) {
 	t.Parallel()
 
 	store := newRerunStore(t)
-	if _, err := store.Claim(context.Background(), claimedRerun()); err != nil {
+	if _, err := store.Claim(context.Background(), claimedRerun(), 1); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 	if err := store.Withdraw(context.Background(), rerunDocketKey); err != nil {
@@ -234,7 +334,7 @@ func TestAClaimWhoseRunNeverExistedIsGivenBack(t *testing.T) {
 	if recorded, found, err := store.Find(rerunDocketKey); err != nil || found {
 		t.Fatalf("Find() = %#v, found = %t, error = %v, want the claim given back", recorded, found, err)
 	}
-	if _, err := store.Claim(context.Background(), claimedRerun()); err != nil {
+	if _, err := store.Claim(context.Background(), claimedRerun(), 1); err != nil {
 		t.Fatalf("Claim() after the withdrawal error = %v, want the same decision claimable", err)
 	}
 }
@@ -246,7 +346,7 @@ func TestAClaimThatStartedARunIsNotGivenBack(t *testing.T) {
 	t.Parallel()
 
 	store := newRerunStore(t)
-	if _, err := store.Claim(context.Background(), claimedRerun()); err != nil {
+	if _, err := store.Claim(context.Background(), claimedRerun(), 1); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 	if _, err := store.Settle(context.Background(), rerunDocketKey, "run-fedcba9876543210fedcba9876543210",
@@ -329,7 +429,7 @@ func TestTheRerunStoreIsTheRunStoresOwnProduct(t *testing.T) {
 	if runs.Reruns().Root() != beside.Root() {
 		t.Fatalf("Reruns().Root() = %q, want %q", runs.Reruns().Root(), beside.Root())
 	}
-	if _, err := runs.Reruns().Claim(context.Background(), claimedRerun()); err != nil {
+	if _, err := runs.Reruns().Claim(context.Background(), claimedRerun(), 1); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 	if _, found, err := beside.Find(rerunDocketKey); err != nil || !found {

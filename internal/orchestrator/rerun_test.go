@@ -283,8 +283,15 @@ func TestASecondStoppageOfAnAlreadyRerunItemIsRefused(t *testing.T) {
 	}
 
 	_, err := harness.rerunner().Rerun(context.Background(), RerunRequest{Run: second.RunID, Reason: rerunReasoning})
-	if err == nil || !strings.Contains(err.Error(), "has carried out 1") {
+	if !errors.Is(err, runstate.ErrRerunDecisionSpent) || !strings.Contains(err.Error(), "has carried out 1") {
 		t.Fatalf("Rerun() error = %v, want a refusal naming the decision already carried out", err)
+	}
+	// And the refusal names the re-run that spent it: which one it was is what
+	// says whether this stoppage is waiting on a decision or on a run.
+	for _, want := range []string{docketedRunID, harness.outcome.RunID} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal is missing the first re-run %q: %v", want, err)
+		}
 	}
 	if len(harness.started) != 1 {
 		t.Fatalf("started = %#v, want the item run again once in total", harness.started)
@@ -296,6 +303,44 @@ func TestASecondStoppageOfAnAlreadyRerunItemIsRefused(t *testing.T) {
 	// cap is what makes that a person's decision rather than this action's.
 	if _, err := harness.runs.Triage().RecordRerun(context.Background(), second.WorkItemID, docketedNow, rerunCaps); err == nil {
 		t.Fatal("RecordRerun() gave a second re-run of one item, which the cap refuses")
+	}
+}
+
+// The same bound where the stoppages were docketed before either was acted on.
+// The once-per-stoppage claim says nothing about this shape: the two entries have
+// keys of their own, so each is claimable as far as that guard is concerned, and
+// what refuses the second is the decision behind them having been carried out.
+func TestTwoUnclaimedStoppagesOfOneItemShareTheOneDecision(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	// A second stoppage of the same item, docketed and un-claimed like the first,
+	// which is the shape a run that stopped twice before anybody triaged it leaves.
+	second := stoppedState()
+	second.RunID = "run-11112222333344445555666677778888"
+	second.Blocker = "Yoyodyne stopped this item: the provider kept refusing."
+	if err := harness.runs.Create(second); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := docketerOver(nil, harness.docket).RecordStoppedRun(second); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+
+	if _, err := harness.rerunner().Rerun(context.Background(), rerunRequest()); err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	_, err := harness.rerunner().Rerun(context.Background(), RerunRequest{Run: second.RunID, Reason: rerunReasoning})
+	if !errors.Is(err, runstate.ErrRerunDecisionSpent) {
+		t.Fatalf("Rerun() error = %v, want the second stoppage refused on the spent decision", err)
+	}
+	if !strings.Contains(err.Error(), docketedRunID) {
+		t.Fatalf("refusal does not name the stoppage that spent the decision: %v", err)
+	}
+	if len(harness.started) != 1 {
+		t.Fatalf("started = %#v, want one run for one decision", harness.started)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, second.RunID)); claimed {
+		t.Fatalf("the second stoppage was claimed on a decision already carried out")
 	}
 }
 
