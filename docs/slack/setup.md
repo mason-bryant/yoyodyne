@@ -96,9 +96,13 @@ rather not do either from Slack can delete those two scopes and the two
 `message.*` events beside them: everything else in this document still works, and
 nothing typed in the channel ever arrives.
 
-`im:write` is used for one message and only that one: the harness reporting itself
-degraded, sent directly to whoever step 4 grants `direct-work`. Removing it costs
-that direct message and nothing else — the same account is still in the channel.
+`im:write` is used for one class of message and only that one: the harness
+reporting itself degraded, sent directly to whoever step 4 grants `direct-work`.
+There are two of them — a session choosing work from a build the harness has moved
+well past, and the harness having started nothing at all while work was ready —
+and each is sent once rather than repeated. Removing the scope costs those direct
+messages and nothing else: the stale-build one is in the channel either way, and
+the stall is in the durable record `yoyo status` reads back.
 
 ## 2. Install it and take the two tokens
 
@@ -469,8 +473,8 @@ held at 00:02 and a session that stopped at its budget both said so, correctly,
 and then nothing said anything for ten hours that could be told from a healthy
 quiet queue or a dead sink. So a line that is **choosing nothing while work is
 ready** says so again while it stands — every `--heartbeat`, an hour by default —
-naming what stopped it, how long that has been true, and how much the tracker
-calls ready behind it:
+naming what stopped it, how long that has been true, and how much ready work a
+run could have been started for behind it:
 
 > Nothing is being chosen on this product: intake is held — the harness held
 > intake after runs kept blocking, for 10 hours now, with 4 items ready to pull.
@@ -489,6 +493,26 @@ completely silent**, which is the whole point — silence has to keep meaning
 nothing to do, so that the times it does not are worth reading. Turning it off is
 not offered, because what that buys is silence that means waiting on you; how
 often is `--heartbeat`.
+
+**And one thing is the absence of a state.** All four of those are read from
+something a process wrote down, which works only while that process is alive to
+write it: a watch session that crashes writes no stop, and one that wedges goes on
+recording that it is watching. So the sink also watches for nothing having
+happened at all — no run started for half an hour, work a run could be started
+for, and no hold, full machine or run in flight to account for it. That is
+recorded against the product and sent to whoever you grant `direct-work` as a
+direct message, once per stall and never once per check:
+
+> Nothing at all has started on this product for 7 hours, with 3 items ready to
+> pull and nothing accounting for it. The session choosing work last recorded
+> watching at 2026-09-01T06:05:00Z, and has said nothing since.
+
+That last sentence is what to act on: a session whose last word was `stopped`
+wants starting, and one still claiming to be watching wants killing first. When it
+clears the record closes and the channel hears nothing — the run that started says
+that itself — and
+[`yoyo status`](../operations.md#when-nothing-happened-at-all) reads the whole
+history back afterwards, which is the only place it exists.
 
 Reading what is ready costs one local tracker (`bd`) read per heartbeat, asked
 only when a message is actually due, and never on the path of any run. A tracker
@@ -846,7 +870,7 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
 | `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
 | `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
-| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The one message this affects is the harness reporting itself degraded, and it is in the channel either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
+| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the two that report the harness itself degraded — a stale session build, and the harness having started nothing at all — and both are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
 | `the watch session's build <sha> is not a revision this product's repository holds` | Said once per build, and not a fault. How old a `yoyo work --watch` session is is measured by counting what has landed in the repository since its binary was built, and that only means anything where the product this sink reports on is Yoyodyne's own source. For any other product the comparison is not this sink's to make, so it says so once and stays quiet. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |
