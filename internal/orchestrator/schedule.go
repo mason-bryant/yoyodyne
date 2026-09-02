@@ -325,6 +325,16 @@ type WatchSessions interface {
 	Record(SessionState) error
 }
 
+// ScheduleEscalations puts stopped work in front of the development manager,
+// once per docketed stoppage. It is satisfied by Escalator.
+//
+// It is optional, and a pull wired without one pulls exactly the same work: what
+// is lost is the delivery, so a run that stopped waits on somebody carrying it
+// to her, which is what every pass did before this existed.
+type ScheduleEscalations interface {
+	Escalate(ctx context.Context) (EscalationSweep, error)
+}
+
 // Starter runs one chosen item to its end. It is a function rather than the
 // pipeline itself because a pull hands each run the configuration that pull
 // read, and because what the scheduler needs from a run is only its outcome.
@@ -364,7 +374,10 @@ type Pull struct {
 	// Spend prices what the session has spent. It is required of a pass that was
 	// given a budget and of no other; see ScheduleSpend.
 	Spend ScheduleSpend
-	Start Starter
+	// Escalations delivers stopped work to the development manager. Optional; see
+	// ScheduleEscalations.
+	Escalations ScheduleEscalations
+	Start       Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -425,11 +438,11 @@ type Scheduler struct {
 	// reached, or when the harness can no longer be read.
 	Watching bool
 	// Budget caps what one session may spend, in the provider's own reported
-	// dollars, over the runs the session started. Zero is unbounded, which is
-	// what a drain has always been. The bound is checked between pulls rather
-	// than during a run: a run already under way is never stopped part way for
-	// money, because the spend is already made and what it would lose is the
-	// work it bought.
+	// dollars, over everything the session spends on: the runs it starts, and the
+	// turns it takes itself putting stopped work in front of the development
+	// manager. Zero is unbounded, which is what a drain has always been. The bound
+	// is checked between pulls rather than during a run or a turn: what is already
+	// spent is spent, and what stopping part way would lose is the work it bought.
 	Budget float64
 	// Sessions is where the session's state transitions are recorded. Optional;
 	// see WatchSessions.
@@ -530,6 +543,17 @@ type Schedule struct {
 	// schedule read afterwards would otherwise be missing.
 	Watched bool `json:"watched,omitempty"`
 	Polls   int  `json:"polls,omitempty"`
+	// Escalated is the stopped work this pass put in front of the development
+	// manager, and what she recorded about it. It is on the schedule for the
+	// reason the started runs are: a pass that woke a role and spent a turn doing
+	// it is a pass that did something, and an operator reading what the session
+	// did must not have to infer it from her conversation.
+	Escalated []Escalated `json:"escalated,omitempty"`
+	// EscalationProblem names a delivery that did not reach her. It costs the
+	// pass nothing it was doing, so it is reported beside the pull rather than
+	// stopping it — but never left unsaid, because stopped work nobody was told
+	// about is exactly what the delivery exists to prevent.
+	EscalationProblem string `json:"escalation_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -540,9 +564,10 @@ type Schedule struct {
 	// still reported, because a brake that failed is exactly the thing an
 	// operator must not find out about by inferring it from the silence.
 	BrakeProblem string `json:"brake_problem,omitempty"`
-	// SpentUSD is what the runs this pass started cost, as the provider reported
-	// it, and Budget is what it was allowed. Both are absent from a pass nobody
-	// bounded and nothing priced.
+	// SpentUSD is what this pass spent, as the provider reported it: the runs it
+	// started, and the turns it took itself putting stopped work in front of the
+	// development manager. Budget is what it was allowed. Both are absent from a
+	// pass nobody bounded and nothing priced.
 	SpentUSD float64 `json:"spent_usd,omitempty"`
 	Budget   float64 `json:"budget,omitempty"`
 	// SpendProblem names run evidence that could not be priced. On an unbounded
@@ -856,6 +881,13 @@ pulling:
 			break
 		}
 		spend = pull.Spend
+		// Stopped work reaches the development manager here, rather than by
+		// somebody carrying it to her. It is done before the brake and before the
+		// hold, because it chooses nothing and starts nothing: what it produces is
+		// her judgment about work that has already stopped, which is exactly what a
+		// held or braked queue is usually waiting on. What it delivers is bounded to
+		// one stoppage per pass; see Escalator.
+		s.escalate(ctx, &schedule, pull)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -1251,6 +1283,72 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 		return
 	}
 	schedule.Braked = &held
+}
+
+// escalate puts the oldest stopped run the development manager has not been
+// shown in front of her, and records what came back on the schedule.
+//
+// Nothing here stops the pass. A delivery that failed costs the pass nothing it
+// was doing — no work was chosen by it and none is withheld for it — so it is
+// reported beside the pull rather than in place of it, exactly as a staleness
+// reading or a brake that could not be placed is. What must not happen is
+// silence: a stoppage that reached nobody is the state this exists to end.
+//
+// What it does cost is the pull's own thread while the turn is taken, which is
+// the one thing worth knowing before reading further: runs already going are
+// untouched, but one that finishes mid-delivery is collected when the delivery
+// returns rather than at once, so a free slot is refilled a turn later than it
+// would have been. That is bounded by the turn and by one delivery per pass, and
+// it is the trade the placement was chosen for — a run that delivered its own
+// stoppage would hold a developer slot instead, which is the same wait taken out
+// of the scarcer thing.
+func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) {
+	if pull.Escalations == nil {
+		return
+	}
+	sweep, err := pull.Escalations.Escalate(ctx)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("stopped work could not be put to the development manager, so it is waiting on somebody carrying it to her: %v", err))
+	}
+	delivered := false
+	for _, escalated := range sweep.Escalated {
+		// What the delivery cost is the session's spend, exactly as a run's is. It
+		// is counted whichever way the turn went and before anything else is
+		// decided about it, because the provider charged for it either way — and a
+		// session bounded by a budget that spent past it on turns nothing counted
+		// would be the operator's cap disappearing quietly, which is the one thing
+		// a bound must not do. The bound itself is read at the top of the next
+		// pull, like every other spend this session makes.
+		schedule.SpentUSD += escalated.CostUSD
+		// A delivery that happened is kept, because it is one of the things this
+		// pass did and there are as many of them as there were stoppages. One that
+		// did not happen is a problem rather than an event, and the problems are
+		// this sweep's rather than every sweep's: a session polling all night
+		// against a conversation nothing can open would otherwise report the same
+		// failure a thousand times.
+		if escalated.Delivered {
+			schedule.Escalated = append(schedule.Escalated, escalated)
+			delivered = true
+		}
+		if escalated.Problem != "" {
+			problems = append(problems, escalated.Problem)
+		}
+	}
+	// What the pass says is replaced by what this sweep found, and cleared only by
+	// a delivery that actually happened. A sweep that found nothing to say is not
+	// evidence that the failure before it was resolved — the stoppage may simply
+	// be waiting out its retry delay — and a pass that erased its own account of
+	// having failed to reach her would end reporting nothing at all about stopped
+	// work, which is the silence this exists to end. A stoppage the harness has
+	// given up on is restated by every sweep, so what stands at the end of a pass
+	// is what is still true.
+	switch {
+	case len(problems) > 0:
+		schedule.EscalationProblem = strings.Join(problems, "; ")
+	case delivered:
+		schedule.EscalationProblem = ""
+	}
 }
 
 // priceRun is what one finished run cost, from the recorded evidence. A run that
@@ -1874,6 +1972,13 @@ func (s Schedule) Render() string {
 	}
 	for _, deferred := range s.Deferred {
 		fmt.Fprintf(&rendered, "%s was not pulled: %s\n", deferred.WorkItemID, deferred.Reason)
+	}
+	// What the pass put in front of the development manager, said beside what it
+	// pulled: a run stopped hours ago reaching her now is the other half of what
+	// this session did with its time.
+	rendered.WriteString(EscalationSweep{Escalated: s.Escalated}.Render())
+	if s.EscalationProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.EscalationProblem)
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))

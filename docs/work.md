@@ -311,14 +311,14 @@ the queue is shown, says why it is parked when you read it, and is never selecte
 however far the queue drains. It is not a wait: nothing clears, and what moves it
 is `unpark`. Work can also be admitted already parked, with `parked` on the
 creation, because the identifier a creation assigns does not come back until the
-next turn and the item is pullable in between. Neither action works on closed
-work, which has left the backlog and was not going to be selected anyway.
+next turn and the item is pullable in between. Neither works on closed work,
+which has left the backlog anyway.
 
 Naming a parked item yourself is unaffected, exactly as with the executor:
 `yoyo run <id>` is you deciding, and parking steers what the harness chooses
-rather than what you may ask for. And parking is not retroactive either — it
-covers exactly the items that carry it, so a queue parked by convention stays
-selectable until each of those items is parked in fact, one `park` each.
+rather than what you may ask for. Parking is not retroactive either: it covers
+exactly the items that carry it, so a queue parked by convention stays selectable
+until each is parked in fact, one `park` each.
 
 A ninth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
@@ -327,28 +327,32 @@ and what changed goes into the run's recorded reason instead.
 
 Two things make this accountable rather than work happening behind your back.
 Holding intake stops it choosing anything more while what is running finishes,
-and it is read at every pull rather than once at the start, so a hold you place
-mid-pass takes effect at the next selection. And every run it starts records, in
-durable state, why that item was chosen — where it sat in the order, how much of
-the queue was pullable, how much of the machine was free, anything upstream that
-had moved, and whether conflict-avoidance shaped the choice. `yoyo status` reads
-it back.
+and is read at every pull rather than once at the start, so a hold you place
+mid-pass takes effect at the next selection. And every run it starts records in
+durable state why that item was chosen — its place in the order, how much of the
+queue was pullable, how much of the machine was free, anything upstream that had
+moved, and whether conflict-avoidance shaped the choice. `yoyo status` reads it
+back.
 
 The configuration is re-read before every pull for the same reason: a capacity
-you raise or a priority you reorder while a pass is running is picked up the next
-time it chooses something, rather than at the next restart. Runs already in
-flight keep the configuration they started under.
+you raise or a priority you reorder mid-pass is picked up the next time it
+chooses, rather than at the next restart. Runs already in flight keep the
+configuration they started under.
 [Configuration](configuration.md#scheduling-ready-work) has the rest.
+
+**A pass also delivers stopped work into the development manager's
+conversation** — a run that failed independent review after every permitted
+attempt, rather than it waiting on the docket for somebody to tell her. Only the
+courier changes, and `yoyo work --help` has what bounds it.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
-until you stop it. Nothing else about the pass changes and nothing needed to:
-every pull already re-reads the configuration and the queue, so work you admit is
-picked up at the next poll and a reprioritization at the next pull, with no change
-detection anywhere in it. An idle session costs one local tracker read per
-interval and asks no provider anything. Holding intake brakes a watching session
-in place rather than stopping it — it keeps polling, chooses nothing, and resumes
-when you release it.
+until you stop it. Nothing else about the pass changes, and nothing needed to:
+the re-reading above is per pull. An idle session costs one local tracker read
+per interval and asks no provider anything, unless it has a stopped run to put to
+the development manager. Holding intake brakes a watching session in place rather
+than stopping it — it keeps polling, chooses nothing, and resumes when you
+release it.
 
 Three things guard a loop that no longer ends. A session does not start the same
 item twice unless the item has changed — what it says, what it is for, its
@@ -357,23 +361,23 @@ cannot get past is not retried every minute forever, and a blocker you release i
 picked up because releasing it changed the item. Runs blocking one after another
 with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
-whole backlog through a failed run overnight. And the session records what it is
-doing — watching, idle, braked, resumed, stopped — where `yoyo status` and the
-Slack sink read it, because an idle session and a dead one are otherwise the same
-silence. A poll that starts nothing names the runs going and what it passed over.
+whole backlog through a failed run overnight. And it records what it is doing —
+watching, idle, braked, resumed, stopped — where `yoyo status` and the Slack sink
+read it, because an idle session and a dead one are otherwise the same silence. A
+poll that starts nothing names the runs going and what it passed over.
 
 **A reading of the harness that fails does not end the session.** The tracker is
 a database a reconcile and every settling run write to, so a reading that fails
 is contention far more often than it is a store that is broken. The one that
-ended a session on 2026-09-01 succeeded again in 0.4s a few minutes later, and
-what it cost was the session: it stopped on that single reading, and the queue
-sat idle until an external job noticed the process was gone. So a watching
-session waits and reads again — two seconds, then four, doubling to thirty — and
-stops only once the readings have gone on failing for five minutes, saying how
-long it tried and what the last failure was. What it rode through is on the pass
-it returns and in the watch log while it is happening, because a reading that
-succeeds on the second attempt leaves nothing at all behind. A drain does none of
-this: it is a command you are waiting on the return of, and one that slept
+ended a session on 2026-09-01 succeeded again in 0.4s a few minutes later; what
+it cost was the session, which stopped on that single reading while the queue sat
+idle until an external job noticed the process was gone. So a watching session
+waits and reads again — two seconds, then four, doubling to thirty — and stops
+only once the readings have gone on failing for five minutes, saying how long it
+tried and what the last failure was. What it rode through is on the pass it
+returns and in the watch log while it happens, because a reading that succeeds on
+the second attempt leaves nothing behind. A drain does none of this: it is a
+command you are waiting on the return of, and one that slept
 through an outage would be one that hung. A pull that is assembled and unusable —
 a capacity of zero, a `--budget` with nothing to price it — is a decision about
 the configuration rather than a reading that failed, and stops either kind of
@@ -383,19 +387,19 @@ pass at once.
 binary it was started from, so every fix that lands behind it is a fix the work
 it dispatches is spent without — which reads as agents failing rather than as a
 process nobody restarted. It had already cost three review rounds against a bug
-that was dead before they started, and then a session found forty-three changes
-old. So when the `yoyo` it is running is written over — you rebuild it, you
-install it — the session stops choosing, waits out every run it already started,
-and restarts into what you deployed. That stop is recorded as a restart rather
-than as an ending, so `yoyo status` and the Slack sink say a session is coming
-back on the new build instead of telling you to start one.
+dead before they started, and then a session was found forty-three changes old.
+So when the `yoyo` it is running is written over, the session stops choosing,
+waits out every run it started, and restarts into what you deployed. That stop is
+recorded as a restart rather than an ending, so `yoyo status` and the Slack sink
+say a session is coming back on the new build instead of telling you to start
+one.
 
 A restart has to be recorded before it is known to have happened, because one
 that works never comes back to record anything. So on the rare occasion it does
-not happen — the operating system refuses the re-execution, or a bound turns out
-to have nothing left of it — the session writes a second stop saying it ended
-after all, and both surfaces correct themselves. What you never get is a stopped
-line that both places tell you needs nothing from you.
+not — the operating system refuses the re-execution, or a bound turns out to have
+nothing left of it — the session writes a second stop saying it ended after all,
+and both surfaces correct themselves. What you never get is a stopped line that
+both places tell you needs nothing from you.
 
 Nothing outside the process could do that. Killing a session cancels the run it
 is carrying, so an external job may only bounce it while nothing is running; with
@@ -422,8 +426,8 @@ restarting it would run the pass again from the top.
 cannot price itself is refused before it starts, and a session that meets a run
 whose evidence will not price stops and names it rather than counting it as free.
 A session that stops that way is a stopped line like any other: with work still
-ready, [the Slack sink](reporting.md#reporting-into-slack) says so again every hour until
-somebody starts one, rather than saying it once at the moment nobody was reading.
+ready, [the Slack sink](reporting.md#reporting-into-slack) says so again every
+hour until somebody starts one.
 
 The default is still the drain, and `--until-drained` says so out loud. What
 changes when you watch is what bounds the spend: a drain is bounded by the queue
