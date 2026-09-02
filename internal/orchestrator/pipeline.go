@@ -4192,7 +4192,7 @@ func (a *activeRun) recordWorktree(worktree gitworktree.Worktree) {
 // somewhere else to write — and somewhere else is the shared temporary directory
 // this exists to keep runs out of.
 func (a *activeRun) prepareScratch() error {
-	directory, err := execution.PrepareScratchDirectory(a.worktree.Path, a.state.RunID)
+	directory, err := execution.PrepareScratchDirectory(a.pipeline.Repository, a.worktree.Path, a.state.RunID)
 	if err != nil {
 		return err
 	}

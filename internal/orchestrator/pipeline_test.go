@@ -969,9 +969,13 @@ func TestTheDeveloperIsGivenAScratchDirectoryCutForItsOwnRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	scratch, found := execution.ScratchDirectory(state.WorktreePath, outcome.RunID)
-	if !found {
-		t.Fatalf("no scratch directory for the worktree %q", state.WorktreePath)
+	// Asked for again rather than derived here: preparing is idempotent, so this
+	// is the same directory the run was handed, and asking the same way the run
+	// did is what makes the assertion about the run rather than about a second
+	// opinion of where scratch goes.
+	scratch, err := execution.PrepareScratchDirectory(pipeline.Repository, state.WorktreePath, outcome.RunID)
+	if err != nil {
+		t.Fatalf("PrepareScratchDirectory() error = %v", err)
 	}
 	if !strings.Contains(requests[0].Prompt, scratch) {
 		t.Fatalf("the contract never names the run's scratch directory %q:\n%s", scratch, requests[0].Prompt)

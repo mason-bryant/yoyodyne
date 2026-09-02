@@ -189,3 +189,13 @@ actually grants, which the harness's own state tree is not: a `mkdir` under
 "Operation not permitted". Git creates that directory with the worktree and
 removes it with the worktree, so nothing accumulates and no cleanup step has to
 remember it. `internal/execution/scratch.go` is where that is decided.
+
+The creation itself goes through `internal/repowrite` with the repository's own
+Git directory as its declared root, like every other harness-owned write. That
+matters more here than it looks: the path is worked out from the `.git` pointer
+inside the run's own worktree, which is a file the run being handed the
+directory can write. So the worktree's administrative directory is named as a
+path relative to a root derived from the repository root the harness was
+configured with — a pointer aimed anywhere else climbs out of that root and is
+refused before anything is created, and every existing component below it is
+resolved against the filesystem on the way down.

@@ -283,3 +283,33 @@ func (r Root) WriteFile(relative string, content []byte) (string, error) {
 	}
 	return target, nil
 }
+
+// MakeDirectory creates the directory a root-relative path names, and any
+// missing directory above it, and returns where it landed.
+//
+// It is here for the caller that needs the directory rather than anything in it:
+// a per-run scratch directory is created by the harness and written into by an
+// agent, so there is no document for the write-and-rename above to carry. A
+// caller reaching for `os.MkdirAll` itself would be a write outside this package
+// deciding its own containment, which is the one thing that has no exceptions —
+// so the entry point is here rather than the containment being restated there.
+//
+// Confinement is decided exactly as it is above: every existing component below
+// the root is resolved before anything is created, and one that points out of
+// the root is refused rather than followed. Creating is idempotent, so a caller
+// that asks twice is given the same directory rather than a failure — which is
+// what a run resumed by a second process needs.
+//
+// The mode is the caller's for the reason OpenAppend's are: what this creates is
+// not a repository document, and a directory holding what one run is doing wants
+// the permissions of the root it sits under rather than a checkout's.
+func (r Root) MakeDirectory(relative string, mode fs.FileMode) (string, error) {
+	clean, target, err := r.resolve(relative)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(target, mode); err != nil {
+		return "", fmt.Errorf("create %s: %w", clean, err)
+	}
+	return target, nil
+}

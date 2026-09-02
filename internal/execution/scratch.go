@@ -2,9 +2,11 @@ package execution
 
 import (
 	"fmt"
-	"os"
+	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
 
 // A run writes files its work needs and its change must not carry: the log it
@@ -43,48 +45,105 @@ import (
 // The worktree's own administrative directory rather than the repository's is
 // the other half. Git creates it for that worktree and removes it with that
 // worktree, so a run's scratch goes when its worktree goes and nothing has to
-// remember to delete it. Nothing here is a repository-scoped write in the sense
-// internal/repowrite exists for: what lands here is never repository content,
-// never part of a diff, and never a document a role owns.
+// remember to delete it.
 const scratchDirectoryName = "scratch"
 
-// ScratchDirectory is where the run named by runID may write while it works in
-// workingDirectory, and whether there is anywhere at all: a working directory in
-// no repository has no Git directory to hold one.
+// PrepareScratchDirectory creates the directory the run named by runID may write
+// while it works in workingDirectory, and reports where it is. It is the only
+// answer to where a run's scratch lives: making the directory and naming it are
+// one step, so nothing reads a path that disagrees with what was made.
 //
-// The run id is in the path even though the directory above it already belongs
-// to one worktree. It costs nothing, it says which run a directory belongs to
-// wherever somebody finds it, and it is what makes two runs' scratch distinct
-// even where they were somehow given one Git directory to share.
-func ScratchDirectory(workingDirectory, runID string) (string, bool) {
-	id := strings.TrimSpace(runID)
-	// The id becomes a path element, so it has to be one: anything that could
-	// climb out of the directory below is refused rather than cleaned up, because
-	// a run id that is not a plain name is a caller's mistake and not a path.
-	if id == "" || id != filepath.Base(id) || id == "." || id == ".." {
-		return "", false
-	}
-	gitDirectory, found := WorktreeGitDirectory(workingDirectory)
-	if !found {
-		return "", false
-	}
-	return filepath.Join(gitDirectory, harnessGitSubdirectory, scratchDirectoryName, id), true
-}
-
-// PrepareScratchDirectory creates that directory and reports where it is.
+// The run id is the last element even though the directory above it already
+// belongs to one worktree. It costs nothing, it says which run a directory
+// belongs to wherever somebody finds it, and it is what makes two runs' scratch
+// distinct even where they were somehow given one Git directory to share.
 //
 // It creates, where the build cache beside it only names a path and lets the Go
 // command make it. The difference is who is told: a tool asked for a cache makes
 // its own, and an agent handed a directory in its contract has to find one there
 // -- a contract naming a path that does not exist is a contract inviting the run
 // to go and pick somewhere else.
-func PrepareScratchDirectory(workingDirectory, runID string) (string, error) {
-	directory, found := ScratchDirectory(workingDirectory, runID)
+//
+// The write goes through the confinement primitive with a root it declares,
+// because every harness-owned write does and this one has the hazard that rule
+// was written for. Where the directory goes is worked out from the `.git`
+// pointer inside the run's own worktree, which is a file the run being handed
+// the directory can write: a replaced pointer or a symlink planted along the way
+// is a path chosen by the thing the harness is cutting the directory for.
+//
+// So neither end of it is taken on trust. The declared root is the repository's
+// own Git directory, derived from the repository root the harness was configured
+// with rather than from anything inside a worktree, and the worktree's
+// administrative directory is named as a path relative to that root -- so a
+// pointer aimed anywhere else is a relative path that climbs out of the root and
+// is refused before anything is created, and every existing component below the
+// root is resolved against the filesystem on the way down.
+func PrepareScratchDirectory(repositoryRoot, workingDirectory, runID string) (string, error) {
+	id, named := scratchRunID(runID)
+	if !named {
+		return "", fmt.Errorf("run id %q is not a name a scratch directory can be cut for", runID)
+	}
+	repositoryGit, found := repositoryGitDirectory(repositoryRoot)
+	if !found {
+		return "", fmt.Errorf("no Git directory holds the repository %q", repositoryRoot)
+	}
+	root, err := repowrite.NewRoot(repositoryGit)
+	if err != nil {
+		return "", fmt.Errorf("confine the scratch directory for run %s: %w", runID, err)
+	}
+	worktreeGit, found := WorktreeGitDirectory(workingDirectory)
 	if !found {
 		return "", fmt.Errorf("no Git directory holds a scratch directory for run %q working in %q", runID, workingDirectory)
 	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	inside, err := gitDirectoryWithin(root.Path(), worktreeGit)
+	if err != nil {
+		return "", fmt.Errorf("place the scratch directory for run %s: %w", runID, err)
+	}
+	created, err := root.MakeDirectory(path.Join(inside, harnessGitSubdirectory, scratchDirectoryName, id), 0o700)
+	if err != nil {
 		return "", fmt.Errorf("create the scratch directory for run %s: %w", runID, err)
 	}
-	return directory, nil
+	return created, nil
+}
+
+// gitDirectoryWithin names one worktree's administrative directory as a path
+// relative to the repository's own Git directory, which is what the confinement
+// below is decided on.
+//
+// Both sides are resolved through their own symlinks first, because the
+// comparison is between two paths on this filesystem rather than between two
+// strings: on macOS the same directory is spelled `/var/…` and `/private/var/…`
+// depending on which of the two something read it from, and a comparison that
+// took either at face value would refuse a legitimate worktree.
+//
+// A worktree whose administrative directory is the repository's own is a plain
+// checkout rather than a worktree, and its scratch goes straight under the root.
+func gitDirectoryWithin(repositoryGit, worktreeGit string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(worktreeGit)
+	if err != nil {
+		return "", fmt.Errorf("resolve the Git directory %q: %w", worktreeGit, err)
+	}
+	relative, err := filepath.Rel(repositoryGit, resolved)
+	if err != nil {
+		return "", fmt.Errorf("place %q inside %q: %w", resolved, repositoryGit, err)
+	}
+	slashed := filepath.ToSlash(relative)
+	if slashed == ".." || strings.HasPrefix(slashed, "../") {
+		return "", fmt.Errorf("the Git directory %q is not inside the repository's own %q", resolved, repositoryGit)
+	}
+	if slashed == "." {
+		return "", nil
+	}
+	return slashed, nil
+}
+
+// scratchRunID is the run id as the one path element it becomes. Anything that
+// could climb out of the directory below is refused rather than cleaned up: a
+// run id that is not a plain name is a caller's mistake and not a path.
+func scratchRunID(runID string) (string, bool) {
+	id := strings.TrimSpace(runID)
+	if id == "" || id != filepath.Base(id) || id == "." || id == ".." {
+		return "", false
+	}
+	return id, true
 }
