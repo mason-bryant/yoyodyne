@@ -668,14 +668,23 @@ func renderChanges(changes gitworktree.ChangeDiff) string {
 			rendered.WriteString("- " + commit.Commit + " " + commit.Subject + "\n")
 		}
 	}
+	// A file the bounds kept out of the patch is named here, with its size and the
+	// bound that dropped it, and it is named whether or not anything else about
+	// the change was cut. A reviewer shown neither the file nor its name cannot
+	// tell a change that delivers it from one that does not, and judges the
+	// delivery it most needs to see as though it were not there — which is how
+	// this mechanism came to refuse two changes before it was written down. It is
+	// listed above the patch rather than below it because it is part of the change
+	// the patch is incomplete about.
+	if len(changes.OmittedFiles) > 0 {
+		rendered.WriteString("\n## Files this change delivers that are not shown below\n\n")
+		for _, file := range changes.OmittedFiles {
+			rendered.WriteString("- " + file.Describe() + "\n")
+		}
+		rendered.WriteString("\nEach of these is part of the change and is absent from the patch. Judge it as unreviewed rather than as absent.\n")
+	}
 	if changes.Truncated {
 		rendered.WriteString("\n## Bounds\n\nThis patch is truncated; it is not the complete change.\n")
-		if len(changes.OmittedFiles) > 0 {
-			rendered.WriteString("Omitted files:\n")
-			for _, file := range changes.OmittedFiles {
-				rendered.WriteString("- " + file + "\n")
-			}
-		}
 		rendered.WriteString("Treat anything you cannot see as unreviewed rather than as approved.\n")
 	}
 	rendered.WriteString("\n## Patch\n\n")
