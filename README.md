@@ -619,9 +619,9 @@ diagnostics.
 
 **What owning the configuration costs.** A later `yoyo` that improves a
 persona or corrects a model selector does not change a project that already has
-its own copy of it, but says so: `yoyo config drift` reports what improved that
-you never edited, and `doctor` says so unasked. The executable's built-in bundle
-is the template `init` generates from rather than a layer projects keep
+its own copy of it; `yoyo config drift` reports what improved that you never
+edited. The built-in bundle is the template `init` generates from rather than a
+layer projects keep
 inheriting — inheritance still works for a project that writes
 `extends: builtin:v1`, and is the right choice for a fleet that should improve
 together, but the explicit file is what yoyo ships.

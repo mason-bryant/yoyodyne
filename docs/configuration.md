@@ -133,7 +133,7 @@ A project keeps its configuration in a `.yoyodyne` directory at its root:
 ```text
 .yoyodyne/
   config.yaml          # the project configuration
-  config.lock          # what the template supplied; compared, not read
+  config.lock          # the template's values; absent in older projects
   personas/            # one Markdown file per agent persona
     product-manager.md
     architect.md
@@ -3453,14 +3453,14 @@ Yoyodyne ships the explicit shape because its operator edits agent properties
 often and wants the effect of an edit obvious. A fleet of projects that should
 improve together is the case `extends` is for.
 [Portable agent configuration](portable-agent-configuration.md) is the design
-that answers what a project owns versus inherits, how the two shapes convert,
-and how a bundle improvement reaches a project that materialized its defaults.
-Its baseline and drift report are built. `config.lock` records what the template
-supplied; `yoyo config drift` sorts each value against it into `unchanged`,
-`yours`, `available`, or `conflicting`. `doctor` and `config validate` speak the
-`available` ones unprompted on standard error, silently when there are none and
-without changing exit codes. Nothing is adopted for you, and `materialize`,
-`extract`, and `adopt` do not exist.
+that answers what a project owns versus inherits. Its baseline and report
+exist: `config.lock` records what the template supplied, `yoyo config drift`
+sorts each value into `unchanged`, `yours`, `available`, or
+`conflicting`, and `doctor` and `config validate` speak the `available` ones
+unprompted on stderr, silently when none, without changing exit codes. A
+project without one hears nothing until `yoyo config baseline` writes it, which
+touches nothing else and starts level. Nothing is adopted for you;
+`materialize`, `extract`, and `adopt` do not exist.
 
 ### Converting an inheriting configuration to an explicit one
 
@@ -3503,6 +3503,7 @@ yoyo config show --origins                # where each value came from
 yoyo config show --effective --origins    # both
 yoyo config show --effective --json       # machine-readable
 yoyo config drift                         # what the template improved
+yoyo config baseline                      # record one where there is none
 ```
 
 `config show` prints the layers it applied, the revision of the configuration in
