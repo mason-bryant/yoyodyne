@@ -5,6 +5,7 @@
     {
       "name": "run",
       "error": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+      "ending": "stopped",
       "outcome": {
         "base_commit": "\u003ccommit-1\u003e",
         "blocked": true,

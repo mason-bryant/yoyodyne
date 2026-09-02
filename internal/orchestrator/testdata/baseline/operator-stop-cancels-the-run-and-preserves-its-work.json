@@ -5,6 +5,7 @@
     {
       "name": "run",
       "error": "the operator stopped this run at \u003ctime\u003e: it is rewriting the wrong file",
+      "ending": "cancelled",
       "outcome": {
         "base_commit": "\u003ccommit-1\u003e",
         "branch": "yoyodyne/yoyodyne-task/01234567",

@@ -4,6 +4,7 @@
   "steps": [
     {
       "name": "run",
+      "ending": "succeeded",
       "outcome": {
         "base_commit": "\u003ccommit-1\u003e",
         "branch": "yoyodyne/yoyodyne-task/01234567",

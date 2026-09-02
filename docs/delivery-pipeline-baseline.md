@@ -270,7 +270,15 @@ the closed vocabulary every listing says it in. The status is the durable value
 and stays what it always was; the outcome exists because `failed` is accurate
 about the attempt and says nothing about the work, so a run handed back to a
 person with its branch and worktree intact printed the same word as one that
-broke with nothing to show for it. Both are recorded, and the traces carry both.
+broke with nothing to show for it.
+
+The outcome is derived rather than durable — `Outcome.Ending()` for a run,
+`State.Outcome()` for a record — so every trace carries it beside the status it
+was read from, and a settlement carries it as a field of its own. That is what
+makes the distinction checkable: `protected-path-refusal-spends-the-repair-budget-and-blocks`
+records `failed` and `stopped` together, and an executor that computed `failed`
+for a run whose work is preserved would move the derived word without moving any
+recorded field.
 
 Three things are reported on a succeeded run rather than turning it into a
 failure, because the work is already integrated and the item already closed:
@@ -326,6 +334,7 @@ re-closing or re-blocking an item is exactly what a sweep must not do.
 | `review-findings-are-repaired-and-then-promoted` | Findings returned to the same developer and re-reviewed by a fresh invocation |
 | `review-findings-spend-the-repair-budget-and-block` | The same budget reached through the reviewer |
 | `protected-path-refusal-is-repaired-before-any-check-runs` | The gate deciding before the checks, on the shared budget |
+| `protected-path-refusal-spends-the-repair-budget-and-blocks` | `path_refusal` while it is outstanding — the refused paths in sorted order — and the same budget reached through the gate |
 | `protected-path-grant-admits-the-change-it-names` | A grant in the item's own text admitting exactly that path |
 | `usage-limit-pause-exits-resumable-and-a-later-invocation-finishes-it` | The pause, the durable deadline as the instant the provider named, and the resume continuing the same run and session |
 | `server-overload-pause-reissues-the-same-attempt` | An overload told apart from an exhausted account |
@@ -338,6 +347,7 @@ re-closing or re-blocking an item is exactly what a sweep must not do.
 | `unresolved-directive-pauses-the-work-before-anything-is-claimed` | A pause with no run behind it |
 | `unfinished-dependency-pauses-the-work-before-anything-is-claimed` | The same, and that a parent-child link is not a blocker |
 | `operator-hold-starts-nothing-at-all` | The hold read before the provider is asked anything |
+| `operator-hold-parks-a-claimed-run-and-accounts-for-what-it-cost` | The same hold read at a provider-call boundary of a run already claimed, and `operator_held_seconds` |
 | `intake-hold-starts-nothing-the-harness-chose` | The narrower hold, on the choosing rather than the work |
 | `promotion-is-replayed-when-the-target-branch-moves` | The replay re-earning the whole gate |
 | `integration-retries-are-bounded-and-block-the-item` | The retry budget |
@@ -355,9 +365,11 @@ is unmeasured. Most of these are asserted somewhere in
 
 **Whole paths.**
 
-- The publishing half — pull requests, queued merges, the remote target, the
-  `publish_failure` report, and the catch-up after a forge merge. It has its own
-  assertions in `internal/orchestrator/publish_test.go`.
+- The publishing half — `pull_request`, queued merges, the remote target, the
+  `publish_failure` report, `publish_skipped` (which only a run that asked to
+  publish and could not ever carries, so the scenarios here leave it empty), and
+  the catch-up after a forge merge. It has its own assertions in
+  `internal/orchestrator/publish_test.go`.
 - `yoyo triage repair` and `yoyo triage rerun`, which re-enter a stopped run
   through their own preconditions.
 - Five of the seven reconciliation actions. `completed` and `blocked` have
@@ -383,6 +395,13 @@ is unmeasured. Most of these are asserted somewhere in
   back.
 - `usage_limit_paused_seconds` reaching `execution.usage_limit_max_pause`, and
   the blocker a usage limit with an unusable reset time produces.
+- The directive and dependency pauses of a run that is **already claimed**. The
+  pause table above says the directive is read before the claim, before a
+  resume, and at every round of the gate including the promotion; only the
+  pre-claim reading has a trace, and both of those traces record no run at all.
+  The operator hold is traced at both boundaries and is the one of the three
+  that is not a gap here; a parity harness measuring the other two mid-gate has
+  to reach them another way.
 
 **Guarantees stated above with no trace behind them.**
 

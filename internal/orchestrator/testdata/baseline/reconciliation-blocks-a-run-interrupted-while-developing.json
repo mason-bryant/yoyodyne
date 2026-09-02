@@ -5,6 +5,7 @@
     {
       "name": "interrupted invocation",
       "error": "verification infrastructure failed: persist check event: state store is unavailable\nsave failed run state: state store is unavailable",
+      "ending": "failed",
       "outcome": {
         "base_commit": "\u003ccommit-1\u003e",
         "branch": "yoyodyne/yoyodyne-task/01234567",

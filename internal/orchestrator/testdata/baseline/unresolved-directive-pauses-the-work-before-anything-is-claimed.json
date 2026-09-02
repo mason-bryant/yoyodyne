@@ -4,6 +4,7 @@
   "steps": [
     {
       "name": "run",
+      "ending": "",
       "outcome": {
         "branch_removed": false,
         "changes": {

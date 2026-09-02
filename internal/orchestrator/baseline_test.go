@@ -138,6 +138,11 @@ func baselineScenarios() []baselineScenario {
 			drive:   baselineProtectedPathRepaired,
 		},
 		{
+			name:    "protected-path-refusal-spends-the-repair-budget-and-blocks",
+			freezes: "A change that keeps touching upstream artifact homes spends the same repair budget a failing check spends and ends blocked, with the refusal durable while it is outstanding: the refused paths in their sorted order, and a blocker naming what was spent. An item granting nothing records no grants beside them, which is what the granted scenario records the other half of.",
+			drive:   baselineProtectedPathBudgetSpent,
+		},
+		{
 			name:    "protected-path-grant-admits-the-change-it-names",
 			freezes: "A work item granting a protected path on its own text admits exactly that path: the same change that would be refused without the grant passes the gate and is promoted.",
 			drive:   baselineProtectedPathGranted,
@@ -196,6 +201,11 @@ func baselineScenarios() []baselineScenario {
 			name:    "operator-hold-starts-nothing-at-all",
 			freezes: "The operator's hold on harness activity is read before anything else: nothing is claimed, no run is reserved, and the provider is not asked so much as whether it is installed.",
 			drive:   baselineOperatorHold,
+		},
+		{
+			name:    "operator-hold-parks-a-claimed-run-and-accounts-for-what-it-cost",
+			freezes: "A hold placed after the claim reaches the run at its next provider call rather than stopping it where it stands: the claim, worktree, branch, and session are preserved across the park, lifting the hold is all it takes to carry on, and the waiting is accounted for in operator_held_seconds rather than charged to any budget.",
+			drive:   baselineHeldClaimedRun,
 		},
 		{
 			name:    "intake-hold-starts-nothing-the-harness-chose",
@@ -425,6 +435,28 @@ func baselineProtectedPathRepaired(t *testing.T) *baselineFixture {
 	return fixture
 }
 
+// baselineProtectedPathBudgetSpent is the refusal reached the other way: a
+// developer that never takes the path back out. It exists beside the repaired
+// scenario because that one ends with the refusal cleared, so nothing there
+// records what a refusal looks like while it is outstanding -- the paths, what
+// the item did grant beside them, and the blocker the item is left carrying.
+func baselineProtectedPathBudgetSpent(t *testing.T) *baselineFixture {
+	fixture := newBaselineFixture(t, baselineItem())
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := baselineImplements(request); err != nil {
+			return err
+		}
+		// Two upstream homes on every attempt, so the recorded refusal is a list
+		// in its sorted order rather than a single path that cannot show one.
+		if err := writeUpstream(t, request.WorkingDirectory, "docs/product/brief.md", "the product is whatever this run needed it to be\n"); err != nil {
+			return err
+		}
+		return writeUpstream(t, request.WorkingDirectory, "docs/designs/delivery.md", "and so is the design\n")
+	}, approveVerdict)
+	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
+	return fixture
+}
+
 func baselineProtectedPathGranted(t *testing.T) *baselineFixture {
 	item := baselineItem()
 	item.Description = "Correct the brief's own account of the pipeline.\n\n" +
@@ -591,6 +623,40 @@ func baselineOperatorHold(t *testing.T) *baselineFixture {
 	return fixture
 }
 
+// baselineHeldClaimedRun is the hold arriving too late to stop anything: the
+// developer is already working, so what the hold reaches is a run with a claim,
+// a worktree, a branch, and a session. The scenario beside it records the hold
+// read before the claim, where there is no run at all; this one records the same
+// hold read at a provider-call boundary, and what the wait cost the run.
+func baselineHeldClaimedRun(t *testing.T) *baselineFixture {
+	fixture := newBaselineFixture(t, baselineItem())
+	holds := newOperatorHoldStore(t)
+	// The hold is placed from inside the developer's own invocation, which is the
+	// case the boundary exists for: what is already streaming is not interrupted,
+	// and the next provider call is where the run notices.
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if _, err := holds.Hold(baseTime); err != nil {
+			return err
+		}
+		return baselineImplements(request)
+	}, approveVerdict)
+	clock := &pausingClock{now: baseTime}
+	// Lifting it while the run is asleep on it is what makes the held span a
+	// number rather than a wait this test would have to sit through. The clock
+	// advances by exactly what it slept, so the seconds the run accounts for are
+	// the same on every machine.
+	clock.onSleep = func() {
+		if _, _, err := holds.Release(); err != nil {
+			t.Errorf("Release() error = %v", err)
+		}
+	}
+	pipeline := waiting(fixture.automatic(t, provider, []string{"test -f feature.txt"}),
+		clock, 6*time.Hour, time.Minute)
+	pipeline.Holds = holds
+	fixture.invoke(t, "run", pipeline)
+	return fixture
+}
+
 func baselineIntakeHold(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
 	intake := newIntakeHoldStore(t)
@@ -701,9 +767,16 @@ type baselineTrace struct {
 }
 
 type baselineTracedStep struct {
-	Name    string         `json:"name"`
-	Error   string         `json:"error,omitempty"`
-	Outcome map[string]any `json:"outcome"`
+	Name  string `json:"name"`
+	Error string `json:"error,omitempty"`
+	// Ending is the outcome word the run's status reads as, recorded beside the
+	// status rather than instead of it. It is derived rather than durable, so a
+	// trace carrying only the status would freeze "failed" for both a run handed
+	// back to a person with its work intact and one that broke with nothing to
+	// show -- which is the whole distinction this word exists to draw, and the
+	// one an executor could get wrong without moving any recorded field.
+	Ending  runstate.RunOutcome `json:"ending"`
+	Outcome map[string]any      `json:"outcome"`
 }
 
 // baselineTracedItem is the durable side effect on the work item: which tracker
@@ -739,7 +812,11 @@ func (f *baselineFixture) trace(t *testing.T, scenario baselineScenario) baselin
 		trace.WorkItem.Calls = []string{}
 	}
 	for _, step := range f.steps {
-		traced := baselineTracedStep{Name: step.name, Outcome: normalizer.value(t, step.outcome)}
+		traced := baselineTracedStep{
+			Name:    step.name,
+			Ending:  step.outcome.Ending(),
+			Outcome: normalizer.value(t, step.outcome),
+		}
 		if step.err != nil {
 			traced.Error = normalizer.text(step.err.Error())
 		}

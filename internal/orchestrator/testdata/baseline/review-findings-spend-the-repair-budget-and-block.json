@@ -5,6 +5,7 @@
     {
       "name": "run",
       "error": "independent review requires repair after 2 of 2 permitted attempt(s): the change misses the acceptance criteria",
+      "ending": "stopped",
       "outcome": {
         "base_commit": "\u003ccommit-1\u003e",
         "blocked": true,

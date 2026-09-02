@@ -5,6 +5,7 @@
     {
       "name": "run",
       "error": "integration lost its target branch after 0 of 0 permitted retry(s): integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
+      "ending": "stopped",
       "outcome": {
         "base_commit": "\u003ccommit-2\u003e",
         "blocked": true,
