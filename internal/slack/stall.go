@@ -36,9 +36,16 @@ import (
 //
 // The order is the cost model the rest of this pass keeps. Everything except how
 // much work is ready is derived from the runs, sessions and switches this pass
-// has already read, so a healthy machine polling every fifteen seconds asks the
-// tracker nothing at all; the read is spent only where nothing else already
-// accounts for the quiet.
+// has already read, so the read is spent only where nothing else already
+// accounts for the quiet — and then at most once per heartbeat, which is the
+// interval the sink's other tracker read keeps.
+//
+// That second gate is the one that matters, because the first is not enough on
+// its own: a drained queue is deliberately not one of the accounted-for states,
+// since nothing but the tracker can say the queue is drained. Without the
+// interval an ordinary idle product — nothing held, nothing running, nothing
+// ready — would spawn `bd` every fifteen seconds forever, which is the cost this
+// surface promises it does not have.
 //
 // It is said once per stall rather than again while it stands, which is the
 // opposite of the heartbeat and deliberately so. An hourly repetition is right
@@ -49,22 +56,28 @@ import (
 // across a restart is the durable record rather than this cursor: the record
 // says a stall is already open, so a fresh sink on a fresh cursor re-says
 // nothing.
-func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held switches, sessions []runstate.WatchTransition, states []runstate.State, inFlight int, streams map[string]struct{}) ([]Delivery, error) {
+func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held switches, sessions []runstate.WatchTransition, states []runstate.State, ready func(context.Context) (int, error), streams map[string]struct{}) ([]Delivery, error) {
 	if f.Stalls == nil {
 		return nil, nil
 	}
 	streams[stallStream] = struct{}{}
 	now := f.now()
+	cursor := cursors.Streams[stallStream]
 
 	activity := readmodel.Activity{
-		Since:        readmodel.LastStart(states, sessions),
-		Running:      inFlight,
+		Since: readmodel.LastStart(states, sessions),
+		// In flight *and still moving*: a run whose process was killed leaves a
+		// record saying it is in flight until `yoyo reconcile` settles it, and
+		// taking that at face value would silence this for the crash it exists to
+		// catch.
+		Running:      readmodel.ActiveRuns(states, now, f.runActivityWindow()),
 		OperatorHeld: held.operatorHeld,
 		IntakeHeld:   held.intakeHeld,
 		Watched:      len(sessions) > 0,
 		Threshold:    f.stallThreshold(),
 		Now:          now,
 	}
+	asked := cursor.Said
 	if activity.Unexplained() {
 		if f.Backlog == nil {
 			// Nothing was wired to say whether there is anything to start, so there
@@ -72,18 +85,28 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held
 			// else, exactly as it does without a heartbeat.
 			return nil, nil
 		}
-		ready, err := f.Backlog.Ready(ctx)
+		if !cursor.Said.IsZero() && now.Sub(cursor.Said) < f.heartbeat() {
+			// Asked recently enough. Nothing else here can answer whether the queue
+			// is drained, so rather than guess this pass makes no reading at all and
+			// the next due one decides. A stall already standing is unaffected: it is
+			// in the record, it has been said, and nothing re-says it.
+			return nil, nil
+		}
+		count, err := ready(ctx)
 		if err != nil {
 			// A tracker that cannot be read leaves this unable to tell a stalled
 			// machine from a drained queue, and it must not guess in either
 			// direction: inventing ready work would wake somebody for nothing, and
 			// assuming none would be the silence this exists to end. So it is said
 			// where the sink says everything else about itself, nothing is recorded,
-			// and it is asked again at the next pass.
+			// and it is asked again at the next interval rather than at the next
+			// poll — the clock is set either way, so a tracker that is down does not
+			// become a tracker asked every fifteen seconds.
 			f.say("what is ready to pull could not be read, so nothing was decided about whether this product has stalled: %v", err)
-			return nil, nil
+			return []Delivery{{Stream: stallStream, Cursor: cursorAsked(cursor, now)}}, nil
 		}
-		activity.Ready = ready
+		activity.Ready = count
+		asked = now
 	}
 	silence := readmodel.ReadSilence(activity)
 
@@ -98,7 +121,17 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held
 	if err != nil {
 		return nil, err
 	}
-	return f.stallSaid(ctx, cursors, reconciled.Standing, now), nil
+	return f.stallSaid(ctx, cursors, reconciled.Standing, now, asked), nil
+}
+
+// cursorAsked records the moment the tracker was last asked what is ready, which
+// is what keeps that read to one a heartbeat rather than one a poll. The stall
+// stream has no other use for this field: what it has already said is in
+// Delivered, so the clock is free to mean this here.
+func cursorAsked(cursor Cursor, at time.Time) Cursor {
+	asked := cursor
+	asked.Said = at
+	return asked
 }
 
 // stallSaid is the one message, and the cursor that records having said it.
@@ -108,9 +141,9 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held
 // no longer standing, which keeps the cursor from growing a line for every night
 // something went quiet — and is safe because a stall that has closed is history
 // and is never said again.
-func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, now time.Time) []Delivery {
+func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, now, asked time.Time) []Delivery {
 	cursor := cursors.Streams[stallStream]
-	advanced := cursor
+	advanced := cursorAsked(cursor, asked)
 	if mark, said := advanced.Marked(stallMark); said {
 		if standing == nil || mark != stallMark+standing.EventID {
 			advanced = advanced.Without(mark)
@@ -123,8 +156,13 @@ func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *
 		// forgetting the mark.
 	case advanced.Has(stallMark + standing.EventID):
 		// Already said, once. This is every pass after the first for as long as the
-		// stall lasts, which is the case the whole record exists for.
-		return nil
+		// stall lasts, which is the case the whole record exists for. Only the clock
+		// on the tracker read can still have moved, and it is persisted when it has
+		// so the next interval is measured from the ask that actually happened.
+		if advanced.Said.Equal(cursor.Said) {
+			return nil
+		}
+		return []Delivery{{Stream: stallStream, Cursor: advanced}}
 	case predates(cursors.Since, standing.OpenedAt):
 		// Open before this product's reporting began. It is read past on age as
 		// every stream here is, and marked so it is read past once rather than on
@@ -148,10 +186,19 @@ func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *
 			}, now),
 		}}
 	}
-	if len(advanced.Delivered) == len(cursor.Delivered) {
+	if len(advanced.Delivered) == len(cursor.Delivered) && advanced.Said.Equal(cursor.Said) {
 		return nil
 	}
 	return []Delivery{{Stream: stallStream, Cursor: advanced}}
+}
+
+// runActivityWindow is how long a run's record may go unmoved before it stops
+// accounting for a quiet line.
+func (f *HarnessFeed) runActivityWindow() time.Duration {
+	if f.RunActivityWindow > 0 {
+		return f.RunActivityWindow
+	}
+	return readmodel.DefaultRunActivityWindow
 }
 
 // stallThreshold is how long nothing may start, over ready work and with nothing

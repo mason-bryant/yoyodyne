@@ -216,6 +216,11 @@ type HarnessFeed struct {
 	// StallThreshold is how long nothing may start before that is a stall rather
 	// than a gap between runs. Zero takes readmodel.DefaultStallThreshold.
 	StallThreshold time.Duration
+	// RunActivityWindow is how long a run's own record may go unmoved before it
+	// stops accounting for the quiet. It exists because a run in flight is the one
+	// explanation here read from a record its own process writes, so it is the one
+	// a dead process keeps writing. Zero takes readmodel.DefaultRunActivityWindow.
+	RunActivityWindow time.Duration
 	// Standing is where the harness stands, as the read model derives it: the same
 	// four lines `yoyo status` prints, said with the heartbeat so a channel and a
 	// terminal answer one question one way. It is optional, and a feed assembled
@@ -357,7 +362,14 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, f.holdDeliveries(cursors.Streams[productStream], held)...)
 
-	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, batch.Streams)
+	// What is ready to pull is asked at most once a pass, however many of this
+	// pass's readings want it. Two of them do — the waiting line and the stall
+	// watchdog — and each gates itself to one reading a heartbeat, so on the
+	// passes where those intervals coincide this is what keeps the cost at the
+	// one tracker read a heartbeat this surface promises rather than two.
+	ready := f.readyOnce()
+
+	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, ready, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -389,12 +401,32 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// absence of anything having been written down at all — which is the state the
 	// heartbeat structurally cannot see, because the thing that feeds it is what
 	// has died.
-	stalled, err := f.stallDeliveries(ctx, cursors, held, sessions, states, inFlight, batch.Streams)
+	stalled, err := f.stallDeliveries(ctx, cursors, held, sessions, states, ready, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, stalled...)
 	return batch, nil
+}
+
+// readyOnce answers what is ready to pull, asking the tracker at most once
+// however often the returned function is called. `bd` is a process the sink
+// spawns, so a pass that wanted the number twice would pay for it twice; the
+// answer cannot change inside one pass anyway, and two readings a moment apart
+// that disagreed would be two accounts of one queue.
+func (f *HarnessFeed) readyOnce() func(context.Context) (int, error) {
+	var (
+		asked  bool
+		count  int
+		failed error
+	)
+	return func(ctx context.Context) (int, error) {
+		if !asked {
+			asked = true
+			count, failed = f.Backlog.Ready(ctx)
+		}
+		return count, failed
+	}
 }
 
 // itemStatuses reads what each work item is doing out of the runs recorded for

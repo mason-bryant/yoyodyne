@@ -675,12 +675,12 @@ than parsing the rendering.
 
 Under the four lines, `yoyo status` reads back every stretch in which this
 product went quiet: nothing started at all, while the tracker reported work
-ready, and no hold, no full machine and no run in flight accounted for it.
+ready, and no hold, no full machine and no still-moving run accounted for it.
 
 ```text
 nothing started on this product for 7h30m0s from 2026-09-01T06:05:00Z, with 3 items ready; it cleared at 2026-09-01T13:35:00Z
   the session choosing work last recorded watching at 2026-09-01T06:05:00Z, and has said nothing since
-  cleared by: 1 developer run(s) are in flight
+  cleared by: 1 developer run(s) are in flight and still moving
 ```
 
 The second line is the one to act on. A stall cannot say why it happened —

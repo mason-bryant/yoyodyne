@@ -662,8 +662,9 @@ no run, no hold. For seven and a half hours every surface here was correct and
 silent, and the operator found it by noticing.
 
 So the sink also reads the absence. When nothing has started for half an hour,
-the tracker reports work ready, and no hold, no full machine and no run in flight
-accounts for it, that is a stall: it is recorded durably against the product, and
+the tracker reports work ready, and no hold, no full machine and no still-moving
+run accounts for it, that is a stall: it is recorded durably against the product,
+and
 each one is sent as a direct message to every person the project granted
 direct-work, exactly once. What it says is how long nothing has happened, how
 much was waiting, the four lines, and — the fact that decides what to do about it
@@ -671,12 +672,21 @@ much was waiting, the four lines, and — the fact that decides what to do about
 session whose last word was `stopped` wants starting and one still claiming to be
 watching wants killing first.
 
+A run in flight quiets it only while that run is still moving, which is what
+keeps a killed one from silencing it: a run whose process is gone leaves a record
+saying it is in flight until `yoyo reconcile` settles it, and that is the crash
+this exists to catch. A working run stamps every provider event onto its own
+record, so a record that has not moved for an hour is what separates the two.
+
 It is said once per stall rather than repeated while it stands, which is the
 opposite of the waiting line above and deliberate: an hourly repetition is right
 for a state somebody may have to sit with and wrong for one that is either acted
 on or is not. Saying it once is a property of the record rather than of the sink,
 so a checker running every fifteen seconds says nothing on the second check and a
-restarted sink says nothing about a stall that was already open. When it clears
+restarted sink says nothing about a stall that was already open. The tracker
+behind it is asked once a heartbeat rather than once a poll, and shares that one
+read with the waiting line above, so noticing costs what this surface has always
+cost; what the interval buys back is that an idle product spawns no `bd` storm. When it clears
 the record closes, saying what accounted for it, and the channel hears nothing —
 what cleared it said so itself, as the run that started. The whole history is
 read back afterwards by

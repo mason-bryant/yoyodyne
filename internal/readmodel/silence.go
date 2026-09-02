@@ -41,6 +41,27 @@ import (
 // The window that was actually paid for was seven and a half hours.
 const DefaultStallThreshold = 30 * time.Minute
 
+// DefaultRunActivityWindow is how long a run's own record may go unmoved before
+// it stops accounting for a quiet line.
+//
+// A run in flight is the one explanation here that is read from a record its
+// own process writes, so it is the one that survives that process dying: a
+// killed run leaves durable state saying it is in flight until `yoyo reconcile`
+// settles it, and taking that at face value would silence this watchdog for
+// exactly the crash it exists to catch. The window is what turns "in flight"
+// into "in flight and still moving".
+//
+// An hour is chosen against what the harness itself guarantees about a live
+// run. Every provider event a run parses is stamped onto its record as it is
+// persisted, and an invocation that emits nothing for five minutes is stopped as
+// stalled, so a working run moves its record continuously. The slowest thing a
+// legitimately live run does is wait out a provider limit, which probes every
+// `usage_limit_unknown_reset_pause` — thirty minutes by default — and writes as
+// it reissues. An hour clears that by a factor of two, so a run that is merely
+// slow is never mistaken for a dead one, while a phantom run silences this for
+// an hour rather than until somebody notices.
+const DefaultRunActivityWindow = time.Hour
+
 // Activity is what a stall reading is derived from: the last time the harness
 // demonstrably started work, and everything that could legitimately account for
 // nothing having started since.
@@ -60,11 +81,15 @@ type Activity struct {
 	// whole of what separates a stall from a drained queue, and it costs a tracker
 	// read, which is why Unexplained answers without it.
 	Ready int
-	// Running is how many developer runs are in flight. A run in flight is not a
-	// stalled line whatever else is true: work is visibly moving, and a message
-	// saying nothing is happening while a run posts its way through a review is
-	// false in the way that teaches people to stop reading. It is the same rule
-	// the channel heartbeat already holds.
+	// Running is how many developer runs are in flight *and still moving*, which
+	// is what ActiveRuns counts and is deliberately narrower than how many runs
+	// the records call in flight. A run that is genuinely working is not a
+	// stalled line whatever else is true — a message saying nothing is happening
+	// while a run posts its way through a review is false in the way that teaches
+	// people to stop reading — but a run whose process is gone is not working,
+	// and its record goes on saying it is in flight until `yoyo reconcile`
+	// settles it. Counting that would silence this watchdog for the crash it
+	// exists to catch, so the record has to show the run still moving.
 	Running int
 	// OperatorHeld and IntakeHeld are the operator's two switches. Each is a
 	// deliberate decision that is already said where decisions are said, so
@@ -98,13 +123,47 @@ type Silence struct {
 	Explains string `json:"explains,omitempty"`
 }
 
+// ActiveRuns counts the developer runs whose records say they are in flight and
+// still moving, which is the only sense in which a run accounts for a quiet
+// line.
+//
+// The liveness test is the run's own UpdatedAt, because that is the stamp the
+// run writes as it works: every provider event it parses is persisted onto its
+// record. A run that has stopped writing has stopped running, whatever its
+// status field still says — which is precisely the state a killed process
+// leaves behind. See DefaultRunActivityWindow for how the window is chosen.
+func ActiveRuns(runs []runstate.State, now time.Time, within time.Duration) int {
+	if within <= 0 {
+		within = DefaultRunActivityWindow
+	}
+	active := 0
+	for _, run := range runs {
+		if run.Status.Terminal() {
+			continue
+		}
+		// A record with no moment on it says nothing about whether its run is
+		// alive, and reading that as activity is the assumption this exists to
+		// remove. It is not counted, so it cannot silence anything.
+		if run.UpdatedAt.IsZero() {
+			continue
+		}
+		if now.Sub(run.UpdatedAt) < within {
+			active++
+		}
+	}
+	return active
+}
+
 // Unexplained is the half of the reading that costs nothing: whether anything
 // other than an empty queue accounts for nothing having started.
 //
 // It is separate so that a caller can spend the tracker read only where the
-// answer still turns on it. A healthy machine polling every fifteen seconds asks
-// the tracker nothing at all, which is the same cost rule the channel heartbeat
-// holds.
+// answer still turns on it. That is a necessary condition for the read rather
+// than a sufficient one: a drained queue is deliberately not an explanation
+// here, because nothing but the tracker can say the queue is drained, so a
+// caller that asked on this alone would ask on every poll of an idle product.
+// Gating how often it then asks is the caller's, and the sink does it on the
+// same heartbeat interval the rest of its tracker reads keep.
 func (a Activity) Unexplained() bool {
 	return a.explanation() == ""
 }
@@ -120,7 +179,7 @@ func (a Activity) explanation() string {
 	case a.IntakeHeld:
 		return "intake is held"
 	case a.Running > 0:
-		return fmt.Sprintf("%d developer run(s) are in flight", a.Running)
+		return fmt.Sprintf("%d developer run(s) are in flight and still moving", a.Running)
 	case !a.Watched:
 		return "no watch session has ever run on this product"
 	case a.Since.IsZero():

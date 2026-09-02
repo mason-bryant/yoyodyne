@@ -514,11 +514,35 @@ that itself — and
 [`yoyo status`](../operations.md#when-nothing-happened-at-all) reads the whole
 history back afterwards, which is the only place it exists.
 
-Reading what is ready costs one local tracker (`bd`) read per heartbeat, asked
-only when a message is actually due, and never on the path of any run. A tracker
+A run in flight is the one thing that quiets it, and only while that run is
+still moving. That distinction is the difference between this working and not:
+a killed run leaves a record saying it is in flight until
+[`yoyo reconcile`](../operations.md#recovering-interrupted-runs) settles it, so
+reading "in flight" as "working" would silence the watchdog for exactly the
+crash it is watching for. What separates the two is the run's own record — a
+working run stamps every provider event onto it as it goes — so a run whose
+record has not moved for an hour stops accounting for the quiet. The hour is
+well clear of anything a live run does: an invocation that emits nothing for
+five minutes is stopped as stalled, and the slowest legitimate wait, a provider
+usage limit, probes every half hour.
+
+Reading what is ready costs one local tracker (`bd`) read per heartbeat, and
+never on the path of any run. Two things here want that number — the waiting
+line above and the stall watchdog — and they share one read rather than taking
+one each: it is asked at most once a pass, and each of them asks at most once a
+heartbeat. The watchdog needs its own interval because the state it is looking
+for is partly a drained queue, and nothing but the tracker can say the queue is
+drained; without one it would ask on every poll of a perfectly healthy idle
+product, which is the one machine that should cost nothing. A tracker
 the sink cannot read — no `bd` on the machine it runs on, say — costs that one
 message: the sink says so in its own log and asks again at the next interval,
 rather than guessing a number in either direction.
+
+What that interval costs the watchdog is promptness rather than the stall: a
+stall is noticed at the first reading after the threshold has passed, and it
+closes at the first reading after it clears. The moment recorded against it is
+when the harness last started something rather than when anybody noticed, so
+the event says how long nothing happened whatever the noticing cost.
 
 The queue changing comes from the conversations you hold with the product
 manager and the development manager, read from the same durable records `yoyo
