@@ -74,10 +74,10 @@ func TestTheDeveloperContractNamesEveryPathBeyondAGrant(t *testing.T) {
 	t.Parallel()
 
 	for _, entry := range protectedpath.ProviderPaths {
-		if !strings.Contains(developerContract, entry.Path) {
+		if !strings.Contains(developerContract(scratchForTest), entry.Path) {
 			t.Fatalf("the developer contract never names %q, which no grant reaches", entry.Path)
 		}
-		if !strings.Contains(developerContract, entry.Provider) {
+		if !strings.Contains(developerContract(scratchForTest), entry.Provider) {
 			t.Fatalf("the developer contract never names %q, which is what refuses %q", entry.Provider, entry.Path)
 		}
 	}

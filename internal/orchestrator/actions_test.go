@@ -580,6 +580,12 @@ var notAStep = map[string]string{
 	"mayRelaunch":                "reads whether the run has a relaunch left",
 	"recordEnvironmentalRefusal": "records that the machine, not the work, refused the round",
 
+	// The environment an invocation is made in, prepared before the first one and
+	// again by any process that resumes the run. It is not a step of the delivery
+	// and could not be reordered into one: it changes nothing about the work, and
+	// what it creates is outside the worktree and can never enter the change.
+	"prepareScratch": "cuts the run the scratch directory its developer contract names",
+
 	// Inside a step rather than beside one. Actions are coarse by design — a
 	// promotion is one operation that takes the lease, checks the remote, moves the
 	// branch and merges the request — so the parts of a registered step are not

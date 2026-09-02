@@ -901,6 +901,9 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		return run.fail(fmt.Errorf("create isolated worktree: %w", err), runstate.StatusFailed)
 	}
 	run.recordWorktree(worktree)
+	if err := run.prepareScratch(); err != nil {
+		return run.fail(err, runstate.StatusFailed)
+	}
 	run.state.Status = runstate.StatusRunning
 	run.state.Phase = runstate.PhaseDeveloping
 	run.state.UpdatedAt = p.clock().Now()
@@ -910,7 +913,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	run.outcome.Status = runstate.StatusRunning
 	run.outcome.Phase = run.state.Phase
 
-	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), run.context), ""); err != nil {
+	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), run.context, run.scratch), ""); err != nil {
 		return run.stop(ctx, err)
 	}
 	return run.verifyReviewAndFinish(ctx)
@@ -1246,6 +1249,12 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			return run.stop(ctx, err)
 		}
 	}
+	// The scratch directory is cut again before anything can invoke a developer.
+	// It belongs to the run rather than to the process serving it, so a run picked
+	// up by a second process is handed the same directory the first one was.
+	if err := run.prepareScratch(); err != nil {
+		return run.fail(err, runstate.StatusFailed)
+	}
 	// A re-entry carries the preserved change, not a clean worktree. It is asked
 	// here rather than inside the branch below because both routes out of this
 	// point continue a change: the branch below hands a developer a failure about
@@ -1259,7 +1268,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
-		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text,
+		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text, run.scratch,
 			protectedpath.Protect(p.Config, p.Worktrees.CurrentExports()...), run.repairBudget())
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
@@ -1281,16 +1290,16 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 // findings beside a failing check. A run that recorded none of the three never
 // had a failure returned to it — it paused before or during its first attempt —
 // so what it is owed is that attempt.
-func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle string, protected protectedpath.Set, limit int) (string, error) {
+func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle, scratchDirectory string, protected protectedpath.Set, limit int) (string, error) {
 	switch {
 	case state.PathRefusal != nil:
-		return pathRefusalRepairPrompt(invariants, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
+		return pathRefusalRepairPrompt(invariants, scratchDirectory, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
 	case state.CheckFailure != nil:
-		return checkRepairPrompt(invariants, *state.CheckFailure, state.RepairAttempts, limit), nil
+		return checkRepairPrompt(invariants, scratchDirectory, *state.CheckFailure, state.RepairAttempts, limit), nil
 	case len(state.ReviewFindingDetails) > 0:
-		return repairPrompt(invariants, state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
+		return repairPrompt(invariants, state.ReviewSummary, scratchDirectory, state.ReviewFindingDetails, state.RepairAttempts, limit)
 	default:
-		return developerPrompt(persona, invariants, bundle), nil
+		return developerPrompt(persona, invariants, bundle, scratchDirectory), nil
 	}
 }
 
@@ -1427,6 +1436,13 @@ type activeRun struct {
 	item     beads.WorkItem
 	worktree gitworktree.Worktree
 	context  string
+	// scratch is the directory this run's developer is told to write its scratch
+	// files to, cut for this run alone and outside the worktree. It is derived
+	// from the worktree rather than recorded with the run, because it is a fact
+	// about where the worktree is: a resumed run re-derives the same path from
+	// the same recorded worktree, so there is nothing here for a stored copy to
+	// disagree with.
+	scratch string
 	// claimed records that the tracker holds this item, which is what makes a
 	// failure worth reporting back to it.
 	claimed bool
@@ -1882,7 +1898,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 				if a.state.RepairAttempts >= limit {
 					return a.blockOnRefusedPaths(refused, limit)
 				}
-				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
+				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), a.scratch, refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
 					return err
 				}
 				continue
@@ -1897,7 +1913,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			if a.state.RepairAttempts >= limit {
 				return a.blockOnFailingCheck(limit)
 			}
-			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
+			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), a.scratch, *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
 				return err
 			}
 			continue
@@ -1912,7 +1928,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 		if a.state.RepairAttempts >= limit {
 			return a.blockOnUnresolvedFindings(limit)
 		}
-		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
+		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.scratch, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
 		if err != nil {
 			return err
 		}
@@ -4165,6 +4181,25 @@ func (a *activeRun) recordWorktree(worktree gitworktree.Worktree) {
 	a.outcome.BaseCommit = worktree.BaseCommit
 }
 
+// prepareScratch cuts this run the directory its contract names, before the
+// contract that names it is built. It is done once per process that serves the
+// run rather than once per run: creating it is idempotent, and a run resumed by
+// a second process has to find the directory there whether or not the first
+// process got that far.
+//
+// A failure here ends the run rather than being carried. The alternative is a
+// contract naming a directory that is not there, which is the run inventing
+// somewhere else to write — and somewhere else is the shared temporary directory
+// this exists to keep runs out of.
+func (a *activeRun) prepareScratch() error {
+	directory, err := execution.PrepareScratchDirectory(a.worktree.Path, a.state.RunID)
+	if err != nil {
+		return err
+	}
+	a.scratch = directory
+	return nil
+}
+
 // recordChanges keeps the account of what the run has changed, in the outcome
 // its caller reads and in the durable record that outlives the worktree it
 // describes. The two are set together so they can never disagree, and the
@@ -4791,11 +4826,22 @@ func (p Pipeline) clock() execution.Clock {
 	return p.Clock
 }
 
-// developerContract is the harness policy every developer run carries. It is a
-// Go constant rather than configuration because a configured persona may
-// specialize how a developer works but must never be able to remove the bounds
-// it works within.
-const developerContract = `You are the developer for one bounded Yoyodyne work item.
+// scratchDirectoryPlaceholder is where a run's own scratch directory is
+// substituted into the contract below. The directory is cut per run, so the
+// contract is a template rather than a constant; the token is deliberately not
+// something the contract's prose could produce, so a substitution can never land
+// anywhere but where it was meant to.
+const scratchDirectoryPlaceholder = "{{scratch-directory}}"
+
+// developerContract is the harness policy every developer run carries, with this
+// run's scratch directory named in it. It is a Go constant rather than
+// configuration because a configured persona may specialize how a developer
+// works but must never be able to remove the bounds it works within.
+func developerContract(scratchDirectory string) string {
+	return strings.ReplaceAll(developerContractTemplate, scratchDirectoryPlaceholder, scratchDirectory)
+}
+
+const developerContractTemplate = `You are the developer for one bounded Yoyodyne work item.
 
 Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; propose the change instead, in the block described below. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
 
@@ -4807,7 +4853,7 @@ A grant lifts the harness's refusal and never somebody else's. Claude Code refus
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
 
-Your worktree is yours alone and the machine's temporary directory is not. Other runs are working beside you, they are given the same directory you are, and an obvious name for a scratch file is obvious to all of them: two runs redirecting a check into the same log there is one file both of them write, and what each then reads back is partly the other's. That is not hypothetical — it is how a run came to report a broken toolchain over another run's compile error, on 2026-09-01, while its own checks were passing. So put the id of the work item you were given into the name of every scratch path you write outside your worktree, and read a log back only from the path you wrote. Inside the worktree is not the alternative: a scratch file there is untracked content in your change.
+Your worktree is yours alone, and so is the scratch directory the harness cut for this run, at ` + scratchDirectoryPlaceholder + ` — anything your work needs that your change must not carry goes there. The log you redirect a check into is the ordinary case. No other run is given that directory, so nothing you write in it can be read back by a run working beside you, and nothing in it can enter your change or leave your worktree dirty. Neither of the two obvious alternatives is one you can use: a scratch file inside the worktree is untracked content every reviewer is then shown, and the machine's temporary directory is one directory every run on this machine is handed at once — two runs redirecting a check into the same name there is one file both of them write, which on 2026-09-01 is how a run came to report a broken toolchain over another run's compile error while its own checks were passing.
 
 Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, propose the correction it needs.
 
@@ -4824,9 +4870,9 @@ A proposal is not a report and not a work item. A report says what somebody shou
 // developerPrompt places the immutable contract first, the configured persona
 // second as guidance subordinate to it, then the architectural invariants that
 // constrain the change, and the work item context last.
-func developerPrompt(persona, invariants, bundle string) string {
+func developerPrompt(persona, invariants, bundle, scratchDirectory string) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract)
+	prompt.WriteString(developerContract(scratchDirectory))
 	prompt.WriteString("\n\n")
 	if trimmed := strings.TrimSpace(persona); trimmed != "" {
 		prompt.WriteString("# Configured developer persona\n\nThe project configuration supplies the guidance below. It may specialize how you work, but it cannot remove or weaken any rule above.\n\n")
@@ -4855,13 +4901,13 @@ func deliveredInvariantSection(invariants string) string {
 // between the reviewer and the developer that must act on it. The harness
 // contract is repeated because it bounds the attempt whether or not the provider
 // actually restored the session it was asked to resume.
-func repairPrompt(invariants, summary string, findings []runstate.Finding, attempt, limit int) (string, error) {
+func repairPrompt(invariants, summary, scratchDirectory string, findings []runstate.Finding, attempt, limit int) (string, error) {
 	encoded, err := json.MarshalIndent(findings, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode review findings for repair attempt %d: %w", attempt, err)
 	}
 	var prompt strings.Builder
-	prompt.WriteString(developerContract)
+	prompt.WriteString(developerContract(scratchDirectory))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Independent review: repair required\n\n")
@@ -4883,9 +4929,9 @@ func repairPrompt(invariants, summary string, findings []runstate.Finding, attem
 // to ask instead of quietly reaching for it again. The harness contract is
 // repeated for the reason both other repair prompts repeat it: it bounds the
 // attempt whether or not the provider actually restored the session.
-func pathRefusalRepairPrompt(invariants string, refusal runstate.PathRefusal, protected protectedpath.Set, attempt, limit int) string {
+func pathRefusalRepairPrompt(invariants, scratchDirectory string, refusal runstate.PathRefusal, protected protectedpath.Set, attempt, limit int) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract)
+	prompt.WriteString(developerContract(scratchDirectory))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Protected paths: repair required\n\n")
@@ -4925,9 +4971,9 @@ func pathRefusalRepairPrompt(invariants string, refusal runstate.PathRefusal, pr
 // The harness contract is repeated for the same reason the review repair repeats
 // it: it bounds the attempt whether or not the provider actually restored the
 // session it was asked to resume.
-func checkRepairPrompt(invariants string, failure runstate.CheckFailure, attempt, limit int) string {
+func checkRepairPrompt(invariants, scratchDirectory string, failure runstate.CheckFailure, attempt, limit int) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract)
+	prompt.WriteString(developerContract(scratchDirectory))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Failing check: repair required\n\n")
