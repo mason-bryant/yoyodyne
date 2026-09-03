@@ -2297,6 +2297,14 @@ func (a *activeRun) blockOnRefusedPaths(refused pathRefusal, limit int) error {
 // session is what carries that work into the next attempt instead of asking a
 // developer to derive it a second time.
 func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
+	// A change this developer proposed that the harness refused opens the prompt,
+	// ahead of the contract and of whatever this invocation is actually for. It is
+	// prepended here rather than built into each kind of prompt because here is the
+	// one place every developer invocation passes through — the first attempt, both
+	// kinds of repair, a resumed attempt, and a granted continuation — and a
+	// refusal that reached only some of them would be a refusal the developer
+	// learns of depending on why it was asked again.
+	prompt = carriedAmendmentRefusals(a.state.RefusedAmendments) + prompt
 	for {
 		// A stop is asked for before the hold, so a run the operator both stopped
 		// and paused stops rather than parking on a hold nothing will lift for it.
@@ -2524,6 +2532,11 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	a.state.UpdatedAt = p.clock().Now()
 	a.outcome.ProviderSessionID = providerResult.SessionID
 	a.outcome.ProviderResolvedModel = providerResult.ResolvedModel
+	// The attempt that produced this reply opened with whatever the harness had
+	// refused of the last one's proposals, so those are spent: they are cleared
+	// before the reply is read, and anything this reply proposes that is refused
+	// takes their place below.
+	a.clearCarriedAmendmentRefusals()
 	// Anything the developer reported is collected out of what it said, so the
 	// summary stays the account of the work and the report reaches the operator
 	// instead of sitting in prose nothing surfaces.

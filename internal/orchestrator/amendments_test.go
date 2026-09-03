@@ -402,6 +402,114 @@ func TestTheDeveloperContractSaysHowToProposeAChange(t *testing.T) {
 	}
 }
 
+// The failure this ends, from run-6ff896ba: a developer named a document the
+// repository does not record, the refusal reached the operator and nobody else,
+// and the developer went on to write into a checked-in file that it had raised a
+// proposal nothing was holding. So the refusal is put in front of that developer
+// before it can be asked anything again — and it is spent by the reply to that
+// invocation, because a refusal repeated on every attempt is one the developer
+// answers over and over.
+func TestARefusedProposalIsPutInFrontOfTheDeveloperThatMadeIt(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	writeDesignArtifact(t, repository)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		// Two failing checks, so the developer is invoked three times: the attempt
+		// that proposes, the one that is told, and one more that must not be told
+		// again.
+		if attempts < 3 {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	provider.developerFinalTextByAttempt = []string{
+		"worked on it\n\n" + amendmentBlock(`{"artifact":"invented","change":"say which ordering holds","why":"the item cannot satisfy both"}`),
+		"worked on it",
+	}
+	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	pipeline.Amendments = &fakeAmendments{}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The refusal still costs the run nothing, which is the property the carry-back
+	// must not have quietly changed.
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("a refused proposal changed what the run did: %#v", outcome)
+	}
+	requests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(requests) != 3 {
+		t.Fatalf("developer invocations = %d, want the attempt that proposed and two repairs", len(requests))
+	}
+	// Nothing had been refused yet when the proposing attempt was asked.
+	if strings.Contains(requests[0].Prompt, "A change you proposed was not recorded") {
+		t.Fatalf("the first attempt was told about a refusal that had not happened:\n%s", requests[0].Prompt)
+	}
+	// The next one opens with it, in the harness's own words rather than a
+	// paraphrase, and is told not to leave the claim behind in the change.
+	told := requests[1].Prompt
+	if !strings.HasPrefix(told, "# A change you proposed was not recorded") {
+		t.Fatalf("the next invocation does not open with the refusal:\n%s", told)
+	}
+	for _, want := range []string{
+		"no artifact answers to that id",
+		"Do not describe the proposal as raised",
+		"do not write into your change",
+	} {
+		if !strings.Contains(told, want) {
+			t.Fatalf("the carried refusal is missing %q:\n%s", want, told)
+		}
+	}
+	// And the contract the invocation still carries under it, so the developer is
+	// asked for the work as well as told about the refusal.
+	if !strings.Contains(told, "Failing check: repair required") {
+		t.Fatalf("the carried refusal replaced the repair the attempt was for:\n%s", told)
+	}
+	// Told once. The reply to that invocation spends it.
+	if strings.Contains(requests[2].Prompt, "A change you proposed was not recorded") {
+		t.Fatalf("the refusal was carried a second time:\n%s", requests[2].Prompt)
+	}
+}
+
+// The carry-back has to survive the process, not just the loop. A run stopped
+// after the reply that was refused is continued by triage in another process
+// entirely, and the developer it hands the work back to is the one that has still
+// never been told.
+func TestARefusedProposalIsDurableForAnInvocationInAnotherProcess(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	writeDesignArtifact(t, repository)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	provider.developerFinalText = "implemented the work item\n\n" +
+		amendmentBlock(`{"artifact":"invented","change":"say which ordering holds","why":"the item cannot satisfy both"}`)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Amendments = &fakeAmendments{}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// Read back through the store, the way a later process reads it: the words are
+	// on disk rather than only in the prompt this run happened to build.
+	recorded, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(recorded.RefusedAmendments) != 1 || !strings.Contains(recorded.RefusedAmendments[0], "no artifact answers to that id") {
+		t.Fatalf("the refusal did not survive the run: %#v", recorded.RefusedAmendments)
+	}
+}
+
 // amendmentBlock renders what an agent writes when it proposes a change, the way
 // the contract asks for it: after everything else it says.
 func amendmentBlock(proposals ...string) string {

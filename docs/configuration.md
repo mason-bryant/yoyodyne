@@ -1052,11 +1052,13 @@ is being asked follows from the document rather than from anything the agent
 claims. A proposal naming a document nobody records is refused, because there is
 no owner to decide a change to a document that does not exist, and a proposal
 from the role that already owns the document is refused too: that role amends
-it. **The refusal reaches you and not the agent that wrote it** — it is named on
-the run's outcome beside the proposals that were kept, and nothing carries it
-back into the agent's next attempt, so a role that misnames a document is not
-told and will misname it the same way again. The artifact ids are what
-`yoyo artifact list` prints.
+it. **The refusal reaches the agent that wrote it as well as you** — it is named
+on the run's outcome beside the proposals that were kept, and it is carried on
+the run's own state so the agent's next invocation opens with it, in the
+harness's own words: nothing was recorded, nobody was asked, do not describe the
+proposal as raised, and propose it again if it is still worth proposing. The
+reply to that invocation spends it, so the agent is told once. The artifact ids
+are what `yoyo artifact list` prints.
 
 **Nothing an unapproved proposal contains reaches the document, and neither does
 anything an approved one contains.** A proposal carries what should become true

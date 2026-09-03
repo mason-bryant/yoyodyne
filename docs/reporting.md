@@ -481,12 +481,23 @@ proposal can produce on its own is a decision.
 
 Like a report, it costs the run nothing. The run integrates exactly as it would
 have, and a proposal the harness cannot read or cannot keep is named on the
-outcome rather than failing the attempt it arrived with — that naming reaches
-you and not the agent, so a role that misnames a document is not told and
-repeats the mistake. It is durable in the same place and for the same reason:
-the run that argued the design was wrong is long finished before anybody decides
-what to do about it. A developer that makes the same argument again on a repair
-attempt raises one proposal rather than one per attempt.
+outcome rather than failing the attempt it arrived with. It is durable in the
+same place and for the same reason: the run that argued the design was wrong is
+long finished before anybody decides what to do about it. A developer that makes
+the same argument again on a repair attempt raises one proposal rather than one
+per attempt.
+
+That naming reaches the agent as well as you. A refusal used to reach you alone,
+which is how a developer whose proposal named a document nobody records went on
+to write into a checked-in file that it had raised one — a false claim durable in
+prose, which only `yoyo amendment list` disproved. So the refusal is carried on
+the run's own state and the developer's next invocation opens with it, in the
+harness's own words: nothing was recorded, nobody was asked, do not describe it
+as raised, and propose it again if it is still worth proposing. The reply to that
+invocation spends it, so a refusal is carried once and no further, and the
+contract every agent works under says the same thing in advance — a proposal is
+raised only once the harness says so, and nothing an agent writes may claim
+otherwise.
 
 The owner hears it where it works, and you are the one who decides. Proposals
 against the brief and the goals are carried into the product manager's

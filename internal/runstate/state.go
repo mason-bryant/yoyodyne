@@ -276,6 +276,17 @@ func (p PathRefusal) Validate() error {
 	return errors.Join(problems...)
 }
 
+// MaxCarriedAmendmentRefusals bounds how many refused amendment proposals a run
+// carries into its developer's next invocation, and MaxAmendmentRefusalBytes
+// bounds one of them. Both are generous for what actually accumulates — one
+// reply proposes at most a handful of changes, and the carried list is emptied
+// by the next reply — and they are here so a provider emitting nothing but
+// unreadable blocks cannot fill durable state or the next prompt with them.
+const (
+	MaxCarriedAmendmentRefusals = 10
+	MaxAmendmentRefusalBytes    = 1 << 10
+)
+
 // Finding is one durable reviewer finding. Findings are recorded rather than
 // only counted because they are the developer's input for the next repair
 // attempt: a run interrupted between attempts has to hand back exactly what the
@@ -763,6 +774,19 @@ type State struct {
 	// gate is decided before the checks, recording a refusal clears both of the
 	// others rather than competing with them for the next attempt.
 	PathRefusal *PathRefusal `json:"path_refusal,omitempty"`
+	// RefusedAmendments are the changes this run's developer proposed that the
+	// harness could not record, in the harness's own words, waiting to be put in
+	// front of the developer that proposed them. It is not a fourth kind of repair
+	// input and competes with none of the three: a refused proposal costs the run
+	// nothing and buys no attempt, it rides along with whatever prompt the run was
+	// going to send next, and the reply that is shown it empties the list.
+	//
+	// It is durable because the refusal used to reach the operator and nobody
+	// else. A developer that named a document the repository does not record was
+	// never told, and went on to write into a checked-in file that it had raised a
+	// proposal nothing was holding — a false claim that outlived the run, which
+	// only `yoyo amendment list` disproved.
+	RefusedAmendments []string `json:"refused_amendments,omitempty"`
 	// RepairAttempts counts the repair attempts already handed back to the
 	// developer, whichever kind of failure triggered them: one budget covers
 	// both, so it bounds the developer invocations a run can make rather than
@@ -1087,6 +1111,17 @@ func (s State) Validate() error {
 	if s.PathRefusal != nil {
 		if err := s.PathRefusal.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("path_refusal: %w", err))
+		}
+	}
+	if len(s.RefusedAmendments) > MaxCarriedAmendmentRefusals {
+		problems = append(problems, fmt.Errorf("%d refused amendments are carried, which exceeds the bound of %d", len(s.RefusedAmendments), MaxCarriedAmendmentRefusals))
+	}
+	for index, refused := range s.RefusedAmendments {
+		if strings.TrimSpace(refused) == "" {
+			problems = append(problems, fmt.Errorf("refused_amendments[%d] is empty", index))
+		}
+		if len(refused) > MaxAmendmentRefusalBytes {
+			problems = append(problems, fmt.Errorf("refused_amendments[%d] is %d bytes, which exceeds the %d byte bound", index, len(refused), MaxAmendmentRefusalBytes))
 		}
 	}
 	if s.Changes != nil {
