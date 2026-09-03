@@ -315,6 +315,72 @@ func TestTheVerdictIsTheReviewersOwnAccount(t *testing.T) {
 	}
 }
 
+// What the reviewer asked for is read from the durable record, so the message an
+// operator gets names each change rather than only counting them. The words are
+// the reviewer's own: the record was redacted before it was written, and nothing
+// here paraphrases what it holds.
+func TestARepairRequestCarriesWhatTheRecordSaysWasAskedFor(t *testing.T) {
+	before := running()
+	before.Phase = runstate.PhaseReviewing
+	after := before
+	after.ReviewDecision = runstate.ReviewRepair
+	after.ReviewFindings = 2
+	after.ReviewFindingDetails = []runstate.Finding{
+		{
+			Severity: "blocker",
+			Message:  "handle the nil worktree. Every caller can be handed one.",
+			File:     "runner.go",
+			Line:     42,
+		},
+		{Severity: "major", Message: "integration is now automatic; README.md still says otherwise", File: "README.md"},
+	}
+	_, notifications := crossed(t, before, after)
+	repairs := only(t, notifications, KindReviewRepairs)
+	want := []string{
+		"blocker: handle the nil worktree (runner.go:42).",
+		"major: integration is now automatic; README.md still says otherwise (README.md)",
+	}
+	if len(repairs.Event.Detail.Requested) != len(want) {
+		t.Fatalf("the request carries %q, want one entry per finding", repairs.Event.Detail.Requested)
+	}
+	for at, requested := range want {
+		if repairs.Event.Detail.Requested[at] != requested {
+			t.Fatalf("requested change %d is %q, want %q", at, repairs.Event.Detail.Requested[at], requested)
+		}
+	}
+	message, err := Render(repairs.Topic, repairs.Speaker, repairs.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, requested := range want {
+		if !strings.Contains(message.Body, "- "+requested) {
+			t.Fatalf("body %q does not name %q on its own line", message.Body, requested)
+		}
+	}
+	// A record that counted findings without keeping them is every run reviewed
+	// before the repair loop kept them, and it says so rather than listing
+	// nothing.
+	countedOnly := after
+	countedOnly.ReviewFindingDetails = nil
+	_, older := crossed(t, before, countedOnly)
+	if requested := only(t, older, KindReviewRepairs).Event.Detail.Requested; len(requested) != 0 {
+		t.Fatalf("a record keeping no findings still carried %q", requested)
+	}
+}
+
+func TestOnlyTheFirstSentenceOfAFindingIsSaid(t *testing.T) {
+	for written, want := range map[string]string{
+		"handle the nil worktree. Every caller can be handed one.":  "handle the nil worktree.",
+		"README.md still says the harness does not integrate":       "README.md still says the harness does not integrate",
+		"the decoder accepts trailing JSON\nand the test misses it": "the decoder accepts trailing JSON",
+		"  padded either side  ":                                    "padded either side",
+	} {
+		if got := firstSentence(written); got != want {
+			t.Fatalf("firstSentence(%q) = %q, want %q", written, got, want)
+		}
+	}
+}
+
 // awaitingVerdict is the record as it stands with the checks behind it and the
 // review about to run: the evidence is cleared and no verdict is recorded.
 func awaitingVerdict() runstate.State {

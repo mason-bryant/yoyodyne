@@ -116,7 +116,10 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 		if after.ReviewDecision == runstate.ReviewApprove {
 			verdict = KindReviewApproved
 		}
-		say(verdict, report.SeverityNote, Persona(domain.RoleReviewer, ""), Detail{Findings: after.ReviewFindings})
+		say(verdict, report.SeverityNote, Persona(domain.RoleReviewer, ""), Detail{
+			Findings:  after.ReviewFindings,
+			Requested: describeFindings(after.ReviewFindingDetails),
+		})
 	}
 	// A promotion is the harness's own act — no agent performs one — so the
 	// harness is the speaker rather than any persona.
@@ -791,4 +794,64 @@ func describePullRequest(published *runstate.PullRequest) string {
 		return fmt.Sprintf("#%d", published.Number)
 	}
 	return strings.TrimSpace(published.URL)
+}
+
+// describeFindings says what a repair round asked for, one entry per finding and
+// in the order the reviewer raised them. It is the count's missing half: a
+// reader given "3 findings" cannot tell a correction to a document from a
+// problem with the design, and both are what a repair round is usually made of.
+//
+// Each entry is the finding's first sentence rather than the whole of it. The
+// whole is in the record the message points at, and what a channel is read for
+// is which change is being asked for rather than the argument behind it. The
+// severity comes first because it is the one word that ranks the change, and
+// the place the record names comes last because it is where somebody looks
+// rather than part of what was said. A finding the record located gives its
+// line beside its file; one that named a file alone says the file.
+//
+// A record that counted findings without keeping them yields nothing, which the
+// message says as itself rather than as a reviewer who asked for nothing.
+func describeFindings(findings []runstate.Finding) []string {
+	if len(findings) == 0 {
+		return nil
+	}
+	described := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		said := firstSentence(finding.Message)
+		if severity := strings.TrimSpace(finding.Severity); severity != "" {
+			said = severity + ": " + said
+		}
+		if file := strings.TrimSpace(finding.File); file != "" {
+			at := file
+			if finding.Line > 0 {
+				at = fmt.Sprintf("%s:%d", file, finding.Line)
+			}
+			// The place a finding names belongs inside the sentence rather than
+			// after it, so it goes before the full stop the reviewer wrote. A
+			// finding that ended on no stop is left ending on none.
+			if strings.HasSuffix(said, ".") {
+				said = strings.TrimSuffix(said, ".") + " (" + at + ")."
+			} else {
+				said += " (" + at + ")"
+			}
+		}
+		described = append(described, said)
+	}
+	return described
+}
+
+// firstSentence is as much of what somebody wrote as stands on its own: up to
+// the first full stop that ends a sentence, or the first line break, whichever
+// comes first. A full stop inside a word is not one — a finding naming
+// README.md is naming a file rather than finishing — so it is the stop followed
+// by a space that ends the sentence.
+func firstSentence(written string) string {
+	trimmed := strings.TrimSpace(written)
+	if line, _, found := strings.Cut(trimmed, "\n"); found {
+		trimmed = strings.TrimSpace(line)
+	}
+	if at := strings.Index(trimmed, ". "); at >= 0 {
+		return trimmed[:at+1]
+	}
+	return trimmed
 }

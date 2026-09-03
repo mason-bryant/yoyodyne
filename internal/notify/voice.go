@@ -169,7 +169,7 @@ var harnessVoice = voice{
 		KindChecksPassed:        "Checks passed on {item}.",
 		KindChecksFailed:        "Checks failed on {item}: {command} exited {exit}.",
 		KindReviewApproved:      "Review of {item} approved.",
-		KindReviewRepairs:       "Review of {item} asked for repairs: {findings}.",
+		KindReviewRepairs:       "Review of {item} asked for repairs: {findings}.\n\n{requested}",
 		KindPromoted:            "{item} promoted onto {branch} at {commit}.",
 		KindPublished:           "{item} published as {pr}.",
 		KindMergeQueued:         "The merge of {pr} is queued on the forge.",
@@ -224,7 +224,7 @@ var developerVoice = voice{
 		KindChecksPassed:        "Checks are green on {item}. I ran them before calling anything done.",
 		KindChecksFailed:        "Checks are red on {item}: {command} exited {exit}. That is my next attempt, not somebody else's problem.",
 		KindReviewApproved:      "The reviewer approved my change on {item}.",
-		KindReviewRepairs:       "{item} came back to me with {findings}. I'll take them as written.",
+		KindReviewRepairs:       "{item} came back to me with {findings}. I'll take them as written.\n\n{requested}",
 		KindPromoted:            "My change on {item} is on {branch}, at {commit}.",
 		KindPublished:           "I've published the change on {item} as {pr}.",
 		KindMergeQueued:         "{pr} is queued to merge; there is nothing more from me on {item}.",
@@ -279,7 +279,7 @@ var reviewerVoice = voice{
 		KindChecksPassed:        "The checks behind {item} pass. Passing checks are evidence, not a verdict.",
 		KindChecksFailed:        "The checks behind {item} fail: {command} exited {exit}. There is nothing for me to judge yet.",
 		KindReviewApproved:      "I approve {item}: correct and complete against the criteria it was given.",
-		KindReviewRepairs:       "I'm asking for repairs on {item}: {findings}, each one specific enough to act on.",
+		KindReviewRepairs:       "I'm asking for repairs on {item}: {findings}, each one specific enough to act on.\n\n{requested}",
 		KindPromoted:            "The change I approved on {item} is on {branch} at {commit}.",
 		KindPublished:           "{item} is published as {pr}. My verdict was on the change, not on the request.",
 		KindMergeQueued:         "{pr} is queued to merge with my approval behind it.",
@@ -333,7 +333,7 @@ var developmentManagerVoice = voice{
 		KindChecksPassed:        "{item} cleared its checks and is on to review.",
 		KindChecksFailed:        "{item} came back from its checks: {command} exited {exit}. It routes to repair with that intact.",
 		KindReviewApproved:      "{item} is approved and clear to integrate.",
-		KindReviewRepairs:       "{item} routes back to the developer with {findings} intact.",
+		KindReviewRepairs:       "{item} routes back to the developer with {findings} intact.\n\n{requested}",
 		KindPromoted:            "{item} is integrated into {branch}. That is one item actually done.",
 		KindPublished:           "{item} is published as {pr} and still counts as in flight.",
 		KindMergeQueued:         "{pr} is queued to merge, so {item} stays in flight until the forge says otherwise.",
@@ -388,7 +388,7 @@ var productManagerVoice = voice{
 		KindChecksPassed:        "{item} passed its checks — progress on what it was admitted for.",
 		KindChecksFailed:        "{item} failed its checks: {command} exited {exit}. Nothing about what it is for has changed.",
 		KindReviewApproved:      "{item} was approved: what was admitted is what was built.",
-		KindReviewRepairs:       "{item} needs repairs: {findings}. Still the same item, not a new one.",
+		KindReviewRepairs:       "{item} needs repairs: {findings}. Still the same item, not a new one.\n\n{requested}",
 		KindPromoted:            "{item} is integrated into {branch} and serves the goal it was admitted for.",
 		KindPublished:           "{item} is published as {pr}.",
 		KindMergeQueued:         "{pr} is queued to merge; {item} is not delivered until it lands.",
@@ -443,7 +443,7 @@ var architectVoice = voice{
 		KindChecksPassed:        "{item} passed its checks. The gate held.",
 		KindChecksFailed:        "{item} failed its checks: {command} exited {exit}. A gate that catches this is a gate doing its job.",
 		KindReviewApproved:      "{item} was approved against the design it derives from.",
-		KindReviewRepairs:       "{item} was sent back with {findings}, which is the loop working rather than failing.",
+		KindReviewRepairs:       "{item} was sent back with {findings}, which is the loop working rather than failing.\n\n{requested}",
 		KindPromoted:            "{item} is on {branch} at {commit}, promoted by the harness itself as the invariant requires.",
 		KindPublished:           "{item} is published as {pr}. The local branch remains the authoritative one.",
 		KindMergeQueued:         "{pr} is queued to merge; the forge settles it, not this run.",
@@ -810,6 +810,7 @@ func (e Event) fields(topic Topic) map[string]string {
 		"command":   stated(detail.Command, "a check the record does not name"),
 		"exit":      strconv.Itoa(detail.ExitCode),
 		"findings":  countOf(detail.Findings, "finding", "findings", "findings the record does not count"),
+		"requested": requestedOf(detail.Requested),
 		"branch":    stated(detail.TargetBranch, "an unnamed branch"),
 		"commit":    stated(shortCommit(detail.Commit), "an unrecorded commit"),
 		"pr":        stated(detail.PullRequest, "an unrecorded pull request"),
@@ -941,6 +942,48 @@ func countOf(count int, singular, plural, absence string) string {
 	}
 }
 
+// MaxRequestedBytes bounds one requested change to something that reads as a
+// line. A finding longer than it is cut rather than wrapped across the message,
+// because the value of the list is that a reader takes in what came back at a
+// glance, and one finding that runs for a paragraph takes that from all of
+// them. What was cut is in the record the message already points at.
+const MaxRequestedBytes = 200
+
+const requestedCutMark = "…"
+
+// requestedOf lists what a repair round asked for, one requested change to a
+// line. The lines are marked with a dash rather than numbered: the record is
+// what a reader counts findings in, and a number here would read as an order to
+// do them in that nobody decided.
+//
+// A record that counted findings without keeping them says so. The absence is
+// not the same news as a reviewer who asked for nothing, and stating it points
+// at the record rather than leaving the count looking like the whole account.
+func requestedOf(requested []string) string {
+	if len(requested) == 0 {
+		return "What each of them asks for is in the record rather than here."
+	}
+	lines := make([]string, 0, len(requested))
+	for _, one := range requested {
+		lines = append(lines, "- "+boundLine(one))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// boundLine cuts one line that would not read as one, and marks the cut so
+// nobody reads a truncated finding as the whole of what was asked for.
+func boundLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) <= MaxRequestedBytes {
+		return trimmed
+	}
+	cut := MaxRequestedBytes - len(requestedCutMark)
+	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
+		cut--
+	}
+	return strings.TrimRight(trimmed[:cut], " \t") + requestedCutMark
+}
+
 // roundsOf says where an exchange has got to against its cap. The cap is said
 // alongside the round because the round on its own does not say how close the
 // exchange is to closing unresolved, which is the part an operator acts on.
@@ -1042,6 +1085,11 @@ func shortCommit(commit string) string {
 func ended(said string) string {
 	trimmed := strings.TrimRight(said, " \t\n")
 	if trimmed == "" {
+		return trimmed
+	}
+	// A line that was cut ends on the mark saying so, and a full stop after it
+	// would read as the end of a sentence the cut is what removed.
+	if strings.HasSuffix(trimmed, requestedCutMark) {
 		return trimmed
 	}
 	switch trimmed[len(trimmed)-1] {
