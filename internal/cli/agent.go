@@ -50,8 +50,10 @@ type agentReport struct {
 	// Conversation is the durable record, absent when this agent has never been
 	// spoken to.
 	Conversation *conversationReport `json:"conversation,omitempty"`
-	// InUse reports that another process is holding this agent's conversation
-	// right now, which is why a second one cannot be opened.
+	// InUse reports that another process has this agent's conversation right
+	// now, which is what anything else wanting a turn waits behind. An
+	// interactive conversation puts it down between turns, so an operator sitting
+	// at a prompt is not what this reports: what it reports is somebody mid-turn.
 	InUse bool `json:"in_use,omitempty"`
 	// Problem is why the durable state could not be read, when it could not.
 	Problem string `json:"problem,omitempty"`
@@ -434,7 +436,7 @@ func renderAgent(report agentReport) string {
 		}
 	}
 	if report.InUse {
-		fmt.Fprintln(&rendered, "  in use by another process right now")
+		fmt.Fprintln(&rendered, "  another process is mid-turn with it right now")
 	}
 	if report.Problem != "" {
 		fmt.Fprintf(&rendered, "  durable state could not be read: %s\n", report.Problem)

@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -322,6 +323,319 @@ func exitedProcess(t *testing.T) int {
 		}
 	}
 	return pid
+}
+
+// A claim on a conversation can be put down and taken up again, which is what
+// lets the operator's console stop being the reason nothing else can reach the
+// agent. While it is down the conversation belongs to whoever takes it.
+func TestAConversationPutDownIsReachableAndCanBeTakenUpAgain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	hold, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if !hold.Held() {
+		t.Fatal("a fresh claim does not have the conversation")
+	}
+	// A claim is exclusive exactly as the plain lease is, for as long as it is
+	// held: this is the first thing that would be wrong if it had stopped
+	// locking at all.
+	if _, err := newConversationStore(t, root).Hold(identity); err == nil || !errors.Is(err, ErrConversationHeld) {
+		t.Fatalf("Hold() against a claimed conversation error = %v, want ErrConversationHeld", err)
+	}
+
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if hold.Held() {
+		t.Fatal("a released claim still reports the conversation as held")
+	}
+	// The other process — the harness relaying, or the operator's assistant —
+	// gets the conversation the moment the console is not mid-turn.
+	other, err := newConversationStore(t, root).Hold(identity)
+	if err != nil {
+		t.Fatalf("Hold() against a released claim error = %v", err)
+	}
+	if err := other.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+
+	if err := hold.Retake(context.Background()); err != nil {
+		t.Fatalf("Retake() error = %v", err)
+	}
+	if !hold.Held() {
+		t.Fatal("a retaken claim does not have the conversation")
+	}
+	// Taking up a conversation this process already has changes nothing rather
+	// than deadlocking against itself.
+	if err := hold.Retake(context.Background()); err != nil {
+		t.Fatalf("Retake() while held error = %v", err)
+	}
+	if _, err := newConversationStore(t, root).Hold(identity); !errors.Is(err, ErrConversationHeld) {
+		t.Fatalf("Hold() after Retake() error = %v, want ErrConversationHeld", err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("final Release() error = %v", err)
+	}
+}
+
+// The process that owns a conversation defers its release for the life of the
+// command, and the conversation is put down and taken up many times underneath
+// that defer. So the deferred release routinely runs against a hold that is
+// already down — every conversation that ends at the prompt is one — and it has
+// to be a no-op rather than anything at all.
+func TestReleasingAConversationThatIsAlreadyDownIsANoOp(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	hold, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	// This is the deferred one, running behind a conversation that put itself
+	// down at the prompt and never took it back.
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release() on a hold that is already down error = %v", err)
+	}
+	if hold.Held() {
+		t.Fatal("a twice-released hold reports the conversation as held")
+	}
+	// And it let go of nothing it did not own: somebody else's claim, taken
+	// while this one was down, survives the second release rather than being
+	// dropped by it.
+	other, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() by another process error = %v", err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("third Release() error = %v", err)
+	}
+	if _, err := newConversationStore(t, root).Hold(identity); !errors.Is(err, ErrConversationHeld) {
+		t.Fatalf("Hold() error = %v, want ErrConversationHeld: a stale release dropped another process's claim", err)
+	}
+	if err := other.Release(); err != nil {
+		t.Fatalf("other Release() error = %v", err)
+	}
+}
+
+// The first claim waits too, which is what `yoyo chat --message` does when it
+// arrives mid-turn. Refusing it was the other half of the seam: the harness
+// relaying to the product manager, and a second window the operator opens
+// beside the first, were both turned away by a turn that was over moments
+// later. What the conversation serializes is turns, so an arriving claim queues
+// behind one rather than failing on it.
+func TestAFirstClaimWaitsForAnInFlightTurnRatherThanRefusing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	// The turn already in flight, taken the way a console takes one back.
+	mine, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+
+	claimed := make(chan *ConversationHold, 1)
+	failed := make(chan error, 1)
+	go func() {
+		hold, err := newConversationStore(t, root).Claim(context.Background(), identity)
+		if err != nil {
+			failed <- err
+			return
+		}
+		claimed <- hold
+	}()
+	select {
+	case hold := <-claimed:
+		hold.Release()
+		t.Fatal("a second claim took the conversation while a turn was in flight")
+	case err := <-failed:
+		t.Fatalf("a second claim was refused rather than queued: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := mine.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	select {
+	case hold := <-claimed:
+		if !hold.Held() {
+			t.Fatal("the claim that waited does not have the conversation")
+		}
+		if err := hold.Release(); err != nil {
+			t.Fatalf("Release() error = %v", err)
+		}
+	case err := <-failed:
+		t.Fatalf("Claim() error = %v after the turn in flight ended", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Claim() did not return after the turn in flight ended")
+	}
+}
+
+// The caller that has something better to do than wait still gets its refusal.
+// A background delivery has asked the agent nothing yet, so it comes back later
+// rather than holding its lease open for the length of somebody else's turn.
+func TestAClaimThatWillNotWaitIsRefusedWhileATurnIsInFlight(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	mine, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if _, err := newConversationStore(t, root).TryClaim(identity); !errors.Is(err, ErrConversationHeld) {
+		t.Fatalf("TryClaim() error = %v, want ErrConversationHeld", err)
+	}
+	// Put down at the prompt is not mid-turn, so the delivery gets its turn
+	// without the operator closing anything.
+	if err := mine.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	delivery, err := newConversationStore(t, root).TryClaim(identity)
+	if err != nil {
+		t.Fatalf("TryClaim() against a conversation put down error = %v", err)
+	}
+	if err := delivery.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+}
+
+// A claim that cannot wait any longer gives up rather than hanging, which is
+// what Ctrl-C at a `yoyo chat` that is waiting its turn amounts to.
+func TestAClaimGivesUpWhenItsContextIsDone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	mine, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	defer mine.Release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := newConversationStore(t, root).Claim(ctx, identity); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Claim() error = %v, want a deadline", err)
+	}
+}
+
+// A turn taken back at the prompt is as visible from outside as the first one
+// was. The stamp and the lock are taken on one path, so a console mid-turn is
+// what `yoyo agent list` and the standing status report — a retake that locked
+// without stamping would have shown every such turn as an idle machine.
+func TestAConversationTakenBackIsStampedAsInFlight(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	hold, err := store.Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if inFlight, err := store.InFlight(identity); !inFlight || err != nil {
+		t.Fatalf("a claimed conversation = %v, %v, want a turn in flight", inFlight, err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	// Put down at the prompt: nobody is talking to the agent, and no surface
+	// should say otherwise.
+	if inFlight, err := store.InFlight(identity); inFlight || err != nil {
+		t.Fatalf("a conversation put down = %v, %v, want no turn in flight", inFlight, err)
+	}
+	if err := hold.Retake(context.Background()); err != nil {
+		t.Fatalf("Retake() error = %v", err)
+	}
+	if inFlight, err := store.InFlight(identity); !inFlight || err != nil {
+		t.Fatalf("a conversation taken back = %v, %v, want a turn in flight", inFlight, err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("final Release() error = %v", err)
+	}
+}
+
+// Taking a conversation back waits for whoever has it rather than refusing: the
+// operator has already typed, and the other process's turn ends on its own.
+func TestTakingAConversationBackWaitsForWhoeverHasIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	hold, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	other, err := newConversationStore(t, root).Hold(identity)
+	if err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+
+	retaken := make(chan error, 1)
+	go func() { retaken <- hold.Retake(context.Background()) }()
+	select {
+	case err := <-retaken:
+		t.Fatalf("Retake() returned %v while another process held the conversation", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := other.Release(); err != nil {
+		t.Fatalf("other Release() error = %v", err)
+	}
+	select {
+	case err := <-retaken:
+		if err != nil {
+			t.Fatalf("Retake() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Retake() did not return after the other process released the conversation")
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("final Release() error = %v", err)
+	}
+}
+
+// A wait that cannot end is not one an operator has to serve: a cancelled
+// context gives the conversation back to the caller as a failure rather than
+// leaving them at a prompt that never answers.
+func TestTakingAConversationBackGivesUpWhenItsContextIsDone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	hold, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	other, err := newConversationStore(t, root).Hold(identity)
+	if err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+	defer other.Release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := hold.Retake(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Retake() error = %v, want a deadline", err)
+	}
+	if hold.Held() {
+		t.Fatal("a Retake() that gave up still reports the conversation as held")
+	}
 }
 
 func TestConversationStoreRefusesForeignAndMalformedRecords(t *testing.T) {
