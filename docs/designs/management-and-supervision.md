@@ -18,6 +18,10 @@ revisions:
       by: architect
       at: 2026-09-01T19:15:00Z
       reason: approved amendment b52bd247 from yoyodyne-ifd.224 - restart-on-deploy owned in one place, with the takeover bounded to idle boundaries, normal lease reattachment, and pinned instances unaffected
+    - action: amended
+      by: architect
+      at: 2026-09-03T16:45:00Z
+      reason: yoyodyne-ifd.130.1 - the supervision tree recorded, one product-manager supervisor, children surviving supervisor death with reattachment by presence and lease, bounded restarts degrading visibly through the standing ladder, and the three operator verbs as the only stop paths; launchd and cutover mechanics deferred to yoyodyne-ifd.142 by name
 ---
 
 # Management and supervision: the typed request contract and process residency
@@ -55,6 +59,8 @@ A role resolves what its own authority covers, and requests the role that owns w
 The long-term shape is **one durable interaction and state service**, with local chat, Slack, and the CLI as conversational clients and the dashboard as a read-only projection — "one pane" means shared state and supervision, not one literal interface. The residency direction: `yoyo chat` is the single entry point; the **product manager supervises the resident subprocesses, the Slack sink included**; today's chat-spawns-subprocesses shape is explicitly interim, on the way to a headless product-manager service — under launchd on macOS, the tested platform — with chat as a thin attach-detach client. The supervising process holds the Slack tokens and **constructs every child's environment by allowlist, never inheritance**, so no provider subprocess ever receives them; that construction is the enforced boundary and is covered by a test. Separately started services are acceptable while they keep clean service boundaries and health/readiness hooks; model sessions are execution details and are never the durable conversation record. Process separation now must not force a new state model later.
 
 A watch session takes up a build installed over it by itself: between runs, never interrupting one. The takeover happens only at a boundary where the process has nothing in flight; the new process reattaches through the normal lease machinery; and pinned workflow instances continue on their pinned definitions and authority — a new binary changes the executor, never in-flight work's contract. This is settled here rather than deferred: a later headless supervisor inherits this behavior rather than re-deciding it.
+
+**The supervision tree.** One supervisor per product: the product-manager service (interim: the chat process). Its children: the Slack reporter, the scheduler/watch loop, the triage dispatcher, the management-loop dispatcher, and — where started — the dashboard command. The supervisor owns start, stop, restart, and the health/readiness of children; each child owns its own domain and none owns workflow truth, per the standing invariants. **Children survive supervisor death**: they are independent processes with recorded presence, and a returning supervisor reattaches through those records and the lease machinery rather than killing and respawning — the same rule a returning chat client already follows. A child that crashes is restarted with backoff; a child that fails repeatedly is not restarted indefinitely — it is left down and reported as **degraded**, reaching the operator through the standing ladder rather than a restart loop. **The escalation ladder is the governed one and the supervisor invents no new verb**: report, then status banners, then a direct message in the degraded class. Operator stopping remains the three existing verbs — hold intake, pause spending, stop everything — and the supervisor is their executor, never a fourth path.
 
 ## Recovery
 

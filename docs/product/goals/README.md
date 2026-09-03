@@ -26,16 +26,12 @@ when it opened.
 
 ## What a goal looks like
 
-A goal document opens with an introduction saying what it covers and why, and
-states the goals that serve that introduction under a `Goals` heading. That is
-[the shape the harness checks](../../configuration.md#product-specifications),
-and it is checked of every document filed here but this index, which is exempt
-by name rather than for what it says. [The v1 non-goals](v1-non-goals.md)
-states its content under a `Non-goals` heading, so the harness reports it as
-stating none. It is still read exactly as written rather than dropped, because
-refusing it would lose intent somebody recorded. The contract having no shape
-for a non-goals document is a gap in the contract, not a reason to file
-non-goals under a `Goals` heading.
+The shape and identity a goals document must carry — the `Goals` heading, the
+frontmatter, the *Supports* trailer resolved against the brief — is governed by
+[the artifact contract](../../designs/artifact-contract.md), the normative home
+for those rules. This index links and describes; it states no rules of its own,
+and [index-and-stray-identity-governance](../../decisions/index-and-stray-identity-governance.md)
+is the decision that keeps it that way.
 
 Each goal states one outcome the product is trying to reach, and should be:
 
@@ -47,18 +43,6 @@ Each goal states one outcome the product is trying to reach, and should be:
 - **an outcome, not an implementation** — what should become true, and why. How
   it gets built belongs to designs and specifications.
 
-Artifact governance, delivered in milestone 2, made that machine-checkable: each
-goals document carries identity frontmatter, every goal's *Supports* trailer —
-the emphasized line directly under its entry, indented with it and with no blank
-line between — is resolved against the brief mechanically, reference validation
-and orphan reporting run over the loaded set, and a test enforces that every
-active goal names a claim the brief states. A reader can still trace the links
-by hand; the harness no longer depends on them to.
-
-This file is a directory index rather than an artifact: it carries no identity
-frontmatter, nothing refers to it by id, and artifact governance skips it by
-name. The shape check above skips it by that same name and not by a rule of its
-own, so there is no document the two read differently and nothing here is ever
-reported for the shape of a document it was not trying to be. `yoyo init`
-writes it and `yoyo doctor` reports it missing, so editing it is safe and
-deleting it is noticed.
+(The three qualities above are the product manager's guidance and move into
+their goals documentation when they rehouse them; they stay here until then so
+nothing recorded is lost.)
