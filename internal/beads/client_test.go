@@ -289,6 +289,111 @@ func TestClientAsksTheTrackerWhatIsReadyRatherThanWorkingItOut(t *testing.T) {
 	}
 }
 
+// Decomposition is stated as an edge by the tracker this project runs on, and
+// the reading that matters is the one that finds it there. The payload is the
+// shape bd returns for a child: no parent field anywhere in it, and the parent
+// named by a parent-child edge attributed to the child itself.
+func TestClientReadsDecompositionStatedAsAnEdgeRatherThanAField(t *testing.T) {
+	t.Parallel()
+
+	child := `[{"id":"yoyodyne-ifd.121.2","title":"Execute the README split","description":"d","status":"open",
+	            "priority":1,"issue_type":"task",
+	            "dependencies":[{"issue_id":"yoyodyne-ifd.121.2","depends_on_id":"yoyodyne-ifd.121",
+	                             "type":"parent-child","metadata":"{}"},
+	                            {"issue_id":"yoyodyne-ifd.121.2","depends_on_id":"yoyodyne-ifd.121.1",
+	                             "type":"blocks","metadata":"{}"}]}]`
+	runner := &fakeRunner{responses: []string{child}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+
+	items, err := client.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("Ready() = %#v", items)
+	}
+	item := items[0]
+	// The field really is absent: this is the case a reader of it alone gets
+	// wrong, rather than a store that states parentage both ways.
+	if item.Parent != "" {
+		t.Fatalf("parent field = %q, want the payload's own answer of none", item.Parent)
+	}
+	if got := item.DecomposedFrom(); got != "yoyodyne-ifd.121" {
+		t.Fatalf("DecomposedFrom() = %q, want the parent the edge names", got)
+	}
+	// Which item an edge belongs to is what tells a parent from a child, so it
+	// has to survive decoding to be checkable at all.
+	if item.Dependencies[0].IssueID != "yoyodyne-ifd.121.2" {
+		t.Fatalf("dependency = %#v, want the item the tracker attributes it to", item.Dependencies[0])
+	}
+}
+
+func TestWorkItemDecomposedFrom(t *testing.T) {
+	t.Parallel()
+
+	edge := func(issue, parent, kind string) Dependency {
+		return Dependency{IssueID: issue, ID: parent, Type: kind}
+	}
+	for _, test := range []struct {
+		name string
+		item WorkItem
+		want string
+	}{
+		{
+			name: "stated as a field",
+			item: WorkItem{ID: "yoyodyne-ifd.121.2", Parent: "yoyodyne-ifd.121"},
+			want: "yoyodyne-ifd.121",
+		},
+		{
+			name: "stated as an edge",
+			item: WorkItem{ID: "yoyodyne-ifd.121.2", Dependencies: []Dependency{
+				edge("yoyodyne-ifd.121.2", "yoyodyne-ifd.121", "parent-child")}},
+			want: "yoyodyne-ifd.121",
+		},
+		{
+			// The tracker answering directly beats the edge, so a store that
+			// restates one relationship both ways cannot report two parents.
+			name: "stated both ways",
+			item: WorkItem{ID: "yoyodyne-ifd.121.2", Parent: "yoyodyne-ifd.121", Dependencies: []Dependency{
+				edge("yoyodyne-ifd.121.2", "yoyodyne-ifd.121", "parent-child")}},
+			want: "yoyodyne-ifd.121",
+		},
+		{
+			name: "an edge the tracker did not attribute",
+			item: WorkItem{ID: "yoyodyne-ifd.121.2", Dependencies: []Dependency{
+				edge("", "yoyodyne-ifd.121", "parent-child")}},
+			want: "yoyodyne-ifd.121",
+		},
+		{
+			// A listing that carried the epic's children beside it must not read
+			// as the epic having been broken out of one of them.
+			name: "an edge belonging to another item",
+			item: WorkItem{ID: "yoyodyne-ifd.121", Dependencies: []Dependency{
+				edge("yoyodyne-ifd.121.2", "yoyodyne-ifd.121", "parent-child")}},
+			want: "",
+		},
+		{
+			name: "a blocker is not a parent",
+			item: WorkItem{ID: "yoyodyne-ifd.121.2", Dependencies: []Dependency{
+				edge("yoyodyne-ifd.121.2", "yoyodyne-ifd.121.1", "blocks")}},
+			want: "",
+		},
+		{
+			name: "work nothing was broken out of",
+			item: WorkItem{ID: "yoyodyne-ifd.256"},
+			want: "",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := test.item.DecomposedFrom(); got != test.want {
+				t.Fatalf("DecomposedFrom() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestClientCreatesAWorkItemAndReportsTheIdentifierItGot(t *testing.T) {
 	t.Parallel()
 
