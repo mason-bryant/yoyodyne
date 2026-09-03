@@ -277,15 +277,51 @@ func (p PathRefusal) Validate() error {
 }
 
 // MaxCarriedAmendmentRefusals bounds how many refused amendment proposals a run
-// carries into its developer's next invocation, and MaxAmendmentRefusalBytes
-// bounds one of them. Both are generous for what actually accumulates — one
-// reply proposes at most a handful of changes, and the carried list is emptied
-// by the next reply — and they are here so a provider emitting nothing but
+// carries into a role's next invocation, and MaxAmendmentRefusalBytes bounds one
+// of them. Both are generous for what actually accumulates — one reply proposes
+// at most a handful of changes, and what one role is carrying is emptied by that
+// role's next reply — and they are here so a provider emitting nothing but
 // unreadable blocks cannot fill durable state or the next prompt with them.
 const (
 	MaxCarriedAmendmentRefusals = 10
 	MaxAmendmentRefusalBytes    = 1 << 10
 )
+
+// AmendmentRefusal is one proposed change the harness could not record, waiting
+// to be put in front of the agent that proposed it.
+//
+// The role is recorded with the words rather than left to be assumed from
+// whichever agent is invoked next. What refuses a proposal is per-role — a
+// proposal from the role that already owns the document is refused for being
+// that role's own to make — so a refusal that arrived without its proposer could
+// be shown to an agent that is then told not to claim something it never said,
+// while the agent that did say it is still never told. That is the same false
+// record this exists to end, one role over.
+type AmendmentRefusal struct {
+	// Role is the contract the proposer was working under when the harness
+	// refused what it proposed, and is what decides whose next invocation opens
+	// with this.
+	Role domain.AgentRole `json:"role"`
+	// Problem is the refusal in the harness's own words. It is carried verbatim:
+	// what is wrong with the block is the whole of what its author needs to write
+	// a different one, and a paraphrase is the harness guessing at that.
+	Problem string `json:"problem"`
+}
+
+// Validate reports every contract violation in the carried refusal at once.
+func (a AmendmentRefusal) Validate() error {
+	var problems []error
+	if err := domain.ValidateIdentifier("role", string(a.Role)); err != nil {
+		problems = append(problems, err)
+	}
+	if strings.TrimSpace(a.Problem) == "" {
+		problems = append(problems, errors.New("problem is required"))
+	}
+	if len(a.Problem) > MaxAmendmentRefusalBytes {
+		problems = append(problems, fmt.Errorf("problem is %d bytes, which exceeds the %d byte bound", len(a.Problem), MaxAmendmentRefusalBytes))
+	}
+	return errors.Join(problems...)
+}
 
 // Finding is one durable reviewer finding. Findings are recorded rather than
 // only counted because they are the developer's input for the next repair
@@ -774,19 +810,19 @@ type State struct {
 	// gate is decided before the checks, recording a refusal clears both of the
 	// others rather than competing with them for the next attempt.
 	PathRefusal *PathRefusal `json:"path_refusal,omitempty"`
-	// RefusedAmendments are the changes this run's developer proposed that the
-	// harness could not record, in the harness's own words, waiting to be put in
-	// front of the developer that proposed them. It is not a fourth kind of repair
-	// input and competes with none of the three: a refused proposal costs the run
-	// nothing and buys no attempt, it rides along with whatever prompt the run was
-	// going to send next, and the reply that is shown it empties the list.
+	// RefusedAmendments are the changes agents on this run proposed that the
+	// harness could not record, each with the role that proposed it, waiting to be
+	// put in front of that role. It is not a fourth kind of repair input and
+	// competes with none of the three: a refused proposal costs the run nothing and
+	// buys no attempt, it rides along with whatever prompt that role was going to
+	// be sent next, and the reply that is shown it drops what it was shown.
 	//
 	// It is durable because the refusal used to reach the operator and nobody
 	// else. A developer that named a document the repository does not record was
 	// never told, and went on to write into a checked-in file that it had raised a
 	// proposal nothing was holding — a false claim that outlived the run, which
 	// only `yoyo amendment list` disproved.
-	RefusedAmendments []string `json:"refused_amendments,omitempty"`
+	RefusedAmendments []AmendmentRefusal `json:"refused_amendments,omitempty"`
 	// RepairAttempts counts the repair attempts already handed back to the
 	// developer, whichever kind of failure triggered them: one budget covers
 	// both, so it bounds the developer invocations a run can make rather than
@@ -1117,11 +1153,8 @@ func (s State) Validate() error {
 		problems = append(problems, fmt.Errorf("%d refused amendments are carried, which exceeds the bound of %d", len(s.RefusedAmendments), MaxCarriedAmendmentRefusals))
 	}
 	for index, refused := range s.RefusedAmendments {
-		if strings.TrimSpace(refused) == "" {
-			problems = append(problems, fmt.Errorf("refused_amendments[%d] is empty", index))
-		}
-		if len(refused) > MaxAmendmentRefusalBytes {
-			problems = append(problems, fmt.Errorf("refused_amendments[%d] is %d bytes, which exceeds the %d byte bound", index, len(refused), MaxAmendmentRefusalBytes))
+		if err := refused.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("refused_amendments[%d]: %w", index, err))
 		}
 	}
 	if s.Changes != nil {

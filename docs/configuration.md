@@ -1054,11 +1054,13 @@ no owner to decide a change to a document that does not exist, and a proposal
 from the role that already owns the document is refused too: that role amends
 it. **The refusal reaches the agent that wrote it as well as you** — it is named
 on the run's outcome beside the proposals that were kept, and it is carried on
-the run's own state so the agent's next invocation opens with it, in the
-harness's own words: nothing was recorded, nobody was asked, do not describe the
-proposal as raised, and propose it again if it is still worth proposing. The
-reply to that invocation spends it, so the agent is told once. The artifact ids
-are what `yoyo artifact list` prints.
+the run's own state, tagged with the role that proposed it, so that role's next
+invocation opens with it in the harness's own words: nothing was recorded, nobody
+was asked, do not describe the proposal as raised, and propose it again if it is
+still worth proposing. That role's next reply spends it, so an agent is told
+once, and a refusal is only ever shown to the role that earned it. Since the
+developer is the only role carrying the block today, the developer is the only
+role that earns one. The artifact ids are what `yoyo artifact list` prints.
 
 **Nothing an unapproved proposal contains reaches the document, and neither does
 anything an approved one contains.** A proposal carries what should become true

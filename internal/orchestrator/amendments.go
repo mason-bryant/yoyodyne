@@ -134,11 +134,11 @@ const maxAmendmentProblemBytes = 512
 // proposer can act on. The outcome is what reaches the operator, and it was for a
 // long time the only place it reached: the agent that wrote the block was never
 // told, so a developer whose proposal was refused carried on believing it was
-// waiting on somebody. The other place is the run's own state, which is what the
-// developer's next invocation opens with.
+// waiting on somebody. The other place is the run's own state, which is what that
+// role's next invocation opens with.
 func (a *activeRun) noteAmendmentProblem(role domain.AgentRole, cause error) {
 	problem := fmt.Sprintf("a change the %s proposed was not recorded: %s", role, singleLine(cause.Error(), maxAmendmentProblemBytes))
-	a.carryAmendmentRefusal(problem)
+	a.carryAmendmentRefusal(role, problem)
 	if a.outcome.AmendmentProblem == "" {
 		a.outcome.AmendmentProblem = problem
 		return
@@ -146,34 +146,60 @@ func (a *activeRun) noteAmendmentProblem(role domain.AgentRole, cause error) {
 	a.outcome.AmendmentProblem += "; " + problem
 }
 
-// carryAmendmentRefusal puts one refusal where this run's next developer
-// invocation reads it. The words are the harness's own and are carried verbatim:
-// what is wrong with the block is the whole of what the developer needs to write
-// a different one, and a paraphrase is the harness guessing at that.
+// carryAmendmentRefusal puts one refusal where the role that earned it reads it
+// next. The words are the harness's own and are carried verbatim: what is wrong
+// with the block is the whole of what its author needs to write a different one,
+// and a paraphrase is the harness guessing at that.
+//
+// The role is recorded with them because every reader of this list is a
+// particular agent being told what it itself proposed. Only the developer's reply
+// is scanned for proposals today, so only the developer can earn one — but this
+// is called with whatever role collected, and a refusal that arrived without its
+// proposer would be shown to whoever was invoked next under a heading claiming
+// they wrote it, while its actual author went on believing it had landed. That is
+// the failure this exists to end, moved one role over, so what decides who is
+// shown a refusal is recorded rather than assumed.
 //
 // Past the bound the refusal is kept on the outcome and dropped from what is
-// carried, which is the direction that cannot cost the agent anything it has not
-// already been told: the list is emptied by every reply, so a reply that fills it
-// has proposed more changes than one block may carry several times over, and the
-// first ones say the same thing as the rest.
-func (a *activeRun) carryAmendmentRefusal(problem string) {
+// carried, which is the direction that cannot cost an agent anything it has not
+// already been told: a role's own reply drops what that role was shown, so a run
+// that fills this has proposed more changes than one block may carry several
+// times over, and the first ones say the same thing as the rest.
+func (a *activeRun) carryAmendmentRefusal(role domain.AgentRole, problem string) {
 	if len(a.state.RefusedAmendments) >= runstate.MaxCarriedAmendmentRefusals {
 		return
 	}
-	a.state.RefusedAmendments = append(a.state.RefusedAmendments, singleLine(problem, runstate.MaxAmendmentRefusalBytes))
+	a.state.RefusedAmendments = append(a.state.RefusedAmendments, runstate.AmendmentRefusal{
+		Role:    role,
+		Problem: singleLine(problem, runstate.MaxAmendmentRefusalBytes),
+	})
 }
 
-// clearCarriedAmendmentRefusals spends the refusals an invocation was shown. It
-// is called where the reply to that invocation is recorded rather than where the
-// prompt is built, so a prompt rebuilt after an interrupted attempt still carries
-// them: what the clear means is that the developer has been told, and only a
-// reply proves that.
-func (a *activeRun) clearCarriedAmendmentRefusals() {
-	a.state.RefusedAmendments = nil
+// clearCarriedAmendmentRefusals spends the refusals one role's invocation was
+// shown, and leaves every other role's where they are: what the clear records is
+// that this role has been told, which says nothing about anybody else.
+//
+// It is called where the reply to that invocation is recorded rather than where
+// the prompt is built, so a prompt rebuilt after an interrupted attempt still
+// carries them — only a reply proves the agent was actually told.
+func (a *activeRun) clearCarriedAmendmentRefusals(role domain.AgentRole) {
+	kept := make([]runstate.AmendmentRefusal, 0, len(a.state.RefusedAmendments))
+	for _, refused := range a.state.RefusedAmendments {
+		if refused.Role != role {
+			kept = append(kept, refused)
+		}
+	}
+	if len(kept) == 0 {
+		a.state.RefusedAmendments = nil
+		return
+	}
+	a.state.RefusedAmendments = kept
 }
 
-// carriedAmendmentRefusals is what a developer's next turn opens with, ahead of
-// everything else it is handed.
+// carriedAmendmentRefusals is what one role's next turn opens with, ahead of
+// everything else it is handed. It renders that role's own refusals and no
+// others: the whole of what it says is "you proposed this and it was not
+// recorded", which is false of anything another agent proposed.
 //
 // It says the same three things a refused tracker block says to the role that
 // sent it: nothing happened, here is why in the harness's own words, and ask
@@ -181,8 +207,14 @@ func (a *activeRun) clearCarriedAmendmentRefusals() {
 // that is the failure this exists to end — a developer that believed its proposal
 // had landed wrote into a checked-in document that it had raised one, and the
 // claim outlived the run that made it.
-func carriedAmendmentRefusals(refused []string) string {
-	if len(refused) == 0 {
+func carriedAmendmentRefusals(role domain.AgentRole, refused []runstate.AmendmentRefusal) string {
+	var mine []string
+	for _, refusal := range refused {
+		if refusal.Role == role {
+			mine = append(mine, refusal.Problem)
+		}
+	}
+	if len(mine) == 0 {
 		return ""
 	}
 	var rendered strings.Builder
@@ -190,7 +222,7 @@ func carriedAmendmentRefusals(refused []string) string {
 	rendered.WriteString("The harness refused it, so nothing is waiting on anybody: no owner was asked, and no decision will ever come back. ")
 	rendered.WriteString("Do not describe the proposal as raised, and do not write into your change — or into anything else that outlives this run — that you have raised one.\n\n")
 	rendered.WriteString("The refusal, in the harness's own words:\n\n")
-	for _, problem := range refused {
+	for _, problem := range mine {
 		rendered.WriteString("- " + problem + "\n")
 	}
 	rendered.WriteString("\nIf the change is still worth proposing, propose it again in a block that answers what the refusal says was wrong with the one before it. If it is not, say so in your summary and leave it at that.\n\n")

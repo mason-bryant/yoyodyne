@@ -528,6 +528,41 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "integration requires no recorded protected-path refusal",
 		},
 		{
+			name: "a carried refusal nobody is named as having earned",
+			mutate: func(state *State) {
+				state.RefusedAmendments = []AmendmentRefusal{{Problem: "a change was not recorded"}}
+			},
+			problem: `refused_amendments[0]: role "" must match`,
+		},
+		{
+			name: "a carried refusal that says nothing",
+			mutate: func(state *State) {
+				state.RefusedAmendments = []AmendmentRefusal{{Role: domain.RoleDeveloper, Problem: "  \n"}}
+			},
+			problem: "refused_amendments[0]: problem is required",
+		},
+		{
+			name: "a carried refusal longer than the bound allows",
+			mutate: func(state *State) {
+				state.RefusedAmendments = []AmendmentRefusal{{
+					Role:    domain.RoleDeveloper,
+					Problem: strings.Repeat("x", MaxAmendmentRefusalBytes+1),
+				}}
+			},
+			problem: "refused_amendments[0]: problem is",
+		},
+		{
+			name: "more carried refusals than the bound allows",
+			mutate: func(state *State) {
+				refusals := make([]AmendmentRefusal, MaxCarriedAmendmentRefusals+1)
+				for index := range refusals {
+					refusals[index] = AmendmentRefusal{Role: domain.RoleDeveloper, Problem: "a change was not recorded"}
+				}
+				state.RefusedAmendments = refusals
+			},
+			problem: "11 refused amendments are carried",
+		},
+		{
 			name:    "integration target that is not a local branch",
 			mutate:  func(state *State) { state.TargetBranch = "refs/heads/main" },
 			problem: "target_branch must be a local branch name",

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -505,8 +506,91 @@ func TestARefusedProposalIsDurableForAnInvocationInAnotherProcess(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if len(recorded.RefusedAmendments) != 1 || !strings.Contains(recorded.RefusedAmendments[0], "no artifact answers to that id") {
+	if len(recorded.RefusedAmendments) != 1 || !strings.Contains(recorded.RefusedAmendments[0].Problem, "no artifact answers to that id") {
 		t.Fatalf("the refusal did not survive the run: %#v", recorded.RefusedAmendments)
+	}
+	// Tagged with who proposed it, which is what decides who is shown it.
+	if recorded.RefusedAmendments[0].Role != domain.RoleDeveloper {
+		t.Fatalf("the refusal is not attributed to the role that earned it: %#v", recorded.RefusedAmendments[0])
+	}
+}
+
+// A refusal is shown to the role that earned it and to nobody else. Only the
+// developer's reply is scanned for proposals today, so only a developer can earn
+// one — but what makes that safe has to be the attribution rather than the single
+// caller, because a refusal shown to the wrong agent is that agent told not to
+// claim something it never said while the agent that did say it goes on believing
+// its proposal landed. That is the failure this item exists to end, one role over.
+func TestARefusalIsNotShownToARoleThatDidNotEarnIt(t *testing.T) {
+	t.Parallel()
+
+	const problem = "a change the reviewer proposed was not recorded: invented: no artifact answers to that id"
+	carried := []runstate.AmendmentRefusal{{Role: domain.RoleReviewer, Problem: problem}}
+
+	// The developer is shown nothing, because none of it is the developer's.
+	if section := carriedAmendmentRefusals(domain.RoleDeveloper, carried); section != "" {
+		t.Fatalf("another role's refusal was put in front of the developer:\n%s", section)
+	}
+	// The role that earned it still is.
+	section := carriedAmendmentRefusals(domain.RoleReviewer, carried)
+	if !strings.Contains(section, problem) {
+		t.Fatalf("the proposing role was not shown its own refusal:\n%s", section)
+	}
+
+	// And spending one role's refusals leaves every other role's where they are: a
+	// developer reply says the developer was told, and nothing about anybody else.
+	run := &activeRun{state: runstate.State{RefusedAmendments: append(
+		[]runstate.AmendmentRefusal{{Role: domain.RoleDeveloper, Problem: "a change the developer proposed was not recorded: invented: no artifact answers to that id"}},
+		carried...)}}
+	run.clearCarriedAmendmentRefusals(domain.RoleDeveloper)
+	if len(run.state.RefusedAmendments) != 1 || run.state.RefusedAmendments[0].Role != domain.RoleReviewer {
+		t.Fatalf("clearing one role's refusals took another role's with them: %#v", run.state.RefusedAmendments)
+	}
+}
+
+// The carried list is bounded, so a run whose every reply is an unreadable block
+// cannot fill durable state or the next prompt with refusals. Past the bound the
+// refusal is still named on the outcome, which is the half that reaches the
+// operator.
+func TestCarriedAmendmentRefusalsStopAtTheBound(t *testing.T) {
+	t.Parallel()
+
+	run := &activeRun{}
+	for i := 0; i < runstate.MaxCarriedAmendmentRefusals+3; i++ {
+		run.noteAmendmentProblem(domain.RoleDeveloper, fmt.Errorf("refusal %d", i))
+	}
+	if len(run.state.RefusedAmendments) != runstate.MaxCarriedAmendmentRefusals {
+		t.Fatalf("carried %d refusals, want the bound of %d", len(run.state.RefusedAmendments), runstate.MaxCarriedAmendmentRefusals)
+	}
+	// What was dropped from the carry is still on the outcome for the operator.
+	if !strings.Contains(run.outcome.AmendmentProblem, "refusal 12") {
+		t.Fatalf("a refusal past the bound was lost to the operator too: %q", run.outcome.AmendmentProblem)
+	}
+	// And every one of them is in a shape the store will take, since a refusal the
+	// state refuses is a refusal nobody is ever told.
+	for index, refused := range run.state.RefusedAmendments {
+		if err := refused.Validate(); err != nil {
+			t.Fatalf("carried refusal %d is not storable: %v", index, err)
+		}
+	}
+}
+
+// One refusal longer than the bound is folded to it rather than left for the
+// store to refuse, because a refusal the state will not take is a refusal nobody
+// is ever told. Today's callers fold to a shorter bound of their own before they
+// get here, so this asks the unit whose guarantee it is rather than going through
+// them: what must hold is that nothing this appends is a shape the state rejects,
+// whatever the caller hands it.
+func TestALongAmendmentRefusalIsFoldedToWhatTheStateWillTake(t *testing.T) {
+	t.Parallel()
+
+	run := &activeRun{}
+	run.carryAmendmentRefusal(domain.RoleDeveloper, strings.Repeat("x", runstate.MaxAmendmentRefusalBytes*2))
+	if len(run.state.RefusedAmendments) != 1 {
+		t.Fatalf("carried = %#v", run.state.RefusedAmendments)
+	}
+	if err := run.state.RefusedAmendments[0].Validate(); err != nil {
+		t.Fatalf("an over-long refusal was carried in a shape the store refuses: %v", err)
 	}
 }
 

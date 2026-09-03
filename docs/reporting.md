@@ -491,11 +491,14 @@ That naming reaches the agent as well as you. A refusal used to reach you alone,
 which is how a developer whose proposal named a document nobody records went on
 to write into a checked-in file that it had raised one — a false claim durable in
 prose, which only `yoyo amendment list` disproved. So the refusal is carried on
-the run's own state and the developer's next invocation opens with it, in the
-harness's own words: nothing was recorded, nobody was asked, do not describe it
-as raised, and propose it again if it is still worth proposing. The reply to that
-invocation spends it, so a refusal is carried once and no further, and the
-contract every agent works under says the same thing in advance — a proposal is
+the run's own state, tagged with the role that proposed it, and that role's next
+invocation opens with it in the harness's own words: nothing was recorded, nobody
+was asked, do not describe it as raised, and propose it again if it is still
+worth proposing. That role's next reply spends it, so a refusal is carried once
+and no further, and it is never shown to a role that did not earn it. The
+developer carries the block today, so the developer is the role this runs for;
+the tagging is what keeps it correct when another role gets the block. The
+contract that role works under says the same thing in advance — a proposal is
 raised only once the harness says so, and nothing an agent writes may claim
 otherwise.
 
