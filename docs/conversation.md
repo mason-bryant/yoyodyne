@@ -713,10 +713,43 @@ one conversation record per agent, with its own provider session, its own turn
 count, and its own picture of the repository. Talking to the architect never
 resumes what the product manager was told, and where two agents fill one role
 neither resumes the other: they are two identities with two sessions, and the
-lease that stops a second process talking to one of them leaves the other free.
+lease that stops a second process taking a turn with one of them leaves the
+other free.
 `yoyo agent list` reads all of it without starting a provider — including
-whether another process is holding a conversation right now, which is why a
-second one would be refused.
+whether another process has a conversation right now, which is what anything
+else wanting a turn waits behind.
+
+**What is exclusive is a turn, not your window.** An open `yoyo chat` spends
+nearly all of its life waiting for you to type, and while it waits it puts the
+conversation down: `yoyo chat --message` in another terminal, the harness's own
+deliveries, and a second `yoyo chat` you leave open beside the first all reach
+the same product manager without you closing anything. What they take turns over
+is the turn itself.
+
+A command you typed queues behind a turn already in flight rather than being
+turned away. It says what it is waiting for once the wait is long enough to
+notice, and Ctrl-C ends the wait. A delivery the harness makes in the background
+does the opposite and comes back later instead of waiting: nothing has been asked
+of the agent yet, so there is nothing to lose by trying again, and a delivery that
+waited would hold its budget open for the length of somebody else's turn.
+
+Your own window takes the conversation back when you press enter, waits there
+the same way, and re-reads the record before it answers — so a turn taken
+elsewhere while you were typing is one your next turn continues from rather than
+one it overwrites. The exception is a run you started from the conversation with
+[`/work`](#steering-the-work-from-the-conversation): that run reports itself into
+the conversation from under the prompt, so the conversation is yours until it
+ends.
+
+The one thing it will not do is carry on through a conversation replaced
+underneath it. An agent has **one** record, so `yoyo chat --new` elsewhere does
+not sit alongside the open conversation — it replaces it. The open one notices at
+your next message and ends, saying so, which protects the new conversation from
+being overwritten in turn. What it cannot do is give you the displaced one back:
+by the time anything notices, that record is already gone and it can no longer be
+resumed. Its event log stays on disk under its own conversation identifier, so
+what was said is still recoverable, but nothing points at it. Start a new
+conversation from the window you are actually in.
 
 An agent is conventionally named for its role, and `yoyo init` names every one
 of them that way, so a project that has never configured two agents on a role has

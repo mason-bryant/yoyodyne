@@ -74,11 +74,17 @@ type developmentManagerConversation struct {
 // A conversation that could not be opened is reported as unreachable rather than
 // as a failed delivery, and the difference is what the caller does about it:
 // nothing was asked of her, so the attempt is given back and a later pass makes
-// it. That covers the ordinary reasons opening fails — the operator has her
-// conversation open, the provider is not signed in, no agent fills the role —
-// none of which is a reason to spend a stoppage's delivery.
+// it. That covers the ordinary reasons opening fails — the operator is mid-turn
+// with her, the provider is not signed in, no agent fills the role — none of
+// which is a reason to spend a stoppage's delivery.
+//
+// Mid-turn is the one this does not wait out, which is why it opens without
+// waiting. An operator sitting at her prompt is no longer a reason at all: the
+// console puts the conversation down between turns, so what is left is a turn
+// actually being taken, and coming back later is cheaper than holding a
+// delivery's lease and budget open until it ends.
 func (d developmentManagerConversation) Judge(ctx context.Context, entry triage.Entry) (orchestrator.Judgment, error) {
-	session, lease, err := openChat(ctx, domain.RoleDevelopmentManager, "", d.configPath, false, d.errors())
+	session, lease, err := openChat(ctx, domain.RoleDevelopmentManager, "", d.configPath, false, false, d.errors())
 	if err != nil {
 		return orchestrator.Judgment{}, fmt.Errorf("%w: %w", orchestrator.ErrConversationUnreachable, err)
 	}

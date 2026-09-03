@@ -148,11 +148,11 @@ type conversationRequest struct {
 // converse holds one conversation with one role: a single message and its reply,
 // or the interactive conversation the operator stays inside.
 func converse(ctx context.Context, role domain.AgentRole, request conversationRequest, stdin io.Reader, stdout, stderr io.Writer) int {
-	session, lease, err := openChat(ctx, role, request.agentName, request.configPath, request.fresh, stderr)
+	session, hold, err := openChat(ctx, role, request.agentName, request.configPath, request.fresh, true, stderr)
 	if err != nil {
 		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
 	}
-	defer lease.Release()
+	defer hold.Release()
 
 	if request.message != "" {
 		return runChatMessage(ctx, session, role, request.message, request.jsonOutput, stdout, stderr)
@@ -344,15 +344,25 @@ func reportChatCommand(stdout, stderr io.Writer, jsonOutput bool, evidence chat.
 // openChat builds a role's conversation from configuration: the configured
 // agent filling that role, the repository's own Markdown, the tracker state as
 // it stands, the harness the operator steers work with, and the durable record a
-// previous process left behind. The returned lease is this process's exclusive
-// hold on that conversation.
+// previous process left behind. The returned hold is this process's claim on
+// that conversation: taken here, put down whenever nobody is talking to the
+// agent, and released for good by the caller.
 //
 // Everything the operator's own commands need is wired for every role, because
 // those commands are the operator's authority rather than the agent's and they
 // mean the same thing in every conversation. What differs between roles is what
 // the role itself may ask for, and that is the contract and the authority table
 // in the chat package rather than anything decided here.
-func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh bool, stderr io.Writer) (*chat.Session, *runstate.Lease, error) {
+//
+// waitForTurn is what to do about a turn already in flight, and it is the one
+// thing the two callers genuinely disagree about. The operator waits: they have
+// already typed the command, a turn ends on its own, and being turned away by
+// one was the seam that made the product manager unreachable. A background
+// delivery does not: nothing was asked of the agent yet, the attempt is given
+// back and a later pass makes it, and a dispatcher holding its lease and its
+// budget open for the length of somebody else's turn is a worse answer than
+// coming back.
+func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh, waitForTurn bool, stderr io.Writer) (*chat.Session, *runstate.ConversationHold, error) {
 	// The conversation is built over the same components a run is, because
 	// steering work from inside it means executing exactly the runs
 	// `yoyodyne run` would have executed.
@@ -411,8 +421,25 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// The conversation is held, recorded, and resumed under the agent that holds
 	// it, so two agents configured for one role are two conversations rather than
 	// one they would take turns overwriting.
-	lease, err := store.Hold(runstate.ConversationIdentity{Agent: name, Role: role})
-	if err != nil {
+	//
+	// Claiming queues behind whoever is mid-turn rather than refusing, which is
+	// the whole of what makes the product manager reachable: `yoyo chat
+	// --message` from another terminal, and a second window the operator opens
+	// beside the first, both wait out a turn instead of being turned away by one.
+	// Ctrl-C ends the wait, and the wait is said out loud once it lasts long
+	// enough to notice, so an operator whose command has not come back knows what
+	// it is behind. The refusing claim comes back at once and so says nothing.
+	identity := runstate.ConversationIdentity{Agent: name, Role: role}
+	var hold *runstate.ConversationHold
+	if err := chat.AwaitConversation(role, stderr, func() error {
+		var err error
+		if waitForTurn {
+			hold, err = store.Claim(ctx, identity)
+		} else {
+			hold, err = store.TryClaim(identity)
+		}
+		return err
+	}); err != nil {
 		return nil, nil, err
 	}
 
@@ -431,7 +458,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	ground := newConversationGround(parts, role)
 	briefing, err := ground.Gather(ctx)
 	if err != nil {
-		return nil, nil, errors.Join(err, lease.Release())
+		return nil, nil, errors.Join(err, hold.Release())
 	}
 	for _, problem := range briefing.Problems {
 		fmt.Fprintf(stderr, "warning: %s\n", problem)
@@ -446,6 +473,12 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		Role:    role,
 		Backend: provider,
 		Store:   store,
+		// This process's claim on the conversation, handed over so an interactive
+		// one can put it down while the operator is at the prompt. What has to be
+		// exclusive is a turn: an idle console that never let go was the reason
+		// nothing else could reach the product manager until the operator closed
+		// their window.
+		Hold: hold,
 		// The tracker and the harness behind the operator's commands are the
 		// harness's own hands, not the product manager's: they are used only
 		// where an operator approved a proposal or asked for something.
@@ -548,9 +581,9 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		Fresh:        fresh,
 	})
 	if err != nil {
-		return nil, nil, errors.Join(err, lease.Release())
+		return nil, nil, errors.Join(err, hold.Release())
 	}
-	return session, lease, nil
+	return session, hold, nil
 }
 
 // conversationAccount picks the provider account one agent's conversation is
