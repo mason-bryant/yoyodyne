@@ -289,6 +289,11 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		Tracker:   parts.tracker(),
 		Worktrees: parts.worktrees,
 		Store:     parts.store,
+		// The same store, named again because a workflow instance is written
+		// through it rather than through the interface a run's record goes
+		// through. It is wired unconditionally and observes nothing until a
+		// project turns the declarative trial on.
+		Instances: parts.store,
 		Backend:   developerProvider,
 		Checks: checks.Runner{
 			Process: processRunner,

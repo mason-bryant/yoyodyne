@@ -34,7 +34,10 @@ const DefaultBound = 1000
 // resumes the instance. Making that safe for an action with a side effect is the
 // step-attempt record, the idempotency key, and the reconciliation the design
 // describes, and none of the three is here — which is why nothing in the delivery
-// path runs on this yet and why the graphs it is exercised against are fixtures.
+// path performs anything through this yet. What does step it over a real run is
+// the orchestrator's declarative trial, and it steps a graph whose doors perform
+// nothing, precisely because re-performing one is what is not yet safe; the
+// graphs this package is exercised against are otherwise fixtures.
 //
 // It holds no state of its own. Two executors over one store and one graph are
 // interchangeable, which is what makes resuming an instance in a second process

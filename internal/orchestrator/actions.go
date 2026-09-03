@@ -3,7 +3,10 @@ package orchestrator
 // The delivery pipeline's steps, named and registered.
 //
 // This is a second door onto functions the pipeline already calls, and nothing
-// yet walks through it. Run still calls claim and develop directly; develop
+// yet walks through it to perform anything. The declarative trial in
+// declarative.go steps copies of these actions whose Perform does nothing, so
+// what it exercises is the topology and the authority they declare rather than
+// the code behind them. Run still calls claim and develop directly; develop
 // calls publishAttempt on its way out of an attempt; and verifyReviewAndFinish,
 // the repair loop and finish call verify, reviewChange, integrate, complete and
 // cleanUp between them — all in the order Go control flow puts them in, and this

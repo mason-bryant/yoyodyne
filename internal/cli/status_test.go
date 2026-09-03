@@ -273,6 +273,41 @@ func TestStatusNamesEachRecordedReasonForWhatItIs(t *testing.T) {
 	}
 }
 
+// The declarative soak is counted off the divergences its runs record, so a run
+// that recorded one has to say so where the run is read. It is not one of the
+// reasons a run ended and must never render as one: the work landed, and what
+// diverged is the observation standing beside it.
+func TestStatusNamesADeclarativeDivergenceWithoutCallingItAFailure(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{
+		Matched:  1,
+		Recorded: 1,
+		Runs: []runstate.RunSummary{{
+			RunID:              "run-0123456789abcdef0123456789abcdef",
+			WorkItemID:         "yoyodyne-ifd.209.6",
+			Status:             runstate.StatusSucceeded,
+			Outcome:            runstate.OutcomeSucceeded,
+			Phase:              runstate.PhaseComplete,
+			StartedAt:          completedAt,
+			CompletedAt:        &completedAt,
+			Integrated:         true,
+			WorkflowInstanceID: "run-0123456789abcdef0123456789abcdef-delivery",
+			WorkflowDivergence: `the run performed "check" and produced "passed", and its instance stands in "review"`,
+			CostUSD:            1.5,
+		}},
+	}, "", false)
+	rendered := out.String()
+	if !strings.Contains(rendered, `workflow divergence: the run performed "check" and produced "passed", and its instance stands in "review"`) {
+		t.Fatalf("rendered = %q, want the divergence named", rendered)
+	}
+	if strings.Contains(rendered, "reason:") {
+		t.Fatalf("a divergence was reported as the reason a run ended: %q", rendered)
+	}
+}
+
 // A run marked outstanding with nothing under it is the "go and read the run's
 // JSON" case this verb exists to remove, and the marker has two causes worth
 // telling apart: cleanup that never finished, and a merge the forge queued and
