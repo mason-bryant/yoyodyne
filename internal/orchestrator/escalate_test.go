@@ -437,12 +437,14 @@ func TestADeliveryACancellationKilledKeepsTheDelivery(t *testing.T) {
 // already cancelled.
 //
 // The store really is this. Its read-modify-write is serialized by a lock whose
-// wait returns the context's error, so a give-back handed a cancelled context is
-// refused the moment another process holds the record — and only then, because
-// an uncontended lock is taken without the context being consulted at all. A
-// test that waited for the real refusal would be waiting on that race; this
-// makes the refusal certain instead, so what the test proves is that the
-// give-back is never handed a cancelled context rather than that it got lucky.
+// wait returns the context's error, so either of the two writes a delivery makes
+// after its turn — the give-back of an attempt, the settling of one that
+// answered — is refused when handed a cancelled context and another process
+// holds the record, and only then, because an uncontended lock is taken without
+// the context being consulted at all. A test that waited for the real refusal
+// would be waiting on that race; this makes the refusal certain instead, so what
+// the tests prove is that neither write is ever handed a cancelled context
+// rather than that they got lucky.
 type cancelSensitiveRecords struct {
 	*runstate.EscalationStore
 }
@@ -452,6 +454,13 @@ func (r cancelSensitiveRecords) Withdraw(ctx context.Context, docketKey, problem
 		return fmt.Errorf("lock the triage escalation of %s: %w", docketKey, err)
 	}
 	return r.EscalationStore.Withdraw(ctx, docketKey, problem)
+}
+
+func (r cancelSensitiveRecords) Settle(ctx context.Context, docketKey string, delivery runstate.Delivery) (runstate.Escalation, error) {
+	if err := ctx.Err(); err != nil {
+		return runstate.Escalation{}, fmt.Errorf("lock the triage escalation of %s: %w", docketKey, err)
+	}
+	return r.EscalationStore.Settle(ctx, docketKey, delivery)
 }
 
 // The same death as the teardown above, arriving the way a shutdown arrives.
@@ -513,6 +522,60 @@ func TestADeliveryAShutdownCancelledKeepsTheDelivery(t *testing.T) {
 	}
 	if len(next.Escalated) != 1 || !next.Escalated[0].Delivered {
 		t.Fatalf("after the shutdowns = %#v, want the stoppage still delivered", next.Escalated)
+	}
+}
+
+// The other half of the same shutdown: it lands after her answer arrived rather
+// than instead of it, so what the cancellation threatens is not the attempt but
+// the record of the delivery. A settle refused there leaves the attempt standing
+// with no delivery against it, which reads as a stoppage nobody has been shown —
+// and a later pass puts one she has already answered to her a second time, the
+// harm the at-most-once record exists to prevent. Nothing else catches it: a
+// decision that spends no counter is one alreadyJudged cannot see.
+func TestADeliveryAShutdownCancelledAfterHerAnswerIsNotDeliveredAgain(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{judgment: Judgment{
+		ConversationID: "chat-abc",
+		Decision:       "rerun",
+		Reason:         "the change is preserved and the findings are stale",
+	}}
+	records := escalationRecords(t)
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	escalator.Records = cancelSensitiveRecords{EscalationStore: records}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// The shutdown lands between her answer and the write that records it: the turn
+	// came back with a decision on it, and the context is gone by the time what she
+	// decided is written down.
+	judge.killTurn = cancel
+	sweep, err := escalator.Escalate(ctx)
+	cancel()
+	if err != nil {
+		t.Fatalf("Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || !sweep.Escalated[0].Delivered {
+		t.Fatalf("escalated = %#v, want the delivery she answered", sweep.Escalated)
+	}
+	if strings.Contains(sweep.Escalated[0].Problem, "could not be recorded") {
+		t.Fatalf("problem = %q, want the settle to outlive the cancellation that landed on it", sweep.Escalated[0].Problem)
+	}
+	recorded, found, err := records.Find(sweep.Escalated[0].DocketKey)
+	if err != nil || !found {
+		t.Fatalf("Find() = found %v, error %v", found, err)
+	}
+	if !recorded.Delivered() || recorded.Decision != "rerun" {
+		t.Fatalf("recorded = %#v, want her answer written down against the attempt", recorded)
+	}
+
+	// And the harness coming back up does not ask her again.
+	judge.killTurn = nil
+	next, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after the shutdown error = %v", err)
+	}
+	if len(next.Escalated) != 0 || len(judge.shown) != 1 {
+		t.Fatalf("after the shutdown = %#v, shown %d, want a stoppage she answered left alone", next.Escalated, len(judge.shown))
 	}
 }
 
