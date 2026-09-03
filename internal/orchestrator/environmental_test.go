@@ -103,6 +103,17 @@ func TestAnEmptyDiffRoundTheEnvironmentRefusedSpendsNothing(t *testing.T) {
 	if environmental.Problem != "" {
 		t.Fatalf("the settle could not pay the refusal back: %s", environmental.Problem)
 	}
+	// And the refusal is handed to a person, which is what the run's durable
+	// blocker says. Every surface reads the outcome off that field rather than off
+	// the failure beside it, so a refusal that recorded no blocker would be
+	// reported as a run the harness merely failed to carry — the same word this
+	// vocabulary exists to stop, and one severity quieter in the channel.
+	if strings.TrimSpace(refused.Blocker) == "" {
+		t.Fatal("the refused handback records no durable blocker, so nothing reading the run can tell a stoppage somebody has to decide from a run that broke")
+	}
+	if outcome := refused.Outcome(); outcome != runstate.OutcomeStopped {
+		t.Fatalf("outcome = %q, want %q: the refusal is a stoppage somebody has to decide about", outcome, runstate.OutcomeStopped)
+	}
 	// The grant is back: the run's record says the continuation bought nothing,
 	// while the run's own budget still counts the attempt slot it spent.
 	if !environmental.GrantReturned {

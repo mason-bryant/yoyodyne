@@ -116,7 +116,10 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 		if after.ReviewDecision == runstate.ReviewApprove {
 			verdict = KindReviewApproved
 		}
-		say(verdict, report.SeverityNote, Persona(domain.RoleReviewer, ""), Detail{Findings: after.ReviewFindings})
+		say(verdict, report.SeverityNote, Persona(domain.RoleReviewer, ""), Detail{
+			Findings:  after.ReviewFindings,
+			Requested: describeFindings(after.ReviewFindingDetails),
+		})
 	}
 	// A promotion is the harness's own act — no agent performs one — so the
 	// harness is the speaker rather than any persona.
@@ -138,12 +141,68 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	if !parked(before) && parked(after) {
 		say(KindRunParked, parkSeverity(after), Harness(), Detail{Cause: causeOf(after)})
 	}
-	// A run that stopped and stayed stopped is the one thing nobody finds out
-	// about on their own, so it is the one crossing said as critical.
-	if !blocked(before) && blocked(after) {
-		sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), Detail{}, blockerText(after))
+	// A run that ended without succeeding, said in the read model's own outcome
+	// vocabulary rather than in one word over all four. A stoppage somebody has to
+	// decide about is the one thing nobody finds out about on their own, so it
+	// keeps the critical crossing it always had; the other three endings leave
+	// nobody a decision and are said as themselves rather than as a blocker
+	// nobody recorded. Both state what remains of the change, because the attempt
+	// being over says nothing about whether the work is.
+	//
+	// There are two crossings rather than one because the two facts are written in
+	// two saves on a path that matters. Reconciliation settles a run some killed
+	// process already left terminal: it takes a blocker from the tracker and puts
+	// it on a record whose status has not moved since the crash. Watching only for
+	// the run becoming terminal, the sink would have said "failed" at the crash
+	// and then nothing at all when the stoppage arrived — the ending an operator
+	// most needs, silently swallowed by the fact the run was already over. So a
+	// blocker appearing on a run that had already ended is itself a crossing, and
+	// the critical line it says corrects the warning that preceded it.
+	endedNow := !endedBadly(before) && endedBadly(after)
+	stoppageNow := !handedToAPerson(before) && handedToAPerson(after)
+	if endedNow || stoppageNow {
+		remains := Detail{Remains: after.Artifacts().Describe()}
+		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
+			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, endingReason(after))
+		} else {
+			remains.Ending = string(outcome)
+			sayWith(KindRunEnded, endingSeverity(outcome), Harness(), remains, endingReason(after))
+		}
 	}
 	return crossed, nil
+}
+
+// endingReason is what the record gives as the reason a run ended, or the
+// absence stated as itself. Both lines above finish on it, so an empty one would
+// leave a sentence trailing off a colon — and the generic absence the renderer
+// falls back to is written for an agent's own words going missing, which is a
+// defect, where this is usually not one.
+//
+// A run ending with no reason recorded is ordinary rather than broken. A
+// cancellation is the plain case: the operator stopped it and owed nobody a
+// sentence about why. Saying the record names no reason is the true account of
+// it; implying one had gone missing would report an ordinary act as a fault in
+// the record. A stoppage reconciliation settled on a run that was already
+// terminal is no longer such a case: the sweep writes its own reason where the
+// record gives none, so what is read here is either the run's account of how it
+// ended or the sweep's account of settling it.
+func endingReason(state runstate.State) string {
+	if reason := blockerText(state); reason != "" {
+		return reason
+	}
+	return "the record names no reason"
+}
+
+// endingSeverity is how loudly a run ending without a blocker is said. A
+// cancellation is a note because somebody chose it and it is no verdict on the
+// change; a run the harness could not carry and one it stopped on time are
+// warnings, because nobody chose either and what follows both is silence that
+// looks exactly like work in progress.
+func endingSeverity(outcome runstate.RunOutcome) report.Severity {
+	if outcome == runstate.OutcomeCancelled {
+		return report.SeverityNote
+	}
+	return report.SeverityWarning
 }
 
 // FromReport says what an agent noticed while its own work carried on. The
@@ -257,13 +316,31 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 	if !ok {
 		return Notification{}, fmt.Errorf("address watch session %s: %q is not a state anything says", transition.SessionID, transition.State)
 	}
+	// A stop the session recorded as a restart is the one stop nothing is waiting
+	// on: it has waited out its runs and is being re-executed into a build
+	// deployed over it. It is said as itself rather than as an ending, because the
+	// two ask opposite things of whoever reads them and only one of them asks for
+	// anything at all.
+	if transition.Restarting {
+		kind = KindWatchRedeploying
+	}
 	// A braked session is the one an operator has to do something about: the
 	// line has stopped and it stays stopped until intake is released.
 	severity := report.SeverityNote
 	if kind == KindWatchBraked {
 		severity = report.SeverityWarning
 	}
-	notification := productNotification(kind, transition.At, Detail{Reason: transition.Reason})
+	// The runs the session could see and the conversation it is waiting on travel
+	// with the reason, because whose move follows an idle poll is derived from them
+	// rather than from the words: a session polling beside a run in flight is not
+	// waiting on an admission, and one whose only unstarted work is a role's to
+	// carry is waiting on that role.
+	notification := productNotification(kind, transition.At, Detail{
+		Reason:     transition.Reason,
+		Running:    transition.Running,
+		Executor:   string(transition.Executor),
+		Unreadable: transition.Unreadable,
+	})
 	notification.Event.Severity = severity
 	return notification, nil
 }
@@ -368,6 +445,58 @@ func FromResident(resident Resident, severity report.Severity, at time.Time) Not
 		Behind: resident.Behind,
 	})
 	notification.Event.Severity = severity
+	return notification
+}
+
+// Stall is the harness having started nothing at all while work was ready to
+// start: since when, over how much, and what the record last said about the
+// thing that chooses work.
+//
+// It is the third state here rather than a crossing, and it is the one that is
+// derived from an absence. The waiting line reads a record somebody wrote — a
+// hold, a session saying it is idle — and a stale resident reads a build stamp;
+// both need the process they are about to have been well enough to write
+// something down. This needs nothing to be alive: what it reads is the last time
+// any run started, which the runs themselves date, against a queue the tracker
+// says has work in it. That is why it catches the case the other two structurally
+// cannot — a scheduler that crashed writes no stop, and a wedged one goes on
+// recording that it is watching.
+//
+// The chooser's last word rides along because it is the whole of what an
+// operator has to decide between at three in the morning: a session whose last
+// word was "stopped" wants starting, and one still claiming to be watching wants
+// killing first.
+type Stall struct {
+	// Since is when the harness last started anything.
+	Since time.Time
+	// Ready is how much admitted work the tracker called ready through it.
+	Ready int
+	// Chooser is what the record last said about the thing that chooses work.
+	Chooser string
+	// Standing is where the harness stands, in the four lines the read model
+	// renders, said for the reason the waiting line says them: somebody reading
+	// this was woken by it, and reconstructing the machine's state from one
+	// sentence is what they would otherwise have to do.
+	Standing string
+}
+
+// FromStall says that nothing at all has started while work was ready to start.
+// It is addressed to the product and spoken by the harness for the reason the
+// line and the holds are: it is about every item rather than any one of them.
+//
+// It is a warning rather than a note, and that is the whole difference between
+// this and the hourly line. A line waiting on a hold somebody placed is a state
+// they already know about; a machine that has silently stopped doing anything is
+// a degraded harness, which is the one class of thing this surface takes to
+// somebody directly.
+func FromStall(stall Stall, at time.Time) Notification {
+	notification := productNotification(KindStallNoticed, at, Detail{
+		Stopped:  strings.TrimSpace(stall.Chooser),
+		Since:    stall.Since,
+		Ready:    stall.Ready,
+		Standing: strings.TrimRight(stall.Standing, "\n"),
+	})
+	notification.Event.Severity = report.SeverityWarning
 	return notification
 }
 
@@ -587,11 +716,29 @@ func parkSeverity(state runstate.State) report.Severity {
 	return report.SeverityWarning
 }
 
-// blocked reports a run that stopped and stayed stopped. It is read from a
-// terminal record carrying a failure rather than from the tracker, for the same
-// reason everything else here is: what is said is what the record says.
-func blocked(state runstate.State) bool {
-	return state.Status.Terminal() && state.Status != runstate.StatusSucceeded && blockerText(state) != ""
+// endedBadly reports a run that reached a terminal status without succeeding,
+// which is the crossing said above however it ended. Which of the four endings
+// it was is the read model's to say, not this one's: a second classification
+// here is a second chance for the channel and `yoyo status` to disagree about
+// one run.
+func endedBadly(state runstate.State) bool {
+	return state.Status.Terminal() && state.Status != runstate.StatusSucceeded
+}
+
+// handedToAPerson reports a run whose ending is a stoppage somebody has to
+// decide about, which is the read model's own reading of it rather than a second
+// one taken here. It is asked of both readings rather than only of the later
+// one, because the blocker can reach a record that is already terminal: the
+// stoppage is then news even though the ending is not.
+//
+// It asks nothing of the status, because the outcome already answers everything
+// the status could: the read model only ever says "stopped" of a terminal record
+// carrying a blocker. Reading the status as well is what silenced this line on
+// the record it matters most on — a run whose promotion a sweep contradicted
+// keeps the "succeeded" it wrote for itself, so a status test here dropped the
+// critical line for a stoppage a person already owns.
+func handedToAPerson(state runstate.State) bool {
+	return state.Outcome() == runstate.OutcomeStopped
 }
 
 // blockerText is what the record gives as the reason. A publication that could
@@ -647,4 +794,64 @@ func describePullRequest(published *runstate.PullRequest) string {
 		return fmt.Sprintf("#%d", published.Number)
 	}
 	return strings.TrimSpace(published.URL)
+}
+
+// describeFindings says what a repair round asked for, one entry per finding and
+// in the order the reviewer raised them. It is the count's missing half: a
+// reader given "3 findings" cannot tell a correction to a document from a
+// problem with the design, and both are what a repair round is usually made of.
+//
+// Each entry is the finding's first sentence rather than the whole of it. The
+// whole is in the record the message points at, and what a channel is read for
+// is which change is being asked for rather than the argument behind it. The
+// severity comes first because it is the one word that ranks the change, and
+// the place the record names comes last because it is where somebody looks
+// rather than part of what was said. A finding the record located gives its
+// line beside its file; one that named a file alone says the file.
+//
+// A record that counted findings without keeping them yields nothing, which the
+// message says as itself rather than as a reviewer who asked for nothing.
+func describeFindings(findings []runstate.Finding) []string {
+	if len(findings) == 0 {
+		return nil
+	}
+	described := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		said := firstSentence(finding.Message)
+		if severity := strings.TrimSpace(finding.Severity); severity != "" {
+			said = severity + ": " + said
+		}
+		if file := strings.TrimSpace(finding.File); file != "" {
+			at := file
+			if finding.Line > 0 {
+				at = fmt.Sprintf("%s:%d", file, finding.Line)
+			}
+			// The place a finding names belongs inside the sentence rather than
+			// after it, so it goes before the full stop the reviewer wrote. A
+			// finding that ended on no stop is left ending on none.
+			if strings.HasSuffix(said, ".") {
+				said = strings.TrimSuffix(said, ".") + " (" + at + ")."
+			} else {
+				said += " (" + at + ")"
+			}
+		}
+		described = append(described, said)
+	}
+	return described
+}
+
+// firstSentence is as much of what somebody wrote as stands on its own: up to
+// the first full stop that ends a sentence, or the first line break, whichever
+// comes first. A full stop inside a word is not one — a finding naming
+// README.md is naming a file rather than finishing — so it is the stop followed
+// by a space that ends the sentence.
+func firstSentence(written string) string {
+	trimmed := strings.TrimSpace(written)
+	if line, _, found := strings.Cut(trimmed, "\n"); found {
+		trimmed = strings.TrimSpace(line)
+	}
+	if at := strings.Index(trimmed, ". "); at >= 0 {
+		return trimmed[:at+1]
+	}
+	return trimmed
 }

@@ -18,7 +18,13 @@ import (
 // four times has spent four budgets and nothing recorded that. The round is
 // counted where the verdict is reached, against the item, and it is counted
 // before the verdict is acted on.
-func TestPipelineCountsEveryVerdictADeveloperAttemptProduced(t *testing.T) {
+//
+// What is counted is a verdict that sent the work back. The approval that ends
+// the run is not one: the cap exists to stop an item buying the same argument
+// another round, and charging the round that settled the argument is what walked
+// an approved-then-conflicted item into a cap that refused every decision about
+// it.
+func TestPipelineCountsTheVerdictThatSentTheWorkBackAndNotTheApproval(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
@@ -46,17 +52,18 @@ func TestPipelineCountsEveryVerdictADeveloperAttemptProduced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
-	// Two developer attempts, two verdicts, two rounds -- and the count is on the
-	// item rather than on the run, so it is still there when the run is cleaned
-	// up.
-	if counters.ReviewRounds != 2 {
-		t.Fatalf("review rounds = %d, want one per developer attempt", counters.ReviewRounds)
+	// Two developer attempts, two verdicts, one round -- the repair verdict that
+	// sent the first attempt back. The count is on the item rather than on the
+	// run, so it is still there when the run is cleaned up.
+	if counters.ReviewRounds != 1 {
+		t.Fatalf("review rounds = %d, want only the verdict that sent the work back", counters.ReviewRounds)
 	}
 	// The round is recorded under the attempt that produced it, and the attempt
 	// is named by the run it was made in, which is what makes the count add up
-	// across runs rather than restart with each one.
-	if want := runstate.RoundKey(outcome.RunID, 1); counters.LastRound != want {
-		t.Fatalf("last counted round = %q, want the repair attempt %q", counters.LastRound, want)
+	// across runs rather than restart with each one. The approval that followed
+	// left the head where the counted round put it.
+	if want := runstate.RoundKey(outcome.RunID, 0); counters.LastRound != want {
+		t.Fatalf("last counted round = %q, want the first attempt %q", counters.LastRound, want)
 	}
 	// Nothing triaged this item: rounds are what the work cost, not something
 	// anybody granted it.
@@ -67,7 +74,8 @@ func TestPipelineCountsEveryVerdictADeveloperAttemptProduced(t *testing.T) {
 
 // A review the reviewer never answered is not a round. The first reply here
 // could not be read as a verdict at all, so the reviewer said nothing about the
-// change, and the item is charged for the one verdict that was actually reached.
+// change; the item is charged for the one verdict that was actually reached and
+// sent the work back, and for nothing else.
 func TestPipelineCountsNoRoundForAReviewThatReachedNoVerdict(t *testing.T) {
 	t.Parallel()
 
@@ -75,15 +83,15 @@ func TestPipelineCountsNoRoundForAReviewThatReachedNoVerdict(t *testing.T) {
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
-	}, "Sure! Here is my review.", approveVerdict)
+	}, "Sure! Here is my review.", repairVerdict, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 2 {
-		t.Fatalf("reviewer invocations = %d, want the unreadable reply asked again once", reviews)
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 3 {
+		t.Fatalf("reviewer invocations = %d, want the unreadable reply asked again once and the repair judged", reviews)
 	}
 	counters, err := store.Triage().Counters(tracker.item.ID)
 	if err != nil {
@@ -91,6 +99,12 @@ func TestPipelineCountsNoRoundForAReviewThatReachedNoVerdict(t *testing.T) {
 	}
 	if counters.ReviewRounds != 1 {
 		t.Fatalf("review rounds = %d, want only the verdict that was reached (run %s)", counters.ReviewRounds, outcome.RunID)
+	}
+	// The unreadable reply and the approval are excluded for different reasons and
+	// the head says which round the one charge was: the repair verdict on the
+	// first developer attempt.
+	if want := runstate.RoundKey(outcome.RunID, 0); counters.LastRound != want {
+		t.Fatalf("last counted round = %q, want the first attempt %q", counters.LastRound, want)
 	}
 }
 

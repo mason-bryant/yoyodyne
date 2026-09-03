@@ -24,6 +24,6 @@ V1 runs every role through Claude Code with fixed operator-configured assignment
 
 ## Consequences
 
-- The backend boundary stays as the seam a second connector re-enters through; no connector work exists to exercise it.
+- The backend boundary stays as the place a second connector attaches; no connector work exists to exercise it.
 - Cross-provider fallback is deferred *with* the connector rather than half-built without one.
 - The claude-execution-and-account-routing design's pinning and alias discipline is what keeps this narrowing reversible.

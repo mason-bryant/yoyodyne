@@ -22,7 +22,21 @@ import (
 // item's bundle because it carries whole documents rather than one item, and
 // bounded for the same reason: a directory of specifications grows without
 // limit.
-const defaultMaxProductBytes = 512 << 10
+//
+// It was 512 KiB, and the eight shipped documents had grown to within 32 bytes
+// of it — so documenting any new behaviour at all pushed the set past the whole
+// budget, with nothing left for the specifications, the tracker state, or the
+// docket that share it. The bound that this figure exists for is the one on a
+// directory nobody counts; a fixed list of eight documents that grows with the
+// product is not it, and squeezing them was costing the product manager the
+// specifications rather than saving anything. So the figure moved once, far
+// enough that the shipped set has room to grow and the rest of the context is
+// not competing with it for the last few kilobytes.
+//
+// It is still a bound and still deliberately finite. What it does not answer is
+// whether eight whole documents is the right thing to carry in full at all,
+// which is a product question rather than a constant.
+const defaultMaxProductBytes = 640 << 10
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.

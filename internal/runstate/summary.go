@@ -67,20 +67,111 @@ const (
 // that has not reached a terminal status keeps its own status word, since
 // "pending" and "running" are already the two facts a reader wants there.
 func (s State) Outcome() RunOutcome {
-	if !s.Status.Terminal() {
-		return RunOutcome(s.Status)
+	return Ending(s.Status, strings.TrimSpace(s.Blocker) != "")
+}
+
+// Ending is the derivation itself, from the two facts that decide it: the status
+// the run reached, and whether it left somebody a blocker to act on. It is
+// exported because the run's durable record is not the only thing that holds
+// those two — the outcome a finished run returns to whatever started it carries
+// them as Status and Blocked — and a caller working them out again is a caller
+// that can come to a different word than `yoyo status` does for one run.
+//
+// A run that has not reached a terminal status keeps its own status word, since
+// "pending" and "running" are already the two facts a reader wants there.
+//
+// # The precedence rule
+//
+// A recorded blocker outranks every terminal status, "succeeded" included. That
+// is the one rule here worth stating, because two decisions that are each right
+// on their own meet at it, and this is where one of them yields:
+//
+//   - Reconciliation deliberately leaves a status alone once a record is
+//     terminal. A run that wrote down how it ended said something no later
+//     sweep saw, and settling it must not overwrite that account.
+//   - A blocker on the record means the work item is back in somebody's hands.
+//
+// Both hold at once on the run that recorded a promotion the target turns out
+// not to carry: the sweep puts the item back in a person's hands and clears the
+// promotion, and the status stays the "succeeded" the run wrote for itself. A
+// derivation reading the status first prints "succeeded" over a run a person now
+// owns, which is the one word that is false about it. So the status yields to the
+// blocker here, in the derivation, and the durable record is not moved: the
+// sweep's rule keeps everything it was for, and the surfaces say the true word.
+// Reconciler.saveTerminalFailure cites this from the other side.
+func Ending(status Status, handedToAPerson bool) RunOutcome {
+	if !status.Terminal() {
+		return RunOutcome(status)
 	}
 	switch {
-	case s.Status == StatusSucceeded:
-		return OutcomeSucceeded
-	case strings.TrimSpace(s.Blocker) != "":
+	case handedToAPerson:
 		return OutcomeStopped
-	case s.Status == StatusCancelled:
+	case status == StatusSucceeded:
+		return OutcomeSucceeded
+	case status == StatusCancelled:
 		return OutcomeCancelled
-	case s.Status == StatusTimedOut:
+	case status == StatusTimedOut:
 		return OutcomeTimedOut
 	default:
 		return OutcomeFailed
+	}
+}
+
+// Artifacts is what a run's record says survives of its change: the branch and
+// the worktree it made, and the harness's own record of which of them it
+// removed. It is a type rather than four fields read in place because the
+// question a reader asks of a run that did not succeed is "is my work gone", and
+// an answer assembled separately by each surface is an answer two surfaces can
+// give differently.
+type Artifacts struct {
+	Branch          string
+	BranchRemoved   bool
+	WorktreePath    string
+	WorktreeRemoved bool
+}
+
+// Preserved reports the run's change surviving the run: a branch or a worktree
+// the harness has not recorded as removed. It asks about both because either one
+// on its own still holds the work — a removed worktree whose branch stands is
+// work somebody can still check out.
+//
+// It is false for a run whose record names neither, which is not the same claim
+// as work thrown away and must not be rendered as one. Describe below is what
+// keeps those apart, and is what a surface says rather than this.
+func (a Artifacts) Preserved() bool {
+	return (a.Branch != "" && !a.BranchRemoved) || (a.WorktreePath != "" && !a.WorktreeRemoved)
+}
+
+// Describe is what remains of a run's change, in the three fixed phrases every
+// surface says it in. Two of them are facts the record holds; the third says the
+// record holds neither, rather than turning two empty fields into a claim that
+// the run made nothing — which is exactly the false reassurance the outcome
+// vocabulary exists to stop.
+//
+// It is derived here, in the read model, rather than in each surface, for the
+// reason Outcome is: `yoyo status`, `yoyo cost`, and the channel must not be
+// able to say different words about one run's remains.
+func (a Artifacts) Describe() string {
+	switch {
+	case a.Preserved():
+		return "work preserved"
+	case a.Branch != "" || a.WorktreePath != "":
+		// Something was made and the harness recorded removing it. That is a
+		// different answer from never having made anything, and an operator asking
+		// whether their work is gone is owed the one that is true.
+		return "work removed"
+	default:
+		return "no artifacts recorded"
+	}
+}
+
+// Artifacts is what this run's durable record says survives of its change.
+func (s State) Artifacts() Artifacts {
+	return Artifacts{
+		Branch:          s.Branch,
+		BranchRemoved:   s.BranchRemoved,
+		WorktreePath:    s.WorktreePath,
+		WorktreeRemoved: s.WorktreeRemoved,
 	}
 }
 
@@ -131,10 +222,15 @@ type RunSummary struct {
 	// outstanding is waiting on, rather than only that it is waiting.
 	MergeQueued bool `json:"merge_queued,omitempty"`
 	// Failure is the run's own reason for ending, and it is the only one of the
-	// four recorded reasons that says the run failed. The three below happened
-	// around the work rather than to it, and are kept apart here for the reason
-	// they are kept apart in the record: a publication or a cleanup that could
-	// not finish must never be read as a failed piece of work.
+	// four recorded reasons that is about the work itself. The three below
+	// happened around the work rather than to it, and are kept apart here for the
+	// reason they are kept apart in the record: a publication or a cleanup that
+	// could not finish must never be read as a failed piece of work.
+	//
+	// It is the reason and never the verdict, exactly as State.Failure is: what
+	// became of the run is Outcome above, and a reader deciding from this field
+	// that a run failed or stopped is a second classification the listing it
+	// prints beside will contradict.
 	Failure string `json:"failure,omitempty"`
 	// FailingCheck is the deterministic check that was still failing when the
 	// record was last written. It is what a repair attempt was handed, so on a
@@ -183,26 +279,32 @@ type RunSummary struct {
 // Cancelled and timed out belong here beside failed: what they have in common is
 // that the work did not land, which is what somebody looking for the runs that
 // went wrong is asking about, and each of them records why it ended.
-func (r RunSummary) Failed() bool { return endedBadly(r.Status) }
+func (r RunSummary) Failed() bool { return endedBadly(r.Status, r.Outcome) }
 
-// Preserved reports the run's change surviving the run: a branch or a worktree
-// the harness has not recorded as removed. It asks about both because either one
-// on its own still holds the work — a removed worktree whose branch stands is
-// work somebody can still check out.
-//
-// It is false for a run whose record names neither, which is not the same claim
-// as work thrown away and must not be rendered as one: what a caller knows from
-// a false answer here is that the record says nothing, and it has to look at the
-// two fields to say which of the two it is.
-func (r RunSummary) Preserved() bool {
-	return (r.Branch != "" && !r.BranchRemoved) || (r.WorktreePath != "" && !r.WorktreeRemoved)
+// Artifacts is what this summary says survives of the run's change.
+func (r RunSummary) Artifacts() Artifacts {
+	return Artifacts{
+		Branch:          r.Branch,
+		BranchRemoved:   r.BranchRemoved,
+		WorktreePath:    r.WorktreePath,
+		WorktreeRemoved: r.WorktreeRemoved,
+	}
 }
+
+// Preserved reports the run's change surviving the run. It is the artifacts'
+// own answer, kept here because a summary is what most callers hold.
+func (r RunSummary) Preserved() bool { return r.Artifacts().Preserved() }
 
 // CostKnown reports a run the recorded evidence could actually price.
 func (r RunSummary) CostKnown() bool { return r.UnknownCost == "" }
 
-func endedBadly(status Status) bool {
-	return status.Terminal() && status != StatusSucceeded
+// endedBadly reports a terminal run whose work did not land. It asks the derived
+// outcome rather than the status alone, because the status alone cannot answer
+// it: by the precedence rule on Ending, a stoppage can be settled onto a record
+// that still says "succeeded", and a selection reading the status would leave
+// that run out of the one listing it most needs to be in.
+func endedBadly(status Status, outcome RunOutcome) bool {
+	return status.Terminal() && outcome != OutcomeSucceeded
 }
 
 // RunQuery narrows which recorded runs a history covers.
@@ -244,7 +346,7 @@ func (s *Store) History(query RunQuery) (RunHistory, error) {
 		if workItemID != "" && state.WorkItemID != workItemID {
 			continue
 		}
-		if query.FailedOnly && !endedBadly(state.Status) {
+		if query.FailedOnly && !endedBadly(state.Status, state.Outcome()) {
 			continue
 		}
 		matched = append(matched, state)

@@ -219,6 +219,62 @@ func TestReconcileReportsTheCatchUpASettleMadeAndTheOneItHeld(t *testing.T) {
 	}
 }
 
+// The sweep's own verdict and what became of the run are two different facts,
+// and a recovery view that printed only the first told an operator a run was
+// settled and nothing about whether their change survived it. Both words come
+// from the read model, so the same run described here and in `yoyo status`
+// cannot be described differently.
+func TestReconcileSaysWhatBecameOfEachRunAndWhatRemainsOfIt(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	results := []orchestrator.Reconciliation{
+		{
+			RunID:        "run-stopped",
+			WorkItemID:   "yoyodyne-stopped",
+			Action:       orchestrator.ActionBlocked,
+			Status:       runstate.StatusFailed,
+			Outcome:      runstate.OutcomeStopped,
+			Branch:       "yoyodyne/stopped",
+			WorktreePath: "/tmp/worktrees/run-stopped",
+		},
+		{
+			RunID:         "run-broke",
+			WorkItemID:    "yoyodyne-broke",
+			Action:        orchestrator.ActionFailed,
+			Status:        runstate.StatusFailed,
+			Outcome:       runstate.OutcomeFailed,
+			Branch:        "yoyodyne/broke",
+			BranchRemoved: true,
+		},
+		// A run still owed a step has no ending yet, so the sweep says what it did
+		// and stops there rather than reporting an outcome nothing reached.
+		{
+			RunID:      "run-held",
+			WorkItemID: "yoyodyne-held",
+			Action:     orchestrator.ActionHeld,
+			Status:     runstate.StatusRunning,
+			Outcome:    runstate.RunOutcome(runstate.StatusRunning),
+		},
+	}
+	if code := reportReconcileResult(&stdout, &stderr, false, results, nil, orchestrator.Convergence{}, 0, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	printed := stdout.String()
+	// The word the vocabulary exists for: a run handed to a person with its
+	// change intact is never reported with the same word as one that broke.
+	if !strings.Contains(printed, "stopped, work preserved") {
+		t.Errorf("stdout = %q, want the stoppage said as stopped with its work preserved", printed)
+	}
+	if !strings.Contains(printed, "failed, work removed") {
+		t.Errorf("stdout = %q, want the broken run said as failed with its work removed", printed)
+	}
+	if strings.Contains(printed, "running,") {
+		t.Errorf("stdout = %q, want no ending claimed for a run that has not reached one", printed)
+	}
+}
+
 // Chat talks to whichever agent fills the product-manager role, with the
 // persona that role resolved to. In this repository both are stated in the
 // project configuration and read from the project's own personas directory.

@@ -241,7 +241,8 @@ func TestAStaleResidentSaysSoWhileTheRoundsAreBeingSpent(t *testing.T) {
 }
 
 // What it says is what somebody has to act on: how far behind the session is,
-// which build it is on, and that a restart is the thing that fixes it.
+// which build it is on, and what closes the gap — installing the build, which
+// the session then takes up itself rather than waiting to be restarted.
 func TestTheResidentLineNamesTheCountAndTheWayOutOfIt(t *testing.T) {
 	t.Parallel()
 
@@ -253,7 +254,7 @@ func TestTheResidentLineNamesTheCountAndTheWayOutOfIt(t *testing.T) {
 	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindResidentStale)
 	harness.now = harness.now.Add(time.Hour)
 	said := harness.say(t, cursors, notify.KindResidentStale)
-	for _, fact := range []string{"7 harness changes", staleResidentBuild[:12], "Restarting it"} {
+	for _, fact := range []string{"7 harness changes", staleResidentBuild[:12], "restarts itself", "installing the build"} {
 		if !strings.Contains(said.Body, fact) {
 			t.Fatalf("body %q does not carry %q", said.Body, fact)
 		}
@@ -690,6 +691,70 @@ func TestTheHeartbeatCarriesTheFourLines(t *testing.T) {
 	} {
 		if !strings.Contains(said.Body, line) {
 			t.Fatalf("body %q does not carry %q", said.Body, line)
+		}
+	}
+}
+
+// What the channel says a state is, is what the read model says it is. This sink
+// used to derive it a second time, and the two derivations disagreed exactly
+// where it costs somebody a trip: a live session sitting idle over a queue it
+// would not touch was reported here as no session running at all, which sends an
+// operator to start the session they already have.
+func TestTheHeartbeatSaysTheStateTheReadModelDerived(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(3)
+	idle := harness.now
+	harness.watched(t, runstate.WatchIdle, "nothing it could start", idle)
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchIdle)
+	harness.now = idle.Add(2 * time.Hour)
+	said := harness.say(t, cursors, notify.KindLineWaiting)
+
+	stall := readmodel.WhyNothingStarts(readmodel.Conditions{
+		Sessions: func() ([]runstate.WatchTransition, error) {
+			return []runstate.WatchTransition{{
+				SessionID: "watch-0123456789abcdef0123456789abcdef",
+				State:     runstate.WatchIdle,
+				At:        idle,
+			}}, nil
+		},
+	})
+	if !strings.Contains(said.Body, stall.Says) {
+		t.Fatalf("body %q does not say the read model's %q", said.Body, stall.Says)
+	}
+	if strings.Contains(said.Body, "yoyo work --watch") {
+		t.Fatalf("an idle session was told to start a session: %q", said.Body)
+	}
+}
+
+// The mark a standing state is remembered by still renders exactly as this
+// package stamped it before the derivation moved to the read model.
+//
+// Both halves of the cursor value matter and for one reason. A sink names the
+// state it is standing on by this, and a mark it does not recognise re-arms the
+// clock silently — so a state standing when the harness is deployed would go
+// quiet for a whole interval, which is precisely the silence the heartbeat
+// exists to end. The reason tokens were kept as they were found for that, and
+// the timestamp is the other half: a format that drifted from stamp's would buy
+// the same silence by the other route.
+func TestTheStandingMarkRendersAsThisPackageStampedIt(t *testing.T) {
+	t.Parallel()
+
+	since := time.Date(2026, 8, 30, 12, 0, 0, 123456789, time.UTC)
+	for _, testCase := range []struct {
+		reason readmodel.Reason
+		legacy string
+	}{
+		{readmodel.ReasonOperatorHold, "hold:"},
+		{readmodel.ReasonIntakeHold, "intake:"},
+		{readmodel.ReasonSessionIdle, "idle:"},
+		{readmodel.ReasonNoWatchSession, "stopped:"},
+	} {
+		stall := readmodel.Stall{Reason: testCase.reason, Since: since}
+		if want := testCase.legacy + stamp(since); stall.Mark() != want {
+			t.Fatalf("mark = %q, want the cursor value this package already holds, %q", stall.Mark(), want)
 		}
 	}
 }

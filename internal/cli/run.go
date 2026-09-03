@@ -66,7 +66,12 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 // acts on runs shares. They are built once here so a pipeline and a reconciler
 // always address the same state root, worktree root, and repository.
 type components struct {
-	config     config.Config
+	config config.Config
+	// configPath is the configuration file these parts were built from, kept so
+	// a command that reads something else the project keeps beside it — a
+	// workflow definition of its own — looks in the directory this configuration
+	// actually came from rather than guessing at one.
+	configPath string
 	repository string
 	// stateRoot is where everything durable that is not the repository lives.
 	// It is kept here so a command that needs another store built on it — the
@@ -220,12 +225,18 @@ func buildComponents(configPath string) (components, error) {
 		Remote:                cfg.Execution.Remote,
 		PushRemote:            cfg.Execution.PushRemote,
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+		// The tracker's export of the work items themselves is what a run reads to
+		// see the work around its own, so a worktree is given the primary
+		// checkout's copy rather than the one its base commit carried. The
+		// interactions export is not here because nothing in a run reads it.
+		CurrentExports: []string{".beads/issues.jsonl"},
 	})
 	if err != nil {
 		return components{}, err
 	}
 	return components{
 		config:        cfg,
+		configPath:    resolved.Path,
 		repository:    repository,
 		stateRoot:     stateRoot,
 		runner:        processRunner,

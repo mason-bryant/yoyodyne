@@ -59,11 +59,14 @@ found the refusal the expensive way
   authoritative statement of what the run is for. No `bd show` is needed to get
   it, and none would work.
 - **Surrounding tracker state** is `.beads/issues.jsonl` in the worktree, the
-  tracker's derived export, read with ordinary file tools. It is written from the
-  store elsewhere and arrives with the commit the worktree was made from, so it
-  is current as of that commit and no fresher: an item admitted since — very
-  possibly including the run's own — is not in it. Where the export and the
-  delivered work item disagree, the delivered item wins.
+  tracker's derived export, read with ordinary file tools. The harness copies the
+  primary checkout's own export into the worktree when it cuts it, rather than
+  leaving whatever the base commit carried, so it holds every item admitted up to
+  the moment this run started — the run's own included. It is a copy and not a
+  live view: an item admitted while the run works is not in it, and neither is
+  anything the store gained after the copy was taken. The copy is held out of the
+  run's change, so it is not something to edit and an edit to it reaches nobody.
+  Where the export and the delivered work item disagree, the delivered item wins.
 - **Tracking the run's own progress** is the run itself. Do not open, claim,
   update, or close items to record what you are doing, and do not file work you
   discover. Discovered work goes in the run's summary, named plainly, for the
@@ -154,6 +157,29 @@ not a licence for a developer run to run `bd update`, which
 [cannot reach the store at all](#the-tracker-is-not-a-developer-run-tool). The
 guard is still wired into developer runs because a hook that is present
 everywhere is one nobody has to remember to install.
+
+## A developer run writes its scratch files to the directory it was given
+
+**The harness cuts every developer run its own directory, outside that run's
+worktree, and names it in the run's contract. Anything the work needs that the
+change must not carry goes there, the check log first among it.**
+
+`$TMPDIR` is not the alternative. It is one directory per user on this machine
+rather than one per session or per run, so it is shared with every run working
+beside you, and an obvious name for a log is obvious to all of them. On
+2026-09-01 two runs five seconds apart redirected `make check` into
+`$TMPDIR/probe-check.log`; one of them read the other's compile error back out of
+it and reported a broken toolchain while its own `make check` was exiting 0.
+`docs/diagnoses/yoyodyne-ifd-238-probe-verdict-crosstalk.md` is the whole of
+that. The naming convention it left behind held only as far as each run's
+reading of it, which is why yoyodyne-ifd.247 replaced it with a directory nobody
+has to remember to name.
+
+The worktree is not the alternative either: a scratch file there is untracked
+content in the change, which every reviewer is then shown.
+
+A session the harness did not make — an interactive one in the checkout — is
+given no such directory and shares `$TMPDIR` with whatever is running beside it.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -807,6 +808,49 @@ func TestRunClassifiesCancellation(t *testing.T) {
 	}
 	if !result.IsError || result.StopReason != string(execution.ProcessCancelled) {
 		t.Fatalf("Run() result = %#v", result)
+	}
+}
+
+// What a stream cut off mid-turn actually leaves on the result, field by field,
+// because a caller now decides something from it: a delivery to the development
+// manager gives its attempt back on a turn that produced no answer, and which
+// fields prove that is the whole of whether the give-back reaches the case it
+// was written for.
+//
+// The session identifier is the trap. It is recorded from the first envelope
+// carrying one — the init event, which arrives before the model has done
+// anything — so a killed turn has one, and reading it as evidence the
+// invocation ended would make every such turn look answered. What only a
+// terminal leaves is the answer text and the priced cost.
+func TestRunLeavesAKilledTurnCarryingNoAnswer(t *testing.T) {
+	t.Parallel()
+
+	// The provider opened the session and said nothing else before the process
+	// group was torn down under it.
+	stream := `{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}` + "\n"
+	result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{
+		Status: execution.ProcessCancelled, ExitCode: -1, Stdout: stream,
+	}}}, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID: testRunID, Role: domain.RoleDevelopmentManager, WorkingDirectory: "/worktree", Prompt: "judge this stoppage",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Process.Status != execution.ProcessCancelled {
+		t.Fatalf("process status = %q, want the cancellation carried on the result", result.Process.Status)
+	}
+	// The session is on the result despite nothing having been answered in it.
+	if result.SessionID != "session-1" {
+		t.Fatalf("session = %q, want the one the init event named", result.SessionID)
+	}
+	// And nothing a terminal writes is: no answer of hers, and no priced cost.
+	if result.FinalText != "" || result.CostReported {
+		t.Fatalf("final text = %q, cost reported = %v, want a turn that reached no terminal", result.FinalText, result.CostReported)
+	}
+	// The failure a person reads is the one the twelve abandoned escalations of
+	// yoyodyne-ifd.250 all carried.
+	if result.DescribeFailure() != string(execution.ProcessCancelled) {
+		t.Fatalf("described failure = %q, want the sentence those records carried", result.DescribeFailure())
 	}
 }
 
@@ -1738,5 +1782,36 @@ func TestAWatchedInvocationRecordsAndReturnsWhatAnUnwatchedOneDoes(t *testing.T)
 	}
 	if !reflect.DeepEqual(watchedResult, unwatchedResult) {
 		t.Fatalf("watching changed the result:\nwatched   %#v\nunwatched %#v", watchedResult, unwatchedResult)
+	}
+}
+
+// The build cache the run's own probe will need.
+//
+// A developer's first act is to execute the project's declared checks, and the
+// toolchain writes what it compiles to a directory under the user's home that
+// the run's sandbox does not grant. Left alone, the probe dies at setup with
+// "operation not permitted" and reads as a broken toolchain rather than as a
+// directory nobody granted, which is what five reports across four work items
+// each rediscovered by hand. The invocation carries the redirect instead.
+func TestAnInvocationCarriesABuildCacheTheRunMayWrite(t *testing.T) {
+	t.Parallel()
+
+	worktree := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(worktree, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	stream := `{"type":"result","subtype":"success","session_id":"s","is_error":false,"result":"done","total_cost_usd":0.01}` + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}
+	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: worktree,
+		Prompt:           "implement the task",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	want := "GOCACHE=" + filepath.Join(worktree, ".git", "yoyodyne", "go-build")
+	if !slices.Contains(runner.commands[0].Env, want) {
+		t.Fatalf("the invocation's environment does not carry %q: %v", want, runner.commands[0].Env)
 	}
 }

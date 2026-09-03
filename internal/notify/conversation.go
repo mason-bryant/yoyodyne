@@ -92,6 +92,12 @@ func FromConversation(conversation runstate.Conversation, events []execution.Eve
 		// role picking it up, and its second is that role working — and only the log
 		// says which this was.
 		return fromTrackerAction(conversation, events[:index], event)
+	case execution.EventTrackerBlockRefused:
+		// The one tracker event here that is about actions nobody carried out. It is
+		// said for the reason the applied ones are not enough: a block the harness
+		// would not read produces no per-action record at all, so without this the
+		// channel reports a queue that did not move as a queue nobody touched.
+		return fromRefusedTrackerBlock(conversation, event)
 	case execution.EventProposalCreated:
 		// The approval that precedes this is deliberately not reported beside it.
 		// They are one decision, and the creation is the half that names the item
@@ -183,6 +189,69 @@ func fromExchange(conversation runstate.Conversation, event execution.Event) (No
 			},
 			Text:   text,
 			Detail: detail,
+		},
+	}, nil
+}
+
+// refusedTrackerBlock is the part of a recorded refusal this reads. It is a
+// narrow local shape for the reason the tracker action's below is: what is read
+// here is a durable record that outlives the code that wrote it.
+type refusedTrackerBlock struct {
+	Role string `json:"role"`
+	// Actions is how many the block asked for, and is zero where the harness could
+	// not count them: a payload it never decoded says nothing about how much was
+	// in it. It is read as an absence rather than as none, which is why what is
+	// carried on is negative where this is zero.
+	Actions int    `json:"actions"`
+	Problem string `json:"problem"`
+}
+
+// fromRefusedTrackerBlock says that a role asked the tracker for several things
+// and got none of them.
+//
+// It is addressed to the product rather than to any item, because a refused
+// block names no item that changed: the actions were refused together, and which
+// items they were about is in the reply nobody kept. The harness speaks it for
+// the reason it speaks a refused directive — the refusal is the harness's own act
+// — so the role that asked is carried in the message instead of narrating it,
+// which is the whole of what says whose work was lost.
+//
+// It is a warning rather than a note. Nobody chose it, several changes an
+// operator may be expecting did not happen, and until the role's next turn the
+// only sign of it is a queue that quietly did not move.
+func fromRefusedTrackerBlock(conversation runstate.Conversation, event execution.Event) (Notification, error) {
+	var recorded refusedTrackerBlock
+	if err := json.Unmarshal(event.Payload, &recorded); err != nil {
+		return Notification{}, fmt.Errorf("read a refused tracker block recorded in %s: %w", conversation.ConversationID, err)
+	}
+	// The role the record names is preferred over the conversation's own, because
+	// the record is what was true when the block was refused; the conversation's
+	// role is what it is now, and a record written without one has nothing else to
+	// fall back on.
+	asking := domain.AgentRole(strings.TrimSpace(recorded.Role))
+	if !asking.Valid() {
+		asking = conversation.Role
+	}
+	// A count the record did not carry is stated as absent rather than read as no
+	// actions at all, exactly as a priority the record omitted is.
+	refused := recorded.Actions
+	if refused <= 0 {
+		refused = -1
+	}
+	return Notification{
+		Topic:   Product(),
+		Speaker: Harness(),
+		Event: Event{
+			Kind:     KindTrackerBlockRefused,
+			At:       event.Timestamp,
+			Severity: report.SeverityWarning,
+			Refs:     Refs{ConversationID: conversation.ConversationID},
+			Detail: Detail{
+				Refused:  refused,
+				Asking:   asking.Title(),
+				Reason:   strings.TrimSpace(recorded.Problem),
+				Priority: -1,
+			},
 		},
 	}, nil
 }

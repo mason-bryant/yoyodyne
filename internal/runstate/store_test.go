@@ -170,6 +170,46 @@ func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 	}
 }
 
+// A save the durable schema refuses names the field it refused, and leaves the
+// record exactly as it was. Both halves are the contract a caller acts on: the
+// process now holds a state nothing durable carries, so it is the only thing that
+// can still say so, and the name of the field is the whole of what it has to go
+// on. Everything that reads the record after that process exits reads what is
+// here rather than what the process believed.
+func TestARefusedSaveNamesTheFieldAndLeavesTheRecordAsItWas(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.ReviewDecision = ReviewRepair
+	state.ReviewFindings = 1
+	state.ReviewFindingDetails = []Finding{{Severity: "advisory", Message: "this reads oddly"}}
+	err := store.Save(state)
+	want := `review_finding_details[0]: severity "advisory" must be "blocker", "major", or "minor"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Save() refused state error = %v, want %q named", err, want)
+	}
+	// The refusal is classified as well as worded. A caller has to be able to tell
+	// it from a store that could not be written, because only one of the two is
+	// still true the next time anything tries: an unavailable store leaves an
+	// interrupted run something comes back for, and this leaves a record no later
+	// write ever catches up with.
+	var refused RefusedStateError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Save() error = %v, want a refusal a caller can tell from an unavailable store", err)
+	}
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.ReviewDecision != "" || len(loaded.ReviewFindingDetails) != 0 {
+		t.Fatalf("the refused save reached the record: %#v", loaded)
+	}
+}
+
 func TestStoreRejectsStateFromAnotherRunFile(t *testing.T) {
 	t.Parallel()
 

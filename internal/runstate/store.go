@@ -91,17 +91,26 @@ type Lease struct {
 	holder string
 }
 
+// releaseStateFile drops a lock and closes the file it was taken on, in that
+// order, and it is how every lock in this package is let go of.
+//
+// The order is the whole of it. Closing would drop the lock anyway, but it is
+// the step that can fail with nothing left to try again: Go does not retry an
+// interrupted close and marks the descriptor closed regardless, so a lock
+// released only by closing could stay taken with no handle left to let go of it.
+// And a close is not even the moment the lock ends when somebody else still has
+// the descriptor: the lock belongs to the open file description, which a process
+// forked while it was held shares until that child execs — and the harness forks
+// Git and check processes constantly. Either way what the next acquirer is told
+// is that another process holds something nobody holds, which is the one answer
+// it cannot act on. Unlocking first makes a failed close a leaked descriptor at
+// worst, never a lock nobody can see.
+func releaseStateFile(file *os.File) error {
+	return errors.Join(unlockStateFile(file), closeStateFile(file))
+}
+
 // Release drops the lease. Releasing twice is a no-op, so a caller can defer it
 // unconditionally.
-//
-// The lock is dropped explicitly before the file is closed, rather than left to
-// the close that would drop it anyway. Closing is the step that can fail with
-// nothing left to try again: Go does not retry an interrupted close and marks
-// the descriptor closed regardless, so a lease that released only by closing
-// could keep its lock with no handle left to let go of it — and every later
-// question about the thing it owns would answer that another process holds it,
-// which is the one answer nobody could act on. Unlocking first makes a failed
-// close a leaked descriptor at worst, never a lock nobody can see.
 //
 // The stamp a reader observes goes before the lock is dropped, so no reader
 // sees a holder for a lease the next process may already own. A stamp that
@@ -120,8 +129,7 @@ func (l *Lease) Release() error {
 		}
 		l.holder = ""
 	}
-	unlocked := unlockStateFile(file)
-	if err := errors.Join(cleared, unlocked, closeStateFile(file)); err != nil {
+	if err := errors.Join(cleared, releaseStateFile(file)); err != nil {
 		return fmt.Errorf("release %s lease: %w", l.label, err)
 	}
 	return nil
@@ -292,7 +300,7 @@ func (s *Store) lockReservations(ctx context.Context) (func(), error) {
 		lock.Close()
 		return nil, fmt.Errorf("lock run reservations: %w", err)
 	}
-	return func() { lock.Close() }, nil
+	return func() { _ = releaseStateFile(lock) }, nil
 }
 
 // takeLease tries to become the owner of one run, reporting whether it did. The
@@ -667,11 +675,36 @@ func encodeEvent(event execution.Event) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+// RefusedStateError is a run state this store will not take: one the durable
+// schema rejects, or one belonging to another product.
+//
+// It is distinguished from every other reason a save can fail because it is the
+// only one that will still be true next time. A store that was unavailable is
+// retried by whoever resumes the run, and what is on disk meanwhile is an
+// interrupted run, which is what it is. A state the schema refuses is refused for
+// as long as the process holds it: no later write closes the gap, so the record
+// stays behind what the process believes and every reader after that process
+// exits believes the record. A caller that gets this back has to end its run over
+// what is actually stored rather than leave it looking resumable.
+//
+// It carries the same words the refusal itself does, because the field it names
+// is the whole of what a caller has to act on.
+type RefusedStateError struct {
+	Problem error
+}
+
+func (e RefusedStateError) Error() string { return e.Problem.Error() }
+
+func (e RefusedStateError) Unwrap() error { return e.Problem }
+
 func (s *Store) validateState(state State) error {
 	if state.ProductID != s.productID {
-		return fmt.Errorf("run product %q does not match store product %q", state.ProductID, s.productID)
+		return RefusedStateError{Problem: fmt.Errorf("run product %q does not match store product %q", state.ProductID, s.productID)}
 	}
-	return state.Validate()
+	if err := state.Validate(); err != nil {
+		return RefusedStateError{Problem: err}
+	}
+	return nil
 }
 
 func (s *Store) statePath(runID string) (string, error) {
@@ -709,27 +742,97 @@ func (s *Store) releasePath(runID string) (string, error) {
 // written, because runs and conversations share this path and an operator
 // reading a failure has to know which record could not be stored.
 func writeJSONFile(file *os.File, label string, value any) error {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
-		return fmt.Errorf("encode %s: %w", label, err)
+	encoded, err := encodeRecord(label, value)
+	if err != nil {
+		return err
 	}
-	if buffer.Len() > maxEncodedStateBytes {
-		return fmt.Errorf("encoded %s is %d bytes, limit is %d", label, buffer.Len(), maxEncodedStateBytes)
+	if len(encoded) > maxEncodedStateBytes {
+		return fmt.Errorf("encoded %s is %d bytes, limit is %d", label, len(encoded), maxEncodedStateBytes)
 	}
-	written, err := file.Write(buffer.Bytes())
+	written, err := file.Write(encoded)
 	if err != nil {
 		return fmt.Errorf("write %s: %w", label, err)
 	}
-	if written != buffer.Len() {
+	if written != len(encoded) {
 		return fmt.Errorf("write %s: %w", label, io.ErrShortWrite)
 	}
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync %s: %w", label, err)
 	}
 	return nil
+}
+
+// encodeRecord is the bytes one record is stored as. It is apart from the write
+// so that a caller can ask what a record would take before it produces one, and
+// so that the answer is the same bytes the write would put on the disk rather
+// than an estimate of them.
+func encodeRecord(label string, value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return nil, fmt.Errorf("encode %s: %w", label, err)
+	}
+	return buffer.Bytes(), nil
+}
+
+// createJSONFile durably writes one record that must not exist yet, and
+// replaceJSONFile durably replaces one that does. They are the two doors every
+// record in this package that is not a log goes through, written here rather
+// than once per record so that what "durable" means — written whole, put on the
+// disk, and named by a rename that a reader either sees or does not — is one
+// answer this package gives rather than each writer's own.
+//
+// Both take the directory as well as the path, because both create it and both
+// sync it: a record whose name is in a directory the operating system has agreed
+// to write later is a record a crash loses along with the name.
+func createJSONFile(directory, path, label string, value any) error {
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return fmt.Errorf("create the directory for %s: %w", label, err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("create %s: %s already exists", label, filepath.Base(path))
+		}
+		return fmt.Errorf("create %s: %w", label, err)
+	}
+	if err := writeJSONFile(file, label, value); err != nil {
+		return cleanupFailedCreate(file, path, err)
+	}
+	if err := file.Close(); err != nil {
+		return cleanupFailedCreate(nil, path, fmt.Errorf("close %s: %w", label, err))
+	}
+	if err := syncDirectory(directory); err != nil {
+		return cleanupFailedCreate(nil, path, err)
+	}
+	return nil
+}
+
+func replaceJSONFile(directory, path, label string, value any) error {
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return fmt.Errorf("create the directory for %s: %w", label, err)
+	}
+	temporary, err := os.CreateTemp(directory, ".record-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary %s: %w", label, err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		return errors.Join(fmt.Errorf("secure temporary %s: %w", label, err), temporary.Close())
+	}
+	if err := writeJSONFile(temporary, label, value); err != nil {
+		return errors.Join(err, temporary.Close())
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary %s: %w", label, err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace %s: %w", label, err)
+	}
+	return syncDirectory(directory)
 }
 
 func cleanupFailedCreate(file *os.File, path string, cause error) error {

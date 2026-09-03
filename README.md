@@ -96,7 +96,9 @@ yoyo chat
 
 [Getting started](#getting-started) is the same three steps with what each one
 is for and what it needs; [Install](#install) has the release download and the
-from-source routes, for anyone who would rather not have Go.
+from-source routes, for anyone who would rather not have Go. Running against
+more than one Claude subscription is a two-step configuration:
+[the multi-account quick start](docs/multi-account-quickstart.md).
 
 What exists today is bounded, and the bounds are worth knowing before you start
 rather than after:
@@ -616,10 +618,10 @@ the reviewer works and cannot let it approve a change it could not see. Bump the
 diagnostics.
 
 **What owning the configuration costs.** A later `yoyo` that improves a
-persona or corrects a model selector does not reach a project that already has
-its own copy of it. Re-run `yoyo init` in a scratch directory and merge the
-difference if you want those improvements. The executable's built-in bundle is
-the template `init` generates from rather than a layer projects keep
+persona or corrects a model selector does not change a project that already has
+its own copy of it; `yoyo config drift` reports what improved that you never
+edited. The built-in bundle is the template `init` generates from rather than a
+layer projects keep
 inheriting — inheritance still works for a project that writes
 `extends: builtin:v1`, and is the right choice for a fleet that should improve
 together, but the explicit file is what yoyo ships.
@@ -723,7 +725,7 @@ yoyo doctor
 Excluding it is load-bearing rather than tidiness. A run refuses to start while
 the primary checkout holds anything uncommitted that the project did not
 declare, untracked files included, and an untracked `.yoyodyne/` is exactly
-that — so without the exclude line the first `yoyo run` names the six files
+that — so without the exclude line the first `yoyo run` names the seven files
 `init` wrote there and stops.
 
 **The exclude line does not cover everything `init` writes.** It also puts a
@@ -829,5 +831,7 @@ a bundle, and migration from `.yoyodyne.yaml`.
   is for, and how a cut drafts one from the work that landed.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what
   the product manager reads.
+- [Terms](docs/terms.md) — every word this project coined that you can still meet,
+  what each means in ordinary words, and where it is used.
 - [Working on yoyo itself](docs/developing-yoyo.md) — the checks, the build, what
   a release is, and what a surface may do with emphasis.

@@ -1,0 +1,55 @@
+# delivery.yaml with one thing changed: a review that asks for changes goes back
+# to checking rather than back to the developer. It is the smallest difference
+# that is still a different sequence, and it is here to be digested rather than
+# to be argued about.
+schema: 1
+id: delivery
+summary: claim a work item, develop a change, check it, review it, and integrate it
+initial: claim
+states:
+  claim:
+    action: work-item.claim
+    summary: take the work item and assemble the context its developer is given
+    on:
+      claimed: develop
+      unavailable: abandoned
+  develop:
+    action: candidate.develop
+    summary: invoke the developer until it produces a change or the run stops trying
+    on:
+      produced: publish
+      produced-nothing: abandoned
+  publish:
+    action: candidate.publish
+    summary: commit the attempt, push the branch, and open or update its pull request
+    on:
+      published: check
+  check:
+    action: candidate.check
+    summary: refuse an ungranted path, then run the project's configured checks
+    on:
+      passed: review
+      failed: develop
+  review:
+    action: candidate.review
+    summary: obtain one independent verdict on the change
+    on:
+      approved: integrate
+      changes-requested: check
+      rejected: abandoned
+  integrate:
+    action: candidate.integrate
+    summary: take the promotion lease and promote the approved change
+    on:
+      integrated: clean-up
+      superseded: develop
+  clean-up:
+    action: run.clean-up
+    summary: remove the worktree and branch once the change is somewhere else
+    on:
+      cleaned: delivered
+terminals:
+  delivered:
+    summary: the change is on the target branch and the run's worktree is gone
+  abandoned:
+    summary: the run stopped without putting a change on the target branch

@@ -20,6 +20,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -168,6 +169,41 @@ var trackerActionArguments = map[string][]string{
 	actionRetire:       {},
 	actionTriage:       {"run", "decision"},
 	actionHandle:       {"report"},
+}
+
+// trackerCapabilities is which authority each operation belongs to. It is the
+// mapping the capability vocabulary was derived without: the inventory records
+// that a role's tracker actions are a list rather than a set of capabilities, and
+// this is that list read once in the vocabulary so the conversation asks what a
+// role holds instead of which role it is.
+//
+// Every line is a judgement, and the judgements are the ones the existing lists
+// already made. Reading and surveying are the same authority, since a survey is a
+// read of the queue as it stands now. Creating, reparenting, and linking build
+// structure, which is decomposition and belongs to the two roles that decompose.
+// Updating an item's own fields is the tracker write nothing else covers. Priority
+// and parking are what is pulled next. Closing and retiring are admission run
+// backwards, and attribution is the other half of admitting — the goal a creation
+// names, added to work that was admitted before goals were checked. Handling a
+// report is what takes one out of the pile the queue is fed from, which is the
+// same authority as deciding what goes into it. Triage's subject is a stopped run
+// rather than an item, which is why it is its own name and not an update.
+var trackerCapabilities = map[string]capability.Capability{
+	actionRead:         capability.WorkItemRead,
+	actionSurvey:       capability.WorkItemRead,
+	actionCreate:       capability.WorkDecompose,
+	actionAttribute:    capability.BacklogAdmit,
+	actionUpdate:       capability.WorkItemMutate,
+	actionReparent:     capability.WorkDecompose,
+	actionReprioritize: capability.BacklogOrder,
+	actionPark:         capability.BacklogOrder,
+	actionUnpark:       capability.BacklogOrder,
+	actionLink:         capability.WorkDecompose,
+	actionUnlink:       capability.WorkDecompose,
+	actionClose:        capability.BacklogAdmit,
+	actionRetire:       capability.BacklogAdmit,
+	actionTriage:       capability.WorkTriage,
+	actionHandle:       capability.BacklogAdmit,
 }
 
 // trackerActionNames lists the operations in the order the contract states them,
@@ -341,7 +377,14 @@ type TrackerError struct {
 	// another role's. It is empty only where nothing named a role, which reads
 	// as the unattributed "agent" rather than as the product manager.
 	Role domain.AgentRole
-	Err  error
+	// Actions is how many the refused block asked for, and is zero where the
+	// harness could not count them — a fence it could not split, or a payload it
+	// could not decode, says nothing about how much was in it. It is kept because
+	// it is the size of what was lost: a block refused for asking eleven things is
+	// eleven things somebody has to ask for again, and a count nobody recorded is
+	// a loss nobody can measure afterwards.
+	Actions int
+	Err     error
 }
 
 func (e *TrackerError) Error() string {
@@ -350,50 +393,118 @@ func (e *TrackerError) Error() string {
 
 func (e *TrackerError) Unwrap() error { return e.Err }
 
+// recordRefusedTrackerBlock writes down that a block was refused whole and puts
+// the refusal in front of the role that sent it.
+//
+// Both halves exist because the refusal used to reach one place only: whatever
+// terminal was watching. Nothing recorded it, so a turn nobody was watching
+// refused a dozen actions to nobody at all, and the role that asked for them
+// carried on believing they had landed — on 2026-09-01 the product manager lost
+// twelve actions that way, three admissions and seven report dispositions, and
+// the miss was found by a person reading the tracker afterwards. So the event is
+// durable, which is what lets a surface say it, and the words are carried into the
+// role's next turn, which is what lets the role re-issue them itself instead of
+// waiting to be told.
+//
+// The words carried are the refusal's own, verbatim: what is wrong with the block
+// is the whole of what the role needs to write a different one, and a paraphrase
+// is the harness guessing at that.
+//
+// It returns what could not be recorded and nothing else. The turn has already
+// failed on the refusal itself, and a report of that failure that also failed is
+// still worth saying — but it is not a second failure of the turn.
+func (s *Session) recordRefusedTrackerBlock(refused *TrackerError) error {
+	var problems []error
+	if err := s.emit(execution.EventTrackerBlockRefused, map[string]any{
+		"turn": s.state.Turns,
+		"role": string(s.state.Role),
+		// How much was refused, where the harness could count it. It is the size of
+		// what the role has to ask for again.
+		"actions": refused.Actions,
+		"problem": refused.Error(),
+	}); err != nil {
+		problems = append(problems, fmt.Errorf("record the refused tracker block: %w", err))
+	}
+	if err := s.carryResults(renderRefusedTrackerBlock(refused)); err != nil {
+		problems = append(problems, err)
+	}
+	return errors.Join(problems...)
+}
+
+// renderRefusedTrackerBlock is what the role's next turn opens with. It says
+// that nothing in the block happened, how much of it there was, and the refusal
+// in the harness's own words, and then asks for the actions again — because the
+// failure this ends is a role that describes refused work as done, and the only
+// thing that undoes it is the role issuing the actions a second time.
+func renderRefusedTrackerBlock(refused *TrackerError) string {
+	var rendered strings.Builder
+	rendered.WriteString("# The tracker block in your last reply was refused\n\n")
+	rendered.WriteString("The harness could not read it, so it was refused whole: nothing in it was carried out, and the tracker is exactly as it was. ")
+	if refused.Actions > 0 {
+		fmt.Fprintf(&rendered, "It asked for %d action(s), and none of them happened. ", refused.Actions)
+	}
+	rendered.WriteString("Do not describe any of it as done.\n\nThe refusal, in the harness's own words:\n\n")
+	rendered.WriteString(refused.Error())
+	rendered.WriteString("\n\nIssue the actions you still want again, in a block that answers what the refusal says is wrong with the one before it.\n\n")
+	return rendered.String()
+}
+
 // extractTrackerActions splits a reply into the prose the operator reads and the
 // tracker actions the turn asked for. Actions come only from the fenced block:
 // prose describing an edit is not an edit, and a block the contract does not
 // accept is refused whole rather than partly applied.
-func extractTrackerActions(reply string) (string, []TrackerAction, error) {
+//
+// The count it returns beside them is how many actions the block asked for, which
+// is the one thing a refusal needs that the refusal itself does not always say. It
+// is zero where nothing could be counted — no block at all, or a payload that did
+// not decode — and it is the requested count rather than the accepted one, so a
+// block refused for asking too much still reports its size.
+func extractTrackerActions(reply string) (string, []TrackerAction, int, error) {
 	prose, payload, found, err := splitFencedBlock(reply, trackerFence, "tracker")
 	if err != nil {
-		return "", nil, err
+		return "", nil, 0, err
 	}
 	if !found {
-		return strings.TrimSpace(reply), nil, nil
+		return strings.TrimSpace(reply), nil, 0, nil
 	}
-	actions, err := decodeTrackerActions(payload)
+	actions, requested, err := decodeTrackerActions(payload)
 	if err != nil {
-		return "", nil, err
+		return "", nil, requested, err
 	}
-	return prose, actions, nil
+	return prose, actions, requested, nil
 }
 
 // decodeTrackerActions strictly decodes the block payload. Unknown fields,
 // trailing content, and oversized input are refused rather than tolerated: what
 // the harness runs against the tracker has to be exactly what was asked for.
-func decodeTrackerActions(payload string) ([]TrackerAction, error) {
+//
+// It returns how many actions the block asked for alongside them, including on
+// every refusal that got far enough to count: the bound and the per-action
+// contract are both refused after the list is in hand, and those are the refusals
+// whose size somebody afterwards has to know.
+func decodeTrackerActions(payload string) ([]TrackerAction, int, error) {
 	trimmed := strings.TrimSpace(payload)
 	if trimmed == "" {
-		return nil, errors.New("decode tracker actions: the tracker block is empty")
+		return nil, 0, errors.New("decode tracker actions: the tracker block is empty")
 	}
 	if len(trimmed) > MaxTrackerBlockBytes {
-		return nil, fmt.Errorf("decode tracker actions: block is %d bytes, limit is %d", len(trimmed), MaxTrackerBlockBytes)
+		return nil, 0, fmt.Errorf("decode tracker actions: block is %d bytes, limit is %d", len(trimmed), MaxTrackerBlockBytes)
 	}
 	decoder := json.NewDecoder(bytes.NewReader([]byte(trimmed)))
 	decoder.DisallowUnknownFields()
 	var document trackerDocument
 	if err := decoder.Decode(&document); err != nil {
-		return nil, fmt.Errorf("decode tracker actions: %w", err)
+		return nil, 0, fmt.Errorf("decode tracker actions: %w", err)
 	}
+	requested := len(document.Actions)
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("decode tracker actions: unexpected trailing content after the actions")
+		return nil, requested, errors.New("decode tracker actions: unexpected trailing content after the actions")
 	}
-	if len(document.Actions) == 0 {
-		return nil, errors.New("decode tracker actions: a tracker block must ask for at least one action")
+	if requested == 0 {
+		return nil, 0, errors.New("decode tracker actions: a tracker block must ask for at least one action")
 	}
-	if len(document.Actions) > MaxTrackerActionsPerTurn {
-		return nil, fmt.Errorf("decode tracker actions: %d actions in one reply, limit is %d", len(document.Actions), MaxTrackerActionsPerTurn)
+	if requested > MaxTrackerActionsPerTurn {
+		return nil, requested, fmt.Errorf("decode tracker actions: %d actions in one reply, limit is %d", requested, MaxTrackerActionsPerTurn)
 	}
 	var problems []error
 	for i, action := range document.Actions {
@@ -402,9 +513,9 @@ func decodeTrackerActions(payload string) ([]TrackerAction, error) {
 		}
 	}
 	if len(problems) > 0 {
-		return nil, fmt.Errorf("invalid tracker actions: %w", errors.Join(problems...))
+		return nil, requested, fmt.Errorf("invalid tracker actions: %w", errors.Join(problems...))
 	}
-	return document.Actions, nil
+	return document.Actions, requested, nil
 }
 
 // Validate reports every contract violation in the action at once.

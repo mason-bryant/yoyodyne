@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -510,26 +511,125 @@ func attemptMessage(item beads.WorkItem, outcome Outcome) string {
 	return subject + "\n" + strings.Join(body, "\n") + "\n"
 }
 
+// maxPullRequestTitleBytes bounds the work item title a pull request title
+// carries. A pull request title is not a commit subject and is not bounded like
+// one: the forge accepts far more, and cutting a title at the subject bound is
+// what left PR #314 titled "... regist". The item id sits in front of what this
+// bounds, so the whole stays about the length a forge shows in a listing.
+const maxPullRequestTitleBytes = 100
+
+// Bounds on what one pull request body carries of the work item's own text and
+// of the change's computed shape. A forge refuses a body past its own limit, so
+// neither a long item nor a change touching hundreds of files may be what stops
+// a run publishing. Each block is cut on a line boundary and says it was cut.
+const (
+	maxPullRequestTextBytes  = 12 << 10
+	maxPullRequestFilesBytes = 12 << 10
+)
+
 func pullRequestTitle(item beads.WorkItem, outcome Outcome) string {
-	return strings.TrimSpace(fmt.Sprintf("%s %s", outcome.WorkItemID, singleLine(item.Title, maxCommitSubjectBytes)))
+	return strings.TrimSpace(fmt.Sprintf("%s %s", outcome.WorkItemID, wordBounded(item.Title, maxPullRequestTitleBytes)))
+}
+
+// wordBounded folds a title into one bounded line and cuts it at a word
+// boundary, so a title that did not fit ends on a word rather than inside one,
+// and says where it was cut: a title that simply stops reads as the whole
+// title. A single word longer than the bound has no boundary to cut at, and
+// falls back to the rune-boundary cut a commit subject takes.
+func wordBounded(value string, limit int) string {
+	folded := strings.Join(strings.Fields(value), " ")
+	if len(folded) <= limit {
+		return folded
+	}
+	cut := singleLine(folded, limit-len("…"))
+	if word := strings.LastIndexByte(cut, ' '); word > 0 {
+		cut = cut[:word]
+	}
+	return strings.TrimRight(cut, " ") + "…"
 }
 
 // pullRequestBody says what a reader of the pull request needs and nothing an
-// agent wrote. The description is harness evidence — which run produced this,
-// what it was written against, and what still has to happen before it merges —
-// because a pull request opened by the harness must not become a channel for
-// model output nobody reviewed.
+// agent wrote. Everything here is either the work item's own text — its
+// description and its acceptance criteria, admitted through the gate that
+// admits work, so governed rather than authored by the run — or a mechanical
+// fact computed from the change itself. That is what lets a reader tell what
+// the request contains without opening the tracker, while the rule a pull
+// request opened by the harness must not become a channel for model output
+// nobody reviewed still holds: the developer's own summary, its reports, its
+// proposals, and the item's notes stay on the run and on the work item.
 func pullRequestBody(item beads.WorkItem, outcome Outcome, base string) string {
 	lines := []string{
-		fmt.Sprintf("Opened by Yoyodyne for work item `%s`: %s", outcome.WorkItemID, singleLine(item.Title, maxCommitSubjectBytes)),
-		"",
-		"- Run: `" + outcome.RunID + "`",
-		"- Branch: `" + outcome.Branch + "` into `" + base + "`",
-		"- Base commit: `" + outcome.BaseCommit + "`",
-		"",
-		fmt.Sprintf("The harness pushed this branch as part of the developer phase, and asks the forge to merge this request with the `%s` method once the configured checks pass and an independent reviewer approves the change. That request is queued rather than immediate: the forge merges it when this pull request's own requirements are met, so a base branch with required checks is waited for rather than overridden. The reviewing agent has no tools and cannot merge anything; the harness makes the merge request itself, after fast-forwarding the local target branch onto this branch's head. The method is deliberate: a merge commit keeps the reviewed commit itself on the base, which a squash or a rebase would replace with a rewritten copy.", mergeMethod),
+		fmt.Sprintf("Opened by Yoyodyne for work item `%s`: %s", outcome.WorkItemID, wordBounded(item.Title, maxPullRequestTitleBytes)),
 	}
+	lines = append(lines, itemSection("What the work item asks for", item.Description)...)
+	lines = append(lines, itemSection("Acceptance criteria", item.AcceptanceCriteria)...)
+	lines = append(lines, changeSection(outcome.Changes)...)
+	lines = append(lines,
+		"",
+		"## Harness evidence",
+		"",
+		"- Run: `"+outcome.RunID+"`",
+		"- Branch: `"+outcome.Branch+"` into `"+base+"`",
+		"- Base commit: `"+outcome.BaseCommit+"`",
+		fmt.Sprintf("- The harness merges this request with the `%s` method once the configured checks pass and an independent reviewer approves it; `docs/designs/v1-harness-design.md` says what that involves.", mergeMethod),
+	)
 	return strings.Join(lines, "\n")
+}
+
+// itemSection carries one field of the work item into the body under its own
+// heading. A field the item does not have gets no heading: an empty section
+// says less than nothing.
+func itemSection(heading, text string) []string {
+	text = boundedBlock(text, maxPullRequestTextBytes)
+	if text == "" {
+		return nil
+	}
+	return []string{"", "## " + heading, "", text}
+}
+
+// changeSection is what the change mechanically is: the diff stat and the
+// changed-file listing the harness computed against the commit the run was
+// written against. Nothing in it is authored, which is why it can be published,
+// and it is what tells a reader what the request touches before they open the
+// diff. A run whose change was never summarized carries neither rather than an
+// empty listing, which would read as a change that touched nothing.
+func changeSection(changes gitworktree.ChangeSummary) []string {
+	files := boundedBlock(changes.Status, maxPullRequestFilesBytes)
+	stat := boundedBlock(changes.DiffStat, maxPullRequestFilesBytes)
+	if files == "" && stat == "" {
+		return nil
+	}
+	lines := []string{"", "## What changed", ""}
+	if files != "" {
+		lines = append(lines, "Changed files:", "", "```", files, "```")
+	}
+	if stat != "" {
+		if files != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "Diff stat:", "", "```", stat, "```")
+	}
+	return lines
+}
+
+// boundedBlock cuts a block of text to a byte bound on a line boundary, and
+// says that it cut: a listing that silently stops reads as a complete one. A
+// block with no line boundary to cut at is cut on a rune boundary instead,
+// because text truncated mid-rune is not text.
+func boundedBlock(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= limit {
+		return text
+	}
+	cut := limit
+	if line := strings.LastIndexByte(text[:cut], '\n'); line > 0 {
+		cut = line
+	} else {
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+	}
+	return strings.TrimRight(text[:cut], "\n") + "\n\n…cut to keep this body inside what the forge accepts; the work item and the diff carry the whole of it."
 }
 
 // renderPublishNotes carries the publication into the tracker, so an operator

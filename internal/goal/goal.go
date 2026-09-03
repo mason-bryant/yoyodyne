@@ -348,6 +348,25 @@ func (a Attribution) Resolved() bool {
 	return a.State == StateAttributed
 }
 
+// Divergent reports an attribution that is wrong rather than merely absent: a
+// goal no goals document states, or one the item recorded and lost.
+//
+// It is the rule the audit exits non-zero on and the rule a release is gated on,
+// which is why it is stated here rather than at each of them. Work that names no
+// goal is not divergent: that is what work admitted before attributions were
+// checked looks like, and it is grandfathered — a rule that quietly started
+// failing legacy items would stop a backlog nobody has had the chance to
+// attribute. A lost attribution fails for the opposite reason to the one
+// grandfathering exists for: the item passed the check, and what is wrong is that
+// the record of it was overwritten.
+//
+// An uncheckable attribution is not divergent either, and deliberately: nothing
+// was judged, which is a hole rather than a wrong claim. Whoever asks this has to
+// answer for that hole separately, and both callers do.
+func (a Attribution) Divergent() bool {
+	return a.State == StateUnresolved || a.State == StateLost
+}
+
 // ApprovalGap says why this attribution does not trace to a goal the operator
 // approved, and is empty exactly when it does. It is what decides whether work
 // reaches the queue without a person, so it is deliberately stricter than

@@ -507,6 +507,46 @@ func TestStatusSaysWhatBecameOfTheWorkRatherThanOneWordForEveryEnding(t *testing
 	}
 }
 
+// The one run whose durable status and whose outcome disagree, listed. A sweep
+// that finds the target does not carry a promotion hands the item back and
+// leaves the status the run recorded for itself, so the listing is reading a
+// record that says "succeeded" and has to say "stopped" over it — with the
+// reason, the phase, and what remains of the change, exactly as every other
+// stoppage is said.
+func TestStatusSaysAContradictedPromotionIsAStoppageRatherThanASuccess(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
+	contradicted := runstate.RunSummary{
+		RunID:        "run-8888888888888888888888888888bb",
+		WorkItemID:   "yoyodyne-ifd.233",
+		Status:       runstate.StatusSucceeded,
+		Outcome:      runstate.OutcomeStopped,
+		Phase:        runstate.PhaseCleaningUp,
+		StartedAt:    completedAt,
+		CompletedAt:  &completedAt,
+		Branch:       "yoyodyne/yoyodyne-ifd.233",
+		WorktreePath: "/state/worktrees/yoyodyne-ifd.233",
+		Failure:      "reconciled after an interrupted run: main does not contain it",
+	}
+
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{contradicted}}, "", true)
+	rendered := out.String()
+	for _, want := range []string{
+		"[stopped, cleaning_up, work preserved]",
+		"reason: reconciled after an interrupted run: main does not contain it",
+		"preserved worktree: /state/worktrees/yoyodyne-ifd.233",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, want)
+		}
+	}
+	if strings.Contains(rendered, string(runstate.OutcomeSucceeded)) {
+		t.Fatalf("a run a person was handed still reads as a success: %q", rendered)
+	}
+}
+
 func TestStatusRefusesArgumentsItCannotHonor(t *testing.T) {
 	t.Parallel()
 
@@ -1002,6 +1042,20 @@ func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
 	if strings.Contains(rendered, "under the cap of 4") {
 		t.Fatalf("rendered = %q, want no under-cap claim at the boundary", rendered)
 	}
+	// And the way out, beside the dead end. An operator told only that nothing
+	// remains is the operator who answers the escalation in the item's notes,
+	// where no guard reads it.
+	if !strings.Contains(rendered,
+		"`yoyo triage override --budget \"review round\" --cap <n> --by \"<you>\" --reason \"<why>\" yoyodyne-ifd.90` is the only thing that crosses it") {
+		t.Fatalf("rendered = %q, want the command that crosses the cap named beside it", rendered)
+	}
+	// It is said where it applies and nowhere else: an item with rounds to spare
+	// has no cap to cross.
+	var under bytes.Buffer
+	printItemTriage(&under, runstate.TriageCounters{WorkItemID: "yoyodyne-ifd.90", ReviewRounds: 3}, runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
+	if strings.Contains(under.String(), "yoyo triage override") {
+		t.Fatalf("rendered = %q, want no override advice on an item that is not at its cap", under.String())
+	}
 }
 
 // The four lines are a contract rather than a layout: all four print, every
@@ -1079,5 +1133,93 @@ func TestStatusCarriesTheFourLinesInJSON(t *testing.T) {
 	}
 	if decoded.Standing.Running == nil || decoded.Standing.NeedsHuman == nil {
 		t.Fatalf("a line is absent rather than empty: %+v", decoded.Standing)
+	}
+}
+
+// A stall is the one history nothing else keeps: the process that would have
+// recorded it is the process a stall means has died. So `yoyo status` reads it
+// back — the stretch, what was waiting through it, and what the thing that
+// chooses work last said before it went silent.
+func TestStatusReadsBackWhatTheProductRecordedAboutGoingQuiet(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	stalls, err := runstate.NewStallStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStallStore() error = %v", err)
+	}
+	dead := time.Date(2026, 9, 1, 6, 5, 0, 0, time.UTC)
+	if _, err := stalls.Reconcile(runstate.StallObservation{
+		Stalled: true,
+		Since:   dead,
+		Ready:   3,
+		Chooser: "the session choosing work last recorded watching at 2026-09-01T06:05:00Z, and has said nothing since",
+		At:      dead.Add(35 * time.Minute),
+	}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if _, err := stalls.Reconcile(runstate.StallObservation{
+		Explains: "1 developer run(s) are in flight",
+		At:       dead.Add(7*time.Hour + 30*time.Minute),
+	}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	for _, fact := range []string{
+		"nothing started on this product for 7h30m0s",
+		"2026-09-01T06:05:00Z",
+		"3 items",
+		"has said nothing since",
+		"cleared by: 1 developer run(s) are in flight",
+	} {
+		if !strings.Contains(stdout, fact) {
+			t.Fatalf("stdout does not carry %q:\n%s", fact, stdout)
+		}
+	}
+
+	// And the same record is in the machine-readable answer, so a second surface
+	// reads it rather than parsing the rendering.
+	encoded, stderr, code := runCLI(t, "status", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	var decoded statusOutput
+	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+		t.Fatalf("decode status JSON: %v (%q)", err, encoded)
+	}
+	if len(decoded.Stalls) != 1 || decoded.Stalls[0].Open() {
+		t.Fatalf("status JSON carries %+v, want the one closed stall", decoded.Stalls)
+	}
+
+	// A question about one item is a different question, and a stall is about the
+	// product rather than about any piece of work.
+	scoped, stderr, code := runCLI(t, "status", "--config", configPath, "yoyodyne-ifd.1")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(scoped, "nothing started on this product") {
+		t.Fatalf("an item-scoped status carried the product's stalls:\n%s", scoped)
+	}
+}
+
+// A product that has never gone quiet says nothing at all about it: the absence
+// is the ordinary state, and a line asserting it on every reading is one every
+// reader learns to skip.
+func TestStatusSaysNothingAboutStallsOnAProductThatHasHadNone(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, "gone quiet") || strings.Contains(stdout, "nothing started on this product") {
+		t.Fatalf("stdout asserts something about stalls on a product that has had none:\n%s", stdout)
 	}
 }

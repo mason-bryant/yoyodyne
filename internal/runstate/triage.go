@@ -128,32 +128,51 @@ type TriageCounters struct {
 	// accepted and then dropped.
 	Reruns      int `json:"reruns,omitempty"`
 	MergeRearms int `json:"merge_rearms,omitempty"`
-	// ReviewRounds is how many reviewer verdicts this item's developer attempts
-	// have produced, across every run of it. It is the figure a repair grant is
-	// truncated against, because it is the one that says what the item has
-	// actually cost: repair budgets reset with each run and this does not.
+	// ReviewRounds is how many times a reviewer verdict has sent this item's work
+	// back, across every run of it. It is the figure a repair grant is truncated
+	// against, because it is the one that says what the item has actually cost:
+	// repair budgets reset with each run and this does not.
 	//
 	// A re-review that no developer attempt produced is not a round. The
 	// integration replay is the case: a promotion that loses its race replays the
 	// same work onto where the target went and asks for a fresh verdict on it,
 	// and counting that would charge the item for losing a race it did not cause.
+	//
+	// Neither is a verdict that approved the change, and for a version of the same
+	// reason: the cap this feeds stops an item buying the same argument another
+	// round, and an approval ends that argument. What is counted is decided by
+	// whoever calls RecordReviewRound, which is the run that obtained the verdict;
+	// this record counts what it is handed.
 	ReviewRounds int `json:"review_rounds,omitempty"`
-	// LastRound identifies the developer attempt whose verdict was counted last,
-	// and only that one: it is the most recent round rather than a set of every
-	// round counted. Recording a round names the attempt that produced it, and an
-	// attempt that names the round already at the head is recorded once — which is
-	// what keeps a review re-asked for the same attempt off the bill, whether it
-	// was resumed after an interrupted process or re-obtained on a replayed
-	// change.
+	// LastJudged identifies the developer attempt a reviewer has most recently
+	// answered about, whichever way the verdict went, and it is what makes the
+	// second answer about one attempt free. That is a separate fact from the round
+	// at the head below, and it has to be: an approval is not a round, so it
+	// leaves no head, and the attempt an approved change was judged under would
+	// otherwise be judged from scratch when a lost promotion replays it. The
+	// replay's fresh verdict can be a repair — the ground moved under the change —
+	// and charging that is charging the item for a race it did not cause, which is
+	// exactly the round this record exists to keep off its bill.
 	//
 	// Consecutive is the whole of what has to be deduplicated, because it is the
 	// whole of what can happen. A repeat is always a re-review of the attempt the
 	// run has most recently been judged on, and nothing else can slip a round for
 	// this item in between: a run reserves the item exclusively, so a second run
 	// of the same item is refused while the first is in flight. An attempt
-	// repeated after some other round of the same item had been counted would be a
-	// second run judging an attempt of the first, which is not a thing the harness
-	// can produce.
+	// repeated after some other verdict of the same item had been obtained would
+	// be a second run judging an attempt of the first, which is not a thing the
+	// harness can produce.
+	//
+	// A record written before this was kept names nobody here and names its
+	// counted round below, which is why the deduplication asks both: the item was
+	// mid-flight when the executable changed under it, and a resumed review of the
+	// attempt at that head must still be free.
+	LastJudged string `json:"last_judged,omitempty"`
+	// LastRound identifies the developer attempt whose verdict was counted last,
+	// and only that one: it is the most recent round rather than a set of every
+	// round counted. It is what a return of that round is matched against, and it
+	// is not what deduplicates a re-review — LastJudged above is, because a verdict
+	// that charged nothing still has to be remembered.
 	//
 	// It is cleared by a round given back, which is what makes the return honest:
 	// a record still naming an attempt whose round is no longer counted would make
@@ -461,26 +480,33 @@ func (s *TriageStore) Counters(workItemID string) (TriageCounters, error) {
 	return s.load(id)
 }
 
-// RecordReviewRound counts one reviewer verdict against a work item and reports
-// what the item now stands at. It never refuses: a round is something that
-// happened rather than something being asked for, and a cap that could stop it
-// being written down would only make the record disagree with the world.
+// RecordReviewRound counts one round against a work item and reports what the
+// item now stands at. It never refuses: a round is something that happened
+// rather than something being asked for, and a cap that could stop it being
+// written down would only make the record disagree with the world.
 //
-// attemptID identifies the developer attempt whose change was judged, and
-// recording the attempt that is already at the head of the record counts once.
-// That is what excludes the integration replay: the replayed change is
-// re-reviewed under the attempt that produced it, so the second verdict names
-// the round just counted. It is also what makes an interrupted review safe to
-// resume — the review is re-asked for, and the round is not counted again.
+// Which verdicts are rounds is the caller's, not this record's — an approval is
+// not one, and the run that obtained the verdict is what knows. What an approval
+// is instead is RecordApprovedAttempt below, which every caller obtaining a
+// verdict has to reach for, because the deduplication here is what keeps a
+// re-review of a judged attempt free and a verdict that reached neither of these
+// is an attempt the record has never heard of.
+//
+// attemptID identifies the developer attempt whose change was judged, and an
+// attempt this item has already been answered about is recorded once. That is
+// what excludes the integration replay: the replayed change is re-reviewed under
+// the attempt that produced it, so the second verdict names an attempt already
+// judged — whether the first verdict cost a round or approved and cost nothing.
+// It is also what makes an interrupted review safe to resume.
 //
 // chargedBy is the process counting it, kept with the round so that only that
-// process can give it back. A round already at the head keeps the charger it was
-// written with rather than acquiring the one asking: the item was charged once,
-// by whoever produced the verdict, and a re-review that counted nothing has
+// process can give it back. An attempt already judged keeps whatever the record
+// holds rather than acquiring the process asking: the item was charged at most
+// once, by whoever produced the verdict, and a re-review that counted nothing has
 // bought nothing to give back.
 //
-// Only the most recent round is compared against, which is sufficient rather
-// than approximate; LastRound says why.
+// Only the most recent verdict is compared against, which is sufficient rather
+// than approximate; LastJudged says why.
 func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attemptID, chargedBy string, at time.Time) (TriageCounters, error) {
 	if strings.TrimSpace(attemptID) == "" {
 		return TriageCounters{}, errors.New("a developer attempt is required to count the round its review produced")
@@ -489,14 +515,57 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 		return TriageCounters{}, errors.New("a charging process is required to count a review round")
 	}
 	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
-		if counters.LastRound == attemptID {
+		if counters.alreadyJudged(attemptID) {
 			return errNoTriageChange
 		}
 		counters.ReviewRounds++
+		counters.LastJudged = attemptID
 		counters.LastRound = attemptID
 		counters.LastRoundCharger = chargedBy
 		return nil
 	})
+}
+
+// RecordApprovedAttempt records that a reviewer answered about one developer
+// attempt and approved it, which costs the item nothing and is still something
+// the record has to hold.
+//
+// It exists because the exclusion and the deduplication are the same mechanism.
+// An approval that went unrecorded would leave the attempt looking unjudged, and
+// the one thing that re-reviews an approved attempt is the integration replay: a
+// promotion that lost its race replays the change onto where the target went and
+// asks for a fresh verdict on it. That verdict can be a repair — the ground
+// moved — and with nothing saying the attempt had already been answered about,
+// the item would be charged a round for losing a race it did not cause. That is
+// the round the replay exclusion has always promised to keep off the bill, and
+// this is what keeps the promise now that an approval is not a round.
+//
+// No charging process is asked for, because nothing is charged. An approval
+// leaves the round at the head, and whatever process holds it, exactly as it
+// found them: a later round given back is still that process's to give.
+func (s *TriageStore) RecordApprovedAttempt(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, error) {
+	if strings.TrimSpace(attemptID) == "" {
+		return TriageCounters{}, errors.New("a developer attempt is required to record the verdict that approved it")
+	}
+	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+		if counters.alreadyJudged(attemptID) {
+			return errNoTriageChange
+		}
+		counters.LastJudged = attemptID
+		return nil
+	})
+}
+
+// alreadyJudged reports an attempt a reviewer has already answered about, which
+// is what makes the second answer free.
+//
+// It asks the counted round as well as the judged attempt, and that is a
+// compatibility clause rather than a second rule: a record written before
+// approvals were remembered names its attempt only at the round it charged, and
+// an item that was mid-flight when the executable changed under it must not have
+// its resumed review charged twice.
+func (c TriageCounters) alreadyJudged(attemptID string) bool {
+	return c.LastJudged == attemptID || c.LastRound == attemptID
 }
 
 // ReturnReviewRound gives back the round one developer attempt's review was
@@ -553,6 +622,13 @@ func (s *TriageStore) ReturnReviewRound(ctx context.Context, workItemID, attempt
 		// makes the next review of the same attempt free.
 		counters.LastRound = ""
 		counters.LastRoundCharger = ""
+		// And the judged attempt with them, where it is this one. A returned round
+		// is a round the environment refused, so the attempt is going to be judged
+		// again and has to be chargeable when it is; leaving it named here is the
+		// same free review by the other door.
+		if counters.LastJudged == attemptID {
+			counters.LastJudged = ""
+		}
 		outcome.Returned = true
 		return nil
 	})
@@ -914,7 +990,7 @@ func (s *TriageStore) lock(ctx context.Context, workItemID string) (func(), erro
 		file.Close()
 		return nil, fmt.Errorf("lock triage counters for %s: %w", workItemID, err)
 	}
-	return func() { file.Close() }, nil
+	return func() { _ = releaseStateFile(file) }, nil
 }
 
 func (s *TriageStore) path(workItemID string) string {

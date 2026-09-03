@@ -16,7 +16,7 @@ revisions:
 
 ## What this is for
 
-V1 executes every role through Claude Code, on one configured account, with fixed operator-configured model assignments — and the discipline that makes that narrow choice safe to widen later: every invocation pinned and recorded, capacity failures visible rather than silently routed around, and durable state that never depends on a provider session. It serves the goals that safety invariants hold whatever the configuration says and that the operator can see what the system does on their behalf. The Codex adapter and the generic provider plugin are parked at priority 4, preserved and off the critical path; the backend boundary remains the architectural seam they would re-enter through, and no connector work exists merely to exercise it.
+V1 executes every role through Claude Code, on one configured account, with fixed operator-configured model assignments — and the discipline that makes that narrow choice safe to widen later: every invocation pinned and recorded, capacity failures visible rather than silently routed around, and durable state that never depends on a provider session. It serves the goals that safety invariants hold whatever the configuration says and that the operator can see what the system does on their behalf. The Codex adapter and the generic provider plugin are parked at priority 4, preserved and off the critical path; the backend boundary remains where a second connector would attach, and no connector work exists merely to exercise it.
 
 ## Pinned invocations
 
@@ -28,7 +28,7 @@ When Claude Code reports explicit usage-limit exhaustion: a wait within the conf
 
 ## Configuration reload
 
-Reload is atomic through validation: a valid revision applies to new invocations only, active invocations keep the revision they were pinned to, and an invalid revision changes nothing — the last valid revision stays in force and the failure is visible as a warning and an audit event. Today's per-command loading satisfies this trivially; the resident product-manager service satisfies it by watching or reloading through the same validation path. Partial activation does not exist in either shape.
+Reload is atomic through validation: a valid revision applies to new invocations only, active invocations keep the revision they were pinned to, and an invalid revision changes nothing — the last valid revision stays active and the failure is visible as a warning and an audit event. Today's per-command loading satisfies this trivially; the resident product-manager service satisfies it by watching or reloading through the same validation path. Partial activation does not exist in either shape.
 
 ## The configuration split
 

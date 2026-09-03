@@ -376,6 +376,15 @@ func TestReconcileFailsARunThatLeftNothingBehind(t *testing.T) {
 	if len(results) != 1 || results[0].Action != ActionFailed || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want a plain terminal failure", results)
 	}
+	// What the sweep did and what became of the run are different facts, and the
+	// second is what says whether anybody's work is gone. This run made nothing,
+	// which is stated as itself rather than as work thrown away.
+	if outcome := results[0].Outcome; outcome != runstate.OutcomeFailed {
+		t.Errorf("outcome = %q, want %q", outcome, runstate.OutcomeFailed)
+	}
+	if remains := results[0].Artifacts().Describe(); remains != "no artifacts recorded" {
+		t.Errorf("what remains = %q, want the absence stated rather than work reported as removed", remains)
+	}
 	if tracker.blocked {
 		t.Fatal("reconciliation blocked an item that has nothing preserved")
 	}
@@ -389,6 +398,106 @@ func TestReconcileFailsARunThatLeftNothingBehind(t *testing.T) {
 	if settled.Status != runstate.StatusFailed || settled.CompletedAt == nil {
 		t.Fatalf("settled state = %#v", settled)
 	}
+}
+
+// A stoppage can be settled onto a record that is already terminal: the last
+// write of the process that died lands after the sweep listed the run and
+// before it adopts it. The stoppage still has to reach that record. Every
+// surface answers "why did this stop" from the reason and the blocker on the
+// run, so a sweep that left the record as it found it handed a person three
+// empty answers.
+func TestReconcileRecordsAStoppageSettledOntoAnAlreadyTerminalRun(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("interrupted Run() error = nil")
+	}
+
+	// The terminal record the interrupted process was still to write is a
+	// cancellation with no reason on it, which is what stopping a run leaves.
+	cancelled := &cancelledBetweenListingAndAdoption{ReconcileStore: store, at: execution.RealClock{}.Now()}
+	results := reconcileSweep(t, repository, worktreeRoot, cancelled, tracker)
+	if len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the stoppage settled onto the terminal run", results)
+	}
+	if !cancelled.settled {
+		t.Fatal("the run was never made terminal, so this settled an interruption rather than a terminal record")
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The run keeps the status it recorded for itself; what the sweep adds is
+	// what stopped it and why.
+	if settled.Status != runstate.StatusCancelled {
+		t.Fatalf("settled status = %q, want the status the run recorded for itself", settled.Status)
+	}
+	if !strings.Contains(settled.Blocker, "no attempt of the harness can finish it") {
+		t.Fatalf("blocker = %q, want the words the item was blocked in", settled.Blocker)
+	}
+	if !strings.Contains(settled.Failure, "reconciled after an interrupted run") ||
+		!strings.Contains(settled.Failure, "no attempt of the harness can finish it") {
+		t.Fatalf("failure = %q, want the reason a person reads for why this stopped", settled.Failure)
+	}
+	if outcome := settled.Outcome(); outcome != runstate.OutcomeStopped {
+		t.Errorf("outcome = %q, want %q", outcome, runstate.OutcomeStopped)
+	}
+	// `yoyo status` prints its reason from the read model rather than from the
+	// record, so the reason has to survive into the summary.
+	history, err := store.History(runstate.RunQuery{})
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	if len(history.Runs) != 1 || history.Runs[0].Failure != settled.Failure {
+		t.Fatalf("history = %#v, want the settled run's own reason", history.Runs)
+	}
+	// The triage docket is the other surface a person triages from, and a build
+	// after this sweep reads the same record rather than the sweep's own copy of
+	// it.
+	docket := &memoryDocket{}
+	build, err := docketerOver([]runstate.State{settled}, docket).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(build.Entries) != 1 || build.Entries[0].Blocker != settled.Blocker {
+		t.Fatalf("docket = %#v, want one entry carrying the run's blocker", build.Entries)
+	}
+}
+
+// cancelledBetweenListingAndAdoption records the terminal write of the process
+// that died in the window a sweep leaves for it: after the runs to settle are
+// listed and before the one it settles is adopted and re-read. What it writes is
+// a cancellation, which is the terminal record that names no reason of its own.
+type cancelledBetweenListingAndAdoption struct {
+	ReconcileStore
+	at      time.Time
+	settled bool
+}
+
+func (s *cancelledBetweenListingAndAdoption) Outstanding() ([]runstate.State, error) {
+	outstanding, err := s.ReconcileStore.Outstanding()
+	if err != nil || s.settled {
+		return outstanding, err
+	}
+	for _, state := range outstanding {
+		cancelled := state
+		cancelled.Status = runstate.StatusCancelled
+		completedAt := s.at
+		cancelled.CompletedAt = &completedAt
+		cancelled.UpdatedAt = completedAt
+		if err := s.ReconcileStore.Save(cancelled); err != nil {
+			return nil, err
+		}
+		s.settled = true
+	}
+	return outstanding, nil
 }
 
 // A promotion found in the target branch is only this run's to claim if this
@@ -420,6 +529,16 @@ func TestReconcileBlocksAnUnapprovedPromotionItFinds(t *testing.T) {
 	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
 	if len(results) != 1 || results[0].Action != ActionBlocked {
 		t.Fatalf("reconciliation = %#v, want an unapproved promotion blocked", results)
+	}
+	// The run is handed to a person with its change intact, and the sweep says
+	// both. Reporting the durable status alone would put "failed" over a branch
+	// and worktree that are still there, which is the reading this vocabulary
+	// exists to stop.
+	if outcome := results[0].Outcome; outcome != runstate.OutcomeStopped {
+		t.Errorf("outcome = %q, want %q", outcome, runstate.OutcomeStopped)
+	}
+	if remains := results[0].Artifacts().Describe(); remains != "work preserved" {
+		t.Errorf("what remains = %q, want the preserved change named", remains)
 	}
 	if !tracker.blocked || tracker.closed {
 		t.Fatalf("tracker = %#v, want a blocked and unclosed item", tracker)
@@ -543,6 +662,79 @@ func TestReconcileBlocksARecordedIntegrationTheTargetDoesNotCarry(t *testing.T) 
 	}
 	// The blocked run keeps nothing that would make it owe cleanup, so the next
 	// sweep leaves it alone instead of deciding it over again.
+	if again := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(again) != 0 {
+		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
+	}
+}
+
+// The same contradiction on a record that already said the run succeeded, which
+// is the shape a process killed after the completing save leaves. The sweep
+// deliberately keeps the status such a record wrote for itself, so what stops it
+// reading as work that landed is the precedence rule in the read model: the
+// blocker this sweep saves outranks the status, and every surface says "stopped".
+func TestReconcileDoesNotLeaveAContradictedPromotionReadingAsSucceeded(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("interrupted Run() error = nil")
+	}
+	interrupted, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if interrupted.Integration == nil {
+		t.Fatalf("interrupted state = %#v, want the recorded integration this test contradicts", interrupted)
+	}
+	// The run reached its terminal status before the process died, short of the
+	// complete phase, which is what leaves the cleanup outstanding.
+	completedAt := interrupted.UpdatedAt
+	interrupted.Status = runstate.StatusSucceeded
+	interrupted.CompletedAt = &completedAt
+	if err := store.Save(interrupted); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	gitOutput(t, repository, "update-ref", "refs/heads/main", interrupted.BaseCommit)
+
+	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+	if len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the uncarried promotion blocked", results)
+	}
+	if !tracker.blocked || tracker.item.Status != "blocked" {
+		t.Fatalf("tracker = %#v, want the item blocked for a person", tracker)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The status stays what the run recorded — the sweep's own rule, unchanged —
+	// and the blocker beside it is what the outcome is read from.
+	if settled.Status != runstate.StatusSucceeded || settled.Integration != nil {
+		t.Fatalf("settled state = %#v, want the recorded status kept and no promotion claimed", settled)
+	}
+	if settled.Outcome() != runstate.OutcomeStopped {
+		t.Fatalf("settled outcome = %q, want a stoppage somebody owns", settled.Outcome())
+	}
+	if !strings.Contains(settled.Failure, "does not contain it") {
+		t.Fatalf("settled failure = %q, want the reason the sweep settled it on", settled.Failure)
+	}
+	if !strings.Contains(settled.Blocker, "does not contain it") {
+		t.Fatalf("settled blocker = %q, want the blocker the item carries", settled.Blocker)
+	}
+	// Nothing the run built was swept away on the strength of a record the
+	// repository denies. The run closed the item when it recorded the promotion,
+	// and the blocker above is what reopens the question.
+	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
+		t.Fatalf("blocked run lost its preserved change: %v", err)
+	}
+	// The settled run owes nothing further, so the next sweep leaves it alone
+	// rather than deciding it again.
 	if again := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(again) != 0 {
 		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
 	}

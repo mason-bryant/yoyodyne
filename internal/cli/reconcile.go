@@ -152,6 +152,14 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 		for _, result := range results {
 			fmt.Fprintf(stdout, "%s (%s): %s\n", result.RunID, result.WorkItemID, result.Action)
+			// What the sweep did and what became of the run are two different facts,
+			// and the second is the one an operator reads this for: the action says a
+			// run was settled, and this says whether their change survived it. Both
+			// words are the read model's, so a run described here and the same run in
+			// `yoyo status` cannot be described differently.
+			if result.Settled() {
+				fmt.Fprintf(stdout, "  %s, %s\n", result.Outcome, result.Artifacts().Describe())
+			}
 			if result.Detail != "" {
 				fmt.Fprintf(stdout, "  %s\n", result.Detail)
 			}

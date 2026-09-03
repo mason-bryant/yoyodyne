@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
@@ -186,15 +187,67 @@ func TestTheSinkIsAssembledForTheProductItReportsOn(t *testing.T) {
 	}
 }
 
+// A pass that runs over a project reporting nowhere has nothing to supervise
+// and nothing to complain about. It has to say so and succeed: an unattended
+// pass that failed here would report every product on the machine that has not
+// turned reporting on, every time it ran.
+func TestSupervisingAProjectThatReportsNowhereIsNotAFailure(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	configPath := writeConfig(t, validConfig)
+
+	stdout, stderr, code := runCLI(t, "slack", "ensure", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("slack ensure code = %d (%s), want a project with reporting off to be healthy", code, stderr)
+	}
+	if !strings.Contains(stdout, "slack.enabled") {
+		t.Fatalf("stdout = %q, want the setting that turns it on named", stdout)
+	}
+}
+
+// What the pass says goes to whatever collects an unattended job's output, and
+// the exit code is what that job reacts to: a sink already running is the
+// ordinary outcome and not news, and tokens nobody stored is the one outcome
+// somebody has to act on.
+func TestSupervisionFailsOnlyWhereNothingIsReportingAndNothingCanStart(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		supervision slack.Supervision
+		code        int
+		says        string
+	}{
+		{slack.Supervision{Product: "yoyodyne", Outcome: slack.OutcomeRunning}, 0, "already reporting"},
+		{slack.Supervision{Product: "yoyodyne", Outcome: slack.OutcomeStarted, PID: 91, Log: "/state/sink.log"}, 0, "pid 91"},
+		{slack.Supervision{Product: "yoyodyne", Outcome: slack.OutcomeReportingOff}, 0, "no sink to run"},
+		{
+			slack.Supervision{
+				Product: "yoyodyne",
+				Outcome: slack.OutcomeSecretsUnavailable,
+				Secrets: []string{slack.BotSecret("yoyodyne"), slack.AppSecret("yoyodyne")},
+			},
+			1, "yoyo-slack-app.yoyodyne",
+		},
+	} {
+		var stdout, stderr strings.Builder
+		code := reportSupervision(&stdout, &stderr, false, testCase.supervision)
+		if code != testCase.code {
+			t.Errorf("%s code = %d, want %d", testCase.supervision.Outcome, code, testCase.code)
+		}
+		if !strings.Contains(stdout.String(), testCase.says) {
+			t.Errorf("%s said %q, want it to mention %q", testCase.supervision.Outcome, stdout.String(), testCase.says)
+		}
+	}
+}
+
 // The verb is one an operator reaches for when they want reporting, so its
 // usage has to carry the whole of what it needs: the tokens, the one-sink rule,
-// and where the setup document is.
+// how it is kept running, and where the setup document is.
 func TestTheSinkUsageSaysWhatSettingItUpNeeds(t *testing.T) {
 	t.Parallel()
 
 	var usage strings.Builder
 	printSlackUsage(&usage)
-	for _, want := range []string{"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "One sink per product", "docs/slack/setup.md"} {
+	for _, want := range []string{"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "One sink per product", "yoyo slack ensure", "docs/slack/setup.md"} {
 		if !strings.Contains(usage.String(), want) {
 			t.Errorf("usage does not mention %q", want)
 		}
@@ -249,3 +302,34 @@ slack:
   enabled: true
   channel: C0123456789
 `
+
+// The count the sink reads the queue with is what a run could actually be
+// started for. The tracker's own readiness is about dependencies alone, so it
+// includes work no pull will ever take — a conversation's to carry, or parked —
+// and counting that is how the heartbeat sent an operator three times to a line
+// that had not stopped. It matters more where the stall watchdog reads it: there
+// the number is the whole of what separates a machine that has died from one
+// with nothing to do.
+func TestTheSinkCountsOnlyTheReadyWorkARunCouldCarry(t *testing.T) {
+	t.Parallel()
+
+	ready := `[
+	  {"id": "yoyodyne-ifd.1", "title": "an ordinary item", "status": "open"},
+	  {"id": "yoyodyne-ifd.2", "title": "the architect's own", "status": "open",
+	   "metadata": {"yoyodyne_executor": "conversation:architect"}},
+	  {"id": "yoyodyne-ifd.3", "title": "parked", "status": "open",
+	   "metadata": {"yoyodyne_parked": "the design is being reworked"}},
+	  {"id": "yoyodyne-ifd.4", "title": "another ordinary item", "status": "open"}
+	]`
+	backlog := readyBacklog{tracker: beads.Client{
+		Runner: &scriptedRunner{outputs: map[string]string{"bd": ready}},
+		Dir:    t.TempDir(),
+	}}
+	count, err := backlog.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Ready() = %d, want the two items a developer run could be started for", count)
+	}
+}

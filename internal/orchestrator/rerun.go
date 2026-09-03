@@ -41,12 +41,29 @@ package orchestrator
 // scheduler pulls from, which is the other way the same work reaches a
 // developer; the two agree because nothing was claimed here.
 //
-// That is also the one thing withdrawn past the claim. The slot can go to
-// another run between the reading and the reservation, and a claim taken for a
+// That is also one of the two things withdrawn past the claim. The slot can go
+// to another run between the reading and the reservation, and a claim taken for a
 // run the reservation then refused is a re-run spent on a run that provably
 // never existed — the reservation refuses before the run's record, the item's
 // claim and any agent. So it is given back, and the carry-out reports the same
 // waiting state it would have reported a moment earlier.
+//
+// # Why a pause the fresh run meets gives the claim back
+//
+// The other is a pause. The operator's hold on all activity, an unresolved
+// directive, work the item waits on, and a held intake all stop the pipeline
+// before it reserves anything, so what comes back is a paused outcome carrying no
+// run: no run record, no claimed item, no agent. That is the same nothing a
+// refused reservation leaves, and it has to cost the same — a claim settled
+// against an empty run identifier is a stoppage whose next carry-out is refused
+// as already re-run, for a run nobody made. So the claim is given back and the
+// pause is reported in place of the run, and lifting it and asking again carries
+// out the same decision.
+//
+// Two of those four are read here before the claim as well, and that is not the
+// same question asked twice: the reading before the claim keeps a harness that is
+// already held from spending anything, and this is what covers a hold, a
+// directive, or a dependency that arrives while the claim is being taken.
 //
 // # Why the hold applies
 //
@@ -138,9 +155,10 @@ type RerunRecords interface {
 	Claim(ctx context.Context, rerun runstate.Rerun) (runstate.Rerun, error)
 	Settle(ctx context.Context, docketKey, runID string, preserved runstate.PreservedArtifacts) (runstate.Rerun, error)
 	Claimed(workItemID string) ([]runstate.Rerun, error)
-	// Withdraw gives the claim back, for the one case where the run it was taken
-	// for provably never existed: a reservation refused for developer capacity.
-	// See runstate.RerunStore.Withdraw for why that case and no other.
+	// Withdraw gives the claim back, for the two cases where the run it was taken
+	// for provably never existed: a reservation refused for developer capacity, and
+	// a pause met where the fresh run would have started. See
+	// runstate.RerunStore.Withdraw for why those cases and no other.
 	Withdraw(ctx context.Context, docketKey string) error
 }
 
@@ -228,7 +246,14 @@ type RerunResult struct {
 	// the decision stands until it is carried out or the development manager
 	// withdraws it, and asking again once a slot frees carries out the same one.
 	CapacityFull *runstate.CapacityError `json:"capacity_full,omitempty"`
-	Outcome      Outcome                 `json:"outcome"`
+	// PausedBeforeStarting is the pause the fresh run met where it would have
+	// started, when one is what stopped this: the operator's hold on all activity,
+	// an unresolved directive, work the item waits on, or a held intake. It is the
+	// pipeline's own outcome, so it names which of them it was. Nothing was
+	// reserved and no run exists, so the claim taken for it was given back and the
+	// stoppage keeps its re-run.
+	PausedBeforeStarting *Outcome `json:"paused_before_starting,omitempty"`
+	Outcome              Outcome  `json:"outcome"`
 	// Preserved is what the stopped run left behind and what became of it.
 	Preserved runstate.PreservedArtifacts `json:"preserved"`
 	// RecordProblem names a durable record this action could not update after the
@@ -350,6 +375,15 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	// and there is nothing to settle behind it.
 	if capacity, refused := capacityRefused(outcome, runErr); refused {
 		return r.withdraw(ctx, entry, capacity, result), nil
+	}
+	// A pause met where the fresh run would have started is the same nothing: the
+	// hold, the directive, the dependency and the intake hold all stop the pipeline
+	// before it reserves a run, claims the item, or invokes an agent. The claim
+	// taken for it is given back and the pause is reported in place of the run, so
+	// the next carry-out of the same decision meets the pause rather than the
+	// once-only guard.
+	if pausedBeforeStarting(outcome) {
+		return r.withdrawPaused(ctx, entry, outcome, result), runErr
 	}
 	result.Outcome = outcome
 	result.Preserved = r.settle(ctx, entry, prior, outcome, &result)
@@ -551,23 +585,70 @@ func capacityRefused(outcome Outcome, err error) (runstate.CapacityError, bool) 
 	return capacity, true
 }
 
+// pausedBeforeStarting reports the fresh run having met a pause where it would
+// have started, and nothing else having happened. The missing run identifier is
+// what makes it that rather than a run that paused: the pauses that stop work
+// before it is claimed carry no run, and a paused outcome naming one describes a
+// run in flight that this carry-out neither started nor may give a claim back for.
+func pausedBeforeStarting(outcome Outcome) bool {
+	return outcome.Paused && outcome.RunID == ""
+}
+
 // withdraw gives back the claim taken for a fresh run a full harness refused to
 // reserve, and reports the same waiting state a carry-out that met capacity
 // before the claim reports.
-//
-// A claim that could not be given back is said out loud rather than swallowed:
-// the stoppage has then paid for a refusal that was meant to be free, and the
-// decision it authorized needs a person to look at it, because nothing else here
-// will notice.
 func (r Rerunner) withdraw(ctx context.Context, entry triage.Entry, capacity runstate.CapacityError, result RerunResult) RerunResult {
 	result.Started = false
 	result.CapacityFull = &capacity
+	r.giveBack(ctx, entry, fmt.Sprintf(
+		"the last free developer slot went to another run before this re-run of %s was reserved", entry.WorkItemID), &result)
+	return result
+}
+
+// withdrawPaused gives back the claim taken for a fresh run that met a pause
+// where it would have started, and reports the pause in place of the run it
+// stopped from existing.
+func (r Rerunner) withdrawPaused(ctx context.Context, entry triage.Entry, paused Outcome, result RerunResult) RerunResult {
+	result.Started = false
+	result.PausedBeforeStarting = &paused
+	r.giveBack(ctx, entry, fmt.Sprintf(
+		"the re-run of %s met %s where the fresh run would have started", entry.WorkItemID, pauseMet(paused)), &result)
+	return result
+}
+
+// giveBack returns the claim taken for a fresh run that provably never existed.
+// met names what the run met instead, so a claim that could not be given back
+// reads as the thing that stopped it rather than as a record failure with no
+// cause.
+//
+// That failure is said out loud rather than swallowed: the stoppage has then paid
+// for a refusal that was meant to be free, and the decision it authorized needs a
+// person to look at it, because nothing else here will notice.
+func (r Rerunner) giveBack(ctx context.Context, entry triage.Entry, met string, result *RerunResult) {
 	if err := r.Reruns.Withdraw(ctx, entry.Key); err != nil {
 		result.note(fmt.Sprintf(
-			"the last free developer slot went to another run before this re-run of %s was reserved, and the claim taken for it could not be given back, so the stoppage has spent its re-run on a run that never started: %v",
-			entry.WorkItemID, err))
+			"%s, and the claim taken for it could not be given back, so the stoppage has spent its re-run on a run that never started: %v",
+			met, err))
 	}
-	return result
+}
+
+// pauseMet names the pause a fresh run met, for a report that has to say what
+// stopped it rather than only that something did. Each of them is lifted by a
+// different person doing a different thing, so which one it was is the whole of
+// what a reader can act on.
+func pauseMet(outcome Outcome) string {
+	switch {
+	case outcome.PausedByOperator != nil:
+		return "the operator's hold on all harness activity"
+	case outcome.PausedByIntake != nil:
+		return "the operator's hold on what the harness chooses"
+	case outcome.PausedByDirective != nil:
+		return "the unresolved directive " + outcome.PausedByDirective.ID
+	case outcome.PausedByDependency != nil:
+		return "unfinished work its item waits on: " + outcome.PausedByDependency.Summary()
+	default:
+		return "a pause"
+	}
 }
 
 // settle records what became of the stopped run's artifacts and reports the
@@ -833,6 +914,18 @@ func (result RerunResult) Render() string {
 			result.WorkItemID, result.CapacityFull.Active, result.CapacityFull.Limit)
 		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run and the decision still stands, so asking again once a slot frees carries out the same one\n", result.PriorRunID)
 		fmt.Fprintf(&rendered, "%s is meanwhile open work the scheduler pulls from, so it can reach a developer without this being asked again\n", result.WorkItemID)
+		if result.RecordProblem != "" {
+			fmt.Fprintln(&rendered, result.RecordProblem)
+		}
+		return rendered.String()
+	}
+	if result.PausedBeforeStarting != nil {
+		// What lifts the pause is said by the pause's own report rather than here,
+		// because it is the same thing that lifts it for any other work. What this
+		// owes a reader is the accounting: nothing ran, and nothing was spent.
+		fmt.Fprintf(&rendered, "NOT STARTED: the fresh run of %s met %s\n",
+			result.WorkItemID, pauseMet(*result.PausedBeforeStarting))
+		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run and the decision still stands, so asking again once the pause lifts carries out the same one\n", result.PriorRunID)
 		if result.RecordProblem != "" {
 			fmt.Fprintln(&rendered, result.RecordProblem)
 		}

@@ -92,6 +92,33 @@ package orchestrator
 // would otherwise put the whole backlog through a failed run each. And a session
 // says what it is doing where somebody who is not at its terminal can read it,
 // because an idle session and a dead one are the same silence.
+//
+// # A session that redeploys itself
+//
+// The fourth thing watching adds is the one failure the loop is itself. A
+// session goes on choosing and dispatching from the binary it was started with
+// while fixes land behind it, so the work it dispatches is spent against defects
+// that were fixed hours before — which reads as agents failing rather than as a
+// process nobody restarted. It cost three review rounds on 2026-08-30 against a
+// bug that had been dead for a day, and on 2026-08-31 the session choosing work
+// was found forty-three changes old.
+//
+// Nothing outside the process can close that. Killing a session cancels the run
+// it is carrying, so an external job may only bounce it while nothing is
+// running; with more than one developer slot and a deep queue the next run
+// starts the moment one settles, and a poll at any interval never lands in that
+// window. The session is the only thing standing in it.
+//
+// So the session takes the deploy up itself. When it finds that the binary it
+// was started from has been replaced, it stops choosing, waits out the runs it
+// already started, and stops with ScheduleRedeployed — which is the caller's
+// signal to re-execute. A live run is never interrupted for it, and that is why
+// this wins the race an external restart loses rather than being the same thing
+// moved inside: the session declining to claim anything more is what makes the
+// window exist at all, and nothing but the session can decline.
+//
+// A drain never does any of this. It is a command somebody is waiting on the
+// return of, and restarting it would run the pass again from the beginning.
 
 import (
 	"context"
@@ -129,6 +156,28 @@ const maxScheduleReasonBytes = 240
 // falls back to counting them. The count stays exact either way.
 const maxCoveringChildrenNamed = 3
 
+// How a watch session rides through a reading of the harness that failed.
+//
+// The tracker is a database a reconcile and every settling run write to, so a
+// reading that fails is contention far more often than it is a store that is
+// broken. The one that ended a session on 2026-09-01 succeeded again in 0.4s a
+// few minutes later, and what it cost was the session: it stopped on that single
+// reading, and the queue sat until an external job noticed the process was gone
+// and started another. A session that dies on one contended read defeats
+// everything built on the session outliving the work it starts, the
+// self-redeploy above first among it.
+//
+// So a watch waits and reads again, doubling the wait from the first delay to
+// the longest, and stops only once the readings have gone on failing for the
+// window. The window is the whole of what separates contention from breakage,
+// which is why a session that stops on one says how long it tried rather than
+// only what failed.
+const (
+	firstReadRetryDelay   = 2 * time.Second
+	longestReadRetryDelay = 30 * time.Second
+	readRetryWindow       = 5 * time.Minute
+)
+
 // Why the scheduler stopped pulling. Each is a different thing for an operator
 // to do about it, which is why they are stated apart rather than folded into one
 // "nothing more was started".
@@ -159,6 +208,11 @@ const (
 	// harness running out of anything, which is why it reads like the limit
 	// above rather than like a failure.
 	ScheduleBudgetSpent = "the session spent the budget it was given"
+	// ScheduleRedeployed reports a session that stopped to take up the binary
+	// deployed over the one it was started from. It is not the end of the line:
+	// the caller re-executes, and the session that comes back is watching the
+	// same queue from the build that was deployed.
+	ScheduleRedeployed = "a build was deployed over the one this session was started from, and the session is restarting into it"
 	// ScheduleSpendUnreadable reports a bounded session that stopped because it
 	// could not tell what it had spent. A budget measured against evidence
 	// nobody can read is not a smaller budget, it is no budget at all, so the
@@ -223,12 +277,62 @@ type ScheduleSpend interface {
 	Price(workItemID string) (runstate.ItemPrice, error)
 }
 
+// ScheduleDeployment reports whether the binary this session is executing has
+// been deployed over since it started. It is satisfied by redeploy.Binary.
+//
+// It is optional, and a session wired without one behaves exactly as every
+// session did before: it goes on running what it was started with until somebody
+// restarts it, which is the state the package comment above describes the cost
+// of. It is asked once per pull and answers from one file reading, so an idle
+// session pays for it what it pays for reading the queue.
+type ScheduleDeployment interface {
+	Replaced() (bool, error)
+}
+
+// SessionState is one transition a watch session records about itself: what it
+// entered, when, why, and whether the stop it is recording is a session coming
+// straight back rather than a line going down.
+type SessionState struct {
+	State  runstate.WatchState
+	At     time.Time
+	Reason string
+	// Running is how many developer runs the pass could see in flight when it
+	// recorded this, and Executor is the conversation that carries the work it
+	// passed over where one does. They travel with the reason because they are the
+	// two facts a reader of an idle line was missing: whether the harness is
+	// nonetheless working, and who has to act before the answer changes.
+	Running  int
+	Executor domain.WorkItemExecutor
+	// Unreadable marks the poll that chose nothing because the harness could not
+	// be read at all. It travels for the same reason the two above do: nothing a
+	// person admits, releases, or opens changes the answer while the store will
+	// not answer, so a reader told to admit work would be told to do the one thing
+	// that cannot help.
+	Unreadable bool
+	// Restarting marks the one stop that is not an ending — the session waiting
+	// out its runs to be re-executed into a build deployed over it. It is what
+	// keeps every surface from telling the operator to start a session that is
+	// already on its way back, which is the standing chore this whole mechanism
+	// exists to end rather than reproduce once per deploy.
+	Restarting bool
+}
+
 // WatchSessions is where a watch session says what it is doing, for the reader
 // who is not at its terminal. It is optional: a session wired without one
 // behaves identically and is simply invisible between the runs it starts, which
 // is the state this exists to end.
 type WatchSessions interface {
-	Record(state runstate.WatchState, at time.Time, reason string) error
+	Record(SessionState) error
+}
+
+// ScheduleEscalations puts stopped work in front of the development manager,
+// once per docketed stoppage. It is satisfied by Escalator.
+//
+// It is optional, and a pull wired without one pulls exactly the same work: what
+// is lost is the delivery, so a run that stopped waits on somebody carrying it
+// to her, which is what every pass did before this existed.
+type ScheduleEscalations interface {
+	Escalate(ctx context.Context) (EscalationSweep, error)
 }
 
 // Starter runs one chosen item to its end. It is a function rather than the
@@ -270,7 +374,10 @@ type Pull struct {
 	// Spend prices what the session has spent. It is required of a pass that was
 	// given a budget and of no other; see ScheduleSpend.
 	Spend ScheduleSpend
-	Start Starter
+	// Escalations delivers stopped work to the development manager. Optional; see
+	// ScheduleEscalations.
+	Escalations ScheduleEscalations
+	Start       Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -331,15 +438,20 @@ type Scheduler struct {
 	// reached, or when the harness can no longer be read.
 	Watching bool
 	// Budget caps what one session may spend, in the provider's own reported
-	// dollars, over the runs the session started. Zero is unbounded, which is
-	// what a drain has always been. The bound is checked between pulls rather
-	// than during a run: a run already under way is never stopped part way for
-	// money, because the spend is already made and what it would lose is the
-	// work it bought.
+	// dollars, over everything the session spends on: the runs it starts, and the
+	// turns it takes itself putting stopped work in front of the development
+	// manager. Zero is unbounded, which is what a drain has always been. The bound
+	// is checked between pulls rather than during a run or a turn: what is already
+	// spent is spent, and what stopping part way would lose is the work it bought.
 	Budget float64
 	// Sessions is where the session's state transitions are recorded. Optional;
 	// see WatchSessions.
 	Sessions WatchSessions
+	// Deployment is how a watching session finds out that the binary it is
+	// executing has been deployed over. Optional; see ScheduleDeployment. It is
+	// consulted only while watching, because a drain is a command somebody is
+	// waiting on the return of rather than a process that outlives a deploy.
+	Deployment ScheduleDeployment
 	// Sleep waits out one poll interval and reports false when the context ended
 	// first. It is injected so a test does not have to spend real seconds, and
 	// defaults to a timer.
@@ -431,6 +543,17 @@ type Schedule struct {
 	// schedule read afterwards would otherwise be missing.
 	Watched bool `json:"watched,omitempty"`
 	Polls   int  `json:"polls,omitempty"`
+	// Escalated is the stopped work this pass put in front of the development
+	// manager, and what she recorded about it. It is on the schedule for the
+	// reason the started runs are: a pass that woke a role and spent a turn doing
+	// it is a pass that did something, and an operator reading what the session
+	// did must not have to infer it from her conversation.
+	Escalated []Escalated `json:"escalated,omitempty"`
+	// EscalationProblem names a delivery that did not reach her. It costs the
+	// pass nothing it was doing, so it is reported beside the pull rather than
+	// stopping it — but never left unsaid, because stopped work nobody was told
+	// about is exactly what the delivery exists to prevent.
+	EscalationProblem string `json:"escalation_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -441,9 +564,10 @@ type Schedule struct {
 	// still reported, because a brake that failed is exactly the thing an
 	// operator must not find out about by inferring it from the silence.
 	BrakeProblem string `json:"brake_problem,omitempty"`
-	// SpentUSD is what the runs this pass started cost, as the provider reported
-	// it, and Budget is what it was allowed. Both are absent from a pass nobody
-	// bounded and nothing priced.
+	// SpentUSD is what this pass spent, as the provider reported it: the runs it
+	// started, and the turns it took itself putting stopped work in front of the
+	// development manager. Budget is what it was allowed. Both are absent from a
+	// pass nobody bounded and nothing priced.
 	SpentUSD float64 `json:"spent_usd,omitempty"`
 	Budget   float64 `json:"budget,omitempty"`
 	// SpendProblem names run evidence that could not be priced. On an unbounded
@@ -451,11 +575,36 @@ type Schedule struct {
 	// number; on a bounded one it is why the session stopped, because a budget
 	// measured against evidence nobody can read is no budget at all.
 	SpendProblem string `json:"spend_problem,omitempty"`
+	// RedeployProblem names a reading of the session's own binary that failed, so
+	// whether a build has been deployed over it is a question nobody answered. It
+	// costs the session its self-redeployment and nothing else, so it is reported
+	// beside the pass rather than stopping it: a session that stopped choosing
+	// work because it could not stat a file would be a worse failure than the
+	// staleness it is guarding against.
+	RedeployProblem string `json:"redeploy_problem,omitempty"`
 	// SessionProblem names a transition that could not be recorded. It costs the
 	// session its visibility rather than its work, so it is reported beside the
 	// pass rather than failing it — the alternative is a session that stops
 	// working because nobody could be told it was working.
 	SessionProblem string `json:"session_problem,omitempty"`
+	// ReadsRetried counts the readings of the harness that failed and were made
+	// again rather than stopping the session, and ReadProblem names the last of
+	// them. Both are for the reader afterwards: a reading that succeeded on the
+	// second attempt leaves nothing at all behind, so a session that rode out a
+	// store outage overnight would otherwise be a session nobody could tell had
+	// met one.
+	ReadsRetried int    `json:"reads_retried,omitempty"`
+	ReadProblem  string `json:"read_problem,omitempty"`
+	// ReadFailure is the reading the session finally stopped on, and how long the
+	// harness had gone on being unreadable when it did.
+	//
+	// It is a field of its own rather than the last value of ReadProblem because
+	// the two are facts about different moments, and only this one is why the pass
+	// ended. A pass stops as unreadable for a second reason — a pull that
+	// assembles and is unusable — and a session that had ridden through a
+	// contended reading an hour earlier would otherwise report that reading as
+	// what stopped it, in the log this exists to make worth trusting.
+	ReadFailure string `json:"read_failure,omitempty"`
 }
 
 // Schedule pulls ready work and runs it, up to the capacity the configuration
@@ -526,6 +675,16 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// pull that could be opened. It is held outside the loop because a run
 	// collected after the final pull still cost what it cost.
 	var spend ScheduleSpend
+	// redeploying is the session having found a build deployed over the one it is
+	// executing. From that point it claims nothing more and waits out what it
+	// already started, which is the whole of how a restart reaches the machine
+	// without cancelling a run.
+	redeploying := false
+	// retries is the run of harness readings that have failed with none
+	// succeeding between them. See readRetries: it is what lets a watch ride
+	// through the store contention a reconcile or a settling run makes, and what
+	// stops the session once the failures have gone on too long to be contention.
+	var retries readRetries
 	running := 0
 
 	// settle takes one finished run into the schedule: what became of it, what it
@@ -575,8 +734,8 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// changes the answer sooner than any interval would, and otherwise sleeps out
 	// the interval this pull read. It reports false when the context ended, which
 	// is the operator stopping the session.
-	wait := func(pull Pull, state runstate.WatchState, reason string) bool {
-		session.enter(state, reason)
+	wait := func(pull Pull, state runstate.WatchState, said account) bool {
+		session.enter(state, said)
 		if running > 0 {
 			return collect()
 		}
@@ -584,10 +743,75 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		return s.sleep(ctx, pull.Poll)
 	}
 
-	session.enter(runstate.WatchWatching, s.opening())
 	var failure error
+	// unreadable takes a reading of the harness that failed and says whether the
+	// pass carries on. It sets what stopped the pass, and the failure it stopped
+	// with, wherever it does not — so a caller handed false has only to break.
+	//
+	// A drain stops on the first one, exactly as it always has: it is a command
+	// somebody is waiting on the return of, and one that slept through a store
+	// outage would be one that hung. A watch waits and reads again, and stops only
+	// once the readings have gone on failing past the window. See the retry
+	// constants for what that is worth and what it cost to find out.
+	unreadable := func(err error) bool {
+		if !s.Watching {
+			schedule.Stopped = ScheduleUnreadable
+			failure = err
+			return false
+		}
+		retries.failed = true
+		now := s.now()
+		if retries.since.IsZero() {
+			retries.since = now
+			retries.delay = firstReadRetryDelay
+		}
+		retries.attempts++
+		if tried := now.Sub(retries.since); tried >= readRetryWindow {
+			schedule.Stopped = ScheduleUnreadable
+			schedule.ReadFailure = fmt.Sprintf(
+				"the harness went on being unreadable for %s across %d reading(s), which is longer than a store somebody else is writing to takes to come back, so the session stopped rather than polling something it cannot read: %v",
+				tried.Round(time.Second), retries.attempts, err)
+			failure = errors.New(schedule.ReadFailure)
+			return false
+		}
+		schedule.ReadsRetried++
+		schedule.ReadProblem = fmt.Sprintf(
+			"reading %d, failing for %s, read again in %s: %v",
+			retries.attempts, now.Sub(retries.since).Round(time.Second), retries.delay, err)
+		// What the session says about itself leaves the changing numbers of the
+		// outage out — which attempt this is, how long it has been failing — so an
+		// outage is one line in the log rather than one per attempt. What they are
+		// is on the schedule, which is where a reader afterwards looks.
+		//
+		// The runs it already has going are not one of those numbers. They are the
+		// difference between a line that has stopped and a line that is working
+		// while one reading fails, and they are named for the same reason the idle
+		// account below names them.
+		outage := fmt.Sprintf(
+			"the harness could not be read and is being read again for up to %s before the session gives up on it: %v",
+			readRetryWindow, err)
+		if running > 0 {
+			outage = fmt.Sprintf("%s in flight; %s", plural(running, "run", "runs"), outage)
+		}
+		session.enter(runstate.WatchIdle, account{reason: outage, running: running, unreadable: true})
+		if !s.sleep(ctx, retries.delay) {
+			schedule.Stopped = ScheduleCancelled
+			return false
+		}
+		retries.delay = min(retries.delay*2, longestReadRetryDelay)
+		return true
+	}
+
+	session.enter(runstate.WatchWatching, account{reason: s.opening()})
 pulling:
 	for {
+		// A pull that read everything it needed clears the failures behind it. What
+		// the window measures is a store that has gone on being unreadable, rather
+		// than a count of the contended readings one session met over a long life.
+		if !retries.failed {
+			retries = readRetries{}
+		}
+		retries.failed = false
 		if s.Limit > 0 && len(schedule.Started) >= s.Limit {
 			schedule.Stopped = ScheduleLimitReached
 			break
@@ -609,16 +833,61 @@ pulling:
 			schedule.Stopped = ScheduleCancelled
 			break
 		}
-		pull, err := s.Open(ctx)
-		if err == nil {
-			err = pull.validate(pullNeeds{waits: s.Watching, bounded: s.Budget > 0})
+		// Whether a build has been deployed over this one, asked before anything
+		// is chosen and before the configuration is even read. It is asked here
+		// rather than after a run settles because those are the same moment seen
+		// from either side — this is the top of the loop a settled run returns to,
+		// and it is the last point before the next item is claimed.
+		if !redeploying && s.Watching && s.Deployment != nil {
+			replaced, err := s.Deployment.Replaced()
+			switch {
+			case err != nil:
+				if schedule.RedeployProblem == "" {
+					schedule.RedeployProblem = fmt.Sprintf("whether a build has been deployed over this session could not be read, so it goes on running what it was started with: %v", err)
+				}
+			case replaced:
+				redeploying = true
+			}
 		}
+		if redeploying {
+			// A live run is never interrupted for a redeploy. Waiting one out is
+			// bounded by the run rather than by the queue, because the session has
+			// already stopped claiming: the window an external restart could never
+			// find is one this makes rather than waits for.
+			if running > 0 {
+				if !collect() {
+					schedule.Stopped = ScheduleCancelled
+					break
+				}
+				continue
+			}
+			schedule.Stopped = ScheduleRedeployed
+			break
+		}
+		pull, err := s.Open(ctx)
 		if err != nil {
+			if !unreadable(fmt.Errorf("open a pull: %w", err)) {
+				break
+			}
+			continue
+		}
+		// A pull that was assembled and is not usable is a decision somebody made
+		// about the configuration rather than a reading that failed, so it stops the
+		// pass at once. Waiting out a window for a capacity of zero to become
+		// something else is a session that hangs, not one that rides out contention.
+		if err := pull.validate(pullNeeds{waits: s.Watching, bounded: s.Budget > 0}); err != nil {
 			failure = fmt.Errorf("open a pull: %w", err)
 			schedule.Stopped = ScheduleUnreadable
 			break
 		}
 		spend = pull.Spend
+		// Stopped work reaches the development manager here, rather than by
+		// somebody carrying it to her. It is done before the brake and before the
+		// hold, because it chooses nothing and starts nothing: what it produces is
+		// her judgment about work that has already stopped, which is exactly what a
+		// held or braked queue is usually waiting on. What it delivers is bounded to
+		// one stoppage per pass; see Escalator.
+		s.escalate(ctx, &schedule, pull)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -635,9 +904,10 @@ pulling:
 		// reading would keep choosing work for as long as it lasted.
 		hold, held, err := pull.Intake.Held()
 		if err != nil {
-			failure = fmt.Errorf("read whether the operator has held intake: %w", err)
-			schedule.Stopped = ScheduleUnreadable
-			break
+			if !unreadable(fmt.Errorf("read whether the operator has held intake: %w", err)) {
+				break
+			}
+			continue
 		}
 		if held {
 			schedule.IntakeHeld = &hold
@@ -649,7 +919,13 @@ pulling:
 			// polling and chooses nothing, and resumes in place when it is
 			// released. That is what makes holding intake something an operator
 			// can do to a session they are not sitting at.
-			if !wait(pull, runstate.WatchBraked, brakedReason(schedule.Braked != nil, hold)) {
+			if !wait(pull, runstate.WatchBraked, account{
+				reason: brakedReason(schedule.Braked != nil, hold),
+				// This session's own runs: a held intake stops the choosing and
+				// interrupts nothing, and the reader has to be able to tell those apart.
+				// What another process has going is not read until after the hold is.
+				running: running,
+			}) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -659,9 +935,10 @@ pulling:
 
 		occupied, err := occupiedItems(pull.Runs)
 		if err != nil {
-			failure = err
-			schedule.Stopped = ScheduleUnreadable
-			break
+			if !unreadable(err) {
+				break
+			}
+			continue
 		}
 		for id := range mine {
 			occupied[id] = struct{}{}
@@ -681,7 +958,10 @@ pulling:
 				schedule.Stopped = ScheduleCapacityFull
 				break
 			}
-			if !wait(pull, runstate.WatchIdle, "every developer slot is held by a run this session did not start") {
+			if !wait(pull, runstate.WatchIdle, account{
+				reason:  "every developer slot is held by a run this session did not start",
+				running: len(occupied),
+			}) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -690,9 +970,10 @@ pulling:
 
 		read, err := pull.queue(ctx)
 		if err != nil {
-			failure = err
-			schedule.Stopped = ScheduleUnreadable
-			break
+			if !unreadable(err) {
+				break
+			}
+			continue
 		}
 		queue := read.queue
 		schedule.Admitted = len(queue.Entries)
@@ -715,6 +996,10 @@ pulling:
 		// far, in the order the product manager set. An item started after one of
 		// them was pulled ahead of it, and its recorded reason says so.
 		var sequenced []string
+		// What this pull passed over and why, assembled as it goes so that a poll
+		// which starts nothing can say what it actually found rather than only that
+		// it found nothing. It is this pull's own reading and is discarded with it.
+		poll := idlePoll{}
 
 		started := 0
 		for _, entry := range queue.Entries {
@@ -735,12 +1020,15 @@ pulling:
 					deferred[entry.ID] = true
 					schedule.Deferred = append(schedule.Deferred, Deferred{WorkItemID: entry.ID, Reason: reason})
 				}
+				poll.pass(entry.ID, unreadyClass(entry), entry.Executor.Role())
 				continue
 			}
 			if s.cooling(tried, read.items[entry.ID]) {
+				poll.pass(entry.ID, idleAlreadyTried, "")
 				continue
 			}
 			if _, busy := occupied[entry.ID]; busy {
+				poll.pass(entry.ID, idleAlreadyInFlight, "")
 				continue
 			}
 			// A decomposed item is not itself a run. Its children are where the work
@@ -763,6 +1051,7 @@ pulling:
 						Reason:     coveredReason(covering),
 					})
 				}
+				poll.pass(entry.ID, idleCoveredByChildren, "")
 				continue
 			}
 			// An unresolved directive stops the work whether it is read here or in
@@ -771,9 +1060,13 @@ pulling:
 			// saying which directive it was.
 			pausing, err := pull.Directives.Pausing(entry.ID)
 			if err != nil {
-				failure = fmt.Errorf("read the directives that pause %s: %w", entry.ID, err)
-				schedule.Stopped = ScheduleUnreadable
-				break pulling
+				if !unreadable(fmt.Errorf("read the directives that pause %s: %w", entry.ID, err)) {
+					break pulling
+				}
+				// The items this pull already started keep running and are collected
+				// like any other; the pull that follows re-reads the queue and passes
+				// over them because they are in flight.
+				continue pulling
 			}
 			if len(pausing) > 0 {
 				// The directive is re-read at every pull rather than remembered,
@@ -788,6 +1081,7 @@ pulling:
 						Reason:     "an unresolved directive pauses it: " + pausing[0].Summary(),
 					})
 				}
+				poll.pass(entry.ID, idlePausedByDirective, "")
 				continue
 			}
 			// Work that would race something already going is sequenced behind it
@@ -807,6 +1101,7 @@ pulling:
 				}
 				sequencedEarlier[entry.ID] = racing
 				sequenced = append(sequenced, entry.ID)
+				poll.pass(entry.ID, idleSequencedBehindWork, "")
 				continue
 			}
 			delete(deferred, entry.ID)
@@ -844,7 +1139,14 @@ pulling:
 			schedule.Stopped = ScheduleDrained
 			break
 		}
-		if !wait(pull, runstate.WatchIdle, idleReason(queue)) {
+		// What this poll actually found, rather than the bare fact that it started
+		// nothing: the runs already going, the items passed over and why, and the
+		// conversation that has to act where one does.
+		if !wait(pull, runstate.WatchIdle, account{
+			reason:   poll.reason(queue, len(occupied)),
+			running:  len(occupied),
+			executor: poll.carrier(),
+		}) {
 			schedule.Stopped = ScheduleCancelled
 			break
 		}
@@ -860,7 +1162,10 @@ pulling:
 		running--
 		settle(done)
 	}
-	session.enter(runstate.WatchStopped, stopping(schedule))
+	// The last line, and whether it is an ending. A session stopping to be
+	// restarted into the build deployed over it is waiting on nothing and nobody,
+	// and a reader told otherwise is being handed the chore this exists to end.
+	session.stop(stopping(schedule), schedule.Redeploying())
 	return schedule, failure
 }
 
@@ -869,11 +1174,36 @@ pulling:
 // that stopped because it could not price itself is read in a channel rather
 // than in this process's terminal, so the run nothing could price has to travel
 // with the reason rather than staying on a schedule nobody there sees.
+//
+// A session that stopped because the harness would not be read travels the same
+// way and for a sharper reason: what tells an operator whether they are looking
+// at a broken store or at one bad minute is how long it went on failing, and the
+// reason alone says neither.
 func stopping(schedule Schedule) string {
-	if schedule.Stopped == ScheduleSpendUnreadable && schedule.SpendProblem != "" {
+	switch {
+	case schedule.Stopped == ScheduleSpendUnreadable && schedule.SpendProblem != "":
 		return schedule.Stopped + ": " + schedule.SpendProblem
+	case schedule.Stopped == ScheduleUnreadable && schedule.ReadFailure != "":
+		return schedule.Stopped + ": " + schedule.ReadFailure
 	}
 	return schedule.Stopped
+}
+
+// readRetries is the run of harness readings that have failed with none
+// succeeding between them: when the first of them was, how many there have been,
+// and how long the next wait is.
+//
+// It is cleared by a pull that read everything it needed rather than by a single
+// successful reading, because what the window measures is a store that has gone
+// on being unreadable — a pull whose queue read succeeds and whose directive read
+// fails is not a store that came back.
+type readRetries struct {
+	since    time.Time
+	attempts int
+	delay    time.Duration
+	// failed marks the pull being made now as having had a reading fail, which is
+	// what keeps a pull that failed from clearing itself at the top of the loop.
+	failed bool
 }
 
 // cooling reports an item this pass has already started and should not start
@@ -955,6 +1285,72 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 	schedule.Braked = &held
 }
 
+// escalate puts the oldest stopped run the development manager has not been
+// shown in front of her, and records what came back on the schedule.
+//
+// Nothing here stops the pass. A delivery that failed costs the pass nothing it
+// was doing — no work was chosen by it and none is withheld for it — so it is
+// reported beside the pull rather than in place of it, exactly as a staleness
+// reading or a brake that could not be placed is. What must not happen is
+// silence: a stoppage that reached nobody is the state this exists to end.
+//
+// What it does cost is the pull's own thread while the turn is taken, which is
+// the one thing worth knowing before reading further: runs already going are
+// untouched, but one that finishes mid-delivery is collected when the delivery
+// returns rather than at once, so a free slot is refilled a turn later than it
+// would have been. That is bounded by the turn and by one delivery per pass, and
+// it is the trade the placement was chosen for — a run that delivered its own
+// stoppage would hold a developer slot instead, which is the same wait taken out
+// of the scarcer thing.
+func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) {
+	if pull.Escalations == nil {
+		return
+	}
+	sweep, err := pull.Escalations.Escalate(ctx)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("stopped work could not be put to the development manager, so it is waiting on somebody carrying it to her: %v", err))
+	}
+	delivered := false
+	for _, escalated := range sweep.Escalated {
+		// What the delivery cost is the session's spend, exactly as a run's is. It
+		// is counted whichever way the turn went and before anything else is
+		// decided about it, because the provider charged for it either way — and a
+		// session bounded by a budget that spent past it on turns nothing counted
+		// would be the operator's cap disappearing quietly, which is the one thing
+		// a bound must not do. The bound itself is read at the top of the next
+		// pull, like every other spend this session makes.
+		schedule.SpentUSD += escalated.CostUSD
+		// A delivery that happened is kept, because it is one of the things this
+		// pass did and there are as many of them as there were stoppages. One that
+		// did not happen is a problem rather than an event, and the problems are
+		// this sweep's rather than every sweep's: a session polling all night
+		// against a conversation nothing can open would otherwise report the same
+		// failure a thousand times.
+		if escalated.Delivered {
+			schedule.Escalated = append(schedule.Escalated, escalated)
+			delivered = true
+		}
+		if escalated.Problem != "" {
+			problems = append(problems, escalated.Problem)
+		}
+	}
+	// What the pass says is replaced by what this sweep found, and cleared only by
+	// a delivery that actually happened. A sweep that found nothing to say is not
+	// evidence that the failure before it was resolved — the stoppage may simply
+	// be waiting out its retry delay — and a pass that erased its own account of
+	// having failed to reach her would end reporting nothing at all about stopped
+	// work, which is the silence this exists to end. A stoppage the harness has
+	// given up on is restated by every sweep, so what stands at the end of a pass
+	// is what is still true.
+	switch {
+	case len(problems) > 0:
+		schedule.EscalationProblem = strings.Join(problems, "; ")
+	case delivered:
+		schedule.EscalationProblem = ""
+	}
+}
+
 // priceRun is what one finished run cost, from the recorded evidence. A run that
 // never got as far as a record is priced at nothing because there is nothing to
 // price, which is the truth about a start that failed before it began; evidence
@@ -992,17 +1388,155 @@ func (s Started) blockedRun() bool {
 	return s.Failure != "" || s.Outcome.Blocked
 }
 
-// idleReason says why a poll started nothing, in the terms the counts already
-// report: an empty backlog and a backlog entirely blocked are the same silence
-// and completely different problems.
-func idleReason(queue backlog.Queue) string {
+// maxIdleItemsNamed bounds how many items one class of an idle account names
+// before it falls back to counting the rest. The count stays exact either way,
+// for the reason every listing here is bounded: a backlog of forty deferred
+// items would otherwise put forty identifiers into a line whose whole job is to
+// be read at a glance.
+const maxIdleItemsNamed = 5
+
+// idleClass is one reason a poll left an item where it was, in the words the
+// idle line names it by. The set is closed, and every place the pull loop passes
+// an item over names one of them: a class nobody named is an item that
+// disappears into a count saying something else about it, which is the
+// misreading this whole account exists to end.
+type idleClass string
+
+const (
+	idleCarriedInConversation idleClass = "carried in conversation"
+	idleParked                idleClass = "parked"
+	idleWaitingOnOtherWork    idleClass = "waiting on other work"
+	idleAlreadyTried          idleClass = "already tried this session"
+	idleAlreadyInFlight       idleClass = "already in flight"
+	idleCoveredByChildren     idleClass = "covered by its children"
+	idlePausedByDirective     idleClass = "paused by a directive"
+	idleSequencedBehindWork   idleClass = "sequenced behind work in flight"
+)
+
+// idlePassedOver is one item a poll did not start: which item, why, and the
+// conversation that carries it where the class names one.
+type idlePassedOver struct {
+	id    string
+	class idleClass
+	role  domain.AgentRole
+}
+
+// idlePoll is what one pull found while it started nothing, in the product
+// manager's own order: every item it met, and the class it met it in.
+//
+// It is this pull's reading rather than the session's memory, and that is the
+// whole of what makes it worth printing. The line it renders is read at the
+// moment somebody is deciding whether the harness is working at all, so a count
+// carried over from an earlier poll would be an account of a queue that has
+// since changed.
+type idlePoll struct {
+	passed []idlePassedOver
+}
+
+// pass records one item this poll left where it was. The role is empty for every
+// class but the conversation-carried one, which is the only class whose answer
+// is a person rather than a wait.
+func (p *idlePoll) pass(id string, class idleClass, role domain.AgentRole) {
+	p.passed = append(p.passed, idlePassedOver{id: id, class: class, role: role})
+}
+
+// reason is the idle line: what is already running, and what this poll passed
+// over and why.
+//
+// Both halves are said because either alone misleads, and both misled. The line
+// said only that nothing was startable, which reads as a stopped machine while a
+// run works on the other slot; and it named a count without naming the items or
+// the reason, which reads as a queue that will move on its own while the only
+// unstarted work is somebody's to carry in conversation. An operator acted on
+// that reading three times.
+func (p idlePoll) reason(queue backlog.Queue, inFlight int) string {
 	if len(queue.Entries) == 0 {
 		return "the backlog is empty"
 	}
-	if queue.Ready() == 0 {
-		return fmt.Sprintf("none of the %d admitted item(s) is ready to pull", len(queue.Entries))
+	var said []string
+	if inFlight > 0 {
+		said = append(said, fmt.Sprintf("%s in flight", plural(inFlight, "run", "runs")))
 	}
-	return fmt.Sprintf("nothing among the %d ready item(s) is startable that this session has not already tried", queue.Ready())
+	if groups := p.groups(); len(groups) > 0 {
+		said = append(said, fmt.Sprintf("%s passed over, of %d admitted: %s",
+			plural(len(p.passed), "item", "items"), len(queue.Entries), strings.Join(groups, "; ")))
+	}
+	if len(said) == 0 {
+		// The pull stopped before it read the queue through, which is what a session
+		// at its own item limit does. Saying what it did not reach is the honest
+		// answer; saying nothing was startable would be a claim about items nothing
+		// looked at.
+		return fmt.Sprintf("none of the %s admitted was reached at this poll", plural(len(queue.Entries), "item", "items"))
+	}
+	return strings.Join(said, "; ")
+}
+
+// groups gathers what was passed over into one entry per class, in the order the
+// pull met them, naming the conversation where the class names one. Grouping is
+// what gives the line something to act on: an operator reads a class and knows
+// what to do about all of it, where a list of items one per line is a list they
+// have to classify themselves.
+func (p idlePoll) groups() []string {
+	type class struct {
+		class idleClass
+		role  domain.AgentRole
+	}
+	var order []class
+	items := make(map[class][]string, len(p.passed))
+	for _, passed := range p.passed {
+		at := class{class: passed.class, role: passed.role}
+		if _, met := items[at]; !met {
+			order = append(order, at)
+		}
+		items[at] = append(items[at], passed.id)
+	}
+	groups := make([]string, 0, len(order))
+	for _, at := range order {
+		named := items[at]
+		further := 0
+		if len(named) > maxIdleItemsNamed {
+			further = len(named) - maxIdleItemsNamed
+			named = named[:maxIdleItemsNamed]
+		}
+		listed := strings.Join(named, ", ")
+		if further > 0 {
+			listed += fmt.Sprintf(", and %d further", further)
+		}
+		if at.role != "" {
+			groups = append(groups, fmt.Sprintf("%s (%s: %s)", at.class, at.role.Title(), listed))
+			continue
+		}
+		groups = append(groups, fmt.Sprintf("%s (%s)", at.class, listed))
+	}
+	return groups
+}
+
+// carrier is the conversation an idle poll is waiting on, which is the marker on
+// the highest-priority item it passed over for one. It is empty where no such
+// item was passed over, which is every idle poll whose answer is a wait rather
+// than a person.
+//
+// The highest-priority one is named because that is the item an operator would
+// open first, and because the reason above names every one of them by role
+// anyway: this decides whose move the message closes on, and the prose is where
+// the rest of them are.
+func (p idlePoll) carrier() domain.WorkItemExecutor {
+	for _, passed := range p.passed {
+		if passed.class == idleCarriedInConversation && passed.role != "" {
+			return domain.ConversationWith(passed.role)
+		}
+	}
+	return ""
+}
+
+// plural counts something in words, so a line an operator reads says "1 run"
+// rather than "1 run(s)". The parenthesised plural is what a status line looks
+// like when nobody read it out loud.
+func plural(count int, one, many string) string {
+	if count == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", count, many)
 }
 
 // coveredReason says that the work has already been broken out, and names what
@@ -1050,6 +1584,22 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 		return parkedReason(entry.Parking), true
 	default:
 		return "", false
+	}
+}
+
+// unreadyClass is which class an unready entry is passed over in, and it makes
+// the same distinction passedOverReason does and in the same order: work no run
+// can carry, then work somebody parked, then everything that is genuinely
+// waiting for something. An item that is both is told the thing that would still
+// hold once the other was lifted.
+func unreadyClass(entry backlog.Entry) idleClass {
+	switch {
+	case !entry.Executor.DeveloperRun():
+		return idleCarriedInConversation
+	case entry.Parking.Parked():
+		return idleParked
+	default:
+		return idleWaitingOnOtherWork
 	}
 }
 
@@ -1132,22 +1682,69 @@ func (s Scheduler) session(schedule *Schedule) *watchSession {
 	return &watchSession{to: s.Sessions, now: s.now, schedule: schedule}
 }
 
+// account is what a session says about the state it is entering: why it is in
+// it, how many developer runs it can see in flight, and the conversation that
+// has to act before its answer changes where there is one.
+//
+// The last two are on the account rather than folded into the prose because
+// something other than a person reads them. The reason is a sentence, and whose
+// move follows an idle poll is a fact a channel closes its message on — derived
+// from these fields rather than parsed back out of the words.
+type account struct {
+	reason  string
+	running int
+	// executor is the conversation the session is waiting on, and unreadable marks
+	// the poll that chose nothing because the harness itself could not be read.
+	// They are the two states whose next move is not an admission, and they are
+	// carried as facts rather than left in the prose because the clause a channel
+	// closes on is derived from them.
+	executor   domain.WorkItemExecutor
+	unreadable bool
+}
+
 type watchSession struct {
 	to       WatchSessions
 	now      func() time.Time
 	schedule *Schedule
 	state    runstate.WatchState
-	reason   string
+	said     account
 }
 
-// enter records the session arriving in a state. The same state with the same
-// reason is the session still being in it, which is not news.
-func (w *watchSession) enter(state runstate.WatchState, reason string) {
-	if w.to == nil || (w.state == state && w.reason == reason) {
+// enter records the session arriving in a state. The same state said the same
+// way is the session still being in it, which is not news.
+//
+// "The same way" is the whole account rather than the reason alone, so a poll
+// that finds what the poll before it found writes nothing however many times it
+// is made — a session idling all night over an unchanging queue is still one
+// line. What does write a second line is the account changing: an item passed
+// over for a different reason, or a run starting or finishing. Both are news to
+// somebody reading an idle line, and both are bounded by the poll interval,
+// because a pass records at most one transition per poll.
+func (w *watchSession) enter(state runstate.WatchState, said account) {
+	if w.to == nil || (w.state == state && w.said == said) {
 		return
 	}
-	w.state, w.reason = state, reason
-	w.record(state, reason)
+	w.state, w.said = state, said
+	w.record(SessionState{
+		State:      state,
+		Reason:     said.reason,
+		Running:    said.running,
+		Executor:   said.executor,
+		Unreadable: said.unreadable,
+	})
+}
+
+// stop records the session's last line, and whether the stop is the session
+// being restarted into a build deployed over it rather than the line going down.
+// The two read identically in the log and mean opposite things to whoever is
+// waiting: one is a session somebody has to start again, and the other is a
+// session that is already on its way back.
+func (w *watchSession) stop(reason string, restarting bool) {
+	if w.to == nil {
+		return
+	}
+	w.state, w.said = runstate.WatchStopped, account{reason: reason}
+	w.record(SessionState{State: runstate.WatchStopped, Reason: reason, Restarting: restarting})
 }
 
 // resume records the session choosing work again after a wait. It leaves the
@@ -1158,17 +1755,18 @@ func (w *watchSession) resume(reason string) {
 	if w.to == nil || w.state == runstate.WatchWatching {
 		return
 	}
-	w.state, w.reason = runstate.WatchWatching, reason
-	w.record(runstate.WatchResumed, reason)
+	w.state, w.said = runstate.WatchWatching, account{reason: reason}
+	w.record(SessionState{State: runstate.WatchResumed, Reason: reason})
 }
 
 // record writes one transition. A transition that cannot be written costs the
 // session its visibility and not its work: what is reported is a session nobody
 // can see, which is worth saying out loud and is not worth stopping the work
 // for.
-func (w *watchSession) record(state runstate.WatchState, reason string) {
-	if err := w.to.Record(state, w.now(), reason); err != nil && w.schedule.SessionProblem == "" {
-		w.schedule.SessionProblem = fmt.Sprintf("the session could not record that it was %s, so what it is doing is not readable from anywhere but here: %v", state, err)
+func (w *watchSession) record(transition SessionState) {
+	transition.At = w.now()
+	if err := w.to.Record(transition); err != nil && w.schedule.SessionProblem == "" {
+		w.schedule.SessionProblem = fmt.Sprintf("the session could not record that it was %s, so what it is doing is not readable from anywhere but here: %v", transition.State, err)
 	}
 }
 
@@ -1375,6 +1973,13 @@ func (s Schedule) Render() string {
 	for _, deferred := range s.Deferred {
 		fmt.Fprintf(&rendered, "%s was not pulled: %s\n", deferred.WorkItemID, deferred.Reason)
 	}
+	// What the pass put in front of the development manager, said beside what it
+	// pulled: a run stopped hours ago reaching her now is the other half of what
+	// this session did with its time.
+	rendered.WriteString(EscalationSweep{Escalated: s.Escalated}.Render())
+	if s.EscalationProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.EscalationProblem)
+	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))
 		if reason := strings.TrimSpace(s.IntakeHeld.Reason); reason != "" {
@@ -1387,6 +1992,17 @@ func (s Schedule) Render() string {
 	// running.
 	if s.Watched && s.Polls > 0 {
 		fmt.Fprintf(&rendered, "waited out %d poll interval(s) with nothing to start\n", s.Polls)
+	}
+	// A session that rode through readings that failed says so. The reading that
+	// succeeded afterwards leaves nothing behind, so an outage nobody was told
+	// about is one that gets diagnosed from scratch the next time it happens. The
+	// last of them is named except where the session went on to stop on a reading
+	// too, which is said once in the failure it stopped with rather than twice.
+	if s.ReadsRetried > 0 {
+		fmt.Fprintf(&rendered, "%d reading(s) of the harness failed and were made again rather than stopping the session\n", s.ReadsRetried)
+	}
+	if s.ReadProblem != "" && s.ReadFailure == "" {
+		fmt.Fprintf(&rendered, "the last of them: %s\n", s.ReadProblem)
 	}
 	if s.Braked != nil {
 		// The brake places a hold nobody chose, so the line that reports it carries
@@ -1410,6 +2026,9 @@ func (s Schedule) Render() string {
 	if s.SessionProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.SessionProblem)
 	}
+	if s.RedeployProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.RedeployProblem)
+	}
 	if s.StalenessProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.StalenessProblem)
 	}
@@ -1421,11 +2040,23 @@ func (s Schedule) Render() string {
 
 // state is the one-line account of what became of a started run. A declined
 // start is neither a success nor a failure and is named as itself.
+//
+// A run that reached an ending is named by that ending, in the read model's own
+// vocabulary, rather than by the error the start came back with. Every stoppage
+// returns one: a run handed to a person with its branch and worktree intact
+// comes back to the scheduler as an error exactly as a run that broke does, so
+// reading the error first put "failed" over both. Which of them it was is the
+// pass's to report and not to work out — Ending is the same derivation `yoyo
+// status` and the channel read.
 func (s Started) state() string {
 	switch {
 	case s.Declined != "":
 		return "declined"
+	case endedWithoutSucceeding(s.Outcome.Status):
+		return string(s.Outcome.Ending())
 	case s.Failure != "":
+		// No run reached a status, so there is no ending to name: the start itself
+		// is what failed.
 		return "failed"
 	case s.Outcome.Paused:
 		return "paused"
@@ -1434,6 +2065,24 @@ func (s Started) state() string {
 	default:
 		return string(s.Outcome.Status)
 	}
+}
+
+// endedWithoutSucceeding reports a run that reached a terminal status other than
+// success, which is the whole of where the four-way vocabulary applies.
+func endedWithoutSucceeding(status runstate.Status) bool {
+	return status.Terminal() && status != runstate.StatusSucceeded
+}
+
+// Redeploying reports a session that stopped in order to be restarted into the
+// build deployed over it, with every run it started waited out first.
+//
+// It is read from why the session stopped rather than from a flag of its own,
+// because the two can disagree and only one of them is the truth: a session that
+// had decided to redeploy and was then stopped by its operator stopped for the
+// operator, and restarting it would be this loop overriding the person who
+// closed it.
+func (s Schedule) Redeploying() bool {
+	return s.Stopped == ScheduleRedeployed
 }
 
 // Failed reports a pass with something in it an operator has to act on. A

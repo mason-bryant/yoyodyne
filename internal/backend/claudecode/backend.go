@@ -196,10 +196,12 @@ type Backend struct {
 // AccountConfigDir; what does not is that this provider reads it from here.
 const providerConfigDirVariable = "CLAUDE_CONFIG_DIR"
 
-// environmentFor is the environment one invocation is made in. Naming no
-// directory returns nil, which leaves the process environment exactly as it is —
-// so an installation with one account runs byte for byte the command it always
-// did, and the account plumbing costs it nothing.
+// environmentFor is what an account contributes to the environment one
+// invocation is made in. Naming no directory returns nil, which names no
+// provider home at all — so an installation with one account still authenticates
+// where the machine is signed in, and the account plumbing costs it nothing.
+// What the invocation is finally given is this plus the run's build cache, which
+// every run gets whether or not it named an account.
 func environmentFor(configDir string) []string {
 	if strings.TrimSpace(configDir) == "" {
 		return nil
@@ -374,10 +376,15 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		configDir = b.ConfigDir
 	}
 	processResult, err := b.Runner.Run(ctx, execution.Command{
-		Name:  b.binary(),
-		Args:  args,
-		Dir:   request.WorkingDirectory,
-		Env:   environmentFor(configDir),
+		Name: b.binary(),
+		Args: args,
+		Dir:  request.WorkingDirectory,
+		// Beside the account, the invocation carries the Go build cache pointed
+		// somewhere this run may write. A developer's first act is to execute
+		// the project's checks, and the default cache is under the user's home,
+		// which the sandbox this run is confined to does not grant: without the
+		// redirect the probe dies at setup and reads as a broken toolchain.
+		Env:   execution.WithGoBuildCache(environmentFor(configDir), request.WorkingDirectory),
 		Stdin: strings.NewReader(request.Prompt),
 		// The stream this invocation is asked for is the liveness signal: every
 		// line the process writes is an event, so the gap between lines is

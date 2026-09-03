@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 func TestWhatASessionSaidSurvivesTheProcessThatSaidIt(t *testing.T) {
@@ -98,6 +100,67 @@ func TestATransitionThatCannotBeReadBackOrDoesNotBelongHereIsRefused(t *testing.
 	if err := store.Record(misbuilt); err == nil {
 		t.Fatal("Record() error = nil, want a build that is not a revision refused")
 	}
+	// The two fields a reader takes whose move follows an idle session from. A
+	// count nothing observed and a marker naming no role would both leave a surface
+	// saying something about the machine that nobody recorded.
+	miscounted := testWatchTransition(testWatchSessionID, WatchIdle, "")
+	miscounted.Running = -1
+	if err := store.Record(miscounted); err == nil {
+		t.Fatal("Record() error = nil, want a negative count of runs in flight refused")
+	}
+	misaddressed := testWatchTransition(testWatchSessionID, WatchIdle, "")
+	misaddressed.Executor = "conversation:nobody"
+	if err := store.Record(misaddressed); err == nil {
+		t.Fatal("Record() error = nil, want a marker naming no role refused")
+	}
+}
+
+// A session idle on one slot while a run works on the other is the state that
+// was read three times as a line that had stopped. What it recorded said only
+// that it had started nothing, so every surface downstream had to guess: these
+// two fields are what it says instead, and they survive the process that said
+// them like everything else here.
+func TestASessionRecordsWhatItSawGoingAndWhoItIsWaitingOn(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	idle := testWatchTransition(testWatchSessionID, WatchIdle,
+		"1 run in flight; 3 items passed over, of 3 admitted: carried in conversation (architect: yoyodyne-ifd.212)")
+	idle.Running = 1
+	idle.Executor = domain.ConversationWith(domain.RoleArchitect)
+	if err := store.Record(idle); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	recorded, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("List() = %#v, want the one transition back", recorded)
+	}
+	if recorded[0].Running != 1 || recorded[0].Executor != domain.ConversationWith(domain.RoleArchitect) {
+		t.Fatalf("transition = %#v, want the runs it saw and the conversation it waits on carried", recorded[0])
+	}
+	if recorded[0].Unreadable {
+		t.Fatalf("transition = %#v, want a queue it read left unmarked", recorded[0])
+	}
+
+	// The other poll that chose nothing, and the one no admission would change:
+	// the store would not answer, so what is in the queue is not what stopped it.
+	outage := testWatchTransition(testWatchSessionID, WatchIdle, "the harness could not be read and is being read again")
+	outage.Unreadable = true
+	if err := store.Record(outage); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	reread, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(reread) != 2 || !reread[1].Unreadable {
+		t.Fatalf("transitions = %#v, want the reading that failed marked as one", reread)
+	}
 }
 
 // A session that stays open runs whatever binary it was started with, and
@@ -136,6 +199,51 @@ func TestASessionRecordsTheBuildItIsRunning(t *testing.T) {
 	}
 	if recorded[1].Build != "" {
 		t.Fatalf("build = %q, want a binary that stamped nothing to record nothing", recorded[1].Build)
+	}
+}
+
+// A session that stopped to be restarted into a build deployed over it says so
+// on the stop, because the state alone cannot tell that apart from a line
+// somebody closed — and the two ask opposite things of whoever reads the log.
+//
+// The mark is a field rather than a state of its own on purpose: a reader from
+// before it existed ignores an unknown field and refuses an unknown state, and
+// the reader running while a redeploy happens is exactly the older one.
+func TestASessionSaysWhenItsStopIsARestart(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	restarting := testWatchTransition(testWatchSessionID, WatchStopped, "a build was deployed over the one this session was started from")
+	restarting.Restarting = true
+	if err := store.Record(restarting); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	ended := testWatchTransition(testWatchSessionID, WatchStopped, "the operator stopped it")
+	if err := store.Record(ended); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	recorded, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 {
+		t.Fatalf("List() = %#v, want both stops", recorded)
+	}
+	if !recorded[0].Restarting {
+		t.Fatal("the stop that was a restart reads back as an ending")
+	}
+	if recorded[1].Restarting {
+		t.Fatal("the stop the operator asked for reads back as a restart")
+	}
+	// Only a stop can be one. A session marked as coming back while it is still
+	// watching would have every surface announcing a restart nothing is going to
+	// make.
+	watching := testWatchTransition(testWatchSessionID, WatchWatching, "watching the backlog until stopped")
+	watching.Restarting = true
+	if err := store.Record(watching); err == nil {
+		t.Fatal("Record() error = nil, want a restart marked on something that is not a stop refused")
 	}
 }
 

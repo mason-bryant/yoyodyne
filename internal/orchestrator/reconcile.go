@@ -131,17 +131,34 @@ const (
 // reconciliation itself could not finish, which leaves the run outstanding for
 // the next attempt rather than silently settled.
 type Reconciliation struct {
-	RunID           string                `json:"run_id"`
-	WorkItemID      string                `json:"work_item_id"`
-	Action          ReconcileAction       `json:"action"`
-	Status          runstate.Status       `json:"status,omitempty"`
-	Phase           runstate.Phase        `json:"phase,omitempty"`
-	Detail          string                `json:"detail,omitempty"`
-	Integration     *runstate.Integration `json:"integration,omitempty"`
-	WorktreeRemoved bool                  `json:"worktree_removed"`
-	BranchRemoved   bool                  `json:"branch_removed"`
-	CleanupFailure  string                `json:"cleanup_failure,omitempty"`
-	Failure         string                `json:"failure,omitempty"`
+	RunID      string          `json:"run_id"`
+	WorkItemID string          `json:"work_item_id"`
+	Action     ReconcileAction `json:"action"`
+	Status     runstate.Status `json:"status,omitempty"`
+	// Outcome is what became of the run in the read model's fixed vocabulary,
+	// carried beside the status rather than instead of it for the reason the run
+	// history and the price breakdown carry theirs: the status is the durable
+	// value and stays what it always was, and this is the reading of it. Without
+	// it a sweep reported "failed" over a run it had just handed to a person with
+	// its branch and worktree intact, which is the one word that says nothing
+	// about whether the work survived.
+	Outcome     runstate.RunOutcome   `json:"outcome,omitempty"`
+	Phase       runstate.Phase        `json:"phase,omitempty"`
+	Detail      string                `json:"detail,omitempty"`
+	Integration *runstate.Integration `json:"integration,omitempty"`
+	// Branch and WorktreePath are what the run made, beside the two flags saying
+	// which of them the harness removed. They are named rather than only counted
+	// because a sweep that says a branch was removed without saying which one has
+	// told an operator something they cannot check, and because the three phrases
+	// below cannot be read off two booleans: a record naming no artifact at all
+	// and one whose artifacts were removed are opposite answers to "is my work
+	// gone", and the flags alone are false for both.
+	Branch          string `json:"branch,omitempty"`
+	WorktreePath    string `json:"worktree_path,omitempty"`
+	WorktreeRemoved bool   `json:"worktree_removed"`
+	BranchRemoved   bool   `json:"branch_removed"`
+	CleanupFailure  string `json:"cleanup_failure,omitempty"`
+	Failure         string `json:"failure,omitempty"`
 	// DocketProblem names a stoppage this sweep settled and could not put on the
 	// triage docket. It is deliberately not a settlement failure: the run is
 	// settled and its blocker is on the work item either way, and the blocker is
@@ -155,6 +172,27 @@ type Reconciliation struct {
 	// it is idempotent and owned by no run, so a held one is a fact to read
 	// rather than a debt to carry.
 	Catchup *gitworktree.Catchup `json:"catchup,omitempty"`
+}
+
+// Artifacts is what this sweep says survives of the run's change, assembled
+// from the record it settled. A surface asks it for the phrase rather than
+// reading the four fields itself, so the recovery view says what remains in the
+// same words `yoyo status` and the channel do.
+func (r Reconciliation) Artifacts() runstate.Artifacts {
+	return runstate.Artifacts{
+		Branch:          r.Branch,
+		BranchRemoved:   r.BranchRemoved,
+		WorktreePath:    r.WorktreePath,
+		WorktreeRemoved: r.WorktreeRemoved,
+	}
+}
+
+// Settled reports a run this sweep left in a terminal state that is not
+// success, which is where the outcome word and what remains of the change are
+// worth saying. A run still owed a step has neither yet, and a run whose work
+// landed removed its artifacts on purpose.
+func (r Reconciliation) Settled() bool {
+	return r.Status.Terminal() && r.Outcome != runstate.OutcomeSucceeded && r.Outcome != ""
 }
 
 // Reconcile settles every run that still owes a step. One run that cannot be
@@ -711,8 +749,15 @@ func (r Reconciler) blockRun(ctx context.Context, state runstate.State, itemStat
 	// The blocker is kept on the run as well as on the item, so what stopped
 	// this run is readable from its own record rather than from whichever of the
 	// item's notes turns out to have been this one's.
+	//
+	// It is written through saveTerminalFailure rather than recordTerminalFailure
+	// because the blocker has to reach disk even for a run some killed process
+	// already made terminal: a stoppage settled onto such a record and skipped is
+	// a run whose durable record never says it stopped, so the docket built after
+	// this sweep, the outcome word every listing derives from the blocker, and the
+	// channel's reading of the record all miss it.
 	state.Blocker = runstate.RecordBlocker(notes)
-	settled, saveErr := r.recordTerminalFailure(state, reason)
+	settled, saveErr := r.saveTerminalFailure(state, reason)
 	result := reconciliationOf(settled, ActionBlocked)
 	result.Detail = reason
 	result.DocketProblem = r.docketStoppedRun(settled)
@@ -771,13 +816,34 @@ func (r Reconciler) recordTerminalFailure(state runstate.State, reason string) (
 // recordTerminalFailure because settling can change durable state that has to
 // reach disk even when the run was already terminal, and a caller with such a
 // change needs the write rather than the skip.
+//
+// A record that was already terminal keeps the status it wrote for itself, and
+// that includes "succeeded": a run that promoted work and then had the promotion
+// contradicted said something about itself no sweep witnessed, and rewriting it
+// would lose that account. What stops the kept status reading as a run whose work
+// landed is the precedence rule on runstate.Ending — the blocker this saves
+// outranks every terminal status there, so the outcome every surface prints is
+// "stopped" while the durable status stays what the run recorded. The blocker
+// reaching disk is what that rule depends on, which is why this path writes even
+// where recordTerminalFailure would skip.
 func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (runstate.State, error) {
+	reconciled := "reconciled after an interrupted run: " + reason
 	if !state.Status.Terminal() {
 		completedAt := r.clock().Now()
 		state.Status = runstate.StatusFailed
 		state.UpdatedAt = completedAt
 		state.CompletedAt = &completedAt
-		state.Failure = "reconciled after an interrupted run: " + reason
+		state.Failure = reconciled
+	} else if strings.TrimSpace(state.Failure) == "" && strings.TrimSpace(state.PublishFailure) == "" {
+		// A record that was already terminal keeps the status it wrote for itself,
+		// but a record that says nothing about why is what left every surface
+		// answering "why did this stop" with an empty line. So the sweep's own
+		// reason is written exactly where the record gives none. A run that
+		// recorded how it ended keeps its own words, and so does one whose reason
+		// is an outstanding publication: both say more than settling it does, and
+		// a publication that could not be pushed must never be read as a failed
+		// piece of work.
+		state.Failure = reconciled
 	}
 	if err := r.Store.Save(state); err != nil {
 		return state, fmt.Errorf("save reconciled run state for %s: %w", state.RunID, err)
@@ -823,8 +889,11 @@ func reconciliationOf(state runstate.State, action ReconcileAction) Reconciliati
 		WorkItemID:      state.WorkItemID,
 		Action:          action,
 		Status:          state.Status,
+		Outcome:         state.Outcome(),
 		Phase:           state.Phase,
 		Integration:     state.Integration,
+		Branch:          state.Branch,
+		WorktreePath:    state.WorktreePath,
 		WorktreeRemoved: state.WorktreeRemoved,
 		BranchRemoved:   state.BranchRemoved,
 		CleanupFailure:  state.CleanupFailure,

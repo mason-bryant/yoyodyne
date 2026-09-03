@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/research"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 )
 
 const (
@@ -27,6 +28,11 @@ const (
 	// follows the single account the effective mapping declares rather than a
 	// value of its own.
 	OriginDerivedAccount = "derived:accounts"
+	// OriginRoleCapabilities marks an agent's capability set, which no layer
+	// states and none may: it is read off the role's bundle in the harness's
+	// registry, so what an agent holds is the registry's statement wherever the
+	// rest of the agent came from.
+	OriginRoleCapabilities = "registry:role-capabilities"
 	// OriginInput marks a configuration decoded from a stream rather than read
 	// from a project file.
 	OriginInput = "configuration input"
@@ -458,6 +464,15 @@ func (r *resolution) finish(sources []string) (Resolved, error) {
 		origins[key] = origin
 	}
 
+	// What the harness may do on an agent's behalf is the registry's to say, so
+	// it is read once here rather than restated by any layer. A registry that
+	// will not build is a defect in the table it is built from, and it stops the
+	// configuration loading rather than leaving every agent holding nothing.
+	holders, err := rolecapability.Default()
+	if err != nil {
+		return Resolved{}, err
+	}
+
 	agents := make(map[string]AgentConfig, len(r.agents))
 	names := make([]string, 0, len(r.agents))
 	for name := range r.agents {
@@ -483,6 +498,15 @@ func (r *resolution) finish(sources []string) (Resolved, error) {
 				effectiveAgent.Account = alias
 				agent.origins["account"] = OriginDerivedAccount
 			}
+		}
+		// The capability set follows the role, whichever layer named the role and
+		// whatever else the layers said about the agent. A role the registry does
+		// not describe is left holding nothing and is reported as an unknown role
+		// when the effective configuration is validated, which names the mistake
+		// where an operator can fix it.
+		if bundle, described := holders.Bundle(effectiveAgent.Role); described {
+			effectiveAgent.Capabilities = bundle.Holds
+			agent.origins["capabilities"] = OriginRoleCapabilities
 		}
 		if agent.persona != nil {
 			text, source, err := agent.persona.loader.load(agent.persona.path)

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -111,6 +113,57 @@ const (
 	SeverityMajor   = "major"
 	SeverityMinor   = "minor"
 )
+
+// The two vocabularies above stated as lists, which is what the validation below
+// reads. Neither is repeated in a switch anywhere in this package, so the list
+// and what a record may carry cannot come to disagree.
+//
+// Both lists are closed and both stay closed. A stored value nothing recognizes
+// is worse than a refused one here: what reads these fields ranks a severity to
+// order a listing, and builds the repair prompt a developer is handed back from
+// them, and neither has an answer for a word it has never seen. Opening them —
+// the tolerant reader, which is right where a record arrives from somewhere this
+// code does not control — would move the refusal out of the save and into those
+// readers, where it is silent.
+//
+// What closing them costs is the trap they once sprang: the reviewer's
+// vocabulary grew, the durable one did not, and the addition was refused at save
+// time in a process that had already reported the verdict to the tracker and the
+// operator. That price is now paid where it can be seen instead.
+// TestTheDurableSchemaStoresEveryVerdictTheReviewerCanProduce holds the review
+// package's vocabularies to being subsets of these, so an addition there fails a
+// check rather than somebody's run.
+var (
+	reviewDecisions   = []string{ReviewApprove, ReviewRepair}
+	findingSeverities = []string{SeverityBlocker, SeverityMajor, SeverityMinor}
+)
+
+// ReviewDecisions and FindingSeverities are those vocabularies as a caller
+// outside this package reads them. Each answers with a copy, because a
+// package-level slice is a vocabulary anybody holding it could rewrite.
+func ReviewDecisions() []string { return slices.Clone(reviewDecisions) }
+
+func FindingSeverities() []string { return slices.Clone(findingSeverities) }
+
+// quotedAlternatives names a vocabulary the way a refusal has to: every value
+// quoted, the last joined with "or". It is derived from the list rather than
+// written out beside it so a value added to one is named by the other.
+func quotedAlternatives(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, strconv.Quote(value))
+	}
+	switch len(quoted) {
+	case 0:
+		return "nothing"
+	case 1:
+		return quoted[0]
+	case 2:
+		return quoted[0] + " or " + quoted[1]
+	default:
+		return strings.Join(quoted[:len(quoted)-1], ", ") + ", or " + quoted[len(quoted)-1]
+	}
+}
 
 // The two ways the harness itself stops a provider invocation on time. They are
 // recorded apart because they describe opposite things: a stalled invocation
@@ -238,10 +291,8 @@ type Finding struct {
 // Validate reports every contract violation in the finding at once.
 func (f Finding) Validate() error {
 	var problems []error
-	switch f.Severity {
-	case SeverityBlocker, SeverityMajor, SeverityMinor:
-	default:
-		problems = append(problems, fmt.Errorf("severity %q must be %q, %q, or %q", f.Severity, SeverityBlocker, SeverityMajor, SeverityMinor))
+	if !slices.Contains(findingSeverities, f.Severity) {
+		problems = append(problems, fmt.Errorf("severity %q must be %s", f.Severity, quotedAlternatives(findingSeverities)))
 	}
 	if strings.TrimSpace(f.Message) == "" {
 		problems = append(problems, errors.New("message is required"))
@@ -842,7 +893,22 @@ type State struct {
 	// be pushed is an outstanding publication rather than a failed run — the same
 	// kind of fact as an outstanding cleanup.
 	PublishFailure string `json:"publish_failure,omitempty"`
-	Failure        string `json:"failure,omitempty"`
+	// Failure is why this run ended, in the words of whoever ended it, and it is
+	// what every surface prints where it answers "why did this stop". It is
+	// written by whatever made the run terminal — the pipeline as it fails a run,
+	// the sweep as it settles one — and a sweep settling a stoppage onto a record
+	// that was already terminal fills it in where that record gives no reason,
+	// because a stoppage nobody can read a reason for is what the surfaces cannot
+	// recover from afterwards.
+	//
+	// It is text and never a test. Whether a run stopped is Blocker's to answer
+	// and Outcome()'s to say: a run can end with a reason and no blocker, which is
+	// a failure nobody has to decide about, and a stoppage can reach a record
+	// whose reason was written before it. A reader inferring a stoppage from a
+	// non-empty Failure is a second classification that will disagree with the
+	// read model's, which is exactly what the fixed outcome vocabulary exists to
+	// prevent.
+	Failure string `json:"failure,omitempty"`
 	// Blocker is the durable blocker exactly as it was recorded on the work item
 	// when this run stopped on something no further attempt of the harness could
 	// resolve. The tracker holds the authoritative copy; this one is kept because
@@ -852,6 +918,10 @@ type State struct {
 	// run must not have to go and find which of the item's notes was this run's.
 	// Absent means this run stopped on nothing anybody has to decide, which is
 	// what every record written before the docket existed means.
+	//
+	// It is the one field a stoppage is inferred from, which is why the words and
+	// the fact are two fields rather than one: Failure above says why a run ended
+	// and this says that somebody now owns it.
 	Blocker string `json:"blocker,omitempty"`
 	// CleanupFailure explains why post-completion cleanup did not finish
 	// cleanly. The run's work is already integrated, closed, and durable when it
@@ -991,7 +1061,7 @@ func (s State) Validate() error {
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))
 	}
-	if s.ReviewDecision != "" && s.ReviewDecision != ReviewApprove && s.ReviewDecision != ReviewRepair {
+	if s.ReviewDecision != "" && !slices.Contains(reviewDecisions, s.ReviewDecision) {
 		problems = append(problems, errors.New("review_decision is invalid"))
 	}
 	if s.ReviewFindings < 0 {

@@ -763,10 +763,12 @@ func TestReviewTellsTheReviewerWhenTheChangeIsTruncated(t *testing.T) {
 	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"evidence is incomplete","findings":[{"severity":"major","message":"inspect the omitted file"}]}`}
 	request := newRequest(nil)
 	request.Changes = gitworktree.ChangeDiff{
-		Status:       "?? huge.bin",
-		Patch:        "diff --git a/small.go b/small.go\n",
-		OmittedFiles: []string{"huge.bin"},
-		Truncated:    true,
+		Status: "?? huge.bin",
+		Patch:  "diff --git a/small.go b/small.go\n",
+		OmittedFiles: []gitworktree.OmittedFile{
+			{Path: "huge.bin", Bytes: 131072, Reason: gitworktree.OmittedTooLarge, Bound: 65536},
+		},
+		Truncated: true,
 	}
 	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
 		t.Fatalf("Review() error = %v", err)
@@ -778,12 +780,107 @@ func TestReviewTellsTheReviewerWhenTheChangeIsTruncated(t *testing.T) {
 	}
 }
 
+// A file the bounds dropped is the absence a reviewer cannot see for itself, so
+// the evidence names it, says how big it is, and says which bound dropped it.
+// Naming it alone was the shape that let two changes be refused over files their
+// reviewer was never told existed.
+func TestReviewNamesEveryOmittedFileWithItsSizeAndBound(t *testing.T) {
+	t.Parallel()
+
+	omitted := []gitworktree.OmittedFile{
+		{Path: "fixtures/corpus.json", Bytes: 131072, Reason: gitworktree.OmittedTooLarge, Bound: 65536},
+		{Path: "assets/logo.png", Bytes: 4096, Reason: gitworktree.OmittedBinary},
+		{Path: "docs/appendix.md", Bytes: 8192, Reason: gitworktree.OmittedPatchFull, Bound: 262144},
+		{Path: "generated/table.txt", Bytes: 512, Reason: gitworktree.OmittedTooManyFiles, Bound: 200},
+		{Path: "link-to-elsewhere", Reason: gitworktree.OmittedUnreadable},
+	}
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"evidence is incomplete","findings":[{"severity":"major","message":"the delivered files are not shown"}]}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		Patch:        "diff --git a/small.go b/small.go\n",
+		OmittedFiles: omitted,
+		Truncated:    true,
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	// Every omitted file is named, and named with what the record holds about it:
+	// a rendering that dropped one would be the silent absence this replaced.
+	for _, file := range omitted {
+		if !strings.Contains(provider.request.Prompt, file.Describe()) {
+			t.Errorf("prompt is missing %q", file.Describe())
+		}
+	}
+	for _, want := range []string{
+		"fixtures/corpus.json (131072 bytes): delivered but too large to show; the per-file bound is 65536 bytes.",
+		"part of the change and is absent from the patch",
+	} {
+		if !strings.Contains(provider.request.Prompt, want) {
+			t.Errorf("prompt is missing %q", want)
+		}
+	}
+}
+
+// The omission is named on its own account rather than inside the truncation
+// notice: a caller that recorded an omitted file without setting the flag would
+// otherwise hand the reviewer a patch with a file silently missing from it.
+func TestReviewNamesOmittedFilesEvenWhereNothingElseWasTruncated(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"evidence is incomplete","findings":[{"severity":"major","message":"the delivered file is not shown"}]}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		Patch:        "diff --git a/small.go b/small.go\n",
+		OmittedFiles: []gitworktree.OmittedFile{{Path: "huge.bin", Bytes: 131072, Reason: gitworktree.OmittedTooLarge, Bound: 65536}},
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if !strings.Contains(provider.request.Prompt, "huge.bin (131072 bytes): delivered but too large to show") {
+		t.Errorf("prompt does not name the omitted file:\n%s", provider.request.Prompt)
+	}
+}
+
+// An empty patch under commits that undid one another is the one emptiness a
+// reviewer cannot read on its own, and reading it as missing evidence is a
+// finding about the harness rather than about the change. The evidence says
+// which it is.
+func TestReviewTellsTheReviewerWhenCommittedWorkWasUndone(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"the change was undone","findings":[{"severity":"blocker","message":"deliver the work the item asks for"}]}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		CommitsWithoutEffect: []gitworktree.Commit{
+			{Commit: "0927704bd0b8b93f7c04f24c1a0c0b6f4f3f5a11", Subject: "yoyodyne: first attempt"},
+			{Commit: "38bb0a77dad2c10ba0b23c1b4320bc31e9c22bf9", Subject: "yoyodyne: reverted attempt"},
+		},
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		"Committed work with no net effect",
+		"2 commit(s)",
+		"0927704bd0b8b93f7c04f24c1a0c0b6f4f3f5a11 yoyodyne: first attempt",
+		"38bb0a77dad2c10ba0b23c1b4320bc31e9c22bf9 yoyodyne: reverted attempt",
+		"rather than a change that failed to be collected",
+	} {
+		if !strings.Contains(provider.request.Prompt, want) {
+			t.Errorf("prompt is missing %q for an undone change", want)
+		}
+	}
+}
+
 func TestReviewRejectsApprovalWhenTheChangeIsIncomplete(t *testing.T) {
 	t.Parallel()
 
 	for _, changes := range []gitworktree.ChangeDiff{
 		{Patch: "partial patch\n", Truncated: true},
-		{Patch: "apparently complete patch\n", OmittedFiles: []string{"large.bin"}},
+		{Patch: "apparently complete patch\n", OmittedFiles: []gitworktree.OmittedFile{{Path: "large.bin", Bytes: 131072, Reason: gitworktree.OmittedTooLarge, Bound: 65536}}},
 	} {
 		provider := &fakeBackend{finalText: `{"decision":"approve","summary":"fine"}`}
 		request := newRequest(nil)

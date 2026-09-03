@@ -11,6 +11,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -837,6 +838,10 @@ func TestARerunHandsTheDevelopmentManagersGuidanceToTheDeveloper(t *testing.T) {
 // only keeps a held harness from spending the stoppage's re-run on a start that
 // would decline — and it is the pipeline that makes it, on the same hold record
 // the action read.
+//
+// Nothing was reserved behind it, so the claim taken for the run comes back: a
+// hold arriving a moment later must cost the stoppage exactly what a hold read a
+// moment earlier costs it, which is nothing.
 func TestAHoldArrivingAfterTheClaimStillStopsTheFreshRun(t *testing.T) {
 	t.Parallel()
 
@@ -852,15 +857,156 @@ func TestAHoldArrivingAfterTheClaimStillStopsTheFreshRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rerun() error = %v", err)
 	}
-	// The action started the run, and the run declined to claim anything.
-	if !result.Started || result.Outcome.PausedByIntake == nil {
-		t.Fatalf("outcome = %#v, want the fresh run held by intake", result.Outcome)
+	// The run declined to claim anything, so the carry-out reports the hold in
+	// place of a run rather than a run that is not there.
+	if result.Started || result.PausedBeforeStarting == nil || result.PausedBeforeStarting.PausedByIntake == nil {
+		t.Fatalf("result = %#v, want the fresh run held by intake and nothing started", result)
 	}
-	if result.Outcome.RunID != "" || result.Outcome.Integration != nil {
-		t.Fatalf("outcome = %#v, want nothing reserved and nothing integrated", result.Outcome)
+	if result.PausedBeforeStarting.RunID != "" || result.PausedBeforeStarting.Integration != nil {
+		t.Fatalf("outcome = %#v, want nothing reserved and nothing integrated", result.PausedBeforeStarting)
 	}
 	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
 		t.Fatalf("developer invocations = %d, want none under a hold", invocations)
+	}
+	if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the claim given back", claimed, err)
+	}
+}
+
+// The two doors a re-run's claim was spent through with nothing behind it: the
+// operator's hold on all activity, and a directive nobody has settled. Both are
+// read by the pipeline where it would start the fresh run — which is past the
+// claim — and both stop it before a run is reserved, the item is claimed, or an
+// agent is invoked. So both give the claim back, and the same decision is carried
+// out once the pause lifts rather than being refused as already re-run for a run
+// that never happened.
+func TestAPauseMetWhereTheFreshRunWouldStartGivesTheClaimBack(t *testing.T) {
+	t.Parallel()
+
+	for _, door := range []struct {
+		name string
+		// pause is what arrives while the claim is being taken, and lift is what
+		// settles it so the same decision can be carried out.
+		pause func(t *testing.T, pipelined *pipelinedRerun)
+		lift  func(t *testing.T, pipelined *pipelinedRerun)
+		// met is what the carry-out has to name as what stopped it.
+		met func(outcome Outcome) bool
+	}{
+		{
+			name: "the operator paused all harness activity",
+			pause: func(t *testing.T, pipelined *pipelinedRerun) {
+				if _, err := pipelined.holds.Hold(docketedNow); err != nil {
+					t.Fatalf("Hold() error = %v", err)
+				}
+			},
+			lift: func(t *testing.T, pipelined *pipelinedRerun) {
+				if _, _, err := pipelined.holds.Release(); err != nil {
+					t.Fatalf("Release() error = %v", err)
+				}
+			},
+			met: func(outcome Outcome) bool { return outcome.PausedByOperator != nil },
+		},
+		{
+			name: "a directive about the work is unresolved",
+			pause: func(t *testing.T, pipelined *pipelinedRerun) {
+				pausingDirective(t, pipelined.directives, directive.KindArtifact, nil)
+			},
+			lift: func(t *testing.T, pipelined *pipelinedRerun) {
+				recorded, err := pipelined.directives.List()
+				if err != nil || len(recorded) != 1 {
+					t.Fatalf("List() = %d directives, error = %v, want the one that paused it", len(recorded), err)
+				}
+				if _, err := pipelined.directives.Resolve(recorded[0].ID, "the goal still covers this work", docketedNow); err != nil {
+					t.Fatalf("Resolve() error = %v", err)
+				}
+			},
+			met: func(outcome Outcome) bool { return outcome.PausedByDirective != nil },
+		},
+	} {
+		t.Run(door.name, func(t *testing.T) {
+			t.Parallel()
+
+			var pipelined *pipelinedRerun
+			paused := false
+			pipelined = newPipelinedRerun(t, func() {
+				// It arrives while the carry-out is committing to the work, which is the
+				// window no reading before the claim can cover. It happens once: the
+				// second attempt is the one that finds the pause lifted.
+				if paused {
+					return
+				}
+				paused = true
+				door.pause(t, pipelined)
+			})
+			result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+			if err != nil {
+				t.Fatalf("Rerun() error = %v, want the pause reported rather than a failure", err)
+			}
+			if result.Started || result.PausedBeforeStarting == nil {
+				t.Fatalf("result = %#v, want the pause reported and nothing started", result)
+			}
+			if !door.met(*result.PausedBeforeStarting) {
+				t.Fatalf("outcome = %#v, want it to name what paused it", result.PausedBeforeStarting)
+			}
+			if result.PausedBeforeStarting.RunID != "" || result.PausedBeforeStarting.Integration != nil {
+				t.Fatalf("outcome = %#v, want nothing reserved and nothing integrated", result.PausedBeforeStarting)
+			}
+			if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+				t.Fatalf("developer invocations = %d, want none behind a pause", invocations)
+			}
+			if result.RecordProblem != "" {
+				t.Fatalf("record problem = %q, want the claim given back cleanly", result.RecordProblem)
+			}
+			if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
+				t.Fatalf("claimed = %t, error = %v, want the stoppage to keep its re-run", claimed, err)
+			}
+			// What the carry-out reports has to say the pause and the accounting, since
+			// a reader who is told only that nothing ran cannot tell this from a
+			// stoppage that has spent everything it had.
+			rendered := result.Render()
+			for _, want := range []string{"NOT STARTED", "keeps its one re-run", "decision still stands"} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("rendered = %q, is missing %q", rendered, want)
+				}
+			}
+
+			// The pause lifts, and the same decision is carried out — rather than
+			// being refused by the once-only guard for a run that never happened.
+			door.lift(t, pipelined)
+			rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+			if err != nil {
+				t.Fatalf("Rerun() once the pause lifted error = %v", err)
+			}
+			if !rerun.Started || rerun.Outcome.Integration == nil {
+				t.Fatalf("result = %#v, want the fresh run started and landed", rerun)
+			}
+		})
+	}
+}
+
+// A claim the harness could not give back after a pause is said out loud, for the
+// reason a raced reservation's is: the stoppage has then spent its one re-run on a
+// run that never started, and only somebody looking can put it back.
+func TestAClaimThatCouldNotBeGivenBackAfterAPauseIsReported(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	held := runstate.OperatorHold{HeldAt: docketedNow}
+	harness.outcome = Outcome{WorkItemID: docketedItem, Paused: true, PausedByOperator: &held}
+	rerunner := harness.rerunner()
+	rerunner.Reruns = unwithdrawableReruns{RerunRecords: harness.reruns}
+	result, err := rerunner.Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	if result.PausedBeforeStarting == nil {
+		t.Fatalf("result = %#v, want the pause still reported", result)
+	}
+	if !strings.Contains(result.RecordProblem, "could not be given back") {
+		t.Fatalf("record problem = %q, want the spent claim named", result.RecordProblem)
+	}
+	if !strings.Contains(result.RecordProblem, "hold on all harness activity") {
+		t.Fatalf("record problem = %q, want it to name what the run met", result.RecordProblem)
 	}
 }
 
@@ -962,7 +1108,13 @@ type pipelinedRerun struct {
 	rerunner Rerunner
 	runs     *runstate.Store
 	intake   *runstate.IntakeHoldStore
-	provider *fakeBackend
+	// holds is the operator's pause on all activity and directives what they have
+	// directed, both read by the pipeline where it would start the fresh run. They
+	// are the two pauses the action itself never reads, so a test that drives one
+	// is driving the door the pipeline holds rather than a second rendering of it.
+	holds      *runstate.OperatorHoldStore
+	directives *runstate.DirectiveStore
+	provider   *fakeBackend
 	// tracker is the one work item both readings ask about: the action's, before
 	// it claims anything, and the pipeline's, where it would start the work.
 	tracker *fakeTracker
@@ -999,6 +1151,14 @@ func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
 	}
 	pipeline.Intake = intake
+	// The operator's hold and the directive record are the pipeline's own, kept
+	// here so a test can place one between the claim and the run: they are read
+	// where the fresh run would start, which is the door this fixture exists to
+	// drive.
+	holds := newOperatorHoldStore(t)
+	pipeline.Holds = holds
+	directives := newDirectiveStore(t)
+	pipeline.Directives = directives
 	// And one re-run record for both readings, for exactly the reason there is one
 	// intake record. The action claims the re-run before it starts anything, and
 	// the pipeline reads that claim where it would otherwise refuse to start a
@@ -1023,11 +1183,13 @@ func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 	recordRerunDecision(t, store, stopped.WorkItemID)
 
 	return &pipelinedRerun{
-		runs:     store,
-		intake:   intake,
-		provider: provider,
-		tracker:  tracker,
-		reruns:   reruns,
+		runs:       store,
+		intake:     intake,
+		holds:      holds,
+		directives: directives,
+		provider:   provider,
+		tracker:    tracker,
+		reruns:     reruns,
 		rerunner: Rerunner{
 			Docket:    docket,
 			Runs:      store,

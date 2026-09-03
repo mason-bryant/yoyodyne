@@ -32,6 +32,13 @@ const (
 	KindItemDecomposed    Kind = "backlog.decomposed"
 	KindItemAttributed    Kind = "backlog.attributed"
 	KindItemReprioritized Kind = "backlog.reprioritized"
+	// A block of tracker actions the harness would not read, and therefore the
+	// backlog not moving when a role meant it to. It is here beside the kinds that
+	// say the queue moved because it is the same news photographed from the other
+	// side: the actions are refused whole, so what a reader is being told is that
+	// several admissions, closes, or reorderings they might have expected did not
+	// happen and the role that asked for them believed they had.
+	KindTrackerBlockRefused Kind = "tracker.block-refused"
 	// What the operator decided about work an agent proposed. It is two kinds
 	// rather than one with a field, for the reason the reviewer's verdict is:
 	// work entering the backlog and work turned down are different news, and
@@ -81,6 +88,15 @@ const (
 	// A blocker is work that stopped and stayed stopped, which is the one thing
 	// nobody finds out about on their own.
 	KindBlockerRecorded Kind = "blocker.recorded"
+	// A run that ended without succeeding and without leaving anybody a blocker
+	// to act on: one the harness failed to carry, one something stopped rather
+	// than judged, one it stopped on time. It is separate from the blocker above
+	// for the reason the outcome vocabulary is small and closed at all — "failed"
+	// is accurate about the attempt and says nothing about the work, so a channel
+	// that said one word over all four told an operator the attempt was over and
+	// nothing about whether their change still existed. The ending is named in the
+	// read model's own word and what remains of the change is stated beside it.
+	KindRunEnded Kind = "run.ended"
 	// A provider refusing the harness for want of capacity, somewhere that is not
 	// a run: a conversation turn, an independent review. A run says it by parking,
 	// and this is the same news from every other process — hours in which nothing
@@ -131,6 +147,14 @@ const (
 	KindWatchBraked  Kind = "watch.braked"
 	KindWatchResumed Kind = "watch.resumed"
 	KindWatchStopped Kind = "watch.stopped"
+	// A session stopping to be restarted into a build deployed over it. It is the
+	// same recorded stop as the one above and it is said apart from it, because
+	// the two mean opposite things to whoever reads them: a session that ended is
+	// a line waiting on somebody to start another, and this is a session that has
+	// waited out its runs and is coming straight back on the new build. Saying
+	// them the same way would hand the operator a move they do not have, once per
+	// deploy, which is the standing chore self-redeployment exists to end.
+	KindWatchRedeploying Kind = "watch.redeploying"
 	// A line that is choosing nothing while work is ready to be chosen. Every
 	// kind above is a transition said once; this one is a state said again while
 	// it stands, because the fact somebody needs is not that it began but that it
@@ -145,6 +169,21 @@ const (
 	// bugs that were fixed on the main line hours earlier — which reads as an agent
 	// failing rather than as a process nobody restarted.
 	KindResidentStale Kind = "resident.stale"
+	// The harness having started nothing at all while work was ready to start.
+	// It is the opposite reading from the line above it: that one is derived from
+	// a record something wrote about itself, and this one from the absence of any
+	// such record — nothing has started since a moment the runs themselves date,
+	// and nothing accounts for it. That is why it exists separately. A scheduler
+	// that crashes writes no stop and a wedged one goes on claiming to watch, so
+	// the state where everything has quietly gone dead is precisely the state no
+	// process is left to announce; on 2026-09-01 it ran seven and a half hours and
+	// was found by a person rather than by anything here.
+	//
+	// It is said once per stall rather than again while it stands. The repetition
+	// the line above needs is for a state somebody may have to sit with; this one
+	// is either acted on or it is not, and the durable stall record is what makes
+	// once mean once across restarts.
+	KindStallNoticed Kind = "stall.noticed"
 	// What one topic gathered while nothing was posting it. Every kind above is
 	// something the record says happened; this one is what a surface does with a
 	// backlog it cannot say one message at a time — a long gap replayed in full
@@ -164,6 +203,7 @@ func Kinds() []Kind {
 		KindItemDecomposed,
 		KindItemAttributed,
 		KindItemReprioritized,
+		KindTrackerBlockRefused,
 		KindWorkApproved,
 		KindWorkDeclined,
 		KindWorkHandedOff,
@@ -181,6 +221,7 @@ func Kinds() []Kind {
 		KindRunParked,
 		KindRunContinued,
 		KindBlockerRecorded,
+		KindRunEnded,
 		KindUsageLimitExhausted,
 		KindReportFiled,
 		KindProposalRaised,
@@ -199,8 +240,10 @@ func Kinds() []Kind {
 		KindWatchBraked,
 		KindWatchResumed,
 		KindWatchStopped,
+		KindWatchRedeploying,
 		KindLineWaiting,
 		KindResidentStale,
+		KindStallNoticed,
 		KindCatchUpDigest,
 	}
 }
@@ -211,17 +254,17 @@ func Kinds() []Kind {
 func (k Kind) Valid() bool {
 	switch k {
 	case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized,
-		KindWorkApproved, KindWorkDeclined,
+		KindTrackerBlockRefused, KindWorkApproved, KindWorkDeclined,
 		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut,
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
-		KindRunParked, KindRunContinued, KindBlockerRecorded, KindUsageLimitExhausted,
+		KindRunParked, KindRunContinued, KindBlockerRecorded, KindRunEnded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
-		KindLineWaiting, KindResidentStale, KindCatchUpDigest:
+		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -490,6 +533,22 @@ type Detail struct {
 	ExitCode int    `json:"exit_code,omitempty"`
 	// Findings is how many the reviewer raised, read by KindReviewRepairs.
 	Findings int `json:"findings,omitempty"`
+	// Requested is what each of those findings asked for, one entry per finding
+	// and in the order the reviewer raised them, read by KindReviewRepairs beside
+	// the count. The count alone says how much work came back and nothing about
+	// what it is, so an operator reading it could not tell a one-word correction
+	// to a document from a problem with the design without leaving the channel.
+	//
+	// Each entry is carried already said rather than as the finding it came from,
+	// for the reason Standing is: what a reader sees is the durable record's own
+	// account, and a second rendering of one finding is a second way to say it.
+	// The words are the reviewer's and are already redacted, because the record
+	// they are read from was redacted before it was written.
+	//
+	// Absent is a record that counted findings without keeping them, which is
+	// every run reviewed before the repair loop kept them. That is said as itself
+	// rather than as a run whose reviewer asked for nothing.
+	Requested []string `json:"requested,omitempty"`
 	// TargetBranch and Commit are where a promotion put the change, read by
 	// KindPromoted.
 	//
@@ -571,12 +630,30 @@ type Detail struct {
 	// that is said again every hour has a different age every time it is said and
 	// a timestamp a reader has to subtract from is not the fact they need.
 	//
+	// All three are read again by KindStallNoticed, where they say the same three
+	// facts about the opposite reading: what the record last said about the thing
+	// that chooses work, the moment the harness last started anything, and how
+	// much was ready through the silence that followed. They are the same fields
+	// rather than a second set because a reader is being told one thing — nothing
+	// is happening, since when, over how much — and two vocabularies for it would
+	// be two ways to say it differently.
+	//
 	// Since is read a second time by KindCatchUpDigest, where it is the first of
 	// the events the digest stands for: the same subtraction against the event's
 	// own moment says how much of a gap was digested away.
 	Stopped string    `json:"stopped,omitempty"`
 	Since   time.Time `json:"since,omitempty"`
 	Ready   int       `json:"ready,omitempty"`
+	// Running is how many developer runs the session could see in flight, read by
+	// KindWatchIdle. It is half of whose move follows a poll that started nothing:
+	// a session idle on one slot while a run works on the other is the harness
+	// working, and a message that said only "nothing is startable" was read three
+	// times as a line that had stopped.
+	Running int `json:"running,omitempty"`
+	// Unreadable is a poll that chose nothing because the harness could not be
+	// read, read by KindWatchIdle. It is the other state whose next move is not an
+	// admission: nothing a person admits reaches a store that will not answer.
+	Unreadable bool `json:"unreadable,omitempty"`
 	// Standing is where the harness stands, already rendered into the four lines
 	// the read model produces, and read by KindLineWaiting. It is carried as the
 	// rendered text rather than as the state it came from, because the format is
@@ -590,11 +667,36 @@ type Detail struct {
 	// how much there is, and therefore how much of the thread's narrative is in
 	// the durable record rather than in the channel.
 	Accumulated int `json:"accumulated,omitempty"`
+	// Ending is what became of a run, in the read model's own fixed vocabulary,
+	// read by KindRunEnded. It is carried as the word rather than derived here for
+	// the reason Standing is carried rendered: the vocabulary is the contract, and
+	// a surface that classified a run for itself is a surface that can come to say
+	// a different word about it than `yoyo status` does.
+	//
+	// Remains is what the record says survives of that run's change, in the three
+	// fixed phrases the same read model renders, and is read by KindRunEnded and
+	// by KindBlockerRecorded. Both kinds state it because "is my work gone" is the
+	// question a run that did not succeed is actually read for, and a stoppage
+	// somebody has to decide about is the case where the answer matters most.
+	Ending  string `json:"ending,omitempty"`
+	Remains string `json:"remains,omitempty"`
+	// Refused is how many tracker actions a block the harness would not read asked
+	// for, and Asking is the role that asked, both read by
+	// KindTrackerBlockRefused. The count is the size of what did not happen, and
+	// it is negative where the record did not carry one, exactly as the priority
+	// above is: a block the harness could not decode says nothing about how much
+	// was in it, and no actions and an uncounted number of them are different
+	// things to be told. The role is carried because the harness speaks this
+	// message: a refusal is the harness's own act, and the only thing that says
+	// whose actions were lost is the record.
+	Refused int    `json:"refused,omitempty"`
+	Asking  string `json:"asking,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
 	// a role changed the backlog, read by the tracker kinds; why proposed work
-	// was turned down, read by KindWorkDeclined; and why a thread reply recorded
-	// nothing, read by KindDirectiveRefused. An operator who holds in a hurry
-	// owes nobody an explanation, so absence is ordinary.
+	// was turned down, read by KindWorkDeclined; why a thread reply recorded
+	// nothing, read by KindDirectiveRefused; and why a block of tracker actions
+	// was refused whole, read by KindTrackerBlockRefused. An operator who holds in
+	// a hurry owes nobody an explanation, so absence is ordinary.
 	Reason string `json:"reason,omitempty"`
 }
 

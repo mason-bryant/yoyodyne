@@ -630,19 +630,80 @@ fi
 # Follow the newest run or conversation, moving on when a later one appears.
 # Each tail is killed only after a successor exists, so no events are dropped in
 # between.
-while :; do
+#
+# Why this is still here rather than retired in favour of the binary, checked on
+# 2026-08-31: `yoyo status` cannot follow anything at all, let alone follow the
+# latest. The fold that was to give it `--follow` (yoyodyne-ifd.63) did not land
+# -- the item is blocked, having been stopped after its permitted repair
+# attempts, and its branch is not an ancestor of this one. `yoyo status` takes
+# `--config`, `--failed`, `--limit`, and `--json` and nothing else, and its own
+# source still refers a reader here to follow a live run. So there is nowhere to
+# send this capability, and the fix for an interrupted `-L` printing on is the
+# one below. Retiring `-L` becomes the right change on the day the fold lands,
+# and not before.
+follow_pgid=""
+
+# Start printing the current target in the background, so a later run can be
+# watched for while it prints.
+#
+# Job control is turned on just long enough to start it, which is what gives the
+# pipeline a process group of its own, and that group is the handle on the whole
+# of it. Two things need that handle. A pipeline started in the background of a
+# shell without job control ignores an interrupt, so control-c used to end this
+# script and leave the tail printing to the operator's terminal; and the pid
+# bash reports for a pipeline is its last command, so killing that alone would
+# leave the tail alive until the file it follows grows again, which for a run
+# that has finished is never.
+#
+# Monitor mode is turned back off immediately: the group is fixed when the
+# processes are forked and outlives the setting, and leaving it on would have
+# bash announce each job's death on a terminal this is trying to leave quiet.
+start_follow() {
+  set -m
   tail -n "$lines" -F "$target" | shape &
-  tail_pid=$!
+  follow_pgid="$(jobs -p %+)"
+  set +m
+}
+
+# Stop whatever is printing, if anything still is.
+stop_follow() {
+  [ -n "$follow_pgid" ] || return 0
+  kill -- -"$follow_pgid" 2>/dev/null || true
+  wait 2>/dev/null || true
+  follow_pgid=""
+}
+
+# Control-c, a plain kill, and a closed terminal all mean stop printing, and
+# none of them leaves the pipeline behind. The exit status is the conventional
+# one for the signal, so whatever started this can still tell an interrupt from
+# a failure.
+#
+# Installing an EXIT handler replaces any earlier one, and there is no earlier
+# one to replace: the only other trap in this file is the RETURN trap inside
+# cost_report that removes that report's two temporary files, and a RETURN trap
+# on a function is a different trap from EXIT and is not touched by these. Nor
+# could the two ever both be live -- the cost report exits the script when it is
+# done, well above here, so a run that reaches this line never ran cost_report
+# and has no temporary files to leave behind. Anything added above that does
+# want an EXIT trap has to be composed with this one rather than set beside it.
+trap 'stop_follow; exit 130' INT
+trap 'stop_follow; exit 143' TERM
+trap 'stop_follow; exit 129' HUP
+trap 'stop_follow' EXIT
+
+while :; do
+  start_follow
   while :; do
     sleep 3
     current="$(newest)"
     if [ -n "$current" ] && [ "$current" != "$target" ]; then
-      kill "$tail_pid" 2>/dev/null || true
-      wait "$tail_pid" 2>/dev/null || true
+      stop_follow
       target="$current"
       echo "==> $(basename "$target" .events.jsonl) [$(status_of "$target")]" >&2
       break
     fi
-    kill -0 "$tail_pid" 2>/dev/null || break
+    # Any process still in the group means it is still printing. When none is,
+    # the pipeline died on its own and the outer loop starts another.
+    kill -0 -- -"$follow_pgid" 2>/dev/null || break
   done
 done

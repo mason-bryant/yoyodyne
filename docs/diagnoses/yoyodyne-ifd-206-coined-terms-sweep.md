@@ -1,16 +1,22 @@
 # Sweep: coined terms in open tracker items and governed documents
 
-Work item: yoyodyne-ifd.206. **This document is the audit half of that item, and
-the item is not done.** No coinage has been replaced anywhere. The sweep has
-been run and its result written down here, but neither of the two places it
-applies to was writable by the run that produced it, for the reasons in
-[What could not be applied](#what-could-not-be-applied). Both reasons are
+Work item: yoyodyne-ifd.206. **This document is the audit half of that item.**
+The sweep has been run and its result written down here; the run that produced
+it could change neither of the two places its result applies to, for the reasons
+in [What could not be applied](#what-could-not-be-applied). Both reasons are
 boundaries working as designed, and neither is a developer's to lift.
 
-What has to happen before ifd.206 can be closed is listed in
-[What remains](#what-remains). Anyone reading this as evidence that the backlog
-and the governed documents have been swept should stop there: they have been
-measured, not changed.
+**What has been applied since, and by whom, is in
+[What has landed](#what-has-landed).** Read that before acting on anything
+below: the governed-document half was applied on 2026-08-31 under a later work
+item's grants, so the counts and the wordings quoted here are as measured on
+2026-08-30 and no longer describe the documents. The tracker half has not been
+applied, and [What remains](#what-remains) is what is still owed.
+
+**The governed-document counts here are a floor, and the current ones are in
+[the yoyodyne-ifd.220 re-run](#the-yoyodyne-ifd220-re-run).** The scan looked for
+one spelling of each term, over a tree that has since moved, so two occurrences
+it records as absent are not.
 
 Records read at 2026-08-30, against the live tracker export
 (`/Users/mbryant/github/yoyodyne/.beads/issues.jsonl`, 309 rows, latest
@@ -28,8 +34,123 @@ The rule being applied is the legibility goal's plain-language clause
 (`docs/product/goals/v1-goals.md:108`): *user-facing language chooses the
 ordinary, literal word over metaphor, coinage, or term of art.*
 
+## What has landed
+
+**2026-08-31, yoyodyne-ifd.216.** The operator amended the plain-language
+directive: a coined term is permitted where it is defined in `docs/terms.md`,
+which holds every one of them. That item was admitted with
+`protected-path grant:` lines for `docs/product`, `docs/designs` and
+`docs/decisions` — the grant this document asked for in
+[What remains](#what-remains) — and a run applied the governed-document half
+under them. What it did, against this document's own measurements:
+
+- **[The register](../terms.md) exists**, seeded from the inventory below. Nine
+  entries: the six mechanism names of
+  [Category 2](#category-2-mechanism-names-where-the-architects-ruling-was-requested),
+  plus `in force`, `minute zero` and `posture` — decoration by this document's
+  reading, registered rather than replaced because each survives only in the
+  invariants home, whose wording this document says is the architect's alone.
+  Each of those three retires if she takes the rewording.
+- **Nine of the twelve Category 1 governed-document occurrences were replaced**:
+  `seam` ×2 in `claude-only-v1-execution.md` and
+  `claude-execution-and-account-routing.md`, `in force` ×2 in `goals/README.md`
+  and `claude-execution-and-account-routing.md`, and `posture` ×1, `re-arm` ×3
+  and `wedged` ×1 in `v1-harness-design.md`.
+- **Three of the twelve were left**, each for a reason this document already
+  states or a reason it would accept:
+  - `harness-is-the-only-role-invoker.md:20` (`posture`) — the text of an active
+    invariant. Registered instead.
+  - `invariants/README.md:10` (`in force`) — the prose governing how invariants
+    are amended, which this document says is nobody's to replace but the
+    architect's. Registered instead.
+  - `v1-harness-design.md:32` (`re-arm`) — inside a recorded amendment reason in
+    the frontmatter. A revision's reason is what the architect decided in her own
+    words on a date, and rewriting one falsifies a record rather than clarifying
+    a sentence. The check does not read frontmatter, for the same reason.
+- **Two occurrences outside the twelve** were found by rescanning the homes on
+  2026-08-31, in documents that did not carry them when this was measured:
+  `soak` ×1 in `configurable-workflows.md`, replaced; and `minute zero` ×2 in
+  `developer-verifies-before-submitting.md`, registered, being invariant text.
+  Neither is in the Category 1 table below, which records no governed-document
+  occurrence of either term.
+- **`internal/terms` is a declared check.** It reads the three artifact homes
+  for the terms below and fails on one the register does not define, so nothing
+  swept out here can come back undefined without a check going red. The reviewer
+  persona carries the same rule as a finding class, for the coinage no check can
+  recognize.
+
+Three things this document reports as outstanding are outstanding still: the
+tracker half, `cadence` in the `yoyo slack` refusal text, and the decisions on
+the proposals in
+[Where the proposals are](#where-the-proposals-are) — of which the three
+carrying Category 1 wording now describe edits already made, and are worth
+deciding rather than leaving open.
+
+## The yoyodyne-ifd.220 re-run
+
+**2026-08-31, yoyodyne-ifd.220.** The reviewer on ifd.216's run found that the
+governed-document headline below was being read as an inventory — by
+[the register](../terms.md) and by `internal/terms` both — when it is a floor,
+and named two occurrences to prove it. Both are real, and only one of them is an
+error in the scan:
+
+- **`soak` ×1 in `designs/configurable-workflows.md`.**
+  [Category 1](#category-1-decoration-to-be-replaced-outright) records no
+  governed occurrence of `soak`, and against the tree this document measured that
+  is correct: `configurable-workflows.md` was promoted after the scan ran. The
+  row is right about 2026-08-30 and wrong as an inventory, which is the whole of
+  the point — a count taken once is not a count that stays true.
+- **`minute-zero` in
+  `decisions/invariants/developer-verifies-before-submitting.md:16`.** The scan
+  looks for `minute zero`, so the hyphenated spelling went past it, and past
+  `internal/terms`, whose match was the same string. That invariant was also
+  written after the scan ran, so both causes land on one file: the count would
+  have missed the occurrence even if it had been taken a day later.
+
+The homes were therefore measured again on 2026-08-31, over the working tree at
+that date, with each term matched however its parts are spaced — hyphenated,
+spaced, closed up, or broken by a line wrap. **These figures replace the headline
+below as the current count.** The headline stands as what was true on 2026-08-30.
+
+| Scan | Occurrences | Terms |
+|---|---|---|
+| 2026-08-30, as [measured below](#how-this-was-measured) | 32 | 8 |
+| 2026-08-31 re-run, whole files, variant-tolerant | 27 | 7 |
+| 2026-08-31 re-run, the prose `internal/terms` reads | 25 | 6 |
+
+Nothing in the re-run is undefined: every term below has a row in the register,
+so the check passes over the homes as they stand. The two figures for the re-run
+differ by what the check deliberately does not read — the frontmatter, which
+holds one `minute zero` in the invariant's title and the surviving `re-arm`.
+
+| Term | Occurrences | Where |
+|---|---|---|
+| `sink` | 18 | `slack-reporting-design.md` ×15, `management-and-supervision.md`, `observability-and-dashboard.md`, `v1-harness-design.md` |
+| `docket` | 2 | `configurable-workflows.md`, `management-and-supervision.md` |
+| `minute zero` | 3 | `developer-verifies-before-submitting.md` — the frontmatter title, the hyphenated `minute-zero` at :16, and :20 |
+| `in force` | 1 | `invariants/README.md` |
+| `posture` | 1 | `harness-is-the-only-role-invoker.md` |
+| `steer` | 1 | `slack-reporting-design.md` |
+| `re-arm` | 1 | `v1-harness-design.md` frontmatter, inside a recorded amendment reason |
+
+Two things the re-run settles about the floor. Re-measured variant-tolerantly
+over the same tree this document scanned, the figure is **32 of 8, unchanged** —
+the strict patterns cost nothing on 2026-08-30, because both escapes are in
+documents that did not exist yet. So the floor was a floor because the homes
+moved, and the strict patterns are what would have let the next one through
+silently. And of the difference between 32 and 27, all of it is the nine
+Category 1 replacements ifd.216 made plus the two documents promoted since;
+none of it is a term that stopped being counted.
+
+The check no longer has the hole. `internal/terms` matches each term however its
+parts are spaced, so `minute-zero` fails where `minute zero` would, and a row in
+the register permits every spelling of its term rather than the one written in
+the row. The re-run's patterns are [in the scans below](#how-this-was-measured),
+beside the strict ones they replace.
+
 ## Summary
 
+Measured on 2026-08-30, before the changes above.
 The governed documents are close to clean and the tracker is not. Across the
 three artifact homes the sweep found **32 occurrences of 8 terms**, of which 18
 are one mechanism name (`sink`) and the rest are 14 scattered occurrences. Across
@@ -79,6 +200,13 @@ find-and-replace over them would produce prose that is literal and wrong.
 | `starving` | 1 — ifd.68.7 (title) | — | **stopping**. Title: `tolerates additive schema changes instead of starving on them` → `tolerates additive schema changes instead of stopping on them`. |
 | `whose-move` | 1 — ifd.187 | — | **waiting on the operator**. `whose-move the operator's` → `and it is waiting on the operator`. |
 | `supersession pile` | 1 — ifd.121.6 | — | **the list of superseded pull requests**. |
+
+The `Governed docs` column is what was there on 2026-08-30 and is not an
+inventory. Both `soak` and `minute zero` read `—` here and neither is a term the
+homes have been free of since: `soak` reached `configurable-workflows.md` and was
+replaced, and `minute zero` is written three times in
+`developer-verifies-before-submitting.md`, once of them hyphenated. Read the
+column against [the re-run](#the-yoyodyne-ifd220-re-run).
 
 Two of these are not new judgments by this sweep. The operator has already
 objected to `in force` in a thread — recorded on ifd.68.23, where he asked *What
@@ -278,8 +406,10 @@ rather than wholly.
 
 ## What could not be applied
 
-Neither half of the item's scope is writable by a developer run, for two
-separate reasons. Both are boundaries working as designed, not faults.
+Neither half of the item's scope was writable by the run that produced this
+document, for two separate reasons. Both are boundaries working as designed, not
+faults. The first was lifted afterwards by a grant on yoyodyne-ifd.216, which is
+[what let the governed half land](#what-has-landed); the second still stands.
 
 **The governed documents are protected paths, and this item grants none.** The
 homes the sweep covers — `docs/product`, `docs/designs`, `docs/decisions`, and
@@ -301,36 +431,33 @@ items are therefore listed above rather than applied.
 
 ## What remains
 
-ifd.206 is not done and should not be closed on the strength of this document.
-Measured against the item's own four done conditions:
+ifd.206 was closed on the strength of this document before the registration
+model landed, which is why yoyodyne-ifd.216 exists. The four done conditions
+below are this document's own, restated against what is true after
+[What has landed](#what-has-landed):
 
 | Done condition | State |
 |---|---|
 | The sweep has run over open items and governed documents | **Met.** Both scans are complete and recorded here. |
-| Decorative coinages are gone | **Not met.** All 66 Category 1 occurrences — 54 in open items, 12 in governed documents — are still in the records. Nine of the 12 governed ones are with their owner as proposals, which is as far as a developer can take them; a proposal is not a removal. |
-| Every surviving mechanism term has an architect ruling, and a plain-words first-use definition where kept | **Not met.** The ruling is requested — `amendment-19d55188…` and `amendment-1af49513…`, both undecided — and no definition can be written until it is decided. |
-| The item lists what was changed | **Not met.** Nothing was changed, and the tracker item could not be updated to say so. |
+| Decorative coinages are gone | **Met in the governed documents, not in the tracker.** Nine of the 12 governed occurrences were replaced on 2026-08-31 and three were registered or left, each named in [What has landed](#what-has-landed): two are invariants-home wording that is the architect's, and one is inside a recorded amendment reason. The 54 occurrences in open items are untouched — the tracker is still outside a developer run's sandbox. |
+| Every surviving mechanism term has an architect ruling, and a plain-words first-use definition where kept | **Superseded.** The operator's amendment replaced the rename-or-define-at-first-use choice with registration: all six mechanism names are kept and defined once, in [the register](../terms.md). `amendment-19d55188…` and `amendment-1af49513…` are still undecided, and a ruling to rename any of them would now be a rename plus a retired entry. |
+| The item lists what was changed | **Met here rather than there.** The tracker was unreachable from the run that made the changes, so the account is [What has landed](#what-has-landed) above. |
 
-Three things have to be arranged by roles other than a developer, and none of
-them is a judgment call this document is trying to pre-empt:
+Two things still have to be arranged by roles other than a developer, and
+neither is a judgment call this document is trying to pre-empt. The third — a
+grant for the governed-document half — was arranged on yoyodyne-ifd.216 and is
+[what let that half land](#what-has-landed).
 
-1. **A grant for the governed-document half.** ifd.206 needs
-   `protected-path grant:` lines admitting `docs/product`, `docs/designs` and
-   `docs/decisions`, written into the item's title, description, design
-   guidance, or acceptance criteria — the fields somebody authored. A grant in
-   the notes does not count, and nothing a developer writes grants a path.
-2. **A writable tracker for the item half.** The run needs its sandbox widened
+1. **A writable tracker for the item half.** The run needs its sandbox widened
    to the primary checkout's `.beads` directory, or the tracker edits have to be
-   made by something that already reaches it.
-3. **Decisions on the six open proposals**, listed in
+   made by something that already reaches it. This is the whole of what is left
+   of Category 1: 54 occurrences in open items, 21 of them in titles.
+2. **Decisions on the six open proposals**, listed in
    [Where the proposals are](#where-the-proposals-are): three carry the
    Category 1 decoration and two carry the mechanism rulings, and one is a
-   duplicate to decline. The Category 1 tracker work does not depend on any of
-   them and can proceed first.
-
-The first two are independent of each other, so the item can be finished in two
-runs rather than one if that is easier to arrange than a single run holding
-both.
+   duplicate to decline. The three carrying decoration now describe edits
+   already made under ifd.216's grants, so deciding them costs nothing and
+   leaves the record honest. The tracker work does not depend on any of them.
 
 ## How this was measured
 
@@ -385,6 +512,36 @@ for name, terms in (("CAT1", cat1), ("CAT2", cat2)):
                     n = len(re.findall(re.escape(t), txt))
                     if n: g[t] += n
     print(name, sum(g.values()), len(g), dict(g))
+PY
+```
+
+Those two term lists are plain substrings, which is what made the headline a
+floor: `minute zero` there does not find `minute-zero`. **The 2026-08-31 re-run**
+is the same walk with each term's parts allowed any spacing, run over the working
+tree at that date. It is what produced the 27 and the 25 in
+[the re-run](#the-yoyodyne-ifd220-re-run) — the first figure over whole files,
+the second over the prose alone, dropping the frontmatter and the fenced blocks
+the way `internal/terms` does.
+
+```bash
+python3 - <<'PY'
+import os, re, collections
+terms = ["tranche","seam","posture","re-arm","sidecar","wedge","in force",
+         "minute zero","soak","pane of glass","starv","whose-move",
+         "supersession pile","docket","brake","heartbeat","sink","steer","handback"]
+def pattern(term):
+    parts = [re.escape(p) for p in re.split(r'[-\s]+', term)]
+    return re.compile(r'\b' + r'[-\s]*'.join(parts), re.I)
+g = collections.Counter()
+for root in ['docs/product', 'docs/designs', 'docs/decisions']:
+    for dp, _, fns in os.walk(root):
+        for fn in fns:
+            if not fn.endswith('.md'): continue
+            txt = open(os.path.join(dp, fn)).read()
+            for t in terms:
+                n = len(pattern(t).findall(txt))
+                if n: g[t] += n
+print(sum(g.values()), len(g), dict(g))
 PY
 ```
 

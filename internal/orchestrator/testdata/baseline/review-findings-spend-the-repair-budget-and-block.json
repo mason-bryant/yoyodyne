@@ -1,0 +1,174 @@
+{
+  "scenario": "review-findings-spend-the-repair-budget-and-block",
+  "freezes": "A change no verdict approves spends the repair budget and ends blocked with the unresolved findings recorded, and nothing is promoted or closed.",
+  "steps": [
+    {
+      "name": "run",
+      "error": "independent review requires repair after 2 of 2 permitted attempt(s): the change misses the acceptance criteria",
+      "ending": "stopped",
+      "outcome": {
+        "base_commit": "\u003ccommit-1\u003e",
+        "blocked": true,
+        "branch": "yoyodyne/yoyodyne-task/01234567",
+        "branch_removed": false,
+        "changes": {
+          "status": "?? feature.txt"
+        },
+        "checks": [
+          {
+            "command": "test -f feature.txt",
+            "passed": true,
+            "process": {
+              "ExitCode": 0,
+              "FinishedAt": "\u003ctime\u003e",
+              "StartedAt": "\u003ctime\u003e",
+              "Status": "succeeded",
+              "Stderr": "",
+              "Stdout": ""
+            },
+            "timeout": 1800000000000
+          }
+        ],
+        "failure": "independent review requires repair after 2 of 2 permitted attempt(s): the change misses the acceptance criteria",
+        "phase": "reviewing",
+        "provider_model": "opus",
+        "provider_resolved_model": "claude-opus-5-developer",
+        "provider_session_id": "developer-session",
+        "repair_attempts": 2,
+        "review_decision": "repair",
+        "review_findings": [
+          {
+            "location": {
+              "file": "feature.txt",
+              "line": 1
+            },
+            "message": "add the missing file",
+            "severity": "blocker"
+          }
+        ],
+        "review_model": "opus",
+        "review_resolved_model": "claude-opus-5-reviewer",
+        "review_session_id": "reviewer-session",
+        "review_summary": "the change misses the acceptance criteria",
+        "run_id": "run-0123456789abcdef0123456789abcdef",
+        "status": "failed",
+        "summary": "implemented the work item",
+        "work_item_closed": false,
+        "work_item_id": "yoyodyne-task",
+        "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+        "worktree_removed": false
+      }
+    }
+  ],
+  "durable_run_record": {
+    "account_alias": "default",
+    "backend": "claude-code",
+    "base_commit": "\u003ccommit-1\u003e",
+    "blocker": "Yoyodyne stopped this item: its independent reviewer still required repair after every permitted attempt.\nRepair attempts: 2 of 2 permitted\nRun: run-0123456789abcdef0123456789abcdef\nBranch: yoyodyne/yoyodyne-task/01234567\nWorktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nThe branch and worktree are preserved; the unresolved findings below need a replan or a reassignment.\nReviewer session: reviewer-session\nReviewer model: opus (resolved: claude-opus-5-reviewer)\nReview decision: repair\nReview summary: the change misses the acceptance criteria\nFinding [blocker] (feature.txt:1): add the missing file",
+    "branch": "yoyodyne/yoyodyne-task/01234567",
+    "changes": {
+      "files": "?? feature.txt"
+    },
+    "completed_at": "\u003ctime\u003e",
+    "config_revision": "\u003cconfig-revision\u003e",
+    "failure": "independent review requires repair after 2 of 2 permitted attempt(s): the change misses the acceptance criteria",
+    "last_sequence": 12,
+    "phase": "reviewing",
+    "product_id": "yoyodyne",
+    "provider_model": "opus",
+    "provider_resolved_model": "claude-opus-5-developer",
+    "provider_session_id": "developer-session",
+    "repair_attempts": 2,
+    "repository_id": "yoyodyne",
+    "review_decision": "repair",
+    "review_finding_details": [
+      {
+        "file": "feature.txt",
+        "line": 1,
+        "message": "add the missing file",
+        "severity": "blocker"
+      }
+    ],
+    "review_findings": 1,
+    "review_model": "opus",
+    "review_resolved_model": "claude-opus-5-reviewer",
+    "review_rounds": 3,
+    "review_session_id": "reviewer-session",
+    "review_summary": "the change misses the acceptance criteria",
+    "run_id": "run-0123456789abcdef0123456789abcdef",
+    "schema_version": 1,
+    "started_at": "\u003ctime\u003e",
+    "status": "failed",
+    "target_branch": "main",
+    "updated_at": "\u003ctime\u003e",
+    "work_item_id": "yoyodyne-task",
+    "work_item_title": "Task",
+    "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567"
+  },
+  "events": [
+    "command.started",
+    "command.completed",
+    "review.started",
+    "review.completed",
+    "command.started",
+    "command.completed",
+    "review.started",
+    "review.completed",
+    "command.started",
+    "command.completed",
+    "review.started",
+    "review.completed"
+  ],
+  "work_item": {
+    "calls": [
+      "claim",
+      "block",
+      "record"
+    ],
+    "status": "blocked",
+    "closed": false,
+    "blocked": true,
+    "notes": [
+      [
+        "Yoyodyne blocked this item; the branch and worktree are preserved, and the blocker recorded on the item says what stopped it.",
+        "Run: run-0123456789abcdef0123456789abcdef",
+        "Failure: independent review requires repair after 2 of 2 permitted attempt(s): the change misses the acceptance criteria",
+        "Phase: reviewing",
+        "Repair attempts: 2",
+        "Branch: yoyodyne/yoyodyne-task/01234567",
+        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+        "Base commit: \u003ccommit-1\u003e",
+        "Claude session: developer-session",
+        "Developer model: opus (resolved: claude-opus-5-developer)",
+        "Preserved changes:",
+        "?? feature.txt",
+        "Reviewer session: reviewer-session",
+        "Reviewer model: opus (resolved: claude-opus-5-reviewer)",
+        "Review decision: repair",
+        "Review summary: the change misses the acceptance criteria",
+        "Finding [blocker] (feature.txt:1): add the missing file"
+      ]
+    ],
+    "blocker": [
+      "Yoyodyne stopped this item: its independent reviewer still required repair after every permitted attempt.",
+      "Repair attempts: 2 of 2 permitted",
+      "Run: run-0123456789abcdef0123456789abcdef",
+      "Branch: yoyodyne/yoyodyne-task/01234567",
+      "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+      "The branch and worktree are preserved; the unresolved findings below need a replan or a reassignment.",
+      "Reviewer session: reviewer-session",
+      "Reviewer model: opus (resolved: claude-opus-5-reviewer)",
+      "Review decision: repair",
+      "Review summary: the change misses the acceptance criteria",
+      "Finding [blocker] (feature.txt:1): add the missing file"
+    ]
+  },
+  "provider_invocations": [
+    "developer: the assigned work item, new session",
+    "reviewer: review of the change, new session",
+    "developer: repair of review findings, continues session",
+    "reviewer: review of the change, new session",
+    "developer: repair of review findings, continues session",
+    "reviewer: review of the change, new session"
+  ]
+}

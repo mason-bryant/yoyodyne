@@ -25,7 +25,7 @@ func TestExtractTrackerActionsSeparatesProseFromWhatWasAskedFor(t *testing.T) {
 		   {"action":"reprioritize","id":"yoyodyne-ifd.24","priority":0,"reason":"the operator is blocked on it"}
 		 ]}` + "\n```\n\nSay so if you would rather I left it where it was.\n"
 
-	prose, actions, err := extractTrackerActions(reply)
+	prose, actions, _, err := extractTrackerActions(reply)
 	if err != nil {
 		t.Fatalf("extractTrackerActions() error = %v", err)
 	}
@@ -50,7 +50,7 @@ func TestExtractTrackerActionsSeparatesProseFromWhatWasAskedFor(t *testing.T) {
 	}
 
 	// A reply that asks for nothing is prose, whole and unchanged.
-	prose, none, err := extractTrackerActions("  The queue is fine as it stands.\n")
+	prose, none, _, err := extractTrackerActions("  The queue is fine as it stands.\n")
 	if err != nil || len(none) != 0 || prose != "The queue is fine as it stands." {
 		t.Fatalf("extractTrackerActions() plain reply = %q, %#v, %v", prose, none, err)
 	}
@@ -191,7 +191,7 @@ func TestTrackerActionsRefuseWhatTheHarnessWillNotRun(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			prose, actions, err := extractTrackerActions(test.reply)
+			prose, actions, _, err := extractTrackerActions(test.reply)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("extractTrackerActions() error = %v, want it to contain %q", err, test.want)
 			}
@@ -692,7 +692,7 @@ func TestSurveyingTheQueueAnswersFromTheTrackerRatherThanTheOpeningPicture(t *te
 		{"an item", `{"action":"survey","id":"yoyodyne-ifd.26"}`, "survey does not take an id"},
 		{"a reason", `{"action":"survey","reason":"before reordering"}`, "survey does not take \"reason\""},
 	} {
-		if _, _, err := extractTrackerActions(trackerReply("Surveying.", refused.reply)); err == nil ||
+		if _, _, _, err := extractTrackerActions(trackerReply("Surveying.", refused.reply)); err == nil ||
 			!strings.Contains(err.Error(), refused.want) {
 			t.Fatalf("a survey carrying %s: error = %v, want it to contain %q", refused.name, err, refused.want)
 		}
@@ -942,5 +942,152 @@ func TestTrackerOutcomeRendersWhatHappenedRatherThanWhatWasAskedFor(t *testing.T
 		if !strings.HasPrefix(line, "  ") {
 			t.Fatalf("rendered line %q is not indented", line)
 		}
+	}
+}
+
+// The proof case, replayed: on 2026-09-01 the product manager asked for twelve
+// tracker actions in one reply, the block was refused whole for the bound of ten,
+// and three admissions and seven report dispositions went nowhere. Nothing
+// recorded the refusal and nothing told the role, so the loss was found by a
+// person reading the tracker afterwards and put right by hand.
+//
+// So the refusal is a durable event, and it reaches the role that sent it at the
+// start of its next turn, verbatim. The second half of the test is what the first
+// half is for: a later process, holding nothing but the record, re-issues the
+// actions from the refusal it was given rather than from anybody carrying it in.
+func TestARefusedTrackerBlockIsRecordedAndReachesTheRoleThatSentIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{}
+	tooMany := make([]string, 0, MaxTrackerActionsPerTurn+2)
+	for i := 0; i <= MaxTrackerActionsPerTurn+1; i++ {
+		tooMany = append(tooMany, `{"action":"close","id":"yoyodyne-`+strconv.Itoa(i)+`","reason":"the work landed"}`)
+	}
+	refusing := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Clearing the queue.", tooMany...)},
+	}})
+	refusing.Store = newTestStore(t, root)
+	refusing.Tracker = tracker
+	refused := openTestSession(t, refusing)
+
+	_, err := refused.Send(context.Background(), "deal with the pile")
+	var unreadable *TrackerError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("Send() error = %v, want a TrackerError", err)
+	}
+	// The whole block was refused, so nothing reached the tracker.
+	if len(tracker.closed) != 0 {
+		t.Fatalf("closed = %#v, want a refused block to have changed nothing", tracker.closed)
+	}
+	// How much was lost is part of the refusal rather than something a reader has
+	// to count from a reply nobody kept.
+	if unreadable.Actions != len(tooMany) {
+		t.Fatalf("refusal counted %d action(s), want %d", unreadable.Actions, len(tooMany))
+	}
+	payload := onlyEventPayload(t, root, refused, execution.EventTrackerBlockRefused)
+	for _, wanted := range []string{
+		`"role":"product-manager"`,
+		`"actions":` + strconv.Itoa(len(tooMany)),
+		"limit is " + strconv.Itoa(MaxTrackerActionsPerTurn),
+	} {
+		if !strings.Contains(payload, wanted) {
+			t.Fatalf("the recorded refusal does not carry %q: %s", wanted, payload)
+		}
+	}
+
+	// A second process, holding nothing but the record the first one left. Its
+	// turn opens with the refusal in the harness's own words.
+	backend := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Re-issuing what was refused.",
+			`{"action":"close","id":"yoyodyne-1","reason":"the work landed"}`)},
+		{SessionID: "session-1", FinalText: "That is the last of them."},
+	}}
+	continuing := testOptions(t, backend)
+	continuing.Store = newTestStore(t, root)
+	continuing.Tracker = tracker
+	resumed := openTestSession(t, continuing)
+	reply, err := resumed.Send(context.Background(), "anything else?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(backend.requests) == 0 {
+		t.Fatalf("the resumed conversation made no provider call")
+	}
+	prompt := backend.requests[0].Prompt
+	if !strings.Contains(prompt, unreadable.Error()) {
+		t.Fatalf("the next turn does not carry the refusal verbatim:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "refused whole") || !strings.Contains(prompt, "Issue the actions you still want again") {
+		t.Fatalf("the next turn does not say what became of the block:\n%s", prompt)
+	}
+
+	// And the role puts it right itself: the action it re-issued landed, with
+	// nobody having carried the refusal to it.
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the re-issued action to have been applied", reply.Actions)
+	}
+	if len(tracker.closed) != 1 || tracker.closed[0][0] != "yoyodyne-1" {
+		t.Fatalf("closed = %#v, want the re-issued close", tracker.closed)
+	}
+
+	// The refusal is owed once. A turn that has been told about it does not
+	// open with it again.
+	if len(backend.requests) < 2 {
+		t.Fatalf("the resumed conversation made %d provider call(s), want the round after the actions too", len(backend.requests))
+	}
+	third := &fakeBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: "Nothing further."}}}
+	later := testOptions(t, third)
+	later.Store = newTestStore(t, root)
+	later.Tracker = tracker
+	if _, err := openTestSession(t, later).Send(context.Background(), "still nothing?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if strings.Contains(third.requests[0].Prompt, "refused whole") {
+		t.Fatalf("a later turn was told about the refusal a second time:\n%s", third.requests[0].Prompt)
+	}
+}
+
+// A block the harness could not decode at all says nothing about how much was in
+// it, so the count is absent rather than invented — and the refusal still reaches
+// the role, which is the half that matters.
+func TestARefusedTrackerBlockNobodyCanCountIsStillHandedBack(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "Tidying.\n\n" + trackerFence + "\n{\"actions\":[{\"action\":\n```\n"},
+	}})
+	options.Store = newTestStore(t, root)
+	options.Tracker = &fakeTracker{}
+	session := openTestSession(t, options)
+
+	_, err := session.Send(context.Background(), "tidy the queue")
+	var unreadable *TrackerError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("Send() error = %v, want a TrackerError", err)
+	}
+	if unreadable.Actions != 0 {
+		t.Fatalf("refusal counted %d action(s), want none counted at all", unreadable.Actions)
+	}
+	if payload := onlyEventPayload(t, root, session, execution.EventTrackerBlockRefused); !strings.Contains(payload, `"actions":0`) {
+		t.Fatalf("the recorded refusal invented a count: %s", payload)
+	}
+
+	backend := &fakeBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: "Understood."}}}
+	continuing := testOptions(t, backend)
+	continuing.Store = newTestStore(t, root)
+	continuing.Tracker = options.Tracker
+	if _, err := openTestSession(t, continuing).Send(context.Background(), "anything else?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	prompt := backend.requests[0].Prompt
+	if !strings.Contains(prompt, unreadable.Error()) {
+		t.Fatalf("the next turn does not carry the refusal verbatim:\n%s", prompt)
+	}
+	// Nothing counted is said by saying nothing about a count, rather than by
+	// telling the role none of its actions were asked for.
+	if strings.Contains(prompt, "It asked for 0 action(s)") {
+		t.Fatalf("the next turn reported an uncounted block as an empty one:\n%s", prompt)
 	}
 }

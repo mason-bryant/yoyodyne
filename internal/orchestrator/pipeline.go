@@ -15,6 +15,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
@@ -27,6 +28,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
@@ -64,6 +66,12 @@ type WorktreeManager interface {
 	// patch above: those are bounded for a reader, and a gate that saw a bounded
 	// listing would pass whatever the bound had cut.
 	ChangedPaths(ctx context.Context, worktree gitworktree.Worktree) ([]string, error)
+	// CurrentExports names the derived files the manager refreshes into a
+	// worktree and holds out of the change. The same gate refuses them, so the
+	// list is asked of the thing that holds them rather than restated here: an
+	// export the harness stopped holding must not go on being refused, and one it
+	// began holding must not go on being committable.
+	CurrentExports() []string
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	// RebaseOntoTarget re-prepares a change whose promotion lost a race, by
 	// replaying it onto wherever the target branch went. It is the only thing
@@ -134,6 +142,12 @@ type StateStore interface {
 	// every simultaneous start can lose.
 	LeaseRotation(ctx context.Context) (*runstate.Lease, error)
 	Save(state runstate.State) error
+	// Load reads one run's record back. A run holding its own lease has no reason
+	// to ask what is on disk — its own state is ahead of it — with one exception:
+	// a save the store refused leaves the record behind what this process holds,
+	// and the ending has to be written onto what is actually there rather than
+	// onto the record that was refused.
+	Load(runID string) (runstate.State, error)
 	AppendEvent(event execution.Event) error
 	// ReleasedWait reports whether the operator has said that a run's recorded
 	// usage-limit deadline no longer describes the provider, and ClearRelease
@@ -604,6 +618,20 @@ type Outcome struct {
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
 }
 
+// Ending is what became of this run, in the fixed vocabulary every surface says
+// it in. It is the read model's own derivation over the two facts an outcome
+// carries — the status the run reached, and whether it left somebody a blocker —
+// rather than a second reading of them here, so a run described from the outcome
+// it returned and the same run described from its durable record cannot be given
+// two different words.
+//
+// Blocked is the outcome's half of State.Blocker: both are written together and
+// only once the tracker has taken the blocker, so a stoppage the tracker refused
+// is not claimed as one on either side.
+func (o Outcome) Ending() runstate.RunOutcome {
+	return runstate.Ending(o.Status, o.Blocked)
+}
+
 type ExistingRunError struct {
 	State runstate.State
 }
@@ -857,20 +885,9 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		invariants: invariants,
 	}
 
-	item, err = p.Tracker.Claim(ctx, workItemID)
-	if err != nil {
-		return run.fail(fmt.Errorf("claim work item: %w", err), runstate.StatusFailed)
+	if err := run.claim(ctx); err != nil {
+		return run.fail(err, runstate.StatusFailed)
 	}
-	run.claimed = true
-	run.item = item
-	if err := validateClaimedItem(item, workItemID); err != nil {
-		return run.fail(fmt.Errorf("validate claimed work item: %w", err), runstate.StatusFailed)
-	}
-	bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: p.Repository, WorkItem: item})
-	if err != nil {
-		return run.fail(fmt.Errorf("assemble claimed work item context: %w", err), runstate.StatusFailed)
-	}
-	run.context = bundle.Text
 	worktree, err := p.Worktrees.Create(ctx, gitworktree.CreateRequest{
 		RunID:        runID,
 		WorkItemID:   workItemID,
@@ -884,6 +901,9 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		return run.fail(fmt.Errorf("create isolated worktree: %w", err), runstate.StatusFailed)
 	}
 	run.recordWorktree(worktree)
+	if err := run.prepareScratch(); err != nil {
+		return run.fail(err, runstate.StatusFailed)
+	}
 	run.state.Status = runstate.StatusRunning
 	run.state.Phase = runstate.PhaseDeveloping
 	run.state.UpdatedAt = p.clock().Now()
@@ -893,10 +913,36 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	run.outcome.Status = runstate.StatusRunning
 	run.outcome.Phase = run.state.Phase
 
-	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text), ""); err != nil {
+	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), run.context, run.scratch), ""); err != nil {
 		return run.stop(ctx, err)
 	}
 	return run.verifyReviewAndFinish(ctx)
+}
+
+// claim takes the work item this run was dispatched for and assembles the
+// context its developer is given.
+//
+// It is the first thing a run changes outside itself: everything above it in Run
+// is a question, and after this the item is claimed and a failure has to give it
+// back. The three failures are wrapped separately and none of them is handled
+// here, because what a caller does about a run that could not be started is the
+// caller's — Run fails it, and the failure says which of the three it was.
+func (a *activeRun) claim(ctx context.Context) error {
+	item, err := a.pipeline.Tracker.Claim(ctx, a.state.WorkItemID)
+	if err != nil {
+		return fmt.Errorf("claim work item: %w", err)
+	}
+	a.claimed = true
+	a.item = item
+	if err := validateClaimedItem(item, a.state.WorkItemID); err != nil {
+		return fmt.Errorf("validate claimed work item: %w", err)
+	}
+	bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: a.pipeline.Repository, WorkItem: item})
+	if err != nil {
+		return fmt.Errorf("assemble claimed work item context: %w", err)
+	}
+	a.context = bundle.Text
+	return nil
 }
 
 // ErrNoRunToContinue is what a continuation refused for not finding the run it
@@ -1203,6 +1249,12 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			return run.stop(ctx, err)
 		}
 	}
+	// The scratch directory is cut again before anything can invoke a developer.
+	// It belongs to the run rather than to the process serving it, so a run picked
+	// up by a second process is handed the same directory the first one was.
+	if err := run.prepareScratch(); err != nil {
+		return run.fail(err, runstate.StatusFailed)
+	}
 	// A re-entry carries the preserved change, not a clean worktree. It is asked
 	// here rather than inside the branch below because both routes out of this
 	// point continue a change: the branch below hands a developer a failure about
@@ -1216,8 +1268,8 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
-		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text,
-			protectedpath.Protect(p.Config), run.repairBudget())
+		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text, run.scratch,
+			protectedpath.Protect(p.Config, p.Worktrees.CurrentExports()...), run.repairBudget())
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
@@ -1238,16 +1290,16 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 // findings beside a failing check. A run that recorded none of the three never
 // had a failure returned to it — it paused before or during its first attempt —
 // so what it is owed is that attempt.
-func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle string, protected protectedpath.Set, limit int) (string, error) {
+func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle, scratchDirectory string, protected protectedpath.Set, limit int) (string, error) {
 	switch {
 	case state.PathRefusal != nil:
-		return pathRefusalRepairPrompt(invariants, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
+		return pathRefusalRepairPrompt(invariants, scratchDirectory, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
 	case state.CheckFailure != nil:
-		return checkRepairPrompt(invariants, *state.CheckFailure, state.RepairAttempts, limit), nil
+		return checkRepairPrompt(invariants, scratchDirectory, *state.CheckFailure, state.RepairAttempts, limit), nil
 	case len(state.ReviewFindingDetails) > 0:
-		return repairPrompt(invariants, state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
+		return repairPrompt(invariants, state.ReviewSummary, scratchDirectory, state.ReviewFindingDetails, state.RepairAttempts, limit)
 	default:
-		return developerPrompt(persona, invariants, bundle), nil
+		return developerPrompt(persona, invariants, bundle, scratchDirectory), nil
 	}
 }
 
@@ -1384,6 +1436,13 @@ type activeRun struct {
 	item     beads.WorkItem
 	worktree gitworktree.Worktree
 	context  string
+	// scratch is the directory this run's developer is told to write its scratch
+	// files to, cut for this run alone and outside the worktree. It is derived
+	// from the worktree rather than recorded with the run, because it is a fact
+	// about where the worktree is: a resumed run re-derives the same path from
+	// the same recorded worktree, so there is nothing here for a stored copy to
+	// disagree with.
+	scratch string
 	// claimed records that the tracker holds this item, which is what makes a
 	// failure worth reporting back to it.
 	claimed bool
@@ -1839,7 +1898,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 				if a.state.RepairAttempts >= limit {
 					return a.blockOnRefusedPaths(refused, limit)
 				}
-				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
+				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), a.scratch, refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
 					return err
 				}
 				continue
@@ -1854,7 +1913,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			if a.state.RepairAttempts >= limit {
 				return a.blockOnFailingCheck(limit)
 			}
-			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
+			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), a.scratch, *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
 				return err
 			}
 			continue
@@ -1869,7 +1928,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 		if a.state.RepairAttempts >= limit {
 			return a.blockOnUnresolvedFindings(limit)
 		}
-		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
+		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.scratch, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
 		if err != nil {
 			return err
 		}
@@ -3481,11 +3540,17 @@ func (a *activeRun) verify(ctx context.Context) error {
 
 // gateProtectedPaths refuses a change that touched an upstream artifact this
 // work item never admitted into its scope. The paths are the harness's own
-// configuration and the artifact homes the roles above the developer own, and
-// the grants are read from the work item's own text — which is the whole point
-// of doing it this way. An exception written into an item was decided before the
-// run started and reviewed with the rest of it; an exception the run discovers
-// is the developer deciding what its work was allowed to redefine.
+// configuration, the artifact homes the roles above the developer own, and the
+// derived exports the worktree manager refreshes and holds out of every run's
+// change; the grants are read from the work item's own text — which is the whole
+// point of doing it this way. An exception written into an item was decided
+// before the run started and reviewed with the rest of it; an exception the run
+// discovers is the developer deciding what its work was allowed to redefine.
+//
+// The exports are asked of the manager at each round rather than remembered,
+// because their hold is an index bit under `.git` that a developer's sandbox can
+// write: what makes the refreshed export stay out of a change is this comparison
+// and not that bit surviving whatever ran in the worktree.
 //
 // It answers with a refusal rather than a verdict. Nothing here says the change
 // is wrong, only that part of it is not this run's to make, so it goes back to
@@ -3496,7 +3561,7 @@ func (a *activeRun) gateProtectedPaths(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list the paths this change touches: %w", err)
 	}
-	protected := protectedpath.Protect(a.pipeline.Config)
+	protected := protectedpath.Protect(a.pipeline.Config, a.pipeline.Worktrees.CurrentExports()...)
 	granted := protectedpath.Grants(grantEvidence(a.item)...)
 	refused := protected.Refused(changed, granted)
 	if len(refused) == 0 {
@@ -3630,10 +3695,42 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	return nil
 }
 
-// finish records the outcome, closes an integrated item whose publication is
-// settled, makes the run durably terminal, and only then removes what the run
-// created.
+// finish is the completing half of a run: what the run produced is recorded and
+// the run is made terminal, and only then is what it created removed.
+//
+// It is control flow rather than an operation of its own. Both halves are
+// registered steps — run.complete and run.clean-up — so a workflow definition
+// orders the same two in the same order this does, and a step that arrives
+// between them arrives in the registry rather than only here.
 func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
+	outcome, err := a.complete(ctx)
+	if err != nil || a.outcome.Integration == nil {
+		return outcome, err
+	}
+	if err := a.cleanUp(ctx); err != nil {
+		// The two things cleanup can fail at are reported differently. A run whose
+		// artifacts are all gone and whose terminal record would not save is one
+		// reconciliation has to settle; anything else left an artifact standing,
+		// which is reported on a succeeded run because the change is integrated and
+		// the item is closed either way.
+		var unrecorded completionRecordingFailure
+		if errors.As(err, &unrecorded) {
+			return a.pipeline.reportCompletionRecordingFailure(a.state, a.outcome, unrecorded.cause)
+		}
+		return a.pipeline.reportOutstandingCleanup(a.state, a.outcome, err)
+	}
+	return a.outcome, nil
+}
+
+// complete records the outcome on the work item, closes an integrated item whose
+// publication is settled, prices what the run spent, and makes the run durably
+// terminal.
+//
+// It stops short of removing anything, and that boundary is the point: the run
+// becomes terminal here and cleanup is the only step left, so a process
+// interrupted between the two leaves a succeeded run in the cleaning_up phase
+// rather than a closed item behind a run nothing finished.
+func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	p := a.pipeline
 	// The tracker is updated only once the work is durably where it belongs:
 	// after integration when it is automatic, and after passing checks when a
@@ -3684,15 +3781,24 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	}
 	a.outcome.Status = runstate.StatusSucceeded
 	a.outcome.Phase = a.state.Phase
-	if a.outcome.Integration == nil {
-		return a.outcome, nil
-	}
+	return a.outcome, nil
+}
 
-	// Only artifacts proven to be integrated are removed, and only after the
-	// tracker agrees the item is done and that fact is durable. Cleanup reports
-	// each artifact separately, so a partial removal is recorded as what it is
-	// rather than collapsed into a single failed flag.
-	cleanup, cleanupErr := p.Worktrees.CleanupIntegrated(ctx, gitworktree.CleanupRequest{
+// cleanUp removes what this run created, once its work is somewhere else, and
+// records the run as complete once nothing it made is left.
+//
+// Only artifacts proven to be integrated are removed, and only after the tracker
+// agrees the item is done and that fact is durable. Cleanup reports each
+// artifact separately, so a partial removal is recorded as what it is rather
+// than collapsed into a single failed flag — which is why what was removed is
+// recorded before the failure is returned rather than after it.
+//
+// The terminal record is here rather than beside the call because it is the last
+// thing cleanup is for: it says the run has nothing left standing, so a run that
+// left an artifact behind never reaches it and is settled as the outstanding
+// cleanup it is.
+func (a *activeRun) cleanUp(ctx context.Context) error {
+	cleanup, err := a.pipeline.Worktrees.CleanupIntegrated(ctx, gitworktree.CleanupRequest{
 		Worktree:     a.worktree,
 		TargetBranch: a.outcome.Integration.TargetBranch,
 		SourceCommit: a.outcome.Integration.SourceCommit,
@@ -3701,28 +3807,36 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	a.outcome.BranchRemoved = cleanup.BranchRemoved
 	a.state.WorktreeRemoved = cleanup.WorktreeRemoved
 	a.state.BranchRemoved = cleanup.BranchRemoved
-	if cleanupErr != nil {
-		// A failure here leaves the run succeeded and reports the outstanding
-		// cleanup: the change is integrated and the item is closed. Whatever was
-		// removed before the failure is still recorded as removed.
-		return p.reportOutstandingCleanup(a.state, a.outcome, fmt.Errorf("clean up integrated run artifacts: %w", cleanupErr))
+	if err != nil {
+		return fmt.Errorf("clean up integrated run artifacts: %w", err)
 	}
 	// Cleanup finished, so the run is complete whatever happens to the record of
 	// it. The reported phase follows that fact rather than the write below.
 	a.state.Phase = runstate.PhaseComplete
-	a.state.UpdatedAt = p.clock().Now()
+	a.state.UpdatedAt = a.pipeline.clock().Now()
 	a.outcome.Phase = a.state.Phase
-	if err := p.Store.Save(a.state); err != nil {
+	if err := a.pipeline.Store.Save(a.state); err != nil {
 		// An interrupted write that recovers must leave a clean terminal record,
 		// not a cleanup warning about artifacts that are already gone.
-		a.state.UpdatedAt = p.clock().Now()
-		if retryErr := p.Store.Save(a.state); retryErr != nil {
-			return p.reportCompletionRecordingFailure(a.state, a.outcome,
-				fmt.Errorf("save completed run state after cleanup: %w", errors.Join(err, retryErr)))
+		a.state.UpdatedAt = a.pipeline.clock().Now()
+		if retryErr := a.pipeline.Store.Save(a.state); retryErr != nil {
+			return completionRecordingFailure{cause: fmt.Errorf(
+				"save completed run state after cleanup: %w", errors.Join(err, retryErr))}
 		}
 	}
-	return a.outcome, nil
+	return nil
 }
+
+// completionRecordingFailure is a run whose artifacts are all gone and whose
+// record of that would not save. It is its own error type because it is the one
+// cleanup failure that is not an outstanding artifact: there is nothing left to
+// remove and nothing for anybody to do by hand, only a terminal record that a
+// later process has to write.
+type completionRecordingFailure struct{ cause error }
+
+func (e completionRecordingFailure) Error() string { return e.cause.Error() }
+
+func (e completionRecordingFailure) Unwrap() error { return e.cause }
 
 // stop turns a stopped step into the outcome the run reports. Two things it can
 // be handed are deliberately not failures, because both leave the run in flight
@@ -3957,6 +4071,16 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	a.state.Failure = message
 	if saveErr := p.Store.Save(a.state); saveErr != nil {
 		cause = errors.Join(cause, fmt.Errorf("save failed run state: %w", saveErr))
+		// Only a state the store refuses is salvaged, and never a store that could
+		// not be written. The second leaves an interrupted run behind, which is what
+		// it is and what reconciliation exists to settle; ending it here would take
+		// a resumable run away from the process that comes back for it.
+		var refused runstate.RefusedStateError
+		if errors.As(saveErr, &refused) {
+			if endingErr := a.recordEndingAfterRefusedSave(status, completedAt, refused); endingErr != nil {
+				cause = errors.Join(cause, endingErr)
+			}
+		}
 	}
 	a.outcome.Status = status
 	a.outcome.Phase = a.state.Phase
@@ -3987,6 +4111,61 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	// at less than it cost, which is the whole reason the price is per item.
 	a.recordPrice()
 	return a.outcome, cause
+}
+
+// maxRefusedRecordFailureBytes keeps the failure a salvaged record carries to a
+// readable line. It is bounded rather than joined whole because one reason a
+// record is refused is that it is too big to store, and a salvage that carried
+// the same bytes back would be refused for the same reason.
+const maxRefusedRecordFailureBytes = 1024
+
+// recordEndingAfterRefusedSave writes the smallest true record of a run whose
+// own terminal state the durable schema refused.
+//
+// A refused save leaves on disk whichever earlier state validated, and for a run
+// ending here that is a snapshot of a run still in flight. Everything that reads
+// the run after this process exits reads that snapshot rather than the outcome
+// this process returns — `yoyo status`, reconciliation, the triage docket, cost
+// attribution — so a run that was reviewed and blocked reads back afterwards as
+// a run nothing ever judged. The run has already failed; what must not also
+// happen is that it reads as one nothing ever ended.
+//
+// This is only for the refusal that no later write closes. A store that could not
+// be written is left alone: the interrupted run it leaves is a true record of a
+// process that stopped, and something comes back for it.
+//
+// So the ending is carried onto the record that is actually there rather than
+// onto the one the store refused, and the failure names what cost it. The
+// evidence the refused record held is lost from the record, not from the run:
+// the work item carries the blocker and the docket entry carries the findings,
+// and the caller writes both from this process's own state.
+//
+// Refused again, there is nothing further to try. The run reports both refusals,
+// and what is left on disk is an interrupted run for reconciliation to settle —
+// which is the one reading of it that is not a lie.
+func (a *activeRun) recordEndingAfterRefusedSave(status runstate.Status, completedAt time.Time, refused error) error {
+	p := a.pipeline
+	durable, err := p.Store.Load(a.state.RunID)
+	if err != nil {
+		return fmt.Errorf("load the run state the refused save left behind: %w", err)
+	}
+	// The resume markers are cleared for the reason the refused record cleared
+	// them: each is an instruction to continue a run that is now over.
+	durable.UsageLimitResetsAt = nil
+	durable.PauseCause = ""
+	durable.ProviderStop = ""
+	durable.DirectivePause = nil
+	durable.DependencyPause = nil
+	durable.OperatorHeldSince = nil
+	durable.Status = status
+	durable.UpdatedAt = completedAt
+	durable.CompletedAt = &completedAt
+	durable.Failure = singleLine(fmt.Sprintf("%s (this record carries the run's ending and not its evidence, because the run's own state could not be stored: %s)",
+		a.state.Failure, refused), maxRefusedRecordFailureBytes)
+	if err := p.Store.Save(durable); err != nil {
+		return fmt.Errorf("record the run's ending over the state the store refused: %w", err)
+	}
+	return nil
 }
 
 // maxCostProblemBytes keeps a price that could not be recorded to a readable
@@ -4039,6 +4218,25 @@ func (a *activeRun) recordWorktree(worktree gitworktree.Worktree) {
 	a.outcome.WorktreePath = worktree.Path
 	a.outcome.Branch = worktree.Branch
 	a.outcome.BaseCommit = worktree.BaseCommit
+}
+
+// prepareScratch cuts this run the directory its contract names, before the
+// contract that names it is built. It is done once per process that serves the
+// run rather than once per run: creating it is idempotent, and a run resumed by
+// a second process has to find the directory there whether or not the first
+// process got that far.
+//
+// A failure here ends the run rather than being carried. The alternative is a
+// contract naming a directory that is not there, which is the run inventing
+// somewhere else to write — and somewhere else is the shared temporary directory
+// this exists to keep runs out of.
+func (a *activeRun) prepareScratch() error {
+	directory, err := execution.PrepareScratchDirectory(a.pipeline.Repository, a.worktree.Path, a.state.RunID)
+	if err != nil {
+		return err
+	}
+	a.scratch = directory
+	return nil
 }
 
 // recordChanges keeps the account of what the run has changed, in the outcome
@@ -4179,12 +4377,13 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			reasked = true
 			continue
 		}
-		// A verdict that was actually reached is one round of this work item's
-		// life, and it is counted before it is acted on. Everything above this
-		// point produced no verdict at all — declined, unserved, killed, or
-		// unreadable — and none of those is a round the item spent.
+		// A verdict that was actually reached is recorded against the work item
+		// before it is acted on, and what it costs depends on which way it went.
+		// Everything above this point produced no verdict at all — declined,
+		// unserved, killed, or unreadable — and none of those is anything the item
+		// was answered about.
 		if err == nil {
-			if countErr := a.countReviewRound(ctx); countErr != nil {
+			if countErr := a.recordReviewVerdict(ctx, decision); countErr != nil {
 				return "", countErr
 			}
 		}
@@ -4192,34 +4391,67 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 	}
 }
 
-// countReviewRound records against the work item's durable triage counters that
-// one more reviewer verdict has been produced for it. The count spans every run
-// of the item, which is what makes it the figure a repair grant is truncated
+// recordReviewVerdict records against the work item's durable triage counters
+// that a reviewer has answered about this developer attempt, and charges the
+// item a round where the answer sent the work back. The count spans every run of
+// the item, which is what makes it the figure a repair grant is truncated
 // against: a run's own repair budget starts again at zero each time, so nothing
 // inside a run says what the item has already cost.
 //
-// The round is recorded under the developer attempt that produced the change, so
-// the same attempt judged twice is counted once. That is what keeps two cases
-// off the item's bill. A review re-asked for after an interrupted process
-// re-judges the attempt that was already counted. And a promotion that loses its
-// race replays the same work onto where the target went and obtains a fresh
-// verdict on it, which is the reviewer judging the same developer attempt on
-// moved ground — charging the item for that would charge it for losing a race it
-// did not cause.
+// A verdict that approved the change is recorded and charges nothing. The cap
+// this feeds exists to stop an item buying the same argument another round, and
+// an approval is the end of that argument rather than another turn of it: what
+// happens to an approved change afterwards — a promotion that lost its race, a
+// merge the forge dropped — is not the change disputing with its reviewer, and
+// charging the item for it walks the item toward its cap on its own success.
+// That is not hypothetical. An item whose last permitted round was an approval,
+// and whose promotion then conflicted, arrived at triage with a decision every
+// recorded path refused; it took an operator override and a fresh work item to
+// move.
 //
-// The round is charged under this process as well as under the attempt, because
+// It unbounds nothing, which is what makes the exclusion safe rather than
+// generous, and what holds that is two budgets rather than the rounds. An
+// approval sends the change to promotion rather than back to the developer, so
+// the only thing that asks for another verdict inside one run is a promotion
+// that lost its race and replayed — which spends an integration retry, and
+// execution.integration_retries_before_reconciliation bounds those. A run's
+// uncharged approvals are therefore one plus that budget, not one: the replay
+// obtains a fresh verdict on the same change, and it can approve again. How many
+// runs an item gets is bounded in turn by budgets of its own — one repair grant
+// and one re-run per item — each refused by a counter this one cannot stand in
+// for.
+//
+// An approval is recorded rather than passed over, and that is load-bearing. The
+// verdict is recorded under the developer attempt that produced the change, so
+// an attempt answered about twice is charged at most once, and that is what
+// keeps two cases off the item's bill. A review re-asked for after an
+// interrupted process re-judges an attempt already answered about. And a
+// promotion that loses its race replays the same work onto where the target went
+// and obtains a fresh verdict on it — which is the reviewer judging the same
+// developer attempt on moved ground, and can come back as a repair. An approval
+// nothing recorded would leave that attempt looking unjudged and charge the item
+// for losing a race it did not cause.
+//
+// A round is charged under this process as well as under the attempt, because
 // the attempt does not say which process spent it and only the process that
 // spent one may give it back. The two keys answer different questions: a run
-// re-entered at the review re-judges the attempt already at the head and counts
-// nothing, and the charger is what stops the refusal that follows crediting this
-// process with the round the process before it bought.
-func (a *activeRun) countReviewRound(ctx context.Context) error {
+// re-entered at the review re-judges an attempt the record already holds and
+// charges nothing, and the charger is what stops the refusal that follows
+// crediting this process with the round the process before it bought.
+func (a *activeRun) recordReviewVerdict(ctx context.Context, decision review.Decision) error {
 	attempt := runstate.RoundKey(a.state.RunID, a.state.RepairAttempts)
+	counters := a.pipeline.Store.Triage()
+	if decision == review.DecisionApprove {
+		if _, err := counters.RecordApprovedAttempt(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
+			return fmt.Errorf("record the verdict that approved attempt %s: %w", attempt, err)
+		}
+		return nil
+	}
 	charger, err := a.chargingProcess()
 	if err != nil {
 		return fmt.Errorf("identify the process charging the review round attempt %s produced: %w", attempt, err)
 	}
-	if _, err := a.pipeline.Store.Triage().RecordReviewRound(ctx, a.state.WorkItemID, attempt, charger, a.pipeline.clock().Now()); err != nil {
+	if _, err := counters.RecordReviewRound(ctx, a.state.WorkItemID, attempt, charger, a.pipeline.clock().Now()); err != nil {
 		return fmt.Errorf("count the review round attempt %s produced: %w", attempt, err)
 	}
 	return nil
@@ -4331,14 +4563,19 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if result.Decision == review.DecisionApprove || result.Decision == review.DecisionRepair {
 		a.state.ReviewDecision = string(result.Decision)
 		a.outcome.ReviewDecision = result.Decision
-		// One round with a reviewer is a verdict, whichever way it went, and the
-		// count of them is what triage measures a work item against. It is counted
-		// here rather than derived from the repair attempts because the two are not
-		// the same number: a refused path and a failing check are handed back
-		// without anybody reviewing anything, and an approved change was reviewed
-		// without a repair at all. Unlike the verdict beside it, it is never
-		// cleared: what the next attempt discards is the judgement, not the fact
-		// that this work has been round once more.
+		// One round with a reviewer is a verdict, whichever way it went, and this
+		// is how many of them this run has had. It is counted here rather than
+		// derived from the repair attempts because the two are not the same number:
+		// a refused path and a failing check are handed back without anybody
+		// reviewing anything, and an approved change was reviewed without a repair
+		// at all. Unlike the verdict beside it, it is never cleared: what the next
+		// attempt discards is the judgement, not the fact that this work has been
+		// round once more.
+		//
+		// It is this run's own figure and not the one the triage caps are measured
+		// against. That one is the item's durable counter, which spans every run
+		// and excludes the verdicts that sent nothing back — see
+		// recordReviewVerdict.
 		a.state.ReviewRounds++
 	}
 	if reviewErr != nil {
@@ -4549,12 +4786,17 @@ func (p Pipeline) runsOnCompiledAdapter(named domain.Backend) bool {
 // validateReviewPolicy refuses automatic integration that is not actually
 // gated. An unenforceable policy must stop the run before anything is claimed,
 // rather than integrate work no independent reviewer ever saw.
+//
+// What it asks of the configured agent is whether its role returns the verdict an
+// integration is gated on, rather than whether the role is named "reviewer". The
+// two are one question today, and asking it as the capability is what keeps this
+// gate and the registry from being able to disagree about which role that is.
 func (p Pipeline) validateReviewPolicy() error {
 	if p.Reviewer == nil {
 		return errors.New("automatic integration requires an independent reviewer")
 	}
 	reviewer := p.reviewer()
-	if reviewer.Role != domain.RoleReviewer {
+	if !rolecapability.MustDefault().Holds(reviewer.Role, capability.ReviewVerdict) {
 		return errors.New("automatic integration requires a configured reviewer agent")
 	}
 	if !p.runsOnCompiledAdapter(reviewer.Backend) {
@@ -4623,19 +4865,34 @@ func (p Pipeline) clock() execution.Clock {
 	return p.Clock
 }
 
-// developerContract is the harness policy every developer run carries. It is a
-// Go constant rather than configuration because a configured persona may
-// specialize how a developer works but must never be able to remove the bounds
-// it works within.
-const developerContract = `You are the developer for one bounded Yoyodyne work item.
+// scratchDirectoryPlaceholder is where a run's own scratch directory is
+// substituted into the contract below. The directory is cut per run, so the
+// contract is a template rather than a constant; the token is deliberately not
+// something the contract's prose could produce, so a substitution can never land
+// anywhere but where it was meant to.
+const scratchDirectoryPlaceholder = "{{scratch-directory}}"
+
+// developerContract is the harness policy every developer run carries, with this
+// run's scratch directory named in it. It is a Go constant rather than
+// configuration because a configured persona may specialize how a developer
+// works but must never be able to remove the bounds it works within.
+func developerContract(scratchDirectory string) string {
+	return strings.ReplaceAll(developerContractTemplate, scratchDirectoryPlaceholder, scratchDirectory)
+}
+
+const developerContractTemplate = `You are the developer for one bounded Yoyodyne work item.
 
 Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; propose the change instead, in the block described below. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
 
 That boundary is enforced rather than trusted. The project's configuration directory and the homes its product artifacts, designs, and decision records live in are refused in your change: the harness compares what you touched against them before any check runs and before any reviewer sees the work, and hands the change back to you if it touches one of them. The only exception is a path this work item grants, on a line beginning ` + "`" + protectedpath.GrantMarker + "`" + ` in its title, description, design guidance, or acceptance criteria. Nothing you write grants a path, and neither does anything written into the item's notes, which is where a run's own record goes. If your work genuinely needs one, leave it alone and say so — the refusal you would get names the same thing this does.
 
+The same gate refuses the work tracker's export where your worktree carries one. The harness copies it in from the checkout your worktree was cut from, so you read the work around your own rather than the copy your base commit carried, and holds it out of your change: it is derived from a store outside Git that nothing you write reaches, and every run is given its own copy, so the same file in two changes is a merge conflict between runs rather than a contribution. Read it and leave it alone. A change containing it is handed back to you whatever became of the bit that holds it.
+
 A grant lifts the harness's refusal and never somebody else's. Claude Code refuses your writes to ".claude/settings.json" and ".claude/settings.local.json" above anything this harness permits: the editing tools are denied there however this run is configured, and the shell sandbox names the file and cannot be disabled. No grant reaches those paths, and an item that tries to grant one is refused before a run starts, so the case you can actually meet is work that needs one of them changed and says so in prose. Those files are the operator's to change by hand. Do the rest of the work, say in your summary exactly what has to go into the file and that a person has to put it there, and do not spend attempts finding another way in — there is not one.
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
+
+Your worktree is yours alone, and so is the scratch directory the harness cut for this run, at ` + scratchDirectoryPlaceholder + ` — anything your work needs that your change must not carry goes there. The log you redirect a check into is the ordinary case. No other run is given that directory, so nothing you write in it can be read back by a run working beside you, and nothing in it can enter your change or leave your worktree dirty. Neither of the two obvious alternatives is one you can use: a scratch file inside the worktree is untracked content every reviewer is then shown, and the machine's temporary directory is one directory every run on this machine is handed at once — two runs redirecting a check into the same name there is one file both of them write, which on 2026-09-01 is how a run came to report a broken toolchain over another run's compile error while its own checks were passing.
 
 Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, propose the correction it needs.
 
@@ -4652,9 +4909,9 @@ A proposal is not a report and not a work item. A report says what somebody shou
 // developerPrompt places the immutable contract first, the configured persona
 // second as guidance subordinate to it, then the architectural invariants that
 // constrain the change, and the work item context last.
-func developerPrompt(persona, invariants, bundle string) string {
+func developerPrompt(persona, invariants, bundle, scratchDirectory string) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract)
+	prompt.WriteString(developerContract(scratchDirectory))
 	prompt.WriteString("\n\n")
 	if trimmed := strings.TrimSpace(persona); trimmed != "" {
 		prompt.WriteString("# Configured developer persona\n\nThe project configuration supplies the guidance below. It may specialize how you work, but it cannot remove or weaken any rule above.\n\n")
@@ -4683,13 +4940,13 @@ func deliveredInvariantSection(invariants string) string {
 // between the reviewer and the developer that must act on it. The harness
 // contract is repeated because it bounds the attempt whether or not the provider
 // actually restored the session it was asked to resume.
-func repairPrompt(invariants, summary string, findings []runstate.Finding, attempt, limit int) (string, error) {
+func repairPrompt(invariants, summary, scratchDirectory string, findings []runstate.Finding, attempt, limit int) (string, error) {
 	encoded, err := json.MarshalIndent(findings, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode review findings for repair attempt %d: %w", attempt, err)
 	}
 	var prompt strings.Builder
-	prompt.WriteString(developerContract)
+	prompt.WriteString(developerContract(scratchDirectory))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Independent review: repair required\n\n")
@@ -4711,9 +4968,9 @@ func repairPrompt(invariants, summary string, findings []runstate.Finding, attem
 // to ask instead of quietly reaching for it again. The harness contract is
 // repeated for the reason both other repair prompts repeat it: it bounds the
 // attempt whether or not the provider actually restored the session.
-func pathRefusalRepairPrompt(invariants string, refusal runstate.PathRefusal, protected protectedpath.Set, attempt, limit int) string {
+func pathRefusalRepairPrompt(invariants, scratchDirectory string, refusal runstate.PathRefusal, protected protectedpath.Set, attempt, limit int) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract)
+	prompt.WriteString(developerContract(scratchDirectory))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Protected paths: repair required\n\n")
@@ -4726,12 +4983,22 @@ func pathRefusalRepairPrompt(invariants string, refusal runstate.PathRefusal, pr
 		fmt.Fprintf(&prompt, "- and %d further refused path(s) not listed here\n", refusal.Omitted)
 	}
 	fmt.Fprintf(&prompt, "\nProtected by this project: %s\n", strings.Join(protected.Directories(), ", "))
+	if held := protected.HeldExports(); len(held) > 0 {
+		fmt.Fprintf(&prompt, "Held out of every run's change by the harness: %s\n", strings.Join(held, ", "))
+	}
 	if len(refusal.Grants) > 0 {
 		fmt.Fprintf(&prompt, "Granted by this work item: %s\n", strings.Join(refusal.Grants, ", "))
 	} else {
 		prompt.WriteString("Granted by this work item: nothing\n")
 	}
 	prompt.WriteString("\n" + protectedpath.GrantInstruction + "\n")
+	// Said only when one of these was actually caught. A developer refused for an
+	// artifact home has no use for an explanation of a file it never touched, and
+	// a repair prompt that explains everything is one nothing in particular stands
+	// out of.
+	if len(protected.HeldExportsAmong(refusal.Paths)) > 0 {
+		prompt.WriteString("\n" + protectedpath.ExportInstruction + "\n")
+	}
 	prompt.WriteString("\nRestore each refused path to what it held before your change, finish the work you were assigned within the paths that are yours, and finish with a concise summary of what you changed. The harness applies this gate again afterwards; the checks, review, and integration stay out of reach until the change touches nothing it was not granted.")
 	return prompt.String()
 }
@@ -4743,9 +5010,9 @@ func pathRefusalRepairPrompt(invariants string, refusal runstate.PathRefusal, pr
 // The harness contract is repeated for the same reason the review repair repeats
 // it: it bounds the attempt whether or not the provider actually restored the
 // session it was asked to resume.
-func checkRepairPrompt(invariants string, failure runstate.CheckFailure, attempt, limit int) string {
+func checkRepairPrompt(invariants, scratchDirectory string, failure runstate.CheckFailure, attempt, limit int) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract)
+	prompt.WriteString(developerContract(scratchDirectory))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Failing check: repair required\n\n")
@@ -4858,6 +5125,15 @@ func renderPathRefusalBlockerNotes(outcome Outcome, refused pathRefusal, limit i
 		lines = append(lines, fmt.Sprintf("Further refused paths not listed: %d", refused.refusal.Omitted))
 	}
 	lines = append(lines, "Protected by this project: "+strings.Join(refused.set.Directories(), ", "))
+	// A refused export is a different decision from a refused document, so the
+	// note says which one this is. Granting the path would admit derived state
+	// into the change rather than settle anything: the file is the harness's copy
+	// of a store outside Git, and a change carrying it means the hold that keeps
+	// it out of every run's change was lifted inside this one.
+	if held := refused.set.HeldExportsAmong(refused.refusal.Paths); len(held) > 0 {
+		lines = append(lines, "Held out of every run's change by the harness: "+strings.Join(held, ", "),
+			"That is a derived export the harness refreshes into each worktree and holds out of its change, so a change carrying one is a lifted hold rather than a missing grant.")
+	}
 	if len(refused.refusal.Grants) > 0 {
 		lines = append(lines, "Granted by this work item: "+strings.Join(refused.refusal.Grants, ", "))
 	} else {

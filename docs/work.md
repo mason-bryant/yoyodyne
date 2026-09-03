@@ -15,6 +15,28 @@ developer for the change:
 On success, the JSON result reports the run ID, branch, worktree, base commit,
 change summary, checks, and agent summary.
 
+The new worktree is given your checkout's own `.beads/issues.jsonl` rather than
+the copy its base commit carried. That export is derived from a store Git is not
+authoritative for and it is committed on a cadence of its own — a release cut,
+not a run — so between cuts every commit carries a copy some number of items
+behind, and a developer reading it for the work around its own would find items
+admitted since simply absent. The copy is held out of the change the run makes:
+it is not in the diff you review, it is not in what gets promoted, and it does
+not conflict against another run that was given its own. Where your tracker's
+export is ignored rather than committed, the copy arrives the same way and needs
+no holding; where it is neither committed nor ignored, none is made, because a
+copy there would arrive as a file the developer never wrote.
+
+The hold itself is a bit in the worktree's index, which lives under `.git` — a
+directory a developer's sandbox grants writes to, so one Git command inside the
+run can undo it and hand the refreshed copy back as part of the change. The
+export is therefore refused in the change as well, by the same gate below that
+refuses an upstream artifact home: a diff containing it goes back to the
+developer with the mechanism named, and the promotion carries the export the
+branch already had. What keeps a derived file
+out of your review is a check made against the change rather than an index bit
+surviving whatever ran in the worktree.
+
 What the item waits on is read from the tracker at every point the run is about
 to commit to work — before it is claimed or resumed, at the start of each round
 of the gate, and once more before the promotion — rather than trusted from
@@ -35,7 +57,8 @@ Then the change is gated on what it touched. The project configuration and the
 artifact homes upstream of the work — `.yoyodyne/`, `docs/product/`,
 `docs/designs/`, and `docs/decisions/` by default — are default-deny for a
 developer's diff, because a developer that edits one is redefining what its own
-work is measured against. A change that touches one without the work item
+work is measured against, and so is the refreshed export above, because it is
+the harness's copy of a store no run writes to. A change that touches one without the work item
 granting it is refused before any check runs and before any reviewer is asked,
 and handed back to the same developer in the same repair loop a failing check
 uses. An item grants an exception in its own text, on a line beginning
@@ -49,7 +72,23 @@ has the details.
 Then the configured checks run in that worktree, and an independent reviewer —
 its own provider invocation, with no tools at all — judges the change against
 the work item, its design guidance and acceptance criteria, the invariants
-delivered with it, and the check results. Everything the reviewer is shown is
+delivered with it, and the check results. The change it is shown is measured
+against the commit the run was cut from rather than against what happens to be
+uncommitted, so work an attempt already published — every attempt is committed
+by the harness before the checks run — is in the patch it judges. The one
+emptiness that follows from that is stated rather than left to be read: a
+worktree carrying commits whose combined effect on the base is nothing is a
+change made and then undone, and the evidence says so and lists them, because a
+reviewer told only that the patch is empty concludes the harness lost the
+evidence. [One did](diagnoses/yoyodyne-ifd-236-review-evidence-over-committed-work.md).
+The patch is bounded, and what the bounds keep out of it is named rather than
+dropped: a new file bigger than the per-file ceiling, one whose content has no
+reviewable diff, and one the total bound had no room left for are each listed
+above the patch by name, with the file's size and the bound that dropped it —
+delivered but too large to show, rather than absent. A reviewer that cannot tell
+a file the change delivers from one it never wrote judges the delivery blind,
+and an absence it is told about is one it can hold the change to.
+Everything the reviewer is shown is
 treated as evidence rather than instruction, so an instruction the developer
 left in the diff is data to analyze rather than something to follow. A verdict
 of `repair` returns the findings to the same developer, up to
@@ -279,14 +318,14 @@ the queue is shown, says why it is parked when you read it, and is never selecte
 however far the queue drains. It is not a wait: nothing clears, and what moves it
 is `unpark`. Work can also be admitted already parked, with `parked` on the
 creation, because the identifier a creation assigns does not come back until the
-next turn and the item is pullable in between. Neither action works on closed
-work, which has left the backlog and was not going to be selected anyway.
+next turn and the item is pullable in between. Neither works on closed work,
+which has left the backlog anyway.
 
 Naming a parked item yourself is unaffected, exactly as with the executor:
 `yoyo run <id>` is you deciding, and parking steers what the harness chooses
-rather than what you may ask for. And parking is not retroactive either — it
-covers exactly the items that carry it, so a queue parked by convention stays
-selectable until each of those items is parked in fact, one `park` each.
+rather than what you may ask for. Parking is not retroactive either: it covers
+exactly the items that carry it, so a queue parked by convention stays selectable
+until each is parked in fact, one `park` each.
 
 A ninth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
@@ -295,28 +334,32 @@ and what changed goes into the run's recorded reason instead.
 
 Two things make this accountable rather than work happening behind your back.
 Holding intake stops it choosing anything more while what is running finishes,
-and it is read at every pull rather than once at the start, so a hold you place
-mid-pass takes effect at the next selection. And every run it starts records, in
-durable state, why that item was chosen — where it sat in the order, how much of
-the queue was pullable, how much of the machine was free, anything upstream that
-had moved, and whether conflict-avoidance shaped the choice. `yoyo status` reads
-it back.
+and is read at every pull rather than once at the start, so a hold you place
+mid-pass takes effect at the next selection. And every run it starts records in
+durable state why that item was chosen — its place in the order, how much of the
+queue was pullable, how much of the machine was free, anything upstream that had
+moved, and whether conflict-avoidance shaped the choice. `yoyo status` reads it
+back.
 
 The configuration is re-read before every pull for the same reason: a capacity
-you raise or a priority you reorder while a pass is running is picked up the next
-time it chooses something, rather than at the next restart. Runs already in
-flight keep the configuration they started under.
+you raise or a priority you reorder mid-pass is picked up the next time it
+chooses, rather than at the next restart. Runs already in flight keep the
+configuration they started under.
 [Configuration](configuration.md#scheduling-ready-work) has the rest.
+
+**A pass also delivers stopped work into the development manager's
+conversation** — a run that failed independent review after every permitted
+attempt, rather than it waiting on the docket for somebody to tell her. Only the
+courier changes, and `yoyo work --help` has what bounds it.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
-until you stop it. Nothing else about the pass changes and nothing needed to:
-every pull already re-reads the configuration and the queue, so work you admit is
-picked up at the next poll and a reprioritization at the next pull, with no change
-detection anywhere in it. An idle session costs one local tracker read per
-interval and asks no provider anything. Holding intake brakes a watching session
-in place rather than stopping it — it keeps polling, chooses nothing, and resumes
-when you release it.
+until you stop it. Nothing else about the pass changes, and nothing needed to:
+the re-reading above is per pull. An idle session costs one local tracker read
+per interval and asks no provider anything, unless it has a stopped run to put to
+the development manager. Holding intake brakes a watching session in place rather
+than stopping it — it keeps polling, chooses nothing, and resumes when you
+release it.
 
 Three things guard a loop that no longer ends. A session does not start the same
 item twice unless the item has changed — what it says, what it is for, its
@@ -325,17 +368,73 @@ cannot get past is not retried every minute forever, and a blocker you release i
 picked up because releasing it changed the item. Runs blocking one after another
 with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
-whole backlog through a failed run overnight. And the session records what it is
-doing — watching, idle, braked, resumed, stopped — where `yoyo status` and the
-Slack sink read it, because an idle session and a dead one are otherwise the same
-silence.
+whole backlog through a failed run overnight. And it records what it is doing —
+watching, idle, braked, resumed, stopped — where `yoyo status` and the Slack sink
+read it, because an idle session and a dead one are otherwise the same silence. A
+poll that starts nothing names the runs going and what it passed over.
+
+**A reading of the harness that fails does not end the session.** The tracker is
+a database a reconcile and every settling run write to, so a reading that fails
+is contention far more often than it is a store that is broken. The one that
+ended a session on 2026-09-01 succeeded again in 0.4s a few minutes later; what
+it cost was the session, which stopped on that single reading while the queue sat
+idle until an external job noticed the process was gone. So a watching session
+waits and reads again — two seconds, then four, doubling to thirty — and stops
+only once the readings have gone on failing for five minutes, saying how long it
+tried and what the last failure was. What it rode through is on the pass it
+returns and in the watch log while it happens, because a reading that succeeds on
+the second attempt leaves nothing behind. A drain does none of this: it is a
+command you are waiting on the return of, and one that slept
+through an outage would be one that hung. A pull that is assembled and unusable —
+a capacity of zero, a `--budget` with nothing to price it — is a decision about
+the configuration rather than a reading that failed, and stops either kind of
+pass at once.
+
+**A watching session takes up a build deployed over it.** A session runs the
+binary it was started from, so every fix that lands behind it is a fix the work
+it dispatches is spent without — which reads as agents failing rather than as a
+process nobody restarted. It had already cost three review rounds against a bug
+dead before they started, and then a session was found forty-three changes old.
+So when the `yoyo` it is running is written over, the session stops choosing,
+waits out every run it started, and restarts into what you deployed. That stop is
+recorded as a restart rather than an ending, so `yoyo status` and the Slack sink
+say a session is coming back on the new build instead of telling you to start
+one.
+
+A restart has to be recorded before it is known to have happened, because one
+that works never comes back to record anything. So on the rare occasion it does
+not — the operating system refuses the re-execution, or a bound turns out to have
+nothing left of it — the session writes a second stop saying it ended after all,
+and both surfaces correct themselves. What you never get is a stopped line that
+both places tell you needs nothing from you.
+
+Nothing outside the process could do that. Killing a session cancels the run it
+is carrying, so an external job may only bounce it while nothing is running; with
+two developer slots and a deep queue the next run starts the moment one settles,
+and a poll at any interval never lands in that window. The session declining to
+claim anything more is what makes the window exist, which is why the session is
+the only thing that can close this. A run in flight is never interrupted for it,
+and the queue is re-read from scratch on the way back in exactly as it is at
+every poll.
+
+**The bounds you set cross the restart reduced to what is left of them.** A
+session given `--budget 50` that has spent $45.01 comes back with $4.99, and one
+given `--limit 10` that has started six comes back with four — because a bound
+carried whole would start again at every deploy, and a machine that deploys
+several times a day would have no bound at all. A session that has reached
+either bound stops on it instead of restarting: you set that number, and taking
+up a build is not you raising it. So what a deploy costs the line is one restart
+and no work, and it costs a bounded session nothing of its cap.
+
+A drain never does this. It is a command you are waiting on the return of, and
+restarting it would run the pass again from the top.
 
 `--budget <usd>` caps what one session spends, and fails closed: a pass that
 cannot price itself is refused before it starts, and a session that meets a run
 whose evidence will not price stops and names it rather than counting it as free.
 A session that stops that way is a stopped line like any other: with work still
-ready, [the Slack sink](reporting.md#reporting-into-slack) says so again every hour until
-somebody starts one, rather than saying it once at the moment nobody was reading.
+ready, [the Slack sink](reporting.md#reporting-into-slack) says so again every
+hour until somebody starts one.
 
 The default is still the drain, and `--until-drained` says so out loud. What
 changes when you watch is what bounds the spend: a drain is bounded by the queue

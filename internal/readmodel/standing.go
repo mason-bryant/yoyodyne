@@ -65,6 +65,12 @@ var backlogStatuses = []string{"open", "blocked"}
 // maxRefusalBytes bounds one refusal as this renders it. A parking reason and a
 // directive are prose somebody wrote at whatever length they wanted, and this is
 // a status line.
+//
+// It binds every surface, and the strictest requirement on it is not this one's.
+// A terminal prints a refusal when somebody asks for it; the channel heartbeat
+// says the same words again every hour while a state stands, which is a line
+// that has to stay a line or become the thing people mute. Raising this would
+// lengthen that message too, so it is raised for both surfaces or for neither.
 const maxRefusalBytes = 160
 
 // Runs is the durable run state the standing status reads. It reads and never
@@ -259,12 +265,19 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// a person. Reading them twice would be two chances for the two lines to
 	// disagree about one file.
 	switches := readSwitches(sources)
-	refused, queue, notStartableProblem := readNotStartable(ctx, sources, switches, running)
+	refused, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running)
 	standing.NotStartable = refused
 	standing.Admitted = len(queue.Entries)
 	standing.NotStartableProblem = notStartableProblem
 
 	needs, needsProblem := readNeedsHuman(sources, switches)
+	// A stall that is holding admitted work back and is nobody else's line to
+	// carry is attention in its own right. Nothing else reports it: a live session
+	// choosing nothing over a ready queue is a state no record announces, and the
+	// only thing that ever said it was the silence afterwards.
+	if waiting, attention := stall.Waiting(); attention {
+		needs = append(needs, waiting)
+	}
 	// Work marked for a conversation is on both lines and says a different thing
 	// on each: the queue's line says why nothing pulls it, and this says who has
 	// to open the conversation. A reader looking for what waits on a person must
@@ -434,7 +447,8 @@ func readSwitches(sources Sources) switches {
 }
 
 // readNotStartable is every admitted item nothing will pull, with the refusal
-// that stops it, and how much admitted work this reading saw in all.
+// that stops it, how much admitted work this reading saw in all, and the stall
+// that is actually holding some of it back.
 //
 // The refusals come from three places and each is the real one. An entry the
 // queue itself calls unready carries the queue's own account. An item an
@@ -443,13 +457,18 @@ func readSwitches(sources Sources) switches {
 // pullable, and what is left is the pass-level refusal — a switch, a full
 // machine, nothing choosing — which is a fact about the harness said once
 // against each item it actually stops.
-func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun) ([]Refused, backlog.Queue, string) {
+//
+// The stall it returns is the one that stopped at least one item. A stall over
+// an empty queue is a state of the machine and not something waiting on
+// anybody, so it is returned as no stall at all rather than as attention nobody
+// asked for.
+func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun) ([]Refused, backlog.Queue, Stall, string) {
 	if sources.Tracker == nil {
-		return nil, backlog.Queue{}, "nothing was wired to read the admitted work"
+		return nil, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
 	}
 	queue, err := readQueue(ctx, sources)
 	if err != nil {
-		return nil, backlog.Queue{}, fmt.Sprintf("the admitted work could not be read: %v", err)
+		return nil, backlog.Queue{}, Stall{}, fmt.Sprintf("the admitted work could not be read: %v", err)
 	}
 	// An item a run is already carrying is on the running line. Naming it here as
 	// well would report the machine working as work that will not start.
@@ -457,11 +476,21 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	for _, run := range running {
 		inFlight[run.WorkItemID] = struct{}{}
 	}
-	// Why nothing more is being chosen, worked out once. It is empty when the
-	// harness would start the next pullable item, which is what makes a pullable
-	// item's absence from this line mean something.
-	stopped, stoppedProblem := whyNothingStarts(sources, held, len(running))
+	// Why nothing more is being chosen, worked out once and by the derivation every
+	// other surface reads. It names no reason when the harness would start the next
+	// pullable item, which is what makes a pullable item's absence from this line
+	// mean something.
+	stopped := whyNothingStarts(sources, held, len(running))
+	refusal := stopped.Refusal()
+	// What the stall could not read is said whatever the queue holds. It is a
+	// gap in this reading rather than a fact about the work, so a queue with
+	// nothing in it must not swallow it below.
+	problem := stopped.Problem
 
+	// Whether the stall actually stopped anything. A stall over an empty queue is
+	// a state of the machine rather than something waiting on a person, and the
+	// attention line must not be given one.
+	stalled := false
 	refused := make([]Refused, 0, len(queue.Entries))
 	for _, entry := range queue.Entries {
 		if _, carried := inFlight[entry.ID]; carried {
@@ -475,54 +504,41 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title,
 				Reason: fmt.Sprintf("paused for unresolved directive %s: %s",
 					paused.ID, singleLine(paused.Unresolved, maxRefusalBytes))})
-		case stopped != "":
-			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: stopped})
+		case refusal != "":
+			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: refusal})
+			stalled = true
 		}
 	}
-	problem := stoppedProblem
+	if !stalled {
+		stopped = Stall{}
+	}
 	if len(held.problems) > 0 {
 		problem = joinProblems(problem, strings.Join(held.problems, "; "))
 	}
-	return refused, queue, problem
+	return refused, queue, stopped, problem
 }
 
-// whyNothingStarts is the pass-level refusal: the reason a pullable item with
-// nothing wrong with it is still not being started. An empty answer means the
-// harness would start it, which is why an item with nothing else against it is
-// then absent from the not-startable line rather than listed with a reason
-// nobody could act on.
-//
-// The order is the order an operator acts in: the switch that stops everything,
-// then the one that stops the choosing, then the machine being full, then
-// nothing being there to choose.
-func whyNothingStarts(sources Sources, held switches, running int) (string, string) {
-	switch {
-	case held.operatorHeld:
-		return fmt.Sprintf("all harness activity is held by the operator, since %s; `yoyo resume` lifts it",
-			held.operator.HeldAt.UTC().Format(time.RFC3339)), ""
-	case held.intakeHeld:
-		reason := "intake is held, so the harness chooses nothing; `yoyo release` lifts it"
-		if said := singleLine(held.intake.Reason, maxRefusalBytes); said != "" {
-			reason = "intake is held — " + said + "; `yoyo release` lifts it"
-		}
-		return reason, ""
-	case sources.Capacity > 0 && running >= sources.Capacity:
-		return fmt.Sprintf("every developer slot is taken: %d of %d in flight", running, sources.Capacity), ""
+// whyNothingStarts is the pass-level stall: the reason a pullable item with
+// nothing wrong with it is still not being started, from the records this
+// reading holds. The derivation itself is shared, because a channel and a
+// terminal that worked this out separately would be two answers to the one
+// question an operator asks.
+func whyNothingStarts(sources Sources, held switches, running int) Stall {
+	conditions := Conditions{
+		OperatorHold: held.operator,
+		OperatorHeld: held.operatorHeld,
+		IntakeHold:   held.intake,
+		IntakeHeld:   held.intakeHeld,
+		Running:      running,
+		Capacity:     sources.Capacity,
 	}
-	if sources.Sessions == nil {
-		return "", "nothing was wired to read the sessions that choose work"
+	// The watch log costs a read, so it is passed as the question rather than the
+	// answer: the derivation asks for it only where the switches and the capacity
+	// did not already settle what has stopped the choosing.
+	if sources.Sessions != nil {
+		conditions.Sessions = sources.Sessions.List
 	}
-	sessions, err := sources.Sessions.List()
-	if err != nil {
-		return "", fmt.Sprintf("what the harness is choosing work with could not be read: %v", err)
-	}
-	if len(Choosing(sessions)) > 0 {
-		return "", ""
-	}
-	// Nothing is watching this product. That is not a queue that will move on its
-	// own, and it is exactly the state that reads as a healthy quiet machine: the
-	// overnight that ended in ten hours of silence was in it from midnight.
-	return "no session is choosing work, so nothing pulls it; `yoyo work --watch` starts one", ""
+	return WhyNothingStarts(conditions)
 }
 
 // Choosing is the watch sessions still alive, latest transition per session. It

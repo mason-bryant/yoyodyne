@@ -96,9 +96,13 @@ rather not do either from Slack can delete those two scopes and the two
 `message.*` events beside them: everything else in this document still works, and
 nothing typed in the channel ever arrives.
 
-`im:write` is used for one message and only that one: the harness reporting itself
-degraded, sent directly to whoever step 4 grants `direct-work`. Removing it costs
-that direct message and nothing else — the same account is still in the channel.
+`im:write` is used for one class of message and only that one: the harness
+reporting itself degraded, sent directly to whoever step 4 grants `direct-work`.
+There are two of them — a session choosing work from a build the harness has moved
+well past, and the harness having started nothing at all while work was ready —
+and each is sent once rather than repeated. Removing the scope costs those direct
+messages and nothing else: the stale-build one is in the channel either way, and
+the stall is in the durable record `yoyo status` reads back.
 
 ## 2. Install it and take the two tokens
 
@@ -236,6 +240,47 @@ at most one of them is right. Under these names, `yoyo doctor` can ask whether
 
 ## 6. Start the sink
 
+On macOS, the harness does this for you:
+
+```sh
+yoyo slack ensure
+```
+
+It starts a sink only if nothing is reporting for this product, reads this
+project's own keychain items into that one process, and returns either way — so
+it is what an unattended pass can run every few minutes as well as what you type
+once. It prints what it did, in one of four ways: a sink already running, a sink
+it started and the pid it started as, the stored items it could not read, or
+reporting turned off for this project so there is no sink to run. Nothing it
+prints is a token. It fails only on the third, which is the one outcome somebody
+has to do something about; a project reporting nowhere is healthy and says so.
+
+**Nothing schedules this for you yet, and that is a gap rather than a design.**
+The step is what the installed maintenance pass is meant to call, once per
+product checkout, in place of the hand-rolled `pgrep`-and-one-namespace step it
+replaces. That pass is the productization of the operator's own script, tracked
+as `yoyodyne-ifd.207`, and it is not in this tree: nothing `yoyo` installs runs
+anything on a schedule. Until it lands, the timer is yours — put `yoyo slack
+ensure` in whatever already runs unattended on that machine, a `launchd` job, a
+`cron` line, or the pass you keep, once per product.
+
+Whether a sink is running is asked of **this product's lease**, which is the
+same lease the sink itself takes and one per product. That is what makes it
+right on a machine running more than one harness: a `pgrep` for `yoyo slack`
+matches the sibling project's sink, so a pass built on one would decide this
+product's sink is running when it is the other product's, and this project would
+report nothing indefinitely. The tokens come from this product's names for the
+same reason. Run it in each product; the products do not see each other.
+
+The sink it starts is in a session of its own, so it stays up when the pass, the
+terminal, or the job that started it goes away, and it says what it is doing in
+`sink.log` beside that product's own sink state. `--json` is the same account
+for something that reads it rather than somebody.
+
+Underneath, that is exactly the launcher below, which is what to write where
+there is no keychain to read — or where you want the sink in front of you rather
+than behind you.
+
 The launcher reads this project's pair into exactly one process:
 
 ```sh
@@ -364,6 +409,13 @@ Into the work item's thread, as they happen:
   three are ordinary facts, since an overload lifts in seconds and a hold or a
   directive is waiting on the person reading the channel
 - the blocker that stopped a run, if one did, said as `critical`
+- the run ending any other way — failed, cancelled, timed out — said in that word
+  rather than in one word for all of them. A run the harness could not carry and
+  one it stopped on time are `warning`s, because nobody chose either; a
+  cancellation is an ordinary fact, since somebody did. Every one of these lines
+  and the blocker line above also say what remains of the change — work
+  preserved, work removed, or no artifacts recorded — because the attempt being
+  over says nothing about whether the work is
 - every report an agent filed against that item, as the agent wrote it
 - every change an agent proposed to a document it does not own, with the
   argument it made for it
@@ -371,8 +423,11 @@ Into the work item's thread, as they happen:
 At the top level of the channel, unthreaded, goes what is about the whole line
 rather than any one item: the operator holding and releasing intake, the
 operator holding and lifting all harness activity, proposed work you turned
-down — there is no item, because nothing was created — and anything an agent
-filed with no work item attached. Burying those in one item's thread would
+down — there is no item, because nothing was created — a block of tracker actions
+the harness refused whole, said as a `warning` with the role that asked, how many
+actions it asked for, and the refusal itself, because none of them happened and
+the role that asked for them believed they had — and anything an agent filed with
+no work item attached. Burying those in one item's thread would
 misfile them. That list is what is *addressed* to the channel rather than
 everything that appears in it: a thread reply asking for attention is shown there
 as well, which is what the severity rule below does.
@@ -405,10 +460,12 @@ goes quiet and says nothing.
 What a watching `yoyo work` session is doing goes there too, and it is the one
 thing here that is news precisely because nothing is happening: a session that
 has gone quiet and a session that has died are the same silence otherwise. It
-says when it opens, when it goes idle over a queue with nothing pullable in it,
-when a held intake brakes it — as a `warning`, because that one needs somebody —
-when it resumes, and when it ends. Each of those is said once, so a session
-idling overnight posts one message rather than one a minute.
+says when it opens, when a poll starts nothing — with the runs it can see going
+and the items it passed over grouped by why, so an idle slot beside a working one
+does not read as a stopped line — when a held intake brakes it, as a `warning`,
+because that one needs somebody, when it resumes, and when it ends. Each of those
+is said once, so a session idling overnight posts one message rather than one a
+minute.
 
 **And one thing is a state rather than an event.** Everything above is said once,
 when it happens, which is right for a narrative and wrong for a night: intake
@@ -416,8 +473,8 @@ held at 00:02 and a session that stopped at its budget both said so, correctly,
 and then nothing said anything for ten hours that could be told from a healthy
 quiet queue or a dead sink. So a line that is **choosing nothing while work is
 ready** says so again while it stands — every `--heartbeat`, an hour by default —
-naming what stopped it, how long that has been true, and how much the tracker
-calls ready behind it:
+naming what stopped it, how long that has been true, and how much ready work a
+run could have been started for behind it:
 
 > Nothing is being chosen on this product: intake is held — the harness held
 > intake after runs kept blocking, for 10 hours now, with 4 items ready to pull.
@@ -437,11 +494,55 @@ nothing to do, so that the times it does not are worth reading. Turning it off i
 not offered, because what that buys is silence that means waiting on you; how
 often is `--heartbeat`.
 
-Reading what is ready costs one local tracker (`bd`) read per heartbeat, asked
-only when a message is actually due, and never on the path of any run. A tracker
+**And one thing is the absence of a state.** All four of those are read from
+something a process wrote down, which works only while that process is alive to
+write it: a watch session that crashes writes no stop, and one that wedges goes on
+recording that it is watching. So the sink also watches for nothing having
+happened at all — no run started for half an hour, work a run could be started
+for, and no hold, full machine or run in flight to account for it. That is
+recorded against the product and sent to whoever you grant `direct-work` as a
+direct message, once per stall and never once per check:
+
+> Nothing at all has started on this product for 7 hours, with 3 items ready to
+> pull and nothing accounting for it. The session choosing work last recorded
+> watching at 2026-09-01T06:05:00Z, and has said nothing since.
+
+That last sentence is what to act on: a session whose last word was `stopped`
+wants starting, and one still claiming to be watching wants killing first. When it
+clears the record closes and the channel hears nothing — the run that started says
+that itself — and
+[`yoyo status`](../operations.md#when-nothing-happened-at-all) reads the whole
+history back afterwards, which is the only place it exists.
+
+A run in flight is the one thing that quiets it, and only while that run is
+still moving. That distinction is the difference between this working and not:
+a killed run leaves a record saying it is in flight until
+[`yoyo reconcile`](../operations.md#recovering-interrupted-runs) settles it, so
+reading "in flight" as "working" would silence the watchdog for exactly the
+crash it is watching for. What separates the two is the run's own record — a
+working run stamps every provider event onto it as it goes — so a run whose
+record has not moved for an hour stops accounting for the quiet. The hour is
+well clear of anything a live run does: an invocation that emits nothing for
+five minutes is stopped as stalled, and the slowest legitimate wait, a provider
+usage limit, probes every half hour.
+
+Reading what is ready costs one local tracker (`bd`) read per heartbeat, and
+never on the path of any run. Two things here want that number — the waiting
+line above and the stall watchdog — and they share one read rather than taking
+one each: it is asked at most once a pass, and each of them asks at most once a
+heartbeat. The watchdog needs its own interval because the state it is looking
+for is partly a drained queue, and nothing but the tracker can say the queue is
+drained; without one it would ask on every poll of a perfectly healthy idle
+product, which is the one machine that should cost nothing. A tracker
 the sink cannot read — no `bd` on the machine it runs on, say — costs that one
 message: the sink says so in its own log and asks again at the next interval,
 rather than guessing a number in either direction.
+
+What that interval costs the watchdog is promptness rather than the stall: a
+stall is noticed at the first reading after the threshold has passed, and it
+closes at the first reading after it clears. The moment recorded against it is
+when the harness last started something rather than when anybody noticed, so
+the event says how long nothing happened whatever the noticing cost.
 
 The queue changing comes from the conversations you hold with the product
 manager and the development manager, read from the same durable records `yoyo
@@ -793,7 +894,7 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
 | `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
 | `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
-| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The one message this affects is the harness reporting itself degraded, and it is in the channel either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
+| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the two that report the harness itself degraded — a stale session build, and the harness having started nothing at all — and both are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
 | `the watch session's build <sha> is not a revision this product's repository holds` | Said once per build, and not a fault. How old a `yoyo work --watch` session is is measured by counting what has landed in the repository since its binary was built, and that only means anything where the product this sink reports on is Yoyodyne's own source. For any other product the comparison is not this sink's to make, so it says so once and stays quiet. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |

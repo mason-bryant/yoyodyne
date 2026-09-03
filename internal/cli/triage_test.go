@@ -99,6 +99,45 @@ func TestTriageRerunReportsAFullHarnessAsAWaitRatherThanAFailure(t *testing.T) {
 	}
 }
 
+// A carry-out whose fresh run met a pause where it would have started is the
+// same kind of state: the claim was given back, so the decision stands and what
+// the operator has to do is lift the pause. It is reported as the pause itself
+// rather than as a refusal with nothing to name, which is what a re-run that
+// started nothing and reported no error would otherwise read as.
+func TestTriageRerunReportsAPauseMetBeforeStartingRatherThanAFailure(t *testing.T) {
+	t.Parallel()
+
+	held := runstate.OperatorHold{HeldAt: time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)}
+	paused := orchestrator.RerunResult{
+		WorkItemID: "yoyodyne-ifd.68.13",
+		PriorRunID: "run-0123456789abcdef0123456789abcdef",
+		PausedBeforeStarting: &orchestrator.Outcome{
+			WorkItemID: "yoyodyne-ifd.68.13", Paused: true, PausedByOperator: &held,
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := reportRerun(&stdout, &stderr, false, paused, nil); code != 0 {
+		t.Fatalf("reportRerun() code = %d, want a pause reported as something other than a failure; stderr = %q", code, stderr.String())
+	}
+	// The accounting and the way out, since neither is any use without the other.
+	for _, want := range []string{"NOT STARTED", "keeps its one re-run", "`yoyo resume`"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, is missing %q", stdout.String(), want)
+		}
+	}
+
+	paused.RecordProblem = "the claim taken for it could not be given back"
+	stdout.Reset()
+	stderr.Reset()
+	if code := reportRerun(&stdout, &stderr, false, paused, nil); code != 1 {
+		t.Fatalf("reportRerun() code = %d, want a spent claim reported as a failure", code)
+	}
+	if !strings.Contains(stdout.String(), "could not be given back") {
+		t.Fatalf("stdout = %q, want the spent claim named", stdout.String())
+	}
+}
+
 // The usage says what is easy to get wrong about the two verbs: the stoppage is
 // re-run once, a repair continues the run instead of starting it over and
 // supersedes the blocker itself, the intake hold applies to both because the

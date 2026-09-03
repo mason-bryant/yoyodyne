@@ -371,9 +371,10 @@ func buildRerunner(configPath string) (orchestrator.Rerunner, error) {
 }
 
 // reportRerun describes what the action did. A re-run that was refused before
-// anything was claimed, one intake held, and one whose fresh run then failed are
-// three different things for an operator to do something about, so none of them
-// is reported as any of the others.
+// anything was claimed, one intake held, one whose fresh run met a pause where it
+// would have started, and one whose fresh run then failed are four different
+// things for an operator to do something about, so none of them is reported as
+// any of the others.
 func reportRerun(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.RerunResult, err error) int {
 	if jsonOutput {
 		output := triageOutput{}
@@ -403,6 +404,19 @@ func reportRerun(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.
 				return 1
 			}
 			return 0
+		}
+		// A pause the fresh run met where it would have started is the third such
+		// state: nothing was reserved, the claim was given back, and what lifts the
+		// pause is the same thing that lifts it for any other work. So the accounting
+		// is reported here and the pause itself exactly as `yoyo run` reports one,
+		// rather than in words this command would have to keep in step with those.
+		if result.PausedBeforeStarting != nil {
+			fmt.Fprint(stdout, result.Render())
+			code := reportRunResult(stdout, stderr, false, *result.PausedBeforeStarting, err)
+			if result.RecordProblem != "" {
+				return 1
+			}
+			return code
 		}
 		// Nothing was started and intake is not held, so the action refused, and
 		// a refusal always says why: it is the only way out of that path.

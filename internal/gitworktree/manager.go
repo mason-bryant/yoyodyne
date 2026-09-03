@@ -70,6 +70,7 @@ type Manager struct {
 	remote                string
 	pushRemote            string
 	allowedPrimaryChanges map[string]struct{}
+	currentExports        []string
 	timeout               time.Duration
 }
 
@@ -93,7 +94,13 @@ type Options struct {
 	// AllowedPrimaryChanges lists repository-relative control-plane files that
 	// may be updated after preflight without becoming part of the worktree base.
 	AllowedPrimaryChanges []string
-	Timeout               time.Duration
+	// CurrentExports lists repository-relative files derived from a store that is
+	// authoritative outside Git, which a new worktree is given the primary
+	// checkout's copy of rather than the copy its base commit happened to carry.
+	// They are read by a run and never written by one, so each is held out of the
+	// change the run makes.
+	CurrentExports []string
+	Timeout        time.Duration
 }
 
 type CreateRequest struct {
@@ -277,8 +284,10 @@ type DiffLimits struct {
 	// already rendered together and remain bounded by MaxTotalBytes.
 	MaxFiles int
 	// MaxCommits bounds how many commits of an accumulated change are described.
-	// A worktree's change is described against one base commit and has no
-	// history of its own, so this bounds a branch-scope change only.
+	// A worktree's change is measured against one base commit rather than read
+	// out of its history, so this bounds a branch-scope change and the one place
+	// a worktree's own commits are described: a change that leaves the base
+	// unchanged while commits sit above it.
 	MaxCommits int
 }
 
@@ -288,12 +297,80 @@ type DiffLimits struct {
 // worktree. Truncated reports that the bounds dropped part of the change, so a
 // caller never mistakes a clamped patch for the whole story.
 type ChangeDiff struct {
-	Status         string   `json:"status"`
-	DiffStat       string   `json:"diff_stat,omitempty"`
-	Patch          string   `json:"patch,omitempty"`
-	UntrackedFiles []string `json:"untracked_files,omitempty"`
-	OmittedFiles   []string `json:"omitted_files,omitempty"`
-	Truncated      bool     `json:"truncated"`
+	Status         string        `json:"status"`
+	DiffStat       string        `json:"diff_stat,omitempty"`
+	Patch          string        `json:"patch,omitempty"`
+	UntrackedFiles []string      `json:"untracked_files,omitempty"`
+	OmittedFiles   []OmittedFile `json:"omitted_files,omitempty"`
+	Truncated      bool          `json:"truncated"`
+	// CommitsWithoutEffect are the commits the worktree carries over its base
+	// where the change against that base is nothing: work an attempt committed
+	// and a later attempt undid. It is filled in that case alone, because that
+	// is the only case where an empty patch says nothing about why — everywhere
+	// else the patch is what the commits did, and listing them beside it would
+	// describe the same change twice.
+	CommitsWithoutEffect []Commit `json:"commits_without_effect,omitempty"`
+}
+
+// OmissionReason is which bound kept one delivered file out of the patch. It is
+// recorded rather than folded into a single "omitted" flag because the reasons
+// are different facts about the change: a file too big to render, a file with no
+// reviewable diff, and a file the budget ran out before are three different
+// things for a reviewer to do something about.
+type OmissionReason string
+
+const (
+	// OmittedTooLarge is the per-file ceiling: the file is delivered, it is
+	// bigger than one file is allowed to be in a patch, and none of it is shown.
+	OmittedTooLarge OmissionReason = "too-large"
+	// OmittedBinary is content Git itself will not render as a diff.
+	OmittedBinary OmissionReason = "binary"
+	// OmittedPatchFull is the total bound: the patch had no room left by the
+	// time this file was reached.
+	OmittedPatchFull OmissionReason = "patch-full"
+	// OmittedTooManyFiles is the file-count bound.
+	OmittedTooManyFiles OmissionReason = "too-many-files"
+	// OmittedUnreadable is anything that is not a regular file the harness can
+	// read from the worktree: a symlink, a socket, a path that left between
+	// being listed and being read.
+	OmittedUnreadable OmissionReason = "unreadable"
+)
+
+// OmittedFile is one file a change delivers that the bounds kept out of the
+// patch. It carries the path, the size, and the bound that dropped it, because
+// a name on its own leaves the reviewer unable to tell an oversized file from a
+// missing one — which is the reading that refused two changes before this was
+// recorded. Every file the untracked half drops is one of these: a file is in
+// the patch or it is here, and nothing leaves on a flag alone.
+type OmittedFile struct {
+	Path   string         `json:"path"`
+	Bytes  int64          `json:"bytes,omitempty"`
+	Reason OmissionReason `json:"reason"`
+	// Bound is the limit that dropped it — bytes for the size bounds, a file
+	// count for the file bound, and zero where the reason is not a bound at all.
+	// It is recorded beside the size so a reader sees the comparison that was
+	// made rather than being asked to know the harness's defaults.
+	Bound int64 `json:"bound,omitempty"`
+}
+
+// Describe is the one sentence a reader is given about a file that is in the
+// change and not in the patch. It names the file, its size, and the bound,
+// because "omitted" alone tells a reviewer that something is missing and nothing
+// about whether anybody could have shown it.
+func (f OmittedFile) Describe() string {
+	switch f.Reason {
+	case OmittedTooLarge:
+		return fmt.Sprintf("%s (%d bytes): delivered but too large to show; the per-file bound is %d bytes.", f.Path, f.Bytes, f.Bound)
+	case OmittedBinary:
+		return fmt.Sprintf("%s (%d bytes): delivered but binary, so it has no reviewable diff.", f.Path, f.Bytes)
+	case OmittedPatchFull:
+		return fmt.Sprintf("%s (%d bytes): delivered but not shown; the %d-byte patch bound was already spent.", f.Path, f.Bytes, f.Bound)
+	case OmittedTooManyFiles:
+		return fmt.Sprintf("%s (%d bytes): delivered but not shown; the change adds more new files than the bound of %d.", f.Path, f.Bytes, f.Bound)
+	case OmittedUnreadable:
+		return fmt.Sprintf("%s: delivered but not a readable regular file, so there is nothing to diff.", f.Path)
+	}
+	return fmt.Sprintf("%s (%d bytes): delivered but not shown.", f.Path, f.Bytes)
 }
 
 var (
@@ -362,6 +439,10 @@ func New(options Options) (*Manager, error) {
 		}
 		allowedPrimaryChanges[filepath.ToSlash(clean)] = struct{}{}
 	}
+	currentExports, err := cleanExportPaths(options.CurrentExports)
+	if err != nil {
+		return nil, err
+	}
 	return &Manager{
 		runner:                options.Runner,
 		gitBinary:             binary,
@@ -370,6 +451,7 @@ func New(options Options) (*Manager, error) {
 		remote:                remote,
 		pushRemote:            pushRemote,
 		allowedPrimaryChanges: allowedPrimaryChanges,
+		currentExports:        currentExports,
 		timeout:               timeout,
 	}, nil
 }
@@ -463,12 +545,25 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 		BaseCommit:   baseCommit,
 		TargetBranch: request.TargetBranch,
 	}
+	// The worktree is cut from a commit, so anything in it that a store outside
+	// Git is authoritative for is only as current as the last commit that carried
+	// it. Those files are refreshed from the primary checkout here, before
+	// anything has read one, and held out of the change this run will make.
+	if err := m.refreshExports(ctx, path); err != nil {
+		return worktree, fmt.Errorf("refresh the current exports in the created worktree: %w", err)
+	}
 	inspection, err := m.Inspect(ctx, worktree)
 	if err != nil {
 		return worktree, fmt.Errorf("verify created worktree: %w", err)
 	}
 	if !inspection.Registered || inspection.Branch != branch {
 		return worktree, errors.New("created worktree is not registered with the expected branch")
+	}
+	// Nothing has been developed here yet, so a worktree that already carries a
+	// change carries the refresh above. Proving it does not is what keeps a
+	// fresher export from becoming a file every run commits and promotes.
+	if inspection.Dirty {
+		return worktree, errors.New("created worktree already carries uncommitted changes")
 	}
 	return worktree, nil
 }
@@ -571,12 +666,17 @@ func (m *Manager) ChangedPaths(ctx context.Context, worktree Worktree) ([]string
 // untracked, as one bounded patch. It only reads: the untracked half is built
 // from `git diff --no-index` rather than from a staged index, so inspecting a
 // worktree never changes what the developer left behind.
+//
+// Every part of it is measured against the recorded base commit rather than
+// against the index, for the reason the summary beside it is: publishing commits
+// each attempt, so a patch built from what happens to be uncommitted would hand
+// a reviewer an empty change and a published branch full of work.
 func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits DiffLimits) (ChangeDiff, error) {
 	limits, err := limits.resolve()
 	if err != nil {
 		return ChangeDiff{}, err
 	}
-	path, _, err := m.verifyOwnedHead(ctx, worktree)
+	path, head, err := m.verifyOwnedHead(ctx, worktree)
 	if err != nil {
 		return ChangeDiff{}, err
 	}
@@ -605,26 +705,72 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	remaining -= len(clamped)
 	changes.Truncated = truncated || containsBinaryDiff(tracked.Stdout)
 
+	// Every untracked file leaves this loop one of two ways: written into the
+	// patch, or recorded as an omission that names it, its size, and the bound
+	// that dropped it. There is no third way out, and the accounting below
+	// refuses a change where one appears — a file that is neither shown nor named
+	// is exactly what a reviewer cannot know it is missing.
+	omit := func(relative string, size int64, reason OmissionReason, bound int64) {
+		changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
+			Path: relative, Bytes: size, Reason: reason, Bound: bound,
+		})
+		changes.Truncated = true
+	}
 	for _, relative := range untracked {
-		if len(changes.UntrackedFiles)+len(changes.OmittedFiles) >= limits.MaxFiles {
-			changes.OmittedFiles = append(changes.OmittedFiles, relative)
-			changes.Truncated = true
-			continue
-		}
-		included, filePatch, err := m.untrackedPatch(ctx, path, relative, limits.MaxFileBytes)
+		size, regular, err := m.untrackedSize(path, relative)
 		if err != nil {
 			return ChangeDiff{}, err
 		}
-		if !included || containsBinaryDiff(filePatch) || len(filePatch) > remaining {
-			changes.OmittedFiles = append(changes.OmittedFiles, relative)
-			changes.Truncated = true
+		switch {
+		case len(changes.UntrackedFiles)+len(changes.OmittedFiles) >= limits.MaxFiles:
+			omit(relative, size, OmittedTooManyFiles, int64(limits.MaxFiles))
+			continue
+		case !regular:
+			omit(relative, size, OmittedUnreadable, 0)
+			continue
+		case size > int64(limits.MaxFileBytes):
+			omit(relative, size, OmittedTooLarge, int64(limits.MaxFileBytes))
 			continue
 		}
-		patch.WriteString(filePatch)
-		remaining -= len(filePatch)
-		changes.UntrackedFiles = append(changes.UntrackedFiles, relative)
+		filePatch, err := m.untrackedPatch(ctx, path, relative)
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+		switch {
+		case containsBinaryDiff(filePatch):
+			omit(relative, size, OmittedBinary, 0)
+		case len(filePatch) > remaining:
+			omit(relative, size, OmittedPatchFull, int64(limits.MaxTotalBytes))
+		default:
+			patch.WriteString(filePatch)
+			remaining -= len(filePatch)
+			changes.UntrackedFiles = append(changes.UntrackedFiles, relative)
+		}
+	}
+	if len(changes.UntrackedFiles)+len(changes.OmittedFiles) != len(untracked) {
+		return ChangeDiff{}, fmt.Errorf("assembled change accounts for %d of %d new files; a file dropped without being named is not reviewable",
+			len(changes.UntrackedFiles)+len(changes.OmittedFiles), len(untracked))
 	}
 	changes.Patch = patch.String()
+
+	// An empty change over the base is evidence only once it says what the
+	// commits above that base did. A published attempt's work lives in commits
+	// here, so an empty patch under a HEAD that has moved reads two ways — a
+	// change made and then undone, or a change the assembly failed to collect —
+	// and a reviewer with no way to tell them apart reads the second, which is
+	// the report yoyodyne-ifd.236 was filed on. The commits are described the way
+	// a branch review describes its own, because it is the same question about
+	// the same thing.
+	//
+	// A truncated change is left alone: a patch the bounds emptied is not a change
+	// that came to nothing, and the reviewer is already told which of those it has.
+	if head != worktree.BaseCommit && changes.Patch == "" && !changes.Truncated &&
+		len(changes.UntrackedFiles) == 0 && len(changes.OmittedFiles) == 0 {
+		changes.CommitsWithoutEffect, err = m.describeCommits(ctx, worktree.BaseCommit, head, limits.MaxCommits)
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+	}
 	return changes, nil
 }
 
@@ -808,34 +954,44 @@ func (m *Manager) untrackedFiles(ctx context.Context, path string) ([]string, er
 	return files, nil
 }
 
-// untrackedPatch renders one untracked file as a new-file patch. It reports
-// included=false when the path is unsafe, is not a regular file, or is larger
-// than the per-file bound, leaving the caller to record it as omitted.
-func (m *Manager) untrackedPatch(ctx context.Context, path, relative string, maxFileBytes int) (bool, string, error) {
+// untrackedSize measures one untracked file, and reports whether it is a
+// regular file the harness can render at all. The size is read before any bound
+// is applied, because the size is what a reader is told about a file the bounds
+// then drop: a name with no size says a file is missing without saying whether
+// showing it was ever possible. A path that is unsafe, gone, or not a regular
+// file reports regular=false and a zero size, which the caller records as an
+// omission rather than passing over.
+func (m *Manager) untrackedSize(path, relative string) (int64, bool, error) {
 	clean := filepath.Clean(relative)
 	if filepath.IsAbs(relative) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return false, "", nil
+		return 0, false, nil
 	}
 	info, err := os.Lstat(filepath.Join(path, filepath.FromSlash(clean)))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, "", nil
+			return 0, false, nil
 		}
-		return false, "", fmt.Errorf("inspect untracked file: %w", err)
+		return 0, false, fmt.Errorf("inspect untracked file: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Size() > int64(maxFileBytes) {
-		return false, "", nil
+	if !info.Mode().IsRegular() {
+		return 0, false, nil
 	}
-	result, err := m.run(ctx, "-C", path, "diff", "--no-index", "--no-ext-diff", "--patch", "--", os.DevNull, clean)
+	return info.Size(), true, nil
+}
+
+// untrackedPatch renders one untracked file as a new-file patch. The caller has
+// already measured it and decided it is within the bounds.
+func (m *Manager) untrackedPatch(ctx context.Context, path, relative string) (string, error) {
+	result, err := m.run(ctx, "-C", path, "diff", "--no-index", "--no-ext-diff", "--patch", "--", os.DevNull, filepath.Clean(relative))
 	if err != nil {
-		return false, "", err
+		return "", err
 	}
 	// `git diff` exits 1 to report differences, which is the normal outcome
 	// here because every untracked file differs from /dev/null.
 	if result.Status != execution.ProcessSucceeded && result.ExitCode != 1 {
-		return false, "", fmt.Errorf("diff untracked worktree file failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+		return "", fmt.Errorf("diff untracked worktree file failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
-	return true, result.Stdout, nil
+	return result.Stdout, nil
 }
 
 func (l DiffLimits) resolve() (DiffLimits, error) {
@@ -1185,6 +1341,18 @@ func (m *Manager) RebaseOntoTarget(ctx context.Context, worktree Worktree, messa
 // makes a conflict safe to hand over is that the branch and the worktree were
 // put back, and that is precisely what did not happen.
 func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, targetCommit string) error {
+	// A refreshed export is a path this worktree's index has been told to leave
+	// alone, and Git refuses to move a HEAD across one. The branch's own copies go
+	// back first so the replay sees an ordinary worktree, and they are refreshed
+	// again below however the replay went.
+	if err := m.restoreExports(ctx, path); err != nil {
+		return fmt.Errorf("put the current exports back before the replay: %w", err)
+	}
+	// A refresh that fails after the replay leaves the branch's own exports in
+	// place, which is what this worktree held before any of this existed: older
+	// than the store rather than wrong. Failing the replay over it would throw
+	// away work that landed, so it is not reported here.
+	defer func() { _ = m.refreshExports(ctx, path) }()
 	rebased, err := m.runWithEnvironment(ctx, harnessCommitEnvironment(), "-C", path,
 		"-c", "core.hooksPath="+os.DevNull,
 		"-c", "user.name="+harnessCommitAuthorName,

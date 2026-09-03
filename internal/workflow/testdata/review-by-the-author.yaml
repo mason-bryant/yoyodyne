@@ -1,0 +1,52 @@
+# A delivery sequence with the review routed to the author.
+#
+# It is the topology the first separation policy exists to refuse, and it is
+# written so that policy is the only thing wrong with it. The schema is the one
+# this build reads, every state selects a registered action, every outcome leads
+# somewhere that exists, and the grant it is compiled under confers everything
+# its actions require. The evidence rule is satisfied too, deliberately: the
+# checks run after the change is written and nothing rewrites the worktree
+# afterwards, so the promotion is reached with both the checks and a verdict
+# still describing what is being promoted.
+#
+# The one thing wrong with it is that the verdict comes back from the invocation
+# that wrote the change — `candidate.develop-and-review` is one action holding
+# both — and that is a sentence no amount of structural validation asks about.
+# So it is refused at compile, by `authorship-is-never-judgment` and by nothing
+# else. The refusal is the policy's rather than an absence in the catalog: the
+# tests register that action deliberately, so a definition selecting it is
+# selecting something this build could genuinely perform.
+schema: 1
+id: review-by-the-author
+summary: a sequence whose review is performed by the invocation that wrote the change
+initial: claim
+states:
+  claim:
+    action: work-item.claim
+    summary: take the work item and assemble the context its developer is given
+    on:
+      claimed: develop
+      unavailable: abandoned
+  develop:
+    action: candidate.develop-and-review
+    summary: write the change and return the verdict on it, in one invocation
+    on:
+      produced: check
+      produced-nothing: abandoned
+  check:
+    action: candidate.check
+    summary: refuse an ungranted path, then run the project's configured checks
+    on:
+      passed: integrate
+      failed: develop
+  integrate:
+    action: candidate.integrate
+    summary: take the promotion lease and promote the change
+    on:
+      integrated: delivered
+      superseded: develop
+terminals:
+  delivered:
+    summary: the change is on the target branch
+  abandoned:
+    summary: the run stopped without putting a change on the target branch

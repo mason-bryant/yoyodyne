@@ -82,6 +82,16 @@ one**, so what is checked is this project's own pair under names that carry the
 product, and whether the sink that is running was launched with them. See
 [Reporting into Slack](reporting.md#reporting-into-slack).
 
+A stopped sink is the one finding here you need not act on by hand. On macOS,
+`yoyo slack ensure` starts one if nothing is reporting for this product, from
+this product's own keychain items, and does nothing when a sink is already
+running — so it is what an unattended pass calls, once per product checkout on
+the machine. Scheduling it is still yours, and only because the pass that would
+call it is not here yet: the productized maintenance job is `yoyodyne-ifd.207`,
+and nothing `yoyo` installs runs anything on a schedule until it lands.
+`yoyo doctor` only diagnoses — it changes nothing, and starting the sink is the
+other command's job.
+
 ## Pausing everything, and resuming it
 
 `yoyo pause` stops everything the harness would spend on a provider, and
@@ -204,19 +214,20 @@ provider for work in three places: inside a run, which parks as above; a
 conversation turn; and an independent `yoyo review`, which uses the same reviewer
 with no run around it. The last two have no run to park, so each records the
 refusal instead — what was stopped, the limit the provider named, and when it
-said it lifts. Nothing waits on it: the turn or the review fails at your terminal
-exactly as it did before. What the record buys is that
-[reporting into Slack](reporting.md#reporting-into-slack) says it as a `warning` without you
-there, and a run that parks on the same limit is said at that weight too. Hours
-in which nothing will happen is the one message a channel nobody is watching most
-needs to carry, and it must not weigh the same as checks passing.
+lifts. Nothing waits on it: the turn or the review fails at your terminal exactly
+as before. What the record buys is that
+[reporting into Slack](reporting.md#reporting-into-slack) says it as a `warning`
+without you there, and a run that parks on the same limit is said at that weight
+too. Hours in which nothing will happen is the one message a channel nobody is
+watching most needs to carry, and it must not weigh the same as checks passing.
 
 Selection is not a fourth place. A watching `yoyo work` session reads the tracker
-and starts runs and makes no provider call of its own, so a limit it meets is met
-by a run it started. That the three above are all of them is checked rather than
-asserted — `TestEveryProviderInvocationAccountsForAnExhaustedLimit` sweeps the
-tree and fails on a provider invocation with no account of what an exhausted
-limit does to it.
+and starts runs, so a limit it meets is met by a run it started, bar the turn it
+takes delivering a stopped run to the development manager. That the three above
+are all of them is checked rather than asserted —
+`TestEveryProviderInvocationAccountsForAnExhaustedLimit` sweeps the tree and
+fails on a provider invocation with no account of what an exhausted limit does to
+it.
 
 ## Waiting out an overloaded provider
 
@@ -373,7 +384,13 @@ state onto what the forge has:
 ```
 
 It compares the recorded run against the repository and Beads, and then finishes
-the run's own remaining step or hands the item to you. It also builds the triage
+the run's own remaining step or hands the item to you. A run it settled into an
+ending that is not success is reported twice over: what the sweep did with it,
+and — in the same words `yoyo status` uses — what became of the run and what
+remains of its change. Those are different facts, and only the second answers
+whether your work is still there. A run whose work landed says only what the
+sweep did, because a successful run removes its branch and worktree on purpose
+and there is nothing preserved to report. It also builds the triage
 docket on the way past, so a run it stopped and a publication the forge quietly
 never merged reach the development manager rather than waiting for somebody to
 go looking. A run whose work reached
@@ -625,15 +642,23 @@ Needs a human (1):
 - **Not startable** is each admitted item nothing will pull, with the refusal
   that stops it — the queue's own account where the queue has one, the directive
   where a directive pauses the work, and otherwise what has stopped the harness
-  choosing at all: a switch, a full machine, or no session choosing work. It
-  never comes from a watch session's memory of what it has already tried, which
-  is a fact about one process rather than about the product. Work that is
+  choosing at all. That last one comes from a closed set of named reasons, each
+  of which says whose move it is: the operator's hold, a held intake, every
+  developer slot taken, a live watch session that has found nothing it can
+  start, no watch session running any more, and a product no session has ever
+  watched. An idle session and no session are named apart on purpose — telling
+  you to start a session you are already running sends you to the wrong place.
+  It never comes from a watch session's memory of what it has already tried,
+  which is a fact about one process rather than about the product. Work that is
   admitted and would be started next is not listed here at all; the count of
   admitted items beside the heading is where it shows.
 - **Needs a human** is always present, and says either `nothing` or the list with
   whose move each one is: the operator's two switches, an unresolved directive, a
-  proposed change nobody has decided, a run that ended still owing a step, and
-  work marked for a conversation rather than for a run.
+  proposed change nobody has decided, a run that ended still owing a step, work
+  marked for a conversation rather than for a run, and a queue nothing is pulling
+  from — a session sitting idle over it, or no session at all — while admitted
+  work waits behind that. A stall over an empty queue is not listed: it is a
+  state of the machine rather than something waiting on you.
 
 A line with nothing in it says `nothing` in words, and a line whose records could
 not be read says that instead — never `nothing`, which would be a confident
@@ -646,9 +671,44 @@ question about one piece of work is a different question. `--json` carries the
 same derivation under `standing`, so a second surface reads the answer rather
 than parsing the rendering.
 
+## When nothing happened at all
+
+Under the four lines, `yoyo status` reads back every stretch in which this
+product went quiet: nothing started at all, while the tracker reported work
+ready, and no hold, no full machine and no still-moving run accounted for it.
+
+```text
+nothing started on this product for 7h30m0s from 2026-09-01T06:05:00Z, with 3 items ready; it cleared at 2026-09-01T13:35:00Z
+  the session choosing work last recorded watching at 2026-09-01T06:05:00Z, and has said nothing since
+  cleared by: 1 developer run(s) are in flight and still moving
+```
+
+The second line is the one to act on. A stall cannot say why it happened —
+it is precisely the absence of anything having been written down — so what is
+recorded beside it is the last thing the watch log holds, and that is what tells a
+scheduler that died from one that is wedged: a session whose last word was
+`stopped` wants starting, and one still claiming to be `watching` wants killing
+first.
+
+This is the one history in the harness that nothing else keeps, and the reason it
+exists is that the process which would have recorded a stall is the process a
+stall means has died. A session that crashes writes no stop, so every other
+surface reads a dead machine as a quiet one — which is exactly what happened on
+2026-09-01, for seven and a half hours, until a person noticed. What notices now
+is the Slack sink's own loop, which outlives the scheduler; it records the stall
+and
+[sends it as a direct message once](reporting.md#reporting-into-slack),
+never once per check. A product with no sink running records nothing, so this
+listing is empty on one.
+
+A product that has never gone quiet says nothing here at all. The five most
+recent stalls are printed, newest first, and `--json` carries every one of them
+under `stalls`; naming an item leaves them out, because a stall is about the
+product rather than about any piece of work.
+
 ## What became of the runs, and what remains of them
 
-Under the four lines, `yoyo status` reads back what the runs themselves recorded
+Under the stalls, `yoyo status` reads back what the runs themselves recorded
 — newest first, the work item, the outcome and the phase the run reached, what
 remains of it, what it cost, why the item was chosen, and the reasons its record
 kept:
@@ -693,11 +753,20 @@ comes from a small fixed set:
 
 `stopped` covers every ending the harness hands to somebody: an unrepaired
 review, a check that kept failing, refused protected paths, a replay the target
-branch outran, and a provider that would not carry the run. The phase beside the
-word says where it stopped and the `reason` under it says what stopped it, so the
-one word never has to carry all five. This used to be one word — `failed` — for
-all of them and for the two below it, which is how three preserved runs came to
-read as three discarded ones.
+branch outran, a provider that would not carry the run, and a promotion the
+target branch turns out not to carry. The phase beside the word says where it
+stopped and the `reason` under it says what stopped it, so the one word never has
+to carry all six. This used to be one word — `failed` — for all of them and for
+the two below it, which is how three preserved runs came to read as three
+discarded ones.
+
+A blocker outranks the run's own status, `succeeded` included. The last of those
+endings is the one where that shows: a run promotes its work, records it, and
+`yoyo reconcile` then finds the target does not carry the promotion, so the item
+goes back into a person's hands while the run's record keeps the status it wrote
+for itself before anything contradicted it. `--json` shows both — a `status` of
+`succeeded` beside an `outcome` of `stopped` — and the outcome is what became of
+the work.
 
 Beside it, every run that did not succeed says what remains: `work preserved`,
 `work removed` where the harness recorded removing the artifacts, or `no
@@ -782,11 +851,16 @@ decision itself is recorded on the work item, which is where to read whether
 stopped work has been decided and what was decided; an escalated item is blocked
 there as well.
 
-A **round** is a reviewer verdict a developer attempt produced, counted across
-every run of the item. A re-review no developer attempt produced is not one, so a
-promotion that [loses its race](configuration.md#losing-a-race-for-the-target-branch)
-and gets a fresh verdict on the replayed change is not charged for it. Rounds are
-what runs actually spend, and every run records them.
+A **round** is a reviewer verdict that sent a developer attempt back, counted
+across every run of the item. A re-review no developer attempt produced is not
+one, so a promotion that [loses its race](configuration.md#losing-a-race-for-the-target-branch)
+and gets a fresh verdict on the replayed change is not charged for it, whichever
+way that verdict goes. Neither is a verdict that approved the change: the cap
+stops an item buying the same argument another round, and an approval ends the
+argument. An approval is still recorded rather than passed over, because the two
+exclusions are one mechanism — an attempt already answered about is charged at
+most once — and a promotion only ever follows an approval. Rounds are what runs
+actually spend, and every run records them.
 
 The lines under it are the budget for what triage can decide about work that did
 not land — another go at the change, a re-run, a re-armed merge — and they move

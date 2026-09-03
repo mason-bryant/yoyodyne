@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
@@ -1001,6 +1002,131 @@ func TestWatchingPullsWorkAdmittedWhileItWasWaiting(t *testing.T) {
 	}
 }
 
+// The state that misled an operator three times on 2026-09-01, replayed: a
+// session idle on one developer slot while a run works on the other, over a
+// queue whose only unstarted work is the architect's to carry in conversation.
+//
+// What it said then was that nothing among the ready items was startable that
+// the session had not already tried, and that the next move was the product
+// manager's, nothing being chosen until ready work was admitted. Both halves
+// were false. The line had not stopped — a run was in flight — and no admission
+// would have moved any of the three items, because no run will ever start one.
+//
+// So the idle line says what the poll actually found: the runs going, the items
+// it passed over, and the conversation each of them is carried in.
+func TestAnIdleWatchSaysWhatItPassedOverAndWhichConversationCarriesIt(t *testing.T) {
+	t.Parallel()
+
+	architects := []beads.WorkItem{
+		{ID: "yoyodyne-ifd.212", Title: "Amend the invariants", Status: "open", Priority: 1,
+			Executor: domain.ConversationWith(domain.RoleArchitect)},
+		{ID: "yoyodyne-ifd.203", Title: "Settle the design", Status: "open", Priority: 2,
+			Executor: domain.ConversationWith(domain.RoleArchitect)},
+		{ID: "yoyodyne-ifd.162", Title: "Record the decision", Status: "open", Priority: 3,
+			Executor: domain.ConversationWith(domain.RoleArchitect)},
+	}
+	harness := newScheduleHarness(architects...)
+	harness.capacity = 2
+	// The other slot: a run somebody else's process is carrying, which is what
+	// makes the line moving rather than stopped.
+	harness.inFlight["yoyodyne-ifd.236"] = runstate.State{
+		RunID: "run-236", WorkItemID: "yoyodyne-ifd.236", Status: runstate.StatusRunning,
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}.
+		Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want nothing started for work no run can carry", schedule.Started)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded, so nothing said what the session found")
+	}
+	for _, want := range []string{
+		"1 run in flight",
+		"3 items passed over, of 3 admitted",
+		"carried in conversation (architect: yoyodyne-ifd.212, yoyodyne-ifd.203, yoyodyne-ifd.162)",
+	} {
+		if !strings.Contains(idle.reason, want) {
+			t.Fatalf("idle reason = %q, want it to say %q", idle.reason, want)
+		}
+	}
+	// The sentence that was read as a stopped line, gone rather than reworded.
+	if strings.Contains(idle.reason, "this session has not already tried") {
+		t.Fatalf("idle reason = %q, want what was found rather than a count of what was not", idle.reason)
+	}
+	// The two facts whose move follows is derived from. Without them a reader is
+	// back to the clause that named the one person who could do nothing about it.
+	if idle.running != 1 {
+		t.Fatalf("idle running = %d, want the run in flight recorded so the line does not read as stopped", idle.running)
+	}
+	if want := domain.ConversationWith(domain.RoleArchitect); idle.executor != want {
+		t.Fatalf("idle executor = %q, want %q, the conversation that carries the work passed over", idle.executor, want)
+	}
+}
+
+// The idle line names items and counts runs, and it is said again when either
+// changes — so what it must not do is say itself again when neither has. A
+// session polling an unchanged queue writes one line however many polls it
+// makes, which is what the reporting promises a reader for a quiet night.
+func TestAnUnchangedIdlePollSaysItselfOnce(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(beads.WorkItem{
+		ID: "yoyodyne-ifd.212", Title: "Amend the invariants", Status: "open", Priority: 1,
+		Executor: domain.ConversationWith(domain.RoleArchitect),
+	})
+	sessions := &recordedSessions{}
+	// Four polls over a queue nothing touches between them.
+	harness.onSleep = func(*scheduleHarness, int) bool { return harness.sleeps < 4 }
+
+	if _, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}).
+		Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	idles := 0
+	for _, state := range sessions.states() {
+		if state == runstate.WatchIdle {
+			idles++
+		}
+	}
+	if idles != 1 {
+		t.Fatalf("recorded %d idle transitions across %d polls, want the unchanged account said once", idles, harness.sleeps)
+	}
+}
+
+// The other side of the same line: a poll with nothing going and nothing
+// anybody carries says so, and names nobody it should not. The conversation and
+// the runs are what displace the admission clause, so a session that has neither
+// leaves it where it was.
+func TestAnIdleWatchOverAnEmptyBacklogNamesNoConversationAndNoRun(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	if _, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}).
+		Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded over an empty backlog")
+	}
+	if idle.reason != "the backlog is empty" {
+		t.Fatalf("idle reason = %q, want the empty backlog said as itself", idle.reason)
+	}
+	if idle.running != 0 || idle.executor != "" {
+		t.Fatalf("idle = %d run(s), executor %q, want neither over a queue with nothing in it", idle.running, idle.executor)
+	}
+}
+
 // The intake hold is a brake rather than a stop for a session that is watching:
 // it polls, chooses nothing, and resumes in place when the operator releases it.
 // A drain still returns, because a drain is a command somebody is waiting on.
@@ -1435,6 +1561,437 @@ func TestWatchingRefusesAPullWithNoInterval(t *testing.T) {
 	}
 }
 
+// --- readings of the harness that fail ------------------------------------------
+
+// contendedStore is the reading that ended a session on 2026-09-01: the tracker
+// refusing a listing while something else was writing to the same store, which
+// succeeded again minutes later.
+const contendedStore = "bd list failed with status cancelled and exit code -1"
+
+// The observed sequence, replayed: one tracker reading fails and the next one
+// succeeds. The session used to exit on the first of those and leave the queue
+// to an external job; it now waits, reads again, pulls the work, and says that
+// it did.
+func TestWatchingReadsTheHarnessAgainAfterAReadingThatFails(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	sessions := &recordedSessions{}
+	harness.failList = func(_ *scheduleHarness, lists int) error {
+		if lists == 1 {
+			return errors.New(contendedStore)
+		}
+		return nil
+	}
+	// The first wait is the retry and the session carries on; the second is the
+	// drained queue after the item ran, which is where the operator stops it.
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 2 }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v, want a contended reading ridden through", err)
+	}
+	if schedule.Stopped != ScheduleCancelled {
+		t.Fatalf("stopped = %q, want the session ended by its operator rather than by one failed reading", schedule.Stopped)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-one" {
+		t.Fatalf("started = %#v, want the work pulled at the reading that succeeded", schedule.Started)
+	}
+	if schedule.ReadsRetried != 1 || !strings.Contains(schedule.ReadProblem, contendedStore) {
+		t.Fatalf("schedule = %d retried, problem %q, want the one failed reading counted and named", schedule.ReadsRetried, schedule.ReadProblem)
+	}
+	if rendered := schedule.Render(); !strings.Contains(rendered, "1 reading(s) of the harness failed and were made again") {
+		t.Fatalf("rendered = %q, want the reading it rode through reported", rendered)
+	}
+	// The session says it while it is happening, not only in the report it
+	// returns when it is over: a session nobody is sitting at is read from the
+	// watch log or not at all.
+	if said := sessions.said(runstate.WatchIdle); !strings.Contains(said, contendedStore) || !strings.Contains(said, "read again") {
+		t.Fatalf("the session said %q while it retried, want the failed reading and that it is being made again", said)
+	}
+	// And it says so as a reading that failed rather than as a queue it read and
+	// found nothing in. Nothing anybody admits reaches a store that will not
+	// answer, so this is the mark that keeps the message off the admission clause.
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded || !idle.unreadable {
+		t.Fatalf("idle transition = %#v, want the poll marked as a reading that failed", idle)
+	}
+}
+
+// A reading that fails while this session has a run of its own going. The line
+// is moving and the store is not answering, and both have to be said: the runs
+// are what stop it reading as a stopped machine, and the failed reading is what
+// stops it reading as a queue somebody has to admit work to.
+func TestAReadingThatFailsBesideARunSaysBothRatherThanNeither(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-held")...)
+	harness.capacity = 2
+	sessions := &recordedSessions{}
+	// The run is held open across the pull whose reading fails, so the session
+	// genuinely has one going when it records the outage.
+	holding := make(chan struct{})
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		<-holding
+		return h.complete(id), nil
+	}
+	// Which pull is being made, so the reading that fails is the one after the
+	// run started rather than a listing counted by hand.
+	pulls := 0
+	harness.onPull = func(_ *scheduleHarness, made int) { pulls = made }
+	harness.failList = func(*scheduleHarness, int) error {
+		if pulls == 1 {
+			return errors.New(contendedStore)
+		}
+		return nil
+	}
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool {
+		if sleeps == 1 {
+			close(holding)
+		}
+		return sleeps < 3
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	if _, err := scheduler.Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v, want a contended reading ridden through", err)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded while the reading failed")
+	}
+	if !strings.Contains(idle.reason, "1 run in flight") || !strings.Contains(idle.reason, contendedStore) {
+		t.Fatalf("idle reason = %q, want the run it had going and the reading that failed", idle.reason)
+	}
+	if idle.running != 1 || !idle.unreadable {
+		t.Fatalf("idle transition = %#v, want %d run(s) and the reading marked as failed", idle, 1)
+	}
+}
+
+// A store that stays unreadable is not contention, and the session stops on it —
+// saying how long it went on failing, which is the whole of what tells an
+// operator which of the two they are looking at.
+func TestWatchingStopsOnceTheHarnessGoesOnBeingUnreadable(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	sessions := &recordedSessions{}
+	harness.failList = func(*scheduleHarness, int) error { return errors.New(contendedStore) }
+	// The operator never stops this one: what ends it is the window, and a session
+	// that did not have one would back off here forever.
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 100 }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err == nil || !strings.Contains(err.Error(), contendedStore) {
+		t.Fatalf("Schedule() error = %v, want the store that would not be read reported", err)
+	}
+	if schedule.Stopped != ScheduleUnreadable {
+		t.Fatalf("stopped = %q, want the unreadable harness named", schedule.Stopped)
+	}
+	if !strings.Contains(err.Error(), "5m0s") {
+		t.Fatalf("Schedule() error = %v, want it to say how long the session tried", err)
+	}
+	if schedule.ReadsRetried < 2 {
+		t.Fatalf("retried = %d, want a session that tried again rather than stopping on the first reading", schedule.ReadsRetried)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want nothing pulled from a queue that was never read", schedule.Started)
+	}
+	// The duration travels with the stop into the log, because the reader who has
+	// to tell a broken store from one bad minute is not at this terminal.
+	if said := sessions.said(runstate.WatchStopped); !strings.Contains(said, "5m0s") {
+		t.Fatalf("the session stopped saying %q, want how long it tried", said)
+	}
+	if !strings.Contains(schedule.ReadFailure, "5m0s") {
+		t.Fatalf("read failure = %q, want the reading the session stopped on carried apart from the ones it rode through", schedule.ReadFailure)
+	}
+}
+
+// A session stops as unreadable for a second reason — a pull that assembles and
+// is unusable — and what it says about that stop is about that stop. A contended
+// reading it rode through earlier is a different fact about a different moment,
+// and reporting it as why the session ended would put a store outage in front of
+// an operator whose capacity is misconfigured.
+func TestAReadingRiddenThroughIsNotWhyASessionStoppedForSomethingElse(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	sessions := &recordedSessions{}
+	harness.failList = func(_ *scheduleHarness, lists int) error {
+		if lists == 1 {
+			return errors.New(contendedStore)
+		}
+		return nil
+	}
+	// The configuration is edited to something no pass can be made from between
+	// the reading that failed and the one that would have succeeded.
+	harness.onPull = func(h *scheduleHarness, pulls int) {
+		if pulls == 1 {
+			h.mu.Lock()
+			h.capacity = 0
+			h.mu.Unlock()
+		}
+	}
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 100 }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "developer capacity is 0") {
+		t.Fatalf("Schedule() error = %v, want the unusable pull reported", err)
+	}
+	if schedule.Stopped != ScheduleUnreadable || schedule.ReadFailure != "" {
+		t.Fatalf("schedule = stopped %q on read failure %q, want a stop that was not a reading that failed", schedule.Stopped, schedule.ReadFailure)
+	}
+	if schedule.ReadsRetried != 1 || !strings.Contains(schedule.ReadProblem, contendedStore) {
+		t.Fatalf("schedule = %d retried, problem %q, want the earlier reading still accounted for", schedule.ReadsRetried, schedule.ReadProblem)
+	}
+	// The line the session ends on is the whole of what a reader away from this
+	// terminal gets, so a contended reading from before must not be in it.
+	if said := sessions.said(runstate.WatchStopped); said != ScheduleUnreadable {
+		t.Fatalf("the session stopped saying %q, want %q and nothing about a reading it rode through", said, ScheduleUnreadable)
+	}
+	if rendered := schedule.Render(); !strings.Contains(rendered, "the last of them: ") || !strings.Contains(rendered, contendedStore) {
+		t.Fatalf("rendered = %q, want the reading it rode through still named", rendered)
+	}
+}
+
+// A drain does not wait any of that out. It is a command somebody is waiting on
+// the return of, and one that slept through an outage would be one that hung.
+func TestADrainStopsOnTheFirstReadingThatFails(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.failList = func(*scheduleHarness, int) error { return errors.New(contendedStore) }
+
+	schedule, err := (Scheduler{Open: harness.open, Sleep: harness.sleep, Now: harness.clock}).Schedule(context.Background())
+	if err == nil || !strings.Contains(err.Error(), contendedStore) {
+		t.Fatalf("Schedule() error = %v, want the failed reading reported at once", err)
+	}
+	if schedule.Stopped != ScheduleUnreadable || schedule.ReadsRetried != 0 {
+		t.Fatalf("schedule = stopped %q after %d retried reading(s), want a drain that did not wait", schedule.Stopped, schedule.ReadsRetried)
+	}
+	if harness.sleeps != 0 {
+		t.Fatalf("the drain waited %d time(s), want none", harness.sleeps)
+	}
+}
+
+// --- redeploying ---------------------------------------------------------------
+
+// The whole of what a session redeploying itself is: a build lands over the one
+// it is executing, and it stops choosing and stops, so the caller can restart it
+// into what was deployed. The item still queued proves it stopped choosing
+// rather than merely finishing.
+func TestAWatchingSessionStopsToTakeUpTheBuildDeployedOverIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	sessions := &recordedSessions{}
+	deployment := &deployedOver{}
+	// The build lands while the first item is running, which is the ordinary case:
+	// nobody deploys into an idle machine on purpose.
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if !schedule.Redeploying() || schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the session stopped to be restarted into what was deployed", schedule.Stopped)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-one" {
+		t.Fatalf("started = %#v, want the session to have claimed nothing after the deploy landed", schedule.Started)
+	}
+	// Nothing waited: a session with a build to take up does not spend a poll
+	// interval first, because every interval it waits is an interval the machine
+	// dispatches from the build somebody replaced.
+	if schedule.Polls != 0 {
+		t.Fatalf("polls = %d, want a session that stopped rather than waited", schedule.Polls)
+	}
+	if reason := sessions.said(runstate.WatchStopped); !strings.Contains(reason, "restarting into it") {
+		t.Fatalf("stopped reason = %q, want the restart said where somebody who is not at the terminal reads it", reason)
+	}
+	// And the stop is marked as a restart rather than left to read as an ending.
+	// Every surface takes whose move follows from that mark: a session that ended
+	// is waiting on somebody to start another, and this one is waiting on nothing,
+	// which is the whole difference between ending the operator's chore and
+	// reproducing it once per deploy.
+	if !sessions.restarted() {
+		t.Fatal("the session recorded its stop as an ending, which tells every reader to start a session that is already coming back")
+	}
+}
+
+// The guarantee the whole shape rests on: a run already going is never
+// interrupted for a redeploy. The session stops claiming immediately and waits
+// out what it started, which is what makes the window an external restart can
+// never find.
+func TestARedeployWaitsOutTheRunsAlreadyGoing(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
+	harness.capacity = 2
+	// Both runs are required to be inside at once, so the deploy below lands with
+	// two live runs rather than with one that has already finished.
+	harness.developersMeet(2)
+	deployment := &deployedOver{}
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if harness.rendezvousFailure != nil {
+		t.Fatalf("the deploy never landed on two live runs: %v", harness.rendezvousFailure)
+	}
+	if schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the session stopped to be restarted", schedule.Stopped)
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %#v, want the two runs already going and nothing claimed after them", schedule.Started)
+	}
+	for _, started := range schedule.Started {
+		if started.Failure != "" || started.Outcome.Status != runstate.StatusSucceeded {
+			t.Fatalf("%s = %#v, want a live run carried to its own end rather than cut off", started.WorkItemID, started)
+		}
+	}
+}
+
+// A bound the session has reached wins over a deploy waiting to be taken up. The
+// operator gave this session a number to stay inside, and a restart is a session
+// starting that number again — so a budget that is gone stops the session as
+// spent, and what takes the build up is the next session somebody starts.
+func TestASpentBudgetStopsTheSessionRatherThanRedeployingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	harness.prices["yoyodyne-one"] = 2.50
+	deployment := &deployedOver{}
+	// The deploy lands while the run that spends the budget is still going, so
+	// both are true at the pull that follows it.
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		h.close(id)
+		return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Budget: 2, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleBudgetSpent {
+		t.Fatalf("stopped = %q, want the bound the operator set to end the session: %s", schedule.Stopped, schedule.Render())
+	}
+	if schedule.Redeploying() {
+		t.Fatal("the session asked to be restarted with its budget spent, which is the bound starting over")
+	}
+}
+
+// The count of runs is the other bound, and it holds the same way. A session
+// that has started the last run it was allowed stops on the number rather than
+// restarting into the build: the restart would be that number starting again,
+// which is not what the operator asked for by writing it.
+func TestALastPermittedRunStopsTheSessionRatherThanRedeployingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	deployment := &deployedOver{}
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Limit: 1, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleLimitReached {
+		t.Fatalf("stopped = %q, want the number of runs the operator asked for to end the session: %s", schedule.Stopped, schedule.Render())
+	}
+	if schedule.Redeploying() {
+		t.Fatal("the session asked to be restarted having started every run it was allowed, which is the bound starting over")
+	}
+}
+
+// A session that cannot tell whether it has been deployed over goes on working.
+// Stopping the line because a file could not be read would be a worse failure
+// than the staleness this guards against, and the reading is tried again at
+// every pull.
+func TestASessionThatCannotReadItsOwnBinaryKeepsChoosingWork(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+	deployment := &deployedOver{failure: errors.New("no such file or directory")}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Redeploying() {
+		t.Fatalf("schedule = %#v, want the work done and no restart claimed", schedule.Started)
+	}
+	if !strings.Contains(schedule.RedeployProblem, "no such file or directory") {
+		t.Fatalf("redeploy problem = %q, want the reading that failed reported", schedule.RedeployProblem)
+	}
+}
+
+// A drain is a command somebody is waiting on the return of, so it returns. A
+// pass that restarted itself would run the whole pass again from the top, which
+// is the opposite of what was asked for.
+func TestADrainNeverRedeploysItself(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	deployment := &deployedOver{}
+	deployment.deploy()
+
+	schedule, err := (Scheduler{Open: harness.open, Deployment: deployment}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleDrained {
+		t.Fatalf("stopped = %q, want a drain that ran its pass and returned", schedule.Stopped)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want the queue drained", schedule.Started)
+	}
+}
+
+// deployedOver is the session's own binary: unchanged until a test deploys over
+// it, and unreadable where a test says the reading itself fails.
+type deployedOver struct {
+	mu       sync.Mutex
+	replaced bool
+	failure  error
+}
+
+func (d *deployedOver) deploy() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.replaced = true
+}
+
+func (d *deployedOver) Replaced() (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failure != nil {
+		return false, d.failure
+	}
+	return d.replaced, nil
+}
+
 func sameStates(got, want []runstate.WatchState) bool {
 	if len(got) != len(want) {
 		return false
@@ -1479,9 +2036,24 @@ type scheduleHarness struct {
 	// made, which is how a test changes the configuration under a running
 	// scheduler.
 	onPull func(*scheduleHarness, int)
+	// failList decides whether a tracker listing fails, with the number of
+	// listings already made. It stands in for the store contention a reconcile or
+	// a settling run makes, which is a reading that fails and then does not.
+	lists    int
+	failList func(*scheduleHarness, int) error
+	// now is the clock a watching session stamps its retries against. The fake
+	// sleep below advances it by exactly the interval it was asked to wait, so a
+	// test that drives a session through a store outage spends no real time
+	// reaching the window the session gives up at.
+	now time.Time
 	// run stands in for the pipeline. The default completes the item; a test
 	// that cares about a refusal or a failure replaces it.
 	run func(*scheduleHarness, string) (Outcome, error)
+	// escalate stands in for putting stopped work to the development manager,
+	// with the number of passes already made. A pull is wired with one only where
+	// a test asks for it, so every other test's pass is what it always was.
+	escalations int
+	escalate    func(*scheduleHarness, int) (EscalationSweep, error)
 
 	pulls      int
 	order      []string
@@ -1506,6 +2078,9 @@ func newScheduleHarness(items ...beads.WorkItem) *scheduleHarness {
 		prices:     map[string]float64{},
 		capacity:   1,
 		gate:       make(chan struct{}),
+		// The morning the session that provoked the retry died, so a test reading
+		// its own timings reads the ones in the report.
+		now: time.Date(2026, 9, 1, 5, 40, 0, 0, time.UTC),
 	}
 	for _, item := range items {
 		harness.ready[item.ID] = true
@@ -1573,10 +2148,14 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	}
 	h.mu.Lock()
 	blockedRuns := h.blockedRuns
+	var escalations ScheduleEscalations
+	if h.escalate != nil {
+		escalations = h
+	}
 	h.mu.Unlock()
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
-		Capacity: capacity, Start: h.start,
+		Capacity: capacity, Start: h.start, Escalations: escalations,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.
@@ -1587,12 +2166,25 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	}, nil
 }
 
+// Escalate stands in for delivering one stopped run to the development
+// manager's conversation, which is a provider turn the scheduler never makes
+// itself.
+func (h *scheduleHarness) Escalate(context.Context) (EscalationSweep, error) {
+	h.mu.Lock()
+	h.escalations++
+	passes, escalate := h.escalations, h.escalate
+	h.mu.Unlock()
+	return escalate(h, passes)
+}
+
 // sleep stands in for waiting out a poll interval. It spends no time at all: a
 // test that wants a session to end says so by returning false, which is the
-// operator stopping it.
-func (h *scheduleHarness) sleep(context.Context, time.Duration) bool {
+// operator stopping it. The clock moves by what the wait asked for, so a session
+// backing off through an outage reaches the window it gives up at.
+func (h *scheduleHarness) sleep(_ context.Context, interval time.Duration) bool {
 	h.mu.Lock()
 	h.sleeps++
+	h.now = h.now.Add(interval)
 	sleeps, onSleep := h.sleeps, h.onSleep
 	h.mu.Unlock()
 	if onSleep == nil {
@@ -1704,16 +2296,47 @@ type recordedSessions struct {
 type recordedTransition struct {
 	state  runstate.WatchState
 	reason string
+	// running, executor, and unreadable are what a reader takes whose move follows
+	// an idle poll from: the runs the session could see going, the conversation
+	// carrying the work it passed over, and a reading of the harness that failed.
+	running    int
+	executor   domain.WorkItemExecutor
+	unreadable bool
+	// restarting is the session marking its last line as a restart rather than an
+	// ending, which is what every surface reads to tell the operator whether
+	// anything is waiting on them.
+	restarting bool
 }
 
-func (r *recordedSessions) Record(state runstate.WatchState, _ time.Time, reason string) error {
+func (r *recordedSessions) Record(transition SessionState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.failure != nil {
 		return r.failure
 	}
-	r.transitions = append(r.transitions, recordedTransition{state: state, reason: reason})
+	r.transitions = append(r.transitions, recordedTransition{
+		state:      transition.State,
+		reason:     transition.Reason,
+		running:    transition.Running,
+		executor:   transition.Executor,
+		unreadable: transition.Unreadable,
+		restarting: transition.Restarting,
+	})
 	return nil
+}
+
+// entered is the first transition recorded into a state, whole rather than only
+// its reason: a test about what a reader is told has to read the fields the
+// reader's whose-move clause is derived from too.
+func (r *recordedSessions) entered(state runstate.WatchState) (recordedTransition, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, transition := range r.transitions {
+		if transition.state == state {
+			return transition, true
+		}
+	}
+	return recordedTransition{}, false
 }
 
 func (r *recordedSessions) states() []runstate.WatchState {
@@ -1724,6 +2347,19 @@ func (r *recordedSessions) states() []runstate.WatchState {
 		states = append(states, transition.state)
 	}
 	return states
+}
+
+// restarted reports the session having marked a stop as a restart rather than as
+// an ending, which is what a reader takes whose move follows from.
+func (r *recordedSessions) restarted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, transition := range r.transitions {
+		if transition.restarting {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *recordedSessions) said(state runstate.WatchState) string {
@@ -1737,7 +2373,24 @@ func (r *recordedSessions) said(state runstate.WatchState) string {
 	return ""
 }
 
+// clock is what a scheduler stamps its own timings with, moved only by the fake
+// sleep above.
+func (h *scheduleHarness) clock() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.now
+}
+
 func (h *scheduleHarness) List(_ context.Context, status string) ([]beads.WorkItem, error) {
+	h.mu.Lock()
+	h.lists++
+	lists, failList := h.lists, h.failList
+	h.mu.Unlock()
+	if failList != nil {
+		if err := failList(h, lists); err != nil {
+			return nil, err
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var matching []beads.WorkItem
@@ -2004,4 +2657,361 @@ func (h *realScheduleHarness) itemLocked(id string) (beads.WorkItem, error) {
 		}
 	}
 	return beads.WorkItem{}, fmt.Errorf("no work item %s", id)
+}
+
+// Every stoppage comes back to the scheduler as an error, so a pass that read
+// the error first said "failed" over a run handed to a person with its branch
+// and worktree intact — the same word it said over one that broke with nothing
+// to show. The pass reports the ending the run reached, in the read model's
+// vocabulary, and works none of it out for itself.
+func TestAPassNamesEachEndingRatherThanCallingEveryStoppageAFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []struct {
+		named   string
+		started Started
+	}{
+		// The reading this exists to stop: the item is back with a person and the
+		// change is still there, which is not what "failed" says.
+		{"stopped", Started{
+			WorkItemID: "yoyodyne-stopped",
+			Outcome:    Outcome{Status: runstate.StatusFailed, Blocked: true, Branch: "yoyodyne/stopped"},
+			Failure:    "the repair budget was spent with the checks still failing",
+		}},
+		{"failed", Started{
+			WorkItemID: "yoyodyne-broke",
+			Outcome:    Outcome{Status: runstate.StatusFailed},
+			Failure:    "the worktree could not be cut",
+		}},
+		{"cancelled", Started{
+			WorkItemID: "yoyodyne-cancelled",
+			Outcome:    Outcome{Status: runstate.StatusCancelled},
+			Failure:    "context canceled",
+		}},
+		{"timed out", Started{
+			WorkItemID: "yoyodyne-late",
+			Outcome:    Outcome{Status: runstate.StatusTimedOut},
+			Failure:    "context deadline exceeded",
+		}},
+		// The three that are not endings at all keep the words they had: a start
+		// the scheduler lost to another process, a run still in flight, and a run
+		// whose work landed.
+		{"declined", Started{WorkItemID: "yoyodyne-lost", Declined: "the slot went to another process"}},
+		{"paused", Started{WorkItemID: "yoyodyne-parked", Outcome: Outcome{Status: runstate.StatusRunning, Paused: true}}},
+		{"integrated", Started{
+			WorkItemID: "yoyodyne-landed",
+			Outcome:    Outcome{Status: runstate.StatusSucceeded, Integration: integratedOnto("main")},
+		}},
+		// A start that never became a run has no ending to name, so the failure is
+		// still what is said.
+		{"failed", Started{WorkItemID: "yoyodyne-unstarted", Failure: "the store refused the reservation"}},
+	} {
+		if named := want.started.state(); named != want.named {
+			t.Errorf("%s is reported as %q, want %q", want.started.WorkItemID, named, want.named)
+		}
+	}
+
+	// And the word reaches the rendered pass rather than only the helper.
+	rendered := Schedule{Started: []Started{{
+		WorkItemID: "yoyodyne-stopped",
+		Outcome:    Outcome{Status: runstate.StatusFailed, Blocked: true},
+		Failure:    "the repair budget was spent",
+	}}}.Render()
+	if !strings.Contains(rendered, "yoyodyne-stopped: stopped") {
+		t.Errorf("the pass reads:\n%s\nwant the stoppage named as one", rendered)
+	}
+}
+
+// integratedOnto is a promotion onto one branch, which is all the pass's own
+// account of a run reads from it.
+func integratedOnto(branch string) *gitworktree.Integration {
+	return &gitworktree.Integration{TargetBranch: branch}
+}
+
+// Stopped work reaches the development manager from the pass rather than from
+// somebody carrying it to her, and what the pass did about it is on the schedule
+// beside what it pulled.
+func TestAPassPutsStoppedWorkToTheDevelopmentManager(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		if passes > 1 {
+			return EscalationSweep{}, nil
+		}
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			DocketKey:  "stopped_run:run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+			Decision:   "repair",
+		}}}, nil
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Escalated) != 1 || !schedule.Escalated[0].Delivered {
+		t.Fatalf("escalated = %#v, want the stoppage this pass delivered", schedule.Escalated)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want the pass to have gone on choosing work", schedule.Started)
+	}
+	if !strings.Contains(schedule.Render(), "escalated the stoppage of run run-0123456789abcdef0123456789abcdef") {
+		t.Fatalf("rendered = %q, want the delivery said beside what the pass pulled", schedule.Render())
+	}
+}
+
+// A delivery that failed costs the pass nothing it was doing, so it is reported
+// beside the pull rather than stopping it — and never left unsaid.
+func TestADeliveryThatFailedDoesNotStopThePass(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{}, errors.New("the conversation could not be opened")
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Stopped != ScheduleDrained {
+		t.Fatalf("schedule = %#v, want a pass that carried on choosing work", schedule)
+	}
+	if !strings.Contains(schedule.EscalationProblem, "waiting on somebody carrying it to her") {
+		t.Fatalf("escalation problem = %q, want the failed delivery said out loud", schedule.EscalationProblem)
+	}
+	if !strings.Contains(schedule.Render(), "could not be opened") {
+		t.Fatalf("rendered = %q, want the failure in the pass's own account", schedule.Render())
+	}
+}
+
+// Held intake stops the harness choosing work. It does not stop stopped work
+// reaching the development manager, because the judgment a held queue is waiting
+// on is exactly what that delivery produces.
+func TestAHeldPassStillPutsStoppedWorkToTheDevelopmentManager(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.held = &runstate.IntakeHold{
+		SchemaVersion: runstate.IntakeHoldSchemaVersion,
+		ProductID:     "yoyodyne",
+		HeldAt:        time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC),
+		Reason:        "three runs blocked in a row",
+	}
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+		}}}, nil
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleIntakeHeld || len(schedule.Started) != 0 {
+		t.Fatalf("schedule = %#v, want a held pass that chose nothing", schedule)
+	}
+	if len(schedule.Escalated) != 1 {
+		t.Fatalf("escalated = %#v, want the stoppage delivered while intake was held", schedule.Escalated)
+	}
+}
+
+// A delivery that keeps failing is one problem rather than a thousand. A
+// watching session polls all night, so a pass that accumulated every failed
+// attempt would report the same sentence once a minute and bury what it did.
+func TestRepeatedDeliveryFailuresAreOneProblemOnThePass(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Problem:    fmt.Sprintf("the conversation could not be opened, attempt %d", passes),
+		}}}, nil
+	}
+	scheduler := Scheduler{}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	scheduler.escalate(context.Background(), &schedule, pull)
+	scheduler.escalate(context.Background(), &schedule, pull)
+
+	if len(schedule.Escalated) != 0 {
+		t.Fatalf("escalated = %#v, want a delivery that did not happen kept as a problem rather than an event", schedule.Escalated)
+	}
+	if schedule.EscalationProblem != "the conversation could not be opened, attempt 2" {
+		t.Fatalf("escalation problem = %q, want the latest attempt and only it", schedule.EscalationProblem)
+	}
+
+	// And a pass that gets through says so, rather than going on reporting a
+	// failure that is over.
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+			Decision:   "repair",
+		}}}, nil
+	}
+	scheduler.escalate(context.Background(), &schedule, pull)
+	if len(schedule.Escalated) != 1 || schedule.EscalationProblem != "" {
+		t.Fatalf("schedule = %#v, want the delivery kept and the failure behind it cleared", schedule)
+	}
+}
+
+// A pass does not erase its own account of stopped work. A pull that finds
+// nothing to say about a stoppage is not evidence that the last one's failure
+// was resolved — the stoppage may be waiting out its retry delay — so what the
+// pass said stands until a delivery actually happens.
+func TestAPassDoesNotEraseWhatItSaidAboutStoppedWork(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		switch passes {
+		case 1:
+			return EscalationSweep{Escalated: []Escalated{{
+				WorkItemID: "yoyodyne-stopped",
+				RunID:      "run-0123456789abcdef0123456789abcdef",
+				Problem:    "the provider refused the turn on attempt 1 of 3",
+			}}}, nil
+		case 2, 3:
+			// The pulls a drain makes while the stoppage waits out its delay.
+			return EscalationSweep{}, nil
+		default:
+			return EscalationSweep{Escalated: []Escalated{{
+				WorkItemID: "yoyodyne-stopped",
+				RunID:      "run-0123456789abcdef0123456789abcdef",
+				Delivered:  true,
+				Decision:   "repair",
+			}}}, nil
+		}
+	}
+	scheduler := Scheduler{}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	scheduler.escalate(context.Background(), &schedule, pull)
+	if schedule.EscalationProblem == "" {
+		t.Fatal("the pass said nothing about a delivery that failed")
+	}
+	for pass := 2; pass <= 3; pass++ {
+		scheduler.escalate(context.Background(), &schedule, pull)
+		if schedule.EscalationProblem == "" {
+			t.Fatalf("pass %d erased what the pass had already said about stopped work", pass)
+		}
+	}
+
+	// And a delivery that actually happened is what clears it.
+	scheduler.escalate(context.Background(), &schedule, pull)
+	if schedule.EscalationProblem != "" || len(schedule.Escalated) != 1 {
+		t.Fatalf("schedule = %#v, want the delivery kept and the failure behind it cleared", schedule)
+	}
+}
+
+// A stoppage the harness has given up delivering is said on every pass for as
+// long as it is true, so a pass that ends hours later still names what needs a
+// person.
+func TestAnAbandonedStoppageIsSaidByEveryPass(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Problem:    "the stoppage of run run-0123456789abcdef0123456789abcdef could not be put to the development manager in 3 attempt(s), so the harness stopped trying and it needs a person",
+		}}}, nil
+	}
+	scheduler := Scheduler{}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	for pass := 1; pass <= 3; pass++ {
+		scheduler.escalate(context.Background(), &schedule, pull)
+		if !strings.Contains(schedule.EscalationProblem, "needs a person") {
+			t.Fatalf("pass %d says %q, want the abandoned stoppage still named", pass, schedule.EscalationProblem)
+		}
+	}
+	// Said once, however many passes have found it: what a reader needs is the
+	// standing fact rather than one line per pull.
+	if strings.Count(schedule.EscalationProblem, "needs a person") != 1 {
+		t.Fatalf("the pass says %q, want the standing fact once rather than once per pull", schedule.EscalationProblem)
+	}
+	if len(schedule.Escalated) != 0 {
+		t.Fatalf("escalated = %#v, want nothing reported as delivered", schedule.Escalated)
+	}
+}
+
+// A delivery is a spend the pass makes itself, so it counts against the bound
+// the session was given. A turn is not a run and nothing else in the pass would
+// see it, and a session that spent past its cap on turns nobody counted is the
+// operator's cap disappearing quietly.
+func TestWhatADeliveryCostCountsAgainstTheSessionsBudget(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(_ *scheduleHarness, passes int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  passes == 1,
+			CostUSD:    0.40,
+			// The second pass is a turn that failed, which the provider charged
+			// for exactly as it charged for the first.
+			Problem: map[bool]string{true: "", false: "the reply could not be read"}[passes == 1],
+		}}}, nil
+	}
+	scheduler := Scheduler{Budget: 1}
+	pull := Pull{Escalations: harness}
+	schedule := Schedule{}
+
+	scheduler.escalate(context.Background(), &schedule, pull)
+	scheduler.escalate(context.Background(), &schedule, pull)
+
+	if schedule.SpentUSD != 0.80 {
+		t.Fatalf("spent = %.2f, want both turns counted against the session", schedule.SpentUSD)
+	}
+}
+
+// And a session stops on its budget over deliveries alone. A watching session
+// with an empty queue starts nothing and used to spend nothing; it can now spend
+// a turn per poll, so the bound has to be able to end it on that spend by itself.
+func TestASessionStopsOnItsBudgetOverDeliveriesAlone(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.escalate = func(*scheduleHarness, int) (EscalationSweep, error) {
+		return EscalationSweep{Escalated: []Escalated{{
+			WorkItemID: "yoyodyne-stopped",
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			Delivered:  true,
+			CostUSD:    0.40,
+		}}}, nil
+	}
+	// The session keeps polling; what stops it is the bound rather than the
+	// operator.
+	harness.onSleep = func(*scheduleHarness, int) bool { return true }
+
+	schedule, err := Scheduler{
+		Open: harness.open, Watching: true, Budget: 1, Sleep: harness.sleep, Now: harness.clock,
+	}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleBudgetSpent {
+		t.Fatalf("stopped = %q, want the session stopped on its budget", schedule.Stopped)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want a session that spent its budget on deliveries alone", schedule.Started)
+	}
+	if schedule.SpentUSD < 1 {
+		t.Fatalf("spent = %.2f, want the deliveries counted up to the bound", schedule.SpentUSD)
+	}
 }

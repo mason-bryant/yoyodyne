@@ -519,6 +519,71 @@ func TestTriageIsRefusedOnWorkThatHasClosed(t *testing.T) {
 	}
 }
 
+// A cap refusal has to leave the development manager holding something the
+// operator can run. Naming the remedy without naming the verb is what sent two
+// overrides into a work item's notes — where "record an override against the
+// item" pointed, and where no guard reads — and left the resubmitted decision
+// meeting the identical refusal.
+func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want []string
+	}{
+		{
+			name: "the refusal a cap produces",
+			err: runstate.TriageCapError{
+				Action:     runstate.TriageRerun,
+				Budget:     runstate.TriageReviewRoundBudget,
+				WorkItemID: "yoyodyne-ifd.224",
+				Spent:      4,
+				Cap:        4,
+			},
+			want: []string{
+				"re-run is refused for yoyodyne-ifd.224",
+				`yoyo triage override --budget "review round"`,
+				"--cap <n>",
+				"yoyodyne-ifd.224",
+				"nothing written into the item's notes crosses it either",
+			},
+		},
+		{
+			// Nothing produces this today, and a refusal that lost the detail must
+			// still leave the operator holding a verb rather than a description.
+			name: "a cap refusal carrying no budget to name",
+			err:  fmt.Errorf("the budget is gone: %w", runstate.ErrTriageCapReached),
+			want: []string{
+				`yoyo triage override --budget "<budget>"`,
+				"nothing written into the item's notes crosses it either",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			refusal := refusedPastCap(testCase.err)
+			if !errors.Is(refusal, runstate.ErrTriageCapReached) {
+				t.Fatalf("the refusal stopped being a cap refusal: %v", refusal)
+			}
+			for _, want := range testCase.want {
+				if !strings.Contains(refusal.Error(), want) {
+					t.Fatalf("the refusal is missing %q:\n%s", want, refusal)
+				}
+			}
+		})
+	}
+
+	// Everything else is left exactly as it was: a tracker that would not answer
+	// is not a cap, and dressing it as one sends the operator to a command that
+	// changes nothing.
+	other := errors.New("the tracker could not be reached")
+	if refusedPastCap(other) != other {
+		t.Fatalf("a failure that is not a cap refusal was rewritten: %v", refusedPastCap(other))
+	}
+}
+
 // triageOptions is a development manager's conversation answering with one
 // reply and then closing off, which is the shape every test here needs.
 func triageOptions(t *testing.T, tracker Tracker, budgets TriageBudgets, answer string) Options {
@@ -636,3 +701,45 @@ func (b *triageBudgetGate) RecordMergeRearm(ctx context.Context, workItemID stri
 }
 
 func (b *triageBudgetGate) now() time.Time { return b.clock.Now() }
+
+// What the harness writes down after delivering a stoppage is what she actually
+// recorded, read from the applied actions rather than from the prose of the
+// reply.
+func TestAReplySaysWhichStoppageItDecided(t *testing.T) {
+	t.Parallel()
+
+	reply := Reply{Actions: []TrackerOutcome{
+		{
+			// A decision about a different stoppage, which is exactly what a
+			// conversation working a docket of several entries produces.
+			Applied: true,
+			Action:  TrackerAction{Action: actionTriage, ID: "yoyodyne-other", Run: otherStoppedRun, Decision: decisionRerun},
+		},
+		{
+			// A refused decision changed nothing, so nothing here may report it as
+			// one.
+			Applied: false,
+			Action:  TrackerAction{Action: actionTriage, ID: "yoyodyne-task", Run: stoppedRun, Decision: decisionRerun},
+		},
+		{
+			Applied: true,
+			Action: TrackerAction{
+				Action: actionTriage, ID: "yoyodyne-task", Run: stoppedRun, Decision: decisionRepair,
+				Reason: "the findings are narrow and the change is preserved",
+			},
+		},
+	}}
+
+	decision, reason, found := reply.TriageDecision(stoppedRun)
+	if !found || decision != decisionRepair || !strings.Contains(reason, "the findings are narrow") {
+		t.Fatalf("TriageDecision() = %q, %q, %v, want the applied decision about this stoppage", decision, reason, found)
+	}
+	if _, _, found := reply.TriageDecision("run-9999999999999999999999999999ffff"); found {
+		t.Fatalf("TriageDecision() found a decision about a stoppage nothing in the reply names")
+	}
+	// A turn that answered and decided nothing is an answer rather than a
+	// failure, and reports as one.
+	if _, _, found := (Reply{}).TriageDecision(stoppedRun); found {
+		t.Fatalf("TriageDecision() found a decision in a reply that recorded none")
+	}
+}

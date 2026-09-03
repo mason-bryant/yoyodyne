@@ -102,10 +102,17 @@ func (s Status) Symbol() string {
 // scanning for what needs them is looking for, and the mark comes off the moment
 // the run continues. A terminal run that did not succeed is blocked for the same
 // reason: cancelled, timed out, or failed, it stopped and stayed stopped.
+//
+// Which of those a terminal run is comes from the read model's outcome rather
+// than from its status, so that the completion mark here means what "succeeded"
+// means everywhere else. A run whose promotion a sweep contradicted keeps the
+// status it recorded and carries a blocker, and the precedence rule on
+// runstate.Ending is what says such a run stopped; reading the status here put a
+// completion mark on an item a person had been handed.
 func StatusOfRun(state runstate.State) Status {
 	switch {
 	case state.Status.Terminal():
-		if state.Status == runstate.StatusSucceeded {
+		if state.Outcome() == runstate.OutcomeSucceeded {
 			return StatusCompleted
 		}
 		return StatusBlocked

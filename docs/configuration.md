@@ -14,13 +14,11 @@ source checkout, and nobody reading its configuration has to be told where a
 value came from.
 
 **What owning your defaults costs.** A later Yoyodyne that improves a persona or
-corrects a model selector does not reach a project that already has its own
-copy. There is no mechanism that reconciles the two: re-run `yoyo init` in a
-scratch directory, diff it against yours, and merge what you want. That is a
-deliberate trade for a tool whose operator reads and edits the file often — the
-effect of an edit is obvious, which matters more here than shared improvement.
-Inheritance is still supported for projects that would rather have the other
-half of that trade; see [Extending a built-in bundle](#extending-a-built-in-bundle).
+corrects a model selector does not change a project that already has its own
+copy — nothing is inherited, so nothing arrives. It does say so, and moving a
+value stays yours. That report, and inheritance for projects wanting the other
+half of the trade, are both under
+[Extending a built-in bundle](#extending-a-built-in-bundle).
 
 ## Creating a project configuration
 
@@ -38,11 +36,10 @@ healthy, and it will not touch a configuration that is already there — one tha
 does not load is handed back with the command to edit it rather than
 regenerated. Everything below is what it writes on your behalf.
 
-`init` writes `.yoyodyne/config.yaml` and one Markdown file per persona under
-`.yoyodyne/personas/`, then loads what it wrote and fails if the result is not
-usable. Without `--product`, the product is named after the directory being
-configured; a directory name that is not a valid identifier is refused rather
-than mangled, and `--product` names one instead. Nothing is overwritten without
+`init` writes what [Layout](#layout) lists, then loads what it wrote and fails if
+the result is not usable. Without `--product`, the product is named after the
+directory being configured; a directory name that is not a valid identifier is
+refused rather than mangled, and `--product` names one instead. Nothing is overwritten without
 `--force`, and a refusal happens before any file is written, so a project is
 never left half-configured.
 
@@ -136,6 +133,7 @@ A project keeps its configuration in a `.yoyodyne` directory at its root:
 ```text
 .yoyodyne/
   config.yaml          # the project configuration
+  config.lock          # the template's values; absent in older projects
   personas/            # one Markdown file per agent persona
     product-manager.md
     architect.md
@@ -229,7 +227,13 @@ naming one of them reaches that one. What a role may do in that conversation is
 **not** configurable and is not what the persona says: the harness holds one contract and one authority table per role,
 sends the contract ahead of the persona on every turn, and refuses anything
 outside the table. A persona specializes how a role works; it cannot widen what
-the role is allowed to do. The set of role names is fixed for the same reason —
+the role is allowed to do. `yoyo config show` reports each agent's
+`capabilities` — everything the harness may do on that agent's behalf, named in
+the vocabulary the authority is stated in rather than left to be inferred from
+the role's name. It is reported and never written: the set is read off the role
+in the harness's own registry, there is no `capabilities` key to put in a
+configuration, and a file that writes one is refused like any other key that
+does not exist. The set of role names is fixed for the same reason —
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name — so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
@@ -923,6 +927,17 @@ The set follows your configuration rather than the default layout: a project
 that keeps its designs elsewhere has not thereby made them a developer's to
 rewrite.
 
+**The tracker's export is refused the same way.** A worktree is given your
+checkout's own `.beads/issues.jsonl` and that copy is
+[held out of the run's change](work.md) with Git's skip-worktree bit — which
+lives in the worktree's index under `.git`, a directory the developer's sandbox
+grants writes to. One `git update-index --no-skip-worktree` inside the run would
+turn the refreshed export into a modification the harness commits, promotes, and
+conflicts every other run against, so the export joins this gate: a diff
+containing it is refused, and the refusal names what the file is and how it got
+there rather than only the path. The paths refused are the exports the harness
+refreshes, so the two never drift apart.
+
 **How it behaves.** The gate runs in front of the deterministic checks, on every
 attempt, over every path the change touches — tracked, untracked, and both sides
 of a move. A change that touches one of these paths without a grant is refused
@@ -1362,6 +1377,79 @@ A tracker that cannot be read costs the work half of the report rather than all
 of it: the documents still report, and the report says the queue was not read
 instead of rendering it as one nothing has moved under.
 
+### The release-readiness workflow
+
+Every check above answers for one thing, and `yoyo conformance` asks the whole
+set together — which is what [cutting a
+release](developing-yoyo.md#cutting-a-release) gates on.
+
+```sh
+yoyo conformance          # what a release is tagged behind
+yoyo conformance --json   # machine-readable
+yoyo conformance --notes  # the Markdown section a release's notes carry
+```
+
+The order the checks run in is not code. It is a **workflow definition**: a
+state machine in YAML that selects actions the harness registered in Go, maps
+each outcome to where the sequence goes next, and ends in one of two terminals —
+`ready`, which lets a tag be cut, and `mismatch`, which refuses it. This build
+ships one, and a project that wants its own writes it here:
+
+```
+.yoyodyne/workflows/release-readiness.yaml
+```
+
+Nothing is merged between the two. A project that writes one owns the whole
+sequence from then on, which is the only arrangement where reading the file
+tells you what actually ran; `yoyo conformance` names which of the two it read,
+and the content digest it pinned, in everything it prints.
+
+What a definition can change is the sequence and nothing else. It selects among
+the actions the build registered — `conformance.artifacts`,
+`conformance.references`, `conformance.invariants`, `conformance.goals` and
+`conformance.staleness` — and an action nothing registers is refused rather than
+run. Each action's authority is declared in Go, and the gate is compiled under
+`repository.read` and `work-item.read` and nothing else, so no definition can
+make it write anything. Each state must handle exactly the outcomes its check can
+produce — `conforms` and `diverges` for the four that gate, `noted` for
+`conformance.staleness`, which reports and refuses nothing — so an unhandled
+outcome, or a transition on one the check never returns, is refused here rather
+than met halfway through a cut. Validation and compilation both happen before the
+first check runs, and a definition that is wrong is refused whole rather than
+half adopted:
+
+```yaml
+schema: 1
+id: release-readiness
+summary: what this project checks before it tags
+initial: artifacts
+states:
+    artifacts:
+        action: conformance.artifacts
+        on:
+            conforms: references
+            diverges: mismatch
+    references:
+        action: conformance.references
+        on:
+            conforms: ready
+            diverges: mismatch
+terminals:
+    ready: {}
+    mismatch: {}
+```
+
+A definition names its own states; `action:` is what selects the check. A state
+called `check-artifacts` selecting `conformance.artifacts` is reported as
+`check-artifacts`, with the check named beside it, so a renamed sequence reads
+against both the file and this build.
+
+A run is recorded durably, one state boundary at a time, under the harness's own
+state root, so what a release was gated on can be read back afterwards. That
+record is the one thing `yoyo conformance` writes — it touches neither the
+repository nor the tracker — and nothing prunes them; one is written per
+invocation.
+
 ## Architectural invariants
 
 The architect's durable constraints live in a second configured directory:
@@ -1474,6 +1562,20 @@ by integrating an unformatted file through a green check run.
 Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
+
+### The environment a check runs in
+
+A check inherits the harness's own environment with one thing added: `GOCACHE`
+is pointed at `.git/yoyodyne/go-build` inside the repository being checked, and
+an inherited value is replaced rather than carried through. Every run the
+harness makes is given the same redirect, so a developer's own execution of the
+checks and the harness's run of them afterwards share one cache.
+
+It is there because the Go toolchain's default cache is under the user's home,
+which a developer run's sandbox does not grant: without the redirect the first
+Go command in a run fails at setup with `operation not permitted`, which reads
+as a broken toolchain. A project whose checks are not Go is unaffected by a
+variable its tools never read.
 
 ### What `init` proposes for `checks`
 
@@ -1662,21 +1764,23 @@ execution:
   blocked_runs_before_intake_hold: 3   # the default
 ```
 
-Nothing else about the pass changes, and nothing needed to. Every pull already
-re-reads the configuration, re-reads the intake hold, takes the queue in the
-order you set, and records why it chose what it chose — so work you admit is
-picked up at the next poll, a reprioritization is honored at the next pull, and
-an item whose dependency landed becomes pullable because the tracker says so.
-There is no change detection anywhere in it, because nothing between the readings
-is cached. A run already in flight is never preempted by any of that.
+Nothing else about the pass changes, and nothing needed to. Every pull re-reads
+the configuration and the intake hold, takes the queue in the order you set, and
+records why it chose what it chose — so work you admit is picked up at the next
+poll, a reprioritization at the next pull, and an item whose dependency landed
+becomes pullable because the tracker says so. There is no change detection in it:
+nothing between the readings is cached, and a run already in flight is never
+preempted by any of it.
 
 An idle session costs one local tracker read per `work_poll` and asks no provider
-anything, so a queue that is empty overnight spends nothing.
+anything, so a queue that is empty overnight spends nothing — unless it has a
+stopped run to [deliver](work.md#letting-the-harness-choose-the-work), which is a
+turn and is charged as one.
 
-**The intake hold is the remote brake.** Holding intake does not stop a watching
-session; it brakes it in place. The session keeps polling, chooses nothing, and
-resumes where it was when you release it. `yoyo pause` — the wider switch — parks
-the runs too, and lifting it resumes them from their own records.
+**The intake hold is the remote brake.** It does not stop a watching session; it
+brakes it in place — the session keeps polling, chooses nothing, and resumes
+where it was when you release it. `yoyo pause`, the wider switch, parks the runs
+too, and lifting it resumes them from their own records.
 
 **Three guards, because the loop no longer ends.**
 
@@ -1692,42 +1796,73 @@ that way, because the other cases that leave an item pullable with nothing
 recorded — a run the intake hold or your `yoyo pause` stopped before it claimed
 anything — would spin the same way. What lifts it is the item changing: what the
 work says, what it is for, its priority, its status, what it depends on, and its
-notes. The notes are what make the ordinary recovery work. A run that stops on a
-blocker takes the item out of the ready queue and writes the blocker into its
-notes, so when you release that item without editing anything else, the session
-sees an item it has not tried and pulls it. Nothing the harness writes can clear
-the cooldown of an item that stayed pullable, because it only ever appends to the
-notes of an item it has claimed, blocked, or closed.
+notes. The notes make the ordinary recovery work: a run that stops on a blocker
+takes the item out of the ready queue and writes the blocker into its notes, so
+when you release that item without editing anything else, the session sees an
+item it has not tried and pulls it. Nothing the harness writes can clear the
+cooldown of an item that stayed pullable, because it only appends to the notes of
+an item it has claimed, blocked, or closed.
 
-An item this session has already run and that nothing has touched since is
-therefore left alone for the life of the session. Restarting the session, or
-touching the item, is what asks for another attempt.
+An item this session has already run and nothing has touched since is left alone
+for the life of the session. Restarting the session, or touching the item, asks
+for another attempt — and the restart it makes for itself when you deploy counts,
+which is usually what you want, since a build you just installed is the likeliest
+reason the attempt would go differently.
 
-`blocked_runs_before_intake_hold` is the failure-storm brake, and it is a
-different thing from that cooldown: it is aimed at a broken machine rather than a
-broken item. That many runs blocking one after another, with nothing landing
-between them, holds intake — the same hold you would place — and it stays held
-until you release it, with `yoyo release` or the conversation's `/release`. Any run that lands clears the count, and `0` turns the
-brake off entirely, leaving you as the only thing that holds intake.
+`blocked_runs_before_intake_hold` is the failure-storm brake, a different thing
+from that cooldown: it is aimed at a broken machine rather than a broken item.
+That many runs blocking one after another, with nothing landing between them,
+holds intake — the same hold you would place — and it stays held until you
+release it, with `yoyo release` or the conversation's `/release`. Any run that
+lands clears the count, and `0` turns the brake off, leaving you as the only
+thing that holds intake.
 
 And the session says what it is doing, because an idle session and a dead one are
 otherwise the same silence. Each transition — watching, idle, braked, resumed,
 stopped — is recorded once, where `yoyo status` prints it and the Slack sink
-posts it. A session idling all night writes one line rather than one a minute.
+posts it. A session idling all night writes one line rather than one a minute. A
+stop says whether it is an ending or a restart, so the one below reads as a
+session coming back rather than a line waiting for you to start another.
 
-**`--budget <usd>`** caps what one session spends, from the same recorded run
-evidence `yoyo cost` prices items from. It is checked between pulls, never during
-a run: the money a running run has spent is already spent, and what stopping it
-would lose is the work it bought.
+**Beyond the three: a reading of the harness that fails does not end the
+session.** The tracker is a database a reconcile and every settling run write to,
+so a reading that fails is contention far more often than a store that is broken
+— and a session that exited on one left the queue idle until an external job
+noticed. A watching session waits and reads again, two seconds doubling to
+thirty, and stops only once the readings have gone on failing for five minutes,
+saying how long it tried. None of it is configured: the numbers are the harness's
+and the same for every product. A drain still stops on the first one, and so does
+either kind of pass on a pull that assembles and is unusable — a capacity of
+zero, or a `--budget` with nothing to price it — because that is a decision about
+the configuration rather than a reading that failed.
 
-A budget the harness cannot measure is not a smaller budget, it is no budget, so
-it fails closed at both ends. A pass given `--budget` with no way to price itself
-is refused before anything starts. A session that has started and then meets a
-run whose recorded evidence will not price — the run's event log gone, or a
-record it cannot read — stops there and says which run it was, rather than
-counting it as free and carrying on inside a bound it can no longer hold. The
-stop is announced like every other transition, so you find out while it matters
-rather than in the morning.
+**Beyond the three: a watching session takes up a build deployed over it.** When
+the `yoyo` it is running is written over — you rebuild it, you install it — the
+session stops choosing, waits out every run it already started, and restarts into
+what you deployed. A run in flight is never interrupted for it, and nothing is
+configured: a deploy is the whole of the instruction. What that costs is one
+restart per deploy, and the queue is re-read from scratch on the way back in
+exactly as it is at every poll.
+
+The bounds cross the restart reduced to what is left of them — `--budget` less
+what the session has spent, `--limit` less what it has started — because a bound
+carried whole would start again at every deploy. A session that has reached
+either one stops on the bound instead of restarting: you set that number, and
+taking up a build is not you raising it. There is nothing here for a drain, which
+is a command you are waiting on the return of.
+
+**`--budget <usd>`** caps what one session spends: the runs it starts, priced
+from the same recorded run evidence `yoyo cost` prices items from, and the turns
+it takes delivering stopped work. It is checked between pulls, never part way:
+money already spent is spent, and what stopping would lose is the work it bought.
+
+A budget the harness cannot measure is no budget, so it fails closed at both
+ends. A pass given `--budget` with no way to price itself is refused before
+anything starts. A session that has started and then meets a run whose recorded
+evidence will not price — the event log gone, or a record it cannot read — stops
+there and says which run it was, rather than counting it as free and carrying on
+inside a bound it can no longer hold. The stop is announced like every other
+transition, so you find out while it matters rather than in the morning.
 
 **The default is still the drain**, and `--until-drained` says so explicitly.
 That is deliberate: watching is the shape this loop is meant to have, and turning
@@ -2420,11 +2555,23 @@ it reaches a developer, and the two agree because this claimed nothing. The last
 slot can also go between that reading and the reservation; a claim taken for a
 run the reservation then refused for capacity is **given back**, because that run
 provably never started — a reservation refused for capacity creates no run
-record, claims no work item and runs no agent. It is the one thing that gives a
-claim back, and a claim carrying a run is refused rather than removed. A
-withdrawal the harness could not write is reported rather than swallowed: the
-stoppage has then spent its re-run on a run that never started, which is a thing
-to go and correct.
+record, claims no work item and runs no agent. A claim carrying a run is refused
+rather than removed. A withdrawal the harness could not write is reported rather
+than swallowed: the stoppage has then spent its re-run on a run that never
+started, which is a thing to go and correct.
+
+**A pause the fresh run meets gives the claim back too**, and for the same
+reason. The operator's hold on all activity, an unresolved directive, work the
+item waits on, and a held intake are all read where the run would start, which is
+past the claim, and each of them stops the pipeline before it reserves a run,
+claims the item, or invokes an agent. So a paused outcome carrying no run is that
+same nothing: the claim is given back, the pause is reported in place of the run,
+and lifting it and asking again carries out the same decision — rather than
+meeting the once-only guard for a run nobody ever made. Two of the four are read
+before the claim as well, which is not the same question twice: that reading
+keeps a harness already held from spending anything, and this covers one that
+arrives while the claim is being taken. These two cases are the only things that
+give a claim back.
 
 The re-run is recorded beside the counters, one file per docketed stoppage at
 `<state root>/products/<product id>/reruns/`, and it carries what the stopped
@@ -2434,9 +2581,9 @@ what to cherry-pick — and **retired** explicitly once it has. Anything that co
 not be retired stays kept with the reason recorded: a worktree holding
 uncommitted work and a branch whose work nothing promoted are both left exactly
 where they are, because nothing else records what they hold. Nothing automated
-deletes the record, for the reason nothing deletes a counter file — save the one
-withdrawal above, which removes a claim whose run was refused a developer slot
-and so never existed.
+deletes the record, for the reason nothing deletes a counter file — save the two
+withdrawals above, which remove a claim whose run was refused a developer slot or
+met a pause where it would have started, and so never existed.
 
 A retirement is written onto the stopped run itself as well, under that run's own
 lease, because its record is what `yoyo status` and the docket read to say
@@ -2598,10 +2745,17 @@ triage of yoyodyne-ifd.90: triage has spent 2 passes on it
 
 At or past the cap — 4 of 4 exactly included, because a grant needs a round and
 none remains — the same line reads: `review rounds: 6 spent across every run of
-this item — at or past the cap of 4, so no decision that buys a round remains`.
-What may still happen is what the budget lines beside it say: waiting,
-re-scoping, and escalating spend nothing, and a merge re-arm spends only its
-own budget, whatever the rounds say.
+this item — at or past the cap of 4, so no decision that buys a round remains`,
+and the line under it names the one thing that changes that, so the dead end and
+the way out are read in the same breath:
+
+```text
+    `yoyo triage override --budget "review round" --cap <n> --by "<you>" --reason "<why>" yoyodyne-ifd.90` is the only thing that crosses it
+```
+
+What may still happen without crossing anything is what the budget lines beside
+it say: waiting, re-scoping, and escalating spend nothing, and a merge re-arm
+spends only its own budget, whatever the rounds say.
 
 ```text
   repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
@@ -2622,14 +2776,41 @@ counters and these caps, read as the docket is read, so what `yoyo status` says
 about an item, what a docket entry says about it, and what refuses the next
 decision about it are one record rather than three counts of it.
 
-**A round is a reviewer verdict a developer attempt produced**, counted across
-every run of the item. A re-review no developer attempt produced is not one, so a
-promotion that [loses its race](#losing-a-race-for-the-target-branch) and gets a
-fresh verdict on the replayed change is not charged for it — counting that would
-charge an item for losing a race it did not cause. A review re-asked for after an
-interrupted process is the same case and is counted once for the same reason.
-Rounds are recorded whatever a cap says, because a round is something that
-happened rather than something being asked for.
+**A round is a reviewer verdict that sent a developer attempt back**, counted
+across every run of the item. A re-review no developer attempt produced is not
+one, so a promotion that [loses its race](#losing-a-race-for-the-target-branch)
+and gets a fresh verdict on the replayed change is not charged for it — counting
+that would charge an item for losing a race it did not cause. A review re-asked
+for after an interrupted process is the same case and is counted once for the
+same reason. Rounds are recorded whatever a cap says, because a round is
+something that happened rather than something being asked for.
+
+**A verdict that approved the change is not a round either.** The cap stops an
+item buying the same argument another round, and an approval ends that argument
+rather than taking another turn of it; what becomes of an approved change
+afterwards — a promotion that conflicted, a merge the forge dropped — is not the
+change disputing with its reviewer. Charging it walked items toward the cap on
+their own success, and one such item reached triage with every recorded decision
+about it refused.
+
+**It loosens no bound**, and what holds that is two budgets rather than the
+rounds. An approval sends the change to promotion rather than back to the
+developer, so the only thing that asks for another verdict inside the same run is
+a promotion that lost its race and replayed — and
+`execution.integration_retries_before_reconciliation` bounds those, so a run's
+uncharged approvals are one plus that budget rather than one. How many runs an
+item gets is bounded in turn by the repair grant and the re-run, each once per
+item.
+Neither of those budgets is the round cap and neither can be spent through it,
+which is what stops the exclusion turning into a budget nothing bounds.
+
+**It is recorded without being counted**, and that is what keeps the replay
+exclusion above true rather than nearly true. Both exclusions are one mechanism:
+an attempt a reviewer has already answered about is charged at most once,
+whichever way either answer went. A promotion only follows an approval, so an
+approval nothing recorded would leave the replayed attempt looking unjudged — and
+the replay's fresh verdict can be a repair, because the ground moved — which is
+the race charged to the item after all.
 
 **Each counter is written before the action it counts takes effect**, so a
 process that dies between the two has recorded a grant it did not give rather
@@ -2725,6 +2906,15 @@ manager's triage vocabulary cannot produce one, and the actions that carry
 decisions out read overrides rather than write them. It is a terminal command for
 the reason `yoyo release` is one — the switch that answers an escalation has to
 work with no conversation open.
+
+**This command is the only thing that crosses a cap, and the refusal names it.**
+An override recorded anywhere else — in the work item's notes, in the escalation,
+in the conversation that raised it — crosses nothing, because no guard reads
+prose. That is not a hypothetical misreading: a refusal that said only "the
+operator can record an override against the item" was twice answered in the
+item's notes, exactly as those words directed, and the resubmitted decision came
+back with the identical message. The development manager's refusal now prints the
+command above with the budget that refused and the item already in it.
 
 **It carries nothing out.** Recording an override changes what the guards will
 permit and nothing else. The development manager then records the decision the
@@ -3275,27 +3465,32 @@ lives: both travel with the repository, and neither needs the Yoyodyne source.
 
 Yoyodyne ships the explicit shape because its operator edits agent properties
 often and wants the effect of an edit obvious. A fleet of projects that should
-improve together is the case `extends` is for. A more portable configuration
-system than either is still wanted, and neither shape is it.
-[Portable agent configuration](portable-agent-configuration.md) is the draft
-that answers what a project should own versus inherit, how the two shapes
-convert into each other, and how a bundle improvement reaches a project that
-materialized its defaults. It is a draft the architect has not ratified, so
-nothing in it is implemented and none of the commands it names exist.
+improve together is the case `extends` is for.
+[Portable agent configuration](portable-agent-configuration.md) is the design
+that answers what a project owns versus inherits. Its baseline and report
+exist: `config.lock` records what the template supplied, `yoyo config drift`
+sorts each value into `unchanged`, `yours`, `available`, or
+`conflicting`, and `doctor` and `config validate` speak the `available` ones
+unprompted on stderr, silently when none, without changing exit codes. A
+project without one hears nothing until `yoyo config baseline` writes it, which
+touches nothing else and starts level. Nothing is adopted for you;
+`materialize`, `extract`, and `adopt` do not exist.
 
 ### Converting an inheriting configuration to an explicit one
 
 1. Record what you have now:
    `yoyo config show --effective --origins > before.txt`.
-2. Run `yoyo init --force`. This overwrites `.yoyodyne/config.yaml` and the
-   personas under `.yoyodyne/personas/`, so commit or stash first.
+2. Run `yoyo init --force`. It overwrites everything `init` writes, so commit or
+   stash first.
 3. Re-apply what was yours: `checks`, your approval policy, and any agent field
    you had overridden. The generated file states each of them in place, so this
    is editing values rather than re-expressing deviations.
 4. Run `yoyo config show --effective --origins` again and diff it against
-   `before.txt`. Every origin should now be the project file, and no effective
-   value should have moved except the persona sources, which are now paths
-   inside your repository.
+   `before.txt`. Every origin should now be the project file, apart from the few
+   a generated file leaves derived — the repository id, the triage repair grant,
+   and each agent's capability set, which is the harness's registry either way —
+   and no effective value should have moved except the persona sources, which are
+   now paths inside your repository.
 
 ## Migrating from `.yoyodyne.yaml`
 
@@ -3321,6 +3516,8 @@ yoyo config show --effective              # the values actually in force
 yoyo config show --origins                # where each value came from
 yoyo config show --effective --origins    # both
 yoyo config show --effective --json       # machine-readable
+yoyo config drift                         # what the template improved
+yoyo config baseline                      # record one where there is none
 ```
 
 `config show` prints the layers it applied, the revision of the configuration in
@@ -3344,15 +3541,20 @@ Origins use these values:
 | `builtin:v1` | Inherited from the built-in bundle, by a project that uses `extends`. |
 | a file path | Supplied by that project configuration file. |
 | `derived:product.id` | Computed from another configured value. |
+| `derived:execution.repair_attempts_before_replan` | A triage repair grant no layer stated, which follows the effective repair budget. |
 | `derived:accounts` | An agent's `account` no layer stated, which follows the single account the mapping declares. |
+| `registry:role-capabilities` | An agent's `capabilities`, read off its role in the harness's registry. No layer states it and none may. |
 
 An unexpected effective value is therefore a two-command diagnosis: `--effective`
 says what the value is, and `--origins` says which layer is responsible for it.
 
 In a project `init` wrote, the answer is the project file for every configured
-value, and `derived:product.id` for `product.repository_id` alone — the one
-value the generated file computes rather than states. Nothing reports
-`builtin:v1`, and nothing reports `harness-default`, because the generated file
-writes down every value the harness would otherwise have filled in. So an origin
-that is neither the project file nor that one derivation means the
-configuration is inheriting something, which is worth looking at.
+value. The exceptions are the values the generated file leaves to follow
+something else: `derived:product.id` for `product.repository_id`,
+`derived:execution.repair_attempts_before_replan` for
+`triage.repair_grant_attempts`, and `registry:role-capabilities` for every
+agent's capability set, which is the harness's rather than any file's. Nothing
+reports `builtin:v1`, and nothing reports `harness-default`, because the
+generated file writes down every value the harness would otherwise have filled
+in. So an origin that is none of those means the configuration is inheriting
+something, which is worth looking at.
