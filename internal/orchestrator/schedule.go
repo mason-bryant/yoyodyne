@@ -1873,10 +1873,9 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	children := make(map[string][]string)
 	// Parentage is taken from whichever way the tracker states it rather than
 	// from the parent field alone. A store that records decomposition only as an
-	// edge — which this project's own tracker does, for every item in it — reads
-	// as a backlog nothing was ever broken out of, and a coverage map built from
-	// that is empty however many epics are sitting in the queue beside their
-	// children.
+	// edge — the tracker's own export is one — reads as a backlog nothing was ever
+	// broken out of, and a coverage map built from that is empty however many
+	// epics are sitting in the queue beside their children.
 	cover := func(item beads.WorkItem) {
 		if parent := item.DecomposedFrom(); parent != "" {
 			children[parent] = append(children[parent], item.ID)
