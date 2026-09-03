@@ -103,10 +103,10 @@ func TestTheDeliveryIsWiredOverTheHarnesssOwnRecords(t *testing.T) {
 	}
 }
 
-// A turn nobody was asked keeps the stoppage's delivery. The two are the
-// failures the harness can prove said nothing to her: a provider that declined
-// the turn for want of capacity, and a pause the operator placed after the
-// escalator read it.
+// A turn that produced no answer of hers keeps the stoppage's delivery. Three
+// failures leave that behind: a provider that declined the turn for want of
+// capacity, a pause the operator placed after the escalator read it, and a
+// cancellation that killed the turn before her reply existed.
 func TestATurnSheWasNeverAskedKeepsTheDelivery(t *testing.T) {
 	t.Parallel()
 
@@ -121,11 +121,24 @@ func TestATurnSheWasNeverAskedKeepsTheDelivery(t *testing.T) {
 		t.Fatalf("a turn the pause refused = %v, want the delivery kept", notReached(paused))
 	}
 
+	// The sentence the twelve abandoned records of yoyodyne-ifd.250 all carried.
+	// Every one of them was a turn a process-group teardown killed, and every one
+	// of them spent an attempt it should have given back.
+	teardown := fmt.Errorf("development manager reported failure: cancelled: %w", chat.ErrTurnAbandoned)
+	if !errors.Is(notReached(teardown), orchestrator.ErrDeliveryCancelled) {
+		t.Fatalf("a turn a teardown killed = %v, want the delivery kept", notReached(teardown))
+	}
+	// And it says which of the two it was, because both are written into a record
+	// somebody reads: her conversation opened perfectly well.
+	if errors.Is(notReached(teardown), orchestrator.ErrConversationUnreachable) {
+		t.Fatalf("a turn a teardown killed = %v, want it reported as a cancellation rather than an unopened conversation", notReached(teardown))
+	}
+
 	// And a turn that may have reached her is left as it is: nothing here can
 	// prove she did not read it, and asking again would spend a turn on an
 	// answer she may already have given.
 	answered := errors.New("development manager reported failure: the reply could not be read")
-	if errors.Is(notReached(answered), orchestrator.ErrConversationUnreachable) {
+	if notReached(answered) != answered {
 		t.Fatalf("a turn that may have reached her = %v, want it left as a delivery that happened", notReached(answered))
 	}
 }

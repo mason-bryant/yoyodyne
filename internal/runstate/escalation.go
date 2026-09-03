@@ -438,19 +438,32 @@ func (s *EscalationStore) Settle(ctx context.Context, docketKey string, delivery
 // keeps every delivery it is owed rather than having spent one on nothing.
 //
 // It is narrow on purpose, exactly as the re-run's is: an attempt is spent by
-// being recorded, and the one case where giving it back is sound is an attempt
-// whose turn provably never happened — a conversation that could not be opened
-// asks the development manager nothing. A record carrying a delivery is
-// therefore refused rather than given back: something was said to her on it, and
-// a second delivery of it is the thing this record exists to prevent.
+// being recorded, and giving one back is sound only for a turn that produced no
+// answer of hers. A record carrying a delivery is therefore refused rather than
+// given back: something was said to her on it, and a second delivery of it is
+// the thing this record exists to prevent.
+//
+// Where that boundary falls is stated here rather than left to each caller,
+// because the callers cite this contract and must not each draw it somewhere
+// else.
+//
+// A conversation that could not be opened is the plain case: the turn never
+// happened, so it asked her nothing. A turn a cancellation killed is the other,
+// and it is the narrower claim. Its give-back does not rest on her never having
+// seen the message — the provider had the prompt from the moment the invocation
+// started, and a transcript it had already written is hers to read on the next
+// turn. It rests on what the turn produced: a cancelled turn that ended before a
+// reply existed had no reply parsed, applied no action of hers, and moved no
+// durable triage record, so a second delivery of it cannot become a second
+// decision. A cancellation that landed after her answer arrived is not this and
+// keeps its attempt: she answered, and this cannot claim she did not.
 //
 // What it gives back is the attempt and not the pacing. The record stays, with
 // its moment on it, so the next delivery waits out the same delay a failed one
-// does — because the two failures this is for are a provider with no capacity and
-// a conversation somebody else is holding, and both of those last minutes or
-// hours. A give-back that erased the record would put the next pull straight back
-// into the same refusal, which on a busy queue is several a minute for as long as
-// the limit lasts.
+// does — because a provider with no capacity and a conversation somebody else is
+// holding both last minutes or hours. A give-back that erased the record would
+// put the next pull straight back into the same refusal, which on a busy queue is
+// several a minute for as long as the limit lasts.
 //
 // A stoppage nothing has been recorded about is already what this would leave
 // behind, so withdrawing one is not an error.

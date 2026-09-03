@@ -103,31 +103,44 @@ func (d developmentManagerConversation) Judge(ctx context.Context, entry triage.
 	return judgment, nil
 }
 
-// notReached marks the failures where the turn provably asked her nothing, so
+// notReached marks the failures where the turn produced no answer of hers, so
 // the stoppage keeps the delivery it is owed rather than spending one on a turn
-// nobody took.
+// that decided nothing.
 //
-// Two of them. A provider that declined the turn for want of capacity never put
-// the message in front of her, and the limit it met is recorded where every
+// Three of them. A provider that declined the turn for want of capacity never
+// put the message in front of her, and the limit it met is recorded where every
 // process outside a run records one — so the right answer is to ask again once
 // it resets, which a later pass does. A pause the operator placed between the
 // escalator reading it and this turn is the same fact a moment later: the turn
 // was refused before the provider was reached, and the stoppage is delivered
 // after the pause lifts.
 //
-// Neither is a reason to ask again immediately, and the record is what stops
-// that: the attempt comes back and the pacing does not, so the next delivery
-// waits out the same delay a failed one does. Both of these last minutes or
-// hours, and a pull that asked again at once would meet the same refusal several
-// times a minute for the whole of it.
+// The third is a turn a cancellation killed before her reply existed, which is
+// the harness's own death rather than anything about her: a signal, a shutdown,
+// a process-group teardown taken out from under the pull. Where that one's
+// boundary falls is stated on the Withdraw contract it is spent against, and it
+// is narrower than the other two — it does not claim she never saw the message,
+// only that the turn ended before a reply was parsed, so no action of hers was
+// applied and the item's durable triage record never moved. A cancellation that
+// landed after her answer arrived is not this and keeps its attempt: she
+// answered, and asking again would put the same evidence to her twice.
 //
-// Everything else is left as it is. A turn that reached her and then failed is
-// one nothing here can prove she did not read, and the bounded retry is what
-// keeps that honesty from becoming a loop.
+// None of the three is a reason to ask again immediately, and the record is what
+// stops that: the attempt comes back and the pacing does not, so the next
+// delivery waits out the same delay a failed one does. A refusal and a hold both
+// last minutes or hours, and a pull that asked again at once would meet the same
+// one several times a minute for the whole of it.
+//
+// Everything else is left as it is. A turn that answered and then failed is one
+// nothing here can prove she did not take, and the bounded retry is what keeps
+// that honesty from becoming a loop.
 func notReached(err error) error {
 	var held *chat.OperatorHoldError
 	if errors.Is(err, chat.ErrProviderCapacity) || errors.As(err, &held) {
 		return fmt.Errorf("%w: %w", orchestrator.ErrConversationUnreachable, err)
+	}
+	if errors.Is(err, chat.ErrTurnAbandoned) {
+		return fmt.Errorf("%w: %w", orchestrator.ErrDeliveryCancelled, err)
 	}
 	return err
 }

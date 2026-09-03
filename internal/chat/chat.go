@@ -986,6 +986,12 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// "the role answered badly", because the two are owed opposite things: one is
 	// worth asking again once the limit resets, and the other is not.
 	declined := providerDeclined(result, err)
+	// And the same again for a turn a cancellation killed before an answer of the
+	// role's existed. It is a third ending a caller that is not a person has to be
+	// able to name: the harness withdrew its own question, so nothing was decided
+	// and nothing was carried out, and a caller with a bounded number of attempts
+	// must not spend one on the harness's own shutdown.
+	abandoned := turnAbandoned(result)
 	// A failed invocation is exactly the case a reply shown as it formed must not
 	// be left looking whole: whatever prose reached the screen was the start of
 	// an answer nobody finished. The two failures below are the only ones that
@@ -994,13 +1000,14 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// wherever the error is eventually reported.
 	if err != nil {
 		s.stream.cutOff()
-		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), declined, refusal, s.record())
+		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), declined, abandoned, refusal, s.record())
 	}
 	if result.IsError {
 		s.stream.cutOff()
 		return "", errors.Join(
 			fmt.Errorf("%s reported failure: %s", RoleTitle(s.state.Role), result.DescribeFailure()),
 			declined,
+			abandoned,
 			refusal,
 			s.record(),
 		)
