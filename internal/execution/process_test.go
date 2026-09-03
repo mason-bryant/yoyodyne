@@ -162,14 +162,81 @@ func TestOSProcessRunnerCancellation(t *testing.T) {
 	}
 }
 
-func TestOSProcessRunnerOutputLimit(t *testing.T) {
+// A process that says more than the result may retain is not stopped for it.
+// The copy stops growing, the marker says where the whole of it is, every line
+// still reaches the observer that writes the durable record, and the process
+// finishes on its own merits.
+func TestOSProcessRunnerTruncatesRetainedOutputInsteadOfFailing(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("verbose", "")
+	command.Timeout = 30 * time.Second
+	// Room for the first few lines and nothing like all of them.
+	command.MaxOutputBytes = 40
+	command.OutputRecord = "the event log for run-test"
+	var observed []Output
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, func(output Output) {
+		observed = append(observed, output)
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != ProcessSucceeded || result.ExitCode != 0 {
+		t.Fatalf("Run() result = %#v, want a process that completed on its merits", result)
+	}
+	if len(observed) != verboseHelperLines+1 {
+		t.Fatalf("observed %d outputs, want every one of the %d the process produced", len(observed), verboseHelperLines+1)
+	}
+	if !result.OutputTruncated || result.TruncatedBytes <= 0 {
+		t.Fatalf("Run() result = %#v, want the truncation reported", result)
+	}
+	if !strings.Contains(result.Stdout, "line 0") {
+		t.Fatalf("Run() stdout = %q, want what fitted inside the bound", result.Stdout)
+	}
+	if strings.Contains(result.Stdout, fmt.Sprintf("line %d", verboseHelperLines-1)) {
+		t.Fatalf("Run() stdout = %q, want the tail left out of the retained copy", result.Stdout)
+	}
+	// The stderr line races the stdout flood through one channel, so which side
+	// of the bound it lands on is not this test's business; what it asserts is
+	// the stream that certainly outgrew it.
+	if !strings.Contains(result.Stdout, "truncated; the whole of it is in the event log for run-test") {
+		t.Fatalf("Run() stdout = %q, want a marker naming the durable record", result.Stdout)
+	}
+}
+
+// A caller that retains nothing durably gets a marker saying so rather than one
+// pointing at a record nobody wrote.
+func TestOSProcessRunnerTruncationSaysWhenNothingHoldsTheRest(t *testing.T) {
 	t.Parallel()
 
 	command := helperCommand("success", "")
 	command.MaxOutputBytes = 2
-	_, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
-	if err == nil || !strings.Contains(err.Error(), "output exceeded") {
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
 		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != ProcessSucceeded {
+		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessSucceeded)
+	}
+	if !strings.Contains(result.Stdout, "truncated; nothing durable holds the rest") {
+		t.Fatalf("Run() stdout = %q, want a marker that names no record", result.Stdout)
+	}
+}
+
+// Output that fits is carried back exactly as it always was, marker and flags
+// included only where something was actually left out.
+func TestOSProcessRunnerLeavesOutputThatFitsAlone(t *testing.T) {
+	t.Parallel()
+
+	result, err := (OSProcessRunner{}).Run(context.Background(), helperCommand("success", ""), nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.OutputTruncated || result.TruncatedBytes != 0 {
+		t.Fatalf("Run() result = %#v, want no truncation reported", result)
+	}
+	if strings.Contains(result.Stdout+result.Stderr, "truncated") {
+		t.Fatalf("Run() output = %q + %q, want no marker", result.Stdout, result.Stderr)
 	}
 }
 
@@ -215,6 +282,11 @@ func TestRedactorReplacesOverlappingSecretsLongestFirst(t *testing.T) {
 		t.Fatalf("Redact() = %q", got)
 	}
 }
+
+// verboseHelperLines is how much the verbose helper says on stdout before its
+// one line of stderr. It is more than any bound a truncation test sets and small
+// enough to compare line by line.
+const verboseHelperLines = 50
 
 func helperCommand(mode, secret string) Command {
 	return Command{
@@ -272,6 +344,12 @@ func TestProcessHelper(t *testing.T) {
 			fmt.Println("still working")
 			time.Sleep(10 * time.Millisecond)
 		}
+	case "verbose":
+		for line := 0; line < verboseHelperLines; line++ {
+			fmt.Printf("line %d\n", line)
+		}
+		fmt.Fprintln(os.Stderr, "warning")
+		os.Exit(0)
 	case "oversized-line":
 		fmt.Print(strings.Repeat("x", 2<<20))
 		time.Sleep(5 * time.Second)

@@ -87,9 +87,15 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 			// process's own with the cache pointed inside the repository being
 			// checked -- the same redirect the run's own probe was given, so
 			// the two share what has already been compiled.
-			Env:      execution.WithGoBuildCache(nil, directory),
-			Timeout:  timeout,
-			Redactor: redactor,
+			Env:     execution.WithGoBuildCache(nil, directory),
+			Timeout: timeout,
+			// Every line a check prints becomes an event in this run's log, so
+			// the log is where the whole of it is once the runner stops growing
+			// its in-memory copy. A suite that prints a great deal is not a
+			// suite that failed, and it is never a reason to stop the command
+			// producing it.
+			OutputRecord: "the event log for " + runID,
+			Redactor:     redactor,
 		}, func(output execution.Output) {
 			if len(observerErrors) > 0 {
 				return
@@ -125,6 +131,12 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 			"exit_code": processResult.ExitCode,
 			"elapsed":   result.Elapsed().String(),
 			"timeout":   timeout.String(),
+			// A check whose output outgrew what the result retains says so
+			// here, beside what it exited with: the events above hold every
+			// line, and this is what tells a reader that the result carries
+			// less than they do.
+			"output_truncated": processResult.OutputTruncated,
+			"truncated_bytes":  processResult.TruncatedBytes,
 		}); err != nil {
 			return results, lastAccepted, err
 		}

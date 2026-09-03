@@ -233,6 +233,56 @@ func TestEveryCheckIsGivenABuildCacheTheRunMayWrite(t *testing.T) {
 	}
 }
 
+// A check that says more than the result retains still passes on its exit code,
+// and what it said is still in the run's log one event per line. The completion
+// event says the retained copy is bounded, so the two never disagree silently.
+func TestRunnerReportsATruncatedCheckWithoutFailingIt(t *testing.T) {
+	t.Parallel()
+
+	runID := "run-0123456789abcdef0123456789abcdef"
+	process := &recordingRunner{result: execution.ProcessResult{
+		Status:          execution.ProcessSucceeded,
+		Stdout:          "the start of it\n… 4096 further bytes of stdout truncated; the whole of it is in the event log for " + runID + "\n",
+		OutputTruncated: true,
+		TruncatedBytes:  4096,
+	}}
+	var events []execution.Event
+	results, _, err := (Runner{Process: process}).Run(
+		context.Background(),
+		runID,
+		t.TempDir(),
+		[]string{"printf 'a lot\\n'"},
+		0,
+		func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(results) != 1 || !results[0].Passed {
+		t.Fatalf("Run() results = %#v, want a check judged on its exit code", results)
+	}
+	if record := process.command.OutputRecord; record != "the event log for "+runID {
+		t.Fatalf("output record = %q, want the run's own event log named", record)
+	}
+	completions := 0
+	for _, event := range events {
+		if event.Type != execution.EventCommandCompleted {
+			continue
+		}
+		completions++
+		payload := string(event.Payload)
+		if !strings.Contains(payload, `"output_truncated":true`) || !strings.Contains(payload, `"truncated_bytes":4096`) {
+			t.Fatalf("completion event = %s, want the truncation stated", payload)
+		}
+	}
+	if completions != 1 {
+		t.Fatalf("recorded %d completions, want the one check that ran", completions)
+	}
+}
+
 type recordingRunner struct {
 	command execution.Command
 	result  execution.ProcessResult
