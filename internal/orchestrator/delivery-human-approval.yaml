@@ -1,0 +1,58 @@
+# The delivery loop for a project whose integration a person still approves.
+#
+# It is the same claim-and-develop-and-check sequence as delivery.yaml with the
+# gate's second half missing, because that is what the pipeline does: a run
+# nobody has authorized to promote has no repair loop to return anything to and
+# no verdict to buy, so it records the outcome on the item after the checks and
+# stops with the change preserved on its branch. `verifyReviewAndFinish` is
+# where the two paths part, and this file is the other side of that branch.
+#
+# It is a second definition rather than a branch inside delivery.yaml because a
+# definition has no way to ask what the project configured -- it selects actions
+# and names destinations, and that is the whole of what it can do. Which of the
+# two a project runs is a binding rather than a transition.
+#
+# What it shares with delivery.yaml, it shares deliberately: the same actions,
+# the same outcome vocabulary, and the same absent `complete` state, since
+# recording the outcome on the item is `(*activeRun).finish` and no registered
+# action is a door onto it.
+schema: 1
+id: delivery-human-approval
+summary: claim a work item, develop a change, check it, and preserve it on its branch for the person who approves the promotion
+initial: claim
+states:
+  claim:
+    action: work-item.claim
+    summary: take the work item this run was dispatched for and assemble the context its developer is given
+    on:
+      claimed: develop
+      unavailable: abandoned
+  develop:
+    action: candidate.develop
+    summary: invoke the developer in this run's worktree, and publish what the attempt produced
+    on:
+      produced: check
+      reissued: develop
+      relaunches-spent: blocked
+      stopped: abandoned
+  check:
+    action: candidate.check
+    summary: refuse a change that touched paths this work item does not grant, then run the project's configured checks over it
+    on:
+      passed: preserved
+      # A failing check ends the run here rather than spending a repair attempt:
+      # nothing is promoted without the approver either way, and the worktree is
+      # preserved for them. The same goes for a refused path and for a check that
+      # could not run at all, so all three arrive at the same place. Neither of
+      # the budget-spent outcomes appears, because there is no repair loop to
+      # spend one.
+      failed: abandoned
+      refused: abandoned
+      unrunnable: abandoned
+terminals:
+  preserved:
+    summary: the change passed its checks and is on its branch, with the outcome recorded on the item for the person who approves the promotion
+  blocked:
+    summary: the run stopped on something a person has to decide, with the worktree and branch preserved and a durable blocker on the item
+  abandoned:
+    summary: the run stopped with nothing preserved for anybody to approve

@@ -513,10 +513,40 @@ them.
   registers the same steps under selectable names — `work-item.claim`,
   `candidate.develop`, `candidate.publish`, `candidate.check`,
   `candidate.review`, `candidate.integrate`, `run.clean-up` — and each one is a
-  single call to the function the pipeline itself calls, but nothing walks
-  through that door yet. So these traces measure the hard-coded sequence, which
-  is what a later executor driving the same steps from a definition has to be
-  diffed against; they say nothing about the registry itself.
+  single call to the function the pipeline itself calls, but nothing in the
+  delivery path walks through that door: `Pipeline.Run` still runs the sequence
+  Go control flow puts it in, and these traces are of that sequence.
+
+  What now reads them is the parity harness in
+  `internal/orchestrator/parity_test.go`, which walks the built-in workflow
+  definitions — `delivery.yaml` and `delivery-human-approval.yaml`, the same
+  loop under its two integration policies — against every trace here. Each path
+  is written down there as the states a run stood in and the outcome it produced
+  in each, held against the trace that evidences it (a developer invocation is a
+  `develop` state, a verdict is a `review` state, and the counters below decide
+  how many of each), and then stepped through the compiled definition by
+  `internal/workflow`'s own executor with the registered actions' doors
+  performing nothing. A recorded path no scenario walks fails that harness by
+  name.
+
+  What it measures is the **sequence** and not the record. The pipeline does
+  everything outside its seven registered steps in Go control flow behind no
+  door at all — the pre-claim questions, the pauses, the budgets, and the
+  outcome recorded on the work item — so there is nothing for an executor to
+  perform that would produce a durable record to compare field by field. The
+  four paths that stop before anything is claimed reach no state at all and are
+  named as inexpressible there rather than walked; the two reconciliation paths
+  are walked as far as the step the process died inside, because the settlement
+  after it is not an action anything registers.
+
+  Two steps of the `completing` phase are missing from the definitions for the
+  same reason and are worth knowing about before reading one as the pipeline.
+  Recording the outcome on the item, closing it and pricing it is
+  `(*activeRun).finish`, which no registered action is a door onto, so no
+  definition can put it between the promotion and the cleanup where it happens.
+  And there is no `publish` state, because `candidate.develop` ends by calling
+  `publishAttempt` — a definition selecting `candidate.publish` beside it would
+  publish every attempt twice.
 
 **Not observable in these scenarios.**
 
