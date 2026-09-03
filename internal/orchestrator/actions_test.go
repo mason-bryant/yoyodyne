@@ -17,6 +17,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -39,6 +40,7 @@ func TestTheDeliveryRegistryIsBuildable(t *testing.T) {
 		"candidate.check",
 		"candidate.review",
 		"candidate.integrate",
+		"run.complete",
 		"run.clean-up",
 	}
 	if names := registry.Names(); !slices.Equal(names, want) {
@@ -62,11 +64,20 @@ func TestEveryRegisteredActionWrapsAFunctionThisPackageHas(t *testing.T) {
 // and in what order. They are the delivery loop's control flow and nothing else:
 // everything a run does, it does because one of these called it or because a
 // step one of these called did.
+//
+// `finish` is one of them rather than a step, and that is the whole of what
+// covers the completing end of a run. It performs nothing itself: it orders
+// `complete` and then `cleanUp`, both registered, so an operation that arrives
+// between them is walked from here and has to be registered or excused. While it
+// was excused as a step of its own, everything inside it was invisible to this
+// test — which is how recording the outcome, closing the item and pricing it
+// came to be delivery work no definition could express.
 var sequencers = []string{
 	"(Pipeline).Run",
 	"(Pipeline).resumeRun",
 	"(*activeRun).verifyReviewAndFinish",
 	"(*activeRun).repairLoop",
+	"(*activeRun).finish",
 }
 
 // TestEveryStepTheDeliveryLoopCallsIsRegistered is the coverage claim, held
@@ -240,6 +251,13 @@ func TestTheRolesThatAuthorizeAPromotionCannotPerformOne(t *testing.T) {
 // flow, but which a run can be found sitting in. A run's phase is the durable
 // record of the step it reached, so a phase no registered action names is a
 // place a run stops that this registry says nothing about.
+//
+// It is the second guard and not the first, because a phase is a coarser thing
+// than a step: a phase two steps run in is covered by either of them, so a step
+// can go missing under a phase somebody else's step already names. That is what
+// happened to the completing phase, which candidate.integrate claimed because
+// promoting a change ends by recording it. The coverage claim is the walk above,
+// held against what the loop calls; this holds the durable record to it.
 func TestEveryRunPhaseHasARegisteredAction(t *testing.T) {
 	t.Parallel()
 
@@ -339,6 +357,154 @@ func TestPerformingARefusedClaimReportsTheRefusal(t *testing.T) {
 	}
 	if run.claimed {
 		t.Error("a refused claim left the run holding the item")
+	}
+}
+
+// TestPerformingCompleteClosesAndPricesTheItem is what makes the completing door
+// worth having: a run driven through it has to finish with its work item exactly
+// as the hard-coded loop leaves it.
+//
+// The parity harness cannot make this claim. It walks the real topology with
+// every door performing nothing, so it measures the sequence and never what a
+// step does — which is how a definition that promoted a change and never closed
+// its item would have walked it clean.
+func TestPerformingCompleteClosesAndPricesTheItem(t *testing.T) {
+	t.Parallel()
+
+	const itemID = "yoyodyne-ifd.209.18"
+	registry, err := deliveryRegistry()
+	if err != nil {
+		t.Fatalf("deliveryRegistry() error = %v", err)
+	}
+	complete, found := registry.Lookup("run.complete")
+	if !found {
+		t.Fatal(`Lookup("run.complete") found nothing`)
+	}
+
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	state := completingRun(itemID, runstate.PhaseCompleting)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	tracker := &fakeTracker{item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
+	prices := &fakePricer{cost: beads.Cost{TotalUSD: 3.50, Runs: 1}}
+	run := &activeRun{
+		pipeline: Pipeline{Tracker: tracker, Prices: prices, Store: store},
+		claimed:  true,
+		state:    state,
+		outcome: Outcome{Integration: &gitworktree.Integration{
+			TargetBranch: "main",
+			SourceCommit: "b0bb1e5",
+		}},
+	}
+	if err := complete.Perform(context.Background(), run); err != nil {
+		t.Fatalf("Perform() error = %v", err)
+	}
+
+	if want := []string{"record", "complete"}; !slices.Equal(tracker.calls, want) {
+		t.Errorf("the tracker was asked for %v, want %v", tracker.calls, want)
+	}
+	if !tracker.closed {
+		t.Error("the promoted item was not closed")
+	}
+	if !run.outcome.WorkItemClosed {
+		t.Error("the run does not report the item as closed")
+	}
+	if want := []string{itemID}; !slices.Equal(prices.priced, want) {
+		t.Errorf("the run priced %v, want %v", prices.priced, want)
+	}
+	if run.outcome.Cost == nil || run.outcome.Cost.TotalUSD != 3.50 {
+		t.Errorf("the run reports the cost %v, and the ledger priced it at 3.50", run.outcome.Cost)
+	}
+	// The run is durably terminal before anything is removed, with the cleanup
+	// still to do. That boundary is what a definition's next state stands on.
+	if run.state.Status != runstate.StatusSucceeded {
+		t.Errorf("run.state.Status = %q, want %q", run.state.Status, runstate.StatusSucceeded)
+	}
+	if run.state.Phase != runstate.PhaseCleaningUp {
+		t.Errorf("run.state.Phase = %q, want %q", run.state.Phase, runstate.PhaseCleaningUp)
+	}
+	if run.state.CompletedAt == nil {
+		t.Error("the run was not recorded as completed")
+	}
+	if run.state.WorktreeRemoved || run.state.BranchRemoved {
+		t.Error("completing removed an artifact; removing them is run.clean-up")
+	}
+	saved, err := store.Load(run.state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if saved.Status != runstate.StatusSucceeded || saved.Phase != runstate.PhaseCleaningUp {
+		t.Errorf("the durable record is %q in %q; a process that died here would resume the cleanup",
+			saved.Status, saved.Phase)
+	}
+}
+
+// TestPerformingCompleteOnAnUnpromotedChangeRecordsWithoutClosing is the other
+// half of the same door, which the human-approval definition selects: a change
+// nobody promoted is recorded and priced, and the item is left for the person
+// who approves the promotion.
+func TestPerformingCompleteOnAnUnpromotedChangeRecordsWithoutClosing(t *testing.T) {
+	t.Parallel()
+
+	const itemID = "yoyodyne-ifd.209.18"
+	registry, err := deliveryRegistry()
+	if err != nil {
+		t.Fatalf("deliveryRegistry() error = %v", err)
+	}
+	complete, _ := registry.Lookup("run.complete")
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	state := completingRun(itemID, runstate.PhaseChecking)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	tracker := &fakeTracker{item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
+	prices := &fakePricer{}
+	run := &activeRun{
+		pipeline: Pipeline{Tracker: tracker, Prices: prices, Store: store},
+		claimed:  true,
+		state:    state,
+	}
+	if err := complete.Perform(context.Background(), run); err != nil {
+		t.Fatalf("Perform() error = %v", err)
+	}
+	if want := []string{"record"}; !slices.Equal(tracker.calls, want) {
+		t.Errorf("the tracker was asked for %v, want %v; nothing was promoted", tracker.calls, want)
+	}
+	if tracker.closed {
+		t.Error("the item was closed and nobody has promoted the change")
+	}
+	if want := []string{itemID}; !slices.Equal(prices.priced, want) {
+		t.Errorf("the run priced %v, want %v", prices.priced, want)
+	}
+	// There is nothing to clean up after, so this is where the run ends.
+	if run.state.Phase != runstate.PhaseComplete {
+		t.Errorf("run.state.Phase = %q, want %q", run.state.Phase, runstate.PhaseComplete)
+	}
+}
+
+// completingRun is a run about to be completed, valid enough for the store to
+// take: the fields runstate requires, and the phase the step is entered from.
+func completingRun(itemID string, phase runstate.Phase) runstate.State {
+	started := baseTime
+	return runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         pipelineRunID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    itemID,
+		WorkItemTitle: "A registered run.complete action",
+		Backend:       domain.BackendClaudeCode,
+		Status:        runstate.StatusRunning,
+		Phase:         phase,
+		StartedAt:     started,
+		UpdatedAt:     started,
 	}
 }
 
@@ -554,7 +720,6 @@ var notAStep = map[string]string{
 	// delivery.
 	"fail":                       "turns a failure into the run's outcome",
 	"stop":                       "turns a stopped step into the run's outcome, which for a pause or a hold leaves the run in flight",
-	"finish":                     "records the outcome, closes an integrated item, prices it, and makes the run terminal before calling run.clean-up. Its tracker writes are real delivery work and it is a candidate for an action of its own; it is excused here because the seven steps this registry was scoped to do not include it",
 	"blockOnFailingCheck":        "hands a spent repair budget to a person",
 	"blockOnRefusedPaths":        "hands a spent repair budget to a person",
 	"blockOnUnresolvedFindings":  "hands a spent repair budget to a person",
@@ -609,4 +774,6 @@ var notAStep = map[string]string{
 	"recordDevelopment":   "records what a developer invocation produced and cost",
 	"deliveredInvariants": "selects the invariants a developer is given",
 	"repairBudget":        "reads how many repair attempts this run may still make",
+	"recordPrice":         "prices the item against what this run spent, inside run.complete",
+	"mergeQueued":         "reads whether the forge only queued the merge, which is what run.complete waits for before closing the item",
 }

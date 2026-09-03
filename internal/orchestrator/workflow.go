@@ -101,7 +101,13 @@ var deliveryAnswers = map[string][]string{
 	"candidate.check":     {"failed", "failed-unrepaired", "passed", "refused", "refused-unrepaired", "unrunnable"},
 	"candidate.review":    {"approved", "changes-requested", "stopped", "unresolved"},
 	"candidate.integrate": {"conflicted", "contended", "integrated", "superseded"},
-	"run.clean-up":        {"cleaned", "partial"},
+	// One outcome, because the run distinguishes nothing here: a promotion whose
+	// merge the forge only queued leaves the item open for a later sweep to close,
+	// and the run goes on to exactly the same next step either way. Where the two
+	// integration policies part is which definition selects this state, not what
+	// it answers with.
+	"run.complete": {"completed"},
+	"run.clean-up": {"cleaned", "partial"},
 }
 
 // builtinDelivery is one shipped definition: the name it answers to and the

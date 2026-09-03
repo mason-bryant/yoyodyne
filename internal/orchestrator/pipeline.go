@@ -3695,10 +3695,50 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	return nil
 }
 
-// finish records the outcome, closes an integrated item whose publication is
-// settled, makes the run durably terminal, and only then removes what the run
-// created.
+// finish is the completing half of a run: what the run produced is recorded and
+// the run is made terminal, and only then is what it created removed.
+//
+// It is control flow rather than an operation of its own. Both halves are
+// registered steps — run.complete and run.clean-up — so a workflow definition
+// orders the same two in the same order this does, and a step that arrives
+// between them arrives in the registry rather than only here.
 func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
+	outcome, err := a.complete(ctx)
+	if err != nil || a.outcome.Integration == nil {
+		return outcome, err
+	}
+	if err := a.cleanUp(ctx); err != nil {
+		// A failure here leaves the run succeeded and reports the outstanding
+		// cleanup: the change is integrated and the item is closed. Whatever was
+		// removed before the failure is still recorded as removed.
+		return a.pipeline.reportOutstandingCleanup(a.state, a.outcome, err)
+	}
+	// Cleanup finished, so the run is complete whatever happens to the record of
+	// it. The reported phase follows that fact rather than the write below.
+	a.state.Phase = runstate.PhaseComplete
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	a.outcome.Phase = a.state.Phase
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		// An interrupted write that recovers must leave a clean terminal record,
+		// not a cleanup warning about artifacts that are already gone.
+		a.state.UpdatedAt = a.pipeline.clock().Now()
+		if retryErr := a.pipeline.Store.Save(a.state); retryErr != nil {
+			return a.pipeline.reportCompletionRecordingFailure(a.state, a.outcome,
+				fmt.Errorf("save completed run state after cleanup: %w", errors.Join(err, retryErr)))
+		}
+	}
+	return a.outcome, nil
+}
+
+// complete records the outcome on the work item, closes an integrated item whose
+// publication is settled, prices what the run spent, and makes the run durably
+// terminal.
+//
+// It stops short of removing anything, and that boundary is the point: the run
+// becomes terminal here and cleanup is the only step left, so a process
+// interrupted between the two leaves a succeeded run in the cleaning_up phase
+// rather than a closed item behind a run nothing finished.
+func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	p := a.pipeline
 	// The tracker is updated only once the work is durably where it belongs:
 	// after integration when it is automatic, and after passing checks when a
@@ -3749,30 +3789,6 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	}
 	a.outcome.Status = runstate.StatusSucceeded
 	a.outcome.Phase = a.state.Phase
-	if a.outcome.Integration == nil {
-		return a.outcome, nil
-	}
-
-	if err := a.cleanUp(ctx); err != nil {
-		// A failure here leaves the run succeeded and reports the outstanding
-		// cleanup: the change is integrated and the item is closed. Whatever was
-		// removed before the failure is still recorded as removed.
-		return p.reportOutstandingCleanup(a.state, a.outcome, err)
-	}
-	// Cleanup finished, so the run is complete whatever happens to the record of
-	// it. The reported phase follows that fact rather than the write below.
-	a.state.Phase = runstate.PhaseComplete
-	a.state.UpdatedAt = p.clock().Now()
-	a.outcome.Phase = a.state.Phase
-	if err := p.Store.Save(a.state); err != nil {
-		// An interrupted write that recovers must leave a clean terminal record,
-		// not a cleanup warning about artifacts that are already gone.
-		a.state.UpdatedAt = p.clock().Now()
-		if retryErr := p.Store.Save(a.state); retryErr != nil {
-			return p.reportCompletionRecordingFailure(a.state, a.outcome,
-				fmt.Errorf("save completed run state after cleanup: %w", errors.Join(err, retryErr)))
-		}
-	}
 	return a.outcome, nil
 }
 

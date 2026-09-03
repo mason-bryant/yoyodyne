@@ -32,12 +32,15 @@ package orchestrator
 // harness" means here.
 //
 // What it does not do is compare a run's durable record field for field, and it
-// could not: everything the pipeline does outside its seven registered steps --
-// the pre-claim questions, the pauses, the budgets, the outcome recorded on the
-// item -- is Go control flow behind no door, so there is nothing to execute that
-// would produce a record to compare. The traces stay the measure; this measures
-// the sequence against them, and the change summary says which paths that
-// leaves unmeasured.
+// could not: everything the pipeline does outside its eight registered steps --
+// the pre-claim questions, the pauses, the budgets -- is Go control flow behind
+// no door, so there is nothing to execute that would produce a record to
+// compare. The traces stay the measure; this measures the sequence against them,
+// and the change summary says which paths that leaves unmeasured. What a step
+// does rather than when it runs is held where the door can actually be performed
+// -- run.complete's tracker writes are in actions_test.go, because a walk whose
+// doors perform nothing cannot tell a run that closed its item from one that did
+// not.
 
 import (
 	"context"
@@ -96,6 +99,7 @@ const (
 	parityCheck     = "check"
 	parityReview    = "review"
 	parityIntegrate = "integrate"
+	parityComplete  = "complete"
 	parityCleanUp   = "clean-up"
 )
 
@@ -110,6 +114,7 @@ func parityScenarios() []parityScenario {
 		{parityCheck, "passed"},
 		{parityReview, "approved"},
 		{parityIntegrate, "integrated"},
+		{parityComplete, "completed"},
 		{parityCleanUp, "cleaned"},
 	}
 	// A pause, an overload, a stop the harness made and a transient death are one
@@ -130,6 +135,11 @@ func parityScenarios() []parityScenario {
 				{parityClaim, "claimed"},
 				{parityDevelop, "produced"},
 				{parityCheck, "passed"},
+				// The same completing step the automatic loop performs, doing less of
+				// it: nothing was promoted, so the outcome is recorded on the item and
+				// the run is priced, and the item is neither closed nor cleaned up
+				// after.
+				{parityComplete, "completed"},
 			},
 			terminal: "preserved",
 		},
@@ -150,6 +160,7 @@ func parityScenarios() []parityScenario {
 				{parityCheck, "passed"},
 				{parityReview, "approved"},
 				{parityIntegrate, "integrated"},
+				{parityComplete, "completed"},
 				{parityCleanUp, "cleaned"},
 			},
 			terminal: "delivered",
@@ -180,6 +191,7 @@ func parityScenarios() []parityScenario {
 				{parityCheck, "passed"},
 				{parityReview, "approved"},
 				{parityIntegrate, "integrated"},
+				{parityComplete, "completed"},
 				{parityCleanUp, "cleaned"},
 			},
 			terminal: "delivered",
@@ -212,6 +224,7 @@ func parityScenarios() []parityScenario {
 				{parityCheck, "passed"},
 				{parityReview, "approved"},
 				{parityIntegrate, "integrated"},
+				{parityComplete, "completed"},
 				{parityCleanUp, "cleaned"},
 			},
 			terminal: "delivered",
@@ -283,6 +296,7 @@ func parityScenarios() []parityScenario {
 				{parityCheck, "passed"},
 				{parityReview, "approved"},
 				{parityIntegrate, "integrated"},
+				{parityComplete, "completed"},
 				{parityCleanUp, "partial"},
 			},
 			terminal: "delivered",
@@ -342,6 +356,7 @@ func parityScenarios() []parityScenario {
 				{parityCheck, "passed"},
 				{parityReview, "approved"},
 				{parityIntegrate, "integrated"},
+				{parityComplete, "completed"},
 				{parityCleanUp, "cleaned"},
 			},
 			terminal: "delivered",

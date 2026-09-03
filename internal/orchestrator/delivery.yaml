@@ -19,11 +19,13 @@
 #     publishAttempt -- which is why the registry declares `forge.publish` on the
 #     developer -- so a definition that also selected `candidate.publish` would
 #     publish every attempt twice.
-#   * There is no `complete` state either, and that one is an absence rather than
-#     a choice: recording the outcome on the work item, closing it and pricing it
-#     is `(*activeRun).finish`, which no registered action is a door onto. It
-#     happens between `integrate` and `clean-up`, and no definition can say so
-#     until it has a door.
+#   * The `complete` state between `integrate` and `clean-up` is where the work
+#     item is finished with: the outcome recorded on it, the item closed now its
+#     promotion is settled, and what the run spent priced against it. It is a
+#     state of its own because that is what the pipeline does there --
+#     `(*activeRun).finish` performs it and then the cleanup -- and a definition
+#     that ran the promotion straight into the cleanup would promote a change and
+#     never close its item.
 #   * A budget is not something a definition can ask about. The run counts its
 #     own repair attempts, relaunches and integration retries, so what appears
 #     here is the pair of outcomes the run distinguishes: the failure handed back
@@ -87,7 +89,7 @@ states:
     action: candidate.integrate
     summary: take the target branch's promotion lease and promote the approved change onto it
     on:
-      integrated: clean-up
+      integrated: complete
       # A promotion that lost its race for the target branch is replayed onto
       # where the target went and re-earns the whole gate: the checks against the
       # replayed change, and a fresh independent verdict on it.
@@ -96,6 +98,11 @@ states:
       # A replay that conflicts is never resolved by the harness. Both sides are
       # left intact and the item is blocked.
       conflicted: blocked
+  complete:
+    action: run.complete
+    summary: record on the work item what this run produced, close it now its promotion is settled, and price what it spent
+    on:
+      completed: clean-up
   clean-up:
     action: run.clean-up
     summary: remove the worktree and branch this run created, once its change is proven to be somewhere else

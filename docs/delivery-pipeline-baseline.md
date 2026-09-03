@@ -512,10 +512,11 @@ them.
 - Every trace here records the pipeline's Go control flow. `actions.go`
   registers the same steps under selectable names — `work-item.claim`,
   `candidate.develop`, `candidate.publish`, `candidate.check`,
-  `candidate.review`, `candidate.integrate`, `run.clean-up` — and each one is a
-  single call to the function the pipeline itself calls, but nothing in the
-  delivery path walks through that door: `Pipeline.Run` still runs the sequence
-  Go control flow puts it in, and these traces are of that sequence.
+  `candidate.review`, `candidate.integrate`, `run.complete`, `run.clean-up` —
+  and each one is a single call to the function the pipeline itself calls, but
+  nothing in the delivery path walks through that door: `Pipeline.Run` still
+  runs the sequence Go control flow puts it in, and these traces are of that
+  sequence.
 
   What now reads them is the parity harness in
   `internal/orchestrator/parity_test.go`, which walks the built-in workflow
@@ -540,23 +541,26 @@ them.
   because adding a trace here is re-recording this document's own artifact.
 
   What it measures is the **sequence** and not the record. The pipeline does
-  everything outside its seven registered steps in Go control flow behind no
-  door at all — the pre-claim questions, the pauses, the budgets, and the
-  outcome recorded on the work item — so there is nothing for an executor to
-  perform that would produce a durable record to compare field by field. The
-  four paths that stop before anything is claimed reach no state at all and are
-  named as inexpressible there rather than walked; the two reconciliation paths
-  are walked as far as the step the process died inside, because the settlement
-  after it is not an action anything registers.
+  everything outside its eight registered steps in Go control flow behind no
+  door at all — the pre-claim questions, the pauses, and the budgets — so there
+  is nothing for an executor to perform that would produce a durable record to
+  compare field by field. The four paths that stop before anything is claimed
+  reach no state at all and are named as inexpressible there rather than walked;
+  the two reconciliation paths are walked as far as the step the process died
+  inside, because the settlement after it is not an action anything registers.
 
-  Two steps of the `completing` phase are missing from the definitions for the
-  same reason and are worth knowing about before reading one as the pipeline.
-  Recording the outcome on the item, closing it and pricing it is
-  `(*activeRun).finish`, which no registered action is a door onto, so no
-  definition can put it between the promotion and the cleanup where it happens.
-  And there is no `publish` state, because `candidate.develop` ends by calling
-  `publishAttempt` — a definition selecting `candidate.publish` beside it would
-  publish every attempt twice.
+  Recording the outcome on the work item, closing it once its promotion is
+  settled and pricing what the run spent is the `complete` state, between the
+  promotion and the cleanup on the automatic path and the last state on the
+  human-approval one. Because the parity walk performs nothing, what that step
+  does to the item is held separately, in `actions_test.go`: the door is
+  performed against a tracker and a ledger and the item has to end up closed and
+  priced exactly as the hard-coded loop leaves it.
+
+  One state is missing from the definitions and is worth knowing about before
+  reading one as the pipeline. There is no `publish` state, because
+  `candidate.develop` ends by calling `publishAttempt` — a definition selecting
+  `candidate.publish` beside it would publish every attempt twice.
 
 **Not observable in these scenarios.**
 
