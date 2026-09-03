@@ -184,6 +184,18 @@ const (
 	// is either acted on or it is not, and the durable stall record is what makes
 	// once mean once across restarts.
 	KindStallNoticed Kind = "stall.noticed"
+	// One value the project's template has improved that this project has never
+	// edited. It is the third state here rather than a crossing, and it is the
+	// mildest thing this vocabulary carries: nothing is wrong, nothing is waiting,
+	// and nothing changes until somebody adopts it. What it is for is the project
+	// that materialized from a template and then never heard that the template
+	// moved — every surface that could have told them is one somebody has to run,
+	// and a fix to a persona nobody knows about is a fix nobody has.
+	//
+	// It is said exactly once per improvement and never again, which is the whole
+	// of what admits it to a message somebody is sent rather than one they come
+	// looking for: a fact that repeats is a fact somebody mutes.
+	KindBundleImprovement Kind = "bundle.improvement"
 	// What one topic gathered while nothing was posting it. Every kind above is
 	// something the record says happened; this one is what a surface does with a
 	// backlog it cannot say one message at a time — a long gap replayed in full
@@ -244,6 +256,7 @@ func Kinds() []Kind {
 		KindLineWaiting,
 		KindResidentStale,
 		KindStallNoticed,
+		KindBundleImprovement,
 		KindCatchUpDigest,
 	}
 }
@@ -264,7 +277,8 @@ func (k Kind) Valid() bool {
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
-		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed, KindCatchUpDigest:
+		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
+		KindBundleImprovement, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -662,6 +676,19 @@ type Detail struct {
 	// exists to prevent. Absent means the surface was assembled without a way to
 	// read it, which is stated rather than left as a blank.
 	Standing string `json:"standing,omitempty"`
+	// Setting and Improvement are which configuration value the project's template
+	// has improved and what the comparison says about it, read by
+	// KindBundleImprovement.
+	//
+	// Improvement is carried already worded, for the reason Standing is: what
+	// makes a value an improvement -- what the template supplied when the project
+	// was generated, what the project holds, and what the template supplies now --
+	// is a three-way comparison that lives in one place, and a surface that
+	// re-derived it here could come to say a different thing about one value than
+	// `yoyo config drift` does. The setting is carried beside it so a voice can
+	// name the value without taking the sentence apart.
+	Setting     string `json:"setting,omitempty"`
+	Improvement string `json:"improvement,omitempty"`
 	// Accumulated is how many events one topic gathered while nothing was posting
 	// them, read by KindCatchUpDigest. It is the whole of what the digest claims:
 	// how much there is, and therefore how much of the thread's narrative is in

@@ -15,7 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Class is what became of one value between the bundle a project materialized
@@ -247,19 +249,13 @@ const maxNamedImprovements = 5
 // harness asking for attention it was told not to ask for. Both are still there
 // for anybody who runs `yoyo config drift`.
 //
-// The surfaces that say it are the CLI's, and deliberately not Slack's yet. The
-// operator asked (2026-09-01, yoyodyne-ifd.241) for each newly-available
-// improvement to be sent as a direct message too, once per improvement and
-// deduplicated through a durable record rather than once per check pass -- but
-// the slack-reporting design reserves its direct-message tier for states where
-// the system is stopped and waiting on a human, and an advisory notice widens
-// that addressing rule deliberately or not at all. That is the architect's
-// ruling to make and it has not been made, so nothing here is wired to the sink
-// and there is no dedup record to wire. Whoever adds one is adding it after the
-// ruling, not around it: this derivation is computed as a command runs, while
-// the sink posts from durable streams, so the improvement has to become a
-// record on a stream the feed reads before it can be sent once and proved to
-// have been sent once.
+// The surfaces that say it are the CLI's. Slack says the same improvements one
+// at a time instead, through Improvement below: the architect's ruling of
+// 2026-09-03 widened the direct-message tier to two named classes and admitted
+// this notice as the first member of the advisory-once one, which speaks exactly
+// once per fact and deduplicates durably. A count belongs on a line printed
+// beside every command; one improvement said on its own belongs in a message
+// that will only ever be sent once.
 func (d Drift) Notice() string {
 	available := d.Available()
 	if len(available) == 0 {
@@ -282,4 +278,45 @@ func countOfValues(count int) string {
 		return "1 value"
 	}
 	return fmt.Sprintf("%d values", count)
+}
+
+// maxSaidValueRunes bounds how much of one value a message quotes. Most values
+// are a word; a replaced list is the whole list, and a message that carried one
+// of those would bury what it is about in what it is offering.
+const maxSaidValueRunes = 60
+
+// Improvement is one available value said on its own: which setting the template
+// improved, what this project still holds, and what it holds instead.
+//
+// It is the per-value counterpart of Notice, and it is here for the same reason
+// Notice is -- a surface that speaks an improvement must not word it itself. The
+// two are one derivation read at two grains: the line counts them for a terminal
+// that prints it beside every command, and this states one of them for a message
+// that is sent exactly once and never repeated.
+//
+// A value that is not an improvement is said exactly as one that is, because
+// what makes a value offerable is its class and the caller has already asked for
+// that: Available is the reading a speaker takes this from, and stating a
+// verdict here as well would be the classification living in two places.
+func (d Drift) Improvement(value Value) string {
+	return fmt.Sprintf("%s has improved %s, a value this project has not edited: it was %s and is %s now",
+		d.Bundle, value.Key, saidValue(value.Baseline), saidValue(value.Bundle))
+}
+
+// saidValue is one value as a message shows it: quoted, so an empty value and a
+// missing one do not read alike, and cut on a rune boundary where it is longer
+// than a sentence can carry. What was cut is still whole in `yoyo config drift`,
+// which is where a reader who needs the rest of it goes.
+func saidValue(value string) string {
+	if utf8.RuneCountInString(value) <= maxSaidValueRunes {
+		return strconv.Quote(value)
+	}
+	runes := 0
+	for index := range value {
+		if runes == maxSaidValueRunes {
+			return strconv.Quote(value[:index] + "…")
+		}
+		runes++
+	}
+	return strconv.Quote(value)
 }

@@ -96,13 +96,16 @@ rather not do either from Slack can delete those two scopes and the two
 `message.*` events beside them: everything else in this document still works, and
 nothing typed in the channel ever arrives.
 
-`im:write` is used for one class of message and only that one: the harness
-reporting itself degraded, sent directly to whoever step 4 grants `direct-work`.
-There are two of them — a session choosing work from a build the harness has moved
-well past, and the harness having started nothing at all while work was ready —
-and each is sent once rather than repeated. Removing the scope costs those direct
-messages and nothing else: the stale-build one is in the channel either way, and
-the stall is in the durable record `yoyo status` reads back.
+`im:write` is used for two classes of message and only those two, sent directly
+to whoever step 4 grants `direct-work`. The first is **the harness reporting
+itself degraded**: a session choosing work from a build the harness has moved
+well past, and the harness having started nothing at all while work was ready.
+The second is **advisory-once** — a fact said exactly once and never repeated,
+which today is one value the project's template has improved that this project
+never edited. Every one of them is sent once rather than repeated. Removing the
+scope costs those direct messages and nothing else: the stale-build message and
+the improvement are in the channel either way, and the stall is in the durable
+record `yoyo status` reads back.
 
 ## 2. Install it and take the two tokens
 
@@ -543,6 +546,28 @@ stall is noticed at the first reading after the threshold has passed, and it
 closes at the first reading after it clears. The moment recorded against it is
 when the harness last started something rather than when anybody noticed, so
 the event says how long nothing happened whatever the noticing cost.
+
+**And one thing is not about the work at all.** A project generated from a
+built-in template records what that template supplied, and
+[`yoyo config drift`](../configuration.md#extending-a-built-in-bundle) reports
+every value the template has improved since that this project never edited.
+`doctor` and `config validate` say the same thing as an aside — but all three are
+commands somebody runs, and a harness left running for a fortnight runs none of
+them, so a fix the template has since made to a persona sits unheard. So the sink
+says it: one message per newly-available improvement, in the channel and as a
+direct message to whoever you grant `direct-work`.
+
+> builtin:v1 has improved agents.developer.model, a value this project has not
+> edited: it was "sonnet" and is "opus" now. Nothing has changed and nothing is
+> waiting on anybody: `yoyo config drift` shows agents.developer.model beside
+> everything else the template moved, and it is adopted by hand or not at all.
+
+It is said **once per improvement and never again** — marked in the sink's own
+durable state as it is sent, so a restart says nothing about one it already sent.
+A template that improves the same setting again later is a second improvement and
+is said again; nothing is ever adopted for you, and the message says outright
+that the next move is nobody's. The comparison costs one reading of your
+configuration per `--heartbeat` rather than one per poll.
 
 The queue changing comes from the conversations you hold with the product
 manager and the development manager, read from the same durable records `yoyo

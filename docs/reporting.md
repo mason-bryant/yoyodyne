@@ -694,6 +694,50 @@ read back afterwards by
 place it exists: a stall leaves no other trace, because the process that would
 have left one is the process a stall means has died.
 
+### What arrives as a direct message
+
+Almost everything above is posted in the channel and nowhere else, because a
+channel is somewhere somebody chooses to look and most of what the harness says
+can wait until they do. A direct message is the exception, and it is admitted
+only by naming its class — the
+[slack-reporting design](designs/slack-reporting-design.md) holds the rule, and a
+state fitting neither class does not get one:
+
+- **Degraded** — the system is stopped, stale, or choosing nothing over ready
+  work: something only a person fixes. The two shipped states are the ones above
+  — a session running a build the harness has moved well past, and the harness
+  having started nothing at all while work was ready.
+- **Advisory-once** — a fact addressed to a person that speaks exactly once per
+  fact, never repeated and never urgent in presentation. One state ships in it:
+  **a value the project's template has improved that this project never edited**.
+
+The last of those is the comparison
+[`yoyo config drift`](configuration.md#extending-a-built-in-bundle)
+prints and `doctor` and `config validate` say as an aside — every one of which is
+a command somebody has to run. A harness left running for a fortnight runs none
+of them, so a fix the template has since made to a persona sits unheard while the
+project goes on without it. So the sink says the same thing: **one direct message
+per newly-available improvement**, naming the setting, what this project holds,
+and what the template supplies now. Nothing is adopted for you and nothing is
+waiting on you — the message says the move is nobody's, and it is an offer a
+project is entitled to decline forever.
+
+Once means once. Each improvement is marked in the sink's own durable cursors as
+it is sent, so a restarted sink, a second sink, and every poll for the rest of
+the project's life stay silent about it. The mark names the value the template
+supplies rather than the setting alone, so a template that improves one setting
+again later is a second improvement and is said again; and a mark is dropped once
+its improvement is no longer offered — adopted, edited, or superseded — which
+keeps the record a statement of what stands rather than a list of everything ever
+said. The comparison itself is read once per `--heartbeat` rather than once per
+poll, so a sink polling every fifteen seconds reads the configuration hourly and
+not four times a minute.
+
+All three need the `im:write` scope the checked-in manifest asks for. A workspace
+that refuses it costs the direct messages and nothing else: the stale build and
+the improvement are in the channel either way, and the stall is in the durable
+record `yoyo status` reads back.
+
 Every message ends by saying whose move follows it. A thread is a narrative and a
 narrative goes quiet — a run takes an hour, an item sits in the queue overnight,
 work routed to a role waits on somebody opening a conversation — and the silence

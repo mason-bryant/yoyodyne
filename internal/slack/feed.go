@@ -42,6 +42,12 @@ const (
 	residentStream   = "resident"
 	stallStream      = "stall"
 	directiveStream  = "directives"
+	// improvementStream is what the project's template offers that the project
+	// has never edited. It is a stream of its own rather than a mark on the
+	// product's because what it holds is one mark per improvement rather than a
+	// fixed pair of facts, and because it is the one reading here that is about
+	// the installation rather than about the work.
+	improvementStream = "improvements"
 )
 
 func runStream(runID string) string { return "run:" + runID }
@@ -70,6 +76,11 @@ const (
 	// names the stall rather than the state for the reason the build mark names a
 	// build: a second stall is a second thing to say, and the same one is not.
 	stallMark = "stall:"
+	// improvementMark names one improvement this cursor has already said. It
+	// names the value the template now supplies as well as the key, because a
+	// template that improves one setting twice has improved it twice: a mark that
+	// held the key alone would swallow the second one for the life of the project.
+	improvementMark = "improvement:"
 	// unrelatedMark records having said, in the sink's own log, that the build a
 	// session is running belongs to a repository this sink is not pointed at. It
 	// is marked for the same reason the escalation is: it is true for as long as
@@ -213,6 +224,17 @@ type HarnessFeed struct {
 	// never notices a stall — which is the seven and a half hours that asked for
 	// this, so every sink the harness builds is given one.
 	Stalls *runstate.StallStore
+	// Improvements is what the project's template supplies now against what it
+	// supplied when this project was generated, read for the one class of value
+	// that is an offer: improved by the template and never edited here. It is
+	// optional, and a feed assembled without one says everything else and never
+	// mentions the template — which is the silence this was added to end, because
+	// every other surface that says it is one somebody has to run.
+	//
+	// Nothing here decides what an improvement is or how it is worded. That is the
+	// configuration's three-way comparison, which `yoyo config drift` prints from
+	// too; this reads it and says one of them at a time.
+	Improvements Improvements
 	// StallThreshold is how long nothing may start before that is a stall rather
 	// than a gap between runs. Zero takes readmodel.DefaultStallThreshold.
 	StallThreshold time.Duration
@@ -406,6 +428,18 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, stalled...)
+
+	// What the project's template offers that this project never edited. It is
+	// last because it is the one reading here that is not about the work at all:
+	// nothing has happened, nothing is degraded, and nothing is waiting on
+	// anybody. It is said because a project that materialized from a template and
+	// then never ran the command that would tell it is a project that goes on
+	// running a persona the template has since fixed.
+	improved, err := f.improvementDeliveries(ctx, cursors.Streams[improvementStream], batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, improved...)
 	return batch, nil
 }
 

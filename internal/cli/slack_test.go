@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -331,5 +332,59 @@ func TestTheSinkCountsOnlyTheReadyWorkARunCouldCarry(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("Ready() = %d, want the two items a developer run could be started for", count)
+	}
+}
+
+// What the sink reads the template comparison through. It is the same derivation
+// `yoyo config drift` prints, read afresh as the sink asks for it, so a project
+// that adopts a value under a process that has been open for a fortnight stops
+// being offered it.
+func TestTheSinkReadsTheSameImprovementsTheDriftCommandPrints(t *testing.T) {
+	t.Parallel()
+
+	path := driftingProject(t, "agents.developer.model")
+	drift, err := configImprovements{path: path}.Offered(context.Background())
+	if err != nil {
+		t.Fatalf("Offered() error = %v", err)
+	}
+	available := drift.Available()
+	if len(available) != 1 || available[0].Key != "agents.developer.model" {
+		t.Fatalf("Available() = %+v, want the one value the template improved", available)
+	}
+	if !strings.Contains(drift.Improvement(available[0]), "agents.developer.model") {
+		t.Errorf("Improvement() = %q, want the setting named", drift.Improvement(available[0]))
+	}
+}
+
+// A project with no baseline has no third side, so there is nothing it can be
+// offered. That is silence rather than a failure: it is the ordinary state of
+// every project generated before the record existed, and an hourly complaint
+// about a file that decides nothing is the nagging this surface avoids.
+func TestAProjectWithNoBaselineIsOfferedNothingAndReportsNoFailure(t *testing.T) {
+	t.Parallel()
+
+	path := writeProjectConfig(t, portableConfig)
+	drift, err := configImprovements{path: path}.Offered(context.Background())
+	if err != nil {
+		t.Fatalf("Offered() error = %v", err)
+	}
+	if len(drift.Available()) != 0 {
+		t.Errorf("Available() = %+v, want nothing offered to a project with no baseline", drift.Available())
+	}
+}
+
+// A baseline that is on disk and will not be read is a file somebody can look
+// at, so it is reported rather than swallowed: the sink says it in its own log
+// and asks again at the next interval.
+func TestAnUnusableBaselineIsReportedRatherThanReadAsNothingOffered(t *testing.T) {
+	t.Parallel()
+
+	path := writeProjectConfig(t, portableConfig)
+	if err := os.WriteFile(config.LockPath(path),
+		[]byte("version: 1\nbundle: builtin:v1\nrevision: bnd-000000000000\nvalues:\n  agents.developer.model: \"opus\"\n"), 0o600); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+	if _, err := (configImprovements{path: path}).Offered(context.Background()); err == nil {
+		t.Fatal("a baseline that could not be used read as a project with nothing to offer")
 	}
 }

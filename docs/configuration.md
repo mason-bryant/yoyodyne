@@ -3554,10 +3554,13 @@ that materialized its defaults; the architect ratified it on 2026-09-01. Its
 baseline and report exist: `config.lock` records what the template supplied,
 `yoyo config drift` sorts each value into `unchanged`, `yours`, `available`, or
 `conflicting`, and `doctor` and `config validate` speak the `available` ones
-unprompted on stderr, silently when none, without changing exit codes. A
-project without one hears nothing until `yoyo config baseline` writes it, which
-touches nothing else and starts level. Nothing is adopted for you;
-`materialize`, `extract`, and `adopt` do not exist yet.
+unprompted on stderr, silently when none, without changing exit codes. Where the
+[Slack sink](reporting.md#what-arrives-as-a-direct-message) is running it says
+the same `available` values without anybody running a command: one direct
+message per improvement, once each and never repeated. A project without a
+baseline hears nothing until `yoyo config baseline` writes it, which touches
+nothing else and starts level. Nothing is adopted for you; `materialize`,
+`extract`, and `adopt` do not exist yet.
 
 ### Converting an inheriting configuration to an explicit one
 
