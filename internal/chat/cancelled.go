@@ -45,16 +45,24 @@ var ErrTurnAbandoned = errors.New("the turn was cancelled before the role answer
 // turnAbandoned is that sentinel for a cancelled turn that produced no answer,
 // and nothing for every other ending.
 //
-// The three pieces of evidence are the ones a provider only reports once it has
-// ended the invocation properly: the session it served the turn in, the answer
-// text, and what it charged. A stream cut off mid-turn carries none of them, and
-// one that reached its own terminal carries them whether or not the process
-// survived long enough to exit.
+// The two pieces of evidence are the ones a provider writes only at the terminal
+// of an invocation: the answer text, and the cost it priced the invocation at. A
+// stream cut off mid-turn reaches no terminal and carries neither, and one that
+// reached its own carries both whether or not the process survived long enough
+// to exit — which is what makes a cancellation landing after her answer arrived
+// distinguishable from one that landed before it.
+//
+// The session identifier is deliberately not among them, and the reason is worth
+// stating because it is the obvious third: it is recorded from the first
+// envelope carrying one, which is the event that opens the session and precedes
+// anything the role does. A killed turn has one. Reading it as evidence the
+// invocation ended would make every abandoned turn look answered, which is this
+// whole judgement inverted.
 func turnAbandoned(result backend.RunResult) error {
 	if result.Process.Status != execution.ProcessCancelled {
 		return nil
 	}
-	if result.CostReported || strings.TrimSpace(result.FinalText) != "" || strings.TrimSpace(result.SessionID) != "" {
+	if result.CostReported || strings.TrimSpace(result.FinalText) != "" {
 		return nil
 	}
 	return ErrTurnAbandoned

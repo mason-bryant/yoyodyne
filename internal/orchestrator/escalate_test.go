@@ -392,6 +392,16 @@ func TestADeliveryACancellationKilledKeepsTheDelivery(t *testing.T) {
 		if strings.Contains(sweep.Escalated[0].Problem, "needs a person") {
 			t.Fatalf("teardown %d problem = %q, want a killed turn to leave the stoppage deliverable", teardown, sweep.Escalated[0].Problem)
 		}
+		// And what a person reads says what actually happened. "Not put to the
+		// development manager" is the claim this failure explicitly refuses to
+		// make: the provider had the prompt from the moment the invocation
+		// started, and what ended was the turn rather than the asking.
+		if !strings.Contains(sweep.Escalated[0].Problem, "ended before she answered") {
+			t.Fatalf("teardown %d problem = %q, want it to say the turn ended before she answered", teardown, sweep.Escalated[0].Problem)
+		}
+		if strings.Contains(sweep.Escalated[0].Problem, "was not put to the development manager") {
+			t.Fatalf("teardown %d problem = %q, want it not to claim she was never asked", teardown, sweep.Escalated[0].Problem)
+		}
 		recorded, found, err := escalator.Records.Find(sweep.Escalated[0].DocketKey)
 		if err != nil || !found {
 			t.Fatalf("teardown %d: Find() = found %v, error %v", teardown, found, err)

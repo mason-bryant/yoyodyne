@@ -18,11 +18,7 @@ import (
 func TestACancelledTurnSaysItEndedBeforeAnAnswerExisted(t *testing.T) {
 	t.Parallel()
 
-	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
-		IsError:    true,
-		StopReason: string(execution.ProcessCancelled),
-		Process:    execution.ProcessResult{Status: execution.ProcessCancelled, ExitCode: -1},
-	}}})
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{killedTurn()}})
 	options.Role = domain.RoleDevelopmentManager
 	options.Agent = string(domain.RoleDevelopmentManager)
 
@@ -37,34 +33,37 @@ func TestACancelledTurnSaysItEndedBeforeAnAnswerExisted(t *testing.T) {
 	}
 }
 
+// killedTurn is what internal/backend/claudecode assembles from a stream a
+// process-group teardown cut off mid-turn, asserted field by field there in
+// TestRunLeavesAKilledTurnCarryingNoAnswer. It is written out here rather than
+// simplified, because the whole question this file decides is which of these
+// fields prove the turn reached no terminal — and a fixture that dropped the
+// session identifier would be a test agreeing with the code about the one thing
+// they must not agree about by construction.
+func killedTurn() backendapi.RunResult {
+	return backendapi.RunResult{
+		IsError:    true,
+		StopReason: string(execution.ProcessCancelled),
+		// Written by the init event, before the role has done anything.
+		SessionID: "session-1",
+		// And nothing a terminal writes: no FinalText, and CostReported false.
+		Process: execution.ProcessResult{Status: execution.ProcessCancelled, ExitCode: -1},
+	}
+}
+
 // A cancellation that landed after her answer arrived is not a turn that
-// produced nothing: whatever became of the process, the provider ended the
-// invocation and said what it served, what it cost, and what she wrote. Reading
-// that as a turn nobody took is how one answer gets asked for twice.
+// produced nothing: whatever became of the process, the provider reached its
+// terminal and said what she wrote and what it charged. Reading that as a turn
+// nobody took is how one answer gets asked for twice.
 func TestACancelledTurnThatAnsweredIsNotAbandoned(t *testing.T) {
 	t.Parallel()
 
-	answered := []backendapi.RunResult{
-		{
-			IsError:    true,
-			StopReason: string(execution.ProcessCancelled),
-			SessionID:  "session-1",
-			Process:    execution.ProcessResult{Status: execution.ProcessCancelled, ExitCode: -1},
-		},
-		{
-			IsError:    true,
-			StopReason: string(execution.ProcessCancelled),
-			FinalText:  "Re-run it.",
-			Process:    execution.ProcessResult{Status: execution.ProcessCancelled, ExitCode: -1},
-		},
-		{
-			IsError:      true,
-			StopReason:   string(execution.ProcessCancelled),
-			CostReported: true,
-			Process:      execution.ProcessResult{Status: execution.ProcessCancelled, ExitCode: -1},
-		},
-	}
-	for _, result := range answered {
+	answeredText := killedTurn()
+	answeredText.FinalText = "Re-run it."
+	pricedTurn := killedTurn()
+	pricedTurn.CostReported = true
+
+	for _, result := range []backendapi.RunResult{answeredText, pricedTurn} {
 		_, err := openTestSession(t, testOptions(t, &fakeBackend{results: []backendapi.RunResult{result}})).
 			Send(context.Background(), "what becomes of this stoppage?")
 		if err == nil || errors.Is(err, ErrTurnAbandoned) {

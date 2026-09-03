@@ -209,6 +209,31 @@ func notTaken(err error) bool {
 	return errors.Is(err, ErrConversationUnreachable) || errors.Is(err, ErrDeliveryCancelled)
 }
 
+// undelivered says what became of a delivery whose attempt is being given back,
+// in the words each of the two failures actually earns.
+//
+// The two are not the same sentence, and writing them as one would put the claim
+// ErrDeliveryCancelled explicitly refuses to make into the record a person reads:
+// a cancelled turn is not a stoppage that was never put to her — the provider
+// had the prompt from the moment the invocation started — it is a turn that
+// ended before she answered.
+func undelivered(runID string, judgeErr error) string {
+	if errors.Is(judgeErr, ErrDeliveryCancelled) {
+		return fmt.Sprintf("the turn putting the stoppage of run %s to the development manager ended before she answered", runID)
+	}
+	return fmt.Sprintf("the stoppage of run %s was not put to the development manager", runID)
+}
+
+// undeliveredAndWaiting is that sentence with what happens next on it, which is
+// the same promise either way: the attempt came back, and the stoppage is put to
+// her once the delay the record keeps has passed.
+func undeliveredAndWaiting(runID string, judgeErr error, delay time.Duration) string {
+	if errors.Is(judgeErr, ErrDeliveryCancelled) {
+		return fmt.Sprintf("%s, and it will be put to her again once %s has passed", undelivered(runID, judgeErr), delay)
+	}
+	return fmt.Sprintf("%s and will be once %s has passed", undelivered(runID, judgeErr), delay)
+}
+
 // Escalator delivers docketed stoppages to the development manager. It has no
 // tracker, no worktree access, and no forge access, and it starts nothing: what
 // it does is put evidence somebody already recorded in front of the role whose
@@ -510,11 +535,11 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 	// charges for a turn that failed exactly as for one that answered.
 	escalated.CostUSD = judgment.CostUSD
 	if notTaken(judgeErr) {
-		escalated.Problem = fmt.Sprintf("the stoppage of run %s was not put to the development manager and will be once %s has passed: %v",
-			entry.RunID, runstate.EscalationRetryDelay, judgeErr)
+		escalated.Problem = fmt.Sprintf("%s: %v",
+			undeliveredAndWaiting(entry.RunID, judgeErr, runstate.EscalationRetryDelay), judgeErr)
 		if err := e.Records.Withdraw(ctx, entry.Key, judgeErr.Error()); err != nil {
-			escalated.Problem = fmt.Sprintf("the stoppage of run %s was not put to the development manager, and the attempt taken for it could not be given back, so it has spent one of %d on a turn nobody took: %v",
-				entry.RunID, runstate.MaxEscalationAttempts, err)
+			escalated.Problem = fmt.Sprintf("%s, and the attempt taken for it could not be given back, so it has spent one of %d on a turn that decided nothing: %v",
+				undelivered(entry.RunID, judgeErr), runstate.MaxEscalationAttempts, err)
 		}
 		return escalated, true, nil
 	}
