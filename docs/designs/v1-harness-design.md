@@ -46,6 +46,14 @@ revisions:
       by: architect
       at: 2026-08-23T18:42:25Z
       reason: the Codex backend subsection now records the operator's 2026-08-22 parking decision via the claude-only-v1-execution record, and the artifact model points at the artifact-contract specification as the normative home of the identity and shape rules, per approved amendment c84e23a5
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:15:00Z
+      reason: approved amendments 309bd0a6 (yoyodyne-ifd.222) and b0934200 (yoyodyne-ifd.234) - the pull-request-body enumeration matches what ships with the rule's basis stated, and the closed-vocabulary policy moves from code comments into the design
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:15:00Z
+      reason: 'yoyodyne-ifd.162 - the CLI table''s status entry matches shipped behavior: the four-line what-happened-what-remains report from yoyodyne-ifd.194 and yoyodyne-ifd.226, and the stream capabilities from yoyodyne-ifd.63; the line labels are taken from the shipped help text, which is authoritative for its own output'
 approvals:
     - revision: 0
       by: operator
@@ -55,14 +63,6 @@ approvals:
       by: operator
       at: 2026-08-19T03:48:10Z
       reason: 'Approved by the operator in conversation on 2026-08-18: the layout section now names the three homes the harness reads instead of claiming docs/product is the only one.'
-    - action: amended
-      by: architect
-      at: 2026-09-01T19:15:00Z
-      reason: approved amendments 309bd0a6 (yoyodyne-ifd.222) and b0934200 (yoyodyne-ifd.234) - the pull-request-body enumeration matches what ships with the rule's basis stated, and the closed-vocabulary policy moves from code comments into the design
-    - action: amended
-      by: architect
-      at: 2026-09-01T19:15:00Z
-      reason: yoyodyne-ifd.162 - the CLI table's status entry matches shipped behavior: the four-line what-happened-what-remains report from yoyodyne-ifd.194 and yoyodyne-ifd.226, and the stream capabilities from yoyodyne-ifd.63; the line labels are taken from the shipped help text, which is authoritative for its own output
 ---
 
 # Yoyodyne V1 Harness Design
