@@ -207,6 +207,13 @@ func (a *activeRun) clearCarriedAmendmentRefusals(role domain.AgentRole) {
 // that is the failure this exists to end — a developer that believed its proposal
 // had landed wrote into a checked-in document that it had raised one, and the
 // claim outlived the run that made it.
+//
+// That half is worded twice on purpose. Telling the agent not to write the claim
+// only binds what it does next, and the refusal is discoverable no earlier than
+// the reply that carried it: by the time this is read, the attempt that proposed
+// has already had its turn, and in run-6ff896ba that is exactly the turn the false
+// claim was written in. So it also asks for the claim to be taken back out, which
+// is the only thing that repairs a record already made.
 func carriedAmendmentRefusals(role domain.AgentRole, refused []runstate.AmendmentRefusal) string {
 	var mine []string
 	for _, refusal := range refused {
@@ -225,6 +232,7 @@ func carriedAmendmentRefusals(role domain.AgentRole, refused []runstate.Amendmen
 	for _, problem := range mine {
 		rendered.WriteString("- " + problem + "\n")
 	}
-	rendered.WriteString("\nIf the change is still worth proposing, propose it again in a block that answers what the refusal says was wrong with the one before it. If it is not, say so in your summary and leave it at that.\n\n")
+	rendered.WriteString("\nIf the attempt that proposed it already wrote anywhere that you had raised this proposal — into the change, a comment, or a note — take that back out now. It was never true, and left there it is the record this run leaves behind.\n\n")
+	rendered.WriteString("If the change is still worth proposing, propose it again in a block that answers what the refusal says was wrong with the one before it. If it is not, say so in your summary and leave it at that.\n\n")
 	return rendered.String()
 }

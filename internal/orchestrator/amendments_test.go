@@ -13,7 +13,9 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -392,10 +394,25 @@ func TestTheDeveloperContractSaysHowToProposeAChange(t *testing.T) {
 	// where a persona cannot weaken it — and repeated on a repair attempt for the
 	// same reason the rest of the contract is.
 	for name, prompt := range map[string]string{
-		"first attempt": developerPrompt("", "", "# Assigned work item\n", "/scratch"),
-		"check repair":  checkRepairPrompt("", "/scratch", runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}, 1, 2),
+		"first attempt":       developerPrompt("", "", "# Assigned work item\n", "/scratch"),
+		"check repair":        checkRepairPrompt("", "/scratch", runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}, 1, 2),
+		"path refusal repair": pathRefusalRepairPrompt("", "/scratch", runstate.PathRefusal{Paths: []string{"docs/designs/v1-design.md"}}, protectedpath.Protect(config.Config{}), 1, 2),
 	} {
-		for _, required := range []string{amendment.Fence, "A proposal is not an edit you have written in advance"} {
+		for _, required := range []string{
+			amendment.Fence,
+			"A proposal is not an edit you have written in advance",
+			// The prohibition is the whole of what stands between a refusal and a
+			// durable false claim in the case the carry-back cannot reach: a
+			// developer invoked once, whose refusal is only discoverable after its
+			// only reply. Nothing asks that developer anything afterwards, so if this
+			// paragraph goes the run-6ff896ba failure comes back with every check
+			// still green.
+			"Writing the block is not the same as the proposal being recorded",
+			"nothing you write may assert that a proposal has been raised",
+			// And that the harness can only answer afterwards, which is what makes
+			// the prohibition follow rather than read as an arbitrary rule.
+			"it can only tell you so after the reply that carried it",
+		} {
 			if !strings.Contains(prompt, required) {
 				t.Fatalf("%s prompt is missing %q", name, required)
 			}
@@ -462,6 +479,11 @@ func TestARefusedProposalIsPutInFrontOfTheDeveloperThatMadeIt(t *testing.T) {
 		"no artifact answers to that id",
 		"Do not describe the proposal as raised",
 		"do not write into your change",
+		// Refraining is not enough on its own. The refusal cannot be known before
+		// the reply that carried it, so the attempt that proposed has already had
+		// its turn — and in run-6ff896ba that is the turn the false claim was
+		// written in. The attempt that is told has to be asked to undo it.
+		"take that back out now",
 	} {
 		if !strings.Contains(told, want) {
 			t.Fatalf("the carried refusal is missing %q:\n%s", want, told)
