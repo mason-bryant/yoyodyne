@@ -17,6 +17,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // The conversation asks the repository and the tracker how old its picture is
@@ -341,6 +342,74 @@ func TestGatherCarriesTheTriageDocketToTheDevelopmentManager(t *testing.T) {
 	}
 }
 
+// What the development manager decided is what takes the stoppage out of the
+// next conversation she opens. The docket is rebuilt from the same durable run
+// records every time it is gathered, so without the closure the same entry is
+// gathered again for ever — and a decision that spends no budget leaves nothing
+// else the harness can read.
+func TestADecisionTakesTheStoppageOffTheDocketTheNextConversationGathers(t *testing.T) {
+	t.Parallel()
+
+	runs := stoppedRunState(t)
+	store, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewDocketStore() error = %v", err)
+	}
+	docketer := docketerOverDocket(runs, store)
+	built, err := docketer.Build()
+	if err != nil || len(built.Entries) != 1 {
+		t.Fatalf("Build() = %#v, error = %v, want the stoppage docketed", built, err)
+	}
+
+	closer := conversationDocketLog{store: store, clock: stoppedClock{at: time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)}}
+	decided := chat.DocketClosure{
+		RunID:     built.Entries[0].RunID,
+		Decision:  "escalate",
+		Reason:    "the findings dispute the item's criteria",
+		DecidedBy: "the development manager in conversation chat-0123456789abcdef",
+	}
+	// A wait answers a publication the forge has not finished, and this run has
+	// none: closing on it would take a live question off the docket.
+	waited := decided
+	waited.Decision = "wait"
+	waited.Classes = []triage.Class{triage.ClassPublication}
+	if closed, err := closer.Close(context.Background(), waited); err != nil || closed != 0 {
+		t.Fatalf("Close() = %d, error = %v, want nothing closed by a decision this stoppage is not", closed, err)
+	}
+
+	decided.Classes = []triage.Class{triage.ClassStoppedRun}
+	closed, err := closer.Close(context.Background(), decided)
+	if err != nil || closed != 1 {
+		t.Fatalf("Close() = %d, error = %v, want the stopped run's entry closed", closed, err)
+	}
+
+	rebuilt, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("second Build() error = %v", err)
+	}
+	if len(rebuilt.Entries) != 0 || rebuilt.Added != 0 || rebuilt.Closed != 1 {
+		t.Fatalf("second build = %#v, want the decided stoppage closed and nothing docketed again", rebuilt)
+	}
+	ground := conversationGround{
+		runner:         &scriptedRunner{outputs: map[string]string{"bd": "[]", "git": "a1a1a1a1a1a1\n"}},
+		repository:     t.TempDir(),
+		specifications: "docs/product",
+		docket:         docketer,
+		gitBinary:      "git",
+		timeout:        time.Second,
+	}
+	briefing, err := ground.Gather(context.Background())
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	// A docket with nothing undecided on it renders no section at all, which is
+	// what a product where nothing has stopped renders: either way there is
+	// nothing waiting on her.
+	if strings.Contains(briefing.Text, "Triage docket") || strings.Contains(briefing.Text, "the repair budget was spent") {
+		t.Fatalf("the decided stoppage is still in the context:\n%s", briefing.Text)
+	}
+}
+
 // Every other role gathers no docket at all: deciding what becomes of stopped
 // work belongs to one role, and a section the reader cannot act on is one every
 // conversation pays for and reads past.
@@ -349,6 +418,11 @@ func TestGatherCarriesNoDocketForARoleThatCannotActOnIt(t *testing.T) {
 
 	if docketer := conversationDocket(components{}, domain.RoleProductManager); docketer != nil {
 		t.Fatalf("the product manager was wired a triage docket")
+	}
+	// Nor the log itself: a role that cannot decide about a stoppage must not be
+	// able to close one either.
+	if entries := conversationDocketEntries(components{}, domain.RoleProductManager); entries != nil {
+		t.Fatalf("the product manager was wired the docket to close entries on")
 	}
 	ground := conversationGround{
 		runner:         &scriptedRunner{outputs: map[string]string{"bd": "[]", "git": "a1a1a1a1a1a1\n"}},
@@ -516,6 +590,10 @@ func docketerOverRuns(t *testing.T, runs *runstate.Store) *orchestrator.Docketer
 	if err != nil {
 		t.Fatalf("runstate.NewDocketStore() error = %v", err)
 	}
+	return docketerOverDocket(runs, docket)
+}
+
+func docketerOverDocket(runs *runstate.Store, docket *runstate.DocketStore) *orchestrator.Docketer {
 	triage := config.Triage{StuckMergeAge: config.Duration(2 * time.Hour), ReviewRoundsCap: 4, RepairGrantAttempts: 2}
 	return &orchestrator.Docketer{
 		Docket: docket,

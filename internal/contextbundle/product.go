@@ -1254,7 +1254,10 @@ forge says about the merge, and what the work item has already spent against
 what it is allowed to spend.
 
 An entry states that something stopped. It does not decide what becomes of it,
-and nothing has: an entry stands until somebody decides. Read the counters
+and nothing has: an entry stands until somebody decides, and recording a
+decision closes it. So what is listed here is what nobody has decided about
+yet — a stoppage you settled in an earlier conversation is closed and is not
+here, whatever the harness has or has not carried out since. Read the counters
 before deciding one — an item that has reached its review-round cap is one no
 further repair may be granted to, whatever else the evidence argues for.
 `

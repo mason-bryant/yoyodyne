@@ -521,6 +521,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// change is, so work carved out of a stoppage waits for the change it was
 		// written against rather than reading as ready without it.
 		Stoppages: conversationStoppages(parts, role),
+		// The docket those decisions are about, so a decision takes the stoppage it
+		// settled off it. An entry nothing closed comes back on every docket after
+		// it, because the docket is rebuilt from durable records at every scan.
+		Docket: conversationDocketEntries(parts, role),
 		// The changes other roles have proposed to the documents this one owns.
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.

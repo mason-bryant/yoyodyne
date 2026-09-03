@@ -25,6 +25,22 @@ package orchestrator
 // Both paths converge on one idempotent write keyed to the event, so a run that
 // dockets its own stoppage and a sweep that settles the same run afterwards
 // produce one entry between them rather than two accounts of one stoppage.
+//
+// # What takes an entry off again
+//
+// A triage decision does, by closing it: the docket's lifecycle is
+// create-on-death and close-on-decision. Nothing used to close one, and because
+// the docket is rebuilt from durable records at every scan, a stoppage decided
+// last week came back on every docket after it — three of the six decisions spend
+// no counter, so nothing the harness reads could tell a settled stoppage from a
+// fresh one, and the only guard against deciding it twice was prose telling the
+// development manager to go and read the item's notes. The listing she is given
+// is bounded, so the settled ones crowded out the ones nobody had looked at.
+//
+// A closure is joined where the docket is read and the entry stays on the log,
+// which is what keeps the two halves from fighting: the scan goes on finding the
+// same stoppage in the same records and goes on recording nothing, because the
+// key is already there.
 
 import (
 	"errors"
@@ -105,20 +121,27 @@ type Docketer struct {
 	Clock  execution.Clock
 }
 
-// DocketBuild is what one build found: the whole docket as it now stands, and
-// how many entries this build is what created. The count is reported rather
-// than the entries themselves because a build is not a notification — an entry
+// DocketBuild is what one build found: the docket as it now stands, and how
+// many entries this build is what created. The count is reported rather than
+// the entries themselves because a build is not a notification — an entry
 // created by this build and one created by last week's sweep are the same
 // standing fact to whoever reads the docket.
 type DocketBuild struct {
+	// Entries are the stoppages nobody has decided about, which is what a docket
+	// is for. An entry a triage decision closed is not among them.
 	Entries []triage.Entry `json:"entries"`
 	Added   int            `json:"added"`
+	// Closed is how many of the docket's entries have been decided and are
+	// therefore not listed. It is reported rather than dropped because a docket
+	// that silently shows a subset is one a reader takes for the whole: the number
+	// says the rest were settled rather than never noticed.
+	Closed int `json:"closed"`
 }
 
 // Build scans every recorded run, dockets what has stopped and is not docketed
-// yet, and returns the docket as it stands. It is safe to repeat and safe to
-// run concurrently with anything: every write is keyed to the event it
-// describes, so a build that races another build records the same entries and
+// yet, and returns the stoppages nobody has decided about. It is safe to repeat
+// and safe to run concurrently with anything: every write is keyed to the event
+// it describes, so a build that races another build records the same entries and
 // the docket collapses them.
 //
 // A run whose record cannot supply an entry is skipped rather than failing the
@@ -177,8 +200,34 @@ func (d Docketer) Build() (DocketBuild, error) {
 		problems = append(problems, fmt.Errorf("read the triage docket: %w", err))
 		return DocketBuild{Added: added}, errors.Join(problems...)
 	}
-	problems = append(problems, d.joinDecisions(entries)...)
-	return DocketBuild{Entries: entries, Added: added}, errors.Join(problems...)
+	// A decided entry leaves the docket here rather than in each reader of it. The
+	// entry stays on the log, which is what stops the same stoppage being docketed
+	// again from the same durable records the next time anything scans; what a
+	// decision ends is its being a question, and this is where the questions are
+	// handed over.
+	open, closed := openDocket(entries)
+	problems = append(problems, d.joinDecisions(open)...)
+	return DocketBuild{Entries: open, Added: added, Closed: closed}, errors.Join(problems...)
+}
+
+// openDocket separates the stoppages nobody has decided about from the ones a
+// triage decision settled, and reports how many were settled.
+func openDocket(entries []triage.Entry) ([]triage.Entry, int) {
+	open := make([]triage.Entry, 0, len(entries))
+	closed := 0
+	for _, entry := range entries {
+		if entry.Closed != nil {
+			closed++
+			continue
+		}
+		open = append(open, entry)
+	}
+	if len(open) == 0 {
+		// Nothing open reads as nothing to decide wherever a docket is rendered, and
+		// an empty slice and no slice at all must not be two different answers to it.
+		return nil, closed
+	}
+	return open, closed
 }
 
 // joinDecisions puts the triage record as it now stands onto every entry: what

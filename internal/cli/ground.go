@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -128,6 +129,67 @@ func (b conversationTriageBudgets) RecordRerun(ctx context.Context, workItemID s
 
 func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
 	return b.store.RecordMergeRearm(ctx, workItemID, b.clock.Now(), b.caps)
+}
+
+// conversationDocketEntries wires the docket itself for the role that decides
+// about what is on it, and for no other. It is the same log the docket in that
+// role's context was built from, so a decision recorded in the conversation and
+// the entry it settled are one record rather than two accounts of one stoppage.
+func conversationDocketEntries(parts components, role domain.AgentRole) chat.TriageEntries {
+	if role != domain.RoleDevelopmentManager {
+		return nil
+	}
+	return conversationDocketLog{store: parts.docket, clock: execution.RealClock{}}
+}
+
+// conversationDocketLog closes the entries one recorded decision settled. What the
+// conversation supplies is the decision and the reasoning; which entries those
+// answer, and when the closing happened, are the harness's.
+type conversationDocketLog struct {
+	store *runstate.DocketStore
+	clock execution.Clock
+}
+
+// Close settles the run's open entries of the classes the decision answers.
+//
+// Every entry it can close is attempted rather than stopping at the first
+// failure, and what failed is reported: a run with two open entries where one
+// closure fails leaves the other one settled, which is a docket closer to right
+// than one that gave up on both.
+func (d conversationDocketLog) Close(_ context.Context, closure chat.DocketClosure) (int, error) {
+	entries, err := d.store.List()
+	if err != nil {
+		return 0, fmt.Errorf("read the triage docket to close what was decided: %w", err)
+	}
+	closed := 0
+	var problems []error
+	for _, entry := range entries {
+		// A decision that answers neither kind of stoppage closes nothing, which
+		// leaves the entry standing rather than taking a question off the docket
+		// that nobody answered.
+		if entry.RunID != closure.RunID || entry.Closed != nil || !slices.Contains(closure.Classes, entry.Class) {
+			continue
+		}
+		took, err := d.store.Close(triage.Closure{
+			SchemaVersion: triage.ClosureSchemaVersion,
+			Key:           entry.Key,
+			ProductID:     entry.ProductID,
+			RunID:         entry.RunID,
+			WorkItemID:    entry.WorkItemID,
+			Decision:      closure.Decision,
+			Reason:        closure.Reason,
+			DecidedBy:     closure.DecidedBy,
+			ClosedAt:      d.clock.Now().UTC(),
+		})
+		if err != nil {
+			problems = append(problems, fmt.Errorf("close the docket entry of run %s: %w", entry.RunID, err))
+			continue
+		}
+		if took {
+			closed++
+		}
+	}
+	return closed, errors.Join(problems...)
 }
 
 // conversationStoppages wires the durable run records a triage decision is

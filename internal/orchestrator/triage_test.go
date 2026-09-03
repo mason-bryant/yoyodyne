@@ -22,11 +22,31 @@ import (
 // one here only ever spend it; what they need is somebody to have charged it.
 const countingProcess = "pid-1-000000000000000a"
 
-// memoryDocket is the durable docket without the disk: it enforces the one
-// property the store guarantees, which is that a key is recorded once.
+// memoryDocket is the durable docket without the disk: it enforces the two
+// properties the store guarantees, which are that a key is recorded once and
+// that a decision recorded against a key is joined onto its entry.
 type memoryDocket struct {
 	entries []triage.Entry
+	closed  map[string]triage.Closure
 	failOn  string
+}
+
+// close settles one entry the way the store does: the entry stays on the log
+// and the decision is recorded beside it.
+func (d *memoryDocket) close(key, decision string) {
+	if d.closed == nil {
+		d.closed = make(map[string]triage.Closure)
+	}
+	d.closed[key] = triage.Closure{
+		SchemaVersion: triage.ClosureSchemaVersion,
+		Key:           key,
+		ProductID:     "yoyodyne",
+		RunID:         docketedRunID,
+		WorkItemID:    docketedItem,
+		Decision:      decision,
+		DecidedBy:     "the development manager in conversation chat-0123456789abcdef",
+		ClosedAt:      docketedNow,
+	}
 }
 
 func (d *memoryDocket) RecordOnce(entry triage.Entry) (bool, error) {
@@ -48,7 +68,16 @@ func (d *memoryDocket) RecordOnce(entry triage.Entry) (bool, error) {
 // List hands back a copy, as the durable store does by decoding the log afresh:
 // what a reader joins onto the entries it was given must not travel back into
 // the log, which is written once and never revised.
-func (d *memoryDocket) List() ([]triage.Entry, error) { return slices.Clone(d.entries), nil }
+func (d *memoryDocket) List() ([]triage.Entry, error) {
+	listed := slices.Clone(d.entries)
+	for index := range listed {
+		if closure, found := d.closed[listed[index].Key]; found {
+			settled := closure
+			listed[index].Closed = &settled
+		}
+	}
+	return listed, nil
+}
 
 func (d *memoryDocket) keys() []string {
 	keys := make([]string, 0, len(d.entries))
@@ -760,6 +789,68 @@ func TestBuildingTheDocketTwiceDocketsEachEventOnce(t *testing.T) {
 	}
 	if strings.Join(docket.keys(), ",") != strings.Join(want, ",") {
 		t.Fatalf("docket keys = %v, want %v", docket.keys(), want)
+	}
+}
+
+// The regression case the twelve phantoms of the 250 sweep left behind: a
+// stoppage the development manager decided about must not come back on the next
+// docket. The scan goes on finding the same run in the same durable records, so
+// what settles it has to be the decision rather than the evidence changing.
+func TestAStoppageDecidedOnceDoesNotComeBackOnTheNextDocket(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	published := publishedState(3 * time.Hour)
+	published.RunID = "run-fedcba9876543210fedcba9876543210"
+	docket := &memoryDocket{}
+	docketer := docketerOver([]runstate.State{stopped, published}, docket)
+	if _, err := docketer.Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	// A wait spends no counter at all, which is precisely the decision nothing
+	// else the harness reads can see.
+	docket.close(triage.PublicationKey(published.RunID, published.PullRequest.Number), "wait")
+
+	rebuilt, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("second Build() error = %v", err)
+	}
+	if rebuilt.Added != 0 {
+		t.Fatalf("second build added %d entry(s), want the settled stoppage left alone", rebuilt.Added)
+	}
+	if rebuilt.Closed != 1 {
+		t.Fatalf("second build closed = %d, want the decided entry counted", rebuilt.Closed)
+	}
+	if len(rebuilt.Entries) != 1 || rebuilt.Entries[0].Class != triage.ClassStoppedRun {
+		t.Fatalf("second build = %#v, want the undecided stoppage and nothing else", rebuilt.Entries)
+	}
+	// The entry is still on the log. That is what stops the scan docketing the
+	// same publication again the next time it walks the same records.
+	if len(docket.entries) != 2 {
+		t.Fatalf("docket entries = %#v, want both stoppages still recorded", docket.keys())
+	}
+}
+
+// A docket every entry of which has been decided is a docket with nothing on
+// it, rather than one that could not be read: what a reader must be told is that
+// nothing is waiting on them.
+func TestADocketWhoseEntriesAreAllDecidedListsNothing(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	docket := &memoryDocket{}
+	docketer := docketerOver([]runstate.State{stopped}, docket)
+	if _, err := docketer.Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	docket.close(triage.Key(triage.ClassStoppedRun, stopped.RunID), "escalate")
+
+	rebuilt, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("second Build() error = %v", err)
+	}
+	if len(rebuilt.Entries) != 0 || rebuilt.Closed != 1 {
+		t.Fatalf("second build = %#v, want nothing listed and the decided entry counted", rebuilt)
 	}
 }
 
