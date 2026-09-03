@@ -373,6 +373,40 @@ worktree — ends the run, and it still says the harness stopped the provider.
 Short Git commands keep their flat deadlines, which is the right bound for a
 command whose duration is known.
 
+## When a run says more than the harness keeps
+
+There is a third bound beside those two, and it is not a deadline: how much of a
+process's output the harness holds in memory. It is 8 MiB, and what it bounds is
+the copy — never the process, and never the run. A run that bursts its output
+diagnosing something is a run doing its work, and a parity harness that diffs
+execution traces is exactly that workload.
+
+Output past the bound is truncated with a marker, and the process carries on to
+its own end:
+
+```text
+[output truncated at 8388608 bytes; the whole of it is in the event log of run-32e3f059…]
+```
+
+The marker follows the rule a cut Slack message already follows: it names the
+durable record holding the whole, so nobody reads a cut copy as everything the
+process said. For a check and for a provider invocation that record is the run's
+own event log, because every line goes into it on the way past — the retained
+copy is the diagnostic beside it rather than the original. A command that keeps
+no such record says the rest was not retained instead, in those words, rather
+than sending you after a file nobody wrote.
+
+The truncation is said out loud in the same event stream `bin/yoyo-status`
+follows, and it is on the result the record keeps, so it is visible both to
+somebody watching and to somebody reading back months later.
+
+This used to end the run. The output bound was a read error, so a verbose run
+failed with its provider's own result event never parsed — no cost recorded, no
+verdict, and a claimed work item left sitting behind a process that was not
+coming back. `run-32e3f059` died that way on 2026-09-03, with zero dollars
+recorded and six hours of silence after it. Keeping traces in files was the
+workaround; nothing needs it now.
+
 ## Recovering interrupted runs
 
 A process that is killed mid-run leaves durable state describing where it got

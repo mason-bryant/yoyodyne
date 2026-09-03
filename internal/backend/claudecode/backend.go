@@ -391,7 +391,12 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		// exactly the gap between events.
 		Timeout:     timeout,
 		IdleTimeout: idleTimeout,
-		Redactor:    redactor,
+		// Every line of that stream is parsed into a normalized event below, so
+		// the run's event log is where an invocation too verbose to retain is
+		// held whole. What the runner keeps is a diagnostic beside it, and the
+		// marker in a cut copy says which of the two a reader has.
+		OutputRecord: execution.EventLogOf(request.RunID),
+		Redactor:     redactor,
 	}, func(output execution.Output) {
 		if output.Stream == execution.StreamStdout {
 			if parseErr := parser.ParseLine(output.Text); parseErr != nil {
@@ -408,6 +413,20 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	}
 	if len(parseErrors) > 0 {
 		return backend.RunResult{}, fmt.Errorf("parse Claude Code stream: %w", errors.Join(parseErrors...))
+	}
+	// An invocation that outran what the runner retains is not an invocation
+	// that failed: every line still reached the parser, so the stream was read
+	// in full and the result event this run is priced from is in the events
+	// below. The truncation is said in the same stream rather than left to a
+	// field nobody opens, because a run that died of its own verbosity is what
+	// this is here to stop looking like silence.
+	if processResult.OutputTruncation != "" {
+		if truncationErr := parser.EmitProcessOutput(execution.Output{
+			Stream: execution.StreamStderr,
+			Text:   processResult.OutputTruncation,
+		}); truncationErr != nil {
+			return backend.RunResult{}, fmt.Errorf("record Claude Code output truncation: %w", truncationErr)
+		}
 	}
 	// The normalized result and events are the durable provider output. Do not
 	// return the raw JSON stream as a second, potentially escape-obfuscated copy.

@@ -162,14 +162,105 @@ func TestOSProcessRunnerCancellation(t *testing.T) {
 	}
 }
 
-func TestOSProcessRunnerOutputLimit(t *testing.T) {
+// A process that outruns the retained bound is truncated and not killed. The
+// run it belongs to has to complete on its own merits: a run that died of its
+// own diagnostics took its work and the account of what it cost with it.
+func TestOSProcessRunnerTruncatesOutputInsteadOfFailingTheProcess(t *testing.T) {
 	t.Parallel()
 
 	command := helperCommand("success", "")
 	command.MaxOutputBytes = 2
-	_, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
-	if err == nil || !strings.Contains(err.Error(), "output exceeded") {
+	command.OutputRecord = EventLogOf("run-0123456789abcdef")
+	var observed []Output
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, func(output Output) {
+		observed = append(observed, output)
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want output past the bound to be no error at all", err)
+	}
+	if result.Status != ProcessSucceeded || result.ExitCode != 0 {
+		t.Fatalf("Run() result = %#v, want the process judged on its own exit", result)
+	}
+	// Every line still reaches the observer, which is what puts the whole of the
+	// output in the record the marker names -- and, for a provider stream, what
+	// keeps the terminal result the run is priced from from being dropped.
+	if len(observed) != 2 {
+		t.Fatalf("observed %d outputs, want the 2 the process produced", len(observed))
+	}
+	if result.OutputTruncation == "" {
+		t.Fatal("Run() reported no truncation for output the bound cut")
+	}
+	if !strings.Contains(result.OutputTruncation, EventLogOf("run-0123456789abcdef")) {
+		t.Fatalf("truncation marker = %q, want the durable record named", result.OutputTruncation)
+	}
+	if !strings.Contains(result.Stdout, result.OutputTruncation) {
+		t.Fatalf("Run() stdout = %q, want the cut copy to carry the marker", result.Stdout)
+	}
+	if !strings.Contains(result.Stderr, result.OutputTruncation) {
+		t.Fatalf("Run() stderr = %q, want the cut copy to carry the marker", result.Stderr)
+	}
+}
+
+// A caller that kept the retained copy and nothing else is told the rest is
+// gone, rather than sent after a durable record nobody wrote.
+func TestOSProcessRunnerSaysWhenNothingHoldsTheOutputItCut(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("success", "")
+	command.MaxOutputBytes = 2
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
 		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(result.OutputTruncation, "not retained") {
+		t.Fatalf("truncation marker = %q, want the absence of a record said plainly", result.OutputTruncation)
+	}
+}
+
+// What is retained of a cut stream is a prefix ending at the marker. A stream
+// that has lost a line keeps losing them, rather than resuming wherever a later
+// short line happened to fit and leaving a copy with a hole in the middle.
+func TestOSProcessRunnerRetainsAPrefixOfACutStream(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("counted-chatter", "")
+	// Wide enough for the first few lines and nowhere near all of them, so the
+	// cut lands mid-stream rather than at either end.
+	command.MaxOutputBytes = 40
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.OutputTruncation == "" {
+		t.Fatalf("Run() stdout = %q, want the bound to have cut it", result.Stdout)
+	}
+	lines := strings.Split(strings.TrimSuffix(result.Stdout, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Run() stdout = %q, want the lines that fit and then the marker", result.Stdout)
+	}
+	if lines[len(lines)-1] != result.OutputTruncation {
+		t.Fatalf("last retained line = %q, want the marker to end the prefix", lines[len(lines)-1])
+	}
+	// The retained lines are the first ones the process wrote, in order and with
+	// none missing between them.
+	for index, line := range lines[:len(lines)-1] {
+		if want := fmt.Sprintf("line %d", index); line != want {
+			t.Fatalf("retained line %d = %q, want %q; the copy is not a prefix", index, line, want)
+		}
+	}
+}
+
+// A process that stayed under the bound is never marked, so the marker's
+// presence is the whole of the fact a reader has to check.
+func TestOSProcessRunnerLeavesOutputUnderTheBoundUnmarked(t *testing.T) {
+	t.Parallel()
+
+	result, err := (OSProcessRunner{}).Run(context.Background(), helperCommand("success", ""), nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.OutputTruncation != "" {
+		t.Fatalf("Run() truncation = %q, want none for output that fit", result.OutputTruncation)
 	}
 }
 
@@ -265,6 +356,13 @@ func TestProcessHelper(t *testing.T) {
 		for line := 0; time.Now().Before(deadline); line++ {
 			fmt.Printf("working %d\n", line)
 			time.Sleep(20 * time.Millisecond)
+		}
+		os.Exit(0)
+	case "counted-chatter":
+		// Numbered so a retained copy can be checked for being a prefix rather
+		// than only for being short.
+		for line := 0; line < 40; line++ {
+			fmt.Printf("line %d\n", line)
 		}
 		os.Exit(0)
 	case "endless-chatter":
