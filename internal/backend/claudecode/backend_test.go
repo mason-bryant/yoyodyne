@@ -1243,6 +1243,59 @@ func TestCapabilities(t *testing.T) {
 	}
 }
 
+// An invocation whose output outran what the runner retains completes on its
+// own merits and is priced from its own result event. What the bound cut is the
+// copy the runner kept, and the record says so in the same stream a follower is
+// watching -- a run that dies of its own verbosity records no cost at all and
+// then looks like silence, which is the failure this is here to stop.
+func TestAnInvocationTooVerboseToRetainStillCompletesAndSaysItWasCut(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test","permissionMode":"acceptEdits","tools":["Read"],"capabilities":[]}`,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","total_cost_usd":4.62,"usage":{"input_tokens":10},"stop_reason":"end_turn"}`,
+	}, "\n") + "\n"
+	marker := "[output truncated at 8388608 bytes; the whole of it is in " + execution.EventLogOf(testRunID) + "]"
+	runner := &fakeRunner{results: []execution.ProcessResult{{
+		Status:           execution.ProcessSucceeded,
+		ExitCode:         0,
+		Stdout:           stream,
+		OutputTruncation: marker,
+	}}}
+	var events []execution.Event
+	result, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement the task",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want a verbose invocation to be no error at all", err)
+	}
+	if result.IsError || result.FinalText != "done" {
+		t.Fatalf("Run() result = %#v, want the invocation judged on its own result event", result)
+	}
+	if !result.CostReported || result.CostUSD != 4.62 {
+		t.Fatalf("Run() cost = %v (reported %t), want the result event's own figure", result.CostUSD, result.CostReported)
+	}
+	if runner.commands[0].OutputRecord != execution.EventLogOf(testRunID) {
+		t.Fatalf("invocation ran with OutputRecord %q, want the run's event log named", runner.commands[0].OutputRecord)
+	}
+	var said bool
+	for _, event := range events {
+		if event.Type == execution.EventProcessOutput && strings.Contains(string(event.Payload), "output truncated") {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatal("no event says the invocation's output was truncated, so the record is silent about a cut copy")
+	}
+}
+
 type fakeRunner struct {
 	results  []execution.ProcessResult
 	errors   []error

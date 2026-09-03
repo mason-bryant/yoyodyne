@@ -87,9 +87,13 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 			// process's own with the cache pointed inside the repository being
 			// checked -- the same redirect the run's own probe was given, so
 			// the two share what has already been compiled.
-			Env:      execution.WithGoBuildCache(nil, directory),
-			Timeout:  timeout,
-			Redactor: redactor,
+			Env:     execution.WithGoBuildCache(nil, directory),
+			Timeout: timeout,
+			// Every line this check writes is emitted below, so the run's own
+			// event log holds the whole of a suite too verbose to retain, and
+			// the marker in the cut copy is what says so.
+			OutputRecord: execution.EventLogOf(runID),
+			Redactor:     redactor,
 		}, func(output execution.Output) {
 			if len(observerErrors) > 0 {
 				return
@@ -110,6 +114,22 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 		}
 		if len(observerErrors) > 0 {
 			return results, lastAccepted, errors.Join(observerErrors...)
+		}
+		// A check too verbose to retain is not a failing check, so nothing here
+		// stops. What the marker buys is that the retained output the failure
+		// report is written from is never read as the whole of what the check
+		// said: the line saying so is in the stream a follower is watching, and
+		// it names the log that has the rest.
+		if processResult.OutputTruncation != "" {
+			if err := emit(runID, sequence, clock, sink, execution.EventProcessOutput, map[string]any{
+				"kind":    "check",
+				"command": safeCommand,
+				"stream":  execution.StreamStdout,
+				"text":    processResult.OutputTruncation,
+			}); err != nil {
+				return results, lastAccepted, err
+			}
+			lastAccepted = sequence.Last()
 		}
 		passed := processResult.Status == execution.ProcessSucceeded
 		result := Result{Command: safeCommand, Process: processResult, Passed: passed, Timeout: timeout}

@@ -61,9 +61,20 @@ type Command struct {
 	// producing nothing is stalled however recently it started. Zero or less
 	// disables the check, which is what a command whose output arrives in one
 	// burst at the end needs.
-	IdleTimeout    time.Duration
+	IdleTimeout time.Duration
+	// MaxOutputBytes bounds what this runner retains of the process's output,
+	// and bounds nothing else: the process runs to its own end however much it
+	// says, and every line still reaches the observer. Zero is
+	// defaultMaxOutputBytes.
 	MaxOutputBytes int
-	Redactor       Redactor
+	// OutputRecord names the durable record holding the whole of this process's
+	// output, which is what the marker left in a cut copy points a reader at. A
+	// caller that streams every line into a run's event log names that log; one
+	// that keeps the retained copy and nothing else leaves this empty, and the
+	// marker says the rest was not kept rather than sending a reader after a
+	// record nobody wrote.
+	OutputRecord string
+	Redactor     Redactor
 }
 
 type Output struct {
@@ -79,6 +90,14 @@ type ProcessResult struct {
 	FinishedAt time.Time
 	Stdout     string
 	Stderr     string
+	// OutputTruncation is the marker standing where the retained output above
+	// was cut, naming the bound and the record holding the whole. It is empty
+	// when nothing was cut, so its presence is the fact and its text is what to
+	// say about it: a caller reporting the truncation into a run's record says
+	// the sentence the cut copy already carries rather than composing a second
+	// one. It is omitted from the record when there is nothing to say, because a
+	// truncation that did not happen is not a field a reader has to interpret.
+	OutputTruncation string `json:",omitempty"`
 }
 
 type OutputObserver func(Output)
@@ -175,7 +194,8 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	var stdoutBuffer bytes.Buffer
 	var stderrBuffer bytes.Buffer
 	outputBytes := 0
-	outputLimitExceeded := false
+	stdoutTruncated := false
+	stderrTruncated := false
 	stalled := false
 	idle := newIdleWatch(command.IdleTimeout)
 	defer idle.stop()
@@ -190,18 +210,43 @@ drain:
 			// the idle bound starts over from here rather than from the start.
 			idle.reset()
 			lineBytes := len(output.Text) + 1
-			if outputBytes+lineBytes > maxOutput {
-				outputLimitExceeded = true
-				continue
+			// A stream that has already lost a line keeps losing them, so what
+			// is retained of it is a prefix ending where its marker says rather
+			// than a copy with a hole in the middle where a later short line
+			// happened to fit. The budget itself is shared, so a chatty stdout
+			// can still spend all of it; what is tracked per stream is which
+			// ones actually lost something, because a marker on a stream that
+			// stayed whole would report a truncation that never happened to it.
+			cut := stdoutTruncated
+			if output.Stream == StreamStderr {
+				cut = stderrTruncated
 			}
-			outputBytes += lineBytes
-			if output.Stream == StreamStdout {
+			switch {
+			case cut || outputBytes+lineBytes > maxOutput:
+				// The bound is on what this runner keeps in memory and on
+				// nothing else. A process is never killed for being verbose and
+				// its output is never an error: a run that bursts stdout
+				// diagnosing something is a run doing its work, and failing it
+				// for that loses the work and the account of what it cost.
+				if output.Stream == StreamStdout {
+					stdoutTruncated = true
+				} else {
+					stderrTruncated = true
+				}
+			case output.Stream == StreamStdout:
+				outputBytes += lineBytes
 				stdoutBuffer.WriteString(output.Text)
 				stdoutBuffer.WriteByte('\n')
-			} else {
+			default:
+				outputBytes += lineBytes
 				stderrBuffer.WriteString(output.Text)
 				stderrBuffer.WriteByte('\n')
 			}
+			// The observer is called for every line, past the bound as much as
+			// under it. It is what carries output into the durable record the
+			// marker points at, so stopping here would cut the whole as well as
+			// the copy -- and for a provider stream it would drop the terminal
+			// result the invocation's own cost is read from.
 			if observer != nil {
 				observer(output)
 			}
@@ -218,6 +263,21 @@ drain:
 
 	waitErr := process.Wait()
 	result.FinishedAt = clock.Now()
+	if stdoutTruncated || stderrTruncated {
+		result.OutputTruncation = truncationMarker(maxOutput, command.OutputRecord)
+		// The marker goes into each stream that lost a line, so whichever of the
+		// two a reader has in front of them says it is a cut copy. A stream that
+		// stayed whole gains nothing, because a marker on it would report a
+		// truncation that did not happen to it.
+		if stdoutTruncated {
+			stdoutBuffer.WriteString(result.OutputTruncation)
+			stdoutBuffer.WriteByte('\n')
+		}
+		if stderrTruncated {
+			stderrBuffer.WriteString(result.OutputTruncation)
+			stderrBuffer.WriteByte('\n')
+		}
+	}
 	result.Stdout = stdoutBuffer.String()
 	result.Stderr = stderrBuffer.String()
 	if process.ProcessState != nil {
@@ -229,9 +289,6 @@ drain:
 		if scanErr != nil {
 			readErrors = append(readErrors, scanErr)
 		}
-	}
-	if outputLimitExceeded {
-		readErrors = append(readErrors, fmt.Errorf("process output exceeded %d bytes", maxOutput))
 	}
 	if len(readErrors) > 0 {
 		return result, errors.Join(readErrors...)
@@ -252,6 +309,32 @@ drain:
 		result.Status = ProcessSucceeded
 	}
 	return result, nil
+}
+
+// EventLogOf names a run's event log as a reader would have to name it to go
+// and find it. It is what a caller streaming a process's output into that log
+// puts on Command.OutputRecord, so the marker in a cut copy sends a reader to
+// the file that has the rest.
+func EventLogOf(runID string) string {
+	if strings.TrimSpace(runID) == "" {
+		return ""
+	}
+	return "the event log of " + runID
+}
+
+// truncationMarker is the line that stands where a retained copy of a process's
+// output was cut. It names the bound it was cut at and the record holding the
+// whole, because a reader who cannot tell a cut copy from a complete one reads
+// the cut one as everything the process said.
+//
+// A caller that named no record has the absence said plainly instead. Pointing
+// a reader at "the durable record" where nothing kept one would send them
+// looking for a file nobody wrote, which is worse than saying the rest is gone.
+func truncationMarker(maxOutput int, record string) string {
+	if strings.TrimSpace(record) == "" {
+		return fmt.Sprintf("[output truncated at %d bytes; the rest was not retained]", maxOutput)
+	}
+	return fmt.Sprintf("[output truncated at %d bytes; the whole of it is in %s]", maxOutput, record)
 }
 
 // idleWatch bounds the gap between one line of process output and the next. It

@@ -233,6 +233,52 @@ func TestEveryCheckIsGivenABuildCacheTheRunMayWrite(t *testing.T) {
 	}
 }
 
+// A check verbose enough to outrun what the runner retains still passes on its
+// own exit, and the run's record says the retained copy is cut rather than
+// leaving a short one to be read as everything the check said. The whole of it
+// is in the event log, because every line was emitted there on the way past.
+func TestACheckTooVerboseToRetainStillPassesAndSaysItWasCut(t *testing.T) {
+	t.Parallel()
+
+	const runID = "run-0123456789abcdef0123456789abcdef"
+	marker := "[output truncated at 8388608 bytes; the whole of it is in " + execution.EventLogOf(runID) + "]"
+	process := &recordingRunner{result: execution.ProcessResult{
+		Status:           execution.ProcessSucceeded,
+		Stdout:           "the part that fit\n" + marker + "\n",
+		OutputTruncation: marker,
+	}}
+	var events []execution.Event
+	results, _, err := (Runner{Process: process}).Run(
+		context.Background(),
+		runID,
+		t.TempDir(),
+		[]string{"noisy-check"},
+		0,
+		func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want a verbose check to be no error at all", err)
+	}
+	if len(results) != 1 || !results[0].Passed {
+		t.Fatalf("Run() results = %#v, want the check judged on its own exit", results)
+	}
+	if process.command.OutputRecord != execution.EventLogOf(runID) {
+		t.Fatalf("check ran with OutputRecord %q, want the run's event log named", process.command.OutputRecord)
+	}
+	var said bool
+	for _, event := range events {
+		if event.Type == execution.EventProcessOutput && strings.Contains(string(event.Payload), "output truncated") {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatal("no event says the check's output was truncated, so the record is silent about a cut copy")
+	}
+}
+
 type recordingRunner struct {
 	command execution.Command
 	result  execution.ProcessResult
