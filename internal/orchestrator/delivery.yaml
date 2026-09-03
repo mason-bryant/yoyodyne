@@ -105,7 +105,7 @@ states:
       completed: clean-up
   clean-up:
     action: run.clean-up
-    summary: remove the worktree and branch this run created, once its change is proven to be somewhere else
+    summary: remove the worktree and branch this run created, once its change is proven to be somewhere else, and record the run as complete once nothing it made is left
     on:
       cleaned: delivered
       # An artifact that survived is reported on a succeeded run rather than

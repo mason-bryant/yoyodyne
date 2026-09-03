@@ -66,12 +66,13 @@ func TestEveryRegisteredActionWrapsAFunctionThisPackageHas(t *testing.T) {
 // step one of these called did.
 //
 // `finish` is one of them rather than a step, and that is the whole of what
-// covers the completing end of a run. It performs nothing itself: it orders
-// `complete` and then `cleanUp`, both registered, so an operation that arrives
-// between them is walked from here and has to be registered or excused. While it
-// was excused as a step of its own, everything inside it was invisible to this
-// test — which is how recording the outcome, closing the item and pricing it
-// came to be delivery work no definition could express.
+// covers the completing end of a run. It performs nothing itself — it orders
+// `complete` and then `cleanUp`, both registered, and turns what either returns
+// into the run's outcome — so an operation that arrives between them is walked
+// from here and has to be registered or excused. While it was excused as a step
+// of its own, everything inside it was invisible to this test, which is how
+// recording the outcome, closing the item and pricing it came to be delivery
+// work no definition could express.
 var sequencers = []string{
 	"(Pipeline).Run",
 	"(Pipeline).resumeRun",
@@ -505,6 +506,93 @@ func completingRun(itemID string, phase runstate.Phase) runstate.State {
 		Phase:         phase,
 		StartedAt:     started,
 		UpdatedAt:     started,
+	}
+}
+
+// cleanedWorktreeManager removes everything it is asked to. It is
+// partialWorktreeManager with the one method the cleanup step calls answered,
+// because every other method it inherits refuses and none of them is reached.
+type cleanedWorktreeManager struct{ partialWorktreeManager }
+
+func (cleanedWorktreeManager) CleanupIntegrated(context.Context, gitworktree.CleanupRequest) (gitworktree.Cleanup, error) {
+	return gitworktree.Cleanup{WorktreeRemoved: true, BranchRemoved: true}, nil
+}
+
+// TestPerformingCleanUpRecordsTheRunAsComplete holds the other end of the
+// completing pair: a run driven through this door has to end where the
+// hard-coded loop ends it.
+//
+// The terminal phase is the last thing a delivery run writes, and it is written
+// here rather than beside the call for exactly this reason — a definition that
+// ordered complete and then clean-up would otherwise leave every run it drove
+// sitting in cleaning_up with nothing left to clean up.
+func TestPerformingCleanUpRecordsTheRunAsComplete(t *testing.T) {
+	t.Parallel()
+
+	registry, err := deliveryRegistry()
+	if err != nil {
+		t.Fatalf("deliveryRegistry() error = %v", err)
+	}
+	cleanUp, _ := registry.Lookup("run.clean-up")
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	// The run as run.complete leaves it: succeeded, with the cleanup outstanding.
+	state := completingRun("yoyodyne-ifd.209.18", runstate.PhaseCleaningUp)
+	completedAt := baseTime
+	state.Status = runstate.StatusSucceeded
+	state.CompletedAt = &completedAt
+	// A removed artifact is only valid against a recorded promotion, and a
+	// recorded promotion is only valid with the approval and the two independent
+	// invocations that authorized it. All of it is what run.complete leaves
+	// behind; none of it is what this test is about.
+	commit := strings.Repeat("b", 40)
+	state.WorktreePath = t.TempDir()
+	state.Branch = "yoyodyne/task/209-18"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.ReviewDecision = runstate.ReviewApprove
+	state.ProviderSessionID = "developer-session"
+	state.ProviderModel = "opus"
+	state.ReviewSessionID = "reviewer-session"
+	state.ReviewModel = "opus"
+	state.Integration = &runstate.Integration{
+		TargetBranch:         "main",
+		SourceCommit:         commit,
+		TargetCommit:         commit,
+		PreviousTargetCommit: strings.Repeat("d", 40),
+	}
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	run := &activeRun{
+		pipeline: Pipeline{Worktrees: cleanedWorktreeManager{}, Store: store},
+		state:    state,
+		outcome: Outcome{Integration: &gitworktree.Integration{
+			TargetBranch: "main",
+			SourceCommit: "b0bb1e5",
+		}},
+	}
+	if err := cleanUp.Perform(context.Background(), run); err != nil {
+		t.Fatalf("Perform() error = %v", err)
+	}
+
+	if !run.state.WorktreeRemoved || !run.state.BranchRemoved {
+		t.Errorf("the run records worktree_removed=%t branch_removed=%t; both were removed",
+			run.state.WorktreeRemoved, run.state.BranchRemoved)
+	}
+	if run.state.Phase != runstate.PhaseComplete {
+		t.Errorf("run.state.Phase = %q, want %q", run.state.Phase, runstate.PhaseComplete)
+	}
+	if run.outcome.Phase != runstate.PhaseComplete {
+		t.Errorf("run.outcome.Phase = %q, want %q", run.outcome.Phase, runstate.PhaseComplete)
+	}
+	saved, err := store.Load(run.state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if saved.Phase != runstate.PhaseComplete {
+		t.Errorf("the durable record is in %q; a run nothing is left of is complete", saved.Phase)
 	}
 }
 

@@ -216,7 +216,7 @@ func deliverySteps() []deliveryStep {
 		{
 			action: action.Action[*activeRun]{
 				Name:    "run.clean-up",
-				Summary: "remove the worktree and branch this run created, once its change is proven to be somewhere else",
+				Summary: "remove the worktree and branch this run created, once its change is proven to be somewhere else, and record the run as complete once nothing it made is left",
 				Wraps:   "(*activeRun).cleanUp",
 				Capabilities: []capability.Capability{
 					capability.WorktreeMutate,
