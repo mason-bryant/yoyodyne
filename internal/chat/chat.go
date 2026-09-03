@@ -358,8 +358,15 @@ type Session struct {
 	// turnCostUSD is what the provider charged for the message being answered,
 	// summed across the rounds it took, and sessionCostUSD is what this process
 	// has spent on the conversation. Both are what the provider reported rather
-	// than anything the harness worked out, and neither is recorded: they are
-	// shown to an operator watching their spend and nothing else reads them.
+	// than anything the harness worked out, and neither is the record of the
+	// spend: the cost log is, and these are the same figures as they are handed
+	// back to whoever asked for the turn.
+	//
+	// The per-turn figure is read by more than the operator's status line now.
+	// A `yoyo work` session takes turns of its own — a stopped run put to the
+	// development manager — and a session given a budget has to count what it
+	// spent doing that, so TurnCostUSD below hands this back. The session figure
+	// stays what it always was: nothing reads it but the screen.
 	//
 	// Summing treats each invocation's reported cost as that invocation's own.
 	// If a provider ever reported a running total for a resumed session instead,
@@ -616,6 +623,22 @@ func Open(options Options) (*Session, error) {
 // Resumed reports whether this session continued a recorded conversation.
 func (s *Session) Resumed() bool { return s.resumed }
 
+// TurnCostUSD is what the provider charged for the message this conversation
+// last answered, as the provider reported it, summed across the rounds that
+// message took.
+//
+// It is here because a turn is not always something an operator asked for. The
+// harness takes one itself when it puts a stopped run in front of the
+// development manager, and a `yoyo work` session given a budget has to count
+// that against the bound it was given — a session that spends past its cap on
+// turns nobody counted is the cap disappearing quietly, which is the one thing
+// a bound must not do.
+//
+// It says nothing about what was recorded. The cost log is where the spend is
+// durable, written as the invocation is taken and independent of whether anybody
+// reads this.
+func (s *Session) TurnCostUSD() float64 { return s.turnCostUSD }
+
 // Evidence reports the conversation as it currently stands.
 func (s *Session) Evidence() Evidence {
 	return Evidence{
@@ -687,6 +710,14 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// returned: the rest of the answer is unaffected by either.
 		s.collectReply(&reply, parsed)
 		if err != nil {
+			// A tracker block the harness would not read is recorded and handed back
+			// to the role that sent it before the turn ends. Everything else about
+			// the failure is unchanged: the answer above is real, the turn is
+			// returned as failed, and nothing in the block was carried out.
+			var refused *TrackerError
+			if errors.As(err, &refused) {
+				err = errors.Join(err, s.recordRefusedTrackerBlock(refused))
+			}
 			return reply, err
 		}
 		// What this role has no authority for is refused before any of it is
@@ -949,6 +980,18 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// rather than about this conversation, and nothing else in the record would
 	// ever say it happened.
 	refusal := s.noteUsageLimit(result, err)
+	// And it says so in the error the turn fails with. To a person at a terminal
+	// that changes nothing — they are told what happened either way — but a caller
+	// that is not a person has to be able to tell "the role was never asked" from
+	// "the role answered badly", because the two are owed opposite things: one is
+	// worth asking again once the limit resets, and the other is not.
+	declined := providerDeclined(result, err)
+	// And the same again for a turn a cancellation killed before an answer of the
+	// role's existed. It is a third ending a caller that is not a person has to be
+	// able to name: the harness withdrew its own question, so nothing was decided
+	// and nothing was carried out, and a caller with a bounded number of attempts
+	// must not spend one on the harness's own shutdown.
+	abandoned := turnAbandoned(result)
 	// A failed invocation is exactly the case a reply shown as it formed must not
 	// be left looking whole: whatever prose reached the screen was the start of
 	// an answer nobody finished. The two failures below are the only ones that
@@ -957,12 +1000,14 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// wherever the error is eventually reported.
 	if err != nil {
 		s.stream.cutOff()
-		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), refusal, s.record())
+		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), declined, abandoned, refusal, s.record())
 	}
 	if result.IsError {
 		s.stream.cutOff()
 		return "", errors.Join(
 			fmt.Errorf("%s reported failure: %s", RoleTitle(s.state.Role), result.DescribeFailure()),
+			declined,
+			abandoned,
 			refusal,
 			s.record(),
 		)
@@ -1044,10 +1089,10 @@ type parsedReply struct {
 func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 	rest, reports, reportErr := report.Extract(answer)
 	parsed := parsedReply{Reports: reports, ReportProblem: reportErr}
-	prose, actions, err := extractTrackerActions(rest)
+	prose, actions, requested, err := extractTrackerActions(rest)
 	if err != nil {
 		parsed.Prose = rest
-		return parsed, &TrackerError{Role: role, Err: err}
+		return parsed, &TrackerError{Role: role, Actions: requested, Err: err}
 	}
 	prose, proposals, err := extractProposals(prose)
 	if err != nil {
@@ -1721,7 +1766,10 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		}
 		var unreadableActions *TrackerError
 		if errors.As(err, &unreadableActions) {
-			fmt.Fprintf(out, "%v\nNothing in that block was carried out, so the tracker is unchanged by it; ask again if you want those changes.\n\n", unreadableActions)
+			// The refusal is recorded and put in front of the role's next turn, so
+			// what would have been your errand is its own: say anything to the
+			// conversation and it reads the refusal and issues the actions again.
+			fmt.Fprintf(out, "%v\nNothing in that block was carried out, so the tracker is unchanged by it. The refusal is recorded and reaches it verbatim on its next turn, so it re-issues the actions itself.\n\n", unreadableActions)
 			continue
 		}
 		// An escalation with nothing to reach the operator by is refused rather

@@ -811,6 +811,49 @@ func TestRunClassifiesCancellation(t *testing.T) {
 	}
 }
 
+// What a stream cut off mid-turn actually leaves on the result, field by field,
+// because a caller now decides something from it: a delivery to the development
+// manager gives its attempt back on a turn that produced no answer, and which
+// fields prove that is the whole of whether the give-back reaches the case it
+// was written for.
+//
+// The session identifier is the trap. It is recorded from the first envelope
+// carrying one — the init event, which arrives before the model has done
+// anything — so a killed turn has one, and reading it as evidence the
+// invocation ended would make every such turn look answered. What only a
+// terminal leaves is the answer text and the priced cost.
+func TestRunLeavesAKilledTurnCarryingNoAnswer(t *testing.T) {
+	t.Parallel()
+
+	// The provider opened the session and said nothing else before the process
+	// group was torn down under it.
+	stream := `{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}` + "\n"
+	result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{
+		Status: execution.ProcessCancelled, ExitCode: -1, Stdout: stream,
+	}}}, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID: testRunID, Role: domain.RoleDevelopmentManager, WorkingDirectory: "/worktree", Prompt: "judge this stoppage",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Process.Status != execution.ProcessCancelled {
+		t.Fatalf("process status = %q, want the cancellation carried on the result", result.Process.Status)
+	}
+	// The session is on the result despite nothing having been answered in it.
+	if result.SessionID != "session-1" {
+		t.Fatalf("session = %q, want the one the init event named", result.SessionID)
+	}
+	// And nothing a terminal writes is: no answer of hers, and no priced cost.
+	if result.FinalText != "" || result.CostReported {
+		t.Fatalf("final text = %q, cost reported = %v, want a turn that reached no terminal", result.FinalText, result.CostReported)
+	}
+	// The failure a person reads is the one the twelve abandoned escalations of
+	// yoyodyne-ifd.250 all carried.
+	if result.DescribeFailure() != string(execution.ProcessCancelled) {
+		t.Fatalf("described failure = %q, want the sentence those records carried", result.DescribeFailure())
+	}
+}
+
 // The two ways the harness stops a provider invocation on time are reported
 // apart, so nothing downstream has to guess whether the process was working.
 func TestRunClassifiesAStallApartFromAnExhaustedBudget(t *testing.T) {

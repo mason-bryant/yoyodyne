@@ -116,7 +116,10 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 		if after.ReviewDecision == runstate.ReviewApprove {
 			verdict = KindReviewApproved
 		}
-		say(verdict, report.SeverityNote, Persona(domain.RoleReviewer, ""), Detail{Findings: after.ReviewFindings})
+		say(verdict, report.SeverityNote, Persona(domain.RoleReviewer, ""), Detail{
+			Findings:  after.ReviewFindings,
+			Requested: describeFindings(after.ReviewFindingDetails),
+		})
 	}
 	// A promotion is the harness's own act — no agent performs one — so the
 	// harness is the speaker rather than any persona.
@@ -327,7 +330,17 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 	if kind == KindWatchBraked {
 		severity = report.SeverityWarning
 	}
-	notification := productNotification(kind, transition.At, Detail{Reason: transition.Reason})
+	// The runs the session could see and the conversation it is waiting on travel
+	// with the reason, because whose move follows an idle poll is derived from them
+	// rather than from the words: a session polling beside a run in flight is not
+	// waiting on an admission, and one whose only unstarted work is a role's to
+	// carry is waiting on that role.
+	notification := productNotification(kind, transition.At, Detail{
+		Reason:     transition.Reason,
+		Running:    transition.Running,
+		Executor:   string(transition.Executor),
+		Unreadable: transition.Unreadable,
+	})
 	notification.Event.Severity = severity
 	return notification, nil
 }
@@ -432,6 +445,58 @@ func FromResident(resident Resident, severity report.Severity, at time.Time) Not
 		Behind: resident.Behind,
 	})
 	notification.Event.Severity = severity
+	return notification
+}
+
+// Stall is the harness having started nothing at all while work was ready to
+// start: since when, over how much, and what the record last said about the
+// thing that chooses work.
+//
+// It is the third state here rather than a crossing, and it is the one that is
+// derived from an absence. The waiting line reads a record somebody wrote — a
+// hold, a session saying it is idle — and a stale resident reads a build stamp;
+// both need the process they are about to have been well enough to write
+// something down. This needs nothing to be alive: what it reads is the last time
+// any run started, which the runs themselves date, against a queue the tracker
+// says has work in it. That is why it catches the case the other two structurally
+// cannot — a scheduler that crashed writes no stop, and a wedged one goes on
+// recording that it is watching.
+//
+// The chooser's last word rides along because it is the whole of what an
+// operator has to decide between at three in the morning: a session whose last
+// word was "stopped" wants starting, and one still claiming to be watching wants
+// killing first.
+type Stall struct {
+	// Since is when the harness last started anything.
+	Since time.Time
+	// Ready is how much admitted work the tracker called ready through it.
+	Ready int
+	// Chooser is what the record last said about the thing that chooses work.
+	Chooser string
+	// Standing is where the harness stands, in the four lines the read model
+	// renders, said for the reason the waiting line says them: somebody reading
+	// this was woken by it, and reconstructing the machine's state from one
+	// sentence is what they would otherwise have to do.
+	Standing string
+}
+
+// FromStall says that nothing at all has started while work was ready to start.
+// It is addressed to the product and spoken by the harness for the reason the
+// line and the holds are: it is about every item rather than any one of them.
+//
+// It is a warning rather than a note, and that is the whole difference between
+// this and the hourly line. A line waiting on a hold somebody placed is a state
+// they already know about; a machine that has silently stopped doing anything is
+// a degraded harness, which is the one class of thing this surface takes to
+// somebody directly.
+func FromStall(stall Stall, at time.Time) Notification {
+	notification := productNotification(KindStallNoticed, at, Detail{
+		Stopped:  strings.TrimSpace(stall.Chooser),
+		Since:    stall.Since,
+		Ready:    stall.Ready,
+		Standing: strings.TrimRight(stall.Standing, "\n"),
+	})
+	notification.Event.Severity = report.SeverityWarning
 	return notification
 }
 
@@ -729,4 +794,64 @@ func describePullRequest(published *runstate.PullRequest) string {
 		return fmt.Sprintf("#%d", published.Number)
 	}
 	return strings.TrimSpace(published.URL)
+}
+
+// describeFindings says what a repair round asked for, one entry per finding and
+// in the order the reviewer raised them. It is the count's missing half: a
+// reader given "3 findings" cannot tell a correction to a document from a
+// problem with the design, and both are what a repair round is usually made of.
+//
+// Each entry is the finding's first sentence rather than the whole of it. The
+// whole is in the record the message points at, and what a channel is read for
+// is which change is being asked for rather than the argument behind it. The
+// severity comes first because it is the one word that ranks the change, and
+// the place the record names comes last because it is where somebody looks
+// rather than part of what was said. A finding the record located gives its
+// line beside its file; one that named a file alone says the file.
+//
+// A record that counted findings without keeping them yields nothing, which the
+// message says as itself rather than as a reviewer who asked for nothing.
+func describeFindings(findings []runstate.Finding) []string {
+	if len(findings) == 0 {
+		return nil
+	}
+	described := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		said := firstSentence(finding.Message)
+		if severity := strings.TrimSpace(finding.Severity); severity != "" {
+			said = severity + ": " + said
+		}
+		if file := strings.TrimSpace(finding.File); file != "" {
+			at := file
+			if finding.Line > 0 {
+				at = fmt.Sprintf("%s:%d", file, finding.Line)
+			}
+			// The place a finding names belongs inside the sentence rather than
+			// after it, so it goes before the full stop the reviewer wrote. A
+			// finding that ended on no stop is left ending on none.
+			if strings.HasSuffix(said, ".") {
+				said = strings.TrimSuffix(said, ".") + " (" + at + ")."
+			} else {
+				said += " (" + at + ")"
+			}
+		}
+		described = append(described, said)
+	}
+	return described
+}
+
+// firstSentence is as much of what somebody wrote as stands on its own: up to
+// the first full stop that ends a sentence, or the first line break, whichever
+// comes first. A full stop inside a word is not one — a finding naming
+// README.md is naming a file rather than finishing — so it is the stop followed
+// by a space that ends the sentence.
+func firstSentence(written string) string {
+	trimmed := strings.TrimSpace(written)
+	if line, _, found := strings.Cut(trimmed, "\n"); found {
+		trimmed = strings.TrimSpace(line)
+	}
+	if at := strings.Index(trimmed, ". "); at >= 0 {
+		return trimmed[:at+1]
+	}
+	return trimmed
 }

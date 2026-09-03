@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 func TestWhatASessionSaidSurvivesTheProcessThatSaidIt(t *testing.T) {
@@ -97,6 +99,67 @@ func TestATransitionThatCannotBeReadBackOrDoesNotBelongHereIsRefused(t *testing.
 	misbuilt.Build = "--upload-pack=touch /tmp/x"
 	if err := store.Record(misbuilt); err == nil {
 		t.Fatal("Record() error = nil, want a build that is not a revision refused")
+	}
+	// The two fields a reader takes whose move follows an idle session from. A
+	// count nothing observed and a marker naming no role would both leave a surface
+	// saying something about the machine that nobody recorded.
+	miscounted := testWatchTransition(testWatchSessionID, WatchIdle, "")
+	miscounted.Running = -1
+	if err := store.Record(miscounted); err == nil {
+		t.Fatal("Record() error = nil, want a negative count of runs in flight refused")
+	}
+	misaddressed := testWatchTransition(testWatchSessionID, WatchIdle, "")
+	misaddressed.Executor = "conversation:nobody"
+	if err := store.Record(misaddressed); err == nil {
+		t.Fatal("Record() error = nil, want a marker naming no role refused")
+	}
+}
+
+// A session idle on one slot while a run works on the other is the state that
+// was read three times as a line that had stopped. What it recorded said only
+// that it had started nothing, so every surface downstream had to guess: these
+// two fields are what it says instead, and they survive the process that said
+// them like everything else here.
+func TestASessionRecordsWhatItSawGoingAndWhoItIsWaitingOn(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	idle := testWatchTransition(testWatchSessionID, WatchIdle,
+		"1 run in flight; 3 items passed over, of 3 admitted: carried in conversation (architect: yoyodyne-ifd.212)")
+	idle.Running = 1
+	idle.Executor = domain.ConversationWith(domain.RoleArchitect)
+	if err := store.Record(idle); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	recorded, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("List() = %#v, want the one transition back", recorded)
+	}
+	if recorded[0].Running != 1 || recorded[0].Executor != domain.ConversationWith(domain.RoleArchitect) {
+		t.Fatalf("transition = %#v, want the runs it saw and the conversation it waits on carried", recorded[0])
+	}
+	if recorded[0].Unreadable {
+		t.Fatalf("transition = %#v, want a queue it read left unmarked", recorded[0])
+	}
+
+	// The other poll that chose nothing, and the one no admission would change:
+	// the store would not answer, so what is in the queue is not what stopped it.
+	outage := testWatchTransition(testWatchSessionID, WatchIdle, "the harness could not be read and is being read again")
+	outage.Unreadable = true
+	if err := store.Record(outage); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	reread, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(reread) != 2 || !reread[1].Unreadable {
+		t.Fatalf("transitions = %#v, want the reading that failed marked as one", reread)
 	}
 }
 

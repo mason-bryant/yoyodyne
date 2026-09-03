@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# cut-release.sh - cut one release: gate on its notes, the adoption walkthrough
-# and the checks, build the archives and their checksums for the tag, then tag
-# the commit they were built from.
+# cut-release.sh - cut one release: gate on its notes, on the system matching
+# what it records about itself, on the adoption walkthrough and on the checks,
+# build the archives and their checksums for the tag, then tag the commit they
+# were built from.
 #
 #   make release VERSION=v0.3.0      what an operator runs
 #   scripts/cut-release.sh v0.3.0    the same thing, without make
@@ -22,14 +23,17 @@
 # tag is created last, so a refusal at any point leaves the repository exactly
 # as it was. There is no half-cut release to clean up. Two things are written
 # before the tag, and both are held to that claim rather than excepted from it.
-# The housekeeping commit for the tracker's derived exports is written after the
-# last gate has passed, for the reason given there: it is made or it is not, and
-# a failure partway through puts the index back rather than leaving the exports
-# staged. And a release whose notes are missing has them drafted, which is the
-# single exception -- a cut with no story to tell writes docs/releases/<tag>.md
-# from the work items that landed and refuses, so the tag lands on a commit that
-# carries its own notes rather than on one they are added after. That refusal
-# says outright what it wrote.
+# The housekeeping commit is written after the last gate has passed, for the
+# reason given there: it is made or it is not, and a failure partway through puts
+# the index back rather than leaving anything staged. It carries the tracker's
+# derived exports and the release-readiness result stamped into this tag's notes,
+# so the notes the tag names carry the conformance result of the tree it names
+# rather than one taken on whichever day the notes were drafted. And a release
+# whose notes are missing has them drafted, which is the single exception -- a cut
+# with no story to tell writes docs/releases/<tag>.md from the work items that
+# landed and refuses, so the tag lands on a commit that carries its own notes
+# rather than on one they are added after. That refusal says outright what it
+# wrote.
 #
 # Requires git 2.9 or newer. Two things here have a floor: the `:(exclude)`
 # pathspec the cleanliness check uses needs 1.9, and `core.hooksPath`, which is
@@ -38,8 +42,10 @@
 # does not refuse `core.hooksPath` -- it ignores it, the hook runs, and the tag
 # names a tree that was dirty again a millisecond after it was cleaned, with
 # nothing saying so. The `git push --atomic` this prints on a day it housekept
-# needs 2.4 of whoever runs it, which the same floor covers. Also make, go, and
-# whatever scripts/walk-adoption.sh needs (bd and python3). Nothing outside the
+# needs 2.4 of whoever runs it, which the same floor covers. Also make, go,
+# python3 -- which stamps the readiness result into the notes here as well as
+# rendering the draft in scripts/release-notes.sh -- and bd, which both the notes
+# and the release-readiness gate read the work items through. Nothing outside the
 # repository is written, and nothing is pushed.
 
 set -euo pipefail
@@ -70,6 +76,12 @@ tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
 # built from them. Each one is also a change a run declares the primary checkout
 # may acquire while it works, in internal/cli/run.go.
 derived_exports=(".beads/interactions.jsonl" ".beads/issues.jsonl")
+# Where the release-readiness section lives inside a release's notes, spelled
+# the way internal/cli/conformance.go renders it. The cut replaces what is
+# between these two lines and leaves everything the product manager wrote around
+# them alone, so stamping a result twice leaves one section rather than two.
+readiness_begin="<!-- yoyodyne:release-readiness -->"
+readiness_end="<!-- /yoyodyne:release-readiness -->"
 
 step()   { printf '\n=== %s\n' "$*"; }
 # Every refusal names the tag it did not cut, because the operator's next
@@ -77,7 +89,11 @@ step()   { printf '\n=== %s\n' "$*"; }
 refuse() { printf '\ncut-release: %s\n' "$*" >&2; exit 1; }
 
 walk_log=""
-cleanup() { [ -z "$walk_log" ] || rm -f "$walk_log"; }
+readiness=""
+cleanup() {
+  [ -z "$walk_log" ] || rm -f "$walk_log"
+  [ -z "$readiness" ] || rm -f "$readiness"
+}
 trap cleanup EXIT
 
 git -C "$repository" rev-parse --git-dir >/dev/null 2>&1 ||
@@ -171,6 +187,37 @@ fi
 printf 'docs/releases/%s.md is present and committed, so %s will name a commit\n' "$tag" "$tag"
 printf 'that carries its own notes\n'
 
+step "gate: release readiness"
+# A tag says the system matches what it records about itself, not only that its
+# tests pass. This runs the release-readiness workflow -- a sequence in the
+# project-owned definition format rather than Go control flow -- over the
+# checkout: the canonical artifacts and their references, the links the
+# documentation makes to itself, the architectural invariants, and every admitted
+# work item's attribution to a goal the product states. Staleness is surveyed
+# alongside and refuses nothing, because a cut that failed over an amendment
+# would teach an operator not to amend.
+#
+# It is rendered as the Markdown section the notes carry rather than as the
+# operator's reading, and there is one invocation rather than two: a gate read
+# one way and a notes section written from a second run would be two results,
+# and only one of them would be the one that refused or did not.
+printf 'The tag is refused unless the system still matches what it records about\n'
+printf 'itself. The section below is what this tag will carry in its notes.\n\n'
+if ! "$make_program" -C "$repository" build >/dev/null; then
+  refuse "the harness could not be built, so release readiness was never checked and $tag was not cut"
+fi
+readiness="$(mktemp "${TMPDIR:-/tmp}/cut-release-readiness.XXXXXX")"
+# Run from the repository rather than from wherever the operator is standing:
+# the harness discovers a project's configuration by walking up from the working
+# directory, and a cut invoked from elsewhere would otherwise check whichever
+# project that directory happens to be inside, or none.
+if (cd "$repository" && ./bin/yoyo conformance --notes) > "$readiness"; then
+  cat "$readiness"
+else
+  cat "$readiness" >&2
+  refuse "release readiness is red, so $tag was not cut and nothing was written"
+fi
+
 step "gate: the adoption walkthrough"
 printf 'A release is what the install path consumes, so the documented first hour\n'
 printf 'is walked before the tag exists rather than after it is published.\n\n'
@@ -197,7 +244,7 @@ if ! "$make_program" -C "$repository" dist-verify VERSION="$tag"; then
   refuse "the release build for $tag failed, so no tag was written"
 fi
 
-step "housekeeping: the tracker's derived exports"
+step "housekeeping: this tag's readiness result and the tracker's derived exports"
 # Here rather than at the top, for two reasons. The walkthrough and the checks
 # above touch the tracker themselves, so an earlier commit would be dirty again
 # behind them; and every gate has now passed, so this is the first thing written
@@ -205,10 +252,51 @@ step "housekeeping: the tracker's derived exports"
 # Committing rather than excepting these paths is what keeps the
 # tag naming a tree with nothing uncommitted in it, so "the archives are the
 # commit the tag names" stays a property rather than a property with a footnote.
+#
+# The readiness section is stamped into the notes here for the same reason it is
+# committed rather than excepted: the notes the tag names then carry the
+# conformance result of the tree the tag names. Writing it earlier would put it
+# in front of gates that had not run; writing it into a file the operator wrote
+# is why it is a delimited section rather than an append -- everything around the
+# markers is theirs and is left exactly as it is.
+[ ! -L "$notes_file" ] ||
+  refuse "$notes_file is a symbolic link, so stamping $tag's readiness result would write outside the repository"
+if ! YOYODYNE_READINESS_BEGIN="$readiness_begin" YOYODYNE_READINESS_END="$readiness_end" \
+     python3 - "$notes_file" "$readiness" <<'PY'
+import os
+import sys
+
+begin, end = os.environ["YOYODYNE_READINESS_BEGIN"], os.environ["YOYODYNE_READINESS_END"]
+notes_path, section_path = sys.argv[1], sys.argv[2]
+
+with open(notes_path, encoding="utf-8") as handle:
+    notes = handle.read()
+with open(section_path, encoding="utf-8") as handle:
+    section = handle.read().strip("\n")
+
+start = notes.find(begin)
+if start == -1:
+    updated = notes.rstrip("\n") + "\n\n" + section + "\n"
+else:
+    stop = notes.find(end, start)
+    if stop == -1:
+        sys.exit("the notes open a release-readiness section and never close it; repair it by hand and cut again")
+    updated = notes[:start] + section + notes[stop + len(end):]
+
+# Written only when it differs, so a cut that changes nothing about the notes
+# leaves their modification time alone and nothing to commit.
+if updated != notes:
+    with open(notes_path, "w", encoding="utf-8") as handle:
+        handle.write(updated)
+PY
+then
+  refuse "$tag's readiness result could not be stamped into $notes_file, so $tag was not cut"
+fi
+
 housekept=()
-for export_path in "${derived_exports[@]}"; do
-  if [ -n "$(git -C "$repository" status --porcelain -- "$export_path")" ]; then
-    housekept+=("$export_path")
+for housekeeping_path in "${derived_exports[@]}" "docs/releases/$tag.md"; do
+  if [ -n "$(git -C "$repository" status --porcelain -- "$housekeeping_path")" ]; then
+    housekept+=("$housekeeping_path")
   fi
 done
 if [ "${#housekept[@]}" -gt 0 ]; then
@@ -218,13 +306,14 @@ if [ "${#housekept[@]}" -gt 0 ]; then
   # than refusing it, and the hook runs.
   if ! git -C "$repository" add -- "${housekept[@]}" ||
      ! git -C "$repository" -c core.hooksPath=/dev/null \
-         commit -q -m "record the tracker's derived exports for $tag"; then
-    # Put the index back, so this refusal leaves the repository exactly as it
-    # was like every refusal above it rather than leaving the exports staged.
-    # Its own stderr stands if it cannot, which is the only way this leaves
-    # anything behind and is louder than the refusal that follows.
+         commit -q -m "record $tag's readiness result and the tracker's derived exports"; then
+    # Put the index back, so nothing is left staged. Its own stderr stands if it
+    # cannot, which is louder than the refusal that follows. This is the one
+    # refusal that does leave something behind -- the readiness section is in the
+    # notes on disk, because it was written before this commit was attempted --
+    # and it says so rather than repeating the claim the others can make.
     git -C "$repository" reset -q -- "${housekept[@]}" || true
-    refuse "the tracker's derived exports could not be committed, so $tag was not cut and the index was put back"
+    refuse "$tag's housekeeping could not be committed, so $tag was not cut and the index was put back. $notes_file still carries the readiness result stamped into it; check it out again before cutting"
   fi
   head="$(git -C "$repository" rev-parse HEAD)"
   printf 'committed %s\n' "${housekept[*]}"

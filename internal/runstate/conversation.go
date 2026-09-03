@@ -118,11 +118,17 @@ type Conversation struct {
 	// revision of its own.
 	Build string `json:"build,omitempty"`
 	Turns int    `json:"turns"`
-	// PendingTrackerResults is what an agent did to the work tracker and has not
+	// PendingTrackerResults is what an agent asked of the work tracker and has not
 	// been told the result of yet, already rendered as the text its next turn is
 	// given. It is durable for the same reason the provider session is: the agent
 	// acted, the process that watched it act may be gone, and an agent that never
 	// learns what its own actions did is one that will describe them wrongly.
+	//
+	// What it carries is the results of actions the harness carried out, and the
+	// refusal of a block it would not read at all. The second is the same fact in
+	// its starkest form — every action in the block is a thing the agent believes
+	// it did and did not — so it travels the same way rather than in a field of its
+	// own.
 	PendingTrackerResults string `json:"pending_tracker_results,omitempty"`
 	// ContextGatheredAt is when the picture of the product the agent is working
 	// from was assembled, and ContextCommit is the repository commit it was

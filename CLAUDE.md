@@ -105,6 +105,29 @@ not a licence for a developer run to run `bd update`, which
 guard is still wired into developer runs because a hook that is present
 everywhere is one nobody has to remember to install.
 
+## A developer run writes its scratch files to the directory it was given
+
+**The harness cuts every developer run its own directory, outside that run's
+worktree, and names it in the run's contract. Anything the work needs that the
+change must not carry goes there, the check log first among it.**
+
+`$TMPDIR` is not the alternative. It is one directory per user on this machine
+rather than one per session or per run, so it is shared with every run working
+beside you, and an obvious name for a log is obvious to all of them. On
+2026-09-01 two runs five seconds apart redirected `make check` into
+`$TMPDIR/probe-check.log`; one of them read the other's compile error back out of
+it and reported a broken toolchain while its own `make check` was exiting 0.
+`docs/diagnoses/yoyodyne-ifd-238-probe-verdict-crosstalk.md` is the whole of
+that. The naming convention it left behind held only as far as each run's
+reading of it, which is why yoyodyne-ifd.247 replaced it with a directory nobody
+has to remember to name.
+
+The worktree is not the alternative either: a scratch file there is untracked
+content in the change, which every reviewer is then shown.
+
+A session the harness did not make — an interactive one in the checkout — is
+given no such directory and shares `$TMPDIR` with whatever is running beside it.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 

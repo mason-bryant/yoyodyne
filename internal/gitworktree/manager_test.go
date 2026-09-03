@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +109,52 @@ func TestManagerCreatesWorktreeFromResolvedBaseCommit(t *testing.T) {
 	}
 	if worktreeBase != worktree.BaseCommit {
 		t.Fatalf("git worktree base = %q, want resolved commit %q", worktreeBase, worktree.BaseCommit)
+	}
+}
+
+// A developer's first act is to execute the project's checks in the worktree it
+// was handed, so a worktree that is still being filled when the run starts is a
+// probe that judges half a tree and reports a broken toolchain. Create is what
+// stops that: it returns only once every file the base commit carries is on disk
+// with the content it was committed with, and a run is invoked after it returns.
+// A developer on 2026-09-01 read the worktree's uniform creation-time timestamps
+// as a checkout still in flight, which is what this pins as not being one.
+func TestCreateReturnsOnlyAWorktreeThatIsWhole(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	committed := map[string]string{
+		"README.txt":             "test\n",
+		"one.txt":                "the first file\n",
+		"nested/two.txt":         "the second file\n",
+		"nested/deeper/three.go": "package deeper\n\nfunc Three() int { return 3 }\n",
+	}
+	for relative, content := range committed {
+		if relative == "README.txt" {
+			continue
+		}
+		writeFile(t, repository, relative, content)
+	}
+	runGit(t, repository, "add", "--all")
+	runGit(t, repository, "commit", "-m", "content to materialize")
+
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-whole", BaseRef: "main"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	for relative, content := range committed {
+		found, err := os.ReadFile(filepath.Join(worktree.Path, relative))
+		if err != nil {
+			t.Fatalf("Create() returned before %s was written: %v", relative, err)
+		}
+		if string(found) != content {
+			t.Fatalf("%s = %q, want the committed %q", relative, found, content)
+		}
+	}
+	if status := gitOutput(t, worktree.Path, "status", "--porcelain", "--untracked-files=all"); strings.TrimSpace(status) != "" {
+		t.Fatalf("created worktree is not quiescent: %s", status)
 	}
 }
 
@@ -914,7 +961,11 @@ func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnifiedChanges() per-file error = %v", err)
 	}
-	if !perFile.Truncated || !reflect.DeepEqual(perFile.OmittedFiles, []string{"big.txt"}) {
+	// The file the per-file bound dropped is recorded by name, with the size it
+	// actually is and the bound it exceeded, so what a reviewer is handed says
+	// "delivered but too large to show" rather than nothing at all.
+	wantOversized := []OmittedFile{{Path: "big.txt", Bytes: 4400, Reason: OmittedTooLarge, Bound: 64}}
+	if !perFile.Truncated || !reflect.DeepEqual(perFile.OmittedFiles, wantOversized) {
 		t.Fatalf("per-file bound = %#v", perFile)
 	}
 	if !reflect.DeepEqual(perFile.UntrackedFiles, []string{"small.txt"}) {
@@ -928,7 +979,8 @@ func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnifiedChanges() file-count error = %v", err)
 	}
-	if len(counted.UntrackedFiles) != 1 || !counted.Truncated || len(counted.OmittedFiles) != 1 {
+	wantCounted := []OmittedFile{{Path: "small.txt", Bytes: 6, Reason: OmittedTooManyFiles, Bound: 1}}
+	if len(counted.UntrackedFiles) != 1 || !counted.Truncated || !reflect.DeepEqual(counted.OmittedFiles, wantCounted) {
 		t.Fatalf("file-count bound = %#v", counted)
 	}
 
@@ -952,6 +1004,75 @@ func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 	}
 }
 
+// The shape this forbids is a file the change delivers leaving the assembly
+// without being shown and without being named: a reviewer handed that judges a
+// delivery it cannot know happened. Every untracked file is therefore in the
+// patch or in the omission record, and the record says how big the file is and
+// which bound dropped it.
+func TestManagerUnifiedChangesAccountsForEveryDeliveredFile(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-omissions", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	oversized := strings.Repeat("generated line\n", 6000)
+	writeFile(t, worktree.Path, "corpus.txt", oversized)
+	writeFile(t, worktree.Path, "asset.bin", "new\x00binary\n")
+	writeFile(t, worktree.Path, "feature.go", "package main\n")
+	if err := os.Symlink("feature.go", filepath.Join(worktree.Path, "alias.go")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	accounted := map[string]bool{}
+	for _, file := range changes.UntrackedFiles {
+		accounted[file] = true
+	}
+	for _, file := range changes.OmittedFiles {
+		if file.Path == "" || file.Reason == "" {
+			t.Errorf("omitted file = %#v, want a path and a reason", file)
+		}
+		accounted[file.Path] = true
+	}
+	for _, delivered := range []string{"corpus.txt", "asset.bin", "feature.go", "alias.go"} {
+		if !accounted[delivered] {
+			t.Errorf("%s is delivered by the change and is neither shown nor named as omitted", delivered)
+		}
+	}
+	if !changes.Truncated {
+		t.Errorf("a change with omitted files was reported as complete: %#v", changes)
+	}
+
+	omissions := map[string]OmittedFile{}
+	for _, file := range changes.OmittedFiles {
+		omissions[file.Path] = file
+	}
+	// The size is the file's own and the bound is the one it was measured
+	// against, so a reviewer reads how far over the ceiling the file is rather
+	// than being told a name and left to guess.
+	want := OmittedFile{Path: "corpus.txt", Bytes: int64(len(oversized)), Reason: OmittedTooLarge, Bound: DefaultMaxDiffFileBytes}
+	if omissions["corpus.txt"] != want {
+		t.Errorf("oversized omission = %#v, want %#v", omissions["corpus.txt"], want)
+	}
+	if described := want.Describe(); !strings.Contains(described, "corpus.txt") ||
+		!strings.Contains(described, "delivered but too large to show") ||
+		!strings.Contains(described, strconv.Itoa(DefaultMaxDiffFileBytes)) {
+		t.Errorf("described omission = %q, want the file, the bound, and what became of it", described)
+	}
+	if omissions["alias.go"].Reason != OmittedUnreadable {
+		t.Errorf("symlink omission = %#v, want it named as unreadable", omissions["alias.go"])
+	}
+	if strings.Contains(changes.Patch, "generated line") {
+		t.Errorf("patch included an oversized file:\n%s", changes.Patch)
+	}
+}
+
 func TestManagerUnifiedChangesMarksBinaryContentIncomplete(t *testing.T) {
 	t.Parallel()
 
@@ -971,7 +1092,7 @@ func TestManagerUnifiedChangesMarksBinaryContentIncomplete(t *testing.T) {
 	if !changes.Truncated {
 		t.Fatalf("binary changes were reported as complete: %#v", changes)
 	}
-	if !reflect.DeepEqual(changes.OmittedFiles, []string{"new.bin"}) {
+	if !reflect.DeepEqual(changes.OmittedFiles, []OmittedFile{{Path: "new.bin", Bytes: 11, Reason: OmittedBinary}}) {
 		t.Fatalf("omitted files = %#v, want new.bin", changes.OmittedFiles)
 	}
 	if !strings.Contains(changes.Patch, "Binary files a/README.txt and b/README.txt differ") {

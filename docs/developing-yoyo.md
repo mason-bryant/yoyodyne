@@ -22,6 +22,16 @@ runs. Those same four are what this project declares as its
 let a change reach review or integration — so anything a run has to exercise has
 to reach one of the four, and for content that is not Go that means `make test`.
 
+## Before you change how a run works
+
+[What the delivery pipeline actually guarantees](delivery-pipeline-baseline.md)
+enumerates the paths a run can take and the boundaries it holds — the phases,
+the pause cases, the shared repair budget and the counters beside it, the
+reconciliation actions, and the terminal outcomes. It is the specification the
+code never had, and it is kept true by golden traces that record what each path
+actually produced, so a change in behavior shows up as a diff rather than as a
+document nobody re-read.
+
 ## Where the build cache goes
 
 The Go toolchain writes what it has compiled to `$GOCACHE`, which defaults to a
@@ -156,6 +166,8 @@ Go check has ever run a line of bash.
 | A place the harness enforces role authority that [the authority inventory](authority-inventory.md) does not list, or a listed check whose declaration has moved or been renamed | `internal/authority` | Add the row, or correct the one that moved. The inventory is the statement of what the harness authorizes today and the ground truth the capability registry re-expresses, so an authorization site nothing lists is authority nobody wrote down. The document decides and the check only reports: adding a row lists a check and moving one to the second table excuses it, neither of which is a change to any code. What the sweep can recognize is a floor — a function that names a role and refuses, a name carrying `authoriz` or `authorit`, and the `protect`, `independen`, and `lease` boundaries — so a check outside all of those is still a reviewer's to catch. |
 | A row of [the authority inventory](authority-inventory.md) that the role-capability registry neither expresses as a capability question nor names as a gap | `internal/rolecapability` | Answer the row: write the question a call site would ask instead of the role's name, or the reason there is not one yet. The registry is the inventory said once more in capabilities, so a check nobody re-expressed is one the conversion would silently drop — and a gap written down is the honest half of the claim, which is why an unanswered row fails and a gap does not. |
 | A place in the Go sources that reads what became of a directive — `Resolved()`, or the `ResolvedAt` behind it — that the audit in `internal/directive` (`disposition_audit_test.go`) does not list, or a listed reader that has moved, gone, or changed how many times it reads | `internal/directive` | Add the row, or correct the one that moved, saying what the read means where it sits. `Resolved` is has-a-disposition and `InForce` is still-applies: a standing instruction carries an outcome the moment somebody records what came of it and goes on applying until the operator withdraws it, so a filter that asked `Resolved` to find out what still constrains work would retire that instruction as soon as its first item was admitted, silently. The audit is the list of every reader and what each one meant by reading it; the sweep is a floor rather than a fence, because it recognizes the call and the field by name, and a reader that reaches the same question another way is still a reviewer's to catch. |
+| A durable field that [the delivery-pipeline baseline](delivery-pipeline-baseline.md) states, that no recorded trace carries, and that its own not-covered section does not name | `internal/orchestrator` (`baseline_test.go`) | Record a trace that carries the field, or name it in the gap list. The document promises a parity harness that what it does not measure is written down, and that promise was broken three times running while every check was green, because nothing but a reader was holding it. The sweep is a floor: it recognizes field names, so an ordering or a refusal the document states in prose alone is still a reviewer's to catch. |
+| A recorded delivery trace that no parity scenario walks, or a scenario whose transcript the trace does not evidence | `internal/orchestrator` (`parity_test.go`) | Write the transcript the trace evidences, name why no built-in definition can express that path, or fix the definition. The built-in workflow definitions are the delivery loop as data, and the only thing that makes them the pipeline rather than a plausible state machine is that every frozen path walks through them. A trace nothing walks is measured by nothing and looks exactly like one that passed. |
 | A governed document whose place in the chain is wrong — a `supports` entry naming nothing, an artifact reaching no brief, or a revision recorded by a role that does not own the document | `internal/cli` (`artifact_repository_test.go`) | The harness reports these and never refuses a document over one; here they fail, because a warning nobody is made to read is how one of them breaks unnoticed. |
 | A claim in the release verb's own suite, [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/cut-release.sh`. The verb is shell, so no other check here executes it, and its value is entirely in cuts it refuses — a refusal first exercised on the day it was needed is one nobody had. |
 | A claim in the notes writer's own suite, [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/release-notes.sh` or `scripts/release-body.sh`. The same argument as the row above, for the other half of the release path: what a release page publishes would otherwise first execute during a publication. |
@@ -214,8 +226,9 @@ make release VERSION=v0.3.0
 git push origin v0.3.0
 ```
 
-It gates on [this release's notes](releases/README.md), walks [the documented
-adoption path](../scripts/walk-adoption.sh), runs
+It gates on [this release's notes](releases/README.md), on [release
+readiness](#release-readiness), walks [the documented adoption
+path](../scripts/walk-adoption.sh), runs
 `check`, builds and verifies the archives for `<tag>`, then tags the commit
 they were built from — in that order, so a red gate refuses the cut, names what
 was red, and leaves nothing to undo. It also refuses a tag that is not
@@ -224,16 +237,22 @@ that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
 over it.
 
-The tracker's own exports — `.beads/interactions.jsonl` and
-`.beads/issues.jsonl` — do not count as a dirty tree. They are derived from a
-store that is authoritative elsewhere, nothing a release ships is built from
-them, and the walkthrough this gate runs rewrites them itself, so refusing on
-them would stall most days of a daily cadence. The cut commits them instead,
-as their own housekeeping commit placed after the last gate is green and before
-the tag, which keeps the tag naming a tree with nothing uncommitted in it
-rather than a clean tree with a footnote. On a day it had to make that commit
-it prints `git push --atomic origin main <tag>` as the publishing command,
-because origin does not have that commit and the branch has to carry it.
+Two things are written before the tag, in one housekeeping commit placed after
+the last gate is green. The tracker's own exports —
+`.beads/interactions.jsonl` and `.beads/issues.jsonl` — do not count as a dirty
+tree: they are derived from a store that is authoritative elsewhere, nothing a
+release ships is built from them, and the walkthrough this gate runs rewrites
+them itself, so refusing on them would stall most days of a daily cadence. The
+readiness result is stamped into `docs/releases/<tag>.md` and goes into the same
+commit, so the notes the tag names carry the conformance result of the tree it
+names rather than one taken on whichever day the notes were drafted; it is
+written only where it differs from the section the notes already carry, so a cut
+that changes neither it nor the exports has nothing to commit. Committing both
+rather than excepting them keeps the tag naming a tree with nothing uncommitted
+in it. On a day it had to make that commit it prints
+`git push --atomic origin main <tag>`, because origin does not have it and the
+branch has to carry it; on a day it had nothing to commit, `git push origin
+<tag>`.
 
 That commit is made with hooks turned off, since a tracker installs a hook that
 exports after every commit and it would rewrite the very files the commit
@@ -247,6 +266,34 @@ deliberately. [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh)
 executes every one of those refusals against fabricated repositories, and
 `make test` runs it, so changing the verb is checked by the same command as
 changing anything else.
+
+## Release readiness
+
+`make check` says the code does what its tests say. A tag says more than that:
+that the system still matches what it records about itself. So the cut runs
+[`yoyo conformance`](artifacts.md#asking-all-of-this-at-once-before-a-tag)
+before it spends the walkthrough — the artifacts and their references, the links
+the documentation makes to itself, the invariants, and every admitted work
+item's attribution to a goal, with staleness surveyed alongside and refusing
+nothing. A divergence refuses the tag and names every mismatch the check that
+found it collected; nothing is written.
+
+The sequence those checks run in is not in the code. It is a
+[workflow definition](configuration.md#the-release-readiness-workflow) — data in
+the project-owned format, selecting actions the harness registered in Go —
+validated and compiled before the first check runs, and walked by the workflow
+runtime one durable transition at a time. It is the first sequence this harness
+runs that never existed as Go control flow, which is the point of it: the same
+checks, ordered by a file a project can read and replace, and no way for that
+file to make the gate perform anything but reads.
+
+The cut asks for it as the Markdown section a release's notes carry, and there
+is one invocation rather than two — a gate read one way and a notes section
+written from a second run would be two results, and only one of them would be
+the one that refused or did not. On a green cut that section is stamped into
+`docs/releases/<tag>.md` between two HTML-comment markers and committed with the
+tag's housekeeping, replacing an earlier one rather than accumulating beside it,
+and leaving everything the product manager wrote around it alone.
 
 ## Every cut writes its notes
 

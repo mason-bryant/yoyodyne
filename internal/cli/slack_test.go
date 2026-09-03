@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
@@ -301,3 +302,34 @@ slack:
   enabled: true
   channel: C0123456789
 `
+
+// The count the sink reads the queue with is what a run could actually be
+// started for. The tracker's own readiness is about dependencies alone, so it
+// includes work no pull will ever take — a conversation's to carry, or parked —
+// and counting that is how the heartbeat sent an operator three times to a line
+// that had not stopped. It matters more where the stall watchdog reads it: there
+// the number is the whole of what separates a machine that has died from one
+// with nothing to do.
+func TestTheSinkCountsOnlyTheReadyWorkARunCouldCarry(t *testing.T) {
+	t.Parallel()
+
+	ready := `[
+	  {"id": "yoyodyne-ifd.1", "title": "an ordinary item", "status": "open"},
+	  {"id": "yoyodyne-ifd.2", "title": "the architect's own", "status": "open",
+	   "metadata": {"yoyodyne_executor": "conversation:architect"}},
+	  {"id": "yoyodyne-ifd.3", "title": "parked", "status": "open",
+	   "metadata": {"yoyodyne_parked": "the design is being reworked"}},
+	  {"id": "yoyodyne-ifd.4", "title": "another ordinary item", "status": "open"}
+	]`
+	backlog := readyBacklog{tracker: beads.Client{
+		Runner: &scriptedRunner{outputs: map[string]string{"bd": ready}},
+		Dir:    t.TempDir(),
+	}}
+	count, err := backlog.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Ready() = %d, want the two items a developer run could be started for", count)
+	}
+}

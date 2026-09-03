@@ -296,6 +296,19 @@ type SessionState struct {
 	State  runstate.WatchState
 	At     time.Time
 	Reason string
+	// Running is how many developer runs the pass could see in flight when it
+	// recorded this, and Executor is the conversation that carries the work it
+	// passed over where one does. They travel with the reason because they are the
+	// two facts a reader of an idle line was missing: whether the harness is
+	// nonetheless working, and who has to act before the answer changes.
+	Running  int
+	Executor domain.WorkItemExecutor
+	// Unreadable marks the poll that chose nothing because the harness could not
+	// be read at all. It travels for the same reason the two above do: nothing a
+	// person admits, releases, or opens changes the answer while the store will
+	// not answer, so a reader told to admit work would be told to do the one thing
+	// that cannot help.
+	Unreadable bool
 	// Restarting marks the one stop that is not an ending — the session waiting
 	// out its runs to be re-executed into a build deployed over it. It is what
 	// keeps every surface from telling the operator to start a session that is
@@ -310,6 +323,16 @@ type SessionState struct {
 // is the state this exists to end.
 type WatchSessions interface {
 	Record(SessionState) error
+}
+
+// ScheduleEscalations puts stopped work in front of the development manager,
+// once per docketed stoppage. It is satisfied by Escalator.
+//
+// It is optional, and a pull wired without one pulls exactly the same work: what
+// is lost is the delivery, so a run that stopped waits on somebody carrying it
+// to her, which is what every pass did before this existed.
+type ScheduleEscalations interface {
+	Escalate(ctx context.Context) (EscalationSweep, error)
 }
 
 // Starter runs one chosen item to its end. It is a function rather than the
@@ -351,7 +374,10 @@ type Pull struct {
 	// Spend prices what the session has spent. It is required of a pass that was
 	// given a budget and of no other; see ScheduleSpend.
 	Spend ScheduleSpend
-	Start Starter
+	// Escalations delivers stopped work to the development manager. Optional; see
+	// ScheduleEscalations.
+	Escalations ScheduleEscalations
+	Start       Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -412,11 +438,11 @@ type Scheduler struct {
 	// reached, or when the harness can no longer be read.
 	Watching bool
 	// Budget caps what one session may spend, in the provider's own reported
-	// dollars, over the runs the session started. Zero is unbounded, which is
-	// what a drain has always been. The bound is checked between pulls rather
-	// than during a run: a run already under way is never stopped part way for
-	// money, because the spend is already made and what it would lose is the
-	// work it bought.
+	// dollars, over everything the session spends on: the runs it starts, and the
+	// turns it takes itself putting stopped work in front of the development
+	// manager. Zero is unbounded, which is what a drain has always been. The bound
+	// is checked between pulls rather than during a run or a turn: what is already
+	// spent is spent, and what stopping part way would lose is the work it bought.
 	Budget float64
 	// Sessions is where the session's state transitions are recorded. Optional;
 	// see WatchSessions.
@@ -517,6 +543,17 @@ type Schedule struct {
 	// schedule read afterwards would otherwise be missing.
 	Watched bool `json:"watched,omitempty"`
 	Polls   int  `json:"polls,omitempty"`
+	// Escalated is the stopped work this pass put in front of the development
+	// manager, and what she recorded about it. It is on the schedule for the
+	// reason the started runs are: a pass that woke a role and spent a turn doing
+	// it is a pass that did something, and an operator reading what the session
+	// did must not have to infer it from her conversation.
+	Escalated []Escalated `json:"escalated,omitempty"`
+	// EscalationProblem names a delivery that did not reach her. It costs the
+	// pass nothing it was doing, so it is reported beside the pull rather than
+	// stopping it — but never left unsaid, because stopped work nobody was told
+	// about is exactly what the delivery exists to prevent.
+	EscalationProblem string `json:"escalation_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -527,9 +564,10 @@ type Schedule struct {
 	// still reported, because a brake that failed is exactly the thing an
 	// operator must not find out about by inferring it from the silence.
 	BrakeProblem string `json:"brake_problem,omitempty"`
-	// SpentUSD is what the runs this pass started cost, as the provider reported
-	// it, and Budget is what it was allowed. Both are absent from a pass nobody
-	// bounded and nothing priced.
+	// SpentUSD is what this pass spent, as the provider reported it: the runs it
+	// started, and the turns it took itself putting stopped work in front of the
+	// development manager. Budget is what it was allowed. Both are absent from a
+	// pass nobody bounded and nothing priced.
 	SpentUSD float64 `json:"spent_usd,omitempty"`
 	Budget   float64 `json:"budget,omitempty"`
 	// SpendProblem names run evidence that could not be priced. On an unbounded
@@ -696,8 +734,8 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// changes the answer sooner than any interval would, and otherwise sleeps out
 	// the interval this pull read. It reports false when the context ended, which
 	// is the operator stopping the session.
-	wait := func(pull Pull, state runstate.WatchState, reason string) bool {
-		session.enter(state, reason)
+	wait := func(pull Pull, state runstate.WatchState, said account) bool {
+		session.enter(state, said)
 		if running > 0 {
 			return collect()
 		}
@@ -740,12 +778,22 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		schedule.ReadProblem = fmt.Sprintf(
 			"reading %d, failing for %s, read again in %s: %v",
 			retries.attempts, now.Sub(retries.since).Round(time.Second), retries.delay, err)
-		// What the session says about itself leaves the changing numbers out, so an
+		// What the session says about itself leaves the changing numbers of the
+		// outage out — which attempt this is, how long it has been failing — so an
 		// outage is one line in the log rather than one per attempt. What they are
 		// is on the schedule, which is where a reader afterwards looks.
-		session.enter(runstate.WatchIdle, fmt.Sprintf(
+		//
+		// The runs it already has going are not one of those numbers. They are the
+		// difference between a line that has stopped and a line that is working
+		// while one reading fails, and they are named for the same reason the idle
+		// account below names them.
+		outage := fmt.Sprintf(
 			"the harness could not be read and is being read again for up to %s before the session gives up on it: %v",
-			readRetryWindow, err))
+			readRetryWindow, err)
+		if running > 0 {
+			outage = fmt.Sprintf("%s in flight; %s", plural(running, "run", "runs"), outage)
+		}
+		session.enter(runstate.WatchIdle, account{reason: outage, running: running, unreadable: true})
 		if !s.sleep(ctx, retries.delay) {
 			schedule.Stopped = ScheduleCancelled
 			return false
@@ -754,7 +802,7 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		return true
 	}
 
-	session.enter(runstate.WatchWatching, s.opening())
+	session.enter(runstate.WatchWatching, account{reason: s.opening()})
 pulling:
 	for {
 		// A pull that read everything it needed clears the failures behind it. What
@@ -833,6 +881,13 @@ pulling:
 			break
 		}
 		spend = pull.Spend
+		// Stopped work reaches the development manager here, rather than by
+		// somebody carrying it to her. It is done before the brake and before the
+		// hold, because it chooses nothing and starts nothing: what it produces is
+		// her judgment about work that has already stopped, which is exactly what a
+		// held or braked queue is usually waiting on. What it delivers is bounded to
+		// one stoppage per pass; see Escalator.
+		s.escalate(ctx, &schedule, pull)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -864,7 +919,13 @@ pulling:
 			// polling and chooses nothing, and resumes in place when it is
 			// released. That is what makes holding intake something an operator
 			// can do to a session they are not sitting at.
-			if !wait(pull, runstate.WatchBraked, brakedReason(schedule.Braked != nil, hold)) {
+			if !wait(pull, runstate.WatchBraked, account{
+				reason: brakedReason(schedule.Braked != nil, hold),
+				// This session's own runs: a held intake stops the choosing and
+				// interrupts nothing, and the reader has to be able to tell those apart.
+				// What another process has going is not read until after the hold is.
+				running: running,
+			}) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -897,7 +958,10 @@ pulling:
 				schedule.Stopped = ScheduleCapacityFull
 				break
 			}
-			if !wait(pull, runstate.WatchIdle, "every developer slot is held by a run this session did not start") {
+			if !wait(pull, runstate.WatchIdle, account{
+				reason:  "every developer slot is held by a run this session did not start",
+				running: len(occupied),
+			}) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -932,6 +996,10 @@ pulling:
 		// far, in the order the product manager set. An item started after one of
 		// them was pulled ahead of it, and its recorded reason says so.
 		var sequenced []string
+		// What this pull passed over and why, assembled as it goes so that a poll
+		// which starts nothing can say what it actually found rather than only that
+		// it found nothing. It is this pull's own reading and is discarded with it.
+		poll := idlePoll{}
 
 		started := 0
 		for _, entry := range queue.Entries {
@@ -952,12 +1020,15 @@ pulling:
 					deferred[entry.ID] = true
 					schedule.Deferred = append(schedule.Deferred, Deferred{WorkItemID: entry.ID, Reason: reason})
 				}
+				poll.pass(entry.ID, unreadyClass(entry), entry.Executor.Role())
 				continue
 			}
 			if s.cooling(tried, read.items[entry.ID]) {
+				poll.pass(entry.ID, idleAlreadyTried, "")
 				continue
 			}
 			if _, busy := occupied[entry.ID]; busy {
+				poll.pass(entry.ID, idleAlreadyInFlight, "")
 				continue
 			}
 			// A decomposed item is not itself a run. Its children are where the work
@@ -980,6 +1051,7 @@ pulling:
 						Reason:     coveredReason(covering),
 					})
 				}
+				poll.pass(entry.ID, idleCoveredByChildren, "")
 				continue
 			}
 			// An unresolved directive stops the work whether it is read here or in
@@ -1009,6 +1081,7 @@ pulling:
 						Reason:     "an unresolved directive pauses it: " + pausing[0].Summary(),
 					})
 				}
+				poll.pass(entry.ID, idlePausedByDirective, "")
 				continue
 			}
 			// Work that would race something already going is sequenced behind it
@@ -1028,6 +1101,7 @@ pulling:
 				}
 				sequencedEarlier[entry.ID] = racing
 				sequenced = append(sequenced, entry.ID)
+				poll.pass(entry.ID, idleSequencedBehindWork, "")
 				continue
 			}
 			delete(deferred, entry.ID)
@@ -1065,7 +1139,14 @@ pulling:
 			schedule.Stopped = ScheduleDrained
 			break
 		}
-		if !wait(pull, runstate.WatchIdle, idleReason(queue)) {
+		// What this poll actually found, rather than the bare fact that it started
+		// nothing: the runs already going, the items passed over and why, and the
+		// conversation that has to act where one does.
+		if !wait(pull, runstate.WatchIdle, account{
+			reason:   poll.reason(queue, len(occupied)),
+			running:  len(occupied),
+			executor: poll.carrier(),
+		}) {
 			schedule.Stopped = ScheduleCancelled
 			break
 		}
@@ -1204,6 +1285,72 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 	schedule.Braked = &held
 }
 
+// escalate puts the oldest stopped run the development manager has not been
+// shown in front of her, and records what came back on the schedule.
+//
+// Nothing here stops the pass. A delivery that failed costs the pass nothing it
+// was doing — no work was chosen by it and none is withheld for it — so it is
+// reported beside the pull rather than in place of it, exactly as a staleness
+// reading or a brake that could not be placed is. What must not happen is
+// silence: a stoppage that reached nobody is the state this exists to end.
+//
+// What it does cost is the pull's own thread while the turn is taken, which is
+// the one thing worth knowing before reading further: runs already going are
+// untouched, but one that finishes mid-delivery is collected when the delivery
+// returns rather than at once, so a free slot is refilled a turn later than it
+// would have been. That is bounded by the turn and by one delivery per pass, and
+// it is the trade the placement was chosen for — a run that delivered its own
+// stoppage would hold a developer slot instead, which is the same wait taken out
+// of the scarcer thing.
+func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) {
+	if pull.Escalations == nil {
+		return
+	}
+	sweep, err := pull.Escalations.Escalate(ctx)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("stopped work could not be put to the development manager, so it is waiting on somebody carrying it to her: %v", err))
+	}
+	delivered := false
+	for _, escalated := range sweep.Escalated {
+		// What the delivery cost is the session's spend, exactly as a run's is. It
+		// is counted whichever way the turn went and before anything else is
+		// decided about it, because the provider charged for it either way — and a
+		// session bounded by a budget that spent past it on turns nothing counted
+		// would be the operator's cap disappearing quietly, which is the one thing
+		// a bound must not do. The bound itself is read at the top of the next
+		// pull, like every other spend this session makes.
+		schedule.SpentUSD += escalated.CostUSD
+		// A delivery that happened is kept, because it is one of the things this
+		// pass did and there are as many of them as there were stoppages. One that
+		// did not happen is a problem rather than an event, and the problems are
+		// this sweep's rather than every sweep's: a session polling all night
+		// against a conversation nothing can open would otherwise report the same
+		// failure a thousand times.
+		if escalated.Delivered {
+			schedule.Escalated = append(schedule.Escalated, escalated)
+			delivered = true
+		}
+		if escalated.Problem != "" {
+			problems = append(problems, escalated.Problem)
+		}
+	}
+	// What the pass says is replaced by what this sweep found, and cleared only by
+	// a delivery that actually happened. A sweep that found nothing to say is not
+	// evidence that the failure before it was resolved — the stoppage may simply
+	// be waiting out its retry delay — and a pass that erased its own account of
+	// having failed to reach her would end reporting nothing at all about stopped
+	// work, which is the silence this exists to end. A stoppage the harness has
+	// given up on is restated by every sweep, so what stands at the end of a pass
+	// is what is still true.
+	switch {
+	case len(problems) > 0:
+		schedule.EscalationProblem = strings.Join(problems, "; ")
+	case delivered:
+		schedule.EscalationProblem = ""
+	}
+}
+
 // priceRun is what one finished run cost, from the recorded evidence. A run that
 // never got as far as a record is priced at nothing because there is nothing to
 // price, which is the truth about a start that failed before it began; evidence
@@ -1241,17 +1388,155 @@ func (s Started) blockedRun() bool {
 	return s.Failure != "" || s.Outcome.Blocked
 }
 
-// idleReason says why a poll started nothing, in the terms the counts already
-// report: an empty backlog and a backlog entirely blocked are the same silence
-// and completely different problems.
-func idleReason(queue backlog.Queue) string {
+// maxIdleItemsNamed bounds how many items one class of an idle account names
+// before it falls back to counting the rest. The count stays exact either way,
+// for the reason every listing here is bounded: a backlog of forty deferred
+// items would otherwise put forty identifiers into a line whose whole job is to
+// be read at a glance.
+const maxIdleItemsNamed = 5
+
+// idleClass is one reason a poll left an item where it was, in the words the
+// idle line names it by. The set is closed, and every place the pull loop passes
+// an item over names one of them: a class nobody named is an item that
+// disappears into a count saying something else about it, which is the
+// misreading this whole account exists to end.
+type idleClass string
+
+const (
+	idleCarriedInConversation idleClass = "carried in conversation"
+	idleParked                idleClass = "parked"
+	idleWaitingOnOtherWork    idleClass = "waiting on other work"
+	idleAlreadyTried          idleClass = "already tried this session"
+	idleAlreadyInFlight       idleClass = "already in flight"
+	idleCoveredByChildren     idleClass = "covered by its children"
+	idlePausedByDirective     idleClass = "paused by a directive"
+	idleSequencedBehindWork   idleClass = "sequenced behind work in flight"
+)
+
+// idlePassedOver is one item a poll did not start: which item, why, and the
+// conversation that carries it where the class names one.
+type idlePassedOver struct {
+	id    string
+	class idleClass
+	role  domain.AgentRole
+}
+
+// idlePoll is what one pull found while it started nothing, in the product
+// manager's own order: every item it met, and the class it met it in.
+//
+// It is this pull's reading rather than the session's memory, and that is the
+// whole of what makes it worth printing. The line it renders is read at the
+// moment somebody is deciding whether the harness is working at all, so a count
+// carried over from an earlier poll would be an account of a queue that has
+// since changed.
+type idlePoll struct {
+	passed []idlePassedOver
+}
+
+// pass records one item this poll left where it was. The role is empty for every
+// class but the conversation-carried one, which is the only class whose answer
+// is a person rather than a wait.
+func (p *idlePoll) pass(id string, class idleClass, role domain.AgentRole) {
+	p.passed = append(p.passed, idlePassedOver{id: id, class: class, role: role})
+}
+
+// reason is the idle line: what is already running, and what this poll passed
+// over and why.
+//
+// Both halves are said because either alone misleads, and both misled. The line
+// said only that nothing was startable, which reads as a stopped machine while a
+// run works on the other slot; and it named a count without naming the items or
+// the reason, which reads as a queue that will move on its own while the only
+// unstarted work is somebody's to carry in conversation. An operator acted on
+// that reading three times.
+func (p idlePoll) reason(queue backlog.Queue, inFlight int) string {
 	if len(queue.Entries) == 0 {
 		return "the backlog is empty"
 	}
-	if queue.Ready() == 0 {
-		return fmt.Sprintf("none of the %d admitted item(s) is ready to pull", len(queue.Entries))
+	var said []string
+	if inFlight > 0 {
+		said = append(said, fmt.Sprintf("%s in flight", plural(inFlight, "run", "runs")))
 	}
-	return fmt.Sprintf("nothing among the %d ready item(s) is startable that this session has not already tried", queue.Ready())
+	if groups := p.groups(); len(groups) > 0 {
+		said = append(said, fmt.Sprintf("%s passed over, of %d admitted: %s",
+			plural(len(p.passed), "item", "items"), len(queue.Entries), strings.Join(groups, "; ")))
+	}
+	if len(said) == 0 {
+		// The pull stopped before it read the queue through, which is what a session
+		// at its own item limit does. Saying what it did not reach is the honest
+		// answer; saying nothing was startable would be a claim about items nothing
+		// looked at.
+		return fmt.Sprintf("none of the %s admitted was reached at this poll", plural(len(queue.Entries), "item", "items"))
+	}
+	return strings.Join(said, "; ")
+}
+
+// groups gathers what was passed over into one entry per class, in the order the
+// pull met them, naming the conversation where the class names one. Grouping is
+// what gives the line something to act on: an operator reads a class and knows
+// what to do about all of it, where a list of items one per line is a list they
+// have to classify themselves.
+func (p idlePoll) groups() []string {
+	type class struct {
+		class idleClass
+		role  domain.AgentRole
+	}
+	var order []class
+	items := make(map[class][]string, len(p.passed))
+	for _, passed := range p.passed {
+		at := class{class: passed.class, role: passed.role}
+		if _, met := items[at]; !met {
+			order = append(order, at)
+		}
+		items[at] = append(items[at], passed.id)
+	}
+	groups := make([]string, 0, len(order))
+	for _, at := range order {
+		named := items[at]
+		further := 0
+		if len(named) > maxIdleItemsNamed {
+			further = len(named) - maxIdleItemsNamed
+			named = named[:maxIdleItemsNamed]
+		}
+		listed := strings.Join(named, ", ")
+		if further > 0 {
+			listed += fmt.Sprintf(", and %d further", further)
+		}
+		if at.role != "" {
+			groups = append(groups, fmt.Sprintf("%s (%s: %s)", at.class, at.role.Title(), listed))
+			continue
+		}
+		groups = append(groups, fmt.Sprintf("%s (%s)", at.class, listed))
+	}
+	return groups
+}
+
+// carrier is the conversation an idle poll is waiting on, which is the marker on
+// the highest-priority item it passed over for one. It is empty where no such
+// item was passed over, which is every idle poll whose answer is a wait rather
+// than a person.
+//
+// The highest-priority one is named because that is the item an operator would
+// open first, and because the reason above names every one of them by role
+// anyway: this decides whose move the message closes on, and the prose is where
+// the rest of them are.
+func (p idlePoll) carrier() domain.WorkItemExecutor {
+	for _, passed := range p.passed {
+		if passed.class == idleCarriedInConversation && passed.role != "" {
+			return domain.ConversationWith(passed.role)
+		}
+	}
+	return ""
+}
+
+// plural counts something in words, so a line an operator reads says "1 run"
+// rather than "1 run(s)". The parenthesised plural is what a status line looks
+// like when nobody read it out loud.
+func plural(count int, one, many string) string {
+	if count == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", count, many)
 }
 
 // coveredReason says that the work has already been broken out, and names what
@@ -1299,6 +1584,22 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 		return parkedReason(entry.Parking), true
 	default:
 		return "", false
+	}
+}
+
+// unreadyClass is which class an unready entry is passed over in, and it makes
+// the same distinction passedOverReason does and in the same order: work no run
+// can carry, then work somebody parked, then everything that is genuinely
+// waiting for something. An item that is both is told the thing that would still
+// hold once the other was lifted.
+func unreadyClass(entry backlog.Entry) idleClass {
+	switch {
+	case !entry.Executor.DeveloperRun():
+		return idleCarriedInConversation
+	case entry.Parking.Parked():
+		return idleParked
+	default:
+		return idleWaitingOnOtherWork
 	}
 }
 
@@ -1381,22 +1682,56 @@ func (s Scheduler) session(schedule *Schedule) *watchSession {
 	return &watchSession{to: s.Sessions, now: s.now, schedule: schedule}
 }
 
+// account is what a session says about the state it is entering: why it is in
+// it, how many developer runs it can see in flight, and the conversation that
+// has to act before its answer changes where there is one.
+//
+// The last two are on the account rather than folded into the prose because
+// something other than a person reads them. The reason is a sentence, and whose
+// move follows an idle poll is a fact a channel closes its message on — derived
+// from these fields rather than parsed back out of the words.
+type account struct {
+	reason  string
+	running int
+	// executor is the conversation the session is waiting on, and unreadable marks
+	// the poll that chose nothing because the harness itself could not be read.
+	// They are the two states whose next move is not an admission, and they are
+	// carried as facts rather than left in the prose because the clause a channel
+	// closes on is derived from them.
+	executor   domain.WorkItemExecutor
+	unreadable bool
+}
+
 type watchSession struct {
 	to       WatchSessions
 	now      func() time.Time
 	schedule *Schedule
 	state    runstate.WatchState
-	reason   string
+	said     account
 }
 
-// enter records the session arriving in a state. The same state with the same
-// reason is the session still being in it, which is not news.
-func (w *watchSession) enter(state runstate.WatchState, reason string) {
-	if w.to == nil || (w.state == state && w.reason == reason) {
+// enter records the session arriving in a state. The same state said the same
+// way is the session still being in it, which is not news.
+//
+// "The same way" is the whole account rather than the reason alone, so a poll
+// that finds what the poll before it found writes nothing however many times it
+// is made — a session idling all night over an unchanging queue is still one
+// line. What does write a second line is the account changing: an item passed
+// over for a different reason, or a run starting or finishing. Both are news to
+// somebody reading an idle line, and both are bounded by the poll interval,
+// because a pass records at most one transition per poll.
+func (w *watchSession) enter(state runstate.WatchState, said account) {
+	if w.to == nil || (w.state == state && w.said == said) {
 		return
 	}
-	w.state, w.reason = state, reason
-	w.record(SessionState{State: state, Reason: reason})
+	w.state, w.said = state, said
+	w.record(SessionState{
+		State:      state,
+		Reason:     said.reason,
+		Running:    said.running,
+		Executor:   said.executor,
+		Unreadable: said.unreadable,
+	})
 }
 
 // stop records the session's last line, and whether the stop is the session
@@ -1408,7 +1743,7 @@ func (w *watchSession) stop(reason string, restarting bool) {
 	if w.to == nil {
 		return
 	}
-	w.state, w.reason = runstate.WatchStopped, reason
+	w.state, w.said = runstate.WatchStopped, account{reason: reason}
 	w.record(SessionState{State: runstate.WatchStopped, Reason: reason, Restarting: restarting})
 }
 
@@ -1420,7 +1755,7 @@ func (w *watchSession) resume(reason string) {
 	if w.to == nil || w.state == runstate.WatchWatching {
 		return
 	}
-	w.state, w.reason = runstate.WatchWatching, reason
+	w.state, w.said = runstate.WatchWatching, account{reason: reason}
 	w.record(SessionState{State: runstate.WatchResumed, Reason: reason})
 }
 
@@ -1637,6 +1972,13 @@ func (s Schedule) Render() string {
 	}
 	for _, deferred := range s.Deferred {
 		fmt.Fprintf(&rendered, "%s was not pulled: %s\n", deferred.WorkItemID, deferred.Reason)
+	}
+	// What the pass put in front of the development manager, said beside what it
+	// pulled: a run stopped hours ago reaching her now is the other half of what
+	// this session did with its time.
+	rendered.WriteString(EscalationSweep{Escalated: s.Escalated}.Render())
+	if s.EscalationProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.EscalationProblem)
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))

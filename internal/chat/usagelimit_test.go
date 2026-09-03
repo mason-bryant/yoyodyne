@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -108,4 +109,38 @@ func newTestUsageLimits(t *testing.T) *runstate.UsageLimitStore {
 		t.Fatalf("NewUsageLimitStore() error = %v", err)
 	}
 	return store
+}
+
+// A turn nobody was asked and a turn answered badly are owed opposite things, so
+// the failure says which of the two it was. The harness now takes turns nobody
+// is sitting in front of, and a caller that could not tell them apart would
+// either give up on a role it never reached or keep paying to hear the same
+// answer.
+func TestARefusedTurnSaysTheRoleWasNeverAsked(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		IsError:    true,
+		StopReason: "usage_limit",
+		UsageLimit: &backendapi.UsageLimit{Kind: "five_hour"},
+	}}})
+	options.UsageLimits = newTestUsageLimits(t)
+	_, err := openTestSession(t, options).Send(context.Background(), "what is next?")
+	if !errors.Is(err, ErrProviderCapacity) {
+		t.Fatalf("Send() error = %v, want it to say the provider declined the turn", err)
+	}
+	// And what a person reads is unchanged: the sentinel is joined to the failure
+	// rather than replacing it.
+	if !strings.Contains(err.Error(), "reported failure") {
+		t.Fatalf("Send() error = %q, want the failure itself still in it", err)
+	}
+
+	// A turn that failed for anything else is not a refusal, and must not be
+	// asked again as though the role had never seen it.
+	other := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{IsError: true, StopReason: "max_turns"}}})
+	other.UsageLimits = newTestUsageLimits(t)
+	_, err = openTestSession(t, other).Send(context.Background(), "what is next?")
+	if err == nil || errors.Is(err, ErrProviderCapacity) {
+		t.Fatalf("Send() error = %v, want a turn the provider answered badly reported as one", err)
+	}
 }

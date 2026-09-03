@@ -26,6 +26,12 @@ import (
 // exist, so naming one would add a way for a run to fail rather than remove one.
 const goBuildCacheVariable = "GOCACHE"
 
+// harnessGitSubdirectory is where the harness keeps what it puts in a
+// repository's Git directory: the build cache below, and the per-run scratch
+// directories in scratch.go beside it. It is one name so that a reader looking
+// at a repository can tell what the harness left there from what Git did.
+const harnessGitSubdirectory = "yoyodyne"
+
 // WithGoBuildCache returns environment with the Go build cache pointed inside
 // the repository that workingDirectory belongs to. A nil environment starts
 // from this process's own, which is what a command that would otherwise have
@@ -68,6 +74,18 @@ func WithGoBuildCache(environment []string, workingDirectory string) []string {
 // is the other half of the choice: a cache inside it would be untracked content
 // in somebody's repository, which is a dirty tree to every gate that reads one
 // and unrecognized content to the composition audit.
+//
+// Concurrent runs writing one cache was suspected of crossing their verdicts and
+// is not doing so. A developer's probe on 2026-09-01 reported a compile error at
+// a line of a package that run had never touched; the cache was the only thing
+// that run shared with the concurrent run whose in-progress edit the diagnostic
+// described. yoyodyne-ifd.238 attributed it elsewhere -- the two runs wrote one
+// scratch log in a temporary directory the machine shares, and the reading run's
+// own checks had passed -- and found no crossed verdict in deliberate contention
+// against one cache. The entries are keyed by the content compiled, so two
+// worktrees at different content are two sets of entries.
+// `docs/diagnoses/yoyodyne-ifd-238-probe-verdict-crosstalk.md` is the evidence,
+// and it is what to reopen this against rather than the suspicion alone.
 func goBuildCache(workingDirectory string) (string, bool) {
 	if strings.TrimSpace(workingDirectory) == "" {
 		return "", false
@@ -76,19 +94,46 @@ func goBuildCache(workingDirectory string) (string, bool) {
 	if !found {
 		return "", false
 	}
-	return filepath.Join(gitDirectory, "yoyodyne", "go-build"), true
+	return filepath.Join(gitDirectory, harnessGitSubdirectory, "go-build"), true
 }
 
 // repositoryGitDirectory resolves the Git directory of the repository a working
-// directory belongs to, reading the files Git itself writes rather than running
-// Git: this is asked on the way to building one command's environment, and a
-// subprocess per invocation to learn a path that is written down is a cost with
-// nothing to show for it.
-//
-// A checkout carries `.git` as a directory. A worktree carries it as a file
-// naming that worktree's administrative directory, which in turn records the
-// repository's own directory in `commondir`.
+// directory belongs to, which is the one every worktree of that repository
+// shares.
 func repositoryGitDirectory(workingDirectory string) (string, bool) {
+	directory, found := WorktreeGitDirectory(workingDirectory)
+	if !found {
+		return "", false
+	}
+	common, err := os.ReadFile(filepath.Join(directory, "commondir"))
+	if err != nil {
+		// A worktree whose administrative directory records no common directory
+		// is one this cannot share a cache across, which is slower and not wrong.
+		return directory, true
+	}
+	if resolved := resolveGitPath(strings.TrimSpace(string(common)), directory); resolved != "" {
+		return resolved, true
+	}
+	return directory, true
+}
+
+// WorktreeGitDirectory resolves the Git directory belonging to one working
+// directory, and whether it is in a repository at all. It reads the files Git
+// itself writes rather than running Git: this is asked on the way to building
+// one command's environment, and a subprocess per invocation to learn a path
+// that is written down is a cost with nothing to show for it.
+//
+// A checkout carries `.git` as a directory, which is the repository's own. A
+// worktree carries it as a file naming that worktree's administrative directory,
+// which belongs to that worktree alone and which Git removes along with it —
+// that is the difference from repositoryGitDirectory above, which goes on to
+// follow `commondir` to the directory every worktree shares. Which of the two a
+// caller wants is decided by whether what it puts there is the repository's or
+// one worktree's.
+func WorktreeGitDirectory(workingDirectory string) (string, bool) {
+	if strings.TrimSpace(workingDirectory) == "" {
+		return "", false
+	}
 	path := filepath.Join(workingDirectory, ".git")
 	info, err := os.Stat(path)
 	if err != nil {
@@ -108,15 +153,6 @@ func repositoryGitDirectory(workingDirectory string) (string, bool) {
 	directory := resolveGitPath(strings.TrimSpace(administrative), workingDirectory)
 	if directory == "" {
 		return "", false
-	}
-	common, err := os.ReadFile(filepath.Join(directory, "commondir"))
-	if err != nil {
-		// A worktree whose administrative directory records no common directory
-		// is one this cannot share a cache across, which is slower and not wrong.
-		return directory, true
-	}
-	if resolved := resolveGitPath(strings.TrimSpace(string(common)), directory); resolved != "" {
-		return resolved, true
 	}
 	return directory, true
 }

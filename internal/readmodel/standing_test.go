@@ -369,6 +369,59 @@ func TestChoosingReadsTheLogPerSession(t *testing.T) {
 	}
 }
 
+// The state that read as a stopped machine, replayed against the four lines: a
+// watch session idle on one developer slot while a run works on the other, over
+// a queue whose only unstarted work is the architect's to carry.
+//
+// The run is on the Running line, which is what keeps idle-on-one-slot from
+// reading as system-idle. And nothing here is waiting on the operator: the items
+// are refused for what they are rather than for a session that has stopped, so
+// the only attention is the architect's conversation. An operator sent to look
+// at the session, or at an admission, was sent somewhere nothing would change.
+func TestARunInFlightBesideWorkAConversationCarriesIsNotAStalledLine(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	sources.Capacity = 2
+	sources.Runs = fakeRuns{
+		incomplete: []runstate.State{{
+			RunID: "run-236", WorkItemID: "yoyodyne-ifd.236", Status: runstate.StatusRunning,
+			Phase: runstate.PhaseDeveloping, StartedAt: moment.Add(-20 * time.Minute),
+		}},
+		prices: map[string]runstate.ItemPrice{},
+	}
+	architects := []beads.WorkItem{
+		{ID: "yoyodyne-ifd.212", Status: "open", Executor: domain.ConversationWith(domain.RoleArchitect)},
+		{ID: "yoyodyne-ifd.203", Status: "open", Executor: domain.ConversationWith(domain.RoleArchitect)},
+	}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": architects},
+		ready:    architects,
+	}}
+	// The session is alive and choosing nothing, which is exactly the log the
+	// misleading line was written from.
+	sources.Sessions = fakeSessions{transitions: []runstate.WatchTransition{
+		{SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-time.Hour)},
+	}}
+
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.Running) != 1 || standing.Running[0].WorkItemID != "yoyodyne-ifd.236" {
+		t.Fatalf("running = %+v, want the run in flight on the running line", standing.Running)
+	}
+	for _, refused := range standing.NotStartable {
+		if strings.Contains(refused.Reason, "found nothing it can start") {
+			t.Fatalf("not startable = %+v, want each item refused for what it is rather than for the session", standing.NotStartable)
+		}
+	}
+	if len(standing.NeedsHuman) != len(architects) {
+		t.Fatalf("needs a human = %+v, want only the conversations that carry the work", standing.NeedsHuman)
+	}
+	for _, attention := range standing.NeedsHuman {
+		if !strings.Contains(attention.Whose, "the architect's") {
+			t.Fatalf("needs a human = %+v, want the architect named rather than the operator", standing.NeedsHuman)
+		}
+	}
+}
+
 // Every developer slot taken is a different refusal from a held switch, and an
 // operator does an entirely different thing about it.
 func TestAFullMachineIsItsOwnRefusal(t *testing.T) {
