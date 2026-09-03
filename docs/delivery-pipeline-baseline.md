@@ -212,10 +212,14 @@ A promotion that loses its race for the target branch is re-prepared rather than
 failed. The change is replayed onto where the target went, the published branch
 is replaced from exactly the commit the harness put there, the approval is
 discarded, and the whole gate runs again — the checks against the replayed
-change and a fresh independent verdict on it. The re-review is not a round the
-item spent, because it judged the same developer attempt on moved ground, and
-the replay spends no repair attempt. A replay that conflicts is never resolved
-by the harness: both sides are left intact and the item is blocked.
+change and a fresh independent verdict on it. The replay spends an
+`integration_retries` and **no repair attempt**: it is the target branch that
+moved, not the change that failed. Its verdict is counted like any other, so
+`review_rounds` goes up — `promotion-is-replayed-when-the-target-branch-moves`
+records 2, the same as an ordinary repair round, and a reader expecting a replay
+to be free of that counter should read the trace rather than this sentence. A
+replay that conflicts is never resolved by the harness: both sides are left
+intact and the item is blocked.
 
 ## The pause cases
 
@@ -255,12 +259,19 @@ a held run would be the harness overriding the operator.
 | `integration_retries` | `execution.integration_retries_before_reconciliation` | Promotions re-prepared after losing the target branch | The target branch moving |
 | `transient_relaunches` | `execution.transient_relaunches_before_blocking` | Provider invocations reissued after one died without judging the work; the developer and the reviewer share it | The provider |
 | `usage_limit_paused_seconds` | `execution.usage_limit_max_pause` | Total waiting committed across every pause | The provider's capacity |
-| `review_rounds` | nothing in the run; `triage.review_rounds_cap` is what triage measures it against | Nothing the run stops on — it counts verdicts obtained for this **work item** | What the work has cost |
+| `review_rounds` | nothing in the run | Nothing the run stops on — it counts every verdict **this run** obtained, approvals included | What this run has cost |
 
 The first four are per run and go with it, and each is what stops the run when it
-is spent. `review_rounds` is per item, is counted by the run and bounded by
-nobody inside it, and survives a run ending — which is why a repair grant is
-truncated against it rather than against a run's own budget.
+is spent. `review_rounds` stops nothing: it is this run's own tally, incremented
+on every verdict whichever way it went, and it is never cleared — what a repair
+discards is the judgement, not the fact that the work has been round once more.
+
+**It is not the counter `triage.review_rounds_cap` measures, and a repair grant
+is not truncated against it.** That one is the work item's durable counter, which
+spans every run of the item and takes only the verdicts that sent something back:
+an approving verdict records an approved attempt instead. So the two disagree by
+design, and reading the run's field as the item's cap would over-count every
+approval — including the second verdict a replayed promotion buys.
 
 Each counter is recorded **before** the thing it bounds happens, so a process
 that dies mid-attempt resumes against the budget it had.
@@ -448,13 +459,53 @@ is unmeasured. Most of these are asserted somewhere in
   that is not a gap here; a parity harness measuring the other two mid-gate has
   to reach them another way.
 
-**Guarantees stated above with no trace behind them.**
+**Guarantees stated above with no trace behind them.** These are the ones the
+mechanical check cannot see: it recognizes durable field names, and every
+guarantee here is stated in prose, about an ordering, a sharing, or a boundary
+that no field records. This list is the only thing a parity harness has for
+them.
 
 - The independence check that refuses to integrate on a reused or missing
   provider session.
 - A replay that conflicts, which blocks with both sides intact.
 - A reviewer's reply that cannot be read as a verdict, which is asked for once
   more and fails the run on the second.
+- **A recorded integration the repository contradicts, blocked rather than
+  believed.** The traced settlement is the opposite case — an integration the
+  record does not carry, found in the target branch by containment — so what no
+  trace holds is the sweep disbelieving a record that claims more than the
+  repository shows.
+- **The developer and the reviewer sharing `transient_relaunches`.** Both
+  relaunch traces kill only the developer, so the budget is frozen as one the
+  developer draws on; that a reviewer's death draws on the same one is stated
+  here and recorded nowhere.
+- **Every counter being recorded before the thing it bounds.** No scenario dies
+  mid-attempt and resumes, so the guarantee that an interrupted attempt still
+  counts — and that a restart therefore cannot buy a fresh budget — is untraced
+  for all five counters. The reconciliation traces interrupt a run, but between
+  steps rather than inside a recorded attempt.
+- **The three repair inputs drawing on one budget.** A refused path, a failing
+  check, and a reviewer's findings each have a trace spending the budget alone;
+  none mixes two of them in one run, so what is frozen is three budgets behaving
+  identically rather than one budget serving three failures.
+- **A protected-path refusal clearing a recorded check failure and any
+  findings**, and a passing gate clearing the other two. The traced refusal is
+  the first thing that happens to its change, so there is nothing recorded for
+  it to clear.
+- **`Tracker.Block` running on its own deadline rather than the run's context.**
+  What that exists for is blocking an item whose run was cancelled or timed out,
+  and no trace drives a block under a cancelled context.
+- **The reconciler taking each run's lease and re-reading state under it.** The
+  settlement traces show what a sweep decided, not that it re-read under the
+  lease rather than deciding from the listing it started with.
+- **An operator hold outlasting `execution.usage_limit_max_pause`.** The traced
+  hold is lifted after one probe; that hold time is bounded by nothing, unlike
+  every other wait, is stated and untraced.
+- **The work item's durable review counter** — the one `triage.review_rounds_cap`
+  measures and a repair grant is truncated against, which takes only the verdicts
+  that sent something back. The traces carry the run's `review_rounds` and never
+  the item's, so an executor could get the item-level counter wrong without
+  moving anything recorded here.
 
 **What the traces are of.**
 
