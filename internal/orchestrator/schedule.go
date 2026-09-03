@@ -143,18 +143,15 @@ var scheduledStatuses = []string{"open", "blocked"}
 // The scheduler does not choose from it, and reads it for one thing: a child
 // somebody is running right now is the strongest possible cover over its
 // parent's execution, and it is precisely the child a queue reading alone cannot
-// see.
-const claimedStatus = "in_progress"
+// see. It is the backlog's name for that slice rather than a second one, so the
+// surfaces that read coverage read the same slice this pass does.
+const claimedStatus = backlog.StatusClaimed
 
 // maxScheduleReasonBytes bounds one part of a recorded selection reason that
 // came from a document rather than from this package. The reason as a whole has
 // its own bound in the run state; this keeps a single amendment's prose from
 // filling it.
 const maxScheduleReasonBytes = 240
-
-// maxCoveringChildrenNamed bounds how many children a deferral names before it
-// falls back to counting them. The count stays exact either way.
-const maxCoveringChildrenNamed = 3
 
 // How a watch session rides through a reading of the harness that failed.
 //
@@ -1043,12 +1040,12 @@ pulling:
 			// everything else, so an item stops being covered when its last child
 			// closes, and one that is decomposed while the session watches stops being
 			// pullable at the next selection.
-			if covering := read.children[entry.ID]; len(covering) > 0 {
+			if covering := read.coverage.Covering(entry.ID); len(covering) > 0 {
 				if !deferred[entry.ID] {
 					deferred[entry.ID] = true
 					schedule.Deferred = append(schedule.Deferred, Deferred{
 						WorkItemID: entry.ID,
-						Reason:     coveredReason(covering),
+						Reason:     backlog.CoveredReason(covering),
 					})
 				}
 				poll.pass(entry.ID, idleCoveredByChildren, "")
@@ -1539,27 +1536,6 @@ func plural(count int, one, many string) string {
 	return fmt.Sprintf("%d %s", count, many)
 }
 
-// coveredReason says that the work has already been broken out, and names what
-// broke it out. The children are what makes it actionable: an operator reading
-// that an item was passed over needs to see where its execution went, and a
-// container left behind after its last child closes is read from the same line.
-//
-// The naming is bounded rather than exhaustive, for the reason every listing
-// here is: an epic decomposed into twenty children would otherwise put twenty
-// identifiers into a report whose whole job is to be read.
-func coveredReason(children []string) string {
-	named := children
-	if len(named) > maxCoveringChildrenNamed {
-		named = named[:maxCoveringChildrenNamed]
-	}
-	reason := fmt.Sprintf("its execution is covered by %d unfinished child item(s): %s",
-		len(children), strings.Join(named, ", "))
-	if further := len(children) - len(named); further > 0 {
-		reason += fmt.Sprintf(", and %d further", further)
-	}
-	return reason + ". The children are the work; pulling this beside them would make the same change twice"
-}
-
 // conversationExecutedReason says that the work was admitted for something other
 // than a developer run, and that this is not a wait. Every other deferral here
 // ends when something clears — a directive resolved, a child closed, a run
@@ -1827,11 +1803,13 @@ type pulled struct {
 	// what says whether something else may be started beside it, and an item
 	// somebody has already pulled is not in the queue to be read from.
 	items map[string]beads.WorkItem
-	// children names the unfinished children of each item in this reading — the
+	// coverage names the unfinished children of each item in this reading — the
 	// ones still queued, and the ones somebody has already pulled — in the
 	// product manager's order. A child that has closed is not here, which is
-	// exactly when its parent stops being covered by it.
-	children map[string][]string
+	// exactly when its parent stops being covered by it. It is the backlog's
+	// derivation rather than this package's, so what a pass will not pull and
+	// what the surfaces report as not startable are one answer.
+	coverage backlog.Coverage
 }
 
 // queue assembles the admitted work into the product manager's order. It is the
@@ -1870,27 +1848,7 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	for _, item := range claimed {
 		items[item.ID] = item
 	}
-	children := make(map[string][]string)
-	// Parentage is taken from whichever way the tracker states it rather than
-	// from the parent field alone. A store that records decomposition only as an
-	// edge — which this project's own tracker does, for every item in it — reads
-	// as a backlog nothing was ever broken out of, and a coverage map built from
-	// that is empty however many epics are sitting in the queue beside their
-	// children.
-	cover := func(item beads.WorkItem) {
-		if parent := item.DecomposedFrom(); parent != "" {
-			children[parent] = append(children[parent], item.ID)
-		}
-	}
-	// The queue first, so what a deferral names reads in the product manager's
-	// order rather than in whatever order the tracker listed.
-	for _, entry := range queue.Entries {
-		cover(items[entry.ID])
-	}
-	for _, item := range claimed {
-		cover(item)
-	}
-	return pulled{queue: queue, items: items, children: children}, nil
+	return pulled{queue: queue, items: items, coverage: backlog.Cover(queue, admitted, claimed)}, nil
 }
 
 // stale reads what changed upstream of the admitted work after it was admitted,

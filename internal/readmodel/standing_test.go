@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -597,5 +598,89 @@ func TestAConversationThatCannotBeAskedIsSaidBesideTheCount(t *testing.T) {
 	}
 	if !strings.Contains(standing.Render(), "  not fully read: ") {
 		t.Fatalf("rendered:\n%s", standing.Render())
+	}
+}
+
+// The failure this line was reporting wrongly: an epic and the child that
+// carries its execution both sitting ready, with the scheduling pass leaving the
+// epic alone forever. The tracker reports both as pullable, so a status that
+// asked only the tracker showed the epic as work about to be started and merely
+// stalled — and sent whoever read it to investigate a stall that is not one.
+func TestACoveredEpicIsNotStartableWithTheCoveringChildNamed(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	epic := beads.WorkItem{ID: "yoyodyne-ifd.121", Title: "A readable README", Status: "open"}
+	// Parentage as an edge rather than as a field, which is the only shape this
+	// project's own tracker ever states it in.
+	child := beads.WorkItem{
+		ID: "yoyodyne-ifd.121.2", Title: "Split it", Status: "open",
+		Dependencies: []beads.Dependency{
+			{IssueID: "yoyodyne-ifd.121.2", ID: epic.ID, Type: "parent-child"},
+		},
+	}
+	admitted := []beads.WorkItem{epic, child}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": admitted},
+		ready:    admitted,
+	}}
+
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.NotStartable) != 1 || standing.NotStartable[0].WorkItemID != epic.ID {
+		t.Fatalf("not startable = %+v, want the covered epic and only it", standing.NotStartable)
+	}
+	if !strings.Contains(standing.NotStartable[0].Reason, child.ID) {
+		t.Fatalf("reason = %q, want the child that covers it named", standing.NotStartable[0].Reason)
+	}
+	// The refusal is the backlog's own words rather than a second wording of the
+	// same fact, which is what the scheduling pass defers the epic with.
+	if standing.NotStartable[0].Reason != backlog.CoveredReason([]string{child.ID}) {
+		t.Fatalf("reason = %q, want the shared derivation's wording", standing.NotStartable[0].Reason)
+	}
+	// A covered epic is not waiting on anybody. Nothing about it clears when a
+	// switch is lifted or a slot frees, so it must not put the harness's stall on
+	// the line that says whose move it is.
+	for _, waiting := range standing.NeedsHuman {
+		t.Fatalf("needs a human = %+v, want a covered epic to ask nothing of anybody", waiting)
+	}
+}
+
+// A claimed child is the strongest cover there is and the one a reading of the
+// queue alone cannot see: it has left the backlog, and it is a run in flight
+// over the very same change.
+func TestAnEpicWhoseChildIsAlreadyRunningIsNotStartable(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	epic := beads.WorkItem{ID: "yoyodyne-epic", Title: "Rewrite it", Status: "open"}
+	child := beads.WorkItem{ID: "yoyodyne-epic.2", Title: "Rewrite it", Status: "in_progress", Parent: epic.ID}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": {epic}, "in_progress": {child}},
+		ready:    []beads.WorkItem{epic},
+	}}
+
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.NotStartable) != 1 || standing.NotStartable[0].WorkItemID != epic.ID {
+		t.Fatalf("not startable = %+v, want the epic its running child covers", standing.NotStartable)
+	}
+	if !strings.Contains(standing.NotStartable[0].Reason, child.ID) {
+		t.Fatalf("reason = %q, want the child that is carrying the work named", standing.NotStartable[0].Reason)
+	}
+}
+
+// Coverage is re-read at every reading rather than remembered, so a container
+// whose last unfinished child has closed is ordinary work again — and a status
+// that went on refusing it would hide real work behind a decomposition that
+// finished.
+func TestAContainerWhoseChildrenHaveClosedIsStartableAgain(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	epic := beads.WorkItem{ID: "yoyodyne-epic", Title: "Rewrite it", Status: "open"}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": {epic}},
+		ready:    []beads.WorkItem{epic},
+	}}
+
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.NotStartable) != 0 {
+		t.Fatalf("not startable = %+v, want the container startable once nothing covers it", standing.NotStartable)
 	}
 }

@@ -707,9 +707,15 @@ Needs a human (1):
   status that took the hold to find out — which is how this was first built —
   would refuse a chat that asked for its own conversation in the same instant.
 - **Not startable** is each admitted item nothing will pull, with the refusal
-  that stops it — the queue's own account where the queue has one, the directive
+  that stops it — the queue's own account where the queue has one, the children
+  where an item's unfinished children already carry its execution, the directive
   where a directive pauses the work, and otherwise what has stopped the harness
-  choosing at all. That last one comes from a closed set of named reasons, each
+  choosing at all. The coverage is the scheduling pass's own derivation rather
+  than a second reading of it, so a decomposed epic is refused here in the same
+  words the pass passes it over in: the tracker reports an epic and the child
+  doing its work as equally pullable, and a status that only asked the tracker
+  showed the epic as work about to be started and merely stalled. That last one
+  comes from a closed set of named reasons, each
   of which says whose move it is: the operator's hold, a held intake, every
   developer slot taken, a live watch session that has found nothing it can
   start, no watch session running any more, and a product no session has ever
