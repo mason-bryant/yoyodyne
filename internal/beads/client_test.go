@@ -289,10 +289,12 @@ func TestClientAsksTheTrackerWhatIsReadyRatherThanWorkingItOut(t *testing.T) {
 	}
 }
 
-// Decomposition is stated as an edge by the tracker this project runs on, and
-// the reading that matters is the one that finds it there. The payload is the
-// shape bd returns for a child: no parent field anywhere in it, and the parent
-// named by a parent-child edge attributed to the child itself.
+// Decomposition can reach this reading as an edge and nothing else, and the
+// reading that matters is the one that finds it there. The payload is that case
+// rather than the whole of what bd answers — no parent field anywhere in it, and
+// the parent named by a parent-child edge attributed to the child itself — which
+// is how the tracker's own export states parentage. What a real listing states
+// is pinned by the capture in TestACapturedListingStatesParentageAsAnEdgeAttributedToTheChild.
 func TestClientReadsDecompositionStatedAsAnEdgeRatherThanAField(t *testing.T) {
 	t.Parallel()
 

@@ -194,13 +194,15 @@ const parentChildDependency = "parent-child"
 // was not broken out of anything.
 //
 // bd states that relationship two ways and a store may use either: the parent
-// field beside the item, and a parent-child dependency on the parent. This
-// project's own tracker uses only the second — not one of its items carries the
-// field, and every parent relationship in it is an edge — so a reading that
-// consults only the field sees a backlog with no decomposition anywhere in it.
-// That is what let the scheduler start yoyodyne-ifd.121 and the child carrying
-// its execution as two developer runs of one scope: the guard against exactly
-// that was already there, and the parentage it keys on was never populated.
+// field beside the item, and a parent-child dependency on the parent. A capture
+// of this project's own tracker states it both ways — testdata holds the listing
+// it answered for yoyodyne-ifd.121.2 and its parent — but the tracker's own
+// export states only the edge, carrying no parent field on any item in it, so a
+// reading that consults only the field sees such a store as a backlog with no
+// decomposition anywhere in it. The scheduler started yoyodyne-ifd.121 and the
+// child carrying its execution as two developer runs of one scope with the guard
+// against exactly that already in place, which is why which way the store states
+// parentage is not something this reading assumes either way.
 //
 // The field wins where both are stated, because that is the tracker answering
 // the question directly. An edge the tracker attributes to some other item is
