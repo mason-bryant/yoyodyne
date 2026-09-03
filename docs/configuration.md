@@ -1951,6 +1951,16 @@ Two fields on the run say what happened:
   the divergence, naming the state it stopped in. Without that, the runs least
   entitled to pass would be the ones counted as clean.
 
+  That holds however the run reaches its terminal. A run its own process ends
+  records it there; a run whose process died and is settled by `yoyo reconcile`
+  afterwards has the same gap recorded by the sweep, in the same words, whether
+  the settlement closes it as completed, blocks it, or fails it. The completed
+  case is the one worth naming: the work lands and the item closes, so a run
+  whose observation stopped halfway would otherwise read exactly like one that
+  walked the definition to the end. A soak is not a quiet period — processes die
+  to the network, to the provider, and to the machine — so a count that only
+  spoke for the runs that ended tidily would be a count of the wrong runs.
+
 Both are on the run's summary, so `yoyo status <beads-id>` and its `--json` carry
 them like every other fact about a run, and a divergence is named on its own line
 there. It is printed beside the reasons a run ended without being one of them: the

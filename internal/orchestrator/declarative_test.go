@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -585,5 +586,129 @@ func TestTheTrialReportsOnlyOutcomesTheRegisteredStepsProduce(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A run whose process dies never records its own ending: a sweep settles it, and
+// that settlement is the only ending it gets. So the gap an unfinished
+// observation leaves has to be recorded there too, in the same words the live
+// pipeline uses. Without it the runs a soak most needs to hear about — the ones
+// the network, the provider, or the machine killed — are exactly the runs
+// recorded as having agreed with the definition throughout.
+//
+// The completed case is the damaging one, and is why this is a table rather than
+// one scenario: the work lands and the item closes, so a run whose observation
+// stopped halfway reads afterwards precisely like one that walked the definition
+// to the end.
+func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		haltAt     runstate.Phase
+		wantAction ReconcileAction
+	}{
+		{name: "settled as completed", haltAt: runstate.PhaseCompleting, wantAction: ActionCompleted},
+		// Halted where the reviewer would have been asked: the gate passed and was
+		// observed, so the instance stands in the review state with nothing left to
+		// step it. Halting while developing would not do — the process survives the
+		// refused write there and observes the developer's own ending, which sends
+		// the instance to a terminal, so there is no gap to find.
+		{name: "settled as blocked", haltAt: runstate.PhaseReviewing, wantAction: ActionBlocked},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			repository, worktreeRoot, store := restartableFixture(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := roleBackend(func(request backend.RunRequest) error {
+				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+			}, approveVerdict)
+			halting := &haltingStore{StateStore: store, at: test.haltAt}
+			pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+			// The trial wired as a project that opted in wires it. Instances go to
+			// the store itself rather than through the halting wrapper, because what
+			// the halt models is a process that stopped writing its run record: the
+			// instance on disk is whatever the dead process had already recorded.
+			pipeline.Instances = store
+			pipeline.Config.Execution.DeclarativeDelivery = true
+
+			if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+				t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
+			}
+			interrupted, err := store.Load(pipelineRunID)
+			if err != nil {
+				t.Fatalf("Load() interrupted state error = %v", err)
+			}
+			if interrupted.Status.Terminal() {
+				t.Fatalf("the run recorded its own terminal; this measures the ending a sweep writes")
+			}
+			if interrupted.WorkflowInstanceID == "" {
+				t.Fatalf("the interrupted run records no instance; it was never observed")
+			}
+			if interrupted.WorkflowDivergence != "" {
+				t.Fatalf("the run already recorded %q; this measures the gap the sweep closes", interrupted.WorkflowDivergence)
+			}
+
+			results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+			if len(results) != 1 || results[0].Action != test.wantAction {
+				t.Fatalf("reconciliation = %#v, want one %q", results, test.wantAction)
+			}
+
+			settled, err := store.Load(interrupted.RunID)
+			if err != nil {
+				t.Fatalf("Load() settled state error = %v", err)
+			}
+			if !settled.Status.Terminal() {
+				t.Fatalf("settled state = %#v, want a terminal run", settled)
+			}
+			instance, err := store.LoadWorkflowInstance(settled.WorkflowInstanceID)
+			if err != nil {
+				t.Fatalf("LoadWorkflowInstance(%s) error = %v", settled.WorkflowInstanceID, err)
+			}
+			if instance.Terminal {
+				t.Fatalf("the instance ended in the terminal %q; there is no gap here to record", instance.State)
+			}
+			if settled.WorkflowDivergence == "" {
+				t.Fatalf("the sweep made the run terminal as %s with its instance standing in %q and recorded no divergence; the soak would count it as clean",
+					settled.Status, instance.State)
+			}
+			if !strings.Contains(settled.WorkflowDivergence, instance.State) {
+				t.Errorf("the divergence is %q and does not name the state %q the instance stopped in", settled.WorkflowDivergence, instance.State)
+			}
+		})
+	}
+}
+
+// The same sweep over a run nobody was observing records nothing, which is what
+// keeps the opt-in an opt-in on this path as well: settling a legacy run must
+// not invent an observation of it.
+func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseCompleting}
+	// Somewhere to record instances and nothing asking for any, so what this
+	// measures is the flag rather than the absence of a store.
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	pipeline.Instances = store
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
+	}
+	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 {
+		t.Fatalf("reconciliation = %#v, want one settlement", results)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() settled state error = %v", err)
+	}
+	if settled.WorkflowInstanceID != "" || settled.WorkflowDivergence != "" {
+		t.Errorf("a run outside the trial was settled carrying instance %q and divergence %q",
+			settled.WorkflowInstanceID, settled.WorkflowDivergence)
 	}
 }

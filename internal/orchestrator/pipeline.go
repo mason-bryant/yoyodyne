@@ -4153,10 +4153,14 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	a.state.UpdatedAt = completedAt
 	a.state.CompletedAt = &completedAt
 	a.state.Failure = message
-	// This is every terminal a run reaches that is not the one cleanup ends. An
-	// observed run whose instance is still standing in a state left by a route the
-	// definition cannot express, and the record about to be written is the last
-	// chance to say so.
+	// This is every terminal *this process* records that is not the one cleanup
+	// ends. An observed run whose instance is still standing in a state left by a
+	// route the definition cannot express, and the record about to be written is
+	// this process's last chance to say so.
+	//
+	// It is not every terminal the run can reach: a process that dies never gets
+	// here, and its run is made terminal by a sweep instead. That ending records
+	// the same divergence in the same words, from Reconciler.noteUnfinishedObservation.
 	a.observeUnfinished()
 	if saveErr := p.Store.Save(a.state); saveErr != nil {
 		cause = errors.Join(cause, fmt.Errorf("save failed run state: %w", saveErr))

@@ -45,6 +45,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/review"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/workflow"
 )
 
@@ -354,7 +355,56 @@ func (a *activeRun) observeUnfinished() {
 	if instance.Terminal {
 		return
 	}
-	a.noteDivergence(fmt.Errorf("the run ended as %s and its instance stands in %q, which is not a terminal; the run left by a route the definition has no outcome for", a.state.Status, instance.State))
+	a.noteDivergence(unfinishedInstance(a.state.Status, instance.State))
+}
+
+// unfinishedInstance is the divergence a run ending terminally with a
+// non-terminal instance records, wherever the ending is recorded.
+//
+// It is one function because there are two places a run becomes terminal and
+// only one thing to say at either: the live pipeline's own ending, and the
+// settlement a sweep writes for a run whose process died. A soak counts the runs
+// carrying no divergence, so the two have to say the same thing in the same
+// words or the count is read off two different measures.
+func unfinishedInstance(status runstate.Status, state string) error {
+	return fmt.Errorf("the run ended as %s and its instance stands in %q, which is not a terminal; the run left by a route the definition has no outcome for", status, state)
+}
+
+// workflowInstanceReader is the half of the instance store an ending needs.
+//
+// Reading whether the observation finished is all of it: nothing here resolves a
+// transition, holds a graph, or steps anything, because a run that is being made
+// terminal is one whose observation has already stopped. That is what lets a
+// settlement ask the question at all — the sweep holds no definition and has no
+// business compiling one to find out where an instance it will never step got to.
+type workflowInstanceReader interface {
+	LoadWorkflowInstance(instanceID string) (runstate.WorkflowInstance, error)
+}
+
+// unfinishedObservation is what a run being made terminal has to record about
+// the instance that was observing it, and "" when there is nothing to record.
+//
+// It is the same question observeUnfinished asks, asked from outside a live run:
+// a run whose process died is settled by a sweep rather than by its own pipeline,
+// and its instance is left standing wherever the dead process got to. Without
+// this, exactly those runs — the ones a soak is least entitled to pass — would
+// reach a terminal status carrying no divergence and be counted clean.
+//
+// An instance that cannot be read is itself the divergence, for the reason
+// observeUnfinished treats it as one: the run is ending with nothing able to say
+// where its observation reached, which is the same silence this exists to close.
+func unfinishedObservation(instances workflowInstanceReader, state runstate.State) string {
+	if state.WorkflowInstanceID == "" || state.WorkflowDivergence != "" || instances == nil {
+		return ""
+	}
+	instance, err := instances.LoadWorkflowInstance(state.WorkflowInstanceID)
+	if err != nil {
+		return err.Error()
+	}
+	if instance.Terminal {
+		return ""
+	}
+	return unfinishedInstance(state.Status, instance.State).Error()
 }
 
 // parksTheRun reports an ending that is an instruction to continue later rather
@@ -398,7 +448,21 @@ func (a *activeRun) observeDevelopEnded(ctx context.Context, err error) {
 // have a second outcome for the round that finds the shared budget already
 // spent, which is the only way a definition can send a spent budget somewhere
 // else; a suite that could not run at all is neither, and ends the run.
+//
+// A park is guarded for here as it is at the developer's state, and for the same
+// reason rather than for an ending `verify` currently produces. It does not
+// produce one today: both callers ask the directive and the dependency before
+// they call it, and what `verify` itself returns is a refusal, a check failure, a
+// check stopped on time, or an infrastructure error. But a park is an instruction
+// to reissue the round rather than an outcome — the run has not left the check —
+// and stepping the instance to `unrunnable` for one would strand it a state ahead
+// of the run and make the resumed run record a divergence that is this
+// classifier's own doing. Guarding costs nothing and does not depend on that
+// reading of `verify` staying true.
 func (a *activeRun) observeCheckEnded(ctx context.Context, err error, unrepaired bool) {
+	if parksTheRun(err) {
+		return
+	}
 	var refused pathRefusal
 	if errors.As(err, &refused) {
 		if unrepaired {
