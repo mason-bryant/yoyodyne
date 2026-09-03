@@ -559,7 +559,7 @@ func (s *RerunStore) lock(ctx context.Context, docketKey string) (func(), error)
 		file.Close()
 		return nil, fmt.Errorf("lock the triage re-run of %s: %w", docketKey, err)
 	}
-	return func() { file.Close() }, nil
+	return func() { _ = releaseStateFile(file) }, nil
 }
 
 // path names one stoppage's record. The name is built the same way a counter

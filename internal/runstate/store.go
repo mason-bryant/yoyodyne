@@ -91,17 +91,26 @@ type Lease struct {
 	holder string
 }
 
+// releaseStateFile drops a lock and closes the file it was taken on, in that
+// order, and it is how every lock in this package is let go of.
+//
+// The order is the whole of it. Closing would drop the lock anyway, but it is
+// the step that can fail with nothing left to try again: Go does not retry an
+// interrupted close and marks the descriptor closed regardless, so a lock
+// released only by closing could stay taken with no handle left to let go of it.
+// And a close is not even the moment the lock ends when somebody else still has
+// the descriptor: the lock belongs to the open file description, which a process
+// forked while it was held shares until that child execs — and the harness forks
+// Git and check processes constantly. Either way what the next acquirer is told
+// is that another process holds something nobody holds, which is the one answer
+// it cannot act on. Unlocking first makes a failed close a leaked descriptor at
+// worst, never a lock nobody can see.
+func releaseStateFile(file *os.File) error {
+	return errors.Join(unlockStateFile(file), closeStateFile(file))
+}
+
 // Release drops the lease. Releasing twice is a no-op, so a caller can defer it
 // unconditionally.
-//
-// The lock is dropped explicitly before the file is closed, rather than left to
-// the close that would drop it anyway. Closing is the step that can fail with
-// nothing left to try again: Go does not retry an interrupted close and marks
-// the descriptor closed regardless, so a lease that released only by closing
-// could keep its lock with no handle left to let go of it — and every later
-// question about the thing it owns would answer that another process holds it,
-// which is the one answer nobody could act on. Unlocking first makes a failed
-// close a leaked descriptor at worst, never a lock nobody can see.
 //
 // The stamp a reader observes goes before the lock is dropped, so no reader
 // sees a holder for a lease the next process may already own. A stamp that
@@ -120,8 +129,7 @@ func (l *Lease) Release() error {
 		}
 		l.holder = ""
 	}
-	unlocked := unlockStateFile(file)
-	if err := errors.Join(cleared, unlocked, closeStateFile(file)); err != nil {
+	if err := errors.Join(cleared, releaseStateFile(file)); err != nil {
 		return fmt.Errorf("release %s lease: %w", l.label, err)
 	}
 	return nil
@@ -292,7 +300,7 @@ func (s *Store) lockReservations(ctx context.Context) (func(), error) {
 		lock.Close()
 		return nil, fmt.Errorf("lock run reservations: %w", err)
 	}
-	return func() { lock.Close() }, nil
+	return func() { _ = releaseStateFile(lock) }, nil
 }
 
 // takeLease tries to become the owner of one run, reporting whether it did. The
