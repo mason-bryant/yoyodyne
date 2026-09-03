@@ -174,9 +174,55 @@ func (c Cost) Validate() error {
 func (c Cost) Complete() bool { return c.UnknownRuns == 0 }
 
 type Dependency struct {
-	ID     string
-	Type   string
-	Status string
+	// IssueID is the item the tracker attributes this edge to, where it says. It
+	// is what tells an edge pointing at an item's parent from one a listing
+	// carried in the other direction, so a reader that cares which way an edge
+	// runs checks it and one that does not can ignore it. It is empty where the
+	// tracker did not say, which a reader treats as this item's own.
+	IssueID string
+	ID      string
+	Type    string
+	Status  string
+}
+
+// parentChildDependency is how bd states decomposition when it states it as an
+// edge rather than as a field. See WorkItem.DecomposedFrom for why that
+// distinction is not academic.
+const parentChildDependency = "parent-child"
+
+// DecomposedFrom is the item this one was broken out of, and empty for work that
+// was not broken out of anything.
+//
+// bd states that relationship two ways and a store may use either: the parent
+// field beside the item, and a parent-child dependency on the parent. This
+// project's own tracker uses only the second — not one of its items carries the
+// field, and every parent relationship in it is an edge — so a reading that
+// consults only the field sees a backlog with no decomposition anywhere in it.
+// That is what let the scheduler start yoyodyne-ifd.121 and the child carrying
+// its execution as two developer runs of one scope: the guard against exactly
+// that was already there, and the parentage it keys on was never populated.
+//
+// The field wins where both are stated, because that is the tracker answering
+// the question directly. An edge the tracker attributes to some other item is
+// skipped, so a listing that carries an item's children alongside its parent
+// cannot be read as the item having been broken out of its own child.
+func (w WorkItem) DecomposedFrom() string {
+	if parent := strings.TrimSpace(w.Parent); parent != "" {
+		return parent
+	}
+	id := strings.TrimSpace(w.ID)
+	for _, dependency := range w.Dependencies {
+		if !strings.EqualFold(strings.TrimSpace(dependency.Type), parentChildDependency) {
+			continue
+		}
+		if issue := strings.TrimSpace(dependency.IssueID); issue != "" && issue != id {
+			continue
+		}
+		if parent := strings.TrimSpace(dependency.ID); parent != "" && parent != id {
+			return parent
+		}
+	}
+	return ""
 }
 
 // NewWorkItem is a work item to create. It is deliberately narrow: the harness
@@ -774,7 +820,12 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 			dependencyType = dependency.Type
 		}
 		if id != "" {
-			item.Dependencies = append(item.Dependencies, Dependency{ID: id, Type: dependencyType, Status: dependency.Status})
+			item.Dependencies = append(item.Dependencies, Dependency{
+				IssueID: dependency.IssueID,
+				ID:      id,
+				Type:    dependencyType,
+				Status:  dependency.Status,
+			})
 		}
 	}
 	item.Cost = costFromMetadata(raw.Metadata)
