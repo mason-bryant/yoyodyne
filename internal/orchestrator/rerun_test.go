@@ -1377,3 +1377,75 @@ func TestARerunnerWithoutItsPartsRefuses(t *testing.T) {
 		}
 	}
 }
+
+// The whole of what yoyodyne-ifd.268 is about, end to end: a run that died
+// holding its change is docketed, and the re-run the development manager records
+// against that stoppage is one the harness carries out.
+//
+// Every one of the three incidents ended the other way. The docket had no entry
+// for the death, so the verb that acts on one refused, the recorded decision sat
+// on the item as a phantom, and a person dispatched the item by name instead —
+// which starts a run and records nothing about why.
+func TestARerunCarriesOutTheDecisionAboutARunThatDiedHoldingItsChange(t *testing.T) {
+	t.Parallel()
+
+	died := diedHoldingItsChange()
+	harness := newRerunHarness(t, died)
+	// The stoppage is on the docket at all, which is what the three incidents
+	// lacked and what the verb below looks the run up in.
+	if len(harness.docket.entries) != 1 || harness.docket.entries[0].Failure != died.Failure {
+		t.Fatalf("the death did not reach the docket: %#v", harness.docket.entries)
+	}
+
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	if !result.Started || len(harness.started) != 1 {
+		t.Fatalf("the recorded decision was not carried out: result = %#v, started = %#v", result, harness.started)
+	}
+	// And the fresh run accounts for itself as the development manager's decision,
+	// which is what a dispatch by name could never record.
+	if harness.started[0].selection.By != runstate.SelectedByDevelopmentManager {
+		t.Fatalf("selection = %#v, want the development manager's decision", harness.started[0].selection)
+	}
+	if !strings.Contains(result.Reason, rerunReasoning) {
+		t.Fatalf("reason = %q, want the reasoning the decision was recorded with", result.Reason)
+	}
+	// What the death left is what the re-run is about, so it is named on the
+	// result rather than left to be found.
+	if result.Preserved.Branch != died.Branch || result.Preserved.Disposition != runstate.PreservedKept {
+		t.Fatalf("preserved = %#v, want the branch the change is on", result.Preserved)
+	}
+	// And the stoppage gets exactly one, the same as every other.
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); !claimed {
+		t.Fatal("the carried-out re-run was not claimed against the stoppage")
+	}
+}
+
+// A death that left nothing behind is refused past the docket lookup as well,
+// so the two conditions agree: nothing dockets it, and nothing would run it
+// again if something had.
+func TestARerunOfADeathThatLeftNothingBehindIsRefused(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, diedHoldingItsChange())
+	gone := diedHoldingItsChange()
+	gone.Branch = ""
+	gone.WorktreePath = ""
+	gone.BaseCommit = ""
+	gone.TargetBranch = ""
+	if err := harness.runs.Save(gone); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	_, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "left no change behind") {
+		t.Fatalf("Rerun() error = %v, want the stoppage refused for holding nothing", err)
+	}
+	if len(harness.started) != 0 {
+		t.Fatalf("started = %#v, want nothing started", harness.started)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+		t.Fatal("a refused re-run spent the stoppage's claim")
+	}
+}

@@ -432,21 +432,41 @@ const MaxBlockerBytes = triage.MaxBlockerBytes
 // wrote at length would cost far more than the tail of one blocker, and the
 // tracker holds the whole of it either way.
 func RecordBlocker(notes string) string {
-	trimmed := strings.TrimRight(notes, "\n")
-	if strings.TrimSpace(trimmed) == "" {
-		return ""
-	}
-	if len(trimmed) <= MaxBlockerBytes {
-		return trimmed
-	}
-	cut := MaxBlockerBytes - len(blockerCutNote)
-	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
-		cut--
-	}
-	return strings.TrimRight(trimmed[:cut], "\n") + blockerCutNote
+	return boundRecordedText(notes, MaxBlockerBytes, blockerCutNote)
 }
 
 const blockerCutNote = "\n[cut; the work item carries the whole of this blocker]"
+
+// RecordFailure makes a bounded record of the reason a run ended, for a reader
+// carrying it somewhere with a bound of its own. The record itself keeps whatever
+// the failing step gave, which can be an error with a provider's output folded
+// into it; the docket entry a stoppage produces cannot, and an entry refused for
+// its length is a stoppage that reaches nobody. So it is cut here, against the
+// bound the entry is held to, rather than refused there.
+func RecordFailure(failure string) string {
+	return boundRecordedText(failure, MaxBlockerBytes, failureCutNote)
+}
+
+const failureCutNote = "\n[cut; the run's own record carries the whole of this failure]"
+
+// boundRecordedText cuts one recorded reason to its bound and says that it was
+// cut, so nobody reads a clamped account as a complete one. The cut lands on a
+// rune boundary, because a record ending mid-character is one a later reader
+// cannot decode at all.
+func boundRecordedText(text string, limit int, cutNote string) string {
+	trimmed := strings.TrimRight(text, "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return ""
+	}
+	if len(trimmed) <= limit {
+		return trimmed
+	}
+	cut := limit - len(cutNote)
+	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
+		cut--
+	}
+	return strings.TrimRight(trimmed[:cut], "\n") + cutNote
+}
 
 // DirectivePause is the user directive a run stopped short for. It is recorded
 // before the run returns, for the same reason a usage-limit deadline is: the

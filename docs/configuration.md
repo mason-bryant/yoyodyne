@@ -2593,8 +2593,10 @@ run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
 repair` continues the run that stopped on the change it already has.
 
 `yoyo triage rerun <run-id> --reason "<the recorded decision>"` starts a fresh
-run of the item whose stopped run the docket entry names. It is refused unless that run is terminally recorded with
-its blocker standing — read from the run's own record rather than from the
+run of the item whose stopped run the docket entry names. It is refused unless that run is terminally recorded and
+still standing on whichever of the two docketed it — its blocker, or, for a run
+that died before anything recorded one, the change it left behind — read from the
+run's own record rather than from the
 docket entry — and one docketed stoppage is re-run once, whatever the item's
 budget still says. It is also refused unless a decision of the development
 manager's is there to carry out: the decision spends the item's re-run budget as
@@ -2697,11 +2699,13 @@ already carried out, which it counts from the continuations the item's runs
 record. Past the once-per-item cap a second is an escalation rather than a larger
 budget, and an item with no rounds left never gets a grant to carry out at all.
 
-Four more things refuse it. The stopped run has to be really over, terminal with
-its blocker standing, read from the run's own record rather than from the docket
+Four more things refuse it. The stopped run has to be really over, terminal and
+still standing on whichever of the two docketed it, read from the run's own
+record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
-refusing, or whose replay conflicted, never had a failure returned to its
-developer, so there is no repair loop to re-enter. The preserved worktree has
+refusing, whose replay conflicted, or that died before anything judged its work,
+never had a failure returned to its developer, so there is no repair loop to
+re-enter; a re-run is what those need. The preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the

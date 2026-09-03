@@ -460,7 +460,13 @@ sweep did, because a successful run removes its branch and worktree on purpose
 and there is nothing preserved to report. It also builds the triage
 docket on the way past, so a run it stopped and a publication the forge quietly
 never merged reach the development manager rather than waiting for somebody to
-go looking. A run whose work reached
+go looking. A run that died holding its change — a push the remote refused, a
+backend that broke mid-attempt — is docketed too, but by the run itself as it
+ends rather than by this sweep: the sweep re-derives blockers from the whole
+recorded history, and every terminal failed run with a surviving branch has the
+shape of a death, so re-deriving those would put months of settled work on the
+docket at once. A death from before this existed is therefore not on the docket
+and will not appear on one. A run whose work reached
 the target branch is closed and its worktree and branch removed, including when
 the run died before it could record the promotion. A run stopped anywhere
 earlier becomes a durable blocker naming the branch and worktree that were

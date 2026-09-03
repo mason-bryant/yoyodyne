@@ -358,6 +358,19 @@ type Entry struct {
 	// item. On a publication entry it is empty: nothing blocked the item, the
 	// change is integrated, and only its publication is unfinished.
 	Blocker string `json:"blocker,omitempty"`
+	// Failure is why the run ended, in the words of whatever ended it. It is what
+	// a stopped-run entry says instead of a blocker where the death came before
+	// anything could record one — a push the remote refused, a backend that broke
+	// mid-attempt, a step the machine would not carry — and the run left the change
+	// behind. Those deaths hand a person exactly what a blocker does: work that is
+	// still there and nothing that will pick it up on its own.
+	//
+	// It is a field of its own rather than a blocker written after the fact,
+	// because a blocker is what the work item carries and these items carry none.
+	// A reader is owed that distinction: the item's own status is where they would
+	// go next, and an entry that dressed a failure as a blocker would send them
+	// looking for something nobody recorded.
+	Failure string `json:"failure,omitempty"`
 	// Findings are the reviewer's own words about the change, and Check is the
 	// deterministic check that was failing. Both are absent from work that
 	// stopped before either had anything to say.
@@ -469,6 +482,9 @@ func (e Entry) Validate() error {
 	if len(e.Blocker) > MaxBlockerBytes {
 		problems = append(problems, fmt.Errorf("blocker is %d bytes, limit is %d", len(e.Blocker), MaxBlockerBytes))
 	}
+	if len(e.Failure) > MaxBlockerBytes {
+		problems = append(problems, fmt.Errorf("failure is %d bytes, limit is %d", len(e.Failure), MaxBlockerBytes))
+	}
 	if len(e.Summary) > MaxMessageBytes {
 		problems = append(problems, fmt.Errorf("summary is %d bytes, limit is %d", len(e.Summary), MaxMessageBytes))
 	}
@@ -513,8 +529,12 @@ func (e Entry) Validate() error {
 	// which is worse than no entry: it looks like coverage.
 	switch e.Class {
 	case ClassStoppedRun:
-		if strings.TrimSpace(e.Blocker) == "" {
-			problems = append(problems, errors.New("a stopped run entry carries the durable blocker that stopped it"))
+		// Either says what stopped the run, and one of them has to. A stoppage the
+		// harness classified carries the blocker the work item carries; a run that
+		// died before anything could classify it carries the reason it gave for
+		// dying.
+		if strings.TrimSpace(e.Blocker) == "" && strings.TrimSpace(e.Failure) == "" {
+			problems = append(problems, errors.New("a stopped run entry carries the durable blocker that stopped it, or the failure of a death that recorded none"))
 		}
 		if e.Publication != nil {
 			problems = append(problems, errors.New("a stopped run entry describes a run rather than a publication"))
@@ -558,6 +578,14 @@ func (e Entry) Render() string {
 		e.Class.Title(), e.RecordedAt.UTC().Format(time.RFC3339), e.item(), e.RunID)
 	if e.Blocker != "" {
 		rendered.WriteString(indented("Blocker", e.Blocker))
+	}
+	// Said only where there is no blocker, and labelled as what it is. A death
+	// that recorded no blocker left the item carrying none, so a reader told
+	// "blocker" would go to the item for words nobody wrote there; and the same
+	// reason printed twice beside a blocker that already says it would be noise on
+	// every ordinary stoppage.
+	if e.Blocker == "" && e.Failure != "" {
+		rendered.WriteString(indented("Died holding its change; the work item carries no blocker for it", e.Failure))
 	}
 	if e.Summary != "" {
 		rendered.WriteString(indented("Review summary", e.Summary))

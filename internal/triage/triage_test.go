@@ -48,7 +48,7 @@ func TestAnEntryIsRefusedWhenItCannotSayWhatStopped(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "a stopped run with no blocker",
+			name: "a stopped run with neither a blocker nor a failure",
 			entry: func() Entry {
 				entry := stoppedRunEntry()
 				entry.Blocker = ""
@@ -476,5 +476,53 @@ func TestAnAgeIsStatedTheWaySomebodyReadsIt(t *testing.T) {
 		if got := describeAge(test.age); got != test.want {
 			t.Fatalf("describeAge(%s) = %q, want %q", test.age, got, test.want)
 		}
+	}
+}
+
+// A run that died holding its change left the work item carrying no blocker,
+// because nothing got as far as recording one. The entry says what stopped it
+// all the same, and says which of the two it is: a reader sent to the item for a
+// blocker nobody wrote there is a reader who concludes the entry is wrong.
+func TestAStoppedRunEntryStandsOnTheFailureWhereNothingRecordedABlocker(t *testing.T) {
+	t.Parallel()
+
+	died := stoppedRunEntry()
+	died.Blocker = ""
+	died.Failure = "publish the developer branch: remote rejected the push: Connection reset"
+	if err := died.Validate(); err != nil {
+		t.Fatalf("Validate() refused an entry that says what stopped the run: %v", err)
+	}
+	rendered := died.Render()
+	if !strings.Contains(rendered, died.Failure) {
+		t.Fatalf("the rendered entry does not say what stopped the run:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "carries no blocker") {
+		t.Fatalf("the rendered entry does not say the item carries no blocker:\n%s", rendered)
+	}
+}
+
+// And on the ordinary stoppage the blocker is the whole of it. The failure a run
+// recorded says the same thing in different words, and an entry printing both
+// would be the same fact twice on nearly every entry there is.
+func TestAStoppedRunEntryWithABlockerDoesNotAlsoPrintTheFailure(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedRunEntry()
+	if strings.Contains(stopped.Render(), "carries no blocker") {
+		t.Fatalf("an entry with a blocker claimed the item carries none:\n%s", stopped.Render())
+	}
+}
+
+// The failure is held to the bound the blocker beside it is, and for the same
+// reason: an entry too big to record is a stoppage that reaches nobody.
+func TestAnEntryIsRefusedWhenItsFailureExceedsTheBound(t *testing.T) {
+	t.Parallel()
+
+	died := stoppedRunEntry()
+	died.Blocker = ""
+	died.Failure = strings.Repeat("x", MaxBlockerBytes+1)
+	err := died.Validate()
+	if err == nil || !strings.Contains(err.Error(), "failure is") {
+		t.Fatalf("Validate() error = %v, want the failure refused for its length", err)
 	}
 }
