@@ -12,8 +12,8 @@ import (
 // deliveryCatalog is the catalog the fixtures are validated against: the actions
 // the delivery pipeline registers today, by the names it registers them under.
 // It is written out here rather than taken from the orchestrator's registry
-// because nothing in the delivery path depends on this package yet, and this
-// package depending on that one would be the dependency pointing the other way.
+// because the orchestrator depends on this package, and this package depending on
+// that one would be the dependency pointing the other way.
 func deliveryCatalog(t *testing.T) Catalog {
 	t.Helper()
 

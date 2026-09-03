@@ -252,6 +252,13 @@ type Pipeline struct {
 	Store     StateStore
 	Backend   backend.Backend
 	Checks    CheckRunner
+	// Instances is where a declarative trial's workflow instances are recorded.
+	// It is the same store the runs are in — a harness has one durable state root
+	// — and it is named separately because an instance is written through the
+	// store itself rather than through the interface a run's record goes through.
+	// A pipeline without one observes nothing, which is what every pipeline that
+	// has not opted in does anyway.
+	Instances *runstate.Store
 	// Reviewer is required only when integration is automatic, because nothing
 	// is ever integrated without an independent verdict.
 	Reviewer ChangeReviewer
@@ -885,9 +892,16 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		invariants: invariants,
 	}
 
+	// A project in the declarative trial records its instance here, standing on
+	// the definition's first state, before the first thing this run changes
+	// outside itself. Nothing about the run depends on it.
+	run.beginDeliveryTrial()
+
 	if err := run.claim(ctx); err != nil {
+		run.observe(ctx, deliveryClaim, "unavailable")
 		return run.fail(err, runstate.StatusFailed)
 	}
+	run.observe(ctx, deliveryClaim, "claimed")
 	worktree, err := p.Worktrees.Create(ctx, gitworktree.CreateRequest{
 		RunID:        runID,
 		WorkItemID:   workItemID,
@@ -1206,6 +1220,12 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			PublishSkipped: skipped,
 		},
 	}
+	// Whether this run is observed is read off its own record rather than off the
+	// configuration this process loaded. A run started before the opt-in names no
+	// instance and is served here exactly as it was before the trial existed, and
+	// a run started under it keeps being observed however the configuration has
+	// since changed: what a run is was settled when it was created.
+	run.resumeDeliveryTrial()
 	// A stop the operator asked for is honored before anything is resumed. The
 	// process that was serving this run may have exited before it reached a
 	// boundary, so without this a later invocation would pick the run up and carry
@@ -1273,6 +1293,11 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
+		// The attempt this run was owed is made again, which is the same state
+		// again: the transition a pause or a death takes in the definition, taken
+		// here by whichever process picks the run up rather than by the one that
+		// put it down.
+		run.observe(ctx, deliveryDevelop, "reissued")
 		if err := run.develop(ctx, prompt, state.ProviderSessionID); err != nil {
 			return run.stop(ctx, err)
 		}
@@ -1480,6 +1505,10 @@ type activeRun struct {
 	// later invocation of the same run is a different process and gets one of its
 	// own, which is exactly what stops it returning this one's round.
 	charger string
+	// trial is the workflow instance this run is observed through, when the
+	// project opted into the declarative trial and this run was created under it.
+	// Nil is a run nothing is watching, which is every run on the legacy path.
+	trial *deliveryTrial
 }
 
 // chargingProcess is what this process charges this run's review rounds under.
@@ -1629,8 +1658,14 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 			return a.stop(ctx, err)
 		}
 		if err := a.verify(ctx); err != nil {
+			// The three ways this gate stops a run under a person's approval are one
+			// error out of one call, and the definition that expresses this path
+			// sends all three to the same ending. Nothing on this path is ever handed
+			// back, so there is no budget here to have spent.
+			a.observeCheckEnded(ctx, err, stillRepairable)
 			return a.stop(ctx, err)
 		}
+		a.observe(ctx, deliveryCheck, "passed")
 		return a.finish(ctx)
 	}
 	// The whole gate repeats when a promotion loses its race for the target
@@ -1664,6 +1699,7 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 		}
 		err := a.integrate(ctx)
 		if err == nil {
+			a.observe(ctx, deliveryIntegrate, "integrated")
 			return a.finish(ctx)
 		}
 		retry, retryErr := a.prepareIntegrationRetry(ctx, err)
@@ -1702,6 +1738,7 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 	}
 	limit := a.pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation
 	if a.state.IntegrationRetries >= limit {
+		a.observe(ctx, deliveryIntegrate, "contended")
 		return false, a.blockOnContendedIntegration(cause, limit)
 	}
 	a.state.IntegrationRetries++
@@ -1718,6 +1755,7 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 		return false, errors.Join(err, recordErr)
 	}
 	if errors.Is(err, gitworktree.ErrRebaseConflict) {
+		a.observe(ctx, deliveryIntegrate, "conflicted")
 		return false, a.blockOnRebaseConflict(err)
 	}
 	if err != nil {
@@ -1743,6 +1781,11 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 	if err := a.pipeline.Store.Save(a.state); err != nil {
 		return false, fmt.Errorf("save replayed run state: %w", err)
 	}
+	// The replay is prepared and the whole gate is about to be re-earned, which is
+	// where the definition sends a superseded promotion. It is observed here
+	// rather than beside the refusal that caused it, because until the replay has
+	// actually been prepared the run may still be ending on it.
+	a.observe(ctx, deliveryIntegrate, "superseded")
 	return true, nil
 }
 
@@ -1896,8 +1939,13 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			if errors.As(err, &refused) {
 				a.recordPathRefusal(refused.refusal)
 				if a.state.RepairAttempts >= limit {
+					a.observeCheckEnded(ctx, err, budgetSpent)
 					return a.blockOnRefusedPaths(refused, limit)
 				}
+				// Observed before the failure is handed back, because the hand-back is
+				// the next state: the gate has to have left the check before the
+				// developer's own state can be entered again.
+				a.observeCheckEnded(ctx, err, stillRepairable)
 				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), a.scratch, refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
 					return err
 				}
@@ -1907,27 +1955,35 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			// can repair, so it ends the run rather than spending an attempt.
 			var failing checkFailure
 			if !errors.As(err, &failing) {
+				a.observeCheckEnded(ctx, err, stillRepairable)
 				return err
 			}
 			a.recordCheckFailure(failing.result)
 			if a.state.RepairAttempts >= limit {
+				a.observeCheckEnded(ctx, err, budgetSpent)
 				return a.blockOnFailingCheck(limit)
 			}
+			a.observeCheckEnded(ctx, err, stillRepairable)
 			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), a.scratch, *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
 				return err
 			}
 			continue
 		}
+		a.observe(ctx, deliveryCheck, "passed")
 		decision, err := a.reviewChange(ctx)
 		if err != nil {
+			a.observeReviewEnded(ctx, "", err, stillRepairable)
 			return err
 		}
 		if decision == review.DecisionApprove {
+			a.observeReviewEnded(ctx, decision, nil, stillRepairable)
 			return nil
 		}
 		if a.state.RepairAttempts >= limit {
+			a.observeReviewEnded(ctx, decision, nil, budgetSpent)
 			return a.blockOnUnresolvedFindings(limit)
 		}
+		a.observeReviewEnded(ctx, decision, nil, stillRepairable)
 		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.scratch, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
 		if err != nil {
 			return err
@@ -2301,6 +2357,7 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		// A stop is asked for before the hold, so a run the operator both stopped
 		// and paused stops rather than parking on a hold nothing will lift for it.
 		if err := a.stopRequested(); err != nil {
+			a.observeDevelopEnded(ctx, err)
 			return err
 		}
 		// The operator's hold is asked before every attempt, including the reissue
@@ -2308,6 +2365,7 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		// spends, and a pause that only covered the first one would let a run keep
 		// spending for as long as the provider kept refusing it.
 		if err := a.holdForOperator(ctx); err != nil {
+			a.observeDevelopEnded(ctx, err)
 			return err
 		}
 		providerResult, err := a.attemptDevelopment(ctx, prompt, sessionID)
@@ -2321,6 +2379,7 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 			// the run has to say about itself — and then handed to a person, because
 			// nothing else is going to relaunch it.
 			if died {
+				a.observe(ctx, deliveryDevelop, "relaunches-spent")
 				return a.blockOnSpentRelaunchBudget(ctx, transient, recorded)
 			}
 			if recorded != nil {
@@ -2335,13 +2394,16 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 				if errors.Is(recorded, execution.ErrProcessNotStarted) {
 					a.recordEnvironmentalRefusal(runstate.CauseSandboxSpawnFailure, recorded.Error(), nothingRan)
 				}
+				a.observeDevelopEnded(ctx, recorded)
 				return recorded
 			}
 			// The attempt that just finished is what publishes. Doing it here
 			// covers every developer invocation a run makes — the first and each
 			// repair — so the pull request always shows the change the checks and
 			// the reviewer are about to judge.
-			return a.publishAttempt(ctx)
+			published := a.publishAttempt(ctx)
+			a.observeDevelopEnded(ctx, published)
+			return published
 		}
 		// The refused attempt may still have established a session. Continuing in
 		// it is what lets the reissued attempt resume in context rather than
@@ -2357,8 +2419,13 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		// attempts the account cannot serve.
 		if refusedForLimit {
 			if err := a.pauseForUsageLimit(ctx, limit); err != nil {
+				a.observeDevelopEnded(ctx, err)
 				return err
 			}
+			// The wait was taken in this process, so the attempt is reissued here
+			// rather than by whatever picks the run up: the same state again, which
+			// is the one transition the definition has for all four of these.
+			a.observe(ctx, deliveryDevelop, "reissued")
 			continue
 		}
 		// An overload is answered before a transient death for the same reason: a
@@ -2367,13 +2434,17 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		// skipping it spends the budget on a server that has not recovered yet.
 		if refusedForOverload {
 			if err := a.pauseForServerOverload(ctx, overload); err != nil {
+				a.observeDevelopEnded(ctx, err)
 				return err
 			}
+			a.observe(ctx, deliveryDevelop, "reissued")
 			continue
 		}
 		if err := a.recordRelaunch(); err != nil {
+			a.observeDevelopEnded(ctx, err)
 			return err
 		}
+		a.observe(ctx, deliveryDevelop, "reissued")
 	}
 }
 
@@ -3704,10 +3775,22 @@ func (a *activeRun) integrate(ctx context.Context) error {
 // between them arrives in the registry rather than only here.
 func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	outcome, err := a.complete(ctx)
-	if err != nil || a.outcome.Integration == nil {
+	if err != nil {
+		// Completing failed, and the definition has no outcome for that: the state
+		// was entered and produced nothing it can route. The instance is left
+		// standing in it, which says exactly that.
 		return outcome, err
 	}
+	a.observe(ctx, deliveryComplete, "completed")
+	if a.outcome.Integration == nil {
+		return outcome, nil
+	}
 	if err := a.cleanUp(ctx); err != nil {
+		// Both cleanup failures are the same outcome here, because the definition
+		// distinguishes only whether the cleanup finished: an artifact that survived
+		// and a terminal record that would not save are each a run that succeeded
+		// with something left for somebody else to settle.
+		a.observe(ctx, deliveryCleanUp, "partial")
 		// The two things cleanup can fail at are reported differently. A run whose
 		// artifacts are all gone and whose terminal record would not save is one
 		// reconciliation has to settle; anything else left an artifact standing,
@@ -3719,6 +3802,7 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 		}
 		return a.pipeline.reportOutstandingCleanup(a.state, a.outcome, err)
 	}
+	a.observe(ctx, deliveryCleanUp, "cleaned")
 	return a.outcome, nil
 }
 
@@ -4069,6 +4153,11 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	a.state.UpdatedAt = completedAt
 	a.state.CompletedAt = &completedAt
 	a.state.Failure = message
+	// This is every terminal a run reaches that is not the one cleanup ends. An
+	// observed run whose instance is still standing in a state left by a route the
+	// definition cannot express, and the record about to be written is the last
+	// chance to say so.
+	a.observeUnfinished()
 	if saveErr := p.Store.Save(a.state); saveErr != nil {
 		cause = errors.Join(cause, fmt.Errorf("save failed run state: %w", saveErr))
 		// Only a state the store refuses is salvaged, and never a store that could

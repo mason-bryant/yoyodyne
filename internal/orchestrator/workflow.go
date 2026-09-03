@@ -13,13 +13,15 @@ package orchestrator
 // selected an action this build does not register, or one requiring authority
 // the grant does not confer, is refused before an instance exists.
 //
-// Nothing in the delivery path calls any of it. `Pipeline.Run` still runs the
-// sequence Go control flow puts it in; these definitions are compiled and walked
-// by the parity harness in parity_test.go, which holds them against the recorded
-// baseline of what the hard-coded path actually does. Making them the thing that
-// runs a real work item needs what the design calls for and none of it is here:
-// the step-attempt record, the idempotency key, and the reconciliation that make
-// an action with a side effect safe to re-perform after a death.
+// Nothing in the delivery path performs anything through them. `Pipeline.Run`
+// still runs the sequence Go control flow puts it in; these definitions are
+// compiled and walked by the parity harness in parity_test.go, which holds them
+// against the recorded baseline of what the hard-coded path actually does, and
+// stepped beside a real run by the declarative trial in declarative.go, whose
+// doors perform nothing. Making them the thing that runs a real work item needs
+// what the design calls for and none of it is here: the step-attempt record, the
+// idempotency key, and the reconciliation that make an action with a side effect
+// safe to re-perform after a death.
 
 import (
 	"bytes"
@@ -29,6 +31,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/workflow"
 )
@@ -148,12 +151,19 @@ func compileDelivery(builtin builtinDelivery) (workflow.Graph[*activeRun], error
 		// the build rather than anything wrong with the definition being read.
 		return workflow.Graph[*activeRun]{}, fmt.Errorf("the delivery steps this build registers are not a registry: %w", err)
 	}
+	return compileDeliveryWith(builtin, registry)
+}
+
+// compileDeliveryWith is the shipped-definition compile over a registry the
+// caller supplies, which is the whole of what the trial needs that the
+// production compile does not: the same definition, the same grant, the same
+// refusals, and doors that perform nothing.
+func compileDeliveryWith(builtin builtinDelivery, registry action.Registry[*activeRun]) (workflow.Graph[*activeRun], error) {
 	grant, err := deliveryGrant()
 	if err != nil {
 		return workflow.Graph[*activeRun]{}, fmt.Errorf("the authority a delivery run holds could not be stated: %w", err)
 	}
 	loader := workflow.Loader[*activeRun]{Registry: registry, Grant: grant}
-
 	graph, err := loader.Load(bytes.NewReader(builtin.Definition))
 	if err != nil {
 		return workflow.Graph[*activeRun]{}, fmt.Errorf("%s: %w", builtin.Source, err)
