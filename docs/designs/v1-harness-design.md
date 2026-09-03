@@ -58,6 +58,10 @@ revisions:
       by: architect
       at: 2026-09-01T19:15:00Z
       reason: 'yoyodyne-ifd.162 - the CLI table''s status entry matches shipped behavior: the four-line what-happened-what-remains report from yoyodyne-ifd.194 and yoyodyne-ifd.226, and the stream capabilities from yoyodyne-ifd.63; the line labels are taken from the shipped help text, which is authoritative for its own output'
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:35:00Z
+      reason: approved amendment e0bff82e from yoyodyne-ifd.36, transcribed at ratification of the portable-agent-configuration design - the Configuration section defers to it on ownership, conversion, and bundle improvements
 approvals:
     - revision: 0
       by: operator
@@ -336,7 +340,7 @@ Codex authentication is delegated to the locally installed CLI. It may use ChatG
 
 ## Configuration
 
-Agent definitions and behavior are configurable, while invariants — and role authority, which no configuration can grant or widen — remain enforced in code. The executable ships a versioned, read-only bundle of agent definitions and personas, so a project records only what is genuinely its own and never needs access to the Yoyodyne source checkout. A project inherits the bundle by name and overlays what it changes:
+Agent definitions and behavior are configurable, while invariants — and role authority, which no configuration can grant or widen — remain enforced in code. The executable ships a versioned, read-only bundle of agent definitions and personas, so a project records only what is genuinely its own and never needs access to the Yoyodyne source checkout. What a project owns versus inherits, moving between the explicit and inheriting shapes, and how a bundle improvement reaches a materialized project are governed by [portable-agent-configuration](portable-agent-configuration.md). A project inherits the bundle by name and overlays what it changes:
 
 ```yaml
 version: 1

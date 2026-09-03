@@ -3466,15 +3466,17 @@ lives: both travel with the repository, and neither needs the Yoyodyne source.
 Yoyodyne ships the explicit shape because its operator edits agent properties
 often and wants the effect of an edit obvious. A fleet of projects that should
 improve together is the case `extends` is for.
-[Portable agent configuration](portable-agent-configuration.md) is the design
-that answers what a project owns versus inherits. Its baseline and report
-exist: `config.lock` records what the template supplied, `yoyo config drift`
-sorts each value into `unchanged`, `yours`, `available`, or
+[Portable agent configuration](designs/portable-agent-configuration.md) is the
+governed design that answers what a project owns versus inherits, how the two
+shapes convert into each other, and how a bundle improvement reaches a project
+that materialized its defaults; the architect ratified it on 2026-09-01. Its
+baseline and report exist: `config.lock` records what the template supplied,
+`yoyo config drift` sorts each value into `unchanged`, `yours`, `available`, or
 `conflicting`, and `doctor` and `config validate` speak the `available` ones
 unprompted on stderr, silently when none, without changing exit codes. A
 project without one hears nothing until `yoyo config baseline` writes it, which
 touches nothing else and starts level. Nothing is adopted for you;
-`materialize`, `extract`, and `adopt` do not exist.
+`materialize`, `extract`, and `adopt` do not exist yet.
 
 ### Converting an inheriting configuration to an explicit one
 
