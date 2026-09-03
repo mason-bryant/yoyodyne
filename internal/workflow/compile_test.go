@@ -21,9 +21,9 @@ type run struct {
 // deliveryRegistry is the delivery pipeline's steps as a registry these tests
 // own: the same names and the same capabilities as the catalog the fixtures are
 // validated against, over a subject this package can construct. It is written out
-// here for the reason deliveryCatalog is — nothing in the delivery path depends
-// on this package yet, and depending on that one from here would point the
-// dependency the wrong way.
+// here for the reason deliveryCatalog is — the orchestrator depends on this
+// package, and depending on that one from here would point the dependency the
+// wrong way.
 func deliveryRegistry(t *testing.T, acted *run) action.Registry[*run] {
 	t.Helper()
 

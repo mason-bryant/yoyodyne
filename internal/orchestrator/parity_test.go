@@ -54,7 +54,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -93,14 +92,19 @@ type parityScenario struct {
 // under. They are constants because the witness counts them and a state renamed
 // in a file without being renamed here would be a count that quietly stopped
 // measuring anything.
+//
+// They are the same constants the declarative trial names a run's boundaries
+// with rather than a second copy: what this harness measures and what a real run
+// is observed against have to be the same seven states or one of them is
+// measuring a definition nobody runs.
 const (
-	parityClaim     = "claim"
-	parityDevelop   = "develop"
-	parityCheck     = "check"
-	parityReview    = "review"
-	parityIntegrate = "integrate"
-	parityComplete  = "complete"
-	parityCleanUp   = "clean-up"
+	parityClaim     = deliveryClaim
+	parityDevelop   = deliveryDevelop
+	parityCheck     = deliveryCheck
+	parityReview    = deliveryReview
+	parityIntegrate = deliveryIntegrate
+	parityComplete  = deliveryComplete
+	parityCleanUp   = deliveryCleanUp
 )
 
 // parityScenarios is every recorded delivery path, said as a transcript.
@@ -1025,53 +1029,20 @@ func walkTranscript(t *testing.T, scenario parityScenario) {
 // parityGraph compiles one built-in definition into a graph whose doors perform
 // nothing.
 //
-// Everything else about the actions is the registered thing: the names, the
-// summaries, the capabilities and what each wraps come from the same table
-// `actions.go` builds the delivery registry from, so the topology walked here is
-// the topology the production registry would compile and the separation policies
-// are asked the same question. Only Perform is replaced, which is what makes it
-// safe to walk a promotion in a unit test.
+// It is the same graph the declarative trial steps beside a real run, built by
+// the same function, which is the point: a harness that walked a topology of its
+// own would be measuring something no run is ever observed against. Everything
+// about the actions except Perform is the registered thing — the names, the
+// summaries, the capabilities and what each wraps come from the table
+// `actions.go` builds the delivery registry from — and the digest inside says
+// the definition is the shipped one, which is what makes it safe to walk a
+// promotion in a unit test.
 func parityGraph(t *testing.T, id string) workflow.Graph[*activeRun] {
 	t.Helper()
 
-	builtin, found := builtinDelivery{}, false
-	for _, shipped := range builtinDeliveryWorkflows() {
-		if shipped.ID == id {
-			builtin, found = shipped, true
-		}
-	}
-	if !found {
-		t.Fatalf("no built-in definition is shipped as %q", id)
-	}
-	// The graph compiled against the real registry is what the definition means;
-	// this one has to be the same definition, and the digest is what says so.
-	compiled, err := compileDelivery(builtin)
+	graph, err := observedDeliveryGraph(id)
 	if err != nil {
-		t.Fatalf("compileDelivery(%s) error = %v", builtin.Source, err)
-	}
-
-	steps := deliverySteps()
-	inert := make([]action.Action[*activeRun], 0, len(steps))
-	for _, step := range steps {
-		door := step.action
-		door.Perform = func(context.Context, *activeRun) error { return nil }
-		inert = append(inert, door)
-	}
-	registry, err := action.New(inert...)
-	if err != nil {
-		t.Fatalf("action.New() error = %v", err)
-	}
-	grant, err := deliveryGrant()
-	if err != nil {
-		t.Fatalf("deliveryGrant() error = %v", err)
-	}
-	loader := workflow.Loader[*activeRun]{Registry: registry, Grant: grant}
-	graph, err := loader.Load(strings.NewReader(string(builtin.Definition)))
-	if err != nil {
-		t.Fatalf("Load(%s) error = %v", builtin.Source, err)
-	}
-	if graph.Digest() != compiled.Digest() {
-		t.Fatalf("the walked graph digests to %s and the shipped definition to %s; they are not the same sequence", graph.Digest(), compiled.Digest())
+		t.Fatalf("observedDeliveryGraph(%s) error = %v", id, err)
 	}
 	return graph
 }

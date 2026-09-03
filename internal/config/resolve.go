@@ -308,6 +308,11 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.check_timeout", execution.CheckTimeout, &r.config.Execution.CheckTimeout, applied.origin)
 		setValue(r.origins, "execution.work_poll", execution.WorkPoll, &r.config.Execution.WorkPoll, applied.origin)
 		setValue(r.origins, "execution.blocked_runs_before_intake_hold", execution.BlockedRunsBeforeIntakeHold, &r.config.Execution.BlockedRunsBeforeIntakeHold, applied.origin)
+		// No harness default is recorded for the trial, for the reason push_remote
+		// records none: off is the absence of the key rather than a value the
+		// harness filled in, and an origin of harness-default on it would read as a
+		// setting somebody has to opt out of.
+		setValue(r.origins, "execution.declarative_delivery", execution.DeclarativeDelivery, &r.config.Execution.DeclarativeDelivery, applied.origin)
 	}
 	if triage := document.Triage; triage != nil {
 		setValue(r.origins, "triage.stuck_merge_age", triage.StuckMergeAge, &r.config.Triage.StuckMergeAge, applied.origin)

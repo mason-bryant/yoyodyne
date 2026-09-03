@@ -853,6 +853,18 @@ var notAStep = map[string]string{
 	"prepareIntegrationRetry": "replays a change whose promotion lost its race, so candidate.integrate can be re-earned",
 	"verifyHandback":          "checks a resumed run still has the change it preserved",
 
+	// The declarative trial. These step the workflow instance a run is observed
+	// through and are the one group here that is not part of the delivery at all:
+	// they perform nothing, decide nothing, and a run that skipped every one of
+	// them delivers identically. Registering one would be registering the
+	// observation of a step as a step.
+	"beginDeliveryTrial":  "records the workflow instance a new run is observed through",
+	"resumeDeliveryTrial": "picks that instance back up on a run this process did not start",
+	"observe":             "records that the run performed one state and produced one outcome",
+	"observeDevelopEnded": "names which outcome the developer's state produced",
+	"observeCheckEnded":   "names which outcome the gate produced",
+	"observeReviewEnded":  "names which outcome the reviewer's state produced",
+
 	// Recording and derivation. These write down what happened or read back what
 	// the run already knows; none of them does anything to the work.
 	"recordWorktree":      "records the worktree the run was given",
