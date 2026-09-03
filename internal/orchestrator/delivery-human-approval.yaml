@@ -1,0 +1,68 @@
+# The delivery loop for a project whose integration a person still approves.
+#
+# It is the same claim-and-develop-and-check sequence as delivery.yaml with the
+# gate's second half missing, because that is what the pipeline does.
+# `verifyReviewAndFinish` is where the two paths part, and it parts before the
+# repair loop rather than after it: its non-automatic branch runs the checks
+# once and then either finishes or stops, so nothing on this path is ever
+# handed back to the developer and no repair attempt is ever spent. A change
+# that passes is recorded on the item and left on its branch for the person who
+# approves the promotion; a change that does not passes through none of that.
+#
+# It is a second definition rather than a branch inside delivery.yaml because a
+# definition has no way to ask what the project configured -- it selects actions
+# and names destinations, and that is the whole of what it can do. Which of the
+# two a project runs is a binding rather than a transition.
+#
+# What it shares with delivery.yaml, it shares deliberately: the same actions,
+# the same outcome vocabulary, and the same absent `complete` state, since
+# recording the outcome on the item is `(*activeRun).finish` and no registered
+# action is a door onto it.
+schema: 1
+id: delivery-human-approval
+summary: claim a work item, develop a change, check it, and preserve it on its branch for the person who approves the promotion
+initial: claim
+states:
+  claim:
+    action: work-item.claim
+    summary: take the work item this run was dispatched for and assemble the context its developer is given
+    on:
+      claimed: develop
+      unavailable: abandoned
+  develop:
+    action: candidate.develop
+    summary: invoke the developer in this run's worktree, and publish what the attempt produced
+    on:
+      produced: check
+      reissued: develop
+      relaunches-spent: blocked
+      stopped: abandoned
+  check:
+    action: candidate.check
+    summary: refuse a change that touched paths this work item does not grant, then run the project's configured checks over it
+    on:
+      passed: preserved
+      # The other three go to one place because the pipeline sends them to one
+      # place. `verifyReviewAndFinish` takes its non-automatic branch straight
+      # past the repair loop: it calls `verify` once and hands whatever comes
+      # back to `stop`, which ends the run. So a check that ran and failed, a
+      # change refused for a path the item never granted, and a suite the
+      # machine could not run at all are one error returned from one call, and
+      # no repair attempt is spent on any of them. Neither of the budget-spent
+      # outcomes appears here for the same reason: there is no budget being
+      # spent.
+      #
+      # What that ending leaves behind is what `abandoned` says below, and it is
+      # driven rather than asserted: parity_test.go runs the real non-automatic
+      # pipeline into each of these three and holds this state's destination
+      # against what the run actually left.
+      failed: abandoned
+      refused: abandoned
+      unrunnable: abandoned
+terminals:
+  preserved:
+    summary: the change passed its checks and is on its branch, with the outcome recorded on the item for the person who approves the promotion
+  blocked:
+    summary: the run stopped on something a person has to decide, with the worktree and branch preserved and a durable blocker on the item
+  abandoned:
+    summary: the run ended without a change that passed its checks, so the approver was offered nothing; the failure is recorded on the item, the item is neither closed nor blocked, and the worktree and branch are left standing for reconciliation to settle

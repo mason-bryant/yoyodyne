@@ -1,0 +1,113 @@
+# The delivery loop, as data.
+#
+# This is the sequence `internal/orchestrator` runs today under automatic
+# integration -- claim a work item, develop a change, gate it, promote it, clean
+# up after it -- written down as the states, transitions and terminals the
+# pipeline actually has. What it is held to is
+# docs/delivery-pipeline-baseline.md and the traces beneath it: every recorded
+# delivery path is walked through this file by the parity harness in
+# parity_test.go, and a path this file cannot express fails that test by name.
+#
+# Nothing in the delivery path loads it. Production still runs the sequence Go
+# control flow puts it in, and this file changes none of that; what it adds is
+# that the sequence is somewhere a reviewer can read whole and something a test
+# can diff against the frozen behaviour.
+#
+# Three things about it are worth knowing before reading it as the pipeline.
+#
+#   * There is no `publish` state. `candidate.develop` ends by calling
+#     publishAttempt -- which is why the registry declares `forge.publish` on the
+#     developer -- so a definition that also selected `candidate.publish` would
+#     publish every attempt twice.
+#   * There is no `complete` state either, and that one is an absence rather than
+#     a choice: recording the outcome on the work item, closing it and pricing it
+#     is `(*activeRun).finish`, which no registered action is a door onto. It
+#     happens between `integrate` and `clean-up`, and no definition can say so
+#     until it has a door.
+#   * A budget is not something a definition can ask about. The run counts its
+#     own repair attempts, relaunches and integration retries, so what appears
+#     here is the pair of outcomes the run distinguishes: the failure handed back
+#     to the developer, and the same failure with the budget spent.
+schema: 1
+id: delivery
+summary: claim a work item, develop a change, gate it on the checks and an independent verdict, and promote it
+initial: claim
+states:
+  claim:
+    action: work-item.claim
+    summary: take the work item this run was dispatched for and assemble the context its developer is given
+    on:
+      claimed: develop
+      unavailable: abandoned
+  develop:
+    action: candidate.develop
+    summary: invoke the developer in this run's worktree, and publish what the attempt produced
+    on:
+      produced: check
+      # The same attempt made again: an exhausted usage limit waited out, a
+      # transiently overloaded server, an invocation the harness stopped on time,
+      # or a provider that died without judging the work. All four reissue the
+      # attempt in the session the refused one established, which is one
+      # transition rather than four because the developer state is where the run
+      # goes back to in every one of them.
+      reissued: develop
+      # The relaunch budget spent. What stopped the run is the provider rather
+      # than the change, so the work is preserved and a person decides.
+      relaunches-spent: blocked
+      # Nothing to hand on: the operator stopped the run, or the invocation
+      # failed in a way no relaunch answers.
+      stopped: abandoned
+  check:
+    action: candidate.check
+    summary: refuse a change that touched paths this work item does not grant, then run the project's configured checks over it
+    on:
+      passed: review
+      # The two repair inputs this state decides, each with the outcome it has
+      # when the shared repair budget is gone. The refusal is decided in front of
+      # the checks, so a change refused for what it touched never ran them.
+      failed: develop
+      failed-unrepaired: blocked
+      refused: develop
+      refused-unrepaired: blocked
+      # A check that could not run at all -- timed out, cancelled, or
+      # infrastructure that failed -- is not repair input and ends the run
+      # instead of spending an attempt.
+      unrunnable: abandoned
+  review:
+    action: candidate.review
+    summary: obtain one independent verdict on the change from a reviewer with no tools
+    on:
+      approved: integrate
+      changes-requested: develop
+      unresolved: blocked
+      # The boundary before a verdict is bought, which is where a run the
+      # operator stopped ends.
+      stopped: abandoned
+  integrate:
+    action: candidate.integrate
+    summary: take the target branch's promotion lease and promote the approved change onto it
+    on:
+      integrated: clean-up
+      # A promotion that lost its race for the target branch is replayed onto
+      # where the target went and re-earns the whole gate: the checks against the
+      # replayed change, and a fresh independent verdict on it.
+      superseded: check
+      contended: blocked
+      # A replay that conflicts is never resolved by the harness. Both sides are
+      # left intact and the item is blocked.
+      conflicted: blocked
+  clean-up:
+    action: run.clean-up
+    summary: remove the worktree and branch this run created, once its change is proven to be somewhere else
+    on:
+      cleaned: delivered
+      # An artifact that survived is reported on a succeeded run rather than
+      # turning it into a failure: the change is integrated and the item closed.
+      partial: delivered
+terminals:
+  delivered:
+    summary: the change is on the target branch, the item is closed, and what the run made is gone or reported as surviving
+  blocked:
+    summary: the run stopped on something a person has to decide, with the worktree and branch preserved and a durable blocker on the item
+  abandoned:
+    summary: the run stopped with nothing promoted and no blocker for anybody to decide about; the worktree and branch are left standing for reconciliation to settle
