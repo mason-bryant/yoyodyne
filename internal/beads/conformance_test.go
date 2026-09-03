@@ -2,9 +2,11 @@ package beads
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -365,6 +367,226 @@ func TestDecompositionEdgeConformance(t *testing.T) {
 	if got := whole.DecomposedFrom(); got != "" {
 		t.Fatalf("the epic's DecomposedFrom() = %q, want nothing: it was broken out of nothing", got)
 	}
+}
+
+// concurrentRuns is the developer capacity this exercise clears. It is two
+// because that is what raising execution.max_concurrent_developers off its
+// default asks for, and two runs beside the scheduler is already three processes
+// holding one store open — one more than the case that has never been exercised.
+const concurrentRuns = 2
+
+// TestConcurrentRunConformance is the live exercise nothing in this package
+// could stand in for: every other concurrency check here drives an in-process
+// fake, so all of them pass identically against a store that refuses a second
+// opener. The tracker is an embedded Dolt database behind a file lock, and this
+// adapter neither serializes its invocations nor retries a contended one, so
+// whether capacity above one is safe was a question no check asked.
+//
+// What runs here is the invocation pattern capacity two actually produces: two
+// developer runs each making the whole sequence one run makes against the
+// tracker — Show, Claim, RecordOutcome, RecordCost, Complete — while the
+// scheduler reads List and Ready beside them for as long as they work. Every
+// invocation is a separate bd process against one store, which is the shape the
+// fakes cannot have.
+//
+// It asserts no invocation failed rather than that contention was handled,
+// because the two are the same assertion from here: a contended invocation this
+// adapter meets has nowhere to go but back to its caller as a failed run. A bd
+// that stops serializing concurrent openers fails this loudly, at the boundary
+// that would otherwise record completed work as failed.
+func TestConcurrentRunConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	carried := make([]string, 0, concurrentRuns)
+	for run := 0; run < concurrentRuns; run++ {
+		created, err := client.Create(ctx, NewWorkItem{
+			Title:       fmt.Sprintf("Work for run %d", run),
+			Description: "One of the concurrent developer runs carries it.",
+			Type:        "task",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		carried = append(carried, created.ID)
+	}
+
+	var contended problems
+	var running sync.WaitGroup
+	for run, id := range carried {
+		running.Add(1)
+		go func() {
+			defer running.Done()
+
+			if _, err := client.Show(ctx, id); err != nil {
+				contended.record("run %d: Show(%s): %v", run, id, err)
+				return
+			}
+			if _, err := client.Claim(ctx, id); err != nil {
+				contended.record("run %d: Claim(%s): %v", run, id, err)
+				return
+			}
+			if _, err := client.RecordOutcome(ctx, id, outcomeOf(run)); err != nil {
+				contended.record("run %d: RecordOutcome(%s): %v", run, id, err)
+				return
+			}
+			if _, err := client.RecordCost(ctx, id, Cost{TotalUSD: float64(run) + 0.5, Runs: 1}); err != nil {
+				contended.record("run %d: RecordCost(%s): %v", run, id, err)
+				return
+			}
+			if _, err := client.Complete(ctx, id, "the run finished"); err != nil {
+				contended.record("run %d: Complete(%s): %v", run, id, err)
+			}
+		}()
+	}
+
+	// The scheduler's own reads, made against the same store for as long as the
+	// runs are writing to it. It is bounded by the runs rather than by a count so
+	// the reads cover the whole of the window they contend with.
+	finished := make(chan struct{})
+	var reading sync.WaitGroup
+	reading.Add(1)
+	go func() {
+		defer reading.Done()
+
+		for {
+			select {
+			case <-finished:
+				return
+			default:
+			}
+			if _, err := client.Ready(ctx); err != nil {
+				contended.record("scheduler: Ready(): %v", err)
+				return
+			}
+			if _, err := client.List(ctx, "in_progress"); err != nil {
+				contended.record("scheduler: List(in_progress): %v", err)
+				return
+			}
+		}
+	}()
+
+	running.Wait()
+	close(finished)
+	reading.Wait()
+
+	if met := contended.recorded(); len(met) > 0 {
+		t.Fatalf("bd invocations failed with %d concurrent developer runs beside the scheduler's reads:\n%s\n"+
+			"the adapter neither serializes nor retries a contended invocation, so each of these is a run recorded as "+
+			"failed; capacity above one needs the adapter given a lock or retry-with-backoff before it is raised",
+			concurrentRuns, strings.Join(met, "\n"))
+	}
+
+	// A failure that is reported is the loud half. The quiet half is a write bd
+	// accepted and did not keep, which is what would corrupt exactly the records
+	// a run's outcome is reconstructed from, so each item is read back afterwards.
+	for run, id := range carried {
+		item, err := client.Show(ctx, id)
+		if err != nil {
+			t.Fatalf("Show(%s) after the runs finished error = %v", id, err)
+		}
+		if item.Status != "closed" {
+			t.Errorf("work item %s status = %q after run %d completed it, want closed", id, item.Status, run)
+		}
+		if !strings.Contains(item.Notes, outcomeOf(run)) {
+			t.Errorf("work item %s notes = %q, want run %d's outcome in them", id, item.Notes, run)
+		}
+		if item.Cost == nil || item.Cost.Runs != 1 {
+			t.Errorf("work item %s cost = %#v, want the price run %d recorded", id, item.Cost, run)
+		}
+	}
+}
+
+// TestConcurrentWriteConformance pins the other half of the same question, and
+// the half a failure count would never show: whether two writes to one item that
+// overlap both survive.
+//
+// It matters because every write this adapter makes is read-modify-write inside
+// bd — a note is appended to the notes already there, a metadata key is set
+// beside the keys already there — so two overlapping writes to one item are a
+// lost update unless bd serializes them. That is not the pattern capacity two
+// produces on its own, where each run holds its own item; it is the pattern a
+// run's own write meets a reconcile or a conversation write on, and it is the
+// one whose failure is silent. A lost --append-notes takes a goal attribution
+// with it, and this package already carries a witness against exactly that loss.
+func TestConcurrentWriteConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	const writers = 4
+	contested, err := client.Create(ctx, NewWorkItem{
+		Title:       "The item everything writes to",
+		Description: "A run, a reconcile, and a conversation all reach it.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	var contended problems
+	var writing sync.WaitGroup
+	for writer := 0; writer < writers; writer++ {
+		writing.Add(1)
+		go func() {
+			defer writing.Done()
+
+			if _, err := client.RecordOutcome(ctx, contested.ID, outcomeOf(writer)); err != nil {
+				contended.record("writer %d: RecordOutcome(): %v", writer, err)
+			}
+		}()
+	}
+	writing.Wait()
+
+	if met := contended.recorded(); len(met) > 0 {
+		t.Fatalf("%d overlapping writes to one work item failed:\n%s", writers, strings.Join(met, "\n"))
+	}
+
+	item, err := client.Show(ctx, contested.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	for writer := 0; writer < writers; writer++ {
+		if !strings.Contains(item.Notes, outcomeOf(writer)) {
+			t.Errorf("work item %s notes = %q after %d overlapping appends, want writer %d's in them; a bd that reads an "+
+				"item's notes and writes them back without serializing loses whichever write finished first, and an "+
+				"attribution lost that way is lost silently",
+				contested.ID, item.Notes, writers, writer)
+		}
+	}
+}
+
+// outcomeOf is what one concurrent writer records, distinct per writer so a
+// write that was accepted and dropped is told from one that never happened.
+func outcomeOf(writer int) string {
+	return fmt.Sprintf("outcome recorded by writer %d", writer)
+}
+
+// problems collects what failed across the goroutines making concurrent
+// invocations. The failures are gathered rather than reported where they happen
+// because a t.Fatalf off the test's own goroutine stops nothing, and because a
+// contended store fails several invocations at once: which of them failed is the
+// evidence, and reporting only the first would hide the shape.
+type problems struct {
+	mu  sync.Mutex
+	met []string
+}
+
+func (p *problems) record(format string, args ...any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.met = append(p.met, fmt.Sprintf(format, args...))
+}
+
+func (p *problems) recorded() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.met
 }
 
 // parentEdgesOf reports what an item's own parent-child edges name. An edge the

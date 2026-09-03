@@ -1753,6 +1753,14 @@ configured, and the default of `1` is deliberate: raising it is a decision about
 your machine, and [how long a check may take](#how-long-a-check-may-take) is the
 setting that has to move with it.
 
+The tracker is not what has to move with it. Several runs invoking `bd` at once
+against one embedded database was an open question until it was exercised
+live — the store serializes them internally, so a concurrent invocation waits its
+turn rather than being refused, and overlapping writes to one item all survive.
+[The exercise and its numbers](experiments/yoyodyne-ifd-271-concurrent-tracker-access.md)
+record what was measured against which bd, and the conformance checks it left
+behind fail loudly if a later bd stops serializing.
+
 ### Watching instead of draining
 
 `yoyo work` returns when nothing more is ready. `yoyo work --watch` does not: it
