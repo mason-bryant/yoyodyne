@@ -42,6 +42,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,6 +52,9 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/action"
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/checks"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/workflow"
 )
@@ -379,6 +383,186 @@ func parityScenarios() []parityScenario {
 			},
 			standing: parityCheck,
 		},
+	}
+}
+
+//
+// The gate stoppages no recorded trace reaches.
+//
+
+// humanApprovalStoppage is one way the gate ends a run whose integration a
+// person approves, and the way to drive the real pipeline into it.
+//
+// They exist because the baseline records exactly one path through
+// `delivery-human-approval.yaml` — the change that passes — so the three
+// outcomes the check state routes anywhere else would otherwise be a claim
+// about the pipeline with nothing behind it. That is the one thing a definition
+// must not be, so rather than assert where they go, each one is driven through
+// the real non-automatic pipeline and the definition's destination is held
+// against what the run actually left behind.
+//
+// Driven rather than recorded is deliberate: the traces under testdata/baseline
+// are the 211 baseline's artifact, and adding to them is re-recording somebody
+// else's frozen document. What these produce is the same evidence, read in the
+// same test that uses it.
+type humanApprovalStoppage struct {
+	// outcome is what `candidate.check` produced, in the definition's own
+	// vocabulary.
+	outcome string
+	// what names the stoppage in a failure.
+	what string
+	// drive runs the real non-automatic pipeline into it.
+	drive func(t *testing.T) *baselineFixture
+}
+
+func humanApprovalStoppages() []humanApprovalStoppage {
+	return []humanApprovalStoppage{
+		{
+			outcome: "failed",
+			what:    "a configured check that ran and failed",
+			drive: func(t *testing.T) *baselineFixture {
+				t.Helper()
+				fixture := newBaselineFixture(t, baselineItem())
+				provider := roleBackend(baselineImplements, approveVerdict)
+				fixture.invoke(t, "run", fixture.pipeline(t, provider, []string{"exit 1"}))
+				return fixture
+			},
+		},
+		{
+			outcome: "refused",
+			what:    "a change touching an upstream artifact home the item never granted",
+			drive: func(t *testing.T) *baselineFixture {
+				t.Helper()
+				fixture := newBaselineFixture(t, baselineItem())
+				provider := roleBackend(func(request backend.RunRequest) error {
+					if err := baselineImplements(request); err != nil {
+						return err
+					}
+					return writeUpstream(t, request.WorkingDirectory, "docs/product/brief.md", "the product is whatever this run needed it to be\n")
+				}, approveVerdict)
+				fixture.invoke(t, "run", fixture.pipeline(t, provider, []string{"test -f feature.txt"}))
+				return fixture
+			},
+		},
+		{
+			outcome: "unrunnable",
+			what:    "a suite the machine could not run at all",
+			drive: func(t *testing.T) *baselineFixture {
+				t.Helper()
+				fixture := newBaselineFixture(t, baselineItem())
+				provider := roleBackend(baselineImplements, approveVerdict)
+				pipeline := fixture.pipeline(t, provider, []string{"test -f feature.txt"})
+				pipeline.Checks = refusingChecks{cause: errors.New("no check process could be started")}
+				fixture.invoke(t, "run", pipeline)
+				return fixture
+			},
+		},
+	}
+}
+
+// refusingChecks is a check runner that could not run the suite at all, which is
+// the one gate stoppage a developer's own change cannot produce.
+type refusingChecks struct{ cause error }
+
+func (r refusingChecks) Run(_ context.Context, _, _ string, _ []string, lastSequence uint64, _ func(execution.Event) error) ([]checks.Result, uint64, error) {
+	return nil, lastSequence, r.cause
+}
+
+// TestHumanApprovalDefinitionEndsAStoppedRunWhereThePipelineLeavesIt holds the
+// three unrecorded transitions to the runs they describe.
+//
+// The terminal is derived from what the run left rather than read from the
+// file, so this fails if the definition sends one of them somewhere whose own
+// account of what survives is not what survived.
+func TestHumanApprovalDefinitionEndsAStoppedRunWhereThePipelineLeavesIt(t *testing.T) {
+	t.Parallel()
+
+	graph := parityGraph(t, HumanApprovalWorkflowID)
+	node, isAState := graph.Node(parityCheck)
+	if !isAState {
+		t.Fatalf("the %s definition declares no %q state", HumanApprovalWorkflowID, parityCheck)
+	}
+
+	for _, stoppage := range humanApprovalStoppages() {
+		t.Run(stoppage.outcome, func(t *testing.T) {
+			t.Parallel()
+			fixture := stoppage.drive(t)
+			state, err := fixture.store.Load(pipelineRunID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			// What the run actually did, in the four parts that tell one ending
+			// from another.
+			succeeded := state.Status == runstate.StatusSucceeded
+			if succeeded {
+				t.Errorf("%s left the run succeeded; the gate did not stop it", stoppage.what)
+			}
+			developed := 0
+			for _, invocation := range fixture.invocations() {
+				if strings.HasPrefix(invocation, "developer:") {
+					developed++
+				}
+			}
+			if developed != 1 {
+				t.Errorf("%s cost %d developer invocation(s); a run on this path is never handed anything back", stoppage.what, developed)
+			}
+			if state.RepairAttempts != 0 {
+				t.Errorf("%s spent repair_attempts = %d; there is no repair loop on this path", stoppage.what, state.RepairAttempts)
+			}
+			if state.WorktreePath == "" || state.Branch == "" {
+				t.Errorf("%s left no worktree or branch on the record (%q, %q)", stoppage.what, state.WorktreePath, state.Branch)
+			}
+			if state.WorktreeRemoved || state.BranchRemoved {
+				t.Errorf("%s removed an artifact (worktree=%t branch=%t); a stopped run leaves its work standing",
+					stoppage.what, state.WorktreeRemoved, state.BranchRemoved)
+			}
+
+			destination, handled := node.Next(stoppage.outcome)
+			if !handled {
+				t.Fatalf("the %q state routes no %q outcome, and %s produces one", parityCheck, stoppage.outcome, stoppage.what)
+			}
+			if !destination.Terminal {
+				t.Fatalf("the %q state sends %q to %q, which is a state; %s ends the run", parityCheck, stoppage.outcome, destination.Name, stoppage.what)
+			}
+			want := terminalTheRunEarned(fixture.tracker.closed, fixture.tracker.blocked, succeeded)
+			if destination.Name != want {
+				t.Errorf("the %q state sends %q to %q, and the run %s left is a %q one: closed=%t blocked=%t succeeded=%t",
+					parityCheck, stoppage.outcome, destination.Name, stoppage.what, want,
+					fixture.tracker.closed, fixture.tracker.blocked, succeeded)
+			}
+			walkTranscript(t, parityScenario{
+				trace:    "human-approval-" + stoppage.outcome,
+				workflow: HumanApprovalWorkflowID,
+				steps: []parityStep{
+					{parityClaim, "claimed"},
+					{parityDevelop, "produced"},
+					{parityCheck, stoppage.outcome},
+				},
+				terminal: want,
+			})
+		})
+	}
+}
+
+// terminalTheRunEarned reads a finished run back as the terminal a definition
+// has to send it to. What became of the work item and whether the run succeeded
+// are the whole of what tells the endings apart: a blocker is somebody's to
+// decide, a closure is work that landed, a success that closed nothing is a
+// change waiting on its approver, and anything else stopped with nothing to
+// show. It is the same reading `witnessEnding` holds a recorded trace to, said
+// forwards so a driven run can be compared to a definition rather than to a
+// sentence.
+func terminalTheRunEarned(closed, blocked, succeeded bool) string {
+	switch {
+	case blocked:
+		return "blocked"
+	case closed:
+		return "delivered"
+	case succeeded:
+		return "preserved"
+	default:
+		return "abandoned"
 	}
 }
 

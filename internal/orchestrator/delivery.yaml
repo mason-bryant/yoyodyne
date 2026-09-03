@@ -110,4 +110,4 @@ terminals:
   blocked:
     summary: the run stopped on something a person has to decide, with the worktree and branch preserved and a durable blocker on the item
   abandoned:
-    summary: the run stopped with nothing promoted and nothing for anyone to decide about
+    summary: the run stopped with nothing promoted and no blocker for anybody to decide about; the worktree and branch are left standing for reconciliation to settle

@@ -529,6 +529,16 @@ them.
   performing nothing. A recorded path no scenario walks fails that harness by
   name.
 
+  One thing there is not read off a trace. Only one recorded path runs under a
+  person's approval — the change that passes — so the three ways that gate can
+  stop a run instead (a check that failed, a path the item never granted, and a
+  suite the machine could not run) would otherwise be transitions nothing
+  measured. The harness drives the real non-automatic pipeline into each of them
+  and holds the definition's destination against what the run left behind: one
+  developer invocation, no repair attempt, the item neither closed nor blocked,
+  and the worktree and branch still standing. Driven rather than recorded,
+  because adding a trace here is re-recording this document's own artifact.
+
   What it measures is the **sequence** and not the record. The pipeline does
   everything outside its seven registered steps in Go control flow behind no
   door at all — the pre-claim questions, the pauses, the budgets, and the
