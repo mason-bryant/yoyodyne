@@ -425,8 +425,14 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// unreported: the process that would have written it being dead. This
 			// notices that nothing has started while work was ready, records it where
 			// `yoyo status` reads it back, and tells the operators once.
-			Stalls:    stalls,
-			Heartbeat: heartbeat,
+			Stalls: stalls,
+			// What this project's template has improved that this project never
+			// edited. Every other surface that says it is one somebody has to run,
+			// so a harness left running for a fortnight says it nowhere at all —
+			// which is a project going on using a persona the template has since
+			// fixed, without anybody having decided to.
+			Improvements: configImprovements{path: configPath},
+			Heartbeat:    heartbeat,
 			// The four lines, from the same derivation `yoyo status` prints them
 			// from. They are said with the heartbeat because that message is the one
 			// somebody reads at three in the morning, and what it said before was
@@ -523,6 +529,51 @@ func (b readyBacklog) Ready(ctx context.Context) (int, error) {
 		}
 	}
 	return pullable, nil
+}
+
+// configImprovements is what this project's template has improved since the
+// project was generated, read as the sink asks for it rather than taken once
+// when the sink was assembled.
+//
+// It is read afresh each time because the answer changes under a process that
+// stays open for weeks: an operator who adopts a value has adopted it, and a
+// comparison held from start-up would go on offering what they already took. The
+// bundle side cannot move under it — that one is compiled into this executable,
+// so a new bundle is a new process — and the reading is two small files, asked
+// at most once a heartbeat by the caller that asks it.
+//
+// It decides nothing about what an improvement is. `yoyo config drift` and the
+// aside every command prints read the same derivation, which is what keeps a
+// channel and a terminal from answering "is this project current" two ways.
+type configImprovements struct {
+	// path is the configuration the sink was started against, as it was given:
+	// empty means the nearest project's, which is what it meant at start-up and
+	// has to go on meaning here.
+	path string
+}
+
+func (c configImprovements) Offered(context.Context) (config.Drift, error) {
+	resolved, err := loadConfiguration(c.path)
+	if err != nil {
+		return config.Drift{}, fmt.Errorf("read the project configuration: %w", err)
+	}
+	drift, unknown := config.ReadDrift(resolved)
+	switch {
+	case unknown.Absent:
+		// A project with no baseline has no third side, so there is nothing it can
+		// be offered: what its template supplied when it was generated was never
+		// recorded, and an improvement reconstructed by assuming a value is a guess
+		// dressed as a record. That is silence rather than a failure — it is the
+		// ordinary state of every project that predates the baseline, and saying so
+		// hourly would be a message about a file that decides nothing.
+		return config.Drift{}, nil
+	case unknown.Reason != "":
+		// The baseline is there and would not be read, which is a file somebody can
+		// look at rather than an absence. It is reported so the sink's own log says
+		// it, exactly as an unreadable repository is.
+		return config.Drift{}, errors.New(unknown.Reason)
+	}
+	return drift, nil
 }
 
 // repositoryDeployments answers how far one repository has moved past one build,

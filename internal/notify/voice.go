@@ -200,6 +200,7 @@ var harnessVoice = voice{
 		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.\n\n{standing}",
 		KindStallNoticed:        "Nothing at all has started on this product for {age}, with {ready} ready to pull and nothing accounting for it. {stopped}.\n\n{standing}",
 		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
+		KindBundleImprovement:   "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows {setting} beside everything else the template moved, and it is adopted by hand or not at all.",
 		KindCatchUpDigest:       "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
 	},
 }
@@ -255,6 +256,7 @@ var developerVoice = voice{
 		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.\n\n{standing}",
 		KindStallNoticed:        "Nothing has been handed to me for {age} and nothing explains it — {ready} sat ready the whole time. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
+		KindBundleImprovement:   "{improvement}. What the template says about {setting} is what I'd be run under if this project took it up, and until somebody does I go on being run under what it holds now.",
 		KindCatchUpDigest:       "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
 	},
 }
@@ -310,6 +312,7 @@ var reviewerVoice = voice{
 		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.\n\n{standing}",
 		KindStallNoticed:        "No change has reached me for a verdict in {age}, and none was written: {ready} ready, no run started, nothing holding it. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back, and installing that build is what stops me granting one — the session takes it up itself between runs.",
+		KindBundleImprovement:   "{improvement}. It changes nothing about the standard I hold a change to today, and it would change {setting} for every change judged after somebody adopts it.",
 		KindCatchUpDigest:       "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
 	},
 }
@@ -364,6 +367,7 @@ var developmentManagerVoice = voice{
 		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.\n\n{standing}",
 		KindStallNoticed:        "My queue has not been pulled from in {age} — {ready} pullable, no hold, no full machine, no run in flight. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does, and they stop when that build is installed — the session takes it up itself between runs.",
+		KindBundleImprovement:   "{improvement}. Nothing in the queue moves for it, and nothing I hand out changes until {setting} is adopted by hand.",
 		KindCatchUpDigest:       "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
 	},
 }
@@ -419,6 +423,7 @@ var productManagerVoice = voice{
 		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.\n\n{standing}",
 		KindStallNoticed:        "Nothing has been spent on this product for {age}, and {ready} I admitted is still waiting. This is not a quiet queue; it is a queue nothing is reading. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What is being spent on this product was built at {commit}, before {behind} landed. Until that build is installed, some of that spend buys work the system has already paid for once; the session takes it up itself between runs once it is.",
+		KindBundleImprovement:   "{improvement}. Whether {setting} is worth taking is the operator's to decide and nobody else's, which is why it is offered once rather than asked for repeatedly.",
 		KindCatchUpDigest:       "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
 	},
 }
@@ -474,6 +479,7 @@ var architectVoice = voice{
 		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} a run could have been started for behind it. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
 		KindStallNoticed:        "Selection has started nothing for {age} over {ready} ready, and no record says why — which is the failure this watches for: the process that would have said something is the process that died. {stopped}.\n\n{standing}",
 		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
+		KindBundleImprovement:   "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; saying {setting} once makes the difference visible without deciding it for anybody.",
 		KindCatchUpDigest:       "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
 	},
 }
@@ -614,7 +620,12 @@ var nextMoves = map[Kind]string{
 	// interrupting one. What is left is the install, which is why this names it
 	// rather than naming a restart nobody has to make.
 	KindResidentStale: "the operator's — installing the build is the whole of it; the session takes it up itself between runs.",
-	KindCatchUpDigest: "nobody's — the record holds all of it, and the thread carries on from here.",
+	// Nobody's, and saying so is the point. Every other move in this table is one
+	// somebody eventually has to make; this one is an offer an operator is
+	// entitled to decline forever, and a message that implied otherwise would be
+	// the nagging that gets a channel muted.
+	KindBundleImprovement: "nobody's — the value stands as this project has it until somebody decides otherwise, and nothing will ask again.",
+	KindCatchUpDigest:     "nobody's — the record holds all of it, and the thread carries on from here.",
 }
 
 // directiveInForceMove is whose move follows a directive that stopped nothing.
@@ -852,6 +863,12 @@ func (e Event) fields(topic Topic) map[string]string {
 		// that simply lacks the lines is indistinguishable from a harness with
 		// nothing in any of them.
 		"standing": stated(detail.Standing, "where the harness stands could not be read here"),
+		// Which value the template improved, and what the comparison says about it.
+		// The sentence is already worded by the derivation that made it, for the
+		// reason the four lines above are: one comparison, said one way wherever it
+		// is read.
+		"setting":     stated(detail.Setting, "a setting the record does not name"),
+		"improvement": stated(detail.Improvement, "what the template improved could not be read here"),
 	}
 }
 

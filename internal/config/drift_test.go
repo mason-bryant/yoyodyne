@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // The table itself. Each row exists because a two-way diff gets it wrong: it
@@ -112,6 +113,54 @@ func TestAnImprovedTemplateValueIsAvailableAndIsWhatTheNoticeSpeaks(t *testing.T
 		if !strings.Contains(notice, want) {
 			t.Errorf("Notice() = %q, want it to name %q", notice, want)
 		}
+	}
+}
+
+// The other grain of the same comparison: one improvement said on its own, for
+// the surface that sends one message per improvement rather than a line counting
+// them. Both are worded here so a channel and a terminal cannot come to say
+// different things about one value.
+func TestOneImprovementIsSaidWithBothItsValues(t *testing.T) {
+	t.Parallel()
+
+	lock, effective := materialized(t)
+	lock = moved(lock, "agents.developer.model", "sonnet")
+	effective.Agents["developer"] = withModel(effective.Agents["developer"], "sonnet")
+
+	drift, err := CompareToBaseline(lock, effective)
+	if err != nil {
+		t.Fatalf("CompareToBaseline() error = %v", err)
+	}
+	available := drift.Available()
+	if len(available) != 1 {
+		t.Fatalf("Available() = %+v, want the one value the template improved", available)
+	}
+	said := drift.Improvement(available[0])
+	for _, want := range []string{BuiltinV1, "agents.developer.model", `"sonnet"`, `"opus"`} {
+		if !strings.Contains(said, want) {
+			t.Errorf("Improvement() = %q, want it to carry %q", said, want)
+		}
+	}
+}
+
+// A value long enough to bury the sentence it is in is cut, on a rune boundary,
+// and the whole of it is still in `yoyo config drift`. Every list in a
+// configuration is one value, so this is the ordinary shape of a replaced list
+// rather than a pathological one.
+func TestALongValueIsCutRatherThanBuryingTheSentence(t *testing.T) {
+	t.Parallel()
+
+	drift := Drift{Known: true, Bundle: BuiltinV1}
+	long := strings.Repeat("é", 400)
+	said := drift.Improvement(Value{Key: "checks", Class: ClassAvailable, Baseline: "[]", Bundle: long})
+	if len(said) > 400 {
+		t.Errorf("Improvement() is %d bytes, want a value cut rather than said whole", len(said))
+	}
+	if !strings.Contains(said, "…") {
+		t.Errorf("Improvement() = %q, want the cut said rather than left silent", said)
+	}
+	if !utf8.ValidString(said) {
+		t.Error("Improvement() cut a value in the middle of a rune")
 	}
 }
 

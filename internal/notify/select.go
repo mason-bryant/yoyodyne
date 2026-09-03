@@ -500,6 +500,45 @@ func FromStall(stall Stall, at time.Time) Notification {
 	return notification
 }
 
+// Improvement is one value the project's template has improved that this
+// project has never edited: which setting it is, and what the three-way
+// comparison says about it.
+//
+// It is the fourth state here rather than a crossing, and the only one that is
+// about the installation rather than about the work. Nothing recorded it and
+// nothing is waiting on it: it is true from the moment a template moves ahead of
+// a project, and it stays true, silently, until somebody adopts it or edits the
+// value themselves. The surfaces that could have said so are all ones an
+// operator has to run, which is why a project can sit for months on a persona
+// the template has since fixed.
+//
+// The sentence is the comparison's own rather than assembled here, because what
+// makes a value an improvement is a derivation with one home, and a second
+// wording of it is a second thing that can disagree with `yoyo config drift`.
+type Improvement struct {
+	// Setting is the configuration key, so a message can name the value without
+	// taking the sentence apart.
+	Setting string
+	// Says is what the comparison says about it: what the template supplied when
+	// this project was generated, and what it supplies now.
+	Says string
+}
+
+// FromImprovement says that the project's template has improved one value this
+// project never edited. It is addressed to the product and spoken by the harness
+// for the reason the line and the holds are: a template is about the whole
+// project rather than any one item of work, and nobody's judgement narrates it.
+//
+// It is a note and stays a note however long it goes unadopted. Nothing is
+// degraded, nothing is waiting, and the state is one an operator is entitled to
+// decline forever -- which is exactly why it is said once and never repeated.
+func FromImprovement(improvement Improvement, at time.Time) Notification {
+	return productNotification(KindBundleImprovement, at, Detail{
+		Setting:     strings.TrimSpace(improvement.Setting),
+		Improvement: strings.TrimSpace(improvement.Says),
+	})
+}
+
 // Accumulation is what one topic gathered while nothing was posting its events:
 // how many there were, the first and last of them, and the most attention any
 // one of them asked for.
