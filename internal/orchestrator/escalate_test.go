@@ -34,10 +34,18 @@ type standingJudge struct {
 	shown    []triage.Entry
 	judgment Judgment
 	err      error
+	// killTurn is the death that arrives while the turn is in flight: a shutdown
+	// cancelling the context the delivery is running under, before the turn it is
+	// running comes back. Nil where the death a test is about is a teardown of the
+	// child alone, which leaves that context untouched.
+	killTurn func()
 }
 
 func (j *standingJudge) Judge(_ context.Context, entry triage.Entry) (Judgment, error) {
 	j.shown = append(j.shown, entry)
+	if j.killTurn != nil {
+		j.killTurn()
+	}
 	if j.err != nil {
 		return Judgment{}, j.err
 	}
@@ -421,6 +429,90 @@ func TestADeliveryACancellationKilledKeepsTheDelivery(t *testing.T) {
 	}
 	if len(next.Escalated) != 1 || !next.Escalated[0].Delivered {
 		t.Fatalf("after the teardowns = %#v, want the stoppage still delivered", next.Escalated)
+	}
+}
+
+// cancelSensitiveRecords is the escalation record with the property that makes a
+// shutdown different from a teardown: a write refused under a context that is
+// already cancelled.
+//
+// The store really is this. Its read-modify-write is serialized by a lock whose
+// wait returns the context's error, so a give-back handed a cancelled context is
+// refused the moment another process holds the record — and only then, because
+// an uncontended lock is taken without the context being consulted at all. A
+// test that waited for the real refusal would be waiting on that race; this
+// makes the refusal certain instead, so what the test proves is that the
+// give-back is never handed a cancelled context rather than that it got lucky.
+type cancelSensitiveRecords struct {
+	*runstate.EscalationStore
+}
+
+func (r cancelSensitiveRecords) Withdraw(ctx context.Context, docketKey, problem string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("lock the triage escalation of %s: %w", docketKey, err)
+	}
+	return r.EscalationStore.Withdraw(ctx, docketKey, problem)
+}
+
+// The same death as the teardown above, arriving the way a shutdown arrives.
+// yoyodyne-ifd.250's give-back was proven against a process-group teardown,
+// where the child is killed and the pull lives on with its context intact; a
+// shutdown cancels the pull's own context, so the give-back it asks for runs
+// under a context that is already cancelled. It has to land anyway, or the
+// largest class of harness death spends the attempt after all.
+func TestADeliveryAShutdownCancelledKeepsTheDelivery(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{err: fmt.Errorf("%w: development manager reported failure: cancelled", ErrDeliveryCancelled)}
+	records := escalationRecords(t)
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	escalator.Records = cancelSensitiveRecords{EscalationStore: records}
+	clock := &movingClock{now: escalationNow}
+	escalator.Clock = clock
+
+	// More shutdowns than the bound permits attempts, for the reason the teardowns
+	// above are counted: no number of the harness's own deaths may abandon a
+	// stoppage nobody has been shown.
+	for shutdown := 0; shutdown <= runstate.MaxEscalationAttempts; shutdown++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		// The shutdown lands mid-turn: the delivery claimed its attempt under a live
+		// context, and the context is gone by the time the turn comes back.
+		judge.killTurn = cancel
+
+		sweep, err := escalator.Escalate(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("shutdown %d: Escalate() error = %v", shutdown, err)
+		}
+		if len(sweep.Escalated) != 1 || sweep.Escalated[0].Delivered {
+			t.Fatalf("shutdown %d = %#v, want a delivery that did not happen", shutdown, sweep.Escalated)
+		}
+		if strings.Contains(sweep.Escalated[0].Problem, "could not be given back") {
+			t.Fatalf("shutdown %d problem = %q, want the give-back to outlive the cancellation that made it necessary", shutdown, sweep.Escalated[0].Problem)
+		}
+		if strings.Contains(sweep.Escalated[0].Problem, "needs a person") {
+			t.Fatalf("shutdown %d problem = %q, want a killed turn to leave the stoppage deliverable", shutdown, sweep.Escalated[0].Problem)
+		}
+		recorded, found, err := records.Find(sweep.Escalated[0].DocketKey)
+		if err != nil || !found {
+			t.Fatalf("shutdown %d: Find() = found %v, error %v", shutdown, found, err)
+		}
+		if recorded.Attempts != 0 {
+			t.Fatalf("shutdown %d attempts = %d, want the harness's own shutdown left uncounted", shutdown, recorded.Attempts)
+		}
+		clock.now = clock.now.Add(runstate.EscalationRetryDelay)
+	}
+
+	// And the stoppage is still hers to judge once the harness is up again.
+	judge.err = nil
+	judge.killTurn = nil
+	judge.judgment = Judgment{ConversationID: "chat-abc", Decision: "rerun"}
+	next, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after the shutdowns error = %v", err)
+	}
+	if len(next.Escalated) != 1 || !next.Escalated[0].Delivered {
+		t.Fatalf("after the shutdowns = %#v, want the stoppage still delivered", next.Escalated)
 	}
 }
 

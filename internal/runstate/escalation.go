@@ -467,6 +467,16 @@ func (s *EscalationStore) Settle(ctx context.Context, docketKey string, delivery
 //
 // A stoppage nothing has been recorded about is already what this would leave
 // behind, so withdrawing one is not an error.
+//
+// It honours the context it is given, and a caller giving an attempt back after
+// a cancellation has to know it: the read-modify-write below is serialized by a
+// lock whose wait returns the context's error, so a give-back handed an
+// already-cancelled context is refused the moment another process holds this
+// record. The refusal is not certain, which is worse than if it were — an
+// uncontended lock is taken without the context being consulted at all, so the
+// same give-back succeeds or fails depending on what else wanted the record just
+// then. A caller giving back a turn a cancellation killed must therefore hand
+// this a context that survives that cancellation.
 func (s *EscalationStore) Withdraw(ctx context.Context, docketKey, problem string) error {
 	key := strings.TrimSpace(docketKey)
 	if key == "" {

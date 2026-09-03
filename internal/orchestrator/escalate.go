@@ -234,6 +234,34 @@ func undeliveredAndWaiting(runID string, judgeErr error, delay time.Duration) st
 	return fmt.Sprintf("%s and will be once %s has passed", undelivered(runID, judgeErr), delay)
 }
 
+// giveBackGrace bounds a give-back that is deliberately outliving the delivery
+// it belongs to. The write it makes is one small file and a lock nothing holds
+// for long, so what this is really bounding is the wait for a lock another
+// process is holding: a detached context with no bound of its own would be a
+// shutdown that cannot finish because something else in it has not.
+const giveBackGrace = 5 * time.Second
+
+// giveBackContext is the context an attempt is given back under: the delivery's
+// own, with its cancellation dropped and a bound of its own put on.
+//
+// The give-back exists for a turn a cancellation killed, and in a shutdown that
+// cancellation is the delivery's own context being cancelled — the largest class
+// of the deaths this covers, and the one where the give-back matters most. The
+// record's read-modify-write is serialized by a lock whose wait honours the
+// context it is given, so a give-back running under the delivery's context is
+// one that fails the moment another process holds the record: the fallback
+// branch is taken and the attempt the harness's own death took is spent after
+// all, which is exactly what the give-back exists to prevent. Detaching keeps
+// everything the delivery's context carried and drops only the cancellation.
+//
+// A process-group teardown, where the child is killed and the harness lives, is
+// covered either way — nothing cancelled the pull's context there. This is what
+// makes the shutdown covered too rather than covered by luck about whether
+// anything else wanted the record at that moment.
+func giveBackContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), giveBackGrace)
+}
+
 // Escalator delivers docketed stoppages to the development manager. It has no
 // tracker, no worktree access, and no forge access, and it starts nothing: what
 // it does is put evidence somebody already recorded in front of the role whose
@@ -537,7 +565,12 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 	if notTaken(judgeErr) {
 		escalated.Problem = fmt.Sprintf("%s: %v",
 			undeliveredAndWaiting(entry.RunID, judgeErr, runstate.EscalationRetryDelay), judgeErr)
-		if err := e.Records.Withdraw(ctx, entry.Key, judgeErr.Error()); err != nil {
+		// Under a context detached from this delivery's, because a shutdown
+		// cancels the very context the delivery ran under: giving the attempt back
+		// under it would fail in the case the give-back is most for.
+		giveBack, stopGivingBack := giveBackContext(ctx)
+		defer stopGivingBack()
+		if err := e.Records.Withdraw(giveBack, entry.Key, judgeErr.Error()); err != nil {
 			escalated.Problem = fmt.Sprintf("%s, and the attempt taken for it could not be given back, so it has spent one of %d on a turn that decided nothing: %v",
 				undelivered(entry.RunID, judgeErr), runstate.MaxEscalationAttempts, err)
 		}
