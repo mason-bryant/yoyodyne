@@ -178,6 +178,37 @@ func (p *streamParser) EmitProcessOutput(output execution.Output) error {
 	})
 }
 
+// truncatedStreamLine is the harness's own name for a provider line the process
+// runner had to cut at its per-line bound. It sits beside the duplicate terminal
+// below as an anomaly rather than a failure: what that envelope said is gone,
+// and everything before and after it is intact.
+const truncatedStreamLine = "truncated_stream_line"
+
+// RecordTruncatedLine records a cut line loudly and reads nothing off it.
+//
+// This is the decision a cut line forces, and it is skip-with-loud-record rather
+// than die. A truncated line is invalid JSON by construction, so handing it to
+// ParseLine could only ever produce a decode error — and the one thing a decode
+// error has to keep meaning is a stream this parser genuinely cannot read, which
+// still fails the run the way it always did. Telling the two apart is why the
+// runner marks the line rather than leaving the shape of the failure to be
+// guessed at. Failing the invocation over one line the harness could not hold is
+// the death yoyodyne-ifd.258 stopped the whole-output bound causing, and there
+// is no more reason to accept it here: an oversized tool result is a run doing
+// its work, and losing the run loses the work and the account of what it cost.
+//
+// What is lost with the envelope is whatever it said. If it was the invocation's
+// terminal, the stream ends without one and the invocation is answered the way
+// every other lost terminal already is; that is the existing answer rather than
+// a new one, and the anomaly in the log is what says why the terminal is missing.
+func (p *streamParser) RecordTruncatedLine(output execution.Output) error {
+	return p.emit(execution.EventProcessOutput, map[string]any{
+		"stream":  output.Stream,
+		"anomaly": truncatedStreamLine,
+		"text":    truncate(p.redactor.Redact(output.Text)),
+	})
+}
+
 func (p *streamParser) parseSystem(envelope streamEnvelope) error {
 	switch envelope.Subtype {
 	case "init":

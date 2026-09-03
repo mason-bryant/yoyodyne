@@ -1296,11 +1296,67 @@ func TestAnInvocationTooVerboseToRetainStillCompletesAndSaysItWasCut(t *testing.
 	}
 }
 
+// A provider line too long for the runner to hold is skipped with a loud record
+// and the invocation carries on to its own result. Handing that line to the
+// parser could only produce a decode error, and a decode error fails the run --
+// which for one oversized tool result is the same self-inflicted death the
+// retained-output bound no longer causes, one layer down.
+func TestAStreamLineTooLongToHoldIsRecordedRatherThanFatal(t *testing.T) {
+	t.Parallel()
+
+	// What a cut line actually looks like: a prefix of an envelope, ending in the
+	// runner's marker, and invalid JSON because of where it stops.
+	cut := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"xxxx` +
+		"…[line truncated at 1048576 bytes; 65536 further bytes were not retained]"
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		cut,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","total_cost_usd":1.25,"usage":{"input_tokens":10},"terminal_reason":"end_turn"}`,
+	}, "\n") + "\n"
+	runner := &fakeRunner{
+		results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}},
+		cutLine: cut,
+	}
+	var events []execution.Event
+	result, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement the task",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want one unreadable line to be no error at all", err)
+	}
+	if result.IsError || result.FinalText != "done" {
+		t.Fatalf("Run() result = %#v, want the invocation judged on its own result event", result)
+	}
+	if !result.CostReported || result.CostUSD != 1.25 {
+		t.Fatalf("Run() cost = %v (reported %t), want the terminal past the cut line still read", result.CostUSD, result.CostReported)
+	}
+	var said bool
+	for _, event := range events {
+		if event.Type == execution.EventProcessOutput && strings.Contains(string(event.Payload), truncatedStreamLine) {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatalf("no event names %q, so the record is silent about a line the harness dropped", truncatedStreamLine)
+	}
+}
+
 type fakeRunner struct {
 	results  []execution.ProcessResult
 	errors   []error
 	commands []execution.Command
 	prompts  []string
+	// cutLine is the stdout line this runner reports as one it had to cut at its
+	// per-line bound. It is how a test drives that path without a fixture a
+	// megabyte long, and it is empty for every stream that was read whole.
+	cutLine string
 }
 
 func (f *fakeRunner) Run(_ context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
@@ -1320,7 +1376,12 @@ func (f *fakeRunner) Run(_ context.Context, command execution.Command, observer 
 	if observer != nil {
 		for _, line := range strings.Split(strings.TrimSuffix(result.Stdout, "\n"), "\n") {
 			if line != "" {
-				observer(execution.Output{Stream: execution.StreamStdout, Text: line, Timestamp: time.Now()})
+				observer(execution.Output{
+					Stream:        execution.StreamStdout,
+					Text:          line,
+					Timestamp:     time.Now(),
+					LineTruncated: f.cutLine != "" && line == f.cutLine,
+				})
 			}
 		}
 		for _, line := range strings.Split(strings.TrimSuffix(result.Stderr, "\n"), "\n") {

@@ -399,6 +399,17 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		Redactor:     redactor,
 	}, func(output execution.Output) {
 		if output.Stream == execution.StreamStdout {
+			// A line the runner cut is not an envelope any more, and nothing
+			// recovers the rest of it. It is recorded as the anomaly it is and the
+			// stream carries on: one line the harness could not hold is not a
+			// stream it could not read, and failing the invocation over it is the
+			// same self-inflicted death that used to arrive as a killed process.
+			if output.LineTruncated {
+				if recordErr := parser.RecordTruncatedLine(output); recordErr != nil {
+					parseErrors = append(parseErrors, recordErr)
+				}
+				return
+			}
 			if parseErr := parser.ParseLine(output.Text); parseErr != nil {
 				parseErrors = append(parseErrors, parseErr)
 			}

@@ -407,6 +407,39 @@ coming back. `run-32e3f059` died that way on 2026-09-03, with zero dollars
 recorded and six hours of silence after it. Keeping traces in files was the
 workaround; nothing needs it now.
 
+### One line that is too long
+
+There is a second bound underneath that one: how much of a single line the
+harness holds, which is 1 MiB. It exists because output is read a line at a time
+and a line has to be complete before anything can be done with it, and it is hit
+by different output than the 8 MiB total — a provider stream puts one tool result
+on one line, so a single large file read can reach it while the invocation as a
+whole is nowhere near verbose.
+
+It follows the same rule. The line is cut, the rest of it is read and thrown away
+so the process is never blocked writing it, and the cut line ends with a marker:
+
+```text
+…[line truncated at 1048576 bytes; 3407872 further bytes were not retained]
+```
+
+The marker names no record holding the rest, because there is none — unlike the
+8 MiB bound, which cuts a copy while every line still reaches the event log, this
+one drops what it cuts. What follows the long line is read normally.
+
+For a provider stream a cut line is no longer an envelope, so nothing is read off
+it: it is recorded as a `truncated_stream_line` anomaly in the run's event log
+and the stream carries on to its own result. A stream the harness genuinely
+cannot read still fails the run with a decode error, which is why the runner
+marks the line rather than leaving that to be guessed from the failure. If the
+line that was cut happened to be the invocation's terminal, the invocation ends
+without one and is answered the way any other lost terminal is — the anomaly in
+the log is what says why it is missing.
+
+This used to end the run too, in the harder way: the process was killed on the
+spot with `token too long`, so the work in the worktree and the invocation's cost
+went with it.
+
 ## Recovering interrupted runs
 
 A process that is killed mid-run leaves durable state describing where it got

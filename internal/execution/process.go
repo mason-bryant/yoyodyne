@@ -16,6 +16,18 @@ import (
 
 const defaultMaxOutputBytes = 8 << 20
 
+// maxLineBytes bounds one line of process output. A line past it is cut here,
+// with a marker, rather than killing the process that wrote it: a provider
+// stream puts one tool result on one line, and a large enough result used to end
+// the run with bufio.Scanner's "token too long" — the same self-inflicted death
+// the retained-output bound no longer causes, one layer down.
+//
+// What it bounds is what this runner passes on and nothing else. The rest of an
+// oversized line is drained and discarded rather than left in the pipe, so the
+// process is never blocked on a full one and every line after the long one is
+// still read.
+const maxLineBytes = 1 << 20
+
 type ProcessStatus string
 
 const (
@@ -81,6 +93,14 @@ type Output struct {
 	Stream    Stream
 	Text      string
 	Timestamp time.Time
+	// LineTruncated reports a line this runner cut at maxLineBytes, whose text
+	// above therefore ends in a marker and is a prefix of what the process wrote.
+	// It is a field rather than something to infer from the marker because an
+	// observer parsing these lines has to tell a line it cannot read from a line
+	// nobody could: a cut line is invalid by construction whatever it carried,
+	// and a parse failure on an intact line still means the stream itself is
+	// unreadable.
+	LineTruncated bool
 }
 
 type ProcessResult struct {
@@ -382,22 +402,104 @@ func (w *idleWatch) stop() {
 func scanOutput(reader io.Reader, stream Stream, clock Clock, redactor Redactor, outputs chan<- Output, scanErrors chan<- error, stopProcess context.CancelFunc, waitGroup *sync.WaitGroup) {
 	defer waitGroup.Done()
 
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		outputs <- Output{
-			Stream:    stream,
-			Text:      redactor.Redact(scanner.Text()),
-			Timestamp: clock.Now(),
+	lines := bufio.NewReaderSize(reader, 64*1024)
+	for {
+		line, dropped, err := readLine(lines, maxLineBytes)
+		// A line that ended at its own newline is a line however empty it is, so
+		// a blank one is still reported. Only the end of the stream can leave
+		// nothing at all, and that is the one case with no line to report.
+		if err == nil || len(line) > 0 || dropped > 0 {
+			if dropped > 0 {
+				// Redaction replaces whole values, so a secret straddling the cut
+				// would have its leading half kept verbatim — the one thing cutting
+				// a line could put into the record that killing the process never
+				// did. Giving back the longest secret's worth of bytes removes the
+				// case, and against a bound of a megabyte it costs the cut copy
+				// nothing.
+				if held := redactor.longest(); held > 0 && len(line) > held {
+					line = line[:len(line)-held]
+					dropped += held
+				}
+			}
+			text := redactor.Redact(string(line))
+			if dropped > 0 {
+				text += lineTruncationMarker(maxLineBytes, dropped)
+			}
+			outputs <- Output{
+				Stream:        stream,
+				Text:          text,
+				Timestamp:     clock.Now(),
+				LineTruncated: dropped > 0,
+			}
+		}
+		switch {
+		case err == nil:
+		case errors.Is(err, io.EOF):
+			return
+		default:
+			// A reader that stops draining can leave the child blocked on a full
+			// pipe. Terminate the process tree immediately so the other stream
+			// closes and Run can return the read failure without waiting for timeout.
+			stopProcess()
+			scanErrors <- fmt.Errorf("read %s: %w", stream, err)
+			return
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		// A scanner that stops draining can leave the child blocked on a full
-		// pipe. Terminate the process tree immediately so the other stream
-		// closes and Run can return the read failure without waiting for timeout.
-		stopProcess()
-		scanErrors <- fmt.Errorf("read %s: %w", stream, err)
+}
+
+// readLine reads one line of process output, bounded. It returns what fits
+// within the bound, how many bytes past it were drained and discarded, and the
+// error that ended the read — nil when the line ended at its own newline, io.EOF
+// at the end of the stream, and anything else a genuine read failure.
+//
+// The tail past the bound is read and thrown away rather than left in the pipe,
+// which is what separates truncating a line from refusing to read it: a reader
+// that stops draining is a child blocked on a full pipe.
+func readLine(reader *bufio.Reader, bound int) ([]byte, int, error) {
+	var kept []byte
+	dropped := 0
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		// ErrBufferFull is a line longer than the reader's own buffer, which is
+		// an instruction to come back for the rest of the same line rather than a
+		// failure. It is the only error that does not end the line.
+		partial := errors.Is(err, bufio.ErrBufferFull)
+		if !partial {
+			chunk = dropLineEnding(chunk)
+		}
+		if room := bound - len(kept); room > 0 {
+			take := len(chunk)
+			if take > room {
+				take = room
+			}
+			kept = append(kept, chunk[:take]...)
+			dropped += len(chunk) - take
+		} else {
+			dropped += len(chunk)
+		}
+		if partial {
+			continue
+		}
+		return kept, dropped, err
 	}
+}
+
+// dropLineEnding removes the terminator, so what a line reports is the text the
+// process wrote and not the newline it ended with. A carriage return before it
+// goes too, which is what the line splitter this replaced always did.
+func dropLineEnding(line []byte) []byte {
+	line = bytes.TrimSuffix(line, []byte{'\n'})
+	return bytes.TrimSuffix(line, []byte{'\r'})
+}
+
+// lineTruncationMarker ends a line this runner had to cut. Unlike the marker for
+// the retained copy as a whole, it names no record holding the rest, because
+// there is none: the observer is handed the same cut line, so the bytes past the
+// bound reached nothing. Saying so plainly is the point — a reader who cannot
+// tell a cut line from a whole one reads the cut one as everything the process
+// said on it.
+func lineTruncationMarker(bound int, dropped int) string {
+	return fmt.Sprintf("…[line truncated at %d bytes; %d further bytes were not retained]", bound, dropped)
 }
 
 type Redactor struct {
@@ -482,6 +584,17 @@ func sensitiveEnvironmentName(name string) bool {
 		}
 	}
 	return strings.HasSuffix(upper, "_SECRET")
+}
+
+// longest is the length of the longest value this redactor replaces, and zero
+// when it replaces nothing. It is what a caller cutting a line short holds back
+// to be sure it is not cutting through a secret; the values are already sorted
+// longest first, so the first one is it.
+func (r Redactor) longest() int {
+	if len(r.values) == 0 {
+		return 0
+	}
+	return len(r.values[0])
 }
 
 func (r Redactor) Redact(value string) string {

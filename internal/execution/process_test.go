@@ -1,8 +1,11 @@
 package execution
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -264,19 +267,151 @@ func TestOSProcessRunnerLeavesOutputUnderTheBoundUnmarked(t *testing.T) {
 	}
 }
 
-func TestOSProcessRunnerStopsProcessWhenALineExceedsScannerLimit(t *testing.T) {
+// One line too long to hold is cut with a marker, and neither the process nor
+// the run dies of it. This used to fail the whole invocation with "token too
+// long": a provider stream puts one tool result on one line, so a large enough
+// result took the run's work and the account of what it cost with it.
+func TestOSProcessRunnerTruncatesAnOversizedLineInsteadOfFailingTheProcess(t *testing.T) {
 	t.Parallel()
 
 	command := helperCommand("oversized-line", "")
-	command.Timeout = 5 * time.Second
-	started := time.Now()
-	_, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
-	if err == nil || !strings.Contains(err.Error(), "token too long") {
-		t.Fatalf("Run() oversized-line error = %v", err)
+	command.Timeout = 30 * time.Second
+	var observed []Output
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, func(output Output) {
+		observed = append(observed, output)
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want an oversized line to be no error at all", err)
 	}
-	if elapsed := time.Since(started); elapsed >= 2*time.Second {
-		t.Fatalf("Run() waited %s for timeout after scanner failure", elapsed)
+	if result.Status != ProcessSucceeded || result.ExitCode != 0 {
+		t.Fatalf("Run() result status = %q exit = %d, want the process judged on its own exit", result.Status, result.ExitCode)
 	}
+	// The long line, then the ordinary one after it: the stream keeps being read
+	// past the cut rather than ending at it.
+	if len(observed) != 2 {
+		t.Fatalf("observed %d outputs, want the 2 the process produced", len(observed))
+	}
+	if !observed[0].LineTruncated {
+		t.Fatal("the oversized line was not reported as truncated")
+	}
+	if !strings.Contains(observed[0].Text, "line truncated at") {
+		t.Fatalf("oversized line ends %q, want the marker naming the cut", tail(observed[0].Text))
+	}
+	if !strings.HasPrefix(observed[0].Text, strings.Repeat("x", 1024)) {
+		t.Fatal("the retained part of the oversized line is not a prefix of what the process wrote")
+	}
+	if observed[1].Text != "after the long line" || observed[1].LineTruncated {
+		t.Fatalf("second output = %#v, want the untouched line that followed the cut one", observed[1])
+	}
+	if !strings.Contains(result.Stdout, "after the long line") {
+		t.Fatal("the retained copy lost the line that followed the cut one")
+	}
+}
+
+// A secret straddling the cut must not have its leading half kept: redaction
+// replaces whole values, so a partial one survives it.
+func TestOSProcessRunnerDoesNotCutThroughASecret(t *testing.T) {
+	t.Parallel()
+
+	secret := "sk-cut-straddling-credential"
+	command := helperCommand("straddling-secret", secret)
+	command.Timeout = 30 * time.Second
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for length := 8; length <= len(secret); length++ {
+		if strings.Contains(result.Stdout, secret[:length]) {
+			t.Fatalf("the cut line retained %q, a leading part of the secret that redaction cannot replace", secret[:length])
+		}
+	}
+}
+
+func TestReadLineBoundsAndDrainsALongLine(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		stream  string
+		bound   int
+		want    []string
+		dropped []int
+	}{
+		{
+			name:    "lines under the bound are untouched",
+			stream:  "alpha\nbeta\n",
+			bound:   16,
+			want:    []string{"alpha", "beta"},
+			dropped: []int{0, 0},
+		},
+		{
+			name:    "a blank line is still a line",
+			stream:  "\nbeta\n",
+			bound:   16,
+			want:    []string{"", "beta"},
+			dropped: []int{0, 0},
+		},
+		{
+			name:    "a carriage return before the newline is not part of the line",
+			stream:  "alpha\r\n",
+			bound:   16,
+			want:    []string{"alpha"},
+			dropped: []int{0},
+		},
+		{
+			name:    "an unterminated last line is reported",
+			stream:  "alpha\nbeta",
+			bound:   16,
+			want:    []string{"alpha", "beta"},
+			dropped: []int{0, 0},
+		},
+		{
+			// The long line is cut and the one after it is read whole, which is
+			// the whole claim: the tail was drained rather than left in the pipe.
+			name:    "a long line is cut and the stream carries on",
+			stream:  "aaaaaaaaaa\nbeta\n",
+			bound:   4,
+			want:    []string{"aaaa", "beta"},
+			dropped: []int{6, 0},
+		},
+		{
+			name:    "a long unterminated last line is cut",
+			stream:  "aaaaaaaaaa",
+			bound:   4,
+			want:    []string{"aaaa"},
+			dropped: []int{6},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Smaller than the shortest line above, so every case reads through
+			// the buffer-full path a megabyte-long line reaches in production.
+			reader := bufio.NewReaderSize(strings.NewReader(testCase.stream), 16)
+			for index, want := range testCase.want {
+				line, dropped, err := readLine(reader, testCase.bound)
+				if err != nil && !errors.Is(err, io.EOF) {
+					t.Fatalf("readLine() line %d error = %v", index, err)
+				}
+				if string(line) != want || dropped != testCase.dropped[index] {
+					t.Fatalf("readLine() line %d = %q dropped %d, want %q dropped %d", index, line, dropped, want, testCase.dropped[index])
+				}
+			}
+			line, dropped, err := readLine(reader, testCase.bound)
+			if !errors.Is(err, io.EOF) || len(line) > 0 || dropped > 0 {
+				t.Fatalf("readLine() after the last line = %q dropped %d err %v, want an empty end of stream", line, dropped, err)
+			}
+		})
+	}
+}
+
+// tail is the end of a string, for a failure message that must not print a
+// megabyte of it.
+func tail(value string) string {
+	if len(value) <= 80 {
+		return value
+	}
+	return "…" + value[len(value)-80:]
 }
 
 func TestSensitiveEnvironmentValues(t *testing.T) {
@@ -371,8 +506,19 @@ func TestProcessHelper(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	case "oversized-line":
-		fmt.Print(strings.Repeat("x", 2<<20))
-		time.Sleep(5 * time.Second)
+		// One line past the per-line bound and then an ordinary one, so a reader
+		// is asked both to cut the long line and to keep reading after it.
+		fmt.Printf("%s\n", strings.Repeat("x", maxLineBytes+(1<<16)))
+		fmt.Println("after the long line")
+		os.Exit(0)
+	case "straddling-secret":
+		// The secret sits astride the cut, half of it inside the bound and half
+		// outside, which is the only place a cut can leave a partial credential
+		// that redaction has no whole value to replace.
+		fmt.Printf("%s%s%s\n",
+			strings.Repeat("x", maxLineBytes-len(secret)/2),
+			secret,
+			strings.Repeat("x", 1<<16))
 		os.Exit(0)
 	default:
 		os.Exit(98)
