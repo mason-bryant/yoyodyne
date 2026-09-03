@@ -17,7 +17,7 @@ package orchestrator
 // still runs the sequence Go control flow puts it in; these definitions are
 // compiled and walked by the parity harness in parity_test.go, which holds them
 // against the recorded baseline of what the hard-coded path actually does, and
-// stepped beside a real run by the declarative trial in declarative.go, whose
+// stepped beside every real run by the declarative path in declarative.go, whose
 // doors perform nothing. Making them the thing that runs a real work item needs
 // what the design calls for and none of it is here: the step-attempt record, the
 // idempotency key, and the reconciliation that make an action with a side effect
@@ -155,7 +155,7 @@ func compileDelivery(builtin builtinDelivery) (workflow.Graph[*activeRun], error
 }
 
 // compileDeliveryWith is the shipped-definition compile over a registry the
-// caller supplies, which is the whole of what the trial needs that the
+// caller supplies, which is the whole of what the observation needs that the
 // production compile does not: the same definition, the same grant, the same
 // refusals, and doors that perform nothing.
 func compileDeliveryWith(builtin builtinDelivery, registry action.Registry[*activeRun]) (workflow.Graph[*activeRun], error) {

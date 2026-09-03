@@ -248,12 +248,13 @@ type RunSummary struct {
 	// CompletionRecordingFailure is on the summary for the reason it is on the
 	// state: the run record is the one durable home this failure class has.
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
-	// WorkflowInstanceID and WorkflowDivergence are what the declarative trial
+	// WorkflowInstanceID and WorkflowDivergence are what the delivery definition
 	// observed of this run: which instance watched it, and why the watching
 	// stopped. Neither says anything about the work — a run that diverged
-	// delivered exactly as it would have — and they are here because the soak the
-	// trial exists for is counted off these two fields. A soak nobody can read
-	// without opening the state directory is one nobody counts.
+	// delivered exactly as it would have — and they are here because the
+	// definition is what a run executes by default, so where it sent a run is a
+	// fact about that run. One nobody can read without opening the state
+	// directory is one nobody reads.
 	WorkflowInstanceID string `json:"workflow_instance_id,omitempty"`
 	WorkflowDivergence string `json:"workflow_divergence,omitempty"`
 	// Selection is why the harness was running this item: who chose it and on

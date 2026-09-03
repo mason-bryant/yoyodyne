@@ -2918,6 +2918,11 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			CheckTimeout:                           config.Duration(30 * time.Minute),
 			WorkPoll:                               config.Duration(60 * time.Second),
 			BlockedRunsBeforeIntakeHold:            3,
+			// What a loaded configuration fills in, and what every run this suite
+			// drives therefore executes: the built-in definition, compiled and
+			// stepped beside the run. A test about the legacy path turns it off
+			// itself, which is what a project rolling back writes.
+			DeclarativeDelivery: true,
 		},
 		// The triage thresholds a loaded configuration would have filled in.
 		// Nothing here drives them; they are stated because a hand-built
@@ -2937,7 +2942,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			"developer": {Role: domain.RoleDeveloper, Backend: domain.BackendClaudeCode, Model: testDeveloperModel, Instances: 1},
 		},
 	}
-	return Pipeline{
+	pipeline := Pipeline{
 		Tracker: tracker, Worktrees: worktrees, Store: store, Backend: provider,
 		Checks: checks.Runner{Process: processRunner}, NewRunID: func() (string, error) { return pipelineRunID, nil },
 		// Every pipeline reads what the operator has directed before it commits to
@@ -2957,6 +2962,17 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 		Intake:     newIntakeHoldStore(t),
 		Repository: repository, Config: cfg,
 	}
+	// And every pipeline records the instance it is executing the definition
+	// through, because `declarative_delivery` is the default above and a fixture
+	// with nowhere to record one would be running the legacy path while its
+	// configuration said otherwise. A test driving an interrupted process hands
+	// in a wrapper around its store and wires the store underneath it itself,
+	// which is what a dead process leaves: the instance on disk is whatever it
+	// had already written.
+	if instances, ok := store.(*runstate.Store); ok {
+		pipeline.Instances = instances
+	}
+	return pipeline
 }
 
 // newOperatorHoldStore builds the durable record of the operator's hold. A test
