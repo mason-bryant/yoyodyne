@@ -340,15 +340,245 @@ func TestWorkOwedAContinuationIsNeverDocketed(t *testing.T) {
 func TestARunThatEndedWithNothingToDecideIsNotDocketed(t *testing.T) {
 	t.Parallel()
 
+	// Neither of the two things that make a stoppage: no blocker anybody recorded,
+	// and no change left behind for anybody to decide about.
 	ended := stoppedState()
 	ended.Blocker = ""
+	ended.Branch = ""
+	ended.WorktreePath = ""
+	ended.Failure = "the harness could not reach the tracker to claim the item"
 	docket := &memoryDocket{}
 	built, err := docketerOver([]runstate.State{ended}, docket).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
 	if built.Added != 0 {
-		t.Fatalf("a run with no blocker was docketed: %#v", docket.entries)
+		t.Fatalf("a run with no blocker and nothing preserved was docketed: %#v", docket.entries)
+	}
+}
+
+// diedHoldingItsChange is the shape all three of yoyodyne-ifd.268's incidents
+// left behind: a run made terminal by its own process, with no blocker anybody
+// recorded, the reason it gave for dying, and the change still on its branch.
+// Nothing resumes it, because it is terminal, and until it was docketed no
+// recorded decision could reach it either.
+func diedHoldingItsChange() runstate.State {
+	died := stoppedState()
+	died.Phase = runstate.PhaseDeveloping
+	died.Blocker = ""
+	died.ReviewSummary = ""
+	died.ReviewFindings = 0
+	died.ReviewFindingDetails = nil
+	died.ReviewRounds = 0
+	died.CheckFailure = nil
+	died.RepairAttempts = 0
+	died.Failure = "publish the developer branch: remote rejected the push: Connection reset by 140.82.121.36 port 443"
+	return died
+}
+
+// The seam yoyodyne-ifd.268 is about: a run that dies holding its change reaches
+// the development manager, so the decision she records about it is one the
+// harness can carry out. Every one of these was found by a person noticing the
+// item had gone quiet, and got out of it by dispatching the item by name — which
+// starts a run and records no decision at all.
+func TestARunThatDiedHoldingItsChangeIsDocketed(t *testing.T) {
+	t.Parallel()
+
+	swept := docketedNow.Add(-30 * time.Minute)
+	for _, test := range []struct {
+		name  string
+		state func(runstate.State) runstate.State
+	}{
+		{
+			// run-0cfda20a of yoyodyne-ifd.267.
+			name:  "the remote reset the developer branch push, with the branch and worktree both still there",
+			state: func(state runstate.State) runstate.State { return state },
+		},
+		{
+			// run-ae343453 of yoyodyne-ifd.242: the same death, whose worktree the
+			// idle sweep took afterwards. The branch is what still holds the change.
+			name: "the same death after the idle sweep took the worktree, leaving the branch",
+			state: func(state runstate.State) runstate.State {
+				state.WorktreeRemoved = true
+				state.WorktreeSweptAt = &swept
+				return state
+			},
+		},
+		{
+			// run-32e3f059 of yoyodyne-ifd.209.6.
+			name: "the developer backend broke mid-attempt on oversized output",
+			state: func(state runstate.State) runstate.State {
+				state.Failure = "developer backend failed: run Claude Code: process output exceeded 8388608 bytes"
+				state.WorktreeRemoved = true
+				state.WorktreeSweptAt = &swept
+				state.PreservedWorkRef = "refs/yoyodyne/preserved-work/" + docketedRunID
+				return state
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			died := test.state(diedHoldingItsChange())
+			if err := died.Validate(); err != nil {
+				t.Fatalf("the death is not a state the harness could record: %v", err)
+			}
+
+			docket := &memoryDocket{}
+			created, err := docketerOver(nil, docket).RecordStoppedRun(died)
+			if err != nil || !created {
+				t.Fatalf("a death holding the change reached nobody: created = %t, error = %v", created, err)
+			}
+			entry := docket.entries[0]
+			if entry.Class != triage.ClassStoppedRun || entry.Key != triage.Key(triage.ClassStoppedRun, docketedRunID) {
+				t.Fatalf("entry = %#v, want the stoppage of the run keyed to it", entry)
+			}
+			// The item carries no blocker for this, so the entry says what stopped
+			// the run in its own field rather than claiming the item holds words
+			// nobody wrote there.
+			if entry.Blocker != "" {
+				t.Fatalf("blocker = %q, want none: nothing recorded one on the item", entry.Blocker)
+			}
+			if entry.Failure != died.Failure {
+				t.Fatalf("failure = %q, want the reason the run gave %q", entry.Failure, died.Failure)
+			}
+			if !strings.Contains(entry.Render(), died.Failure) {
+				t.Fatalf("the rendered entry does not say what stopped the run:\n%s", entry.Render())
+			}
+			// And what still holds the change is named, because that is the whole of
+			// what makes the entry actionable.
+			if entry.Artifacts.Branch != died.Branch || entry.Artifacts.BranchRemoved {
+				t.Fatalf("artifacts = %#v, want the branch the change is on", entry.Artifacts)
+			}
+		})
+	}
+}
+
+// The deaths this must not docket. Each is terminal and each leaves something
+// behind, and none of them is work waiting on a person's decision.
+func TestADeathThatIsNobodysDecisionIsNotDocketed(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name  string
+		state func(runstate.State) runstate.State
+	}{
+		{
+			// An operator's stop and a deadline are both deliberate. Neither hands
+			// anybody a decision, and both read as themselves rather than as a
+			// stoppage everywhere else the harness says what became of a run.
+			name: "the operator stopped it",
+			state: func(state runstate.State) runstate.State {
+				state.Status = runstate.StatusCancelled
+				return state
+			},
+		},
+		{
+			name: "the harness stopped it on time",
+			state: func(state runstate.State) runstate.State {
+				state.Status = runstate.StatusTimedOut
+				return state
+			},
+		},
+		{
+			// The work landed. Finishing what is left of the run is reconciliation's,
+			// and an unfinished publication of it is docketed as the publication it is.
+			name: "it failed after promoting its work",
+			state: func(state runstate.State) runstate.State {
+				state.Phase = runstate.PhaseIntegrating
+				state.ReviewDecision = runstate.ReviewApprove
+				state.ReviewRounds = 1
+				state.ProviderSessionID = "developer-session"
+				state.ProviderModel = "opus"
+				state.ReviewSessionID = "reviewer-session"
+				state.ReviewModel = "opus"
+				state.Integration = &runstate.Integration{
+					TargetBranch:         "main",
+					SourceCommit:         strings.Repeat("c", 40),
+					TargetCommit:         strings.Repeat("c", 40),
+					PreviousTargetCommit: strings.Repeat("a", 40),
+				}
+				state.HarnessCommit = strings.Repeat("c", 40)
+				return state
+			},
+		},
+		{
+			name: "it died with nothing to show for it",
+			state: func(state runstate.State) runstate.State {
+				state.Branch = ""
+				state.WorktreePath = ""
+				state.BaseCommit = ""
+				state.TargetBranch = ""
+				return state
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			died := test.state(diedHoldingItsChange())
+			if err := died.Validate(); err != nil {
+				t.Fatalf("the death is not a state the harness could record: %v", err)
+			}
+
+			docket := &memoryDocket{}
+			created, err := docketerOver(nil, docket).RecordStoppedRun(died)
+			if err != nil {
+				t.Fatalf("RecordStoppedRun() error = %v", err)
+			}
+			if created || len(docket.entries) != 0 {
+				t.Fatalf("a run nobody has to decide about was docketed: %#v", docket.entries)
+			}
+		})
+	}
+}
+
+// And the scan over the recorded history does not go looking for them, which is
+// the one asymmetry in this file that looks like an oversight. Every terminal
+// failed run with a surviving branch has this shape, including every record
+// written before the harness carried a blocker at all; re-deriving it would put
+// months of settled work on the docket in one build and push the stoppages that
+// need deciding off the end of what the development manager's context can carry.
+func TestTheScanDoesNotBackfillDeathsFromTheRecordedHistory(t *testing.T) {
+	t.Parallel()
+
+	docket := &memoryDocket{}
+	built, err := docketerOver([]runstate.State{diedHoldingItsChange()}, docket).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if built.Added != 0 {
+		t.Fatalf("the scan backfilled a death from the history: %#v", docket.entries)
+	}
+	// A blocker is re-derived as it always was: it is a durable classification
+	// that stood on the record from the moment it was written.
+	blocked := &memoryDocket{}
+	rebuilt, err := docketerOver([]runstate.State{stoppedState()}, blocked).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if rebuilt.Added != 1 {
+		t.Fatalf("the scan stopped re-deriving a blocker: added = %d", rebuilt.Added)
+	}
+}
+
+// A failure long enough to exceed what an entry may carry is cut rather than
+// refused. An entry refused for its length is a stoppage that reaches nobody,
+// which is exactly the silence this docketing exists to end.
+func TestAnOversizedFailureIsCutRatherThanLosingTheEntry(t *testing.T) {
+	t.Parallel()
+
+	died := diedHoldingItsChange()
+	died.Failure = strings.Repeat("x", triage.MaxBlockerBytes*2)
+	docket := &memoryDocket{}
+	created, err := docketerOver(nil, docket).RecordStoppedRun(died)
+	if err != nil || !created {
+		t.Fatalf("a verbose death reached nobody: created = %t, error = %v", created, err)
+	}
+	entry := docket.entries[0]
+	if len(entry.Failure) > triage.MaxBlockerBytes {
+		t.Fatalf("failure is %d bytes, which the entry's own bound refuses", len(entry.Failure))
+	}
+	if !strings.Contains(entry.Failure, "the run's own record carries the whole of this failure") {
+		t.Fatalf("a cut failure did not say it was cut: %q", entry.Failure[len(entry.Failure)-120:])
 	}
 }
 

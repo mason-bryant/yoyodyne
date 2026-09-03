@@ -3,13 +3,18 @@ package orchestrator
 // Docketing the work that has stopped moving.
 //
 // Two things stop work in a way no further attempt of the harness resolves. A
-// run ends on a durable blocker — the repair budget spent, a replay that
-// conflicts, a provider that kept refusing — and an approved change is
-// published to a forge that then never merges it. The first is an event the
-// harness is present for, so it is docketed where it happens. The second is the
-// absence of an event, which nothing can be present for, so it is found by a
-// scan: the reconciling sweep, and the build that runs when the development
-// manager opens a conversation.
+// run stops with its change still there — on a durable blocker the harness
+// recorded, or by dying before anything could record one — and an approved
+// change is published to a forge that then never merges it. The first is an
+// event the harness is present for, so it is docketed where it happens. The
+// second is the absence of an event, which nothing can be present for, so it is
+// found by a scan: the reconciling sweep, and the build that runs when the
+// development manager opens a conversation.
+//
+// The two shapes of the first are one class here because they are one fact to
+// whoever reads them: the work is still there and nothing is going to pick it up.
+// What separates them is only whether the harness got as far as saying so, and
+// stoppedRun below says why that must not decide who hears about it.
 //
 // The scan is deliberately not a scheduled process, because there is none to
 // hang it on. What that costs is stated rather than hidden: the configured
@@ -24,6 +29,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -254,18 +260,25 @@ func rerunOf(entry triage.Entry, claimed []runstate.Rerun) *triage.Rerun {
 	return nil
 }
 
-// RecordStoppedRun dockets one run that ended on a durable blocker, at the
-// moment it ended. It reports whether this call is what created the entry, so a
-// caller can tell docketing a stoppage from finding it already docketed.
+// RecordStoppedRun dockets one run that stopped with its change still there, at
+// the moment it ended. It reports whether this call is what created the entry, so
+// a caller can tell docketing a stoppage from finding it already docketed.
 //
-// A run with no recorded blocker dockets nothing and is not an error: that is
-// every run that ended for a reason nobody has to decide about, which is most
-// of them.
+// It is the wider of the two questions asked in this file. A run that ended on a
+// durable blocker is docketed here and re-derived by the scan; a run that died
+// before anything could record one is docketed here and nowhere else, for the
+// reason preservedDeath states. This is the only place both are asked, and it is
+// called wherever a run becomes terminal — by the pipeline as it fails one, and
+// by the sweep as it settles one — which is what makes "at the moment it ended"
+// true of either.
+//
+// A run that neither dockets anything and is not an error: that is every run that
+// ended for a reason nobody has to decide about, which is most of them.
 func (d Docketer) RecordStoppedRun(state runstate.State) (bool, error) {
 	if err := d.validate(); err != nil {
 		return false, err
 	}
-	if !stoppedRun(state) {
+	if !stoppedRun(state) && !preservedDeath(state) {
 		return false, nil
 	}
 	entry, err := d.stoppedRunEntry(state, d.now())
@@ -323,8 +336,65 @@ func publicationDocketed(state runstate.State, already map[string]bool) bool {
 // waiting out a provider, an operator, or a directive, is owed a continuation
 // and is not stopped work at all — every one of those pauses is recorded on a
 // run that is still running, which is exactly what this excludes.
+//
+// It is the whole of what the scan below re-derives, and deliberately not the
+// whole of what is docketed: preservedDeath is the other half, and is recorded
+// where the death happens rather than found by walking the history.
 func stoppedRun(state runstate.State) bool {
 	return state.Blocker != "" && state.Status.Terminal()
+}
+
+// preservedDeath reports a run that died holding its change, with nothing having
+// classified the death as a stoppage.
+//
+// The harness has two routes to a terminal record and they disagreed about these.
+// A run whose process was killed is settled by a sweep, which blocks the item
+// when the artifacts survive and dockets the stoppage off that blocker. A run
+// that fails inside its own process records an outcome note instead — no blocker,
+// and so no entry — because the harness may yet resume it, and a blocked item is
+// one it would refuse to resume. That is the right call for the record and the
+// wrong one for the docket: once the run is terminal nothing resumes it, and the
+// change is still sitting on a branch with no recorded way to decide about it.
+// `yoyo triage rerun` and `yoyo triage repair` both act on a docketed stoppage,
+// so a push the remote refused (yoyodyne-ifd.242, yoyodyne-ifd.267) or a backend
+// that broke mid-attempt (yoyodyne-ifd.209.6) left the development manager's
+// recorded decision unexecutable, and the exit each time was a person dispatching
+// the item by name — which starts a run and records no decision at all.
+//
+// Three conditions narrow it, and each excludes a run that is not this. A status
+// other than failed is a run something stopped rather than one that died: an
+// operator's stop and a deadline are both deliberate, and neither hands anybody a
+// decision. A run that integrated its work is reconciliation's to finish, and an
+// unfinished publication of it is docketed as the publication it is. And a run
+// that left nothing behind is the harness having failed to carry it, which is a
+// failure to read rather than work to decide about.
+//
+// # Why only where the death happens
+//
+// This is asked as a run ends and never by the scan that walks the recorded
+// history, which is the one asymmetry here worth stating because it looks like an
+// oversight. A blocker is a durable classification that stands on a record
+// forever, so re-deriving it costs nothing: a run that carried one always did. A
+// death that preserved its change is not — it is a shape every terminal failed run
+// with a surviving branch has, including every record written before the harness
+// carried a blocker at all, which the run schema says is most of them. Re-deriving
+// it over the history would have docketed 48 of the 374 runs this repository had
+// recorded on 2026-09-04, nearly all of them long-closed work, in one build; the
+// development manager's context lists 25 entries newest first, so that one build
+// would have hidden every stoppage she actually had to decide about behind months
+// of settled ones. A docket read as complete when it is not is worse than one that
+// says what it could not show, and this is the version of that failure the docket
+// itself would have caused.
+//
+// What it costs is that a death whose docket write fails is not picked up later,
+// where a blocker would be. That is reported by the run that could not write it,
+// and is the same trade the scan makes everywhere else: the run's record still
+// says what happened, and nothing about the change is lost.
+func preservedDeath(state runstate.State) bool {
+	return state.Status == runstate.StatusFailed &&
+		state.Integration == nil &&
+		strings.TrimSpace(state.Failure) != "" &&
+		state.Artifacts().Preserved()
 }
 
 // stuckPublication reports an approved publication that did not finish and is
@@ -406,6 +476,11 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 		WorkItemTitle: state.WorkItemTitle,
 		RecordedAt:    now.UTC(),
 		Blocker:       state.Blocker,
+		// The reason the run gave for dying is carried only where it is what makes
+		// this a stoppage. Every other entry has a blocker that says the same thing
+		// in the words the work item carries, and printing the failure beside it
+		// would be the same fact twice on every ordinary stoppage.
+		Failure:       docketFailure(state),
 		Summary:       state.ReviewSummary,
 		Findings:      docketFindings(state.ReviewFindingDetails),
 		Check:         docketCheck(state.CheckFailure),
@@ -588,6 +663,19 @@ func docketEnvironmental(refused *runstate.EnvironmentalRefusal) *triage.Environ
 		// words about what this round cost.
 		Account: refused.Describe(),
 	}
+}
+
+// docketFailure is the reason a preserved death gives for having died, bounded to
+// what an entry may carry. A run's own record keeps whatever the failing step
+// gave it and nothing bounds that, so an entry built from it unbounded would be
+// refused for its length — and a stoppage refused at the docket is one the
+// development manager never hears about, which is the silence this whole path
+// exists to end.
+func docketFailure(state runstate.State) string {
+	if state.Blocker != "" || !preservedDeath(state) {
+		return ""
+	}
+	return runstate.RecordFailure(state.Failure)
 }
 
 func docketCheck(failure *runstate.CheckFailure) *triage.Check {

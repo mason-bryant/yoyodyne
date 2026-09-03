@@ -415,16 +415,24 @@ func docketedStoppage(docket RerunDocket, priorRunID, act string) (triage.Entry,
 }
 
 // stoppageIsOver reports the run's own record proving the stoppage is terminal
-// with its blocker standing. Both halves are the condition: a run still in
-// flight is owed the rest of its own step, and one that ended without a blocker
-// stopped for a reason nobody has to decide about.
+// and still standing. Both halves are the condition: a run still in flight is
+// owed the rest of its own step, and one that ended with nothing anybody has to
+// decide about is not a stoppage at all.
+//
+// The second half is asked of the same two facts the docket makes an entry from,
+// and deliberately so. A blocker is nearly always what says a person owns this; a
+// run that died holding its change is the case where nothing recorded one and the
+// work is waiting all the same. An entry exists for either, so a condition that
+// asked only about the blocker would refuse the very stoppages the docket has
+// just started carrying — and refuse them past the lookup that found the entry,
+// which is the worst place to say no.
 func stoppageIsOver(prior runstate.State) error {
 	if !prior.Status.Terminal() {
 		return fmt.Errorf("run %s is recorded as %s rather than ended, so it is owed a continuation rather than a fresh run; a re-run is refused while anything of it is resumable",
 			prior.RunID, prior.Status)
 	}
-	if strings.TrimSpace(prior.Blocker) == "" {
-		return fmt.Errorf("run %s ended carrying no durable blocker, so nothing about it stopped for a person to decide", prior.RunID)
+	if strings.TrimSpace(prior.Blocker) == "" && !preservedDeath(prior) {
+		return fmt.Errorf("run %s ended carrying no durable blocker and left no change behind, so nothing about it stopped for a person to decide", prior.RunID)
 	}
 	return nil
 }

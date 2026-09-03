@@ -898,16 +898,34 @@ queues, and the two that work inside a run are not on it.
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
 reaches the product manager's — carried in the context rather than by you
-noticing something went quiet. Two things put an item on it. A run that ends on
-a durable blocker dockets itself as it stops, and so does a run a `yoyo
-reconcile` sweep stops for it. An approved publication that did not finish is
-docketed too: one the harness already recorded as
+noticing something went quiet. Two things put an item on it. A run stops with
+its change still there, and an approved publication does not finish.
+
+A stopped run reaches the docket by either of two routes. Most of them end on a
+durable blocker, which dockets itself as the run stops, or which a `yoyo
+reconcile` sweep records and dockets for a run whose process died. The rest died
+before anything could record one — a push the remote refused, a backend that
+broke mid-attempt — and those are docketed on the reason they gave for dying,
+once the run is terminal and the change it made is still on its branch or in its
+worktree. The two are one class because they are one fact to whoever reads them:
+the work is still there and nothing is going to pick it up on its own.
+
+A death is docketed as it happens and is never found later by a scan, which is
+the one place the two routes differ. A blocker is a durable classification the
+sweep can re-derive from any record that carries one; a death is a shape every
+terminal failed run with a surviving branch has, so re-deriving it would fill
+this section with settled work from months back and push the stoppages you have
+to decide about off the end of it.
+
+An unfinished publication is docketed too: one the harness already recorded as
 outstanding — a merge the forge dropped, or one it performed that could not be
 confirmed — and one that has simply been sitting unmerged past
 `triage.stuck_merge_age`.
 
 Each entry carries the evidence rather than a summary of it: the blocker in the
-words it was recorded in, the reviewer's own findings, the check that was
+words it was recorded in — or, for a death that recorded none, the failure the
+run gave, labelled as what it is so nobody goes to the item for words nobody
+wrote there — the reviewer's own findings, the check that was
 failing and what it printed, the branch and worktree that were preserved and
 whether they still exist, what the forge says about the merge, and the counters
 saying how many review rounds the item has accumulated against the configured
@@ -1003,9 +1021,11 @@ itself the way every other chosen run does; **your hold on intake applies to
 it**, because the harness is the one choosing here and the exemption for an item
 named by hand is yours rather than the development manager's.
 
-Four things refuse it. The stopped run has to be really over — terminal, with
-its blocker standing, read from the run's own record rather than from the docket
-entry. One docketed stoppage is re-run once. The work item has to be one a run
+Four things refuse it. The stopped run has to be really over — terminal, and
+still standing on whichever of the two put it on the docket: its blocker, or, for
+a run that died before anything recorded one, the change it left behind. Either
+way that is read from the run's own record rather than from the docket entry. One
+docketed stoppage is re-run once. The work item has to be one a run
 may start on — open, with nothing it depends on outstanding — which for a
 docketed stoppage usually means somebody has put it back, because stopping the
 run blocked it. And a decision of the development
