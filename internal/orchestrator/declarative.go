@@ -1,15 +1,15 @@
 package orchestrator
 
-// The declarative trial: the built-in delivery definition stepped beside a run
-// that is really happening.
+// The declarative path: the built-in delivery definition stepped beside a run
+// that is really happening. It is what a new run does unless its project rolled
+// back, which is `execution.declarative_delivery: false` and nothing else.
 //
 // `workflow.go` compiles the definitions and `parity_test.go` walks them against
 // the recorded baseline. Both of those are transcripts of runs that already
-// finished. This is the same walk over a run that has not: a project that opts
-// in records a workflow instance beside each new run, and every boundary the run
-// crosses is put to the definition — the state the run just performed and the
-// outcome it produced — so the definition resolves the transition and the
-// instance records where it went.
+// finished. This is the same walk over a run that has not: each new run records
+// a workflow instance, and every boundary the run crosses is put to the
+// definition — the state the run just performed and the outcome it produced — so
+// the definition resolves the transition and the instance records where it went.
 //
 // What it does not do is perform anything, and that is the difference between
 // this milestone and the one that follows it. The pipeline claims the item,
@@ -23,11 +23,11 @@ package orchestrator
 // `candidate.integrate` would be an executor that could perform it twice after a
 // death, and nothing here is worth that.
 //
-// So what the trial produces is evidence rather than behaviour: a durable record
-// of the sequence the definition chose, standing beside the durable record of
-// the sequence the run took, for as many real items as the operator cares to
-// observe. Where the two disagree the run is untouched and the disagreement is
-// recorded on it — which is the whole bar the soak is measured against.
+// So what the default produces is a record rather than behaviour: the sequence
+// the definition chose, standing beside the durable record of the sequence the
+// run took, for every item the harness delivers. Where the two disagree the run
+// is untouched and the disagreement is recorded on it — which is what made the
+// soak countable and is now what makes every run's topology position readable.
 //
 // One class of disagreement is already known and is deliberately not smoothed
 // over. A run interrupted while its reviewer was being asked resumes at the
@@ -35,8 +35,8 @@ package orchestrator
 // is what keeps an approval from outliving the change it was given for — and no
 // definition has a transition from `review` back to `check`, because no recorded
 // trace holds that path. Such a run records a divergence naming both places. The
-// observation says so rather than inventing a transition, because a trial that
-// quietly agreed with itself would be worth nothing.
+// observation says so rather than inventing a transition, because an observation
+// that quietly agreed with itself would be worth nothing.
 
 import (
 	"context"
@@ -108,13 +108,14 @@ func deliveryInstanceID(runID string) string {
 }
 
 // beginDeliveryTrial creates the durable instance a new run is observed through,
-// when the project has opted in and this process has somewhere to record one.
+// unless the project rolled back to the legacy path or this process has nowhere
+// to record one.
 //
 // Everything it can refuse leaves the run exactly as it was, with no instance
-// and nothing recorded: the trial is an observation of delivery and is never a
-// reason delivery does not happen. The refusals are silent for that reason —
-// there is no run yet for a divergence to be recorded on, and a project that did
-// not opt in is the ordinary case rather than something to report.
+// and nothing recorded: this is an observation of delivery and is never a reason
+// delivery does not happen. The refusals are silent for that reason — there is
+// no run yet for a divergence to be recorded on, and a project that rolled back
+// is one that asked for exactly this rather than something to report.
 func (a *activeRun) beginDeliveryTrial() {
 	p := a.pipeline
 	if !p.Config.Execution.DeclarativeDelivery || p.Instances == nil {
@@ -143,14 +144,14 @@ func (a *activeRun) beginDeliveryTrial() {
 	a.state.WorkflowInstanceID = trial.instance
 }
 
-// resumeDeliveryTrial picks the trial back up on a run this process did not
-// start, from the instance the run's own record names.
+// resumeDeliveryTrial picks the observation back up on a run this process did
+// not start, from the instance the run's own record names.
 //
 // The record decides and the configuration is never consulted, which is the
-// whole of "a legacy run is never migrated": a run started before the opt-in
-// names no instance and is served here exactly as it was served before, and a
-// run started under the opt-in keeps being observed even if the opt-in has since
-// been turned off. What each run is is settled once, when it is created.
+// whole of "an in-flight run is never migrated": a run started on the legacy
+// path names no instance and is served here exactly as it was served before, and
+// a run started on the definition keeps being observed even if the project has
+// rolled back since. What each run is is settled once, when it is created.
 func (a *activeRun) resumeDeliveryTrial() {
 	p := a.pipeline
 	if a.state.WorkflowInstanceID == "" || p.Instances == nil {
@@ -174,9 +175,9 @@ func (a *activeRun) resumeDeliveryTrial() {
 	}
 }
 
-// deliveryTrialOver builds the executor a trial steps with: the definition this
-// project's integration policy binds, compiled with doors that perform nothing,
-// under the same grant a delivery run is compiled and performed under.
+// deliveryTrialOver builds the executor a run is stepped with: the definition
+// this project's integration policy binds, compiled with doors that perform
+// nothing, under the same grant a delivery run is compiled and performed under.
 func (p Pipeline) deliveryTrialOver(runID string) (*deliveryTrial, error) {
 	bound := HumanApprovalWorkflowID
 	if p.automatic() {
@@ -259,8 +260,8 @@ func observedDeliveryGraph(id string) (workflow.Graph[*activeRun], error) {
 //
 // It returns nothing, and that is the contract the rest of the pipeline is
 // written against: an observation cannot fail a run, cannot change where a run
-// goes, and cannot cost it anything but a file write. A run that is not in the
-// trial passes straight through, which is every run until a project opts in.
+// goes, and cannot cost it anything but a file write. A run on the legacy path
+// passes straight through, which is every run a rolled-back project starts.
 func (a *activeRun) observe(ctx context.Context, state, outcome string) {
 	if a.trial == nil || a.trial.stopped != "" {
 		return

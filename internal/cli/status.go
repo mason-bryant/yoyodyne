@@ -685,8 +685,8 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	}
 	// A divergence is not a reason the run ended and is never read as one: the run
 	// delivered exactly as it would have, and what diverged is the observation
-	// beside it. It is printed because the declarative soak is counted off it, and
-	// a divergence nobody is shown is a soak that looks clean.
+	// beside it. It is printed because every run executes the definition by
+	// default now, and a disagreement nobody is shown is one nobody acts on.
 	if run.WorkflowDivergence != "" {
 		fmt.Fprintf(writer, "  workflow divergence: %s\n", singleLine(run.WorkflowDivergence))
 		printed = true

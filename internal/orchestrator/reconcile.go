@@ -72,11 +72,11 @@ type ReconcileStore interface {
 	// where it is and then moves it, which is the same race a promotion is, so
 	// it queues in the same place rather than beside it.
 	LeasePromotion(ctx context.Context, targetBranch string) (*runstate.Lease, error)
-	// LoadWorkflowInstance reads the instance a run in the declarative trial was
+	// LoadWorkflowInstance reads the instance a run on the declarative path was
 	// observed through. A settlement never steps one: it reads whether the
 	// observation reached a terminal of its own, because a run this sweep is
-	// making terminal with an instance still standing mid-graph is one the soak
-	// would otherwise count as clean.
+	// making terminal with an instance still standing mid-graph is one that would
+	// otherwise read as having agreed with the definition throughout.
 	LoadWorkflowInstance(instanceID string) (runstate.WorkflowInstance, error)
 }
 
@@ -678,11 +678,13 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 		state.Status = runstate.StatusSucceeded
 		state.CompletedAt = &completedAt
 	}
-	// This is the settlement the trial's count most depends on. The work landed
-	// and the item closes, so a run whose observation stopped somewhere mid-graph
-	// reads afterwards exactly like one that walked the definition to the end —
-	// which is the single way the soak can be quietly wrong in the direction of
-	// looking clean.
+	// This is the settlement the record most depends on. The work landed and the
+	// item closes, so a run whose observation stopped somewhere mid-graph reads
+	// afterwards exactly like one that walked the definition to the end — which
+	// is the single way the account of a run can be quietly wrong in the
+	// direction of looking clean. The recorded baseline holds one of these: a
+	// process killed inside integration is settled as succeeded with its instance
+	// still standing in `integrate`, and it says so.
 	r.noteUnfinishedObservation(&state)
 	state.Phase = runstate.PhaseCleaningUp
 	state.UpdatedAt = r.clock().Now()
@@ -871,10 +873,10 @@ func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (ru
 //
 // A run served by a live pipeline records this for itself, in activeRun.fail. A
 // run whose process died does not: settling it is the only ending it gets, so
-// without this the runs that end by the routes a soak most needs to hear about —
-// a process killed by the network, by the provider, or by the machine — would be
+// without this the runs that end by the routes most worth hearing about — a
+// process killed by the network, by the provider, or by the machine — would be
 // exactly the runs recorded as having agreed with the definition throughout.
-// This repository's own history for the work that added the trial is four
+// This repository's own history for the work that added the observation is four
 // consecutive runs killed that way, so it is not a corner.
 //
 // It notes rather than saves, like its counterpart: the caller is writing the

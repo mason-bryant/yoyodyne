@@ -250,6 +250,13 @@ execution:
   # changes -- and "0" turns it off, leaving you as the only thing that holds
   # intake.
   blocked_runs_before_intake_hold: %d
+  # Every new run compiles the built-in delivery definition and records where it
+  # sent the run, beside the run's own record. The delivery is the same delivery
+  # either way -- the definition's steps perform nothing -- so what this buys is
+  # the account. Setting it to "false" is the rollback to the legacy path, and it
+  # reaches new runs only: a run already in flight finishes on whatever it
+  # started on.
+  declarative_delivery: %t
 
 # When work that has stopped moving is looked at, and what looking at it may
 # spend. An approved publication nobody has merged is docketed once it has sat
@@ -333,6 +340,7 @@ approvals:
 		renderScaffoldDuration(effective.Execution.CheckTimeout),
 		renderScaffoldDuration(effective.Execution.WorkPoll),
 		effective.Execution.BlockedRunsBeforeIntakeHold,
+		effective.Execution.DeclarativeDelivery,
 		renderScaffoldDuration(effective.Triage.StuckMergeAge),
 		effective.Triage.ReviewRoundsCap,
 		effective.Exchange.MaxRounds,
