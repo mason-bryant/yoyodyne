@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // The run a docket entry names, in the shape the harness mints them, and a
@@ -636,6 +637,161 @@ func triageSend(t *testing.T, options Options) Reply {
 		t.Fatalf("Send() error = %v", err)
 	}
 	return reply
+}
+
+// triageReplyClosing is the same conversation with the docket wired, which is
+// how the command line wires a development manager's: a decision settles the
+// entry it was made about, so the stoppage stops being put to her.
+func triageReplyClosing(t *testing.T, tracker Tracker, docket TriageEntries, answer string) Reply {
+	t.Helper()
+
+	options := triageOptions(t, tracker, nil, answer)
+	options.Reports = &fakeReports{}
+	options.Docket = docket
+	return triageSend(t, options)
+}
+
+// fakeDocket is the durable docket as a decision reaches it: what was closed,
+// and what refuses to close.
+type fakeDocket struct {
+	closed []DocketClosure
+	// closes is how many entries each call reports settling, and err is a docket
+	// that could not be written — the state where the decision stands and the
+	// entry does not.
+	closes int
+	err    error
+}
+
+func (d *fakeDocket) Close(_ context.Context, closure DocketClosure) (int, error) {
+	d.closed = append(d.closed, closure)
+	if d.err != nil {
+		return 0, d.err
+	}
+	return d.closes, nil
+}
+
+// The other half of the docket's lifecycle: an entry is created where work
+// stops, and a decision closes it. Without this the docket is rebuilt from the
+// same durable records at every scan and the same settled stoppage comes back
+// for ever — and a re-scope spends no counter, so nothing else the harness reads
+// says she looked at it.
+func TestATriageDecisionClosesTheDocketEntryItSettled(t *testing.T) {
+	t.Parallel()
+
+	answer := trackerReply("The refused half is its own item now.",
+		`{"action":"triage","id":"yoyodyne-ifd.70","run":"`+stoppedRun+`","decision":"rescope","reason":"the reviewer refused the migration"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.70": {ID: "yoyodyne-ifd.70", Title: "the item that stopped", Status: "open"},
+	}}
+	docket := &fakeDocket{closes: 1}
+	reply := triageReplyClosing(t, tracker, docket, answer)
+
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	if len(docket.closed) != 1 {
+		t.Fatalf("closed = %#v, want the entry this decision settled", docket.closed)
+	}
+	closure := docket.closed[0]
+	if closure.RunID != stoppedRun || closure.Decision != "rescope" {
+		t.Fatalf("closure = %#v, want the stoppage and the decision it was settled with", closure)
+	}
+	// A re-scope answers a run that stopped rather than a publication nobody
+	// merged, and closing the wrong one would take a live question off the docket.
+	if len(closure.Classes) != 1 || closure.Classes[0] != triage.ClassStoppedRun {
+		t.Fatalf("classes = %#v, want the stopped run alone", closure.Classes)
+	}
+	if !strings.Contains(closure.Reason, "refused the migration") || !strings.Contains(closure.DecidedBy, "development manager") {
+		t.Fatalf("closure = %#v, want the reasoning and who decided it", closure)
+	}
+	if rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions); !strings.Contains(rendered, "docket entry(s) of that run are closed") {
+		t.Fatalf("the operator was not told the entry was closed:\n%s", rendered)
+	}
+}
+
+// A wait is a decision about the publication the forge has not finished, and an
+// escalation hands the whole run to the operator. Which entries a decision
+// closes is what keeps a live question on the docket while a settled one leaves.
+func TestWhichEntriesADecisionClosesFollowsWhatItAnswers(t *testing.T) {
+	t.Parallel()
+
+	for _, decided := range []struct {
+		decision string
+		classes  []triage.Class
+	}{
+		{decision: "wait", classes: []triage.Class{triage.ClassPublication}},
+		{decision: "escalate", classes: []triage.Class{triage.ClassStoppedRun, triage.ClassPublication}},
+	} {
+		t.Run(decided.decision, func(t *testing.T) {
+			t.Parallel()
+
+			answer := trackerReply("Decided.",
+				`{"action":"triage","id":"yoyodyne-ifd.70","run":"`+stoppedRun+`","decision":"`+decided.decision+`","reason":"the forge still has it"}`)
+			if decided.decision == "escalate" {
+				answer = reportReply(answer,
+					`{"severity":"warning","message":"yoyodyne-ifd.70 needs a branch protection changed."}`)
+			}
+			tracker := &fakeTracker{items: map[string]beads.WorkItem{
+				"yoyodyne-ifd.70": {ID: "yoyodyne-ifd.70", Title: "the item that stopped", Status: "open"},
+			}}
+			docket := &fakeDocket{closes: len(decided.classes)}
+			reply := triageReplyClosing(t, tracker, docket, answer)
+
+			if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+				t.Fatalf("actions = %#v", reply.Actions)
+			}
+			if len(docket.closed) != 1 {
+				t.Fatalf("closed = %#v, want one closure", docket.closed)
+			}
+			if fmt.Sprint(docket.closed[0].Classes) != fmt.Sprint(decided.classes) {
+				t.Fatalf("classes = %#v, want %#v", docket.closed[0].Classes, decided.classes)
+			}
+		})
+	}
+}
+
+// A docket that could not be written leaves the decision recorded and the entry
+// standing, which is what every entry did before closing existed. Failing the
+// action instead would report a recorded decision as though nothing had
+// happened, and invite exactly the second decision this prevents.
+func TestADocketEntryThatCouldNotBeClosedIsSaidRatherThanFailingTheDecision(t *testing.T) {
+	t.Parallel()
+
+	answer := trackerReply("Decided.",
+		`{"action":"triage","id":"yoyodyne-ifd.70","run":"`+stoppedRun+`","decision":"rescope","reason":"the reviewer refused the migration"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.70": {ID: "yoyodyne-ifd.70", Title: "the item that stopped", Status: "open"},
+	}}
+	docket := &fakeDocket{err: errors.New("the docket is unwritable")}
+	reply := triageReplyClosing(t, tracker, docket, answer)
+
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the decision recorded", reply.Actions)
+	}
+	if len(tracker.updates) != 1 {
+		t.Fatalf("updates = %#v, want the decision on the item", tracker.updates)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	if !strings.Contains(rendered, "could not be closed and will be put to you again") {
+		t.Fatalf("the standing entry was not said out loud:\n%s", rendered)
+	}
+}
+
+// A conversation with no docket wired records the decision and closes nothing,
+// rather than failing a decision it was asked to make.
+func TestADecisionWithoutADocketIsStillRecorded(t *testing.T) {
+	t.Parallel()
+
+	answer := trackerReply("Decided.",
+		`{"action":"triage","id":"yoyodyne-ifd.70","run":"`+stoppedRun+`","decision":"rescope","reason":"the reviewer refused the migration"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.70": {ID: "yoyodyne-ifd.70", Title: "the item that stopped", Status: "open"},
+	}}
+	reply := triageReply(t, tracker, nil, answer)
+
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied || len(tracker.updates) != 1 {
+		t.Fatalf("actions = %#v, updates = %#v", reply.Actions, tracker.updates)
+	}
 }
 
 // fakeStoppedRuns is the harness's record of which run was made for which work

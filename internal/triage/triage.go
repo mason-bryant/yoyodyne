@@ -50,6 +50,11 @@ const CapCleared = math.MaxInt
 // written once and never revised.
 const SchemaVersion = 1
 
+// ClosureSchemaVersion is versioned apart from the entry it settles, because the
+// two are written at different moments by different things: an entry is made
+// where the work stopped, and a closure where somebody decided about it.
+const ClosureSchemaVersion = 1
+
 // Class is what stopped. The two are kept apart because they are found
 // differently and read differently: a stopped run is an event the harness was
 // present for, and a stuck publication is a thing that has not happened, which
@@ -300,6 +305,108 @@ type Rerun struct {
 	RunID     string    `json:"run_id,omitempty"`
 }
 
+// Closure is the triage decision that settled one docketed stoppage: the moment
+// the entry stopped being something anybody has to decide about.
+//
+// It exists because an entry is created where work stops and nothing ever took
+// one off again. The docket is rebuilt from durable records at every scan, and
+// three of the six decisions — waiting, re-scoping, escalating — spend no counter
+// at all, so a stoppage decided last week came back on every docket after it with
+// nothing but the item's notes to say it had been settled. On a long-lived
+// product that is the section that exists to surface unhandled work filling up
+// with handled work, and the development manager's context lists only the newest
+// entries: the decided ones crowd out the ones nobody has looked at.
+//
+// So a decision closes its entry, and the closure is the record of that. It
+// carries the decision and the reasoning rather than only the fact, because what
+// a closed entry has to answer for the next reader is why nobody needs to decide
+// this again — and it names who decided, so a closure is attributable to the
+// conversation that made it rather than to the harness that wrote it down.
+type Closure struct {
+	SchemaVersion int `json:"schema_version"`
+	// Key names the docket entry this settles, which is what makes a closure one
+	// per stoppage rather than one per item or one per run: a run can stop and
+	// have a publication nobody merged, and deciding about one of those is not
+	// deciding about the other.
+	Key        string           `json:"key"`
+	ProductID  domain.ProductID `json:"product_id"`
+	RunID      string           `json:"run_id"`
+	WorkItemID string           `json:"work_item_id"`
+	// Decision is the development manager's decision in the vocabulary the
+	// conversation records it in. It is carried as the word rather than checked
+	// against a list here, because that vocabulary belongs to the role's contract
+	// and a second copy of it is a second thing to keep in step.
+	Decision string `json:"decision"`
+	Reason   string `json:"reason,omitempty"`
+	// DecidedBy is who settled it, in words a reader recognises: the role and the
+	// conversation the decision was recorded in.
+	DecidedBy string    `json:"decided_by"`
+	ClosedAt  time.Time `json:"closed_at"`
+}
+
+// MaxDecisionBytes bounds the decision word a closure carries. The vocabulary is
+// six short words, so anything near this is prose that arrived where a decision
+// was expected.
+const MaxDecisionBytes = 64
+
+// Validate reports every contract violation in the closure at once.
+func (c Closure) Validate() error {
+	var problems []error
+	if c.SchemaVersion != ClosureSchemaVersion {
+		problems = append(problems, fmt.Errorf("schema_version must be %d", ClosureSchemaVersion))
+	}
+	switch key := strings.TrimSpace(c.Key); {
+	case key == "":
+		problems = append(problems, errors.New("key is required: a closure settles one docket entry"))
+	case len(key) > MaxKeyBytes:
+		problems = append(problems, fmt.Errorf("key is %d bytes, limit is %d", len(key), MaxKeyBytes))
+	}
+	if err := domain.ValidateIdentifier("product id", string(c.ProductID)); err != nil {
+		problems = append(problems, err)
+	}
+	if strings.TrimSpace(c.RunID) == "" {
+		problems = append(problems, errors.New("run id is required"))
+	}
+	if strings.TrimSpace(c.WorkItemID) == "" {
+		problems = append(problems, errors.New("work item id is required"))
+	}
+	switch decision := strings.TrimSpace(c.Decision); {
+	case decision == "":
+		// A closure with no decision on it is an entry taken off the docket with
+		// nothing saying why, which is worse than one that reappears: the next
+		// reader cannot tell it from work nobody ever looked at.
+		problems = append(problems, errors.New("the decision that settled this stoppage is required"))
+	case len(decision) > MaxDecisionBytes:
+		problems = append(problems, fmt.Errorf("decision is %d bytes, limit is %d", len(decision), MaxDecisionBytes))
+	}
+	if len(c.Reason) > MaxMessageBytes {
+		problems = append(problems, fmt.Errorf("reason is %d bytes, limit is %d", len(c.Reason), MaxMessageBytes))
+	}
+	if strings.TrimSpace(c.DecidedBy) == "" {
+		problems = append(problems, errors.New("who decided this is required"))
+	}
+	if len(c.DecidedBy) > MaxMessageBytes {
+		problems = append(problems, fmt.Errorf("decided_by is %d bytes, limit is %d", len(c.DecidedBy), MaxMessageBytes))
+	}
+	if c.ClosedAt.IsZero() {
+		problems = append(problems, errors.New("closed_at is required"))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid triage docket closure: %w", err)
+	}
+	return nil
+}
+
+// Describe says what closed one entry, the way a reader of the entry reads it.
+func (c Closure) Describe() string {
+	described := fmt.Sprintf("decided as %q by %s at %s",
+		strings.TrimSpace(c.Decision), strings.TrimSpace(c.DecidedBy), c.ClosedAt.UTC().Format(time.RFC3339))
+	if reason := strings.TrimSpace(c.Reason); reason != "" {
+		described += ": " + reason
+	}
+	return described
+}
+
 // Committed is the round figure the budget is measured against: what this item
 // has cost, or what a recorded grant has promised it, whichever is greater. The
 // two are not added, for the reason the record that keeps them does not add
@@ -407,6 +514,17 @@ type Entry struct {
 	// reason: an override answers the escalation this entry produced, so one frozen
 	// into the entry could only ever be absent.
 	Overrides []Override `json:"overrides,omitempty"`
+	// Closed is the decision that settled this stoppage, when one has been
+	// recorded. Like the re-run and the overrides above it is joined where the
+	// docket is read rather than written into the log, and for the same reason
+	// sharpened: a decision is made after the work stopped, so a closure frozen
+	// into the entry could only ever be absent.
+	//
+	// An entry carrying one is off the docket: it is not listed for the
+	// development manager and not delivered to her, because the question it asks
+	// has been answered. It is still on the log, which is what stops the same
+	// stoppage being docketed again from the same durable records.
+	Closed *Closure `json:"closed,omitempty"`
 	// CountersProblem is why the item's durable triage record could not be read
 	// for this entry. It is stated rather than left to zeros, which would read as
 	// an item nothing has been decided about — the one reading that turns an
@@ -576,6 +694,14 @@ func (e Entry) Render() string {
 	var rendered strings.Builder
 	fmt.Fprintf(&rendered, "  [%s] %s on %s (%s)\n",
 		e.Class.Title(), e.RecordedAt.UTC().Format(time.RFC3339), e.item(), e.RunID)
+	// Said first, because it is the one thing that changes what everything below
+	// it is for: the evidence is still worth reading and the question it was
+	// gathered to answer has been answered. A closed entry is not listed on the
+	// development manager's docket at all, so this is for wherever else one is
+	// shown — and an entry rendered without it would read as undecided.
+	if e.Closed != nil {
+		rendered.WriteString(indented("Closed", e.Closed.Describe()))
+	}
 	if e.Blocker != "" {
 		rendered.WriteString(indented("Blocker", e.Blocker))
 	}

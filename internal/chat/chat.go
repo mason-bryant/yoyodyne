@@ -200,6 +200,14 @@ type Options struct {
 	// conversation without one records a decision unchecked, and decomposes
 	// ungated, rather than appearing to have done either.
 	Stoppages Stoppages
+	// Docket is the durable record of what has stopped moving, wired here so a
+	// decision takes the stoppage it settled off it. Without it an entry stands
+	// for ever — the docket is rebuilt from durable records at every scan, and the
+	// decisions that spend no budget leave nothing else that says somebody looked
+	// — so the settled stoppages crowd the unsettled ones out of a listing that is
+	// bounded. It is optional like the rest, and a conversation without one
+	// records the decision and says the entry is still standing.
+	Docket TriageEntries
 	// Exchanges is the inter-role ask channel: how a question this role cannot
 	// answer itself reaches the role that can, without the operator relaying it
 	// and without a whole work item. It is optional like the rest, and a

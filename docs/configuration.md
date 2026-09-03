@@ -2854,7 +2854,9 @@ Three of the development manager's six decisions spend a budget here — a repai
 grant, a re-run, a merge re-arm — and `wait`, `rescope`, and `escalate` cost
 nothing and reach no counter, so an item that was escalated reads `triage has
 spent nothing on it`. Whether stopped work has been decided, and what was
-decided, is recorded on the work item itself.
+decided, is recorded on the work item itself — and on the docket entry, which
+every decision closes, so a stoppage settled without spending anything still
+leaves the docket rather than being put to the development manager again.
 
 **This is also what the docket reports.** Every entry for an item carries these
 counters and these caps, read as the docket is read, so what `yoyo status` says

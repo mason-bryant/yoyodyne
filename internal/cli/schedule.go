@@ -512,10 +512,11 @@ them reaches her over several polls rather than holding the queue closed while
 she reads, and a stoppage she has already been granted a repair or a re-run for
 is passed over whether or not that decision has been carried out yet. Her
 decisions that spend nothing -- escalating to you, re-scoping, waiting -- leave
-no counter to read, so a stoppage settled one of those ways can reach her once
-more; the docket entry she is shown says what has been decided about it. She
-decides there and the decision is recorded against the item's triage budget
-exactly as it is when somebody brings her a stoppage by hand; nothing is carried
+no counter to read, and what says she looked is that the decision closed the
+docket entry: a settled stoppage is neither delivered again nor listed on the
+docket she reads, whichever way she decided it. She decides there and the
+decision is recorded against the item's triage budget exactly as it is when
+somebody brings her a stoppage by hand; nothing is carried
 out by this, so "yoyo triage repair" and "yoyo triage rerun" still act on what
 she decided. A turn that may have reached her and then failed is made again a
 quarter of an hour later, three times in all, and
