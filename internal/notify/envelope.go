@@ -533,6 +533,22 @@ type Detail struct {
 	ExitCode int    `json:"exit_code,omitempty"`
 	// Findings is how many the reviewer raised, read by KindReviewRepairs.
 	Findings int `json:"findings,omitempty"`
+	// Requested is what each of those findings asked for, one entry per finding
+	// and in the order the reviewer raised them, read by KindReviewRepairs beside
+	// the count. The count alone says how much work came back and nothing about
+	// what it is, so an operator reading it could not tell a one-word correction
+	// to a document from a problem with the design without leaving the channel.
+	//
+	// Each entry is carried already said rather than as the finding it came from,
+	// for the reason Standing is: what a reader sees is the durable record's own
+	// account, and a second rendering of one finding is a second way to say it.
+	// The words are the reviewer's and are already redacted, because the record
+	// they are read from was redacted before it was written.
+	//
+	// Absent is a record that counted findings without keeping them, which is
+	// every run reviewed before the repair loop kept them. That is said as itself
+	// rather than as a run whose reviewer asked for nothing.
+	Requested []string `json:"requested,omitempty"`
 	// TargetBranch and Commit are where a promotion put the change, read by
 	// KindPromoted.
 	//

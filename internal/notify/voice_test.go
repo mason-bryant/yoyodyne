@@ -30,6 +30,15 @@ func speakers() []Speaker {
 	return all
 }
 
+// requestedChanges is what a repair round asked for, as the record holds it: two
+// findings a line takes whole and one longer than any line, so what a message
+// does with each of them is exercised wherever this event is rendered.
+var requestedChanges = []string{
+	"blocker: handle the nil worktree (runner.go:42)",
+	"major: integration is now automatic; README.md still says the harness does not integrate (README.md:38)",
+	"minor: " + strings.Repeat("a finding nobody could fit on a line ", 12),
+}
+
 // fullyRecorded is an event with every field a voice line could reach for, so a
 // rendering failure is a missing line rather than a missing fact.
 func fullyRecorded(kind Kind) Event {
@@ -49,6 +58,7 @@ func fullyRecorded(kind Kind) Event {
 			Command:         "go test ./...",
 			ExitCode:        1,
 			Findings:        3,
+			Requested:       requestedChanges,
 			TargetBranch:    "main",
 			Commit:          "0123456789abcdef0123456789abcdef01234567",
 			PullRequest:     "#84 (https://example.test/pull/84)",
@@ -124,7 +134,13 @@ func TestEveryMessageSaysWhoseMoveFollowsIt(t *testing.T) {
 			// The clause is the harness's note about where the thread stands rather
 			// than part of what the persona said, and most lines finish on words
 			// somebody typed rather than on a full stop.
+			// A line the message cut ends on the mark saying so, which closes the
+			// account exactly as a full stop does — and putting a full stop after it
+			// would end a sentence the cut is what removed.
 			account := strings.TrimSuffix(message.Body, nextMoveLead+move)
+			if strings.HasSuffix(account, requestedCutMark) {
+				continue
+			}
 			if !strings.HasSuffix(account, ".") && !strings.HasSuffix(account, "!") && !strings.HasSuffix(account, "?") {
 				t.Fatalf("the %s says %s as %q, which runs the clause into the account", speaker.Key(), kind, message.Body)
 			}
@@ -662,6 +678,98 @@ func TestACountIsSaidInWordsRatherThanAsABareNumber(t *testing.T) {
 		if got := countOf(count, "finding", "findings", "findings the record does not count"); got != want {
 			t.Fatalf("countOf(%d) = %q, want %q", count, got, want)
 		}
+	}
+}
+
+// A count says how much came back and nothing about what it is, and an operator
+// reading one cannot tell a correction to a document from a problem with the
+// design without leaving the channel. So a repair request names each change it
+// asks for, in every voice that can say one.
+func TestARepairRequestNamesEachChangeItAsksFor(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.2")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	for _, speaker := range speakers() {
+		message, err := Render(topic, speaker, fullyRecorded(KindReviewRepairs))
+		if err != nil {
+			t.Fatalf("the %s asks for repairs: %v", speaker.Key(), err)
+		}
+		if !strings.Contains(message.Body, "- blocker: handle the nil worktree (runner.go:42)") {
+			t.Fatalf("the %s asks for repairs as %q, which does not name the first change", speaker.Key(), message.Body)
+		}
+		if !strings.Contains(message.Body, "- major: integration is now automatic") {
+			t.Fatalf("the %s asks for repairs as %q, which does not name the second change", speaker.Key(), message.Body)
+		}
+		// One line per finding, so what came back is taken in at a glance rather
+		// than read as a paragraph.
+		lines := 0
+		for _, line := range strings.Split(message.Body, "\n") {
+			if strings.HasPrefix(line, "- ") {
+				lines++
+			}
+		}
+		if lines != len(requestedChanges) {
+			t.Fatalf("the %s put %d changes on their own line, want %d: %q", speaker.Key(), lines, len(requestedChanges), message.Body)
+		}
+	}
+}
+
+func TestAFindingTooLongForALineIsCutRatherThanOverflowing(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.2")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	message, err := Render(topic, Persona(domain.RoleReviewer, ""), fullyRecorded(KindReviewRepairs))
+	if err != nil {
+		t.Fatalf("render a repair request: %v", err)
+	}
+	// The clause saying whose move follows is the harness's own note, and it lands
+	// after the last change rather than being part of it.
+	account := strings.TrimSuffix(message.Body, nextMoveLead+nextMoves[KindReviewRepairs])
+	for _, line := range strings.Split(account, "\n") {
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		if len(line) > len("- ")+MaxRequestedBytes {
+			t.Fatalf("a requested change is %d bytes: %q", len(line), line)
+		}
+	}
+	if !strings.Contains(message.Body, requestedCutMark) {
+		t.Fatalf("a finding longer than a line was not marked as cut: %q", message.Body)
+	}
+	// The cut takes the tail rather than the beginning: what a reader is owed is
+	// which change is being asked for, and that is where the finding starts.
+	if !strings.Contains(message.Body, "- minor: a finding nobody could fit on a line") {
+		t.Fatalf("a cut finding lost the words it starts with: %q", message.Body)
+	}
+	if got := boundLine("blocker: short enough."); got != "blocker: short enough." {
+		t.Fatalf("a finding a line takes whole was changed to %q", got)
+	}
+}
+
+// A record that counted findings without keeping them is not a reviewer who
+// asked for nothing, and a message that said nothing about the difference would
+// read as the whole account of a repair round.
+func TestARepairRequestSaysWhenTheRecordKeptNoChanges(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.2")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	event := fullyRecorded(KindReviewRepairs)
+	event.Detail.Requested = nil
+	message, err := Render(topic, Persona(domain.RoleReviewer, ""), event)
+	if err != nil {
+		t.Fatalf("render a repair request: %v", err)
+	}
+	if !strings.Contains(message.Body, "3 findings") {
+		t.Fatalf("body %q does not count the findings", message.Body)
+	}
+	if !strings.Contains(message.Body, "in the record rather than here") {
+		t.Fatalf("body %q does not say where what each finding asks for is", message.Body)
+	}
+	if strings.Contains(message.Body, "\n- ") {
+		t.Fatalf("body %q lists changes the record does not hold", message.Body)
 	}
 }
 
