@@ -366,6 +366,64 @@ func TestAnUnreachableConversationKeepsTheDelivery(t *testing.T) {
 	}
 }
 
+// A delivery a cancellation killed before her answer existed is the harness's
+// own death rather than anything about her, so it gives its attempt back too.
+// This is the whole of yoyodyne-ifd.250: every teardown of the process the pull
+// ran in spent an attempt, and enough of them turned a stoppage nobody had ever
+// been shown into a record saying it needs a person.
+func TestADeliveryACancellationKilledKeepsTheDelivery(t *testing.T) {
+	t.Parallel()
+
+	judge := &standingJudge{err: fmt.Errorf("%w: development manager reported failure: cancelled", ErrDeliveryCancelled)}
+	escalator := escalatorOver(t, []runstate.State{reviewStoppedState(docketedRunID, docketedItem)}, judge, nil)
+	clock := &movingClock{now: escalationNow}
+	escalator.Clock = clock
+
+	// More teardowns than the bound permits attempts. Not one of them may spend
+	// one, so no number of them can abandon a stoppage.
+	for teardown := 0; teardown <= runstate.MaxEscalationAttempts; teardown++ {
+		sweep, err := escalator.Escalate(context.Background())
+		if err != nil {
+			t.Fatalf("teardown %d: Escalate() error = %v", teardown, err)
+		}
+		if len(sweep.Escalated) != 1 || sweep.Escalated[0].Delivered {
+			t.Fatalf("teardown %d = %#v, want a delivery that did not happen", teardown, sweep.Escalated)
+		}
+		if strings.Contains(sweep.Escalated[0].Problem, "needs a person") {
+			t.Fatalf("teardown %d problem = %q, want a killed turn to leave the stoppage deliverable", teardown, sweep.Escalated[0].Problem)
+		}
+		// And what a person reads says what actually happened. "Not put to the
+		// development manager" is the claim this failure explicitly refuses to
+		// make: the provider had the prompt from the moment the invocation
+		// started, and what ended was the turn rather than the asking.
+		if !strings.Contains(sweep.Escalated[0].Problem, "ended before she answered") {
+			t.Fatalf("teardown %d problem = %q, want it to say the turn ended before she answered", teardown, sweep.Escalated[0].Problem)
+		}
+		if strings.Contains(sweep.Escalated[0].Problem, "was not put to the development manager") {
+			t.Fatalf("teardown %d problem = %q, want it not to claim she was never asked", teardown, sweep.Escalated[0].Problem)
+		}
+		recorded, found, err := escalator.Records.Find(sweep.Escalated[0].DocketKey)
+		if err != nil || !found {
+			t.Fatalf("teardown %d: Find() = found %v, error %v", teardown, found, err)
+		}
+		if recorded.Attempts != 0 {
+			t.Fatalf("teardown %d attempts = %d, want the harness's own death left uncounted", teardown, recorded.Attempts)
+		}
+		clock.now = clock.now.Add(runstate.EscalationRetryDelay)
+	}
+
+	// And the stoppage is still hers to judge once something answers.
+	judge.err = nil
+	judge.judgment = Judgment{ConversationID: "chat-abc", Decision: "rerun"}
+	next, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after the teardowns error = %v", err)
+	}
+	if len(next.Escalated) != 1 || !next.Escalated[0].Delivered {
+		t.Fatalf("after the teardowns = %#v, want the stoppage still delivered", next.Escalated)
+	}
+}
+
 // A turn that may have been taken is one nothing can claim was not, so the
 // attempt stands and the delivery does not. It is tried again, and the trying is
 // bounded: past the bound the stoppage needs a person, and every pass afterwards

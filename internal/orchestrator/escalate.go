@@ -178,9 +178,61 @@ type Judgment struct {
 
 // ErrConversationUnreachable reports a delivery that failed before the
 // development manager was asked anything: her conversation could not be opened
-// at all. It is its own error because it is the one failure whose attempt is
-// provably worth giving back — nothing was said to her, and nothing was spent.
+// at all. It is its own error because it is a failure whose attempt is provably
+// worth giving back — nothing was said to her, and nothing was spent.
 var ErrConversationUnreachable = errors.New("the development manager's conversation could not be opened")
+
+// ErrDeliveryCancelled reports a delivery whose turn a cancellation killed
+// before any answer of hers existed — a signal, a shutdown, a process-group
+// teardown taken out from under the pull. It is separate from an unreachable
+// conversation because it is a different fact about the same delivery and both
+// are recorded in words a person reads: her conversation opened perfectly well,
+// and what stopped the delivery was the harness's own death.
+//
+// It is the second failure whose attempt is worth giving back, and it is worth
+// giving back for the reason stated on the Withdraw contract it is spent
+// against: the turn ended before a reply existed, so nothing of hers was parsed,
+// no action was applied, and the item's durable triage record never moved. A
+// second delivery of it therefore cannot become a second decision, which is the
+// harm the attempt record exists to prevent.
+//
+// What it does not claim is that she never saw the message. The provider had the
+// prompt from the moment the invocation started. The claim is the narrower one
+// the give-back actually rests on: this turn decided nothing and carried nothing
+// out.
+var ErrDeliveryCancelled = errors.New("the delivery was cancelled before the development manager answered")
+
+// notTaken reports a delivery failure whose attempt is given back rather than
+// spent. Both members are failures that produced no answer of hers, and every
+// other ending is left as an attempt she may have been asked.
+func notTaken(err error) bool {
+	return errors.Is(err, ErrConversationUnreachable) || errors.Is(err, ErrDeliveryCancelled)
+}
+
+// undelivered says what became of a delivery whose attempt is being given back,
+// in the words each of the two failures actually earns.
+//
+// The two are not the same sentence, and writing them as one would put the claim
+// ErrDeliveryCancelled explicitly refuses to make into the record a person reads:
+// a cancelled turn is not a stoppage that was never put to her — the provider
+// had the prompt from the moment the invocation started — it is a turn that
+// ended before she answered.
+func undelivered(runID string, judgeErr error) string {
+	if errors.Is(judgeErr, ErrDeliveryCancelled) {
+		return fmt.Sprintf("the turn putting the stoppage of run %s to the development manager ended before she answered", runID)
+	}
+	return fmt.Sprintf("the stoppage of run %s was not put to the development manager", runID)
+}
+
+// undeliveredAndWaiting is that sentence with what happens next on it, which is
+// the same promise either way: the attempt came back, and the stoppage is put to
+// her once the delay the record keeps has passed.
+func undeliveredAndWaiting(runID string, judgeErr error, delay time.Duration) string {
+	if errors.Is(judgeErr, ErrDeliveryCancelled) {
+		return fmt.Sprintf("%s, and it will be put to her again once %s has passed", undelivered(runID, judgeErr), delay)
+	}
+	return fmt.Sprintf("%s and will be once %s has passed", undelivered(runID, judgeErr), delay)
+}
 
 // Escalator delivers docketed stoppages to the development manager. It has no
 // tracker, no worktree access, and no forge access, and it starts nothing: what
@@ -451,10 +503,11 @@ func reviewRepairStoppage(state runstate.State) bool {
 // deliver puts one stoppage in front of the development manager and records what
 // came back.
 //
-// A conversation that could not be opened gives the attempt back: nothing was
-// asked of her, so the stoppage keeps the delivery it is owed and the next pass
-// makes it. Every other failure keeps the attempt, because a turn that may have
-// been taken is one this cannot claim was not — and the record is bounded, so a
+// A delivery that produced no answer of hers gives the attempt back — her
+// conversation could not be opened, or a cancellation killed the turn before a
+// reply existed — so the stoppage keeps the delivery it is owed and the next
+// pass makes it. Every other failure keeps the attempt, because a turn that
+// answered is one this cannot claim did not — and the record is bounded, so a
 // delivery that goes on failing stops rather than spending every pass on it.
 // It reports whether an attempt was made at all, so a stoppage another process
 // claimed between the reading and the claim leaves this pass looking at the next
@@ -481,12 +534,12 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 	// What the turn cost is carried whichever way it went, because the provider
 	// charges for a turn that failed exactly as for one that answered.
 	escalated.CostUSD = judgment.CostUSD
-	if errors.Is(judgeErr, ErrConversationUnreachable) {
-		escalated.Problem = fmt.Sprintf("the stoppage of run %s was not put to the development manager and will be once %s has passed: %v",
-			entry.RunID, runstate.EscalationRetryDelay, judgeErr)
+	if notTaken(judgeErr) {
+		escalated.Problem = fmt.Sprintf("%s: %v",
+			undeliveredAndWaiting(entry.RunID, judgeErr, runstate.EscalationRetryDelay), judgeErr)
 		if err := e.Records.Withdraw(ctx, entry.Key, judgeErr.Error()); err != nil {
-			escalated.Problem = fmt.Sprintf("the stoppage of run %s was not put to the development manager, and the attempt taken for it could not be given back, so it has spent one of %d on a turn nobody took: %v",
-				entry.RunID, runstate.MaxEscalationAttempts, err)
+			escalated.Problem = fmt.Sprintf("%s, and the attempt taken for it could not be given back, so it has spent one of %d on a turn that decided nothing: %v",
+				undelivered(entry.RunID, judgeErr), runstate.MaxEscalationAttempts, err)
 		}
 		return escalated, true, nil
 	}
