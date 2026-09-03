@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,9 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -391,14 +394,225 @@ func TestTheDeveloperContractSaysHowToProposeAChange(t *testing.T) {
 	// where a persona cannot weaken it — and repeated on a repair attempt for the
 	// same reason the rest of the contract is.
 	for name, prompt := range map[string]string{
-		"first attempt": developerPrompt("", "", "# Assigned work item\n", "/scratch"),
-		"check repair":  checkRepairPrompt("", "/scratch", runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}, 1, 2),
+		"first attempt":       developerPrompt("", "", "# Assigned work item\n", "/scratch"),
+		"check repair":        checkRepairPrompt("", "/scratch", runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}, 1, 2),
+		"path refusal repair": pathRefusalRepairPrompt("", "/scratch", runstate.PathRefusal{Paths: []string{"docs/designs/v1-design.md"}}, protectedpath.Protect(config.Config{}), 1, 2),
 	} {
-		for _, required := range []string{amendment.Fence, "A proposal is not an edit you have written in advance"} {
+		for _, required := range []string{
+			amendment.Fence,
+			"A proposal is not an edit you have written in advance",
+			// The prohibition is the whole of what stands between a refusal and a
+			// durable false claim in the case the carry-back cannot reach: a
+			// developer invoked once, whose refusal is only discoverable after its
+			// only reply. Nothing asks that developer anything afterwards, so if this
+			// paragraph goes the run-6ff896ba failure comes back with every check
+			// still green.
+			"Writing the block is not the same as the proposal being recorded",
+			"nothing you write may assert that a proposal has been raised",
+			// And that the harness can only answer afterwards, which is what makes
+			// the prohibition follow rather than read as an arbitrary rule.
+			"it can only tell you so after the reply that carried it",
+		} {
 			if !strings.Contains(prompt, required) {
 				t.Fatalf("%s prompt is missing %q", name, required)
 			}
 		}
+	}
+}
+
+// The failure this ends, from run-6ff896ba: a developer named a document the
+// repository does not record, the refusal reached the operator and nobody else,
+// and the developer went on to write into a checked-in file that it had raised a
+// proposal nothing was holding. So the refusal is put in front of that developer
+// before it can be asked anything again — and it is spent by the reply to that
+// invocation, because a refusal repeated on every attempt is one the developer
+// answers over and over.
+func TestARefusedProposalIsPutInFrontOfTheDeveloperThatMadeIt(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	writeDesignArtifact(t, repository)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		// Two failing checks, so the developer is invoked three times: the attempt
+		// that proposes, the one that is told, and one more that must not be told
+		// again.
+		if attempts < 3 {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	provider.developerFinalTextByAttempt = []string{
+		"worked on it\n\n" + amendmentBlock(`{"artifact":"invented","change":"say which ordering holds","why":"the item cannot satisfy both"}`),
+		"worked on it",
+	}
+	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	pipeline.Amendments = &fakeAmendments{}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The refusal still costs the run nothing, which is the property the carry-back
+	// must not have quietly changed.
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("a refused proposal changed what the run did: %#v", outcome)
+	}
+	requests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(requests) != 3 {
+		t.Fatalf("developer invocations = %d, want the attempt that proposed and two repairs", len(requests))
+	}
+	// Nothing had been refused yet when the proposing attempt was asked.
+	if strings.Contains(requests[0].Prompt, "A change you proposed was not recorded") {
+		t.Fatalf("the first attempt was told about a refusal that had not happened:\n%s", requests[0].Prompt)
+	}
+	// The next one opens with it, in the harness's own words rather than a
+	// paraphrase, and is told not to leave the claim behind in the change.
+	told := requests[1].Prompt
+	if !strings.HasPrefix(told, "# A change you proposed was not recorded") {
+		t.Fatalf("the next invocation does not open with the refusal:\n%s", told)
+	}
+	for _, want := range []string{
+		"no artifact answers to that id",
+		"Do not describe the proposal as raised",
+		"do not write into your change",
+		// Refraining is not enough on its own. The refusal cannot be known before
+		// the reply that carried it, so the attempt that proposed has already had
+		// its turn — and in run-6ff896ba that is the turn the false claim was
+		// written in. The attempt that is told has to be asked to undo it.
+		"take that back out now",
+	} {
+		if !strings.Contains(told, want) {
+			t.Fatalf("the carried refusal is missing %q:\n%s", want, told)
+		}
+	}
+	// And the contract the invocation still carries under it, so the developer is
+	// asked for the work as well as told about the refusal.
+	if !strings.Contains(told, "Failing check: repair required") {
+		t.Fatalf("the carried refusal replaced the repair the attempt was for:\n%s", told)
+	}
+	// Told once. The reply to that invocation spends it.
+	if strings.Contains(requests[2].Prompt, "A change you proposed was not recorded") {
+		t.Fatalf("the refusal was carried a second time:\n%s", requests[2].Prompt)
+	}
+}
+
+// The carry-back has to survive the process, not just the loop. A run stopped
+// after the reply that was refused is continued by triage in another process
+// entirely, and the developer it hands the work back to is the one that has still
+// never been told.
+func TestARefusedProposalIsDurableForAnInvocationInAnotherProcess(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	writeDesignArtifact(t, repository)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	provider.developerFinalText = "implemented the work item\n\n" +
+		amendmentBlock(`{"artifact":"invented","change":"say which ordering holds","why":"the item cannot satisfy both"}`)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Amendments = &fakeAmendments{}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// Read back through the store, the way a later process reads it: the words are
+	// on disk rather than only in the prompt this run happened to build.
+	recorded, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(recorded.RefusedAmendments) != 1 || !strings.Contains(recorded.RefusedAmendments[0].Problem, "no artifact answers to that id") {
+		t.Fatalf("the refusal did not survive the run: %#v", recorded.RefusedAmendments)
+	}
+	// Tagged with who proposed it, which is what decides who is shown it.
+	if recorded.RefusedAmendments[0].Role != domain.RoleDeveloper {
+		t.Fatalf("the refusal is not attributed to the role that earned it: %#v", recorded.RefusedAmendments[0])
+	}
+}
+
+// A refusal is shown to the role that earned it and to nobody else. Only the
+// developer's reply is scanned for proposals today, so only a developer can earn
+// one — but what makes that safe has to be the attribution rather than the single
+// caller, because a refusal shown to the wrong agent is that agent told not to
+// claim something it never said while the agent that did say it goes on believing
+// its proposal landed. That is the failure this item exists to end, one role over.
+func TestARefusalIsNotShownToARoleThatDidNotEarnIt(t *testing.T) {
+	t.Parallel()
+
+	const problem = "a change the reviewer proposed was not recorded: invented: no artifact answers to that id"
+	carried := []runstate.AmendmentRefusal{{Role: domain.RoleReviewer, Problem: problem}}
+
+	// The developer is shown nothing, because none of it is the developer's.
+	if section := carriedAmendmentRefusals(domain.RoleDeveloper, carried); section != "" {
+		t.Fatalf("another role's refusal was put in front of the developer:\n%s", section)
+	}
+	// The role that earned it still is.
+	section := carriedAmendmentRefusals(domain.RoleReviewer, carried)
+	if !strings.Contains(section, problem) {
+		t.Fatalf("the proposing role was not shown its own refusal:\n%s", section)
+	}
+
+	// And spending one role's refusals leaves every other role's where they are: a
+	// developer reply says the developer was told, and nothing about anybody else.
+	run := &activeRun{state: runstate.State{RefusedAmendments: append(
+		[]runstate.AmendmentRefusal{{Role: domain.RoleDeveloper, Problem: "a change the developer proposed was not recorded: invented: no artifact answers to that id"}},
+		carried...)}}
+	run.clearCarriedAmendmentRefusals(domain.RoleDeveloper)
+	if len(run.state.RefusedAmendments) != 1 || run.state.RefusedAmendments[0].Role != domain.RoleReviewer {
+		t.Fatalf("clearing one role's refusals took another role's with them: %#v", run.state.RefusedAmendments)
+	}
+}
+
+// The carried list is bounded, so a run whose every reply is an unreadable block
+// cannot fill durable state or the next prompt with refusals. Past the bound the
+// refusal is still named on the outcome, which is the half that reaches the
+// operator.
+func TestCarriedAmendmentRefusalsStopAtTheBound(t *testing.T) {
+	t.Parallel()
+
+	run := &activeRun{}
+	for i := 0; i < runstate.MaxCarriedAmendmentRefusals+3; i++ {
+		run.noteAmendmentProblem(domain.RoleDeveloper, fmt.Errorf("refusal %d", i))
+	}
+	if len(run.state.RefusedAmendments) != runstate.MaxCarriedAmendmentRefusals {
+		t.Fatalf("carried %d refusals, want the bound of %d", len(run.state.RefusedAmendments), runstate.MaxCarriedAmendmentRefusals)
+	}
+	// What was dropped from the carry is still on the outcome for the operator.
+	if !strings.Contains(run.outcome.AmendmentProblem, "refusal 12") {
+		t.Fatalf("a refusal past the bound was lost to the operator too: %q", run.outcome.AmendmentProblem)
+	}
+	// And every one of them is in a shape the store will take, since a refusal the
+	// state refuses is a refusal nobody is ever told.
+	for index, refused := range run.state.RefusedAmendments {
+		if err := refused.Validate(); err != nil {
+			t.Fatalf("carried refusal %d is not storable: %v", index, err)
+		}
+	}
+}
+
+// One refusal longer than the bound is folded to it rather than left for the
+// store to refuse, because a refusal the state will not take is a refusal nobody
+// is ever told. Today's callers fold to a shorter bound of their own before they
+// get here, so this asks the unit whose guarantee it is rather than going through
+// them: what must hold is that nothing this appends is a shape the state rejects,
+// whatever the caller hands it.
+func TestALongAmendmentRefusalIsFoldedToWhatTheStateWillTake(t *testing.T) {
+	t.Parallel()
+
+	run := &activeRun{}
+	run.carryAmendmentRefusal(domain.RoleDeveloper, strings.Repeat("x", runstate.MaxAmendmentRefusalBytes*2))
+	if len(run.state.RefusedAmendments) != 1 {
+		t.Fatalf("carried = %#v", run.state.RefusedAmendments)
+	}
+	if err := run.state.RefusedAmendments[0].Validate(); err != nil {
+		t.Fatalf("an over-long refusal was carried in a shape the store refuses: %v", err)
 	}
 }
 
