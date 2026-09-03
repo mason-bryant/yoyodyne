@@ -651,7 +651,7 @@ func (s *EscalationStore) lock(ctx context.Context, docketKey string) (func(), e
 		file.Close()
 		return nil, fmt.Errorf("lock the triage escalation of %s: %w", docketKey, err)
 	}
-	return func() { file.Close() }, nil
+	return func() { _ = releaseStateFile(file) }, nil
 }
 
 // path names one stoppage's record, the same way the re-run beside it is named:

@@ -990,7 +990,7 @@ func (s *TriageStore) lock(ctx context.Context, workItemID string) (func(), erro
 		file.Close()
 		return nil, fmt.Errorf("lock triage counters for %s: %w", workItemID, err)
 	}
-	return func() { file.Close() }, nil
+	return func() { _ = releaseStateFile(file) }, nil
 }
 
 func (s *TriageStore) path(workItemID string) string {
