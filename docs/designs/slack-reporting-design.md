@@ -22,6 +22,14 @@ revisions:
       by: architect
       at: 2026-09-01T19:15:00Z
       reason: approved amendments fb92f7a7, 3b9126c6, and e3d3c8e9 from yoyodyne-ifd.68.25 - the prose ruling answers which prose posts, its attribution, every role's voice, and @role answering, with decision 1 unamended; and decision 2's token claim now names both mechanisms, enforced by construction for agents and stated honestly for the harness process, with setup moved off shell export
+    - action: amended
+      by: architect
+      at: 2026-09-03T16:45:00Z
+      reason: yoyodyne-ifd.68.25.1 - the operator's direction that agents appear to speak in threads with their own identity, formalized over the fb92f7a7 ruling; the durable-record source rule and the reporter's no-provider rule are restated unchanged as what makes the proxy safe
+    - action: amended
+      by: architect
+      at: 2026-09-03T16:45:00Z
+      reason: approved amendments 2a89bb4b and fb58a54c (3cb3ca45 declined as duplicate) - the direct-message tier's admitting rule is two named classes, degraded and advisory-once, with the shipped states listed and the bundle-improvement notice admitted as the first advisory-once member with durable dedup; rules yoyodyne-ifd.241.1 and 241.3
 ---
 
 # Slack reporting: events out, directives in, one thread per topic
@@ -46,12 +54,17 @@ A sink starting with no cursor for a stream initializes that cursor at now and r
 
 **4. Socket Mode, confirmed.** The harness runs on operators' machines behind NAT; the Events API would demand a public HTTPS endpoint per operator, which fails the near-one-click setup requirement outright. And Socket Mode is bidirectional on one connection, which is what makes 68.4 a feature flag rather than a transport redesign: the websocket that posts is the websocket replies arrive on. Rejected: incoming webhooks — outbound-only, so two-way would mean a second transport later, which is precisely the rework this design exists to prevent.
 
-**5. Persona voice is deterministic; agent-authored text is verbatim.** Two kinds of outbound message, and the split is load-bearing:
+**5. Persona voice is deterministic; agent-authored text is verbatim.** The channel carries agent speech, and each persona appears to speak with its own display identity and avatar, the reporter posting as its proxy. Two rules make that safe and are unchanged in substance: **no prose reaches Slack that is not first held in a durable record** — the verbatim kinds, and recorded conversation turns routed through the durable interaction service — and **the reporter never invokes a provider**, because the process holding the tokens must never be the process running an agent. Harness facts remain deterministically rendered; a persona's voice is its recorded words, never a generation made for the channel. Two kinds of outbound message, and the split is load-bearing:
 
 - **Harness facts** — a run starting, checks passing, a verdict, a promotion — are rendered from the event by per-role voice templates shipped alongside the personas (68.2's deliverable), with each persona given its own Slack display name and avatar on the message. No provider invocation per event. Rejected: voicing events through a model. It prices visibility at a model call per event, makes the channel nondeterministic, and puts a model between a fact and its reporting — a model paraphrasing "checks failed" is a model that can misstate it.
 - **Agent-authored text** — a report, a proposal's summary, an ask-exchange turn — is posted as the agent wrote it, attributed to its persona, already redacted (decision 7). This is where the genuine voice lives, at no added cost and no added risk: it is text the agent already said, in a channel that already carries agent text to operators.
 
 **What prose the channel carries.** Decision 1 stands: the source is the durable record, and the reporter additionally never invokes a provider, because the process that holds the tokens must never be the process that runs an agent. What widens is what gets durably recorded. Prose posts only when a durable record holds it: the verbatim kinds above, and a role's recorded conversation turns when routed through the durable interaction service. It is attributed to the persona whose record it is, with the display identity every speaker already has. Every role gets a voice through exactly this mechanism — its durable conversation and records; no record, no voice. An @role question in a thread is answered today by the harness from the read model, per the stated exception; once the conversational client lands, gated on the durable service, it routes as a turn into that role's durable conversation through the service, and the recorded reply posts in-thread.
+
+**What may arrive as a direct message.** A direct message is admitted only by naming its class, and a state fitting neither class does not DM — that is the gate a developer must not widen silently, stated here rather than in `heartbeat.go`:
+
+- **Degraded** — the system is stopped, stale, or choosing nothing over ready work: something only a human fixes. The two shipped states (a watch session running a build the harness moved past; nothing started while work was ready) are this class, and the original stopped-and-waiting states are too.
+- **Advisory-once** — a fact addressed to a person that speaks exactly once per fact, deduplicated durably, never repeated, never urgent in presentation. The bundle-improvement notice is its first member: one DM per newly-available improvement, the dedup key recorded durably so restarts cannot re-announce.
 
 **6. One vocabulary, two directions.** Outbound events and inbound directives are two halves of one contract, correlated by topic (section: *Addressing*). The inbound half creates **no new directive machinery**: a thread reply is a new *receiver* for the existing directive record — same kinds, same pause semantics, same resolution — so nothing about the channel can weaken directive governance, because the channel does not have its own governance to weaken.
 
