@@ -391,7 +391,13 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		// exactly the gap between events.
 		Timeout:     timeout,
 		IdleTimeout: idleTimeout,
-		Redactor:    redactor,
+		// Every line this process writes becomes an event in the run's own log,
+		// so the log is where the whole of it is when the runner stops retaining
+		// its in-memory copy. The invocation is not stopped for saying a lot: a
+		// verbose run is still a run, and one killed for its own diagnostics
+		// records neither what it did nor what it spent.
+		OutputRecord: eventLogRecord(request.RunID),
+		Redactor:     redactor,
 	}, func(output execution.Output) {
 		if output.Stream == execution.StreamStdout {
 			if parseErr := parser.ParseLine(output.Text); parseErr != nil {
@@ -405,6 +411,15 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	})
 	if err != nil {
 		return backend.RunResult{}, fmt.Errorf("run Claude Code: %w", err)
+	}
+	// A truncated copy is loud rather than silent. The run's log holds every
+	// line the process wrote, so nothing is lost, but a reader comparing the log
+	// against a result that carries only part of it has to be told which of the
+	// two is the whole.
+	if processResult.OutputTruncated {
+		if emitErr := parser.EmitOutputTruncated(processResult); emitErr != nil {
+			parseErrors = append(parseErrors, emitErr)
+		}
 	}
 	if len(parseErrors) > 0 {
 		return backend.RunResult{}, fmt.Errorf("parse Claude Code stream: %w", errors.Join(parseErrors...))
@@ -456,6 +471,14 @@ func developerWriteToolIsScoped(tool string) bool {
 		return strings.HasPrefix(pattern, "/") && !strings.HasPrefix(pattern, "//") && !strings.Contains(pattern, "..")
 	}
 	return true
+}
+
+// eventLogRecord names where the whole of one invocation's process output is,
+// for the marker the runner leaves in the copy it stopped growing. It is the run
+// id rather than a path because a path is this process's view of the store and
+// the id is what every surface already says a run by.
+func eventLogRecord(runID string) string {
+	return "the event log for " + runID
 }
 
 func shortRunID(runID string) string {

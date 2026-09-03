@@ -19,10 +19,12 @@
             "process": {
               "ExitCode": 0,
               "FinishedAt": "\u003ctime\u003e",
+              "OutputTruncated": false,
               "StartedAt": "\u003ctime\u003e",
               "Status": "succeeded",
               "Stderr": "",
-              "Stdout": ""
+              "Stdout": "",
+              "TruncatedBytes": 0
             },
             "timeout": 1800000000000
           }

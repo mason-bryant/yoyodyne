@@ -115,6 +115,58 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	}
 }
 
+// A verbose invocation is still an invocation. What the runner bounds is the
+// copy it carries back, so the terminal is parsed, what it cost is recorded, and
+// the truncation is said in the run's own log instead of the whole invocation
+// being failed for it -- which is how run-32e3f059 died on 2026-09-03 with zero
+// dollars recorded against six hours of work.
+func TestRunKeepsAnInvocationWhoseOutputOutgrewWhatIsRetained(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","total_cost_usd":0.25,"usage":{"input_tokens":10},"stop_reason":"end_turn"}`,
+	}, "\n") + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{
+		Status:          execution.ProcessSucceeded,
+		Stdout:          stream,
+		OutputTruncated: true,
+		TruncatedBytes:  4096,
+	}}}
+	var events []execution.Event
+	result, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement the task",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.IsError || result.FinalText != "done" || result.CostUSD != 0.25 || !result.CostReported {
+		t.Fatalf("Run() result = %#v, want the terminal and its cost kept", result)
+	}
+	if record := runner.commands[0].OutputRecord; record != "the event log for "+testRunID {
+		t.Fatalf("output record = %q, want the run's own event log named", record)
+	}
+	truncations := 0
+	for _, event := range events {
+		if event.Type == execution.EventProcessOutput && strings.Contains(string(event.Payload), `"output_truncated"`) {
+			truncations++
+			if !strings.Contains(string(event.Payload), `"truncated_bytes":4096`) {
+				t.Fatalf("truncation event = %s, want what was left out", event.Payload)
+			}
+		}
+	}
+	if truncations != 1 {
+		t.Fatalf("recorded %d truncations, want the one that happened", truncations)
+	}
+}
+
 // An invocation's terminal is the only event carrying what it cost, and a run's
 // log holds several invocations: the developer's attempts and the reviewer's
 // beside them. So the terminal has to say whose invocation it ended, or the

@@ -14,6 +14,19 @@ import (
 	"time"
 )
 
+// defaultMaxOutputBytes bounds what a result carries back in memory when a
+// caller names no bound of its own. It is a bound on the copy and never on the
+// process: a command that says more than this keeps running, keeps being
+// observed, and finishes on its merits.
+//
+// It was the latter until yoyodyne-ifd.258. A run whose provider process wrote
+// more than this had every later line dropped before the observer saw it —
+// which for the Claude Code adapter is the stream the events and the cost are
+// parsed from — and then had the whole invocation failed for the overflow.
+// run-32e3f059 died that way on 2026-09-03 with nothing recorded of what it had
+// spent, and a parity harness diffing execution traces is exactly the workload
+// that bursts stdout. Retaining less is the answer to a process that says a lot;
+// killing it is not.
 const defaultMaxOutputBytes = 8 << 20
 
 type ProcessStatus string
@@ -61,9 +74,23 @@ type Command struct {
 	// producing nothing is stalled however recently it started. Zero or less
 	// disables the check, which is what a command whose output arrives in one
 	// burst at the end needs.
-	IdleTimeout    time.Duration
+	IdleTimeout time.Duration
+	// MaxOutputBytes bounds what the result retains of stdout and stderr
+	// together, and nothing else. Output past it is left out of the retained
+	// copy and replaced by a marker naming where the whole of it is; the process
+	// is not stopped, the observer still sees every line, and the result is
+	// whatever the process itself earned. Zero takes defaultMaxOutputBytes, and
+	// a negative bound is a caller's mistake rather than an unlimited one.
 	MaxOutputBytes int
-	Redactor       Redactor
+	// OutputRecord names the durable record that holds the whole of this
+	// command's output — the run's event log, for a caller whose observer writes
+	// every line to one. The truncation marker names it, so a reader of the
+	// bounded copy is sent to the rest rather than told that some is missing.
+	// This is the rule a Slack message too long to post already follows. A
+	// caller that keeps nothing durable leaves it empty, and the marker says
+	// that instead rather than pointing at a record nobody wrote.
+	OutputRecord string
+	Redactor     Redactor
 }
 
 type Output struct {
@@ -79,6 +106,16 @@ type ProcessResult struct {
 	FinishedAt time.Time
 	Stdout     string
 	Stderr     string
+	// OutputTruncated says Stdout and Stderr are a bounded copy rather than the
+	// whole of what the process said. It is not a failure and never decides the
+	// status: the process ran to whatever end it ran to, and this describes what
+	// the result kept of it. A caller that parses retained output has to consult
+	// it, because a bounded copy parses as a shorter answer rather than as an
+	// error.
+	OutputTruncated bool
+	// TruncatedBytes is how much of the output the result did not keep, which is
+	// what a record of the truncation quotes.
+	TruncatedBytes int
 }
 
 type OutputObserver func(Output)
@@ -175,7 +212,13 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	var stdoutBuffer bytes.Buffer
 	var stderrBuffer bytes.Buffer
 	outputBytes := 0
-	outputLimitExceeded := false
+	stdoutDropped := 0
+	stderrDropped := 0
+	// Retention stops for good at the first line that does not fit rather than
+	// per line, so the copy is the start of what was said and not an arbitrary
+	// selection from it: a short line kept after a long one was dropped would
+	// read as consecutive output that never was.
+	retaining := true
 	stalled := false
 	idle := newIdleWatch(command.IdleTimeout)
 	defer idle.stop()
@@ -190,15 +233,24 @@ drain:
 			// the idle bound starts over from here rather than from the start.
 			idle.reset()
 			lineBytes := len(output.Text) + 1
-			if outputBytes+lineBytes > maxOutput {
-				outputLimitExceeded = true
-				continue
-			}
-			outputBytes += lineBytes
-			if output.Stream == StreamStdout {
+			switch {
+			case !retaining || outputBytes+lineBytes > maxOutput:
+				// Past the bound the runner stops keeping and carries on. The
+				// observer still gets the line, because the observer is what
+				// writes output to the run's durable record: the whole of it
+				// survives there even though this result carries only the start.
+				retaining = false
+				if output.Stream == StreamStdout {
+					stdoutDropped += lineBytes
+				} else {
+					stderrDropped += lineBytes
+				}
+			case output.Stream == StreamStdout:
+				outputBytes += lineBytes
 				stdoutBuffer.WriteString(output.Text)
 				stdoutBuffer.WriteByte('\n')
-			} else {
+			default:
+				outputBytes += lineBytes
 				stderrBuffer.WriteString(output.Text)
 				stderrBuffer.WriteByte('\n')
 			}
@@ -218,8 +270,10 @@ drain:
 
 	waitErr := process.Wait()
 	result.FinishedAt = clock.Now()
-	result.Stdout = stdoutBuffer.String()
-	result.Stderr = stderrBuffer.String()
+	result.Stdout = retainedOutput(stdoutBuffer.String(), StreamStdout, stdoutDropped, command.OutputRecord)
+	result.Stderr = retainedOutput(stderrBuffer.String(), StreamStderr, stderrDropped, command.OutputRecord)
+	result.TruncatedBytes = stdoutDropped + stderrDropped
+	result.OutputTruncated = result.TruncatedBytes > 0
 	if process.ProcessState != nil {
 		result.ExitCode = process.ProcessState.ExitCode()
 	}
@@ -229,9 +283,6 @@ drain:
 		if scanErr != nil {
 			readErrors = append(readErrors, scanErr)
 		}
-	}
-	if outputLimitExceeded {
-		readErrors = append(readErrors, fmt.Errorf("process output exceeded %d bytes", maxOutput))
 	}
 	if len(readErrors) > 0 {
 		return result, errors.Join(readErrors...)
@@ -252,6 +303,34 @@ drain:
 		result.Status = ProcessSucceeded
 	}
 	return result, nil
+}
+
+// retainedOutput is one stream's bounded copy, with a marker where the bound cut
+// it. Nothing is added to a copy that kept everything, so an ordinary result
+// reads exactly as it always did.
+//
+// The marker sits on top of the bound rather than inside it, which is the one
+// place this differs from the Slack rule it otherwise follows. The bound there
+// is what the surface will accept and the marker has to fit under it; the bound
+// here is on how much of a process's output the harness holds in memory, and a
+// caller that then has a smaller bound of its own applies it to the copy it was
+// handed, marker and all.
+func retainedOutput(text string, stream Stream, dropped int, record string) string {
+	if dropped <= 0 {
+		return text
+	}
+	return text + truncationMarker(stream, dropped, record)
+}
+
+// truncationMarker says what the bounded copy left out and where the whole of it
+// is, in the words a Slack message too long to post already uses. A copy that
+// stopped without saying so is the failure this replaced: silence reads as a
+// process that stopped talking rather than as a harness that stopped listening.
+func truncationMarker(stream Stream, dropped int, record string) string {
+	if where := strings.TrimSpace(record); where != "" {
+		return fmt.Sprintf("… %d further bytes of %s truncated; the whole of it is in %s\n", dropped, stream, where)
+	}
+	return fmt.Sprintf("… %d further bytes of %s truncated; nothing durable holds the rest\n", dropped, stream)
 }
 
 // idleWatch bounds the gap between one line of process output and the next. It

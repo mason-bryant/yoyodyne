@@ -178,6 +178,19 @@ func (p *streamParser) EmitProcessOutput(output execution.Output) error {
 	})
 }
 
+// EmitOutputTruncated records that the runner stopped retaining this
+// invocation's process output, and how much of it the result does not carry.
+// The lines themselves are already in this log — the runner keeps observing
+// past its own retention bound — so what this adds is the fact that the result
+// and the log no longer say the same thing, which is otherwise a discrepancy a
+// reader would have to discover.
+func (p *streamParser) EmitOutputTruncated(result execution.ProcessResult) error {
+	return p.emit(execution.EventProcessOutput, map[string]any{
+		"kind":            "output_truncated",
+		"truncated_bytes": result.TruncatedBytes,
+	})
+}
+
 func (p *streamParser) parseSystem(envelope streamEnvelope) error {
 	switch envelope.Subtype {
 	case "init":

@@ -373,6 +373,25 @@ worktree — ends the run, and it still says the harness stopped the provider.
 Short Git commands keep their flat deadlines, which is the right bound for a
 command whose duration is known.
 
+## When a run says more than the harness keeps
+
+How much a process says is bounded too, and that bound stops nothing. The
+harness holds eight megabytes of a process's output in memory; past that it
+stops growing its copy, and the process keeps running, keeps being read, and
+finishes on whatever it exits with. Every line still reaches the run's event
+log, one event each, so the whole of what was said is there whatever the copy
+held — and the copy ends with a line saying how much it left out and that the
+log has the rest. A check whose output outgrew the bound says so on its
+completion event beside its exit code, and a provider invocation whose output
+outgrew it says so in an event of its own, so a result carrying less than the
+log does is never a discrepancy somebody has to discover.
+
+It was fatal until 2026-09-03: a run that said more than the bound had the rest
+of its output dropped before anything read it, and was then failed for the
+overflow. That is how run-32e3f059 died with nothing recorded of what it had
+spent, and then sat claimed and silent for six hours. A run is not stopped for
+being verbose.
+
 ## Recovering interrupted runs
 
 A process that is killed mid-run leaves durable state describing where it got
