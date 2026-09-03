@@ -315,6 +315,72 @@ func TestTheVerdictIsTheReviewersOwnAccount(t *testing.T) {
 	}
 }
 
+// What the reviewer asked for is read from the durable record, so the message an
+// operator gets names each change rather than only counting them. The words are
+// the reviewer's own: the record was redacted before it was written, and nothing
+// here paraphrases what it holds.
+func TestARepairRequestCarriesWhatTheRecordSaysWasAskedFor(t *testing.T) {
+	before := running()
+	before.Phase = runstate.PhaseReviewing
+	after := before
+	after.ReviewDecision = runstate.ReviewRepair
+	after.ReviewFindings = 2
+	after.ReviewFindingDetails = []runstate.Finding{
+		{
+			Severity: "blocker",
+			Message:  "handle the nil worktree. Every caller can be handed one.",
+			File:     "runner.go",
+			Line:     42,
+		},
+		{Severity: "major", Message: "integration is now automatic; README.md still says otherwise", File: "README.md"},
+	}
+	_, notifications := crossed(t, before, after)
+	repairs := only(t, notifications, KindReviewRepairs)
+	want := []string{
+		"blocker: handle the nil worktree (runner.go:42).",
+		"major: integration is now automatic; README.md still says otherwise (README.md)",
+	}
+	if len(repairs.Event.Detail.Requested) != len(want) {
+		t.Fatalf("the request carries %q, want one entry per finding", repairs.Event.Detail.Requested)
+	}
+	for at, requested := range want {
+		if repairs.Event.Detail.Requested[at] != requested {
+			t.Fatalf("requested change %d is %q, want %q", at, repairs.Event.Detail.Requested[at], requested)
+		}
+	}
+	message, err := Render(repairs.Topic, repairs.Speaker, repairs.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, requested := range want {
+		if !strings.Contains(message.Body, "- "+requested) {
+			t.Fatalf("body %q does not name %q on its own line", message.Body, requested)
+		}
+	}
+	// A record that counted findings without keeping them is every run reviewed
+	// before the repair loop kept them, and it says so rather than listing
+	// nothing.
+	countedOnly := after
+	countedOnly.ReviewFindingDetails = nil
+	_, older := crossed(t, before, countedOnly)
+	if requested := only(t, older, KindReviewRepairs).Event.Detail.Requested; len(requested) != 0 {
+		t.Fatalf("a record keeping no findings still carried %q", requested)
+	}
+}
+
+func TestOnlyTheFirstSentenceOfAFindingIsSaid(t *testing.T) {
+	for written, want := range map[string]string{
+		"handle the nil worktree. Every caller can be handed one.":  "handle the nil worktree.",
+		"README.md still says the harness does not integrate":       "README.md still says the harness does not integrate",
+		"the decoder accepts trailing JSON\nand the test misses it": "the decoder accepts trailing JSON",
+		"  padded either side  ":                                    "padded either side",
+	} {
+		if got := firstSentence(written); got != want {
+			t.Fatalf("firstSentence(%q) = %q, want %q", written, got, want)
+		}
+	}
+}
+
 // awaitingVerdict is the record as it stands with the checks behind it and the
 // review about to run: the evidence is cleared and no verdict is recorded.
 func awaitingVerdict() runstate.State {
@@ -1093,6 +1159,56 @@ func TestAWatchSessionIsAddressedToTheWholeLine(t *testing.T) {
 	// nobody wrote a line for.
 	if _, err := FromWatch(watchTransition(runstate.WatchState("pondering"), "")); err == nil {
 		t.Fatal("FromWatch() error = nil, want a state nothing says refused")
+	}
+}
+
+// What the session recorded about the state of the line reaches the message
+// that closes on whose move it is. The idle line that misled an operator three
+// times carried only its own sentence, so every surface downstream had to guess
+// at the two facts that decide the answer: whether the harness is nonetheless
+// working, and who carries the work it passed over.
+func TestAnIdleSessionCarriesWhatItSawGoingAndWhoItWaitsOn(t *testing.T) {
+	idle := watchTransition(runstate.WatchIdle,
+		"1 run in flight; 3 items passed over, of 3 admitted: carried in conversation (architect: yoyodyne-ifd.212)")
+	idle.Running = 1
+	idle.Executor = domain.ConversationWith(domain.RoleArchitect)
+
+	notification, err := FromWatch(idle)
+	if err != nil {
+		t.Fatalf("address an idle session: %v", err)
+	}
+	if notification.Event.Detail.Running != 1 {
+		t.Fatalf("detail = %+v, want the run in flight carried", notification.Event.Detail)
+	}
+	if notification.Event.Detail.Executor != string(domain.ConversationWith(domain.RoleArchitect)) {
+		t.Fatalf("detail = %+v, want the conversation the session waits on carried", notification.Event.Detail)
+	}
+	message, err := Render(notification.Topic, notification.Speaker, notification.Event)
+	if err != nil {
+		t.Fatalf("render an idle session: %v", err)
+	}
+	if !strings.HasSuffix(message.Body, nextMoveLead+"the architect's, in conversation — the work this poll passed over is carried there, and no run will ever start it.") {
+		t.Fatalf("body %q does not close on the architect's move", message.Body)
+	}
+
+	// The poll that read nothing at all travels the same way. Admitting work to a
+	// store that will not answer changes nothing, so the mark has to reach the
+	// clause rather than staying in the session's own prose.
+	outage := watchTransition(runstate.WatchIdle, "the harness could not be read and is being read again")
+	outage.Unreadable = true
+	failed, err := FromWatch(outage)
+	if err != nil {
+		t.Fatalf("address a session that could not read the harness: %v", err)
+	}
+	if !failed.Event.Detail.Unreadable {
+		t.Fatalf("detail = %+v, want the reading that failed carried", failed.Event.Detail)
+	}
+	said, err := Render(failed.Topic, failed.Speaker, failed.Event)
+	if err != nil {
+		t.Fatalf("render a session that could not read the harness: %v", err)
+	}
+	if strings.HasSuffix(said.Body, nextMoveLead+nextMoves[KindWatchIdle]) {
+		t.Fatalf("body %q sends the reader to an admission over a store that would not answer", said.Body)
 	}
 }
 

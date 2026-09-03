@@ -1,0 +1,123 @@
+{
+  "scenario": "reconciliation-blocks-a-run-interrupted-while-developing",
+  "freezes": "A process killed before anything was promoted is settled as a blocker with the work preserved, and a second sweep finds nothing outstanding.",
+  "steps": [
+    {
+      "name": "interrupted invocation",
+      "error": "verification infrastructure failed: persist check event: state store is unavailable\nsave failed run state: state store is unavailable",
+      "ending": "failed",
+      "outcome": {
+        "base_commit": "\u003ccommit-1\u003e",
+        "branch": "yoyodyne/yoyodyne-task/01234567",
+        "branch_removed": false,
+        "changes": {
+          "status": "?? feature.txt"
+        },
+        "failure": "verification infrastructure failed: persist check event: state store is unavailable",
+        "phase": "checking",
+        "provider_model": "opus",
+        "provider_resolved_model": "claude-opus-5-developer",
+        "provider_session_id": "developer-session",
+        "run_id": "run-0123456789abcdef0123456789abcdef",
+        "status": "failed",
+        "summary": "implemented the work item",
+        "work_item_closed": false,
+        "work_item_id": "yoyodyne-task",
+        "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+        "worktree_removed": false
+      }
+    }
+  ],
+  "reconciliations": [
+    {
+      "action": "blocked",
+      "branch": "yoyodyne/yoyodyne-task/01234567",
+      "branch_removed": false,
+      "detail": "the run was interrupted in the developing phase with nothing integrated, and no attempt of the harness can finish it",
+      "outcome": "stopped",
+      "phase": "developing",
+      "run_id": "run-0123456789abcdef0123456789abcdef",
+      "status": "failed",
+      "work_item_id": "yoyodyne-task",
+      "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+      "worktree_removed": false
+    },
+    {
+      "action": "nothing outstanding",
+      "branch_removed": false,
+      "run_id": "second sweep",
+      "work_item_id": "",
+      "worktree_removed": false
+    }
+  ],
+  "durable_run_record": {
+    "account_alias": "default",
+    "backend": "claude-code",
+    "base_commit": "\u003ccommit-1\u003e",
+    "blocker": "Yoyodyne stopped this item while reconciling an interrupted run. No developer was restarted for it.\nReason: the run was interrupted in the developing phase with nothing integrated, and no attempt of the harness can finish it\nRun: run-0123456789abcdef0123456789abcdef\nPhase when interrupted: developing\nPreserved worktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nUncommitted changes in the worktree: true\nPreserved branch: yoyodyne/yoyodyne-task/01234567 at \u003ccommit-1\u003e\nIntegration target: main",
+    "branch": "yoyodyne/yoyodyne-task/01234567",
+    "changes": {
+      "files": "?? feature.txt"
+    },
+    "completed_at": "\u003ctime\u003e",
+    "config_revision": "\u003cconfig-revision\u003e",
+    "failure": "reconciled after an interrupted run: the run was interrupted in the developing phase with nothing integrated, and no attempt of the harness can finish it",
+    "last_sequence": 0,
+    "phase": "developing",
+    "product_id": "yoyodyne",
+    "provider_model": "opus",
+    "provider_resolved_model": "claude-opus-5-developer",
+    "provider_session_id": "developer-session",
+    "repository_id": "yoyodyne",
+    "run_id": "run-0123456789abcdef0123456789abcdef",
+    "schema_version": 1,
+    "started_at": "\u003ctime\u003e",
+    "status": "failed",
+    "target_branch": "main",
+    "updated_at": "\u003ctime\u003e",
+    "work_item_id": "yoyodyne-task",
+    "work_item_title": "Task",
+    "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567"
+  },
+  "events": [
+    "command.started"
+  ],
+  "work_item": {
+    "calls": [
+      "claim",
+      "record",
+      "block"
+    ],
+    "status": "blocked",
+    "closed": false,
+    "blocked": true,
+    "notes": [
+      [
+        "Yoyodyne bootstrap run failed; branch and worktree are preserved when present.",
+        "Run: run-0123456789abcdef0123456789abcdef",
+        "Failure: verification infrastructure failed: persist check event: state store is unavailable",
+        "Phase: checking",
+        "Branch: yoyodyne/yoyodyne-task/01234567",
+        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+        "Base commit: \u003ccommit-1\u003e",
+        "Claude session: developer-session",
+        "Developer model: opus (resolved: claude-opus-5-developer)",
+        "Preserved changes:",
+        "?? feature.txt"
+      ]
+    ],
+    "blocker": [
+      "Yoyodyne stopped this item while reconciling an interrupted run. No developer was restarted for it.",
+      "Reason: the run was interrupted in the developing phase with nothing integrated, and no attempt of the harness can finish it",
+      "Run: run-0123456789abcdef0123456789abcdef",
+      "Phase when interrupted: developing",
+      "Preserved worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+      "Uncommitted changes in the worktree: true",
+      "Preserved branch: yoyodyne/yoyodyne-task/01234567 at \u003ccommit-1\u003e",
+      "Integration target: main"
+    ]
+  },
+  "provider_invocations": [
+    "developer: the assigned work item, new session"
+  ]
+}

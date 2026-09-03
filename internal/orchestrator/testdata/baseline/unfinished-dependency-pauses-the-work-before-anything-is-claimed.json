@@ -1,0 +1,36 @@
+{
+  "scenario": "unfinished-dependency-pauses-the-work-before-anything-is-claimed",
+  "freezes": "An item waiting on unfinished work is paused before it is claimed and the outcome names the blocking items; a parent-child link is not a blocker.",
+  "steps": [
+    {
+      "name": "run",
+      "ending": "",
+      "outcome": {
+        "branch_removed": false,
+        "changes": {
+          "status": ""
+        },
+        "paused": true,
+        "paused_by_dependency": {
+          "blockers": [
+            "yoyodyne-blocker"
+          ]
+        },
+        "run_id": "",
+        "status": "",
+        "work_item_closed": false,
+        "work_item_id": "yoyodyne-task",
+        "worktree_removed": false
+      }
+    }
+  ],
+  "durable_run_record": null,
+  "events": [],
+  "work_item": {
+    "calls": [],
+    "status": "open",
+    "closed": false,
+    "blocked": false
+  },
+  "provider_invocations": []
+}

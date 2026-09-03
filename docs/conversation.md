@@ -1007,6 +1007,13 @@ without this being asked again. The last slot can also go between the reading
 and the reservation; a claim taken for a run the reservation then refused is
 given back, because that run provably never started.
 
+**A pause that arrives in that same window costs the stoppage nothing either.**
+Pausing everything, a directive nobody has settled, work the item has been made
+to wait on, and a held intake are all read where the fresh run would start, and
+each of them stops it before anything is reserved or claimed. The claim taken for
+it is given back and the carry-out says which pause it met; lift that pause and
+ask again, and the same decision runs.
+
 What that stopped run preserved is kept until the fresh run integrates and
 retired explicitly then — removed, and the removal written onto the stopped run's
 own record so `/status` and the docket stop advertising a branch and a worktree

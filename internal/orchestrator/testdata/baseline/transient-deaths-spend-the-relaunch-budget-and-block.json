@@ -1,0 +1,97 @@
+{
+  "scenario": "transient-deaths-spend-the-relaunch-budget-and-block",
+  "freezes": "A provider that keeps dying spends execution.transient_relaunches_before_blocking and ends blocked on the provider rather than on the change, with the work preserved.",
+  "steps": [
+    {
+      "name": "run",
+      "error": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+      "ending": "stopped",
+      "outcome": {
+        "base_commit": "\u003ccommit-1\u003e",
+        "blocked": true,
+        "branch": "yoyodyne/yoyodyne-task/01234567",
+        "branch_removed": false,
+        "changes": {
+          "status": ""
+        },
+        "failure": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+        "phase": "developing",
+        "provider_model": "opus",
+        "provider_session_id": "developer-session",
+        "run_id": "run-0123456789abcdef0123456789abcdef",
+        "status": "failed",
+        "summary": "API Error: Connection closed mid-response. The response above may be incomplete.",
+        "transient_relaunches": 2,
+        "work_item_closed": false,
+        "work_item_id": "yoyodyne-task",
+        "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+        "worktree_removed": false
+      }
+    }
+  ],
+  "durable_run_record": {
+    "account_alias": "default",
+    "backend": "claude-code",
+    "base_commit": "\u003ccommit-1\u003e",
+    "blocker": "Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.\nRelaunches: 2 of 2 permitted\nLast provider failure: api_error: API Error: Connection closed mid-response. The response above may be incomplete.\nRun: run-0123456789abcdef0123456789abcdef\nBranch: yoyodyne/yoyodyne-task/01234567\nWorktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nNo check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider.",
+    "branch": "yoyodyne/yoyodyne-task/01234567",
+    "completed_at": "\u003ctime\u003e",
+    "config_revision": "\u003cconfig-revision\u003e",
+    "failure": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+    "last_sequence": 0,
+    "phase": "developing",
+    "product_id": "yoyodyne",
+    "provider_model": "opus",
+    "provider_session_id": "developer-session",
+    "repository_id": "yoyodyne",
+    "run_id": "run-0123456789abcdef0123456789abcdef",
+    "schema_version": 1,
+    "started_at": "\u003ctime\u003e",
+    "status": "failed",
+    "target_branch": "main",
+    "transient_relaunches": 2,
+    "updated_at": "\u003ctime\u003e",
+    "work_item_id": "yoyodyne-task",
+    "work_item_title": "Task",
+    "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567"
+  },
+  "events": [],
+  "work_item": {
+    "calls": [
+      "claim",
+      "block",
+      "record"
+    ],
+    "status": "blocked",
+    "closed": false,
+    "blocked": true,
+    "notes": [
+      [
+        "Yoyodyne blocked this item; the branch and worktree are preserved, and the blocker recorded on the item says what stopped it.",
+        "Run: run-0123456789abcdef0123456789abcdef",
+        "Failure: the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+        "Phase: developing",
+        "Relaunches after a provider death: 2",
+        "Branch: yoyodyne/yoyodyne-task/01234567",
+        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+        "Base commit: \u003ccommit-1\u003e",
+        "Claude session: developer-session",
+        "Developer model: opus"
+      ]
+    ],
+    "blocker": [
+      "Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.",
+      "Relaunches: 2 of 2 permitted",
+      "Last provider failure: api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+      "Run: run-0123456789abcdef0123456789abcdef",
+      "Branch: yoyodyne/yoyodyne-task/01234567",
+      "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+      "No check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider."
+    ]
+  },
+  "provider_invocations": [
+    "developer: the assigned work item, new session",
+    "developer: the assigned work item, continues session",
+    "developer: the assigned work item, continues session"
+  ]
+}

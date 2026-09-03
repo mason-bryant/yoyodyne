@@ -16,6 +16,7 @@ package chat
 // before, and what is new is that the failure leaves a trace.
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
@@ -57,6 +58,28 @@ func (s *Session) noteUsageLimit(result backend.RunResult, err error) error {
 		return fmt.Errorf("record the provider's refusal: %w", err)
 	}
 	return nil
+}
+
+// ErrProviderCapacity marks the failure of a turn the provider declined for
+// want of capacity, rather than one it answered badly. It is a sentinel joined
+// into the error the turn fails with, so what an operator reads is unchanged and
+// a caller that is not a person can still tell the two apart.
+//
+// The distinction is what the caller owes the turn. A turn nobody was asked is
+// worth asking again once the limit resets; one the role answered is not, and
+// asking again would be the same money spent on the same answer. It exists
+// because the harness now takes turns nobody is sitting in front of — a stopped
+// run delivered into the development manager's conversation — and a refusal met
+// there must not read as her having been asked.
+var ErrProviderCapacity = errors.New("the provider declined this turn for want of capacity")
+
+// providerDeclined is that sentinel for a turn the provider refused, and nothing
+// for every other ending.
+func providerDeclined(result backend.RunResult, err error) error {
+	if refusedForUsageLimit(result, err) == nil {
+		return nil
+	}
+	return ErrProviderCapacity
 }
 
 // refusedForUsageLimit reports a turn the provider declined for want of

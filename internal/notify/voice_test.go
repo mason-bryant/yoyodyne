@@ -30,6 +30,15 @@ func speakers() []Speaker {
 	return all
 }
 
+// requestedChanges is what a repair round asked for, as the record holds it: two
+// findings a line takes whole and one longer than any line, so what a message
+// does with each of them is exercised wherever this event is rendered.
+var requestedChanges = []string{
+	"blocker: handle the nil worktree (runner.go:42)",
+	"major: integration is now automatic; README.md still says the harness does not integrate (README.md:38)",
+	"minor: " + strings.Repeat("a finding nobody could fit on a line ", 12),
+}
+
 // fullyRecorded is an event with every field a voice line could reach for, so a
 // rendering failure is a missing line rather than a missing fact.
 func fullyRecorded(kind Kind) Event {
@@ -49,6 +58,7 @@ func fullyRecorded(kind Kind) Event {
 			Command:         "go test ./...",
 			ExitCode:        1,
 			Findings:        3,
+			Requested:       requestedChanges,
 			TargetBranch:    "main",
 			Commit:          "0123456789abcdef0123456789abcdef01234567",
 			PullRequest:     "#84 (https://example.test/pull/84)",
@@ -61,6 +71,8 @@ func fullyRecorded(kind Kind) Event {
 			Goal:            "Work the harness runs on its own is visible while it runs",
 			Parent:          "yoyodyne-ifd.68",
 			Priority:        1,
+			Refused:         12,
+			Asking:          "product manager",
 			Reason:          "reordering the backlog first",
 			Since:           moment.Add(-3 * time.Hour),
 			Ready:           4,
@@ -122,7 +134,13 @@ func TestEveryMessageSaysWhoseMoveFollowsIt(t *testing.T) {
 			// The clause is the harness's note about where the thread stands rather
 			// than part of what the persona said, and most lines finish on words
 			// somebody typed rather than on a full stop.
+			// A line the message cut ends on the mark saying so, which closes the
+			// account exactly as a full stop does — and putting a full stop after it
+			// would end a sentence the cut is what removed.
 			account := strings.TrimSuffix(message.Body, nextMoveLead+move)
+			if strings.HasSuffix(account, requestedCutMark) {
+				continue
+			}
 			if !strings.HasSuffix(account, ".") && !strings.HasSuffix(account, "!") && !strings.HasSuffix(account, "?") {
 				t.Fatalf("the %s says %s as %q, which runs the clause into the account", speaker.Key(), kind, message.Body)
 			}
@@ -166,6 +184,102 @@ func TestWorkAConversationCarriesIsNeverSaidToBeWaitingForARun(t *testing.T) {
 		}
 		if !strings.HasSuffix(attributed.Body, nextMoveLead+"the architect's, in conversation — no run will ever be started for this.") {
 			t.Fatalf("%s carried by the architect reads as %q, want the wait left with them", kind, attributed.Body)
+		}
+	}
+}
+
+// A watch idles for opposite reasons, and the clause it used to close on
+// answered for one of them. It named the product manager whatever the session
+// had found, and an operator acted on that three times over a queue whose only
+// unstarted work was the architect's to carry, while a developer run worked on
+// the other slot: nothing was waiting on an admission, and the line had not
+// stopped.
+//
+// So the named actor is the one who can act. The admission clause is what is
+// left when nothing is going and nothing is anybody's to carry, which is the one
+// state admitting ready work actually changes.
+func TestAnIdleWatchNamesTheActorWhoCanActOnIt(t *testing.T) {
+	topic := Product()
+	for _, testCase := range []struct {
+		name   string
+		detail func(*Detail)
+		want   string
+	}{
+		{
+			name:   "carried in an architect's conversation",
+			detail: func(d *Detail) { d.Executor = string(domain.ConversationWith(domain.RoleArchitect)) },
+			want:   "the architect's, in conversation — the work this poll passed over is carried there, and no run will ever start it.",
+		},
+		{
+			// The run in flight answers second: an item somebody has to open is still
+			// waiting on them while the other slot works.
+			name: "a run in flight beside work an architect carries",
+			detail: func(d *Detail) {
+				d.Executor = string(domain.ConversationWith(domain.RoleArchitect))
+				d.Running = 1
+			},
+			want: "the architect's, in conversation — the work this poll passed over is carried there, and no run will ever start it.",
+		},
+		{
+			name:   "a run in flight and nothing anybody carries",
+			detail: func(d *Detail) { d.Running = 1 },
+			want:   "nobody's — the runs in flight carry on, and the queue is read again as each of them finishes.",
+		},
+		{
+			// The queue was never read, so nothing that is in it stopped the choosing
+			// and nothing anybody admits reaches a store that will not answer.
+			name:   "a queue that could not be read",
+			detail: func(d *Detail) { d.Unreadable = true },
+			want:   "the harness's — the queue could not be read, and it is read again until it answers or the session gives up on it.",
+		},
+		{
+			name: "a queue that could not be read while a run carries on",
+			detail: func(d *Detail) {
+				d.Unreadable = true
+				d.Running = 1
+			},
+			want: "the harness's — the queue could not be read, and it is read again until it answers or the session gives up on it.",
+		},
+		{
+			name:   "nothing going and nothing anybody carries",
+			detail: func(*Detail) {},
+			want:   nextMoves[KindWatchIdle],
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			event := fullyRecorded(KindWatchIdle)
+			testCase.detail(&event.Detail)
+			message, err := Render(topic, Harness(), event)
+			if err != nil {
+				t.Fatalf("render an idle watch: %v", err)
+			}
+			if !strings.HasSuffix(message.Body, nextMoveLead+testCase.want) {
+				t.Fatalf("idle reads as %q, want it to close on %q", message.Body, testCase.want)
+			}
+		})
+	}
+}
+
+// The admission pointer is said only where admitting ready work is what changes
+// the answer. A session polling beside a run, or over work only a conversation
+// carries, is not waiting on the product manager for anything.
+func TestAnIdleWatchPointsAtAdmissionOnlyWhenAdmissionIsTheNextAct(t *testing.T) {
+	topic := Product()
+	for _, detail := range []Detail{
+		{Executor: string(domain.ConversationWith(domain.RoleArchitect))},
+		{Running: 2},
+		{Executor: string(domain.ConversationWith(domain.RoleDevelopmentManager)), Running: 1},
+		{Unreadable: true},
+		{Unreadable: true, Running: 1},
+	} {
+		event := fullyRecorded(KindWatchIdle)
+		event.Detail = detail
+		message, err := Render(topic, Harness(), event)
+		if err != nil {
+			t.Fatalf("render an idle watch: %v", err)
+		}
+		if strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindWatchIdle]) {
+			t.Fatalf("idle over %+v reads as %q, want somebody who can act on it named", detail, message.Body)
 		}
 	}
 }
@@ -564,6 +678,98 @@ func TestACountIsSaidInWordsRatherThanAsABareNumber(t *testing.T) {
 		if got := countOf(count, "finding", "findings", "findings the record does not count"); got != want {
 			t.Fatalf("countOf(%d) = %q, want %q", count, got, want)
 		}
+	}
+}
+
+// A count says how much came back and nothing about what it is, and an operator
+// reading one cannot tell a correction to a document from a problem with the
+// design without leaving the channel. So a repair request names each change it
+// asks for, in every voice that can say one.
+func TestARepairRequestNamesEachChangeItAsksFor(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.2")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	for _, speaker := range speakers() {
+		message, err := Render(topic, speaker, fullyRecorded(KindReviewRepairs))
+		if err != nil {
+			t.Fatalf("the %s asks for repairs: %v", speaker.Key(), err)
+		}
+		if !strings.Contains(message.Body, "- blocker: handle the nil worktree (runner.go:42)") {
+			t.Fatalf("the %s asks for repairs as %q, which does not name the first change", speaker.Key(), message.Body)
+		}
+		if !strings.Contains(message.Body, "- major: integration is now automatic") {
+			t.Fatalf("the %s asks for repairs as %q, which does not name the second change", speaker.Key(), message.Body)
+		}
+		// One line per finding, so what came back is taken in at a glance rather
+		// than read as a paragraph.
+		lines := 0
+		for _, line := range strings.Split(message.Body, "\n") {
+			if strings.HasPrefix(line, "- ") {
+				lines++
+			}
+		}
+		if lines != len(requestedChanges) {
+			t.Fatalf("the %s put %d changes on their own line, want %d: %q", speaker.Key(), lines, len(requestedChanges), message.Body)
+		}
+	}
+}
+
+func TestAFindingTooLongForALineIsCutRatherThanOverflowing(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.2")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	message, err := Render(topic, Persona(domain.RoleReviewer, ""), fullyRecorded(KindReviewRepairs))
+	if err != nil {
+		t.Fatalf("render a repair request: %v", err)
+	}
+	// The clause saying whose move follows is the harness's own note, and it lands
+	// after the last change rather than being part of it.
+	account := strings.TrimSuffix(message.Body, nextMoveLead+nextMoves[KindReviewRepairs])
+	for _, line := range strings.Split(account, "\n") {
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		if len(line) > len("- ")+MaxRequestedBytes {
+			t.Fatalf("a requested change is %d bytes: %q", len(line), line)
+		}
+	}
+	if !strings.Contains(message.Body, requestedCutMark) {
+		t.Fatalf("a finding longer than a line was not marked as cut: %q", message.Body)
+	}
+	// The cut takes the tail rather than the beginning: what a reader is owed is
+	// which change is being asked for, and that is where the finding starts.
+	if !strings.Contains(message.Body, "- minor: a finding nobody could fit on a line") {
+		t.Fatalf("a cut finding lost the words it starts with: %q", message.Body)
+	}
+	if got := boundLine("blocker: short enough."); got != "blocker: short enough." {
+		t.Fatalf("a finding a line takes whole was changed to %q", got)
+	}
+}
+
+// A record that counted findings without keeping them is not a reviewer who
+// asked for nothing, and a message that said nothing about the difference would
+// read as the whole account of a repair round.
+func TestARepairRequestSaysWhenTheRecordKeptNoChanges(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.2")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	event := fullyRecorded(KindReviewRepairs)
+	event.Detail.Requested = nil
+	message, err := Render(topic, Persona(domain.RoleReviewer, ""), event)
+	if err != nil {
+		t.Fatalf("render a repair request: %v", err)
+	}
+	if !strings.Contains(message.Body, "3 findings") {
+		t.Fatalf("body %q does not count the findings", message.Body)
+	}
+	if !strings.Contains(message.Body, "in the record rather than here") {
+		t.Fatalf("body %q does not say where what each finding asks for is", message.Body)
+	}
+	if strings.Contains(message.Body, "\n- ") {
+		t.Fatalf("body %q lists changes the record does not hold", message.Body)
 	}
 }
 

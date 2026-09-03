@@ -831,3 +831,71 @@ func TestAnUnreadableExchangeRecordIsRefusedRatherThanSaid(t *testing.T) {
 		t.Fatal("a round naming no exchange was said anyway")
 	}
 }
+
+// A block of tracker actions the harness would not read produces no per-action
+// record at all, so before this the channel said nothing about a dozen
+// admissions and dispositions that never happened. It is said as a warning: the
+// queue did not move, nobody chose that, and the role that asked believed it had.
+func TestARefusedTrackerBlockIsSaidAgainstTheProductWithWhatItCost(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerBlockRefused, map[string]any{
+		"turn":    1,
+		"role":    string(domain.RoleProductManager),
+		"actions": 12,
+		"problem": "the product manager asked for tracker actions the harness cannot read: decode tracker actions: 12 actions in one reply, limit is 10",
+	})}
+
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Kind != KindTrackerBlockRefused {
+		t.Fatalf("kind = %q, want %q", notification.Event.Kind, KindTrackerBlockRefused)
+	}
+	// Nothing changed about any one item, so it belongs to the line rather than
+	// to a thread it would misfile itself in.
+	if notification.Topic.Kind != TopicProduct {
+		t.Fatalf("topic = %+v, want the product", notification.Topic)
+	}
+	// The harness refused it, so the harness says so — and the role that asked is
+	// in the message rather than in the display name.
+	if !notification.Speaker.IsHarness() {
+		t.Fatalf("speaker = %+v, want the harness", notification.Speaker)
+	}
+	if notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("severity = %q, want a warning", notification.Event.Severity)
+	}
+	if notification.Event.Refs.ConversationID != conversation.ConversationID {
+		t.Fatalf("refs = %+v, want the conversation it was refused in", notification.Event.Refs)
+	}
+	for _, wanted := range []string{"product manager", "12 tracker actions", "limit is 10"} {
+		if !strings.Contains(message.Body, wanted) {
+			t.Fatalf("message %q does not say %q", message.Body, wanted)
+		}
+	}
+	// Whose move it is, since the actions come back only if that role issues them
+	// again: nothing else in the harness will.
+	if !strings.Contains(message.Body, "the role that asked") {
+		t.Fatalf("message %q does not say whose move follows it", message.Body)
+	}
+}
+
+// A block nobody could count is not a block that asked for nothing, and the
+// message must not read as one.
+func TestARefusedTrackerBlockNobodyCouldCountSaysSo(t *testing.T) {
+	conversation := conversationWith(domain.RoleArchitect)
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerBlockRefused, map[string]any{
+		"turn":    2,
+		"role":    string(domain.RoleArchitect),
+		"actions": 0,
+		"problem": "the architect asked for tracker actions the harness cannot read: decode tracker actions: unexpected end of JSON input",
+	})}
+
+	_, message := said(t, conversation, events, 0)
+	if !strings.Contains(message.Body, "does not count") {
+		t.Fatalf("message %q does not state the count as absent", message.Body)
+	}
+	if strings.Contains(message.Body, "no tracker actions") {
+		t.Fatalf("message %q reads an uncounted block as an empty one", message.Body)
+	}
+	if !strings.Contains(message.Body, "architect") {
+		t.Fatalf("message %q does not name the role that asked", message.Body)
+	}
+}

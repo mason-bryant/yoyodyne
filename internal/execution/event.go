@@ -79,6 +79,14 @@ const (
 	EventTrackerActionRequested EventType = "tracker.action.requested"
 	EventTrackerActionApplied   EventType = "tracker.action.applied"
 	EventTrackerActionFailed    EventType = "tracker.action.failed"
+	// A whole block of tracker actions the harness would not read, which is
+	// recorded even though no action in it was requested: the three events above
+	// are written per action and a refused block never reaches them, so without
+	// this the only trace of a dozen lost admissions was a line on whichever
+	// terminal happened to be watching. It carries the role that asked, how many
+	// actions the block asked for where the harness could count them, and the
+	// refusal in the words the role is given back.
+	EventTrackerBlockRefused EventType = "tracker.block.refused"
 	// What an agent reports while its work continues is recorded in that
 	// invocation's own log as well as in the collected pile: the run or
 	// conversation says a report was made, and the pile says what it was. A

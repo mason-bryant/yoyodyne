@@ -309,6 +309,14 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	if err != nil {
 		return nil, "", err
 	}
+	// The product's own record of having gone quiet, beside the runs and the watch
+	// log rather than in the sink's state: a stall is a fact about the product that
+	// `yoyo status` reads back long after any sink that noticed it has been
+	// restarted, and it is the dedup that keeps one stall to one direct message.
+	stalls, err := runstate.NewStallStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	// The same product-scoped directive records `yoyo directive` writes and every
 	// run consults. A directive recorded from a thread lands there rather than in
 	// a second pile beside it, which is the whole of what makes a reply reach the
@@ -412,6 +420,12 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 				runner:     execution.OSProcessRunner{},
 				timeout:    chatTrackerTimeout,
 			},
+			// Whether anything is happening at all. Every message above this is read
+			// from something a process wrote about itself, which leaves one state
+			// unreported: the process that would have written it being dead. This
+			// notices that nothing has started while work was ready, records it where
+			// `yoyo status` reads it back, and tells the operators once.
+			Stalls:    stalls,
 			Heartbeat: heartbeat,
 			// The four lines, from the same derivation `yoyo status` prints them
 			// from. They are said with the heartbeat because that message is the one
@@ -480,12 +494,35 @@ func (t trackerTitles) Title(ctx context.Context, workItemID string) (string, er
 	return item.Title, nil
 }
 
+// Ready counts what a developer run could actually be started for, which is
+// narrower than what the tracker calls ready and is the number both of the sink's
+// readings of the queue mean.
+//
+// The tracker's readiness is about dependencies alone, so its answer includes
+// two classes of item no pull will ever take: work marked for a conversation,
+// which no run carries by definition, and work the product manager parked, which
+// selection passes over however far the queue drains. Counting those was already
+// wrong in the heartbeat — an operator was sent three times to a line that had
+// not stopped, over a queue whose only unstarted work was the architect's — and
+// it is worse where the stall watchdog reads it, because there the number is the
+// whole of what separates a machine that has died from one with nothing to do,
+// and being wrong wakes somebody at three in the morning about a queue that is
+// behaving exactly as it should.
+//
+// It is the same rule the queue's own ordering applies, kept here rather than
+// reached for because this is a count and that is a listing.
 func (b readyBacklog) Ready(ctx context.Context) (int, error) {
 	items, err := b.tracker.Ready(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return len(items), nil
+	pullable := 0
+	for _, item := range items {
+		if item.Executor.DeveloperRun() && !item.Parking.Parked() {
+			pullable++
+		}
+	}
+	return pullable, nil
 }
 
 // repositoryDeployments answers how far one repository has moved past one build,

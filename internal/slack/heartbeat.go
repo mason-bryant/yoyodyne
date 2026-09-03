@@ -121,7 +121,7 @@ type switches struct {
 // happened, and a second message a moment later would be the sink repeating what
 // the channel already has. What this adds is the hour after that, and every hour
 // after that.
-func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, held switches, sessions []runstate.WatchTransition, inFlight int, streams map[string]struct{}) ([]Delivery, error) {
+func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, held switches, sessions []runstate.WatchTransition, inFlight int, ready func(context.Context) (int, error), streams map[string]struct{}) ([]Delivery, error) {
 	if f.Backlog == nil {
 		return nil, nil
 	}
@@ -147,7 +147,7 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		return nil, nil
 	}
 
-	ready, err := f.Backlog.Ready(ctx)
+	count, err := ready(ctx)
 	if err != nil {
 		// A tracker that cannot be read leaves the sink unable to tell a line
 		// waiting on somebody from an honestly quiet one, and it must not guess in
@@ -159,7 +159,7 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 			state.Since.UTC().Format(time.RFC3339), err)
 		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
 	}
-	if ready == 0 {
+	if count == 0 {
 		// Idle with nothing ready is the healthy quiet the operator asked to keep,
 		// so it is silent. The clock is still reset, because what a poll costs is a
 		// tracker read and there is no reason to spend one every fifteen seconds on
@@ -178,7 +178,7 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		Notification: notify.FromLine(notify.Line{
 			Stopped:  state.Says,
 			Since:    state.Since,
-			Ready:    ready,
+			Ready:    count,
 			Standing: f.standing(ctx),
 		}, now),
 	}}, nil

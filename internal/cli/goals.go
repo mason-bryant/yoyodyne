@@ -435,17 +435,17 @@ func attributionsOf(admitted []beads.WorkItem, goals goal.Set) []itemAttribution
 
 // attributionExitCode is the status the audit exits with: non-zero for an item
 // whose attribution is wrong or was destroyed, and zero for one that never had
-// one. The rule is here rather than inline because it is the grandfathering
-// decision itself, and a rule that quietly started failing legacy items would
-// stop a backlog nobody has had the chance to attribute.
+// one. Which of those is which is goal.Attribution.Divergent, where the
+// grandfathering decision is stated once — the release-readiness gate is held to
+// the same rule, and two copies of it would be two answers to what the backlog
+// has to trace to.
 //
-// A lost attribution fails for the opposite reason to the one grandfathering
-// exists for: the item passed the check, and what is wrong is that the record of
-// it was overwritten. Reporting that without failing is how six items stayed
-// orphaned for as long as it took somebody to read the report by eye.
+// Reporting a destroyed attribution without failing is how six items stayed
+// orphaned for as long as it took somebody to read the report by eye, which is
+// why the status is taken from the report rather than left to the reader.
 func attributionExitCode(attributions []itemAttribution) int {
 	for _, entry := range attributions {
-		if entry.Attribution.State == goal.StateUnresolved || entry.Attribution.State == goal.StateLost {
+		if entry.Attribution.Divergent() {
 			return 1
 		}
 	}

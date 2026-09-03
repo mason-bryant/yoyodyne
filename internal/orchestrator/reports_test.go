@@ -122,8 +122,8 @@ func TestTheDeveloperContractSaysWhatMeritsAReport(t *testing.T) {
 	// cannot weaken it, and it is repeated on a repair attempt for the same
 	// reason the rest of the contract is.
 	for name, prompt := range map[string]string{
-		"first attempt": developerPrompt("", "", "# Assigned work item\n"),
-		"check repair":  checkRepairPrompt("", runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}, 1, 2),
+		"first attempt": developerPrompt("", "", "# Assigned work item\n", "/scratch"),
+		"check repair":  checkRepairPrompt("", "/scratch", runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}, 1, 2),
 	} {
 		for _, required := range []string{report.Fence, "A report is not a blocker", "Most replies carry no report at all."} {
 			if !strings.Contains(prompt, required) {

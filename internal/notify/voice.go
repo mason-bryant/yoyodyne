@@ -159,6 +159,7 @@ var harnessVoice = voice{
 		KindItemDecomposed:      "{item} was created under {parent}, decomposing it: {title}",
 		KindItemAttributed:      "{item} was attributed to a goal: {goal}",
 		KindItemReprioritized:   "{item} was set to {priority}.",
+		KindTrackerBlockRefused: "The {asking} asked for {refused} in one reply and the harness refused the block whole, so none of them happened: {why}",
 		KindWorkApproved:        "The operator approved proposed work, and it was admitted as {item}: {title}. It serves: {goal}",
 		KindWorkDeclined:        "The operator declined proposed work — {title} — because: {why}",
 		KindWorkHandedOff:       "{item} was handed to {executor} rather than to a developer run: {why}",
@@ -168,7 +169,7 @@ var harnessVoice = voice{
 		KindChecksPassed:        "Checks passed on {item}.",
 		KindChecksFailed:        "Checks failed on {item}: {command} exited {exit}.",
 		KindReviewApproved:      "Review of {item} approved.",
-		KindReviewRepairs:       "Review of {item} asked for repairs: {findings}.",
+		KindReviewRepairs:       "Review of {item} asked for repairs: {findings}.\n\n{requested}",
 		KindPromoted:            "{item} promoted onto {branch} at {commit}.",
 		KindPublished:           "{item} published as {pr}.",
 		KindMergeQueued:         "The merge of {pr} is queued on the forge.",
@@ -191,12 +192,13 @@ var harnessVoice = voice{
 		KindHoldPlaced:          "All harness activity is held.",
 		KindHoldLifted:          "The hold on harness activity is lifted.",
 		KindWatchStarted:        "A watch session is open on this product: {why}",
-		KindWatchIdle:           "The watch session found nothing to start and is polling: {why}",
+		KindWatchIdle:           "The watch session started nothing at this poll and is polling again: {why}",
 		KindWatchBraked:         "The watch session is choosing nothing while intake is held: {why}",
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
 		KindWatchRedeploying:    "The watch session is restarting into the build deployed over it, having waited out every run it started: {why}",
 		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.\n\n{standing}",
+		KindStallNoticed:        "Nothing at all has started on this product for {age}, with {ready} ready to pull and nothing accounting for it. {stopped}.\n\n{standing}",
 		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
 		KindCatchUpDigest:       "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
 	},
@@ -212,6 +214,7 @@ var developerVoice = voice{
 		KindItemDecomposed:      "{parent} was broken down, and {item} is one of the pieces I could be handed: {title}.",
 		KindItemAttributed:      "{item} now says what it is for: {goal}. That is the intent I'd be building against.",
 		KindItemReprioritized:   "{item} sits at {priority} now. What I build doesn't change with the order it is queued in.",
+		KindTrackerBlockRefused: "A block the {asking} sent was refused together — {refused} — and nothing in the queue moved for any of it: {why}",
 		KindWorkApproved:        "The operator approved that one, so {item} is work somebody will be given: {title}, for {goal}.",
 		KindWorkDeclined:        "Proposed work was turned down before it reached anybody — {title} — because: {why}",
 		KindWorkHandedOff:       "{item} will never reach me: it is carried by {executor} rather than by a run, because {why}",
@@ -221,7 +224,7 @@ var developerVoice = voice{
 		KindChecksPassed:        "Checks are green on {item}. I ran them before calling anything done.",
 		KindChecksFailed:        "Checks are red on {item}: {command} exited {exit}. That is my next attempt, not somebody else's problem.",
 		KindReviewApproved:      "The reviewer approved my change on {item}.",
-		KindReviewRepairs:       "{item} came back to me with {findings}. I'll take them as written.",
+		KindReviewRepairs:       "{item} came back to me with {findings}. I'll take them as written.\n\n{requested}",
 		KindPromoted:            "My change on {item} is on {branch}, at {commit}.",
 		KindPublished:           "I've published the change on {item} as {pr}.",
 		KindMergeQueued:         "{pr} is queued to merge; there is nothing more from me on {item}.",
@@ -244,12 +247,13 @@ var developerVoice = voice{
 		KindHoldPlaced:          "Held before my next provider call. Nothing of the change is lost.",
 		KindHoldLifted:          "The hold is lifted; I'm carrying on.",
 		KindWatchStarted:        "Work can reach me without anybody typing an identifier now: {why}",
-		KindWatchIdle:           "There's nothing queued for me to pick up, so I'm waiting rather than working: {why}",
+		KindWatchIdle:           "Nothing was handed to me at this poll, so I'm waiting rather than working: {why}",
 		KindWatchBraked:         "Nothing is being handed to me while intake is held: {why}",
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
 		KindWatchRedeploying:    "The session that hands me work is restarting into a newer build of itself; work will keep arriving once it is back: {why}",
 		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.\n\n{standing}",
+		KindStallNoticed:        "Nothing has been handed to me for {age} and nothing explains it — {ready} sat ready the whole time. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
 		KindCatchUpDigest:       "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
 	},
@@ -265,6 +269,7 @@ var reviewerVoice = voice{
 		KindItemDecomposed:      "{item} was cut out of {parent}: {title}. Narrower work is work I can judge as finished or not.",
 		KindItemAttributed:      "{item} records the goal it serves: {goal}. Intent I can read beats intent I have to infer.",
 		KindItemReprioritized:   "{item} moved to {priority}. The order work arrives in changes nothing about the standard it meets.",
+		KindTrackerBlockRefused: "The {asking} asked for {refused} and the harness read none of them, so what the queue says now is what it said before: {why}",
 		KindWorkApproved:        "Approved and admitted as {item}: {title}, serving {goal}. I'll see it when a change comes back from it.",
 		KindWorkDeclined:        "{title} was declined, so there is no change coming and nothing for me to judge: {why}",
 		KindWorkHandedOff:       "{item} left the run queue for {executor}, so no change on it will come to me: {why}",
@@ -274,7 +279,7 @@ var reviewerVoice = voice{
 		KindChecksPassed:        "The checks behind {item} pass. Passing checks are evidence, not a verdict.",
 		KindChecksFailed:        "The checks behind {item} fail: {command} exited {exit}. There is nothing for me to judge yet.",
 		KindReviewApproved:      "I approve {item}: correct and complete against the criteria it was given.",
-		KindReviewRepairs:       "I'm asking for repairs on {item}: {findings}, each one specific enough to act on.",
+		KindReviewRepairs:       "I'm asking for repairs on {item}: {findings}, each one specific enough to act on.\n\n{requested}",
 		KindPromoted:            "The change I approved on {item} is on {branch} at {commit}.",
 		KindPublished:           "{item} is published as {pr}. My verdict was on the change, not on the request.",
 		KindMergeQueued:         "{pr} is queued to merge with my approval behind it.",
@@ -297,12 +302,13 @@ var reviewerVoice = voice{
 		KindHoldPlaced:          "Held before my next review. Nothing already judged changes.",
 		KindHoldLifted:          "The hold is lifted; reviews resume.",
 		KindWatchStarted:        "Changes will keep arriving for a verdict without anybody starting them: {why}",
-		KindWatchIdle:           "Nothing is being worked on, so there is no change coming to judge: {why}",
+		KindWatchIdle:           "Nothing new was started at this poll, so no further change is coming to me from it: {why}",
 		KindWatchBraked:         "Nothing new is being started while intake is held, so nothing is coming for a verdict: {why}",
 		KindWatchResumed:        "Work is starting again, so changes will come back to me: {why}",
 		KindWatchStopped:        "No more changes will arrive from this session; what I judged already stands: {why}",
 		KindWatchRedeploying:    "The session sending me changes is restarting into a newer build of itself, so what arrives next was chosen by the build that was deployed: {why}",
 		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.\n\n{standing}",
+		KindStallNoticed:        "No change has reached me for a verdict in {age}, and none was written: {ready} ready, no run started, nothing holding it. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back, and installing that build is what stops me granting one — the session takes it up itself between runs.",
 		KindCatchUpDigest:       "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
 	},
@@ -317,6 +323,7 @@ var developmentManagerVoice = voice{
 		KindItemDecomposed:      "I've broken {parent} down, and {item} is a bounded piece of it: {title}.",
 		KindItemAttributed:      "{item} now carries the goal it serves: {goal}. Work I cannot say the purpose of is work I cannot order honestly.",
 		KindItemReprioritized:   "{item} is at {priority} now, so that is where it gets pulled from.",
+		KindTrackerBlockRefused: "A block from the {asking} never reached the queue I pull from — {refused} — so its order and its contents are unchanged: {why}",
 		KindWorkApproved:        "{item} was approved and is in my queue: {title}, for {goal}.",
 		KindWorkDeclined:        "{title} was declined, so nothing about it ever reaches my queue: {why}",
 		KindWorkHandedOff:       "{item} is out of what I pull: it is carried by {executor}, so a run would only spend itself on it — {why}",
@@ -326,7 +333,7 @@ var developmentManagerVoice = voice{
 		KindChecksPassed:        "{item} cleared its checks and is on to review.",
 		KindChecksFailed:        "{item} came back from its checks: {command} exited {exit}. It routes to repair with that intact.",
 		KindReviewApproved:      "{item} is approved and clear to integrate.",
-		KindReviewRepairs:       "{item} routes back to the developer with {findings} intact.",
+		KindReviewRepairs:       "{item} routes back to the developer with {findings} intact.\n\n{requested}",
 		KindPromoted:            "{item} is integrated into {branch}. That is one item actually done.",
 		KindPublished:           "{item} is published as {pr} and still counts as in flight.",
 		KindMergeQueued:         "{pr} is queued to merge, so {item} stays in flight until the forge says otherwise.",
@@ -349,12 +356,13 @@ var developmentManagerVoice = voice{
 		KindHoldPlaced:          "Everything is held. Nothing new starts, and nothing in flight is lost.",
 		KindHoldLifted:          "The hold is lifted; the work in flight carries on.",
 		KindWatchStarted:        "The queue is being pulled from until somebody stops it, rather than once: {why}",
-		KindWatchIdle:           "The queue has nothing pullable in it, so the line is waiting on admissions rather than on work: {why}",
+		KindWatchIdle:           "Nothing was pulled from the queue at this poll: {why}",
 		KindWatchBraked:         "I'm pulling nothing while intake is held, and what was already running finishes: {why}",
 		KindWatchResumed:        "I'm pulling from the top of the queue again: {why}",
 		KindWatchStopped:        "The queue stops being pulled from here; what is in it stays in it: {why}",
 		KindWatchRedeploying:    "The queue stops being pulled from only until the session is back on the build deployed over it, and nothing in it moved: {why}",
 		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.\n\n{standing}",
+		KindStallNoticed:        "My queue has not been pulled from in {age} — {ready} pullable, no hold, no full machine, no run in flight. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does, and they stop when that build is installed — the session takes it up itself between runs.",
 		KindCatchUpDigest:       "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
 	},
@@ -370,6 +378,7 @@ var productManagerVoice = voice{
 		KindItemDecomposed:      "{parent} was decomposed into {item}: {title}. What the work is for stays what the parent was admitted for.",
 		KindItemAttributed:      "I've recorded what {item} is for: {goal}. Work that says nothing about intent is work nobody can decide to stop doing.",
 		KindItemReprioritized:   "I've put {item} at {priority}: {why}",
+		KindTrackerBlockRefused: "A block I sent was refused whole — {refused} — so nothing I meant to change about the backlog changed: {why}",
 		KindWorkApproved:        "The operator approved the work I proposed, and it is admitted as {item}: {title}, serving {goal}.",
 		KindWorkDeclined:        "The operator turned down work I proposed — {title}, which would have served {goal} — because: {why}. Nothing was created.",
 		KindWorkHandedOff:       "{item} is work {executor} carries rather than a run, and it is marked as such so nothing spends a run on it: {why}",
@@ -379,7 +388,7 @@ var productManagerVoice = voice{
 		KindChecksPassed:        "{item} passed its checks — progress on what it was admitted for.",
 		KindChecksFailed:        "{item} failed its checks: {command} exited {exit}. Nothing about what it is for has changed.",
 		KindReviewApproved:      "{item} was approved: what was admitted is what was built.",
-		KindReviewRepairs:       "{item} needs repairs: {findings}. Still the same item, not a new one.",
+		KindReviewRepairs:       "{item} needs repairs: {findings}. Still the same item, not a new one.\n\n{requested}",
 		KindPromoted:            "{item} is integrated into {branch} and serves the goal it was admitted for.",
 		KindPublished:           "{item} is published as {pr}.",
 		KindMergeQueued:         "{pr} is queued to merge; {item} is not delivered until it lands.",
@@ -402,12 +411,13 @@ var productManagerVoice = voice{
 		KindHoldPlaced:          "The operator holds all harness activity.",
 		KindHoldLifted:          "The operator lifted the hold.",
 		KindWatchStarted:        "What is admitted is now what is spent on, since the queue is pulled from until somebody stops it: {why}",
-		KindWatchIdle:           "Nothing is being spent, because nothing admitted is ready to be worked on: {why}",
+		KindWatchIdle:           "No new spending was started at this poll: {why}",
 		KindWatchBraked:         "Spending has stopped while intake is held, and what is in the backlog keeps its place: {why}",
 		KindWatchResumed:        "Work is being chosen again, and what I admit is what gets spent on: {why}",
 		KindWatchStopped:        "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
 		KindWatchRedeploying:    "Choosing and spending pause only while the session restarts into the build deployed over it, and the backlog is untouched by that: {why}",
 		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.\n\n{standing}",
+		KindStallNoticed:        "Nothing has been spent on this product for {age}, and {ready} I admitted is still waiting. This is not a quiet queue; it is a queue nothing is reading. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What is being spent on this product was built at {commit}, before {behind} landed. Until that build is installed, some of that spend buys work the system has already paid for once; the session takes it up itself between runs once it is.",
 		KindCatchUpDigest:       "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
 	},
@@ -423,6 +433,7 @@ var architectVoice = voice{
 		KindItemDecomposed:      "{item} was carved out of {parent}: {title}. Decomposition is structure, and structure is where a design holds or does not.",
 		KindItemAttributed:      "{item} was traced back to {goal}. A queue nobody can trace is a system nobody can reason about.",
 		KindItemReprioritized:   "{item} moved to {priority}, which changes the order and nothing about the design it derives from.",
+		KindTrackerBlockRefused: "A block of {refused} from the {asking} was refused whole rather than partly applied, which is the contract holding: {why}",
 		KindWorkApproved:        "Approved and admitted as {item}: {title}, under {goal}. What it may become is bounded by the design it derives from.",
 		KindWorkDeclined:        "{title} was declined, and the shape of the system is unchanged by work nobody started: {why}",
 		KindWorkHandedOff:       "{item} is executed by {executor} rather than by a run, and saying so is what keeps a run from discovering it by refusing an empty diff: {why}",
@@ -432,7 +443,7 @@ var architectVoice = voice{
 		KindChecksPassed:        "{item} passed its checks. The gate held.",
 		KindChecksFailed:        "{item} failed its checks: {command} exited {exit}. A gate that catches this is a gate doing its job.",
 		KindReviewApproved:      "{item} was approved against the design it derives from.",
-		KindReviewRepairs:       "{item} was sent back with {findings}, which is the loop working rather than failing.",
+		KindReviewRepairs:       "{item} was sent back with {findings}, which is the loop working rather than failing.\n\n{requested}",
 		KindPromoted:            "{item} is on {branch} at {commit}, promoted by the harness itself as the invariant requires.",
 		KindPublished:           "{item} is published as {pr}. The local branch remains the authoritative one.",
 		KindMergeQueued:         "{pr} is queued to merge; the forge settles it, not this run.",
@@ -455,12 +466,13 @@ var architectVoice = voice{
 		KindHoldPlaced:          "All harness activity is held, at the provider-call boundary rather than mid-generation.",
 		KindHoldLifted:          "The hold is lifted, and every parked run resumes from its own record.",
 		KindWatchStarted:        "Selection is now a loop rather than a pass, and nothing between its readings is cached: {why}",
-		KindWatchIdle:           "Selection is polling an empty queue, which costs a tracker read and no provider call: {why}",
+		KindWatchIdle:           "Selection read the queue and started nothing, which costs a tracker read and no provider call: {why}",
 		KindWatchBraked:         "Selection is stopped by the intake hold, which is the brake working rather than failing: {why}",
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
 		KindWatchRedeploying:    "The selection loop closes and restarts on the build deployed over it; every run it started was waited out rather than abandoned: {why}",
-		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} the tracker calls ready behind it. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
+		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} a run could have been started for behind it. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
+		KindStallNoticed:        "Selection has started nothing for {age} over {ready} ready, and no record says why — which is the failure this watches for: the process that would have said something is the process that died. {stopped}.\n\n{standing}",
 		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
 		KindCatchUpDigest:       "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
 	},
@@ -507,8 +519,14 @@ var nextMoves = map[Kind]string{
 	KindItemDecomposed:    "the harness's, when this reaches the top of the queue and a run is free.",
 	KindItemAttributed:    "the harness's, when this reaches the top of the queue and a run is free.",
 	KindItemReprioritized: "the harness's, and this is where it now gets pulled from.",
-	KindWorkApproved:      "the harness's, when this reaches the top of the queue and a run is free.",
-	KindWorkDeclined:      "nobody's — nothing was created, and nothing follows.",
+	// A refused block is the one item here whose move belongs to the role that
+	// asked. The refusal reaches it verbatim at the start of its next turn, so the
+	// actions come back if that role issues them again — and nothing at all
+	// happens if nobody says anything to that conversation, which is the half a
+	// reader has to know.
+	KindTrackerBlockRefused: "the role that asked — the refusal opens its next turn, and the actions happen only if it issues them again.",
+	KindWorkApproved:        "the harness's, when this reaches the top of the queue and a run is free.",
+	KindWorkDeclined:        "nobody's — nothing was created, and nothing follows.",
 	// Work a conversation carries. The handoff is the one state where the thread
 	// waits on a person opening a conversation rather than on anything the harness
 	// will do by itself, which is exactly the silence this exists to name.
@@ -572,16 +590,25 @@ var nextMoves = map[Kind]string{
 	KindHoldPlaced:     "the operator's — nothing runs until the hold is lifted.",
 	KindHoldLifted:     "the harness's — every parked run resumes from its own record.",
 	KindWatchStarted:   "the harness's — the queue is pulled from until somebody stops it.",
-	KindWatchIdle:      "the product manager's — nothing is chosen until work that is ready is admitted.",
-	KindWatchBraked:    "the operator's — choosing resumes when intake is released.",
-	KindWatchResumed:   "the harness's — work is being chosen again.",
-	KindWatchStopped:   "the operator's — nothing more is chosen until a session is started again.",
+	// The idle poll with nothing else to say: the queue was read, no run is going,
+	// and nothing passed over is a person's to carry. Admitting ready work is then
+	// genuinely the act that changes the answer, which is the only case this clause
+	// is said in — see idleMove, which answers for the three states it used to be
+	// said over wrongly before it reaches this.
+	KindWatchIdle:    "the product manager's — nothing is chosen until work that is ready is admitted.",
+	KindWatchBraked:  "the operator's — choosing resumes when intake is released.",
+	KindWatchResumed: "the harness's — work is being chosen again.",
+	KindWatchStopped: "the operator's — nothing more is chosen until a session is started again.",
 	// The one stop nobody has to answer. The session waited out its runs and is
 	// being re-executed into the build deployed over it, so telling the reader to
 	// start a session would be handing them a move they do not have — once per
 	// deploy, which is exactly the standing chore self-redeployment removes.
 	KindWatchRedeploying: "nobody's — the session is coming back on the build that was deployed, and the queue is read again when it does.",
 	KindLineWaiting:      "the operator's — this stands until somebody clears what stopped it.",
+	// A stall names the machine rather than the state, because there is no state:
+	// what has to be looked at is the thing that chooses work, and whether it is
+	// dead or merely wedged is in the message above this clause.
+	KindStallNoticed: "the operator's — nothing starts until whatever chooses work is looked at, and started again if it has died.",
 	// The restart is no longer anybody's: a watch session takes up a build
 	// installed over it by itself, between the runs it is carrying and without
 	// interrupting one. What is left is the install, which is why this names it
@@ -620,8 +647,47 @@ func nextMove(event Event) (string, bool) {
 	if event.Kind == KindDirectiveRecorded && strings.TrimSpace(event.Detail.Unresolved) == "" {
 		return directiveInForceMove, true
 	}
+	// A watch that started nothing idles for opposite reasons, and the fixed clause
+	// answered for one of them.
+	if event.Kind == KindWatchIdle {
+		return idleMove(event.Detail), true
+	}
 	move, ok := nextMoves[event.Kind]
 	return move, ok
+}
+
+// idleMove is whose move follows a poll that started nothing. It is derived from
+// what the session recorded rather than taken from the table, because a watch
+// idles for opposite reasons and one fixed clause can only be right about one of
+// them.
+//
+// The clause it replaced named the product manager whatever the session had
+// found, and an operator acted on that three times over a queue whose only
+// unstarted work was the architect's to carry, while a developer run worked on
+// the other slot. Both halves of that were wrong: nothing was waiting on an
+// admission, and the line had not stopped. So every state that is not an
+// admission answers first — a store that would not answer, work a conversation
+// carries, runs still going — and the admission clause is left to the case where
+// admitting ready work is genuinely what changes the answer.
+func idleMove(detail Detail) string {
+	// A store that will not answer. Nothing a person admits, releases, or opens
+	// reaches it, so this answers before anything else: the queue was not read, so
+	// what is in it is not what stopped the choosing.
+	if detail.Unreadable {
+		return "the harness's — the queue could not be read, and it is read again until it answers or the session gives up on it."
+	}
+	// Work only a conversation carries. No admission and no run moves it, and the
+	// marker names who does.
+	if role := domain.WorkItemExecutor(strings.TrimSpace(detail.Executor)).Role(); role != "" {
+		return "the " + role.Title() + "'s, in conversation — the work this poll passed over is carried there, and no run will ever start it."
+	}
+	// A run in flight is the harness working. Naming anybody's move over it would
+	// be reporting a stall while the chain moves, which is what sent an operator to
+	// look at a line that was not stopped.
+	if detail.Running > 0 {
+		return "nobody's — the runs in flight carry on, and the queue is read again as each of them finishes."
+	}
+	return nextMoves[KindWatchIdle]
 }
 
 // handedOffMove is whose move follows work only a conversation will carry. It
@@ -744,6 +810,7 @@ func (e Event) fields(topic Topic) map[string]string {
 		"command":   stated(detail.Command, "a check the record does not name"),
 		"exit":      strconv.Itoa(detail.ExitCode),
 		"findings":  countOf(detail.Findings, "finding", "findings", "findings the record does not count"),
+		"requested": requestedOf(detail.Requested),
 		"branch":    stated(detail.TargetBranch, "an unnamed branch"),
 		"commit":    stated(shortCommit(detail.Commit), "an unrecorded commit"),
 		"pr":        stated(detail.PullRequest, "an unrecorded pull request"),
@@ -763,6 +830,11 @@ func (e Event) fields(topic Topic) map[string]string {
 		"parent":    stated(detail.Parent, "an item the record does not name"),
 		"priority":  priorityOf(detail),
 		"executor":  stated(carrierOf(detail.Executor), "something the record does not name"),
+		// What a refused block asked for, and who asked. The count states an absence
+		// rather than reading as none: a block whose actions nobody could count is
+		// not a block that asked for nothing, and the two are opposite news.
+		"refused": countOf(detail.Refused, "tracker action", "tracker actions", "a number of tracker actions the record does not count"),
+		"asking":  stated(detail.Asking, "a role the record does not name"),
 		// What became of a run and what remains of its change, both already said in
 		// the read model's own words. A record that carries neither says so rather
 		// than leaving a blank, for the reason every absence here does — but more
@@ -870,6 +942,48 @@ func countOf(count int, singular, plural, absence string) string {
 	}
 }
 
+// MaxRequestedBytes bounds one requested change to something that reads as a
+// line. A finding longer than it is cut rather than wrapped across the message,
+// because the value of the list is that a reader takes in what came back at a
+// glance, and one finding that runs for a paragraph takes that from all of
+// them. What was cut is in the record the message already points at.
+const MaxRequestedBytes = 200
+
+const requestedCutMark = "…"
+
+// requestedOf lists what a repair round asked for, one requested change to a
+// line. The lines are marked with a dash rather than numbered: the record is
+// what a reader counts findings in, and a number here would read as an order to
+// do them in that nobody decided.
+//
+// A record that counted findings without keeping them says so. The absence is
+// not the same news as a reviewer who asked for nothing, and stating it points
+// at the record rather than leaving the count looking like the whole account.
+func requestedOf(requested []string) string {
+	if len(requested) == 0 {
+		return "What each of them asks for is in the record rather than here."
+	}
+	lines := make([]string, 0, len(requested))
+	for _, one := range requested {
+		lines = append(lines, "- "+boundLine(one))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// boundLine cuts one line that would not read as one, and marks the cut so
+// nobody reads a truncated finding as the whole of what was asked for.
+func boundLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) <= MaxRequestedBytes {
+		return trimmed
+	}
+	cut := MaxRequestedBytes - len(requestedCutMark)
+	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
+		cut--
+	}
+	return strings.TrimRight(trimmed[:cut], " \t") + requestedCutMark
+}
+
 // roundsOf says where an exchange has got to against its cap. The cap is said
 // alongside the round because the round on its own does not say how close the
 // exchange is to closing unresolved, which is the part an operator acts on.
@@ -971,6 +1085,11 @@ func shortCommit(commit string) string {
 func ended(said string) string {
 	trimmed := strings.TrimRight(said, " \t\n")
 	if trimmed == "" {
+		return trimmed
+	}
+	// A line that was cut ends on the mark saying so, and a full stop after it
+	// would read as the end of a sentence the cut is what removed.
+	if strings.HasSuffix(trimmed, requestedCutMark) {
 		return trimmed
 	}
 	switch trimmed[len(trimmed)-1] {

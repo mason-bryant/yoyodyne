@@ -1,0 +1,573 @@
+# What the delivery pipeline actually guarantees
+
+*For someone changing the harness's execution path, and for whoever comes to
+re-express it. Part of [yoyo's documentation](../README.md#further-reading).*
+
+The pipeline in `internal/orchestrator` is the only thing that turns an approved
+work item into a promoted change. What it promises has never been written down
+in one place: it is spread across five thousand lines of Go, a few hundred
+assertions, and [what work flows through](work.md), which describes the path an
+operator sees rather than the boundaries the code actually holds.
+
+This document is that enumeration — the delivery paths, the step boundaries, the
+events, the durable fields, the side effects, the policy branches, the pause
+cases, the retry counters, the reconciliation behavior, and the terminal
+outcomes. It is worth having on its own: a specification of the hard-coded
+pipeline that a reviewer can read and disagree with. It is worth more as a
+baseline, because anything that re-expresses this pipeline — a configurable
+executor, a second backend, a rewritten integration step — has to be measured
+against what the current one does rather than against what somebody remembers it
+doing, and a memory is not something you can diff.
+
+**Nothing here is a decision.** Every line is a description of code that already
+exists. Where this document and the code disagree, the code is right and this
+document is a defect.
+
+## How this document is kept true
+
+Prose goes stale silently, so the guarantees below are also recorded as
+executable traces in `internal/orchestrator/baseline_test.go`, one per delivery
+path, under `internal/orchestrator/testdata/baseline/`.
+
+Each trace drives one path end to end against a real Git repository and a fake
+provider, and writes down everything the path produced: the outcome the caller
+was handed, the durable run record left on disk, the run's event log, every
+tracker call and the words the run left on the work item, and each provider
+invocation said as the three things that tell one from another: which role it
+was made as, what it was asked for — the assigned work item, a review, or a
+repair of findings, of a failing check, or of a refused path — and whether it
+continued a session an earlier attempt established. The prompt itself is
+classified rather than recorded, so what a diff shows is a run asking for a
+different thing or losing a session, not a wording change. Temporary directories, commit
+identifiers, timestamps, the configuration digest, and elapsed times are
+replaced by stable placeholders, so what a trace holds is the behavior rather
+than the machine it ran on.
+
+The traces are not assertions about the fields somebody thought to check. They
+are the whole of what the path produced, which is what makes them useful to a
+parity harness: a new executor is compared to the recorded document field by
+field, and a field it writes at a different step or does not write at all shows
+up whether or not anyone predicted it.
+
+Changing behavior therefore changes a trace, and re-recording is deliberate:
+
+```sh
+go test ./internal/orchestrator -run TestDeliveryPipelineBaseline -update-baseline
+```
+
+The diff is the review. An intended change reads as the fields it moved; an
+unintended one reads as the fields nobody meant to move.
+
+The section at the end, naming what no trace holds, is held to that promise by a
+check rather than by a reader: `TestBaselineDocumentDisclosesEveryFieldNoTraceHolds`
+fails when this document states a durable field that no trace carries and the
+gap list does not name. It is a floor rather than a fence — it recognizes field
+names, so a behavior stated only in prose is still a reviewer's to catch — and
+it reports rather than decides: recording a trace satisfies it, and so does
+naming the field below.
+
+## The entry points
+
+| Entry point | What it is | Covered by a trace |
+| --- | --- | --- |
+| `Pipeline.Run` on an item with nothing in flight | A fresh run: claim, worktree, develop, gate, promote | yes |
+| `Pipeline.Run` on an item with a run in flight | Adopting that run under the same exclusive lease and continuing it from durable state | yes, for the usage-limit pause and the provider stopped on time |
+| `Reconciler.Reconcile` | Settling every run no live process owns | yes, for the completed and blocked settlements |
+| `yoyo triage repair` (`repaircontinue.go`) | Re-entering a stopped run's repair loop on a granted budget | **no** |
+| `yoyo triage rerun` (`rerun.go`) | Starting a fresh run of an item whose last run stopped owing a repair | **no** |
+| `BranchReviewer` (`branchreview.go`) | Reviewing a branch outside a run | **no** — not a delivery path |
+
+The three uncovered rows are named rather than omitted. The first two re-enter
+the same run machinery through their own preconditions and are part of what a
+later executor has to reproduce; a baseline that did not say they were missing
+would read as covering them.
+
+## What happens before anything is claimed
+
+`Pipeline.Run` asks a fixed sequence of questions, and the order is itself a
+guarantee: each one is cheaper than the one after it, and each refuses before
+anything more has been spent.
+
+1. **Wiring and configuration.** A pipeline missing a required collaborator, a
+   configuration that does not validate, a developer on a backend with no
+   compiled adapter, an agent whose model selector is not pinned, a project with
+   no configured checks, and — where integration is automatic — a review policy
+   that does not gate it, are each refused here. Nothing is claimed.
+2. **The operator's hold on all harness activity.** Read first among the durable
+   questions because it is the broadest answer: a held harness starts nothing,
+   claims nothing, and does not ask the provider whether it is installed. A run
+   already in flight is left in flight rather than resumed into a boundary that
+   would park it again.
+3. **Publishing.** Whether this run publishes is settled before anything is
+   claimed. A project that asked for pull requests and cannot open one fails
+   here; a project whose repository has no configured remote degrades to local
+   behavior and says so on the outcome as `publish_skipped`.
+4. **Provider availability.** Not installed, or not authenticated, refuses.
+5. **The work item**, loaded from the tracker.
+6. **Unresolved directives that pause this item.** The work stops before it is
+   claimed and the outcome names the directive.
+7. **Unfinished work this item depends on.** Only a `blocks` dependency counts;
+   a parent-child link is not a blocker. The work stops before it is claimed and
+   the outcome names the blocking items.
+8. **A run already in flight.** Adopting it takes the same exclusive lease a
+   fresh reservation takes. It is continued only when its remaining work is
+   fully described by durable state — a usage-limit or overload pause, a
+   provider the harness stopped on time, a directive pause, a dependency pause,
+   an operator hold, or a resumable repair loop under automatic integration —
+   and is otherwise refused as `ExistingRunError`.
+9. **The intake hold**, asked only here and only for work the harness chose for
+   itself. What it holds is the choosing, so a run already under way carries on
+   under it and an item the operator named is exempt.
+10. **A fresh run substituted for a repair somebody is owed.** An item whose last
+    run stopped owing a repair refuses a clean start unless triage claimed the
+    re-run.
+11. **Item readiness**, the context bundle, the invariants, and the repository's
+    readiness for an isolated worktree.
+12. **The integration target.** An automatic or publishing run fixes the branch
+    it will be promoted into before any work starts, and never infers it
+    afterwards.
+13. **The run identifier and the provider account.** A pool with nothing left to
+    spend refuses here, before a work item has been taken.
+14. **Reservation**, which enforces `execution.max_concurrent_developers`.
+15. **The claim**, then the item is re-validated against what was claimed and the
+    context bundle is re-assembled from it.
+16. **The worktree**, cut from the target branch, and the run's state written as
+    `running` in the `developing` phase.
+
+**Nine of those sixteen steps have a trace; seven do not.** Traced are the
+operator's hold (2), loading the item (5), the directive and dependency
+questions (6, 7), continuing a run already in flight (8), the intake hold (9),
+fixing the integration target (12), the claim (15), and the worktree (16) — each
+by the scenario named for it, or by every scenario that reaches it.
+
+Untraced are the refusals, and they are the half of this sequence a parity
+harness is most likely to under-measure, because a refusal that never fires
+looks exactly like a step that is not there. Nothing here holds: the wiring and
+configuration refusals (1) — a missing collaborator, a configuration that does
+not validate, a backend with no compiled adapter, an unpinned model selector, no
+configured checks, or a review policy that does not gate automatic integration;
+publishing settled before the claim (3), which belongs to the publishing half
+listed below; provider availability (4); the `ExistingRunError` refusal of a run
+in flight whose remaining work durable state does not fully describe (8); the
+refusal of a clean start where a repair is owed (10); item readiness, the
+context bundle, the invariants, and the repository's readiness (11); an account
+pool with nothing left to spend (13); and the `execution.max_concurrent_developers`
+bound reservation enforces (14).
+
+**The order is a guarantee no trace holds either.** Each refusal above is
+asserted somewhere in `internal/orchestrator`, but that a held harness refuses
+before the provider is asked, and that the provider is asked before the tracker
+is, is a property of the sequence rather than of any one step — so a new
+executor could satisfy every individual refusal and still ask them in an order
+that spends more before refusing. Measuring that needs its own harness.
+
+## The steps of a run
+
+| Phase | What it does | What it writes |
+| --- | --- | --- |
+| `developing` | One developer invocation in the run's worktree, resuming the run's session on every attempt after the first | `provider_session_id`, `provider_model`, `provider_resolved_model`, `changes`, `last_sequence` |
+| `checking` | The protected-path gate first, then every configured check in order | `path_refusal` or `check_failure` while one is outstanding, and clears the other two when a gate passes |
+| `reviewing` | One independent review invocation, its own session, no tools | `review_session_id`, `review_model`, `review_resolved_model`, `review_decision`, `review_summary`, `review_findings`, `review_finding_details`, `review_rounds` |
+| `integrating` | Under the target branch's promotion lease: commit, fast-forward the local target, publish and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
+| `completing` | Record the outcome on the item, close it, price it | the tracker's record and closure |
+| `cleaning_up` | Remove the worktree and the branch, each recorded separately | `worktree_removed`, `branch_removed` |
+| `complete` | Nothing outstanding | `completed_at` |
+
+A run whose integration a person still approves stops after `checking`: it
+records the outcome, leaves the change on its branch, and closes nothing.
+
+### The repair loop
+
+Under automatic integration the whole gate is a loop, and every round asks the
+directive and dependency questions again before it spends another developer
+invocation. Three different failures are repair input for the same developer,
+and all three draw on **one** budget, `execution.repair_attempts_before_replan`:
+
+1. **A protected-path refusal**, decided before the checks run. Recording it
+   clears any check failure and any findings, because those describe a change
+   the gate has already moved past.
+2. **A failing check**, decided before the reviewer is asked. Recording it clears
+   the findings for the same reason. A check that could not run at all — timed
+   out, cancelled, or infrastructure that failed — is not repair input and ends
+   the run.
+3. **A reviewer's repair verdict**, with its findings recorded in full because
+   they are the next attempt's input.
+
+Sharing one budget is what bounds the total developer invocations a run can
+make. The attempt is recorded before the developer is invoked, so an interrupted
+attempt still counts and a restart cannot buy a fresh budget. A run that spends
+the budget blocks the item and preserves the worktree and the branch.
+
+Triage can grant further attempts on a stopped run; the granted attempts add to
+the configured budget rather than replacing it, and `repair_attempts` goes on
+meaning every attempt this run has handed back.
+
+### What the promotion re-earns
+
+An approval authorizes integration only when it demonstrably came from a second
+invocation: missing or reused provider identity fails the run rather than
+promoting it.
+
+A promotion that loses its race for the target branch is re-prepared rather than
+failed. The change is replayed onto where the target went, the published branch
+is replaced from exactly the commit the harness put there, the approval is
+discarded, and the whole gate runs again — the checks against the replayed
+change and a fresh independent verdict on it. The replay spends an
+`integration_retries` and **no repair attempt**: it is the target branch that
+moved, not the change that failed. Its verdict is counted like any other, so
+`review_rounds` goes up — `promotion-is-replayed-when-the-target-branch-moves`
+records 2, the same as an ordinary repair round, and a reader expecting a replay
+to be free of that counter should read the trace rather than this sentence. A
+replay that conflicts is never resolved by the harness: both sides are left
+intact and the item is blocked.
+
+## The pause cases
+
+A pause is not a failure. The run stays in flight with its claim, worktree,
+branch, and developer session preserved, and the record on disk says what it is
+waiting for so a later invocation resumes it rather than starting a second
+attempt.
+
+| Pause | Where it is read | What lifts it | On the outcome |
+| --- | --- | --- | --- |
+| Exhausted provider usage limit | Every developer and reviewer invocation | The deadline the provider named, or `yoyo resume` | `paused`, `pause_cause: usage_limit`, `usage_limit_resets_at`, `usage_limit_kind` |
+| Transient provider server overload | The same boundaries | The configured overload interval | `paused`, `pause_cause: server_overload` |
+| A provider invocation the harness stopped on time | After an invocation that stalled or exhausted its budget | Nothing; it is runnable immediately | `paused`, `provider_stop` |
+| An unresolved user directive | Before the claim, before a resume, and at every round of the gate including the promotion | Somebody settling the directive | `paused`, `paused_by_directive` |
+| Unfinished work the item depends on | The same boundaries | That work closing, or the link being removed | `paused`, `paused_by_dependency` |
+| The operator's hold on harness activity | Every provider-call boundary | The operator lifting it | `paused`, `paused_by_operator`, `pause_cause: operator_hold` |
+| The operator's hold on intake | Only where a run would be started for a reason other than the operator naming the item | The operator lifting it | `paused`, `paused_by_intake`, and **no run at all** |
+
+The directive, the dependency, and both holds can also stop work before there is
+a run: nothing is claimed and no worktree exists, so the outcome names the work
+item and what stopped it and nothing else.
+
+Two bounds govern waiting. `execution.usage_limit_in_process_pause` is how much
+of a wait this process will hold open — a longer one exits with the run still in
+flight, to be picked up later — and `execution.usage_limit_max_pause` bounds the
+waiting one run may commit to across every pause it takes, recorded in
+`usage_limit_paused_seconds` so a restart part-way through cannot buy a fresh
+budget. Time an operator hold accounts for is kept apart in
+`operator_held_seconds` and is bounded by nothing: a maximum pause that stopped
+a held run would be the harness overriding the operator.
+
+## The counters, and what each one bounds
+
+| Counter | Configured by | What it bounds | What it is evidence about |
+| --- | --- | --- | --- |
+| `repair_attempts` | `execution.repair_attempts_before_replan` | Developer invocations spent on failures of the change | The change |
+| `integration_retries` | `execution.integration_retries_before_reconciliation` | Promotions re-prepared after losing the target branch | The target branch moving |
+| `transient_relaunches` | `execution.transient_relaunches_before_blocking` | Provider invocations reissued after one died without judging the work; the developer and the reviewer share it | The provider |
+| `usage_limit_paused_seconds` | `execution.usage_limit_max_pause` | Total waiting committed across every pause | The provider's capacity |
+| `review_rounds` | nothing in the run | Nothing the run stops on — it counts every verdict **this run** obtained, approvals included | What this run has cost |
+
+The first four are per run and go with it, and each is what stops the run when it
+is spent. `review_rounds` stops nothing: it is this run's own tally, incremented
+on every verdict whichever way it went, and it is never cleared — what a repair
+discards is the judgement, not the fact that the work has been round once more.
+
+**It is not the counter `triage.review_rounds_cap` measures, and a repair grant
+is not truncated against it.** That one is the work item's durable counter, which
+spans every run of the item and takes only the verdicts that sent something back:
+an approving verdict records an approved attempt instead. So the two disagree by
+design, and reading the run's field as the item's cap would over-count every
+approval — including the second verdict a replayed promotion buys.
+
+Each counter is recorded **before** the thing it bounds happens, so a process
+that dies mid-attempt resumes against the budget it had.
+
+## What a run does outside itself
+
+| Side effect | When |
+| --- | --- |
+| `Tracker.Claim` | Once, before the worktree is cut |
+| `Tracker.RecordOutcome` | On success, on failure, and on every pause of a claimed run |
+| `Tracker.Complete` | Only on a promotion that is where it will stay; a merge the forge only queued defers the closure to reconciliation |
+| `Tracker.Block` | On every stoppage a person has to decide about, on its own deadline rather than the run's context |
+| Git: worktree created, harness commit, local target fast-forwarded, branch and worktree removed | The phases above |
+| Forge: branch pushed, pull request opened or updated, merge requested, remote target observed | Only where the project publishes |
+| Run record and event log | Every step boundary |
+| Spend log, price on the item, reports, amendments, triage docket | Where each is wired; a pipeline without one runs identically and names what it could not keep |
+
+## The events
+
+The run's log carries what the harness itself observed. From a run driven with a
+fake provider that is `command.started` and `command.completed` per check, and
+`review.started` and `review.completed` per review invocation, plus
+`review.drift` where a reviewer answered with a field the verdict schema does not
+define. A real provider adapter adds its own stream — `agent.message`,
+`process.output`, `file.changed`, and the `run.*` terminals that carry what an
+invocation cost — so the recorded traces are the harness's half of the log
+rather than the whole of it.
+
+Events are append-only and never rewritten. `last_sequence` on the run record is
+where the log had reached, and it is what a resumed invocation continues from.
+
+## Terminal outcomes
+
+| Status | Reached by |
+| --- | --- |
+| `succeeded` | The gate passed and, where integration is automatic, the promotion landed |
+| `failed` | Anything the run could not carry further, including a spent budget |
+| `cancelled` | The operator asked the run to stop, or the context was cancelled |
+| `timed_out` | The context's deadline passed, or the harness stopped a process on time |
+
+A terminal run is not the only outcome. A paused run is `running` and still in
+flight; a held or directive-stopped item may have no run at all.
+
+Beside the status a run also carries an **outcome** — `succeeded`, `stopped`,
+`cancelled`, `timed out`, or `failed` — which is the reading of that status in
+the closed vocabulary every listing says it in. The status is the durable value
+and stays what it always was; the outcome exists because `failed` is accurate
+about the attempt and says nothing about the work, so a run handed back to a
+person with its branch and worktree intact printed the same word as one that
+broke with nothing to show for it.
+
+The outcome is derived rather than durable — `Outcome.Ending()` for a run,
+`State.Outcome()` for a record — so every trace carries it beside the status it
+was read from, and a settlement carries it as a field of its own. That is what
+makes the distinction checkable: `protected-path-refusal-spends-the-repair-budget-and-blocks`
+records `failed` and `stopped` together, and an executor that computed `failed`
+for a run whose work is preserved would move the derived word without moving any
+recorded field.
+
+Three things are reported on a succeeded run rather than turning it into a
+failure, because the work is already integrated and the item already closed:
+`publish_failure` (an outstanding publication), `cleanup_failure` (an artifact
+that survives, or a removal that could not be confirmed — `worktree_removed` and
+`branch_removed` tell those apart), and `completion_recording_failure` (the final
+record arrived late).
+
+An **environmental** refusal is the one stoppage that leaves the item's budgets
+where they were: the environment refused the round rather than the work failing,
+so a caller that reported the blocker without it would say the item had spent a
+round it never spent.
+
+## Reconciliation
+
+`Reconciler.Reconcile` settles every run no live process owns. It takes each
+run's lease and re-reads its state under it, so nothing is decided from a
+listing another process has moved on from. **It never starts a developer.**
+
+| Action | When |
+| --- | --- |
+| `held` | A live process holds the run; it is left alone |
+| `resumable` | The run's own pipeline can continue it: a repair loop with durable state, a usage-limit or overload pause, a directive pause, a dependency pause, an operator hold, or a provider stopped on time |
+| `queued` | The forge accepted a merge it has not performed; nothing can be decided until it does |
+| `completed` | The work is promoted — recorded, or found in the target branch by containment — so the item is closed and the artifacts removed |
+| `blocked` | Nothing could finish the run; the item carries a durable blocker and the work is preserved |
+| `failed` | The run left nothing behind for anyone to act on |
+| `unsettled` | Settlement itself could not finish; the run stays outstanding for the next sweep |
+
+A settlement reports the run's status and its outcome, the phase it was
+interrupted in, and the artifacts it made — the branch and the worktree by name,
+beside the two flags saying which of them the sweep removed. Naming them is what
+makes the report checkable: a sweep saying a branch was removed without saying
+which one has told an operator something they cannot verify. A record naming no
+artifact at all and one whose artifacts were removed are opposite answers to "is
+my work gone", and the flags are false on both, so the names are what tells them
+apart.
+
+An interruption inside the integration step is the one boundary durable state
+cannot describe — the promotion either landed or it did not — and only the
+repository can answer. A recorded integration that the repository contradicts is
+blocked rather than believed. A second sweep over a settled run does nothing:
+re-closing or re-blocking an item is exactly what a sweep must not do.
+
+## The recorded scenarios
+
+| Trace | What it freezes |
+| --- | --- |
+| `human-approved-change-is-preserved-for-its-approver` | The non-automatic path stops after the checks and promotes, closes, and cleans up nothing |
+| `automatic-run-promotes-reviews-closes-and-cleans-up` | The whole happy path, including both cleanup steps |
+| `failing-check-is-repaired-and-then-promoted` | A check failure as repair input, and the durable failure cleared once it passes |
+| `failing-check-spends-the-repair-budget-and-blocks` | The repair budget, and what a blocked run leaves behind |
+| `review-findings-are-repaired-and-then-promoted` | Findings returned to the same developer and re-reviewed by a fresh invocation |
+| `review-findings-spend-the-repair-budget-and-block` | The same budget reached through the reviewer |
+| `protected-path-refusal-is-repaired-before-any-check-runs` | The gate deciding before the checks, on the shared budget |
+| `protected-path-refusal-spends-the-repair-budget-and-blocks` | `path_refusal` while it is outstanding — the refused paths in sorted order — and the same budget reached through the gate |
+| `protected-path-grant-admits-the-change-it-names` | A grant in the item's own text admitting exactly that path |
+| `usage-limit-pause-exits-resumable-and-a-later-invocation-finishes-it` | The pause, the durable deadline as the instant the provider named, and the resume continuing the same run and session |
+| `server-overload-pause-reissues-the-same-attempt` | An overload told apart from an exhausted account |
+| `provider-stopped-on-time-is-resumable-and-continues-the-same-attempt` | A stop the harness made, owed the rest of an attempt rather than a wait, and never blamed on the developer |
+| `operator-stop-cancels-the-run-and-preserves-its-work` | The `cancelled` terminal, taken at a provider-call boundary before a verdict is bought |
+| `verdict-fields-the-schema-does-not-name-are-recorded-as-drift` | The `review.drift` event, and a verdict acted on without what the schema does not define |
+| `partial-cleanup-leaves-a-succeeded-run-reporting-what-survives` | `cleanup_failure` on a succeeded run, with each artifact reported separately |
+| `transient-provider-death-relaunches-without-charging-the-developer` | The relaunch budget spending no repair attempt |
+| `transient-deaths-spend-the-relaunch-budget-and-block` | The relaunch budget's bound |
+| `unresolved-directive-pauses-the-work-before-anything-is-claimed` | A pause with no run behind it |
+| `unfinished-dependency-pauses-the-work-before-anything-is-claimed` | The same, and that a parent-child link is not a blocker |
+| `operator-hold-starts-nothing-at-all` | The hold read before the provider is asked anything |
+| `operator-hold-parks-a-claimed-run-and-accounts-for-what-it-cost` | The same hold read at a provider-call boundary of a run already claimed, and `operator_held_seconds` |
+| `intake-hold-starts-nothing-the-harness-chose` | The narrower hold, on the choosing rather than the work |
+| `promotion-is-replayed-when-the-target-branch-moves` | The replay re-earning the whole gate |
+| `integration-retries-are-bounded-and-block-the-item` | The retry budget |
+| `reconciliation-completes-a-run-interrupted-inside-integration` | Settlement from the repository rather than the record |
+| `reconciliation-blocks-a-run-interrupted-while-developing` | Settlement as a blocker, and a second sweep finding nothing |
+
+## What this baseline does not yet cover
+
+Named so that a parity harness measuring against it knows what it is not
+measuring. Everything this document states above is behavior of the current
+pipeline; what is listed here is behavior the document states and **no trace
+holds**, so a parity harness has to measure it some other way or accept that it
+is unmeasured. Most of these are asserted somewhere in
+`internal/orchestrator`; what none of them has is a recorded trace.
+
+**Whole paths.**
+
+- The publishing half — `pull_request`, queued merges, the remote target, the
+  `publish_failure` report, `publish_skipped` (which only a run that asked to
+  publish and could not ever carries, so the scenarios here leave it empty), and
+  the catch-up after a forge merge. It has its own assertions in
+  `internal/orchestrator/publish_test.go`.
+- `yoyo triage repair` and `yoyo triage rerun`, which re-enter a stopped run
+  through their own preconditions.
+- **Seven of the sixteen pre-claim steps, and the order of all sixteen.** The
+  refusals in steps 1, 3, 4, 8, 10, 11, 13, and 14 are enumerated where they are
+  asked, with the untraced ones named there rather than only here, because a
+  reader deciding what to measure reads the sequence rather than this list. The
+  ordering itself is a guarantee no single trace can hold.
+- Five of the seven reconciliation actions. `completed` and `blocked` have
+  traces, and a second sweep finding nothing is recorded beside them; `held`,
+  `resumable`, `queued`, `failed`, and `unsettled` do not.
+- The escalation in `escalate.go`, which delivers a run stopped on a 2-of-2
+  review verdict into the development manager's conversation. It happens after a
+  run has stopped rather than inside one, so no trace here reaches it, and a
+  parity harness measuring what becomes of a stopped run has to measure it
+  separately.
+
+**Outcomes and fields.**
+
+- The `timed_out` terminal, reached by a check stopped at
+  `execution.check_timeout` or by a context deadline. A check that timed out is
+  also the branch of the repair loop that ends a run rather than spending an
+  attempt, so both are untraced together. It is left untraced deliberately: what
+  such a run records includes how long the check ran, which is the machine rather
+  than the behavior.
+- `completion_recording_failure`, which is a succeeded run whose final record
+  arrived late.
+- The environmental classification of a refused round, and the budgets it hands
+  back.
+- `usage_limit_paused_seconds` reaching `execution.usage_limit_max_pause`, and
+  the blocker a usage limit with an unusable reset time produces.
+- The directive and dependency pauses of a run that is **already claimed**. The
+  pause table above says the directive is read before the claim, before a
+  resume, and at every round of the gate including the promotion; only the
+  pre-claim reading has a trace, and both of those traces record no run at all.
+  The operator hold is traced at both boundaries and is the one of the three
+  that is not a gap here; a parity harness measuring the other two mid-gate has
+  to reach them another way.
+
+**Guarantees stated above with no trace behind them.** These are the ones the
+mechanical check cannot see: it recognizes durable field names, and every
+guarantee here is stated in prose, about an ordering, a sharing, or a boundary
+that no field records. This list is the only thing a parity harness has for
+them.
+
+- The independence check that refuses to integrate on a reused or missing
+  provider session.
+- A replay that conflicts, which blocks with both sides intact.
+- A reviewer's reply that cannot be read as a verdict, which is asked for once
+  more and fails the run on the second.
+- **A recorded integration the repository contradicts, blocked rather than
+  believed.** The traced settlement is the opposite case — an integration the
+  record does not carry, found in the target branch by containment — so what no
+  trace holds is the sweep disbelieving a record that claims more than the
+  repository shows.
+- **The developer and the reviewer sharing `transient_relaunches`.** Both
+  relaunch traces kill only the developer, so the budget is frozen as one the
+  developer draws on; that a reviewer's death draws on the same one is stated
+  here and recorded nowhere.
+- **Every counter being recorded before the thing it bounds.** No scenario dies
+  mid-attempt and resumes, so the guarantee that an interrupted attempt still
+  counts — and that a restart therefore cannot buy a fresh budget — is untraced
+  for all five counters. The reconciliation traces interrupt a run, but between
+  steps rather than inside a recorded attempt.
+- **The three repair inputs drawing on one budget.** A refused path, a failing
+  check, and a reviewer's findings each have a trace spending the budget alone;
+  none mixes two of them in one run, so what is frozen is three budgets behaving
+  identically rather than one budget serving three failures.
+- **A protected-path refusal clearing a recorded check failure and any
+  findings**, and a passing gate clearing the other two. The traced refusal is
+  the first thing that happens to its change, so there is nothing recorded for
+  it to clear.
+- **`Tracker.Block` running on its own deadline rather than the run's context.**
+  What that exists for is blocking an item whose run was cancelled or timed out,
+  and no trace drives a block under a cancelled context.
+- **The reconciler taking each run's lease and re-reading state under it.** The
+  settlement traces show what a sweep decided, not that it re-read under the
+  lease rather than deciding from the listing it started with.
+- **An operator hold outlasting `execution.usage_limit_max_pause`.** The traced
+  hold is lifted after one probe; that hold time is bounded by nothing, unlike
+  every other wait, is stated and untraced.
+- **The work item's durable review counter** — the one `triage.review_rounds_cap`
+  measures and a repair grant is truncated against, which takes only the verdicts
+  that sent something back. The traces carry the run's `review_rounds` and never
+  the item's, so an executor could get the item-level counter wrong without
+  moving anything recorded here.
+
+**What the traces are of.**
+
+- Every trace here records the pipeline's Go control flow. `actions.go`
+  registers the same steps under selectable names — `work-item.claim`,
+  `candidate.develop`, `candidate.publish`, `candidate.check`,
+  `candidate.review`, `candidate.integrate`, `run.complete`, `run.clean-up` —
+  and each one is a single call to the function the pipeline itself calls, but
+  nothing in the delivery path walks through that door: `Pipeline.Run` still
+  runs the sequence Go control flow puts it in, and these traces are of that
+  sequence.
+
+  What now reads them is the parity harness in
+  `internal/orchestrator/parity_test.go`, which walks the built-in workflow
+  definitions — `delivery.yaml` and `delivery-human-approval.yaml`, the same
+  loop under its two integration policies — against every trace here. Each path
+  is written down there as the states a run stood in and the outcome it produced
+  in each, held against the trace that evidences it (a developer invocation is a
+  `develop` state, a verdict is a `review` state, and the counters below decide
+  how many of each), and then stepped through the compiled definition by
+  `internal/workflow`'s own executor with the registered actions' doors
+  performing nothing. A recorded path no scenario walks fails that harness by
+  name.
+
+  One thing there is not read off a trace. Only one recorded path runs under a
+  person's approval — the change that passes — so the three ways that gate can
+  stop a run instead (a check that failed, a path the item never granted, and a
+  suite the machine could not run) would otherwise be transitions nothing
+  measured. The harness drives the real non-automatic pipeline into each of them
+  and holds the definition's destination against what the run left behind: one
+  developer invocation, no repair attempt, the item neither closed nor blocked,
+  and the worktree and branch still standing. Driven rather than recorded,
+  because adding a trace here is re-recording this document's own artifact.
+
+  What it measures is the **sequence** and not the record. The pipeline does
+  everything outside its eight registered steps in Go control flow behind no
+  door at all — the pre-claim questions, the pauses, and the budgets — so there
+  is nothing for an executor to perform that would produce a durable record to
+  compare field by field. The four paths that stop before anything is claimed
+  reach no state at all and are named as inexpressible there rather than walked;
+  the two reconciliation paths are walked as far as the step the process died
+  inside, because the settlement after it is not an action anything registers.
+
+  Recording the outcome on the work item, closing it once its promotion is
+  settled and pricing what the run spent is the `complete` state, between the
+  promotion and the cleanup on the automatic path and the last state on the
+  human-approval one. Because the parity walk performs nothing, what that step
+  does to the item is held separately, in `actions_test.go`: the door is
+  performed against a tracker and a ledger and the item has to end up closed and
+  priced exactly as the hard-coded loop leaves it.
+
+  One state is missing from the definitions and is worth knowing about before
+  reading one as the pipeline. There is no `publish` state, because
+  `candidate.develop` ends by calling `publishAttempt` — a definition selecting
+  `candidate.publish` beside it would publish every attempt twice.
+
+**Not observable in these scenarios.**
+
+- The spend log, the price on the item, collected reports, proposed amendments,
+  and the triage docket, none of which are wired in the recorded scenarios: a
+  pipeline without them runs identically, so the traces say nothing about what
+  they receive.
+- A real provider adapter's event stream. The fake provider emits none, so the
+  recorded event sequences are the harness's half of the log rather than the
+  whole of it.
