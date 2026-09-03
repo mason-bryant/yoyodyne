@@ -1906,6 +1906,87 @@ having only if the thing that chooses actually consults it. Both halves are
 enforced rather than conventional: an item you name yourself is exempt from the
 hold, because naming it is you deciding it is the exception.
 
+## Observing a run against the workflow definition
+
+The delivery loop's sequence is also written down as data, in the two built-in
+workflow definitions this build ships — `delivery.yaml` for a project whose
+integration the harness takes, and `delivery-human-approval.yaml` for one where a
+person still approves it. Nothing runs from them. What runs a work item is the
+same Go control flow it always was, and the conversion that changes that is a
+later step with its own configuration.
+
+What a project can turn on now is the observation:
+
+```yaml
+execution:
+  declarative_delivery: true   # off unless you write this
+```
+
+A run started while this is on records a **workflow instance** beside its own
+record, standing on the definition's first state, and every boundary the run
+crosses is put to the definition: the state the run just performed, the outcome
+it produced, and the transition the definition resolves from them. Nothing is
+performed through the definition — the doors it holds are the registered delivery
+steps with their bodies replaced by nothing at all — so delivery is untouched and
+what the instance costs is one small file write per boundary.
+
+Two fields on the run say what happened:
+
+- `workflow_instance_id` names the instance, and a run carrying one is a run in
+  the trial. It is written when the run is created and never afterwards.
+- `workflow_divergence` is why the run stopped being observed: the definition
+  sent it somewhere it did not go, refused an outcome it produced, could not be
+  stepped at all, or had no outcome for the way the run ended. A run carrying one
+  is a run to read before the definition is trusted with anything, and it is the
+  whole measure of the trial — a clean soak is N real items observed with none of
+  these.
+
+  That last case is what keeps the count honest. A run can end by a route no
+  definition expresses — a review that ended without a verdict and without the
+  operator's stop, a `complete` that failed, a worktree that could not be cut
+  before the first attempt — and none of those is observed, deliberately, because
+  naming the nearest outcome would record the run ending somewhere it did not. So
+  the instance is left standing where the two last agreed, and a run that reaches
+  a terminal status with its instance still mid-graph records the gap itself as
+  the divergence, naming the state it stopped in. Without that, the runs least
+  entitled to pass would be the ones counted as clean.
+
+  That holds however the run reaches its terminal. A run its own process ends
+  records it there; a run whose process died and is settled by `yoyo reconcile`
+  afterwards has the same gap recorded by the sweep, in the same words, whether
+  the settlement closes it as completed, blocks it, or fails it. The completed
+  case is the one worth naming: the work lands and the item closes, so a run
+  whose observation stopped halfway would otherwise read exactly like one that
+  walked the definition to the end. A soak is not a quiet period — processes die
+  to the network, to the provider, and to the machine — so a count that only
+  spoke for the runs that ended tidily would be a count of the wrong runs.
+
+Both are on the run's summary, so `yoyo status <beads-id>` and its `--json` carry
+them like every other fact about a run, and a divergence is named on its own line
+there. It is printed beside the reasons a run ended without being one of them: the
+run delivered exactly as it would have, and what diverged is the observation. That
+line is how the soak is counted, because a divergence nobody is shown is a soak
+that looks clean.
+
+One divergence is already known and expected: a run interrupted while its
+reviewer was being asked resumes at the checks rather than at the review, because
+a resumed run re-earns the whole gate, and no definition has a transition from
+the review back to the check. Such a run records a divergence naming both. It is
+left as a divergence deliberately — the definition is missing a path the pipeline
+takes, and an observation that quietly agreed with itself would be worth nothing.
+
+**The flag reaches new runs only.** Whether a run is observed is settled once,
+when the run is reserved, and read back off the run's own record by every later
+process. So a run already in flight when you turn the trial on carries on exactly
+as it was, with no instance and nothing watching it, and a run that started in
+the trial keeps being observed to its terminal even if you turn the trial off
+underneath it. There is no migration in either direction, which is the same rule
+an in-flight instance is held to when the definition itself changes: it keeps
+running the definition it was pinned to, or it stops being stepped and says so.
+
+Turning it off is one line: delete the setting, or set it to `false`. Runs
+already in flight finish as they started.
+
 ## Publishing through pull requests
 
 By default Yoyodyne is entirely local: it creates a branch and a worktree, runs

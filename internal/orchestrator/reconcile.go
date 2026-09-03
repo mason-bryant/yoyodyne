@@ -72,6 +72,12 @@ type ReconcileStore interface {
 	// where it is and then moves it, which is the same race a promotion is, so
 	// it queues in the same place rather than beside it.
 	LeasePromotion(ctx context.Context, targetBranch string) (*runstate.Lease, error)
+	// LoadWorkflowInstance reads the instance a run in the declarative trial was
+	// observed through. A settlement never steps one: it reads whether the
+	// observation reached a terminal of its own, because a run this sweep is
+	// making terminal with an instance still standing mid-graph is one the soak
+	// would otherwise count as clean.
+	LoadWorkflowInstance(instanceID string) (runstate.WorkflowInstance, error)
 }
 
 // Reconciler settles the runs an interrupted process left behind. It compares
@@ -672,6 +678,12 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 		state.Status = runstate.StatusSucceeded
 		state.CompletedAt = &completedAt
 	}
+	// This is the settlement the trial's count most depends on. The work landed
+	// and the item closes, so a run whose observation stopped somewhere mid-graph
+	// reads afterwards exactly like one that walked the definition to the end —
+	// which is the single way the soak can be quietly wrong in the direction of
+	// looking clean.
+	r.noteUnfinishedObservation(&state)
 	state.Phase = runstate.PhaseCleaningUp
 	state.UpdatedAt = r.clock().Now()
 	if err := r.Store.Save(state); err != nil {
@@ -845,10 +857,34 @@ func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (ru
 		// piece of work.
 		state.Failure = reconciled
 	}
+	// Asked after the status is settled, because the divergence names the status
+	// the run ended as, and before the save that is this run's last word.
+	r.noteUnfinishedObservation(&state)
 	if err := r.Store.Save(state); err != nil {
 		return state, fmt.Errorf("save reconciled run state for %s: %w", state.RunID, err)
 	}
 	return state, nil
+}
+
+// noteUnfinishedObservation records, on a run this sweep is making terminal,
+// that the instance observing it never reached a terminal of its own.
+//
+// A run served by a live pipeline records this for itself, in activeRun.fail. A
+// run whose process died does not: settling it is the only ending it gets, so
+// without this the runs that end by the routes a soak most needs to hear about —
+// a process killed by the network, by the provider, or by the machine — would be
+// exactly the runs recorded as having agreed with the definition throughout.
+// This repository's own history for the work that added the trial is four
+// consecutive runs killed that way, so it is not a corner.
+//
+// It notes rather than saves, like its counterpart: the caller is writing the
+// terminal record next and this is one of the fields that record carries. It
+// never fails a settlement — an observation that cannot be read is recorded as
+// the divergence it is, and the sweep carries on settling the run either way.
+func (r Reconciler) noteUnfinishedObservation(state *runstate.State) {
+	if divergence := unfinishedObservation(r.Store, *state); divergence != "" {
+		state.WorkflowDivergence = divergence
+	}
 }
 
 // itemStatus reads the tracker's own view of the item, which is the half of

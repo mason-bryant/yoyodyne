@@ -653,6 +653,29 @@ type State struct {
 	// before this did and what a binary carrying no revision of its own produces —
 	// a comparison nobody can make, rather than a run that is current.
 	Build string `json:"build,omitempty"`
+	// WorkflowInstanceID is the workflow instance this run is observed through,
+	// and is what tells a run in the declarative trial from a run on the legacy
+	// path: a run carrying one records a position in the built-in delivery
+	// definition beside everything else it records, and a run carrying none is
+	// executing the same sequence with nothing watching it. It is written when
+	// the run is created and never afterwards, which is what makes the trial a
+	// property of the run rather than of the configuration a later process reads:
+	// a run started before the opt-in was turned on stays a legacy run for the
+	// whole of its life, however many processes serve it.
+	//
+	// The instance itself lives beside this record in the same store, under this
+	// identifier. Nothing about the run depends on it: it is an observation, and
+	// a run whose instance could not be created or stepped delivers exactly as it
+	// would have.
+	WorkflowInstanceID string `json:"workflow_instance_id,omitempty"`
+	// WorkflowDivergence is why this run stopped stepping that instance — the
+	// definition sent the run somewhere it did not go, refused an outcome it
+	// produced, or could not be stepped at all. It is the whole point of the
+	// trial: a soak is N real items observed without one of these, so a run
+	// carrying one is a run somebody has to read before the definition is trusted
+	// to decide anything. Absent means the instance and the run agreed at every
+	// boundary the run reached.
+	WorkflowDivergence string `json:"workflow_divergence,omitempty"`
 	// ProviderSessionID is the developer session. The reviewer's session is
 	// recorded separately because the two are always distinct invocations.
 	ProviderSessionID string `json:"provider_session_id,omitempty"`
@@ -1057,6 +1080,19 @@ func (s State) Validate() error {
 	}
 	if s.Build != "" && !buildPattern.MatchString(s.Build) {
 		problems = append(problems, errors.New("build is not a revision"))
+	}
+	// The instance is checked to the shape an instance is recorded under, for the
+	// same reason: a run naming an instance nothing could be stored as names
+	// nothing at all. A divergence without one is worse than either — it reports
+	// an observation about a run that was never observed — so it is refused
+	// rather than carried.
+	if s.WorkflowInstanceID != "" {
+		if err := domain.ValidateIdentifier("workflow_instance_id", s.WorkflowInstanceID); err != nil {
+			problems = append(problems, err)
+		}
+	}
+	if s.WorkflowDivergence != "" && s.WorkflowInstanceID == "" {
+		problems = append(problems, errors.New("workflow_divergence requires the workflow_instance_id it was observed on"))
 	}
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))

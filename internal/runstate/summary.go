@@ -248,6 +248,14 @@ type RunSummary struct {
 	// CompletionRecordingFailure is on the summary for the reason it is on the
 	// state: the run record is the one durable home this failure class has.
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
+	// WorkflowInstanceID and WorkflowDivergence are what the declarative trial
+	// observed of this run: which instance watched it, and why the watching
+	// stopped. Neither says anything about the work — a run that diverged
+	// delivered exactly as it would have — and they are here because the soak the
+	// trial exists for is counted off these two fields. A soak nobody can read
+	// without opening the state directory is one nobody counts.
+	WorkflowInstanceID string `json:"workflow_instance_id,omitempty"`
+	WorkflowDivergence string `json:"workflow_divergence,omitempty"`
 	// Selection is why the harness was running this item: who chose it and on
 	// what grounds. It matters most for the runs nobody typed an identifier for,
 	// which is why its absence is worth reporting rather than omitting — a run
@@ -397,6 +405,9 @@ func (s *Store) summarize(state State) RunSummary {
 		Failure:           state.Failure,
 		PublishFailure:    state.PublishFailure,
 		CleanupFailure:    state.CleanupFailure,
+
+		WorkflowInstanceID: state.WorkflowInstanceID,
+		WorkflowDivergence: state.WorkflowDivergence,
 
 		CompletionRecordingFailure: state.CompletionRecordingFailure,
 	}

@@ -280,6 +280,20 @@ type Execution struct {
 	// through a run each and dock every one of them. Zero never brakes, which is
 	// the behaviour a pass had before this bound existed.
 	BlockedRunsBeforeIntakeHold int `yaml:"blocked_runs_before_intake_hold" json:"blocked_runs_before_intake_hold"`
+	// DeclarativeDelivery opts this project's new runs into the declarative
+	// trial: each of them records a workflow instance of the built-in delivery
+	// definition and steps it beside the run, so the sequence the definition
+	// would have chosen is compared against the sequence the run actually took.
+	// It changes nothing about how work is delivered — the pipeline performs
+	// every step exactly as it always has — and what it buys is the evidence the
+	// conversion needs before the definition is allowed to decide anything: real
+	// items through the definition, with any divergence recorded on the run.
+	//
+	// It defaults off, and it is read once per run, when the run is created. A
+	// run already in flight keeps whatever it started under, so turning this on
+	// never migrates a run that is mid-flight and turning it off never strands
+	// one.
+	DeclarativeDelivery bool `yaml:"declarative_delivery,omitempty" json:"declarative_delivery,omitempty"`
 }
 
 const (
