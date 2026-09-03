@@ -5,9 +5,9 @@ package orchestrator
 // This is a second door onto functions the pipeline already calls, and nothing
 // yet walks through it. Run still calls claim and develop directly; develop
 // calls publishAttempt on its way out of an attempt; and verifyReviewAndFinish,
-// the repair loop and finish call verify, reviewChange, integrate and cleanUp
-// between them — all in the order Go control flow puts them in, and this file
-// changes none of that. What it adds is that each of
+// the repair loop and finish call verify, reviewChange, integrate, complete and
+// cleanUp between them — all in the order Go control flow puts them in, and this
+// file changes none of that. What it adds is that each of
 // those steps now has a name a workflow definition could select, and a statement
 // in code of what performing it requires — which is the half of "configuration
 // selects sequence, code grants capability" that has to exist before any
@@ -39,11 +39,14 @@ import (
 // no registered step occupies fails that test rather than passing quietly.
 type deliveryStep struct {
 	action action.Action[*activeRun]
-	// phases are the run phases this step occupies. Two steps can name the same
-	// phase — publishing happens inside the developing phase, because a pull
-	// request is opened for the attempt that just finished — and one step can name
-	// two, because promoting a change ends in the completing phase it moved the run
-	// into. What must not happen is a phase no step names at all.
+	// phases are the run phases this step occupies — the phases a run is in while
+	// this step is the one being performed, rather than every phase the step
+	// writes. Two steps can name the same phase: publishing happens inside the
+	// developing phase, because a pull request is opened for the attempt that just
+	// finished. A phase a step only moves the run into on its way out belongs to
+	// whatever runs next — promoting a change ends by recording the completing
+	// phase, and the step performed in it is run.complete. What must not happen is
+	// a phase no step names at all.
 	phases []runstate.Phase
 }
 
@@ -182,12 +185,38 @@ func deliverySteps() []deliveryStep {
 				// individually optional pieces.
 				Perform: func(ctx context.Context, a *activeRun) error { return a.integrate(ctx) },
 			},
-			phases: []runstate.Phase{runstate.PhaseIntegrating, runstate.PhaseCompleting},
+			// Promoting ends by recording the completing phase, and the step performed
+			// in it is the next one rather than this one.
+			phases: []runstate.Phase{runstate.PhaseIntegrating},
+		},
+		{
+			action: action.Action[*activeRun]{
+				Name:    "run.complete",
+				Summary: "record on the work item what this run produced, close it once its promotion is settled, and price what it spent",
+				Wraps:   "(*activeRun).complete",
+				Capabilities: []capability.Capability{
+					// The tracker write is the whole of what makes this a delivery step
+					// rather than bookkeeping: the outcome is recorded on the item and an
+					// integrated item is closed against it. Pricing writes what the run cost
+					// against the same item, which is why nothing else appears here.
+					capability.WorkItemMutate,
+					capability.RunStateMutate,
+				},
+				// The outcome is not returned through this door for the same reason
+				// candidate.review's verdict is not: what the run produced is already on
+				// its durable state and on its outcome before this returns, so the answer
+				// is read from the run rather than from the call.
+				Perform: func(ctx context.Context, a *activeRun) error {
+					_, err := a.complete(ctx)
+					return err
+				},
+			},
+			phases: []runstate.Phase{runstate.PhaseCompleting},
 		},
 		{
 			action: action.Action[*activeRun]{
 				Name:    "run.clean-up",
-				Summary: "remove the worktree and branch this run created, once its change is proven to be somewhere else",
+				Summary: "remove the worktree and branch this run created, once its change is proven to be somewhere else, and record the run as complete once nothing it made is left",
 				Wraps:   "(*activeRun).cleanUp",
 				Capabilities: []capability.Capability{
 					capability.WorktreeMutate,

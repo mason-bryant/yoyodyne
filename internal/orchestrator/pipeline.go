@@ -3695,10 +3695,42 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	return nil
 }
 
-// finish records the outcome, closes an integrated item whose publication is
-// settled, makes the run durably terminal, and only then removes what the run
-// created.
+// finish is the completing half of a run: what the run produced is recorded and
+// the run is made terminal, and only then is what it created removed.
+//
+// It is control flow rather than an operation of its own. Both halves are
+// registered steps — run.complete and run.clean-up — so a workflow definition
+// orders the same two in the same order this does, and a step that arrives
+// between them arrives in the registry rather than only here.
 func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
+	outcome, err := a.complete(ctx)
+	if err != nil || a.outcome.Integration == nil {
+		return outcome, err
+	}
+	if err := a.cleanUp(ctx); err != nil {
+		// The two things cleanup can fail at are reported differently. A run whose
+		// artifacts are all gone and whose terminal record would not save is one
+		// reconciliation has to settle; anything else left an artifact standing,
+		// which is reported on a succeeded run because the change is integrated and
+		// the item is closed either way.
+		var unrecorded completionRecordingFailure
+		if errors.As(err, &unrecorded) {
+			return a.pipeline.reportCompletionRecordingFailure(a.state, a.outcome, unrecorded.cause)
+		}
+		return a.pipeline.reportOutstandingCleanup(a.state, a.outcome, err)
+	}
+	return a.outcome, nil
+}
+
+// complete records the outcome on the work item, closes an integrated item whose
+// publication is settled, prices what the run spent, and makes the run durably
+// terminal.
+//
+// It stops short of removing anything, and that boundary is the point: the run
+// becomes terminal here and cleanup is the only step left, so a process
+// interrupted between the two leaves a succeeded run in the cleaning_up phase
+// rather than a closed item behind a run nothing finished.
+func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	p := a.pipeline
 	// The tracker is updated only once the work is durably where it belongs:
 	// after integration when it is automatic, and after passing checks when a
@@ -3749,40 +3781,22 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	}
 	a.outcome.Status = runstate.StatusSucceeded
 	a.outcome.Phase = a.state.Phase
-	if a.outcome.Integration == nil {
-		return a.outcome, nil
-	}
-
-	if err := a.cleanUp(ctx); err != nil {
-		// A failure here leaves the run succeeded and reports the outstanding
-		// cleanup: the change is integrated and the item is closed. Whatever was
-		// removed before the failure is still recorded as removed.
-		return p.reportOutstandingCleanup(a.state, a.outcome, err)
-	}
-	// Cleanup finished, so the run is complete whatever happens to the record of
-	// it. The reported phase follows that fact rather than the write below.
-	a.state.Phase = runstate.PhaseComplete
-	a.state.UpdatedAt = p.clock().Now()
-	a.outcome.Phase = a.state.Phase
-	if err := p.Store.Save(a.state); err != nil {
-		// An interrupted write that recovers must leave a clean terminal record,
-		// not a cleanup warning about artifacts that are already gone.
-		a.state.UpdatedAt = p.clock().Now()
-		if retryErr := p.Store.Save(a.state); retryErr != nil {
-			return p.reportCompletionRecordingFailure(a.state, a.outcome,
-				fmt.Errorf("save completed run state after cleanup: %w", errors.Join(err, retryErr)))
-		}
-	}
 	return a.outcome, nil
 }
 
-// cleanUp removes what this run created, once its work is somewhere else.
+// cleanUp removes what this run created, once its work is somewhere else, and
+// records the run as complete once nothing it made is left.
 //
 // Only artifacts proven to be integrated are removed, and only after the tracker
 // agrees the item is done and that fact is durable. Cleanup reports each
 // artifact separately, so a partial removal is recorded as what it is rather
 // than collapsed into a single failed flag — which is why what was removed is
 // recorded before the failure is returned rather than after it.
+//
+// The terminal record is here rather than beside the call because it is the last
+// thing cleanup is for: it says the run has nothing left standing, so a run that
+// left an artifact behind never reaches it and is settled as the outstanding
+// cleanup it is.
 func (a *activeRun) cleanUp(ctx context.Context) error {
 	cleanup, err := a.pipeline.Worktrees.CleanupIntegrated(ctx, gitworktree.CleanupRequest{
 		Worktree:     a.worktree,
@@ -3796,8 +3810,33 @@ func (a *activeRun) cleanUp(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("clean up integrated run artifacts: %w", err)
 	}
+	// Cleanup finished, so the run is complete whatever happens to the record of
+	// it. The reported phase follows that fact rather than the write below.
+	a.state.Phase = runstate.PhaseComplete
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	a.outcome.Phase = a.state.Phase
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		// An interrupted write that recovers must leave a clean terminal record,
+		// not a cleanup warning about artifacts that are already gone.
+		a.state.UpdatedAt = a.pipeline.clock().Now()
+		if retryErr := a.pipeline.Store.Save(a.state); retryErr != nil {
+			return completionRecordingFailure{cause: fmt.Errorf(
+				"save completed run state after cleanup: %w", errors.Join(err, retryErr))}
+		}
+	}
 	return nil
 }
+
+// completionRecordingFailure is a run whose artifacts are all gone and whose
+// record of that would not save. It is its own error type because it is the one
+// cleanup failure that is not an outstanding artifact: there is nothing left to
+// remove and nothing for anybody to do by hand, only a terminal record that a
+// later process has to write.
+type completionRecordingFailure struct{ cause error }
+
+func (e completionRecordingFailure) Error() string { return e.cause.Error() }
+
+func (e completionRecordingFailure) Unwrap() error { return e.cause }
 
 // stop turns a stopped step into the outcome the run reports. Two things it can
 // be handed are deliberately not failures, because both leave the run in flight
