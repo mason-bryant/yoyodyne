@@ -529,6 +529,46 @@ func TestSchedulerLeavesAnEpicItsOpenChildrenAlreadyCover(t *testing.T) {
 	}
 }
 
+// The same guard against the shape the tracker actually hands it. The pair above
+// states its parentage as a field, and no item in this project's own tracker
+// ever has: parentage is recorded there as a parent-child edge, and a guard that
+// read only the field saw a backlog with nothing decomposed in it. So it passed
+// yoyodyne-ifd.121 and yoyodyne-ifd.121.2 straight through, and the two runs it
+// started produced two conflicting wholesale README rewrites, one of them
+// guaranteed to lose at integration.
+func TestSchedulerLeavesAnEpicCoveredByAChildTheTrackerStatesAsAnEdge(t *testing.T) {
+	t.Parallel()
+
+	epic := beads.WorkItem{
+		ID: "yoyodyne-ifd.121", Title: "Docs architecture: a readable README", Status: "open", Priority: 1,
+	}
+	child := beads.WorkItem{
+		ID: "yoyodyne-ifd.121.2", Title: "Execute the README split", Status: "open", Priority: 1,
+		Dependencies: []beads.Dependency{
+			{IssueID: "yoyodyne-ifd.121.2", ID: epic.ID, Type: "parent-child"},
+		},
+	}
+	harness := newScheduleHarness(epic, child)
+	harness.capacity = 2
+
+	schedule, err := Scheduler{Open: harness.open, Limit: 1}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if child.Parent != "" {
+		t.Fatalf("child parent field = %q, want the shape the tracker states, which sets none", child.Parent)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != child.ID {
+		t.Fatalf("started = %#v, want only the child that carries the work: %s", schedule.Started, schedule.Render())
+	}
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != epic.ID {
+		t.Fatalf("deferred = %#v, want the covered epic named rather than silently dropped", schedule.Deferred)
+	}
+	if !strings.Contains(schedule.Deferred[0].Reason, child.ID) {
+		t.Fatalf("deferred reason = %q, want the child that covers it named", schedule.Deferred[0].Reason)
+	}
+}
+
 // What covers an item is an unfinished child, whatever slice of the tracker it
 // is in. A blocked child is work somebody will release; a claimed one is a run
 // in flight over the very same change, and it is the case a reading of the queue

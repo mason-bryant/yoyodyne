@@ -50,6 +50,14 @@ revisions:
       by: architect
       at: 2026-08-31T15:58:12Z
       reason: the fixed-roles statement points at the authority-by-capability decision record and the configurable-workflows design, which refine it - authority semantics stay in Go while composition becomes protected operator-activated configuration only after behavioral parity - per the 2026-08-31 promotion of the configurable-workflows brief (yoyodyne-ifd.210)
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:15:00Z
+      reason: approved amendments 309bd0a6 (yoyodyne-ifd.222) and b0934200 (yoyodyne-ifd.234) - the pull-request-body enumeration matches what ships with the rule's basis stated, and the closed-vocabulary policy moves from code comments into the design
+    - action: amended
+      by: architect
+      at: 2026-09-01T19:15:00Z
+      reason: 'yoyodyne-ifd.162 - the CLI table''s status entry matches shipped behavior: the four-line what-happened-what-remains report from yoyodyne-ifd.194 and yoyodyne-ifd.226, and the stream capabilities from yoyodyne-ifd.63; the line labels are taken from the shipped help text, which is authoritative for its own output'
 approvals:
     - revision: 0
       by: operator
@@ -290,6 +298,8 @@ Provider event streams, process metadata, locks, caches, and temporary run state
 
 All durable records include `ProductID` and, where applicable, `RepositoryID`, even though v1 configures exactly one of each.
 
+The durable run-state schema's closed vocabularies stay closed: a reader may rely on the recorded set. An addition to a producing vocabulary is a deliberate act held by a conformance test that forces every consumer to be updated together, rather than by a save-time refusal — which would make older binaries reject records newer binaries legitimately wrote.
+
 ## Backend Boundary
 
 The harness uses coding-agent CLIs as subprocess backends. A conceptual Go interface is:
@@ -419,7 +429,7 @@ When publishing is enabled:
 - **A queued merge ends the run rather than being waited for.** It completes minutes later, long after any wait a run could reasonably hold, so the run records the request as queued and finishes: the change is already integrated into the authoritative local branch, and what is outstanding is the forge's half. The run branch stays on the remote, because that branch is what the forge still has to merge. [Reconciliation](#recovery-and-idempotency) is what settles it afterwards.
 - **The merge method is a merge commit, deliberately.** The three methods produce different remote histories, and only one of them puts the reviewed commit itself on the base. A squash replaces it with a commit that was never reviewed, and GitHub's rebase always updates committer information and mints new SHAs — even for a request that sits directly on its base — so both leave the remote carrying a *copy* of the work, which the authoritative local branch does not have and can never fast-forward onto. A merge commit keeps the promoted commit intact as its second parent. The method is recorded on the run and on the work item, along with the commit the merge produced, because it is what decides the shape of the remote history.
 - **A refusal is reported as a refusal.** A protected branch declining even to queue the merge — because the request conflicts with its base, or the repository forbids the merge method — is the repository's rules being applied, not the harness failing, so the run reports which requirement was unmet: the forge's merge state and its own message, rather than a generic failure. A required check that has not finished is no longer one of these; it is what the queue waits for.
-- **The pull request body is harness evidence.** It names the run, the branch, the base, and the method the request will be merged by. Model output is not republished through it, so an agent cannot use a pull request as a channel for text nobody reviewed.
+- **The pull request body is governed or computed, never model output.** It names the run, the branch, the base, and the method the request will be merged by, and carries the work item's own description and acceptance criteria and the computed diffstat and changed-file list. Nothing unreviewed reaches it — not because the body is evidence-only, but because every source is governed or computed: item text arrives through the product manager's gated actions, and the diffstat is the harness's own arithmetic. Model output is still not republished through it.
 
 ### How the two approvals compose
 
@@ -475,7 +485,7 @@ yoyo init                 validate repository, Beads, Git, and providers
 yoyo chat                 talk with the product manager
 yoyo run <beads-id>       execute or resume a specific ready item
 yoyo work                 schedule ready development work
-yoyo status               show agents, runs, blockers, and stale artifacts
+yoyo status               what became of recent runs and what remains to be done, in the shipped four-line report; follow, list, and price the live event streams of runs, conversations, and branch reviews
 yoyo pause / resume       hold intake and stop or release the harness's spending
 yoyo work /stop           stop one run, or everything, cooperatively
 yoyo directive ...        record and inspect durable user directives

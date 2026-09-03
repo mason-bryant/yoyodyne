@@ -234,32 +234,36 @@ func undeliveredAndWaiting(runID string, judgeErr error, delay time.Duration) st
 	return fmt.Sprintf("%s and will be once %s has passed", undelivered(runID, judgeErr), delay)
 }
 
-// giveBackGrace bounds a give-back that is deliberately outliving the delivery
+// recordGrace bounds a record write that is deliberately outliving the delivery
 // it belongs to. The write it makes is one small file and a lock nothing holds
 // for long, so what this is really bounding is the wait for a lock another
 // process is holding: a detached context with no bound of its own would be a
 // shutdown that cannot finish because something else in it has not.
-const giveBackGrace = 5 * time.Second
+const recordGrace = 5 * time.Second
 
-// giveBackContext is the context an attempt is given back under: the delivery's
-// own, with its cancellation dropped and a bound of its own put on.
+// recordContext is the context a delivery writes its own record under: the
+// delivery's own, with its cancellation dropped and a bound of its own put on.
 //
-// The give-back exists for a turn a cancellation killed, and in a shutdown that
-// cancellation is the delivery's own context being cancelled — the largest class
-// of the deaths this covers, and the one where the give-back matters most. The
-// record's read-modify-write is serialized by a lock whose wait honours the
-// context it is given, so a give-back running under the delivery's context is
-// one that fails the moment another process holds the record: the fallback
-// branch is taken and the attempt the harness's own death took is spent after
-// all, which is exactly what the give-back exists to prevent. Detaching keeps
-// everything the delivery's context carried and drops only the cancellation.
+// Two writes need it, and they need it for the same death. The give-back exists
+// for a turn a cancellation killed; the settle writes down the turn that
+// answered. In a shutdown that cancellation is the delivery's own context being
+// cancelled — the largest class of the deaths either write covers, and the one
+// where each matters most. The record's read-modify-write is serialized by a
+// lock whose wait honours the context it is given, so either write running under
+// the delivery's context is one that fails the moment another process holds the
+// record: the give-back takes its fallback branch and the attempt the harness's
+// own death took is spent after all, and the settle leaves a delivery she
+// answered with no moment of delivery on it, which the next pass puts to her a
+// second time. Both are exactly what the writes exist to prevent. Detaching
+// keeps everything the delivery's context carried and drops only the
+// cancellation.
 //
 // A process-group teardown, where the child is killed and the harness lives, is
 // covered either way — nothing cancelled the pull's context there. This is what
 // makes the shutdown covered too rather than covered by luck about whether
 // anything else wanted the record at that moment.
-func giveBackContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), giveBackGrace)
+func recordContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), recordGrace)
 }
 
 // Escalator delivers docketed stoppages to the development manager. It has no
@@ -568,7 +572,7 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 		// Under a context detached from this delivery's, because a shutdown
 		// cancels the very context the delivery ran under: giving the attempt back
 		// under it would fail in the case the give-back is most for.
-		giveBack, stopGivingBack := giveBackContext(ctx)
+		giveBack, stopGivingBack := recordContext(ctx)
 		defer stopGivingBack()
 		if err := e.Records.Withdraw(giveBack, entry.Key, judgeErr.Error()); err != nil {
 			escalated.Problem = fmt.Sprintf("%s, and the attempt taken for it could not be given back, so it has spent one of %d on a turn that decided nothing: %v",
@@ -590,7 +594,16 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 		escalated.Delivered = true
 		escalated.Decision = judgment.Decision
 	}
-	if _, err := e.Records.Settle(ctx, entry.Key, delivery); err != nil {
+	// Under a context detached from this delivery's, for the reason the give-back
+	// above is: a shutdown cancels the very context the delivery ran under, and it
+	// can land between her answer arriving and this write. A settle that failed
+	// there would leave the attempt standing with no delivery recorded against it,
+	// so a later pass puts a stoppage she has already answered to her a second time
+	// — and nothing else would catch it, because a decision that spends no counter
+	// is one alreadyJudged cannot see.
+	settle, stopSettling := recordContext(ctx)
+	defer stopSettling()
+	if _, err := e.Records.Settle(settle, entry.Key, delivery); err != nil {
 		escalated.Problem = strings.TrimSpace(escalated.Problem + fmt.Sprintf(
 			"; what became of putting the stoppage of run %s to the development manager could not be recorded, so the record still says it may not have reached her: %v",
 			entry.RunID, err))

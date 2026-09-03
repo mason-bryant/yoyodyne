@@ -57,6 +57,15 @@ type inFlight struct {
 	// epics maps an epic identifier to the in-flight item working under it. Both
 	// an item's parent and the item itself are keys: two children of one epic
 	// race each other, and a child races the epic it was broken out of.
+	//
+	// The parent read here is the one the tracker states as a field, and
+	// deliberately not the wider reading beads.WorkItem.DecomposedFrom does. A
+	// tracker that hangs its whole backlog off one root epic states that the
+	// wider way too, and holding every item back behind whichever child of the
+	// root is already running is serializing the queue rather than declining one
+	// race — which the header above says is exactly what this is not. Widening it
+	// wants a container epic told from a decomposed one first, and that question
+	// is not answered here.
 	epics map[string]string
 	// taken is the surfaces each in-flight item holds, in the order the items
 	// were taken, so which conflict is reported for a candidate is stable rather
