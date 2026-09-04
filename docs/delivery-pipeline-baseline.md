@@ -532,7 +532,16 @@ them.
   `reconciliation-completes-a-run-interrupted-inside-integration`, where a
   process killed inside integration is settled as succeeded with its instance
   still standing in `integrate`, and the gap that leaves is recorded rather than
-  smoothed over. Where each instance *went* is not read off these traces:
+  smoothed over. The other interrupted scenario,
+  `reconciliation-blocks-a-run-interrupted-while-developing`, carries none, and
+  that is the observation having finished rather than the blocked settlement
+  skipping it: the process survives the refused write, records its own ending,
+  and the developer's ending is one the definition has an outcome for, so the
+  instance is on the `abandoned` terminal before the sweep looks at it.
+  `TestASweepRecordsTheGapAnInterruptedObservationLeaves` and
+  `TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal` hold both
+  halves of that, the first of them over a blocked settlement as well as a
+  completed one. Where each instance *went* is not read off these traces:
   `internal/orchestrator/declarative_test.go` drives the eight paths the parity
   harness holds a transcript for and compares the instance's own sequence
   against it.

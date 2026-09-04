@@ -1975,6 +1975,18 @@ Two fields on the run say what happened:
   provider, and to the machine — so a record that only spoke for the runs that
   ended tidily would be a record of the wrong runs.
 
+  **What is recorded is the gap, not the settlement.** A process that died can
+  still have left its instance on a terminal — an ending the definition has an
+  outcome for is stepped before the process stops writing — and such a run is
+  settled carrying no divergence, on every one of those three settlements. That
+  is the recorded baseline's blocked trace:
+  `reconciliation-blocks-a-run-interrupted-while-developing` stops writing as the
+  developer's attempt ends, the developer's ending sends its instance to
+  `abandoned`, and the sweep blocks the run with nothing to record. An empty
+  divergence there is the observation having finished rather than the sweep
+  having missed it, which is why it is measured rather than left to be read off
+  an absent field.
+
 Both are on the run's summary, so `yoyo status <beads-id>` and its `--json` carry
 them like every other fact about a run, and a divergence is named on its own line
 there. It is printed beside the reasons a run ended without being one of them: the

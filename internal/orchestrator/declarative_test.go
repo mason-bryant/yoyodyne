@@ -626,6 +626,66 @@ func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
 	}
 }
 
+// The other half of the same rule, and the one the recorded baseline holds: a
+// blocked settlement records a divergence when there is a gap and records none
+// when there is not.
+//
+// `reconciliation-blocks-a-run-interrupted-while-developing` is a process that
+// stops writing its run record as the developer's attempt ends, and its trace
+// carries an instance and no divergence. That reads like the blocked path having
+// been missed, and it is the opposite: the process survives the refused write,
+// records its own ending, and the developer's ending is one the definition has an
+// outcome for, so the instance reaches the `abandoned` terminal before the sweep
+// ever looks at it. An observation that finished is not a gap, and inventing a
+// divergence for one would make every such run read as a disagreement.
+//
+// It is measured here rather than left to be inferred from an empty field,
+// because an empty field is exactly what the defect would look like too.
+func TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	// The baseline scenario's own halt: writes stop while the developer's work is
+	// still the only thing that happened.
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"test -f feature.txt"}), provider)
+	pipeline.Instances = store
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
+	}
+
+	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+	if len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want one %q", results, ActionBlocked)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() settled state error = %v", err)
+	}
+	if !settled.Status.Terminal() {
+		t.Fatalf("settled state = %#v, want a terminal run", settled)
+	}
+	if settled.WorkflowInstanceID == "" {
+		t.Fatalf("the settled run records no instance; it was never observed")
+	}
+	instance, err := store.LoadWorkflowInstance(settled.WorkflowInstanceID)
+	if err != nil {
+		t.Fatalf("LoadWorkflowInstance(%s) error = %v", settled.WorkflowInstanceID, err)
+	}
+	if !instance.Terminal {
+		t.Fatalf("the instance stands in %q rather than a terminal; this measures the settlement that has no gap to record", instance.State)
+	}
+	if settled.WorkflowDivergence != "" {
+		t.Errorf("the observation reached the terminal %q and the run was still settled carrying the divergence %q",
+			instance.State, settled.WorkflowDivergence)
+	}
+}
+
 // The same sweep over a run nobody was observing records nothing, which is what
 // the rollback has to reach on this path as well: settling a legacy run must not
 // invent an observation of it.
