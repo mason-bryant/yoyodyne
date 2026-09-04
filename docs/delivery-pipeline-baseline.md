@@ -259,12 +259,34 @@ a held run would be the harness overriding the operator.
 | `integration_retries` | `execution.integration_retries_before_reconciliation` | Promotions re-prepared after losing the target branch | The target branch moving |
 | `transient_relaunches` | `execution.transient_relaunches_before_blocking` | Provider invocations reissued after one died without judging the work; the developer and the reviewer share it | The provider |
 | `usage_limit_paused_seconds` | `execution.usage_limit_max_pause` | Total waiting committed across every pause | The provider's capacity |
+| `retries` | nothing in the configuration | Per boundary: a two-hour window of Fibonacci waits capped at half an hour | The network under one boundary |
 | `review_rounds` | nothing in the run | Nothing the run stops on — it counts every verdict **this run** obtained, approvals included | What this run has cost |
 
 The first four are per run and go with it, and each is what stops the run when it
 is spent. `review_rounds` stops nothing: it is this run's own tally, incremented
 on every verdict whichever way it went, and it is never cleared — what a repair
 discards is the judgement, not the fact that the work has been round once more.
+
+`retries` is a list rather than a count, and it bounds per boundary rather than
+per run: each entry names where the failure happened, which attempt at that
+boundary it was, the interval that was waited, and the failure itself, and a
+boundary's window is what its own entries have already committed. The boundaries
+are every place a run reaches something outside itself — the branch push, opening
+the pull request, republishing a replayed branch, reading and confirming the
+remote target, the merge, the merge confirmation, deleting the merged branch,
+catching the local target up, provider invocation, and the writes a finishing run
+makes to the tracker. Only failures whose class is clearly recoverable — a
+connection reset, a network drop, a transport-level refusal, a subprocess that
+produced no verdict at all — are waited on; everything else is reported exactly
+as promptly as it was before, which is what keeps this a wait around the existing
+behavior rather than a second opinion about it.
+
+The provider's boundary is the one that interacts with a counter above it.
+`transient_relaunches` is spent first and bounds every death; past it, a death
+whose class is clearly recoverable goes on being waited out against `retries`,
+and only a spent window blocks. That is why the two are separate: the budget
+bounds provider weather nobody has classified, and the window bounds a network
+that is down.
 
 **It is not the counter `triage.review_rounds_cap` measures, and a repair grant
 is not truncated against it.** That one is the work item's durable counter, which
@@ -394,7 +416,8 @@ re-closing or re-blocking an item is exactly what a sweep must not do.
 | `verdict-fields-the-schema-does-not-name-are-recorded-as-drift` | The `review.drift` event, and a verdict acted on without what the schema does not define |
 | `partial-cleanup-leaves-a-succeeded-run-reporting-what-survives` | `cleanup_failure` on a succeeded run, with each artifact reported separately |
 | `transient-provider-death-relaunches-without-charging-the-developer` | The relaunch budget spending no repair attempt |
-| `transient-deaths-spend-the-relaunch-budget-and-block` | The relaunch budget's bound |
+| `transient-deaths-spend-the-relaunch-budget-and-block` | The relaunch budget's bound, for a death whose class the harness does not recognize |
+| `recoverable-death-carries-on-past-the-relaunch-budget` | A dropped connection waited out past the spent relaunch budget, with each wait recorded on the run |
 | `unresolved-directive-pauses-the-work-before-anything-is-claimed` | A pause with no run behind it |
 | `unfinished-dependency-pauses-the-work-before-anything-is-claimed` | The same, and that a parent-child link is not a blocker |
 | `operator-hold-starts-nothing-at-all` | The hold read before the provider is asked anything |
@@ -421,6 +444,30 @@ is unmeasured. Most of these are asserted somewhere in
   publish and could not ever carries, so the scenarios here leave it empty), and
   the catch-up after a forge merge. It has its own assertions in
   `internal/orchestrator/publish_test.go`.
+- **Four of the ten `retries` boundaries.** The boundaries are the ten
+  `runstate.Retry*` constants, counted as constants rather than as call sites —
+  `reading the remote target branch` is one boundary with three call sites and
+  one window, and `writing to the tracker` is one with three, and each is counted
+  once.
+
+  One has a recorded trace: a provider death waited out past its budget. Five
+  more are asserted in `internal/orchestrator/recovery_test.go` and held by no
+  trace here — the branch push (including that the retry does not read as an
+  empty change), opening the pull request, the merge (twice over: the reset that
+  is waited out, and the window that runs out and leaves an outstanding
+  publication), reading the remote target, which a retried merge re-reads before
+  each attempt, and the tracker writes, whose test is the one that holds a
+  promoted change closing its item rather than being recorded as a failed run.
+
+  The remaining four have neither a trace nor an assertion: republishing a
+  replayed run branch, confirming the merge with the forge, deleting the merged
+  remote branch, and catching the local target up. Two are worth naming rather
+  than counting, because a retry there is not simply a second read: republishing
+  and deleting the remote branch are both compare-and-swap writes, so a reset
+  that arrived *after* the write reached the forge leaves the retry refused by
+  the swap rather than succeeding. Such a run stops exactly as it would have
+  stopped without the retry, and the failure it names is the refused swap rather
+  than the reset that caused it.
 - `yoyo triage repair` and `yoyo triage rerun`, which re-enter a stopped run
   through their own preconditions.
 - **Seven of the sixteen pre-claim steps, and the order of all sixteen.** The
@@ -475,10 +522,11 @@ them.
   record does not carry, found in the target branch by containment — so what no
   trace holds is the sweep disbelieving a record that claims more than the
   repository shows.
-- **The developer and the reviewer sharing `transient_relaunches`.** Both
-  relaunch traces kill only the developer, so the budget is frozen as one the
-  developer draws on; that a reviewer's death draws on the same one is stated
-  here and recorded nowhere.
+- **The developer and the reviewer sharing `transient_relaunches`.** Every
+  relaunch trace kills only the developer, so the budget is frozen as one the
+  developer draws on. That a reviewer's death draws on the same budget — and on
+  the same recovery window past it — is asserted in
+  `internal/orchestrator/recovery_test.go` and held by no trace here.
 - **Every counter being recorded before the thing it bounds.** No scenario dies
   mid-attempt and resumes, so the guarantee that an interrupted attempt still
   counts — and that a restart therefore cannot buy a fresh budget — is untraced

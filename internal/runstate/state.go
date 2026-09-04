@@ -641,6 +641,102 @@ func (c RepairContinuation) Validate() error {
 	return errors.Join(problems...)
 }
 
+// The boundaries a run can meet a recoverable failure at, named here rather than
+// where each one is retried so the record speaks one vocabulary. Each is a place
+// a network drop killed a run outright before yoyodyne-ifd.264, and each stands
+// for one recovery window: a run that spent its whole window pushing a branch
+// still gets a fresh one at the merge, because the two are different failures
+// however alike they read.
+//
+// The provider's is deliberately one boundary rather than two. The developer and
+// the reviewer share the relaunch budget already, for the reason stated on
+// TransientRelaunches, and a recovery window they did not share would let a run
+// alternating between them absorb twice what one boundary is worth.
+const (
+	RetryPublishBranch      = "publishing the run branch"
+	RetryOpenPullRequest    = "opening the pull request"
+	RetryRepublishBranch    = "republishing the replayed run branch"
+	RetryRemoteTarget       = "reading the remote target branch"
+	RetryMerge              = "merging the pull request"
+	RetryMergeConfirmation  = "confirming the merge"
+	RetryDeleteRemoteBranch = "deleting the merged remote branch"
+	RetryCatchUpTarget      = "catching the local target branch up"
+	RetryProviderInvocation = "invoking the provider"
+	// RetryTrackerWrite covers the writes a finishing run makes to the tracker —
+	// the outcome recorded on the item, the closure, and the price. They are one
+	// boundary rather than three for the reason the remote target's three call
+	// sites are one: they are the same store reached the same way within one
+	// step, and a `bd` that could not be run for one of them could not be run for
+	// the next. A transient failure there recorded finished, integrated work as a
+	// failed run, which is the same loss the forge boundaries carried and is why
+	// the product manager joined them to this item's set.
+	RetryTrackerWrite = "writing to the tracker"
+)
+
+// MaxRetries bounds how many recoverable failures one run records. The window
+// and the interval cap already bound them to about twenty per boundary, so this
+// is a backstop against a boundary retried in a loop nobody meant to write
+// rather than a budget: a run that reaches it has stopped being a run whose
+// record anybody can read.
+const MaxRetries = 256
+
+// MaxRetryFailureBytes bounds what one retry keeps of the failure it waited out.
+// It is the message that says why, not the record of the failure itself — the
+// run's event stream carries that whole — and a hundred of these in one state
+// file is what the bound exists for.
+const MaxRetryFailureBytes = 512
+
+// Retry is one recoverable failure a run waited out and asked again. It is the
+// evidence half of the operator's rule: a retry nobody can see is a run that
+// looks like it simply took longer, and the reason four runs' worth of lost work
+// took a day to diagnose is that nothing anywhere said a connection had been
+// reset.
+type Retry struct {
+	// Boundary is where the failure happened, from the vocabulary above.
+	Boundary string `json:"boundary"`
+	// Attempt is which retry at that boundary this was, counted from 1. It is
+	// what the interval was derived from, so a reader can check the backoff
+	// against the record rather than believing it.
+	Attempt int `json:"attempt"`
+	// DelaySeconds is how long the run waited before asking again. It is recorded
+	// rather than recomputed because the series is the harness's and may change,
+	// and a record that had to be read against the build that wrote it is not a
+	// record.
+	DelaySeconds int64 `json:"delay_seconds"`
+	// At is when the failure was met, which is also when the wait was committed.
+	At time.Time `json:"at"`
+	// Failure is what failed, bounded. It is the provider's or the forge's own
+	// words rather than a class the harness assigned, because which of them it
+	// was is exactly what somebody reading a run afterwards wants.
+	Failure string `json:"failure"`
+}
+
+// Delay is the recorded wait as a duration.
+func (r Retry) Delay() time.Duration {
+	return time.Duration(r.DelaySeconds) * time.Second
+}
+
+// Validate reports every contract violation in one recorded retry at once.
+func (r Retry) Validate() error {
+	var problems []error
+	if strings.TrimSpace(r.Boundary) == "" {
+		problems = append(problems, errors.New("the boundary a retry happened at is required"))
+	}
+	if r.Attempt < 1 {
+		problems = append(problems, errors.New("attempt is counted from 1"))
+	}
+	if r.DelaySeconds < 0 {
+		problems = append(problems, errors.New("delay_seconds cannot be negative"))
+	}
+	if r.At.IsZero() {
+		problems = append(problems, errors.New("at is required"))
+	}
+	if len(r.Failure) > MaxRetryFailureBytes {
+		problems = append(problems, fmt.Errorf("failure is %d bytes, which exceeds the %d byte bound", len(r.Failure), MaxRetryFailureBytes))
+	}
+	return errors.Join(problems...)
+}
+
 // Integration is the durable evidence of a completed promotion: exactly which
 // commit the harness created and which commit the target moved from and to.
 type Integration struct {
@@ -894,6 +990,20 @@ type State struct {
 	// recorded before each relaunch begins, so a process that dies mid-relaunch
 	// resumes against the budget it had rather than buying a fresh one.
 	TransientRelaunches int `json:"transient_relaunches,omitempty"`
+	// Retries are the recoverable failures this run waited out and asked again, in
+	// the order it met them, each carrying the boundary it happened at, which
+	// attempt at that boundary it was, and how long the run waited before the next
+	// one. A run that finishes carrying some of these is a run a connection reset
+	// would have recorded as failed before yoyodyne-ifd.264, which is why they are
+	// durable rather than only logged: what they evidence is completed work that
+	// was nearly lost, and an operator reading the record afterwards has to be
+	// able to see how close it came.
+	//
+	// Each is appended before its wait begins, exactly as the counters beside it
+	// are recorded before the thing they bound, so a process that dies mid-wait
+	// comes back to the recovery it had already spent rather than to a fresh
+	// window.
+	Retries []Retry `json:"retries,omitempty"`
 	// UsageLimitResetsAt is the deadline a run paused for an exhausted provider
 	// usage limit is waiting on. It is written before the wait begins, so a
 	// process that dies during the wait does not lose the deadline and a restart
@@ -1230,6 +1340,14 @@ func (s State) Validate() error {
 	if s.UsageLimitPausedSeconds < 0 {
 		problems = append(problems, errors.New("usage_limit_paused_seconds cannot be negative"))
 	}
+	if len(s.Retries) > MaxRetries {
+		problems = append(problems, fmt.Errorf("retries holds %d entries, which exceeds the %d entry bound", len(s.Retries), MaxRetries))
+	}
+	for index, retry := range s.Retries {
+		if err := retry.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("retries[%d]: %w", index, err))
+		}
+	}
 	if s.UsageLimitResetsAt != nil {
 		// A pause is an instruction to resume later, so it is only coherent on a
 		// run that can still be resumed. Recorded on a terminal run it would
@@ -1416,6 +1534,35 @@ func (s State) Validate() error {
 // measured against.
 func (s State) UsageLimitPaused() time.Duration {
 	return time.Duration(s.UsageLimitPausedSeconds) * time.Second
+}
+
+// RetryAttempts is how many recoverable failures this run has already waited out
+// at one boundary. It is read off the durable record rather than off anything a
+// process is holding, so a run picked up after a crash carries on from the
+// backoff it had reached instead of starting the series again.
+func (s State) RetryAttempts(boundary string) int {
+	attempts := 0
+	for _, retry := range s.Retries {
+		if retry.Boundary == boundary {
+			attempts++
+		}
+	}
+	return attempts
+}
+
+// RetryWaited is how much of one boundary's recovery window this run has already
+// committed, which is what the next wait is measured against. It is added to
+// when a wait is committed rather than as it elapses, for the reason the usage
+// limit's budget is: a restart part-way through a wait must not buy a fresh
+// window.
+func (s State) RetryWaited(boundary string) time.Duration {
+	var waited time.Duration
+	for _, retry := range s.Retries {
+		if retry.Boundary == boundary {
+			waited += retry.Delay()
+		}
+	}
+	return waited
 }
 
 // GrantedRepairAttempts is how many further repair attempts triage has granted

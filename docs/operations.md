@@ -329,9 +329,21 @@ what went wrong.
 
 Relaunches are counted in durable run state before each one begins, so a process
 that dies mid-relaunch resumes against the budget it had rather than a fresh one.
-A run that spends the budget stops and records a blocker on the work item naming
-the provider's own last message. That is the only case a person sees. Setting the
-bound to `0` restores the earlier behavior: the first provider death ends the run.
+Setting the bound to `0` buys no relaunches at all: the first provider death is
+the last. It does not turn off
+[waiting a dropped connection out](#waiting-out-a-network-that-dropped) — that
+is a different rule, it is not configured, and it applies at `0` exactly as it
+applies at `2`.
+
+**What happens once the budget is spent depends on what killed the invocation.**
+A death nothing can classify stops the run there and records a blocker on the
+work item naming the provider's own last message. A death that is plainly a
+dropped connection does not: it is
+[waited out and asked again](#waiting-out-a-network-that-dropped) past the
+budget, on the same backoff every other transport failure gets, and only a run
+that spends that whole window stops. The budget is the right bound for weather
+nobody has classified; a reset connection is not that, and stopping on one is
+what cost four runs their finished work.
 
 What else that blocker says depends on what the run was carrying, because a
 provider dies during a repair attempt as readily as during the first one. A run
@@ -350,6 +362,79 @@ it fails the run exactly as it always did. So does a 529, which is
 any terminal the API did not report at all. The invocation ended twice is the one
 thing outside the API's own errors that still relaunches, because it is not a
 verdict on anything — it is the provider failing to say what its verdict was.
+
+## Waiting out a network that dropped
+
+A run touches somebody else's network at its most expensive moments: it pushes
+the run branch, opens and updates the pull request, reads where the remote target
+branch stands, asks the forge to merge, confirms the merge, deletes the merged
+branch, catches the local branch up, and makes every provider invocation over
+it. It ends by writing to the tracker, which is not a network but is a store
+other processes are writing to, and a `bd` too busy to run judges the work no
+more than a reset connection does.
+On 2026-09-03 four runs died at those boundaries in one day, each on a single
+connection reset the next attempt would have survived — completed and sometimes
+already reviewed work recorded as failed — and the intake brake then held the
+whole line three times because the blocked runs came one after another.
+
+**The harness no longer fails outright on anything that can recover.** A failure
+whose class says the next attempt may well succeed — a connection reset, a
+network drop, a transport-level refusal — is waited out and asked again, at every
+one of the boundaries above.
+
+- **The waits are Fibonacci seconds, capped at half an hour**: 1s, 1s, 2s, 3s,
+  5s, 8s, 13s and so on, reaching the cap after about seventy minutes. Cheap
+  while a reset connection is still the likeliest explanation, and a probe every
+  half hour after that.
+- **Each boundary gets its own two-hour window**, because a network that dropped
+  a push says nothing about a merge. Roughly twenty attempts fit in one.
+- **None of it is configured.** The intervals are the harness's and the same for
+  every product, exactly as the watching session's retry of an unreadable tracker
+  is: what they measure is how long a connection that comes back takes, rather
+  than anything about a project.
+- **Nothing that is an answer is waited on.** An authentication failure, a merge
+  the forge refused, a protected branch, a conflict, and any 4xx earn the
+  identical answer on the next attempt, so they are reported as promptly as they
+  always were. So is a failure whose class the harness does not recognize: the
+  set is deliberately small, and anything outside it keeps the behavior it had.
+  The full recoverable-versus-terminal taxonomy is the architect's, and this does
+  not wait on it.
+
+**Every wait is recorded before it is taken**, on the run itself, with the
+boundary, which attempt it was, the interval, and the failure it waited out. Two
+things follow. A process that dies mid-wait comes back to the window it had
+already spent rather than to a fresh one. And a run that waited a network out and
+finished says so on the work item — `Waited out a recoverable failure while
+merging the pull request: 3 retr(ies) over 4s, waiting 1s, 1s, 2s` — which is the
+only sign that anything happened at all, and the thing to read when a machine's
+network is degrading before it starts costing runs.
+
+**A window that runs out escalates rather than going quiet.** What the boundary
+would have produced is produced — an outstanding publication, a blocker on the
+item — with the attempts and the time in front of it, so a run handed to a person
+says the network was retried and for how long instead of reporting the last reset
+as though it were the first.
+
+**One consequence is worth knowing before you raise
+`execution.max_concurrent_developers`, and it is not free.** Five of these
+boundaries run under the target branch's promotion lease, which is what keeps
+promotions serial: re-reading the remote target, the merge, confirming it,
+deleting the merged remote branch, and catching the local branch up. A run
+waiting a forge out holds that lease while it waits, and each of those boundaries
+has a two-hour window of its own — so the worst case is not two hours but the sum
+of them, and a forge that is down for a day holds the lease for as long as the
+windows last rather than for an hour.
+
+**Other runs promoting into that branch do not wait it out.** The promotion queue
+is bounded at fifteen minutes, so a run that reaches integration while the lease
+is held waits that long and then stops, saying that another promotion held the
+lease for the whole wait. Before these waits existed the holder failed fast and
+the queue drained behind it; now a forge outage longer than fifteen minutes can
+stop the runs queued behind the one that is waiting. The trade is deliberate at
+one developer, where there is no queue at all — waiting is what stops reviewed
+work being recorded as failed — but above one it converts a long outage into
+stopped runs on the branch rather than one slow one, and the fix while it lasts
+is `yoyo pause` rather than waiting for the windows to run out.
 
 ## When a provider stalls or runs out of budget
 

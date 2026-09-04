@@ -1202,6 +1202,23 @@ type fakeForge struct {
 	// lagging the merge it just performed.
 	openReplies int
 	stateCalls  int
+	// ensureResets and mergeResets are how many times the connection carrying
+	// that call drops before it goes through. They are the failure that killed
+	// four runs on 2026-09-03: nothing about the request reached the forge, so
+	// the class says the next attempt may well succeed.
+	ensureResets int
+	mergeResets  int
+	// afterMergeReset runs when a merge attempt is dropped, which is the moment
+	// the run then spends waiting before it asks again. It is how a test
+	// expresses the world moving during that wait.
+	afterMergeReset func()
+}
+
+// connectionReset is what the transport writes when it drops a request, in the
+// words git and gh actually print. A test states the words rather than a class,
+// because words are what the harness reads.
+func connectionReset(what string) error {
+	return fmt.Errorf("%s: OpenSSL SSL_read: Connection reset by peer, errno 54", what)
 }
 
 func (f *fakeForge) Availability(context.Context) (publish.Availability, error) {
@@ -1212,6 +1229,10 @@ func (f *fakeForge) Availability(context.Context) (publish.Availability, error) 
 }
 
 func (f *fakeForge) Ensure(_ context.Context, request publish.Request) (publish.PullRequest, error) {
+	if f.ensureResets > 0 {
+		f.ensureResets--
+		return publish.PullRequest{}, connectionReset("open pull request for " + request.Head)
+	}
 	f.opened = append(f.opened, request)
 	if f.onEnsure != nil {
 		f.onEnsure()
@@ -1232,6 +1253,13 @@ func (f *fakeForge) Ensure(_ context.Context, request publish.Request) (publish.
 // exercising an assumption — no forge merge method leaves the base at the
 // commit the harness promoted.
 func (f *fakeForge) Merge(_ context.Context, request publish.MergeRequest) (publish.MergeResult, error) {
+	if f.mergeResets > 0 {
+		f.mergeResets--
+		if f.afterMergeReset != nil {
+			f.afterMergeReset()
+		}
+		return publish.MergeResult{}, connectionReset(fmt.Sprintf("merge pull request %d", request.Number))
+	}
 	if f.mergeErr != nil {
 		return publish.MergeResult{}, f.mergeErr
 	}

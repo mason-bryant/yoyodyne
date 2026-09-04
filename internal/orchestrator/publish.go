@@ -98,15 +98,27 @@ func (a *activeRun) publishAttempt(ctx context.Context) error {
 	if !a.publishing {
 		return nil
 	}
-	publication, err := a.pipeline.Worktrees.PublishBranch(ctx, a.worktree, attemptMessage(a.item, a.outcome))
-	// The commit the harness made is what permits this worktree's HEAD to have
-	// moved, so it is recorded the moment it exists — including when the push
-	// that followed it failed. A later step, or a later process resuming this
-	// run, then accepts exactly that commit and nothing an agent could put in
-	// its place.
-	if publication.Commit != "" {
-		a.recordHarnessCommit(publication.Commit)
-	}
+	// The push is the first place a run touches the network, and a reset one is
+	// what killed a run at this exact step. Asking again is safe as well as
+	// necessary: the commit the dropped attempt made is already in the worktree,
+	// so a second attempt commits nothing and pushes that same commit.
+	//
+	// What makes it safe is the recording below happening inside the attempt
+	// rather than after the last one. The commit the harness made is what permits
+	// this worktree's HEAD to have moved, so it is recorded the moment it exists —
+	// including when the push that followed it failed — and a later step, a later
+	// process resuming this run, or the very next attempt here then accepts
+	// exactly that commit and nothing an agent could put in its place. Recorded
+	// after the retries instead, the retry's own ownership check would read a HEAD
+	// the run had not yet been told about and refuse the push it was asked to
+	// repeat.
+	publication, err := recoveringValue(ctx, a, runstate.RetryPublishBranch, func(ctx context.Context) (gitworktree.Publication, error) {
+		published, publishErr := a.pipeline.Worktrees.PublishBranch(ctx, a.worktree, attemptMessage(a.item, a.outcome))
+		if published.Commit != "" {
+			a.recordHarnessCommit(published.Commit)
+		}
+		return published, publishErr
+	})
 	if errors.Is(err, gitworktree.ErrNoChanges) {
 		// An attempt that changed nothing has nothing to publish. It is not a
 		// failure here: the checks and the reviewer are what judge an empty
@@ -116,11 +128,16 @@ func (a *activeRun) publishAttempt(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("publish the developer branch: %w", err)
 	}
-	pullRequest, err := a.pipeline.Publisher.Ensure(ctx, publish.Request{
-		Head:  publication.Branch,
-		Base:  a.worktree.TargetBranch,
-		Title: pullRequestTitle(a.item, a.outcome),
-		Body:  pullRequestBody(a.item, a.outcome, a.worktree.TargetBranch),
+	// Opening the request is idempotent by contract — a repair attempt updates the
+	// request its first attempt opened — so a reset connection here is asked again
+	// rather than ending a run whose work is already pushed.
+	pullRequest, err := recoveringValue(ctx, a, runstate.RetryOpenPullRequest, func(ctx context.Context) (publish.PullRequest, error) {
+		return a.pipeline.Publisher.Ensure(ctx, publish.Request{
+			Head:  publication.Branch,
+			Base:  a.worktree.TargetBranch,
+			Title: pullRequestTitle(a.item, a.outcome),
+			Body:  pullRequestBody(a.item, a.outcome, a.worktree.TargetBranch),
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("open the pull request for the developer branch: %w", err)
@@ -162,7 +179,9 @@ func (a *activeRun) republishRebase(ctx context.Context, rebase gitworktree.Reba
 	if published.HeadCommit == rebase.HeadCommit {
 		return nil
 	}
-	publication, err := a.pipeline.Worktrees.RepublishBranch(ctx, a.worktree, published.HeadCommit)
+	publication, err := recoveringValue(ctx, a, runstate.RetryRepublishBranch, func(ctx context.Context) (gitworktree.Publication, error) {
+		return a.pipeline.Worktrees.RepublishBranch(ctx, a.worktree, published.HeadCommit)
+	})
 	if err != nil {
 		return fmt.Errorf("republish the replayed developer branch: %w", err)
 	}
@@ -214,14 +233,22 @@ func (a *activeRun) settleRemoteTarget(ctx context.Context) error {
 		TargetCommit:         a.worktree.BaseCommit,
 		PreviousTargetCommit: a.worktree.BaseCommit,
 	}
-	err := a.pipeline.Worktrees.VerifyRemoteTarget(ctx, standing)
+	// Reading where the remote target stands is a network call like any other, and
+	// a reset one here would stop a run whose change is built, checked, and
+	// approved. The drift this is actually looking for is not a recoverable class,
+	// so it is reported as promptly as it always was.
+	err := a.recovering(ctx, runstate.RetryRemoteTarget, func(ctx context.Context) error {
+		return a.pipeline.Worktrees.VerifyRemoteTarget(ctx, standing)
+	})
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, gitworktree.ErrRemoteTargetDrift) {
 		return fmt.Errorf("check the remote target branch before promoting: %w", err)
 	}
-	catchup, catchupErr := a.pipeline.Worktrees.CatchUpTarget(ctx, a.worktree.TargetBranch)
+	catchup, catchupErr := recoveringValue(ctx, a, runstate.RetryCatchUpTarget, func(ctx context.Context) (gitworktree.Catchup, error) {
+		return a.pipeline.Worktrees.CatchUpTarget(ctx, a.worktree.TargetBranch)
+	})
 	if catchupErr != nil {
 		return fmt.Errorf("bring %s onto what %s has before promoting: %w",
 			a.worktree.TargetBranch, a.pipeline.Config.Execution.Remote, catchupErr)
@@ -255,6 +282,14 @@ func (a *activeRun) settleRemoteTarget(ctx context.Context) error {
 // promoted commit is on the remote target, and the remote target carries
 // exactly its content — rather than an equality no forge merge can produce.
 const mergeMethod = publish.MergeCommit
+
+// errPreMergeVerification stands in, inside the retried merge, for a
+// verification of the remote target that is over — drifted, or failing on
+// something no further wait would outlast. The real failure is kept beside it
+// and is what gets reported; this is what the merge's own recovery sees, and it
+// carries no recoverable class, so a verification that already spent its window
+// cannot be read as a merge failure worth a second one.
+var errPreMergeVerification = errors.New("the remote target branch could not be verified before the merge")
 
 // publishIntegration merges the run's pull request, which the approving verdict
 // has just authorized. The harness asks the forge to merge and treats its answer
@@ -309,22 +344,52 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 			published.Number, published.HeadCommit, integration.SourceCommit))
 		return nil
 	}
+	// The merge is the last thing a run asks of the network and the most expensive
+	// one to lose: the change is promoted locally by the time it is asked, so a
+	// reset connection here is a publication left outstanding on work nobody found
+	// anything wrong with. A refusal is not one of these — the forge applying its
+	// own rules earns the identical answer next time — so only the transport
+	// classes are asked again, and the head commit passed along keeps a request
+	// that somehow merged in between from being merged twice.
+	//
 	// A forge asked to merge into a branch that moved would reconcile that
-	// movement itself. The drift check the promotion made locally is therefore
-	// made again here, against the remote, immediately before the merge.
-	if err := a.pipeline.Worktrees.VerifyRemoteTarget(ctx, integration); err != nil {
-		cause := fmt.Errorf("check the remote target branch before merging: %w", err)
+	// movement itself, so the drift check the promotion made locally is made again
+	// here, against the remote — and made inside the retry rather than in front of
+	// it, so that it is immediately before *this* merge rather than immediately
+	// before the first one. A merge reissued after a wait that can reach half an
+	// hour is a merge performed on evidence that old, and evidence a later change
+	// to the target branch has invalidated is exactly what may not authorize an
+	// integration. The head commit pins the candidate and says nothing about the
+	// base, so nothing else here would have caught it.
+	//
+	// The verification's own transport failures are waited out under their own
+	// boundary, so a network that drops the read does not spend the merge's window
+	// on it; what reaches the merge's recovery is a verification that is over, and
+	// it is handed back as a sentinel rather than as its own failure so the merge
+	// does not read a recoverable class in it and buy a second window for a
+	// question already answered.
+	var verifyFailure error
+	result, err := recoveringValue(ctx, a, runstate.RetryMerge, func(ctx context.Context) (publish.MergeResult, error) {
+		verifyFailure = a.recovering(ctx, runstate.RetryRemoteTarget, func(ctx context.Context) error {
+			return a.pipeline.Worktrees.VerifyRemoteTarget(ctx, integration)
+		})
+		if verifyFailure != nil {
+			return publish.MergeResult{}, errPreMergeVerification
+		}
+		return a.pipeline.Publisher.Merge(ctx, publish.MergeRequest{
+			Number:     published.Number,
+			HeadCommit: published.HeadCommit,
+			Method:     mergeMethod,
+		})
+	})
+	if verifyFailure != nil {
+		cause := fmt.Errorf("check the remote target branch before merging: %w", verifyFailure)
 		a.recordPublishFailure(cause)
-		if errors.Is(err, gitworktree.ErrRemoteTargetDrift) {
+		if errors.Is(verifyFailure, gitworktree.ErrRemoteTargetDrift) {
 			return a.settlePromotedDivergence(ctx, integration, cause)
 		}
 		return nil
 	}
-	result, err := a.pipeline.Publisher.Merge(ctx, publish.MergeRequest{
-		Number:     published.Number,
-		HeadCommit: published.HeadCommit,
-		Method:     mergeMethod,
-	})
 	if err != nil {
 		a.recordPublishFailure(err)
 		return nil
@@ -363,7 +428,9 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	// The forge says it merged; this is what its merge actually did to the
 	// branch. The recorded commit is the forge's merge commit, which is the one
 	// commit the remote target has that the local one does not.
-	remoteTarget, err := a.pipeline.Worktrees.ConfirmRemoteTarget(ctx, integration)
+	remoteTarget, err := recoveringValue(ctx, a, runstate.RetryRemoteTarget, func(ctx context.Context) (string, error) {
+		return a.pipeline.Worktrees.ConfirmRemoteTarget(ctx, integration)
+	})
 	if err != nil {
 		a.recordPublishFailure(fmt.Errorf("confirm the merge reached %s: %w", integration.TargetBranch, err))
 		return nil
@@ -378,7 +445,9 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	// The published branch is debris once its work is on the target, and it is
 	// removed on the same evidence the local branch is: the exact commit that was
 	// published and merged.
-	if err := a.pipeline.Worktrees.DeleteRemoteBranch(ctx, a.worktree, published.HeadCommit); err != nil {
+	if err := a.recovering(ctx, runstate.RetryDeleteRemoteBranch, func(ctx context.Context) error {
+		return a.pipeline.Worktrees.DeleteRemoteBranch(ctx, a.worktree, published.HeadCommit)
+	}); err != nil {
 		a.recordPublishFailure(fmt.Errorf("delete the merged remote branch: %w", err))
 		return nil
 	}
@@ -406,7 +475,9 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 // A remote with no such branch is neither: it is a target this repository has
 // never published, and the outstanding publication already says so.
 func (a *activeRun) settlePromotedDivergence(ctx context.Context, integration gitworktree.Integration, cause error) error {
-	catchup, err := a.pipeline.Worktrees.CatchUpTarget(ctx, integration.TargetBranch)
+	catchup, err := recoveringValue(ctx, a, runstate.RetryCatchUpTarget, func(ctx context.Context) (gitworktree.Catchup, error) {
+		return a.pipeline.Worktrees.CatchUpTarget(ctx, integration.TargetBranch)
+	})
 	if err != nil {
 		// Whether the branches can be reconciled is exactly what could not be
 		// established, and a promotion whose remote nobody could look at must not
@@ -435,19 +506,28 @@ func (a *activeRun) settlePromotedDivergence(ctx context.Context, integration gi
 var mergeConfirmationDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
 // awaitMerge asks the forge whether the pull request it has just merged now
-// reports as merged, retrying while it still reports the request open. A
-// query that fails is returned immediately: that is the forge being unreachable
-// rather than slow to notice, and retrying it would only delay a failure the
-// operator has to see.
+// reports as merged, retrying while it still reports the request open.
+//
+// A query that fails on the forge's own answer is returned immediately: that is
+// something an operator has to see, and asking again would only delay it. A
+// query that fails on the connection carrying it is a different thing and is
+// waited out like every other transport failure — the merge has already
+// happened, and reporting a completed publication as outstanding because the
+// confirmation could not be fetched is precisely the loss this exists to stop.
 func (a *activeRun) awaitMerge(ctx context.Context) (publish.PullRequest, error) {
-	merged, err := a.pipeline.Publisher.State(ctx, a.worktree.Branch)
+	askForge := func(ctx context.Context) (publish.PullRequest, error) {
+		return recoveringValue(ctx, a, runstate.RetryMergeConfirmation, func(ctx context.Context) (publish.PullRequest, error) {
+			return a.pipeline.Publisher.State(ctx, a.worktree.Branch)
+		})
+	}
+	merged, err := askForge(ctx)
 	for attempt := 0; err == nil && !merged.Merged && attempt < len(mergeConfirmationDelays); attempt++ {
 		if waitErr := a.pipeline.sleep(ctx, mergeConfirmationDelays[attempt]); waitErr != nil {
 			// A cancelled or expired run stops waiting, and reports what the forge
 			// last said rather than inventing a verdict about it.
 			return merged, nil
 		}
-		merged, err = a.pipeline.Publisher.State(ctx, a.worktree.Branch)
+		merged, err = askForge(ctx)
 	}
 	return merged, err
 }
@@ -470,7 +550,9 @@ func (a *activeRun) mergeQueued() bool {
 // knows about — so a catch-up that was held is a fact for whoever reads this run
 // rather than a debt the run has to carry.
 func (a *activeRun) catchUpTarget(ctx context.Context, targetBranch string) {
-	catchup, err := a.pipeline.Worktrees.CatchUpTarget(ctx, targetBranch)
+	catchup, err := recoveringValue(ctx, a, runstate.RetryCatchUpTarget, func(ctx context.Context) (gitworktree.Catchup, error) {
+		return a.pipeline.Worktrees.CatchUpTarget(ctx, targetBranch)
+	})
 	if err != nil {
 		catchup.TargetBranch = targetBranch
 		catchup.Held = err.Error()

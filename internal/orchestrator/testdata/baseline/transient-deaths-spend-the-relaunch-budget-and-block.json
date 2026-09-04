@@ -1,10 +1,10 @@
 {
   "scenario": "transient-deaths-spend-the-relaunch-budget-and-block",
-  "freezes": "A provider that keeps dying spends execution.transient_relaunches_before_blocking and ends blocked on the provider rather than on the change, with the work preserved.",
+  "freezes": "A provider that keeps dying of something the harness cannot classify spends execution.transient_relaunches_before_blocking and ends blocked on the provider rather than on the change, with the work preserved.",
   "steps": [
     {
       "name": "run",
-      "error": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+      "error": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: the provider ended this invocation and named no reason for it",
       "ending": "stopped",
       "outcome": {
         "base_commit": "\u003ccommit-1\u003e",
@@ -14,13 +14,13 @@
         "changes": {
           "status": ""
         },
-        "failure": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+        "failure": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: the provider ended this invocation and named no reason for it",
         "phase": "developing",
         "provider_model": "opus",
         "provider_session_id": "developer-session",
         "run_id": "run-0123456789abcdef0123456789abcdef",
         "status": "failed",
-        "summary": "API Error: Connection closed mid-response. The response above may be incomplete.",
+        "summary": "API Error: the provider ended this invocation and named no reason for it",
         "transient_relaunches": 2,
         "work_item_closed": false,
         "work_item_id": "yoyodyne-task",
@@ -33,11 +33,11 @@
     "account_alias": "default",
     "backend": "claude-code",
     "base_commit": "\u003ccommit-1\u003e",
-    "blocker": "Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.\nRelaunches: 2 of 2 permitted\nLast provider failure: api_error: API Error: Connection closed mid-response. The response above may be incomplete.\nRun: run-0123456789abcdef0123456789abcdef\nBranch: yoyodyne/yoyodyne-task/01234567\nWorktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nNo check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider.",
+    "blocker": "Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.\nRelaunches: 2 of 2 permitted\nLast provider failure: api_error: API Error: the provider ended this invocation and named no reason for it\nRun: run-0123456789abcdef0123456789abcdef\nBranch: yoyodyne/yoyodyne-task/01234567\nWorktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nNo check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider.",
     "branch": "yoyodyne/yoyodyne-task/01234567",
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
-    "failure": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+    "failure": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: the provider ended this invocation and named no reason for it",
     "last_sequence": 0,
     "phase": "developing",
     "product_id": "yoyodyne",
@@ -70,7 +70,7 @@
       [
         "Yoyodyne blocked this item; the branch and worktree are preserved, and the blocker recorded on the item says what stopped it.",
         "Run: run-0123456789abcdef0123456789abcdef",
-        "Failure: the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+        "Failure: the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: the provider ended this invocation and named no reason for it",
         "Phase: developing",
         "Relaunches after a provider death: 2",
         "Branch: yoyodyne/yoyodyne-task/01234567",
@@ -83,7 +83,7 @@
     "blocker": [
       "Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.",
       "Relaunches: 2 of 2 permitted",
-      "Last provider failure: api_error: API Error: Connection closed mid-response. The response above may be incomplete.",
+      "Last provider failure: api_error: API Error: the provider ended this invocation and named no reason for it",
       "Run: run-0123456789abcdef0123456789abcdef",
       "Branch: yoyodyne/yoyodyne-task/01234567",
       "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",

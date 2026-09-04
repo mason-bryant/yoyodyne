@@ -301,8 +301,13 @@ func baselineScenarios() []baselineScenario {
 		},
 		{
 			name:    "transient-deaths-spend-the-relaunch-budget-and-block",
-			freezes: "A provider that keeps dying spends execution.transient_relaunches_before_blocking and ends blocked on the provider rather than on the change, with the work preserved.",
+			freezes: "A provider that keeps dying of something the harness cannot classify spends execution.transient_relaunches_before_blocking and ends blocked on the provider rather than on the change, with the work preserved.",
 			drive:   baselineRelaunchBudgetSpent,
+		},
+		{
+			name:    "recoverable-death-carries-on-past-the-relaunch-budget",
+			freezes: "A provider death that is plainly a dropped connection is waited out on a Fibonacci backoff past the spent relaunch budget rather than blocking the item, and each wait is recorded on the run with the boundary and the interval.",
+			drive:   baselineRecoverableDeathCarriesOn,
 		},
 		{
 			name:    "unresolved-directive-pauses-the-work-before-anything-is-claimed",
@@ -700,10 +705,26 @@ func baselineTransientRelaunch(t *testing.T) *baselineFixture {
 
 func baselineRelaunchBudgetSpent(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	// More deaths than the budget can pay for, so what stops the run is the
-	// budget rather than the provider recovering.
-	provider := transientDeathBackend(10, approveVerdict)
+	// More deaths than the budget can pay for, and of something the harness
+	// cannot classify, so what stops the run is the budget rather than the
+	// provider recovering. A death that is plainly a dropped connection carries
+	// on past this budget instead; that is the trace below.
+	provider := opaqueDeathBackend(10, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
+	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
+	fixture.invoke(t, "run", pipeline)
+	return fixture
+}
+
+func baselineRecoverableDeathCarriesOn(t *testing.T) *baselineFixture {
+	fixture := newBaselineFixture(t, baselineItem())
+	// Four deaths against a budget of two, all of them a dropped connection. The
+	// first two are relaunches; the two after them are what this trace is for,
+	// waited out on the backoff and recorded with their intervals, and the fifth
+	// invocation serves the work.
+	provider := transientDeathBackend(4, approveVerdict)
+	pipeline := waiting(fixture.automatic(t, provider, []string{"test -f feature.txt"}),
+		&pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
 	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
 	fixture.invoke(t, "run", pipeline)
 	return fixture

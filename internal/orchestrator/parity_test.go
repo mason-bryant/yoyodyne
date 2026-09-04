@@ -130,6 +130,18 @@ func parityScenarios() []parityScenario {
 		{parityClaim, "claimed"},
 		{parityDevelop, "reissued"},
 	}, promoted[1:]...)
+	// A recoverable death carries on past the relaunch budget, so the same
+	// transition is taken four times: twice for the relaunches the budget bought
+	// and twice for the waits the recovery window bought after it. The definition
+	// has one transition for all four, which is the point — what tells a relaunch
+	// from a recovery is the run's record rather than the sequence.
+	recoveredThenPromoted := append([]parityStep{
+		{parityClaim, "claimed"},
+		{parityDevelop, "reissued"},
+		{parityDevelop, "reissued"},
+		{parityDevelop, "reissued"},
+		{parityDevelop, "reissued"},
+	}, promoted[1:]...)
 
 	return []parityScenario{
 		{
@@ -321,6 +333,12 @@ func parityScenarios() []parityScenario {
 				{parityDevelop, "relaunches-spent"},
 			},
 			terminal: "blocked",
+		},
+		{
+			trace:    "recoverable-death-carries-on-past-the-relaunch-budget",
+			workflow: DeliveryWorkflowID,
+			steps:    recoveredThenPromoted,
+			terminal: "delivered",
 		},
 		{
 			trace:         "unresolved-directive-pauses-the-work-before-anything-is-claimed",

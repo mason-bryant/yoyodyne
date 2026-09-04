@@ -519,8 +519,14 @@ type Outcome struct {
 	// finishing anyway is the whole point of the budget: the deaths cost nobody
 	// anything. Blocked reports the budget spent, with what killed the last
 	// attempt recorded on the work item.
-	TransientRelaunches int  `json:"transient_relaunches,omitempty"`
-	Blocked             bool `json:"blocked,omitempty"`
+	TransientRelaunches int `json:"transient_relaunches,omitempty"`
+	// Retries are the recoverable failures this run waited out and asked again —
+	// a reset connection at a publish, at a merge, or under a provider — each with
+	// the boundary it happened at and the interval that was waited. A run
+	// reporting some and succeeding anyway is what yoyodyne-ifd.264 is for: before
+	// it, one of these recorded completed and sometimes reviewed work as failed.
+	Retries []runstate.Retry `json:"retries,omitempty"`
+	Blocked bool             `json:"blocked,omitempty"`
 	// Environmental is the environment refusing this round rather than the work
 	// failing: which environmental cause the run recorded, and what the settle
 	// gave back once it found the round had delivered nothing. It is the one
@@ -1233,6 +1239,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			ProviderResolvedModel: state.ProviderResolvedModel,
 			RepairAttempts:        state.RepairAttempts,
 			TransientRelaunches:   state.TransientRelaunches,
+			Retries:               state.Retries,
 			UsageLimitKind:        state.UsageLimitKind,
 			PauseCause:            state.PauseCause,
 			// A resumed run keeps the pull request the interrupted process
@@ -2399,6 +2406,23 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		overload, refusedForOverload := refusedForServerOverload(providerResult, err)
 		transient, died := diedTransiently(providerResult.TransientFailure, providerResult.Process.Status, providerResult.IsError, err)
 		if !refusedForLimit && !refusedForOverload && !a.mayRelaunch(died) {
+			// The relaunch budget is spent, which is the right bound for a provider
+			// dying in ways nobody can classify. A death that is plainly a dropped
+			// connection is not one of those, and stopping a run on one is what cost
+			// four runs their completed work: so it is waited out on a backoff and
+			// asked again past the budget, and only a spent recovery window blocks.
+			if died {
+				retried, recoverErr := a.recoverProvider(ctx, transient)
+				if recoverErr != nil {
+					a.observeDevelopEnded(ctx, recoverErr)
+					return recoverErr
+				}
+				if retried {
+					sessionID = a.carrySession(providerResult.SessionID, sessionID)
+					a.observe(ctx, deliveryDevelop, "reissued")
+					continue
+				}
+			}
 			recorded := a.recordDevelopment(ctx, providerResult, err)
 			// A transient death with the budget already spent is recorded exactly as
 			// any other developer failure is — the attempt's changes are part of what
@@ -2434,11 +2458,7 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		// The refused attempt may still have established a session. Continuing in
 		// it is what lets the reissued attempt resume in context rather than
 		// starting the work over.
-		if providerResult.SessionID != "" {
-			sessionID = providerResult.SessionID
-			a.state.ProviderSessionID = providerResult.SessionID
-			a.outcome.ProviderSessionID = providerResult.SessionID
-		}
+		sessionID = a.carrySession(providerResult.SessionID, sessionID)
 		// An exhausted limit is answered first when a refused attempt somehow
 		// reports both: it is the longer wait of the two, and waiting an overload's
 		// interval into a limit that has hours left would spend the budget on
@@ -2472,6 +2492,20 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		}
 		a.observe(ctx, deliveryDevelop, "reissued")
 	}
+}
+
+// carrySession keeps the session an ended attempt established, so the attempt
+// reissued after it resumes in context rather than deriving the change again. It
+// reports what the next attempt should continue in, which is the session the
+// last one reported where it reported one and what the run was already carrying
+// otherwise.
+func (a *activeRun) carrySession(reported, current string) string {
+	if reported == "" {
+		return current
+	}
+	a.state.ProviderSessionID = reported
+	a.outcome.ProviderSessionID = reported
+	return reported
 }
 
 // mayRelaunch reports a provider death this run still has budget to absorb. It
@@ -3845,7 +3879,18 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// The tracker is updated only once the work is durably where it belongs:
 	// after integration when it is automatic, and after passing checks when a
 	// human still owns the promotion.
-	if _, err := p.Tracker.RecordOutcome(ctx, a.state.WorkItemID, renderOutcomeNotes(a.outcome)); err != nil {
+	// The tracker is a store other processes are writing to, so a write here that
+	// produced no answer at all — the `bd` that was killed or never completed —
+	// is contention far more often than a store that is broken, and it judges
+	// nothing about a run whose work is already integrated. Recording that as a
+	// failed run is the same loss the forge boundaries carried, which is why the
+	// product manager joined these writes to this item's set. They share one
+	// boundary and one window: a `bd` that could not be run for the outcome could
+	// not be run for the closure either.
+	if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
+		_, err := p.Tracker.RecordOutcome(ctx, a.state.WorkItemID, renderOutcomeNotes(a.outcome))
+		return err
+	}); err != nil {
 		return a.fail(fmt.Errorf("record successful run outcome: %w", err), runstate.StatusFailed)
 	}
 	// An item closes as integrated once the promotion is where it is going to
@@ -3857,7 +3902,10 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// item stays claimed with the queued merge named on it, rather than closed
 	// against a merge nobody has confirmed.
 	if a.outcome.Integration != nil && !a.mergeQueued() {
-		if _, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome)); err != nil {
+		if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
+			_, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome))
+			return err
+		}); err != nil {
 			return a.fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
 		}
 		a.outcome.WorkItemClosed = true
@@ -4304,9 +4352,20 @@ func (a *activeRun) recordPrice() {
 	if a.pipeline.Prices == nil || !a.claimed {
 		return
 	}
-	priceCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cost, err := a.pipeline.Prices.Record(priceCtx, a.state.WorkItemID)
+	// The price is written to the tracker like the outcome and the closure, so it
+	// is waited out on the same boundary and the same window. Each attempt gets
+	// its own deadline rather than sharing one: a bound that started before the
+	// wait would leave every attempt after the first with no time to be made in.
+	var cost *beads.Cost
+	err := a.recovering(context.Background(), runstate.RetryTrackerWrite, func(ctx context.Context) error {
+		priceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		priced, priceErr := a.pipeline.Prices.Record(priceCtx, a.state.WorkItemID)
+		if priced != nil {
+			cost = priced
+		}
+		return priceErr
+	})
 	if cost != nil {
 		a.outcome.Cost = cost
 	}
@@ -4466,6 +4525,18 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 		// the provider named rather than the change.
 		if transient, died := diedTransiently(reported.transientFailure, reported.processStatus, false, err); died {
 			if !a.mayRelaunch(true) {
+				// Past the budget a plainly recoverable death is still not a verdict,
+				// and it costs more here than anywhere: the change is built, checked,
+				// and waiting on the one invocation that has to happen before it can be
+				// promoted. It shares the developer's recovery window for the reason it
+				// shares the developer's relaunch budget.
+				retried, recoverErr := a.recoverProvider(ctx, transient)
+				if recoverErr != nil {
+					return "", recoverErr
+				}
+				if retried {
+					continue
+				}
 				return "", a.blockOnSpentRelaunchBudget(ctx, transient, err)
 			}
 			if relaunchErr := a.recordRelaunch(); relaunchErr != nil {
@@ -5300,6 +5371,12 @@ func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailur
 		"Branch: " + outcome.Branch,
 		"Worktree: " + outcome.WorktreePath,
 	}
+	// A run that also spent its recovery window says so, because the two say
+	// different things to whoever reads this. A budget spent on its own is a
+	// provider ending invocations for reasons nobody has classified; a window
+	// spent as well is a network that stayed down for as long as the harness was
+	// willing to wait, which is a machine to look at rather than an account.
+	lines = append(lines, renderRetryNotes(outcome)...)
 	if outcome.RepairAttempts > 0 {
 		lines = append(lines, "Repair attempts already spent: "+strconv.Itoa(outcome.RepairAttempts))
 	}
@@ -5621,6 +5698,12 @@ func renderOutcomeNotes(outcome Outcome) string {
 	if outcome.TransientRelaunches > 0 {
 		lines = append(lines, "Relaunches after a provider death: "+strconv.Itoa(outcome.TransientRelaunches))
 	}
+	// A run that waited a network out and finished is the one this has to say
+	// most about, because nothing else about it looks unusual: before
+	// yoyodyne-ifd.264 each of these was a run recorded as failed with its work
+	// completed, and a reader who cannot see the retries cannot see how close it
+	// came or that the network is degrading.
+	lines = append(lines, renderRetryNotes(outcome)...)
 	if outcome.ProviderSessionID != "" {
 		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
 	}
