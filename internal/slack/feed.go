@@ -117,9 +117,12 @@ type Delivery struct {
 	// somebody chooses to look, and both classes this is set on are things they
 	// will not think to look for.
 	//
-	// It is set on exactly the two classes the architect's ruling of 2026-09-03
-	// admitted to the tier, and a state fitting neither does not set it — the gate
-	// is named in the slack-reporting design rather than widened here:
+	// It is set on exactly the two classes the architect admitted to the tier, and
+	// a state fitting neither does not set it. The gate is named in
+	// docs/designs/slack-reporting-design.md, under "What may arrive as a direct
+	// message", rather than widened here; the revision of 2026-09-03 that admitted
+	// the second class records it as ruling yoyodyne-ifd.241.1 and 241.3, and that
+	// document rather than this comment is the authority:
 	//
 	//   - degraded: the harness itself stopped, stale, or choosing nothing over
 	//     ready work, which is something only a person fixes. Its members are set
