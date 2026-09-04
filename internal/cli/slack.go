@@ -317,6 +317,14 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	if err != nil {
 		return nil, "", err
 	}
+	// The claims the harness gave back, in the same place and for the same reason:
+	// a release is a fact about the product that outlives the pass that made it,
+	// and the log is what keeps one release to one direct message. This sink only
+	// reads it — the watch loop is what audits and writes.
+	releasedClaims, err := runstate.NewClaimStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	// The same product-scoped directive records `yoyo directive` writes and every
 	// run consults. A directive recorded from a thread lands there rather than in
 	// a second pile beside it, which is the whole of what makes a reply reach the
@@ -426,6 +434,11 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// notices that nothing has started while work was ready, records it where
 			// `yoyo status` reads it back, and tells the operators once.
 			Stalls: stalls,
+			// And the case that reading cannot see: an item the tracker calls in
+			// progress with nothing working on it. It has left the ready queue, so a
+			// machine stuck behind one reads as a drained queue rather than as a stall.
+			// The watch loop audits and releases; this says so, once per release.
+			Claims: releasedClaims,
 			// What this project's template has improved that this project never
 			// edited. Every other surface that says it is one somebody has to run,
 			// so a harness left running for a fortnight says it nowhere at all —

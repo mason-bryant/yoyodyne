@@ -199,6 +199,7 @@ var harnessVoice = voice{
 		KindWatchRedeploying:    "The watch session is restarting into the build deployed over it, having waited out every run it started: {why}",
 		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.\n\n{standing}",
 		KindStallNoticed:        "Nothing at all has started on this product for {age}, with {ready} ready to pull and nothing accounting for it. {stopped}.\n\n{standing}",
+		KindClaimReleased:       "{item} was claimed with nothing working on it, so the harness gave it back to the queue: {stopped}. Nothing had moved on it for {age}.",
 		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
 		KindBundleImprovement:   "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows {setting} beside everything else the template moved, and it is adopted by hand or not at all.",
 		KindCatchUpDigest:       "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
@@ -255,6 +256,7 @@ var developerVoice = voice{
 		KindWatchRedeploying:    "The session that hands me work is restarting into a newer build of itself; work will keep arriving once it is back: {why}",
 		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.\n\n{standing}",
 		KindStallNoticed:        "Nothing has been handed to me for {age} and nothing explains it — {ready} sat ready the whole time. {stopped}.\n\n{standing}",
+		KindClaimReleased:       "{item} was sitting claimed with no run alive behind it for {age} — {stopped} — so it is back in the queue and can be handed to me again.",
 		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
 		KindBundleImprovement:   "{improvement}. What the template says about {setting} is what I'd be run under if this project took it up, and until somebody does I go on being run under what it holds now.",
 		KindCatchUpDigest:       "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
@@ -311,6 +313,7 @@ var reviewerVoice = voice{
 		KindWatchRedeploying:    "The session sending me changes is restarting into a newer build of itself, so what arrives next was chosen by the build that was deployed: {why}",
 		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.\n\n{standing}",
 		KindStallNoticed:        "No change has reached me for a verdict in {age}, and none was written: {ready} ready, no run started, nothing holding it. {stopped}.\n\n{standing}",
+		KindClaimReleased:       "{item} was claimed with nothing working on it for {age}, so it is back in the queue: {stopped}. Nothing has been judged either way; the change that run left, if any, is still where it left it.",
 		KindResidentStale:       "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back, and installing that build is what stops me granting one — the session takes it up itself between runs.",
 		KindBundleImprovement:   "{improvement}. It changes nothing about the standard I hold a change to today, and it would change {setting} for every change judged after somebody adopts it.",
 		KindCatchUpDigest:       "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
@@ -366,6 +369,7 @@ var developmentManagerVoice = voice{
 		KindWatchRedeploying:    "The queue stops being pulled from only until the session is back on the build deployed over it, and nothing in it moved: {why}",
 		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.\n\n{standing}",
 		KindStallNoticed:        "My queue has not been pulled from in {age} — {ready} pullable, no hold, no full machine, no run in flight. {stopped}.\n\n{standing}",
+		KindClaimReleased:       "{item} had been out of the queue for {age} with nothing working on it, so it is back in it and pullable again: {stopped}.",
 		KindResidentStale:       "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does, and they stop when that build is installed — the session takes it up itself between runs.",
 		KindBundleImprovement:   "{improvement}. Nothing in the queue moves for it, and nothing I hand out changes until {setting} is adopted by hand.",
 		KindCatchUpDigest:       "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
@@ -422,6 +426,7 @@ var productManagerVoice = voice{
 		KindWatchRedeploying:    "Choosing and spending pause only while the session restarts into the build deployed over it, and the backlog is untouched by that: {why}",
 		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.\n\n{standing}",
 		KindStallNoticed:        "Nothing has been spent on this product for {age}, and {ready} I admitted is still waiting. This is not a quiet queue; it is a queue nothing is reading. {stopped}.\n\n{standing}",
+		KindClaimReleased:       "{item} spent {age} looking like work in progress while nothing was being spent on it. It is back in the queue: {stopped}.",
 		KindResidentStale:       "What is being spent on this product was built at {commit}, before {behind} landed. Until that build is installed, some of that spend buys work the system has already paid for once; the session takes it up itself between runs once it is.",
 		KindBundleImprovement:   "{improvement}. Whether {setting} is worth taking is the operator's to decide and nobody else's, which is why it is offered once rather than asked for repeatedly.",
 		KindCatchUpDigest:       "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
@@ -478,6 +483,7 @@ var architectVoice = voice{
 		KindWatchRedeploying:    "The selection loop closes and restarts on the build deployed over it; every run it started was waited out rather than abandoned: {why}",
 		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} a run could have been started for behind it. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
 		KindStallNoticed:        "Selection has started nothing for {age} over {ready} ready, and no record says why — which is the failure this watches for: the process that would have said something is the process that died. {stopped}.\n\n{standing}",
+		KindClaimReleased:       "Selection had been passing over {item} for {age} because the tracker called it claimed, and nothing was working on it: {stopped}. An item that leaves the ready queue and never comes back is the failure a stall reading structurally cannot see, which is why the claims are audited against the runs.",
 		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
 		KindBundleImprovement:   "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; saying {setting} once makes the difference visible without deciding it for anybody.",
 		KindCatchUpDigest:       "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
@@ -615,6 +621,13 @@ var nextMoves = map[Kind]string{
 	// what has to be looked at is the thing that chooses work, and whether it is
 	// dead or merely wedged is in the message above this clause.
 	KindStallNoticed: "the operator's — nothing starts until whatever chooses work is looked at, and started again if it has died.",
+	// Nobody's move, and the message is still worth sending. The item is back in
+	// the queue, the run that left it is ended, and the slot it was filling is
+	// free — so the state this reports is one the harness has already put right,
+	// and a clause naming a chore would be inventing one. What it is for is that
+	// the line was quietly degraded until it was, and a second run for an item is
+	// something a reader has to be able to account for afterwards.
+	KindClaimReleased: "nobody's — the item is pullable again and will be chosen in its turn, and whatever the run that left it produced is still on its branch.",
 	// The restart is no longer anybody's: a watch session takes up a build
 	// installed over it by itself, between the runs it is carrying and without
 	// interrupting one. What is left is the install, which is why this names it

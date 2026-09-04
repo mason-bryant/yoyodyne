@@ -196,6 +196,20 @@ const (
 	// of what admits it to a message somebody is sent rather than one they come
 	// looking for: a fact that repeats is a fact somebody mutes.
 	KindBundleImprovement Kind = "bundle.improvement"
+	// A claim the harness gave back because nothing was working on it. It is the
+	// same reading as the stall above, taken from the other end: that one asks
+	// whether anything has started and this one asks whether what the tracker says
+	// is running actually is. The difference is what each can see. An item the
+	// harness claimed has left the ready queue, so a machine whose only startable
+	// work is sitting under dead claims reads as a drained queue — nothing held,
+	// nothing running, nothing ready — and the stall reading is silent about it by
+	// construction. Four nights of throughput went that way in the week of
+	// 2026-09-01.
+	//
+	// It is said once per release, which is once per stuck item, because the
+	// release is what ends the state: what follows it is the item being pulled
+	// again, and that has its own message.
+	KindClaimReleased Kind = "claim.released"
 	// What one topic gathered while nothing was posting it. Every kind above is
 	// something the record says happened; this one is what a surface does with a
 	// backlog it cannot say one message at a time — a long gap replayed in full
@@ -256,6 +270,7 @@ func Kinds() []Kind {
 		KindLineWaiting,
 		KindResidentStale,
 		KindStallNoticed,
+		KindClaimReleased,
 		KindBundleImprovement,
 		KindCatchUpDigest,
 	}
@@ -278,7 +293,7 @@ func (k Kind) Valid() bool {
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
-		KindBundleImprovement, KindCatchUpDigest:
+		KindClaimReleased, KindBundleImprovement, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -651,6 +666,13 @@ type Detail struct {
 	// rather than a second set because a reader is being told one thing — nothing
 	// is happening, since when, over how much — and two vocabularies for it would
 	// be two ways to say it differently.
+	//
+	// Stopped and Since are read a third time by KindClaimReleased, where they say
+	// the same pair about one item rather than about the line: what the record said
+	// became of the run that left the claim behind, and the last moment that run
+	// said anything. They are the same fields for the same reason — one reader is
+	// being told one thing, nothing is working on this, since when — and a
+	// vocabulary of its own would be a second way to say it.
 	//
 	// Since is read a second time by KindCatchUpDigest, where it is the first of
 	// the events the digest stands for: the same subtraction against the event's
