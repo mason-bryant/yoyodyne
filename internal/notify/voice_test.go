@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -673,6 +674,21 @@ func TestSeverityIsSaidInWordsBeforeItIsSaidInDecoration(t *testing.T) {
 	}
 }
 
+// trackerIdentifier is what a work item's identifier looks like whoever issued
+// it: a hyphenated prefix and a dotted number, as `yoyodyne-ifd.102.7` and
+// `beads-core.14` both are. It is matched by shape rather than by the two the
+// event happens to carry, because the failure this guards against is a voice
+// line reaching for some other item — the one a decomposition came out of, the
+// one a dependency names — and a test looking for two known strings passes
+// while that message goes out.
+//
+// What it deliberately does not match is the other things a message names: a
+// run, an exchange, a commit, a pull request, a source file. None of those has
+// the dotted number after a hyphenated word, and each of them is something a
+// reader follows rather than an item they would have to look up to know what
+// the message is about.
+var trackerIdentifier = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\.\d+(?:\.\d+)*\b`)
+
 // A channel is read by people, and an identifier is a name a reader has to go
 // and resolve before they know what a message is about. So every message says
 // the work in the words the record calls it, whatever the persona and whatever
@@ -699,6 +715,12 @@ func TestAMessageNamesTheWorkInWordsRatherThanByItsIdentifier(t *testing.T) {
 			// second way, and it is no more readable for being in the refs.
 			if strings.Contains(message.Body, fullyRecorded(kind).Refs.WorkItemID) {
 				t.Fatalf("the %s says %s as %q, which names the item by its reference", speaker.Key(), kind, message.Body)
+			}
+			// And no other item's identifier either. The event this renders carries
+			// the item a decomposition was cut out of as well as its own, which is
+			// exactly the one a line can reach for without anybody noticing.
+			if found := trackerIdentifier.FindString(message.Body); found != "" {
+				t.Fatalf("the %s says %s as %q, which names an item by the identifier %q", speaker.Key(), kind, message.Body, found)
 			}
 		}
 	}

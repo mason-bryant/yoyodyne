@@ -156,7 +156,7 @@ var harnessVoice = voice{
 	avatar: ":gear:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "Admitted to the backlog: {title}. It serves: {goal}",
-		KindItemDecomposed:      "Created under {parent}, decomposing it: {title}",
+		KindItemDecomposed:      "Decomposed out of the item above it: {title}",
 		KindItemAttributed:      "{item} was attributed to a goal: {goal}",
 		KindItemReprioritized:   "{item} was set to {priority}.",
 		KindTrackerBlockRefused: "The {asking} asked for {refused} in one reply and the harness refused the block whole, so none of them happened: {why}",
@@ -212,7 +212,7 @@ var developerVoice = voice{
 	avatar: ":hammer_and_wrench:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "{title} is in the backlog and could reach me one day, admitted for {goal}.",
-		KindItemDecomposed:      "{parent} was broken down, and one of the pieces I could be handed is {title}.",
+		KindItemDecomposed:      "The item above this one was broken down, and one of the pieces I could be handed is {title}.",
 		KindItemAttributed:      "{item} now says what it is for: {goal}. That is the intent I'd be building against.",
 		KindItemReprioritized:   "{item} sits at {priority} now. What I build doesn't change with the order it is queued in.",
 		KindTrackerBlockRefused: "A block the {asking} sent was refused together — {refused} — and nothing in the queue moved for any of it: {why}",
@@ -268,7 +268,7 @@ var reviewerVoice = voice{
 	avatar: ":mag:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "Admitted: {title}. What it serves — {goal} — is what I will judge a change against.",
-		KindItemDecomposed:      "Cut out of {parent}: {title}. Narrower work is work I can judge as finished or not.",
+		KindItemDecomposed:      "Cut out of the item above it: {title}. Narrower work is work I can judge as finished or not.",
 		KindItemAttributed:      "{item} records the goal it serves: {goal}. Intent I can read beats intent I have to infer.",
 		KindItemReprioritized:   "{item} moved to {priority}. The order work arrives in changes nothing about the standard it meets.",
 		KindTrackerBlockRefused: "The {asking} asked for {refused} and the harness read none of them, so what the queue says now is what it said before: {why}",
@@ -323,7 +323,7 @@ var developmentManagerVoice = voice{
 	avatar: ":clipboard:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "In the queue now: {title}, admitted for {goal}.",
-		KindItemDecomposed:      "I've broken {parent} down, and a bounded piece of it is {title}.",
+		KindItemDecomposed:      "I've broken the item above this one down, and a bounded piece of it is {title}.",
 		KindItemAttributed:      "{item} now carries the goal it serves: {goal}. Work I cannot say the purpose of is work I cannot order honestly.",
 		KindItemReprioritized:   "{item} is at {priority} now, so that is where it gets pulled from.",
 		KindTrackerBlockRefused: "A block from the {asking} never reached the queue I pull from — {refused} — so its order and its contents are unchanged: {why}",
@@ -379,7 +379,7 @@ var productManagerVoice = voice{
 	avatar: ":compass:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "I've admitted this to the backlog: {title}. It serves {goal}, and that claim is the operator's to disagree with.",
-		KindItemDecomposed:      "{title} was decomposed out of {parent}. What the work is for stays what the parent was admitted for.",
+		KindItemDecomposed:      "{title} was decomposed out of the item above it. What the work is for stays what that item was admitted for.",
 		KindItemAttributed:      "I've recorded what {item} is for: {goal}. Work that says nothing about intent is work nobody can decide to stop doing.",
 		KindItemReprioritized:   "I've put {item} at {priority}: {why}",
 		KindTrackerBlockRefused: "A block I sent was refused whole — {refused} — so nothing I meant to change about the backlog changed: {why}",
@@ -435,7 +435,7 @@ var architectVoice = voice{
 	avatar: ":triangular_ruler:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "Entered the backlog under {goal}: {title}. Work traceable to intent is what keeps the shape of the thing deliberate.",
-		KindItemDecomposed:      "Carved out of {parent}: {title}. Decomposition is structure, and structure is where a design holds or does not.",
+		KindItemDecomposed:      "Carved out of the item above it: {title}. Decomposition is structure, and structure is where a design holds or does not.",
 		KindItemAttributed:      "{item} was traced back to {goal}. A queue nobody can trace is a system nobody can reason about.",
 		KindItemReprioritized:   "{item} moved to {priority}, which changes the order and nothing about the design it derives from.",
 		KindTrackerBlockRefused: "A block of {refused} from the {asking} was refused whole rather than partly applied, which is the contract holding: {why}",
@@ -842,9 +842,15 @@ func (e Event) fields(topic Topic) map[string]string {
 		"exchange":  stated(exchangeOf(e.Refs, topic), "an unnamed exchange"),
 		"title":     stated(detail.Title, "a title the record does not carry"),
 		"goal":      stated(detail.Goal, "no goal the record names"),
-		"parent":    stated(detail.Parent, "an item the record does not name"),
-		"priority":  priorityOf(detail),
-		"executor":  stated(carrierOf(detail.Executor), "something the record does not name"),
+		// There is deliberately no placeholder for the item a decomposition was
+		// created under. The record holds that item's identifier and nothing that
+		// names it in words, so a line reaching for it could only hand a reader an
+		// identifier to resolve — which is the whole of what these messages stopped
+		// doing. A line that asks for one is refused as it renders, and every line
+		// in every voice is rendered by the tests, so one added later fails there
+		// rather than in somebody's channel.
+		"priority": priorityOf(detail),
+		"executor": stated(carrierOf(detail.Executor), "something the record does not name"),
 		// What a refused block asked for, and who asked. The count states an absence
 		// rather than reading as none: a block whose actions nobody could count is
 		// not a block that asked for nothing, and the two are opposite news.

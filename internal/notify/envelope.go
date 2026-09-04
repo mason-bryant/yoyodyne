@@ -626,9 +626,16 @@ type Detail struct {
 	// KindItemAttributed. It is the goal in the words the goals document states
 	// it in, which is what makes the claim checkable rather than decorative.
 	Goal string `json:"goal,omitempty"`
-	// Parent is the admitted item a decomposition was created under, read by
-	// KindItemDecomposed. "Created under what" is the whole of what makes a
-	// decomposition auditable.
+	// Parent is the admitted item a decomposition was created under. "Created
+	// under what" is the whole of what makes a decomposition auditable, so the
+	// envelope carries it for anybody reading the record afterwards.
+	//
+	// No voice line says it. What the record holds is the parent's identifier and
+	// nothing that names it in words, and a message handing a reader an
+	// identifier to resolve is what these messages stopped doing: the
+	// decomposition is said as what it is, and the item it came out of is in the
+	// record and in the tracker. Recording the parent's title beside its
+	// identifier is what would let the channel name it.
 	Parent string `json:"parent,omitempty"`
 	// Priority is where in the queue a reprioritization put an item, read by
 	// KindItemReprioritized. It is negative where the record did not say, because

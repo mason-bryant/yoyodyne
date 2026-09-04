@@ -143,8 +143,20 @@ func TestACreationUnderAParentIsDecompositionRatherThanAdmission(t *testing.T) {
 	if notification.Speaker.Role != domain.RoleDevelopmentManager {
 		t.Fatalf("spoken by %q", notification.Speaker.Key())
 	}
-	if !strings.Contains(message.Body, parent) {
-		t.Fatalf("body %q does not say what was decomposed", message.Body)
+	// The record keeps what it was cut out of, for anybody auditing where a piece
+	// of work came from.
+	if notification.Event.Detail.Parent != parent {
+		t.Fatalf("detail %+v does not record what was decomposed", notification.Event.Detail)
+	}
+	// The message says it was decomposed and names the piece, in words. It does
+	// not say the parent's identifier: the record holds that identifier and
+	// nothing that names it, so saying it would hand a reader something to
+	// resolve in the one message that is about a piece of work having a name.
+	if !strings.Contains(message.Body, "The voice work under the reporting epic") {
+		t.Fatalf("body %q does not say what was cut out", message.Body)
+	}
+	if strings.Contains(message.Body, parent) {
+		t.Fatalf("body %q names the item it was cut out of by its identifier", message.Body)
 	}
 }
 
