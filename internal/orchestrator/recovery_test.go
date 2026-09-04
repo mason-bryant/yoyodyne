@@ -302,6 +302,89 @@ func TestARecoverableReviewerDeathCarriesOnPastTheRelaunchBudget(t *testing.T) {
 	}
 }
 
+// trackerBusy is what the tracker's own client reports when `bd` produced no
+// verdict at all — killed, or never completed. It is the store being contended
+// rather than the store answering, and it is the specimen the product manager
+// named when the tracker's write boundaries were joined to this item's set.
+var trackerBusy = errors.New("bd close failed with status cancelled and exit code -1: signal: killed")
+
+// The last boundary a run touches is the tracker, and it is the one where a
+// transient failure costs the most: the change is promoted, the item is about to
+// close, and a `bd` the store was too busy to run recorded all of that as a
+// failed run. The writes a finishing run makes share one boundary and one window
+// for the reason the remote target's three call sites do.
+func TestATrackerWriteThatProducedNoVerdictIsWaitedOutRatherThanFailingTheRun(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{
+		item:                 beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"},
+		completeFailures:     1,
+		transientCompleteErr: trackerBusy,
+	}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the busy store waited out", err)
+	}
+	// The whole point: work that was promoted closes as integrated rather than
+	// being recorded as a failed run over a `bd` that never ran.
+	if !outcome.WorkItemClosed || !tracker.closed {
+		t.Fatalf("work item closed = %t (tracker %t), want the integrated item closed", outcome.WorkItemClosed, tracker.closed)
+	}
+	if outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("status = %q, want the run to have succeeded", outcome.Status)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if attempts := state.RetryAttempts(runstate.RetryTrackerWrite); attempts != 1 {
+		t.Fatalf("retries recorded at the tracker = %d, want the one refused write: %#v", attempts, state.Retries)
+	}
+	if !strings.Contains(state.Retries[0].Failure, "exit code -1") {
+		t.Errorf("recorded failure = %q, want the tracker client's own words", state.Retries[0].Failure)
+	}
+}
+
+// The conservative half at the same boundary: a tracker that answered is an
+// answer, and asking again earns the same one. A run that could not close its
+// item because the item is not there has to reach a person now.
+func TestATrackerThatAnsweredIsNotWaitedOnAtAll(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{
+		item:        beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"},
+		completeErr: errors.New("bd close failed with status failed and exit code 1: issue yoyodyne-task not found"),
+	}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() error = nil, want the tracker's own answer to end the run")
+	}
+	if !strings.Contains(outcome.Failure, "not found") {
+		t.Fatalf("failure = %q, want the tracker's own words", outcome.Failure)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if attempts := state.RetryAttempts(runstate.RetryTrackerWrite); attempts != 0 {
+		t.Errorf("retries at the tracker = %d, want an answer reported at once: %#v", attempts, state.Retries)
+	}
+}
+
 // A forge that never comes back has to escalate rather than retry for ever, and
 // what it escalates has to say the network was retried: a run handed to a person
 // reporting the last reset as though it were the first is what took a day to

@@ -3879,7 +3879,18 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// The tracker is updated only once the work is durably where it belongs:
 	// after integration when it is automatic, and after passing checks when a
 	// human still owns the promotion.
-	if _, err := p.Tracker.RecordOutcome(ctx, a.state.WorkItemID, renderOutcomeNotes(a.outcome)); err != nil {
+	// The tracker is a store other processes are writing to, so a write here that
+	// produced no answer at all — the `bd` that was killed or never completed —
+	// is contention far more often than a store that is broken, and it judges
+	// nothing about a run whose work is already integrated. Recording that as a
+	// failed run is the same loss the forge boundaries carried, which is why the
+	// product manager joined these writes to this item's set. They share one
+	// boundary and one window: a `bd` that could not be run for the outcome could
+	// not be run for the closure either.
+	if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
+		_, err := p.Tracker.RecordOutcome(ctx, a.state.WorkItemID, renderOutcomeNotes(a.outcome))
+		return err
+	}); err != nil {
 		return a.fail(fmt.Errorf("record successful run outcome: %w", err), runstate.StatusFailed)
 	}
 	// An item closes as integrated once the promotion is where it is going to
@@ -3891,7 +3902,10 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// item stays claimed with the queued merge named on it, rather than closed
 	// against a merge nobody has confirmed.
 	if a.outcome.Integration != nil && !a.mergeQueued() {
-		if _, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome)); err != nil {
+		if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
+			_, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome))
+			return err
+		}); err != nil {
 			return a.fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
 		}
 		a.outcome.WorkItemClosed = true
@@ -4338,9 +4352,20 @@ func (a *activeRun) recordPrice() {
 	if a.pipeline.Prices == nil || !a.claimed {
 		return
 	}
-	priceCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cost, err := a.pipeline.Prices.Record(priceCtx, a.state.WorkItemID)
+	// The price is written to the tracker like the outcome and the closure, so it
+	// is waited out on the same boundary and the same window. Each attempt gets
+	// its own deadline rather than sharing one: a bound that started before the
+	// wait would leave every attempt after the first with no time to be made in.
+	var cost *beads.Cost
+	err := a.recovering(context.Background(), runstate.RetryTrackerWrite, func(ctx context.Context) error {
+		priceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		priced, priceErr := a.pipeline.Prices.Record(priceCtx, a.state.WorkItemID)
+		if priced != nil {
+			cost = priced
+		}
+		return priceErr
+	})
 	if cost != nil {
 		a.outcome.Cost = cost
 	}

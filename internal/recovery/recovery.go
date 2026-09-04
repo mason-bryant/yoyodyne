@@ -152,4 +152,19 @@ var recoverablePhrases = []string{
 	"bad gateway",
 	"service unavailable",
 	"gateway timeout",
+	// A subprocess that produced no verdict at all, which is how the tracker's
+	// own client reports a `bd` that was killed or never completed:
+	// `bd close failed with status cancelled and exit code -1: ...`. It is the
+	// same class as a dropped connection and not a different one — nothing judged
+	// the work, and the store being contended is far more often the reason than
+	// the store being broken, which is the reading yoyodyne-ifd.232 already
+	// applied to tracker *reads*.
+	//
+	// Both are the exact strings internal/beads formats rather than categories,
+	// which is what keeps them narrow. "exit code -1" carries its colon so it
+	// cannot match the "-1" that opens "-12", and the status is matched with the
+	// words in front of it so a work item whose own text says "cancelled" is not
+	// read as a process that was.
+	"failed with status cancelled",
+	"exit code -1:",
 }

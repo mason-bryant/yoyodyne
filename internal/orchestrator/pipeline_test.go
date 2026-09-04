@@ -2748,7 +2748,13 @@ type fakeTracker struct {
 	calls       []string
 	onClaim     func() error
 	completeErr error
-	blockErr    error
+	// completeFailures and transientCompleteErr are how many closures are refused
+	// before one goes through, and what they are refused with. They are apart
+	// from completeErr because that one is a tracker that keeps answering the
+	// same way, and this is a store that was busy.
+	completeFailures     int
+	transientCompleteErr error
+	blockErr             error
 }
 
 type partialWorktreeManager struct {
@@ -2856,6 +2862,12 @@ func (f *fakeTracker) Block(_ context.Context, _ string, reason string) (beads.W
 
 func (f *fakeTracker) Complete(_ context.Context, _ string, reason string) (beads.WorkItem, error) {
 	f.calls = append(f.calls, "complete")
+	// completeFailures is how many times the closure is refused before it goes
+	// through, which is what a `bd` the store was too busy to run looks like.
+	if f.completeFailures > 0 {
+		f.completeFailures--
+		return beads.WorkItem{}, f.transientCompleteErr
+	}
 	if f.completeErr != nil {
 		return beads.WorkItem{}, f.completeErr
 	}

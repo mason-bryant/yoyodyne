@@ -93,6 +93,11 @@ func TestRecoverableRecognizesTheThreeClassesAndNothingElse(t *testing.T) {
 		"HTTP 502: Bad Gateway (https://api.github.com/graphql)",
 		"HTTP 503: Service Unavailable",
 		"HTTP 504: Gateway Timeout",
+		// The tracker's own client, reporting a `bd` that produced no verdict.
+		// These are the strings internal/beads formats, and the first is the
+		// specimen that admitted yoyodyne-ifd.232.
+		"bd list failed with status cancelled and exit code -1: ",
+		"close integrated work item: bd close failed with status cancelled and exit code -1: signal: killed",
 	} {
 		if !RecoverableDetail(recoverable) {
 			t.Errorf("RecoverableDetail(%q) = false, want the class recognized", recoverable)
@@ -114,6 +119,13 @@ func TestRecoverableRecognizesTheThreeClassesAndNothingElse(t *testing.T) {
 		"check `make test` timed out after 30m0s",
 		"exit status 1: 503 files changed",
 		"commit 502f3c9de0a1c7b45023ad9915de5024f0a1c7b4 is not on the target branch",
+		// A tracker that answered. The store said no; asking again earns the same
+		// no, and the exit codes here must not be read as the -1 that means a
+		// process produced nothing.
+		"bd close failed with status failed and exit code 1: issue yoyodyne-ifd.9 not found",
+		"bd update failed with status failed and exit code -12: killed by the operator",
+		"work item yoyodyne-ifd.9 carries no cost after being priced",
+		"the operator cancelled this run",
 	} {
 		if RecoverableDetail(terminal) {
 			t.Errorf("RecoverableDetail(%q) = true, want an answer nobody should wait on", terminal)

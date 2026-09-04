@@ -271,14 +271,15 @@ discards is the judgement, not the fact that the work has been round once more.
 per run: each entry names where the failure happened, which attempt at that
 boundary it was, the interval that was waited, and the failure itself, and a
 boundary's window is what its own entries have already committed. The boundaries
-are every place a run touches somebody else's network — the branch push, opening
+are every place a run reaches something outside itself — the branch push, opening
 the pull request, republishing a replayed branch, reading and confirming the
 remote target, the merge, the merge confirmation, deleting the merged branch,
-catching the local target up, and provider invocation. Only failures whose class
-is clearly recoverable — a connection reset, a network drop, a transport-level
-refusal — are waited on; everything else is reported exactly as promptly as it
-was before, which is what keeps this a wait around the existing behavior rather
-than a second opinion about it.
+catching the local target up, provider invocation, and the writes a finishing run
+makes to the tracker. Only failures whose class is clearly recoverable — a
+connection reset, a network drop, a transport-level refusal, a subprocess that
+produced no verdict at all — are waited on; everything else is reported exactly
+as promptly as it was before, which is what keeps this a wait around the existing
+behavior rather than a second opinion about it.
 
 The provider's boundary is the one that interacts with a counter above it.
 `transient_relaunches` is spent first and bounds every death; past it, a death
@@ -443,18 +444,20 @@ is unmeasured. Most of these are asserted somewhere in
   publish and could not ever carries, so the scenarios here leave it empty), and
   the catch-up after a forge merge. It has its own assertions in
   `internal/orchestrator/publish_test.go`.
-- **Four of the nine `retries` boundaries.** The boundaries are the nine
+- **Four of the ten `retries` boundaries.** The boundaries are the ten
   `runstate.Retry*` constants, counted as constants rather than as call sites —
   `reading the remote target branch` is one boundary with three call sites and
-  one window, and is counted once.
+  one window, and `writing to the tracker` is one with three, and each is counted
+  once.
 
-  One has a recorded trace: a provider death waited out past its budget. Four
+  One has a recorded trace: a provider death waited out past its budget. Five
   more are asserted in `internal/orchestrator/recovery_test.go` and held by no
   trace here — the branch push (including that the retry does not read as an
   empty change), opening the pull request, the merge (twice over: the reset that
   is waited out, and the window that runs out and leaves an outstanding
-  publication), and reading the remote target, which a retried merge re-reads
-  before each attempt.
+  publication), reading the remote target, which a retried merge re-reads before
+  each attempt, and the tracker writes, whose test is the one that holds a
+  promoted change closing its item rather than being recorded as a failed run.
 
   The remaining four have neither a trace nor an assertion: republishing a
   replayed run branch, confirming the merge with the forge, deleting the merged

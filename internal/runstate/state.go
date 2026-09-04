@@ -662,6 +662,15 @@ const (
 	RetryDeleteRemoteBranch = "deleting the merged remote branch"
 	RetryCatchUpTarget      = "catching the local target branch up"
 	RetryProviderInvocation = "invoking the provider"
+	// RetryTrackerWrite covers the writes a finishing run makes to the tracker —
+	// the outcome recorded on the item, the closure, and the price. They are one
+	// boundary rather than three for the reason the remote target's three call
+	// sites are one: they are the same store reached the same way within one
+	// step, and a `bd` that could not be run for one of them could not be run for
+	// the next. A transient failure there recorded finished, integrated work as a
+	// failed run, which is the same loss the forge boundaries carried and is why
+	// the product manager joined them to this item's set.
+	RetryTrackerWrite = "writing to the tracker"
 )
 
 // MaxRetries bounds how many recoverable failures one run records. The window

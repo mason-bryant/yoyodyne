@@ -2411,8 +2411,15 @@ developer, so a relaunch spends no repair attempt.
 
 Relaunches are counted in durable run state before each one begins, so a process
 that dies mid-relaunch resumes against the budget it had rather than a fresh one.
-Setting the bound to `0` restores the earlier behavior: the first provider death
-ends the run.
+
+Setting the bound to `0` buys no relaunches at all: the first provider death is
+the last, and the run stops there. It is **not** an opt-out of
+[waiting a dropped connection out](#waiting-out-a-network-that-dropped), which
+is a different rule and is not configured — a death that is plainly a reset
+connection is waited out on the recovery window at `0` exactly as it is at `2`,
+because what the operator ruled is that the harness never fails outright on
+anything that can recover. What `0` decides is how much of the provider's
+unclassifiable weather one run absorbs before it stops.
 
 What happens once the budget is spent depends on what killed the invocation. A
 death nothing can classify stops the run and records a blocker on the work item
@@ -2445,7 +2452,10 @@ because it is not a verdict on anything.
 A run touches somebody else's network at its most expensive moments: it pushes
 the run branch, opens and updates the pull request, reads where the remote target
 branch stands, asks the forge to merge, confirms the merge, deletes the merged
-branch, catches the local branch up, and makes every provider invocation over it.
+branch, catches the local branch up, and makes every provider invocation over
+it. It ends by writing to the tracker, which is not a network but is a store
+other processes are writing to, and a `bd` too busy to run judges the work no
+more than a reset connection does.
 **A failure at one of those whose class says the next attempt may well succeed —
 a connection reset, a network drop, a transport-level refusal — is waited out and
 asked again rather than recorded as terminal.**
