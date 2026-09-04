@@ -77,7 +77,7 @@ product:
   decisions: docs/decisions
 
 execution:
-  max_concurrent_developers: 2  # raised for the ifd.49 soak; the promotion
+  max_concurrent_developers: 3  # raised 2->3 by the operator 2026-09-04 for the wide post-sweep queue; watch the replay rate and usage windows, drop back if either climbs. Was: raised for the ifd.49 soak; the promotion
                                 # lease serializes integrations underneath
   repair_attempts_before_replan: 2
   # A promotion that loses a race -- to another run, or to whoever moved the
@@ -204,9 +204,9 @@ agents:
     role: developer
     backend: claude-code
     model: opus
-    # Two instances so max_concurrent_developers: 2 is coherent; the
+    # Three instances so max_concurrent_developers: 3 is coherent; the
     # capacity rule refuses a limit the instances cannot supply.
-    instances: 2
+    instances: 3
     persona:
       version: v1
       path: personas/developer.md
@@ -236,7 +236,9 @@ agents:
     role: reviewer
     backend: claude-code
     model: opus
-    instances: 1
+    # Raised 1->2 alongside max_concurrent_developers: 3 so reviews don't
+    # queue behind one instance when the slots fill (operator, 2026-09-04).
+    instances: 2
     persona:
       version: v1
       path: personas/reviewer.md
