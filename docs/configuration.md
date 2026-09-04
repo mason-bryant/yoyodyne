@@ -2997,8 +2997,14 @@ finishes the publication of work that is already integrated.
 It takes the target branch's promotion lease before it asks the forge for
 anything, so it queues behind whatever is promoting into that branch now — a
 re-arm is an integration retry against the target branch, and
-`one-promotion-per-target-branch` binds it as it binds the promotion itself. A
-merge the forge queues again puts the run back where `yoyo reconcile` settles it.
+`one-promotion-per-target-branch` binds it as it binds the promotion itself. The
+lease covers the forge reads and the pre-merge check as well as the merge, and
+not the merge alone: that check on the remote target is the evidence the repeated
+request stands on, and a promotion admitted between the check and the merge
+invalidates it. Everything answerable from the harness's own records — nothing
+docketed, a live run, no decision left to carry out — refuses in front of the
+lease, so an ordinary refusal holds up no promotion. A merge the forge queues
+again puts the run back where `yoyo reconcile` settles it.
 
 The other three decisions still carry themselves out no further than the record:
 a re-scope, a wait, and an escalation ask for no action at all. The budget is

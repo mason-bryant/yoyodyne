@@ -401,3 +401,110 @@ func TestTriageRepairTellsAWaitFromARefusal(t *testing.T) {
 		t.Fatalf("stderr = %q, want it to say where the preserved work is", stderr.String())
 	}
 }
+
+// The verb needs the publication it acts on, exactly as the two beside it need
+// the stoppage.
+func TestTriageRearmRequiresThePublicationItActsOn(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"triage", "rearm", "--reason", "the wedged check has since passed"}, &stdout, &stderr, "test")
+	if code != 2 {
+		t.Fatalf("Run() code = %d, want 2; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "exactly one run identifier") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+// A re-arm is spent by recording it, which happens before the forge is asked, so
+// there are three outcomes rather than two: refused before anything was spent,
+// spent on a request the forge then would not take, and taken.
+//
+// The middle one is the one that reads wrongly if the report branches on the
+// repeat alone. The publication's only re-arm is gone and no merge is pending,
+// and an operator told "no merge was asked for" beside an error saying it was
+// spent has been told two opposite things about the budget they are deciding
+// against next.
+func TestTriageRearmSeparatesARefusalFromASpentRequestTheForgeRefused(t *testing.T) {
+	t.Parallel()
+
+	refused := orchestrator.RearmResult{
+		WorkItemID: "yoyodyne-ifd.68.13",
+		RunID:      "run-0123456789abcdef0123456789abcdef",
+		Number:     92,
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := reportRearm(&stdout, &stderr, false, refused,
+		errors.New("the merge is held by something only a person can satisfy")); code != 1 {
+		t.Fatalf("reportRearm() code = %d, want a refusal reported as a failure", code)
+	}
+	if !strings.Contains(stderr.String(), "no merge was asked for") {
+		t.Fatalf("stderr = %q, want a refusal that says nothing was asked", stderr.String())
+	}
+
+	// Spent and refused by the forge: the count is what says so, because it is
+	// written before the request and stands whatever the request came to.
+	spent := refused
+	spent.Rearms = 1
+	stdout.Reset()
+	stderr.Reset()
+	if code := reportRearm(&stdout, &stderr, false, spent,
+		errors.New("repeat the merge request for pull request 92: the forge could not be reached")); code != 1 {
+		t.Fatalf("reportRearm() code = %d, want a spent repeat reported as a failure", code)
+	}
+	if strings.Contains(stderr.String(), "no merge was asked for") {
+		t.Fatalf("a spent re-arm was reported as one that asked for nothing: %q", stderr.String())
+	}
+	for _, want := range []string{"re-arm is spent", "none left", "escalation rather than another re-arm"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, is missing %q", stderr.String(), want)
+		}
+	}
+
+	// A cap refusal names the once-per-publication bound, which is the evidence
+	// for escalating instead.
+	stdout.Reset()
+	stderr.Reset()
+	capped := runstate.TriageCapError{
+		Action: runstate.TriageMergeRearm, Budget: runstate.TriageMergeRearmBudget,
+		WorkItemID: "yoyodyne-ifd.68.13", Publication: "publication:run-a#92", Spent: 1, Cap: 1,
+	}
+	if code := reportRearm(&stdout, &stderr, false, refused, capped); code != 1 {
+		t.Fatalf("reportRearm() code = %d, want a cap refusal reported as a failure", code)
+	}
+	if !strings.Contains(stderr.String(), "one publication's merge request once") {
+		t.Fatalf("stderr = %q, want the per-publication bound named", stderr.String())
+	}
+}
+
+// A repeat the forge took reports what was repeated, so an operator can check it
+// against the request the verdict authorized without going to the forge.
+func TestTriageRearmReportsTheRequestItRepeated(t *testing.T) {
+	t.Parallel()
+
+	taken := orchestrator.RearmResult{
+		WorkItemID: "yoyodyne-ifd.68.13",
+		RunID:      "run-0123456789abcdef0123456789abcdef",
+		Number:     92,
+		URL:        "https://forge.invalid/pull/92",
+		Method:     "merge",
+		HeadCommit: strings.Repeat("c", 40),
+		Reason:     "the development manager's triage decided a re-arm of publication publication:run-a#92",
+		Rearmed:    true,
+		Queued:     true,
+		Rearms:     1,
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := reportRearm(&stdout, &stderr, false, taken, nil); code != 0 {
+		t.Fatalf("reportRearm() code = %d, want a repeated request reported as success; stderr = %q", code, stderr.String())
+	}
+	for _, want := range []string{"pull request 92", "merge method", strings.Repeat("c", 40), "queued again", "1 re-arm(s)"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, is missing %q", stdout.String(), want)
+		}
+	}
+}

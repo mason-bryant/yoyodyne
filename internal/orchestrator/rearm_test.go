@@ -336,10 +336,12 @@ func TestARearmIsRefusedWhenOnlyAPersonCanSatisfyWhatIsUnmet(t *testing.T) {
 			if result.Rearmed || len(harness.forge.requested) != 0 {
 				t.Fatalf("a refused re-arm asked the forge for %#v", harness.forge.requested)
 			}
-			// Nothing was queued for either: a refusal must not hold the target
-			// branch against the promotions that could still use it.
-			if len(harness.leases.promoted) != 0 {
-				t.Fatalf("a refused re-arm took the promotion lease for %v", harness.leases.promoted)
+			// The merge state is read under the promotion lease rather than in front
+			// of it, because the check it gates — the remote target's — is evidence a
+			// promotion admitted in between would invalidate. So the lease is taken
+			// and given straight back, and the refusal costs the publication nothing.
+			if len(harness.leases.promoted) != 1 || harness.leases.promoted[0] != "main" {
+				t.Fatalf("promotion leases taken = %v, want the target branch held while the forge was asked", harness.leases.promoted)
 			}
 			// Refused before anything is spent, so the publication keeps the re-arm
 			// its decision bought and asking again once the requirement is met
@@ -461,6 +463,11 @@ func TestARearmIsRefusedWithNoDecisionRecorded(t *testing.T) {
 	}
 	if len(harness.forge.requested) != 0 {
 		t.Fatalf("an undecided re-arm asked the forge for %#v", harness.forge.requested)
+	}
+	// Everything answerable from the harness's own records refuses in front of
+	// both leases, so the ordinary refusal holds up no promotion at all.
+	if len(harness.leases.promoted) != 0 {
+		t.Fatalf("a re-arm refused from the harness's own records took the promotion lease for %v", harness.leases.promoted)
 	}
 }
 

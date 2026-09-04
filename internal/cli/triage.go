@@ -3,19 +3,22 @@ package cli
 // Carrying out what triage decided.
 //
 // The development manager decides what becomes of work that stopped and records
-// the decision on the work item; the harness is what acts on one. Two of those
-// actions exist, and they are the two opposite answers to a run that stopped: a
-// re-run, which is what a correct change whose ground moved needs, and a repair,
-// which continues the run that stopped on the change it already has.
+// the decision on the work item; the harness is what acts on one. Three of those
+// actions exist. Two are the opposite answers to a run that stopped: a re-run,
+// which is what a correct change whose ground moved needs, and a repair, which
+// continues the run that stopped on the change it already has. The third is
+// about the other thing that stops — an approved change the forge queued a merge
+// for and then dropped — and it repeats that merge request, once per publication.
 //
 // The decision is not made here and cannot be. What each takes is the run the
 // docket entry names and the reasoning the development manager recorded, and
 // what it does with them is the harness's own work — reading the intake hold,
-// proving the stoppage is over, and then either claiming the one re-run that
-// stoppage gets and starting a fresh run, or spending the item's repair grant,
-// superseding the blocker, and continuing the run that stopped.
+// proving the stoppage is over, and then claiming the one re-run that stoppage
+// gets and starting a fresh run, spending the item's repair grant and continuing
+// the run that stopped, or taking the target branch's promotion lease and asking
+// the forge for the identical merge the reviewer's verdict already authorized.
 
-// The third verb here is not one of those and carries nothing out. Both of them
+// The fourth verb here is not one of those and carries nothing out. The three
 // require a decision recorded against the item's durable triage budget, and the
 // caps that bound those budgets refused the recording as well as the carrying
 // out -- so an item at the end of its rounds was unrunnable by every recorded
@@ -187,9 +190,17 @@ func buildRearmer(configPath string) (orchestrator.Rearmer, error) {
 	}, nil
 }
 
-// reportRearm describes what the action did. A re-arm refused before anything
-// was spent and one whose repeated request the forge then answered are different
-// things for an operator to do something about, and a refusal always says why.
+// reportRearm describes what the action did. There are three outcomes and an
+// operator does something different about each: a refusal before anything was
+// spent, a repeat the forge then would not take, and a request it took.
+//
+// The middle one is why this does not branch on the repeat alone. The re-arm is
+// spent by recording it, which happens before the forge is asked, so a request
+// the forge refused leaves the publication's one re-arm gone and no merge
+// pending — and reporting that as "no merge was asked for" beside an error
+// saying it was spent tells an operator two opposite things about the budget
+// they are about to decide against. The count is what tells them apart, because
+// it is written before the request and stands whatever the request came to.
 func reportRearm(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.RearmResult, err error) int {
 	if jsonOutput {
 		output := triageOutput{}
@@ -208,6 +219,12 @@ func reportRearm(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.
 		return 0
 	}
 	if !result.Rearmed {
+		if result.Rearms > 0 {
+			fmt.Fprintf(stderr, "the merge request for pull request %d was not taken by the forge, and the publication's re-arm is spent: %v\n",
+				result.Number, err)
+			fmt.Fprintln(stderr, "the re-arm is recorded whatever the forge answered, so this publication has none left; a further drop is an escalation rather than another re-arm")
+			return 1
+		}
 		fmt.Fprintf(stderr, "the re-arm was refused and no merge was asked for: %v\n", err)
 		if errors.Is(err, runstate.ErrTriageCapReached) {
 			fmt.Fprintln(stderr, "triage repeats one publication's merge request once; a second drop is an escalation rather than a larger budget")
@@ -567,8 +584,9 @@ refused where the forge's own merge state names something only a person can
 satisfy, refused while the run that made the publication is still alive or the
 item has any run in flight, and refused past one re-arm per publication, where a
 further drop is an escalation rather than another re-arm. It takes the target
-branch's promotion lease, so it queues behind whatever is promoting into that
-branch now.
+branch's promotion lease before it asks the forge anything and holds it across
+the pre-merge check and the merge together, so nothing moves the target between
+the check that authorizes the merge and the merge itself.
 
 The intake hold applies to the first two, because the harness is choosing work
 there. A re-arm chooses none: it finishes a publication of work that is already

@@ -57,9 +57,10 @@ pauses the machine it is on.
 ## A recorded gap: per-item budgets are per machine
 
 What triage has spent on one work item — the repair grants it has been given, the
-re-runs it has caused, the merge re-arms it has made, and the review rounds it
-has cost across every run of it — is counted in durable state on the machine that
-counted it. There is one such home per harness, and nothing moves it.
+re-runs it has caused, the merge re-arms it has made (bounded once per
+publication rather than per item, but counted in the same record), and the review
+rounds it has cost across every run of it — is counted in durable state on the
+machine that counted it. There is one such home per harness, and nothing moves it.
 
 So two collaborators running their own harnesses against one repository each hold
 a full set of budgets for the same item: an item that has spent its grants on one

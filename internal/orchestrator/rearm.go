@@ -55,6 +55,12 @@ package orchestrator
 // promotion from being able to make one. It is taken after the run's own lease,
 // which is the order everything else that holds both takes them in; repeat says
 // why that order and not the other.
+//
+// It is held across the forge reads and the pre-merge check as well as the merge,
+// rather than around the merge alone. The check on the remote target is the
+// evidence that authorizes the repeated request, and a promotion admitted between
+// that check and the merge invalidates it — which is the whole of what the lease
+// is for.
 
 import (
 	"context"
@@ -237,29 +243,20 @@ func (r Rearmer) Rearm(ctx context.Context, request RearmRequest) (RearmResult, 
 		return result, err
 	}
 	result.Reason = rearmReason(prior, published, decided, result.DocketKey, reasoning)
-	// What the forge says now decides whether this is a drop worth repeating at
-	// all, and it is asked before the local check because it is the cheaper of the
-	// two and the one that refuses most re-arms.
-	if err := r.forgeWouldTakeItBack(ctx, prior, published, integration); err != nil {
-		return result, err
-	}
-	if err := r.Worktrees.VerifyRemoteTarget(ctx, gitworktree.Integration{
-		Branch:               prior.Branch,
-		TargetBranch:         integration.TargetBranch,
-		SourceCommit:         integration.SourceCommit,
-		TargetCommit:         integration.TargetCommit,
-		PreviousTargetCommit: integration.PreviousTargetCommit,
-	}); err != nil {
-		return result, fmt.Errorf("check the remote target branch before repeating the merge request: %w; nothing was spent, so the publication keeps its re-arm", err)
-	}
-
+	// Everything above is read from the harness's own records and refuses without
+	// taking a lease, so the ordinary refusal holds up no promotion. What is left —
+	// what the forge says, whether the remote target still passes, and the request
+	// itself — is asked under the leases, because those are the questions a
+	// concurrent promotion can invalidate between the asking and the merge.
 	return r.repeat(ctx, prior.RunID, integration.TargetBranch, published.MergeRearms, result)
 }
 
-// repeat spends the publication's re-arm and makes the request, under the run's
-// own lease so that the counter and the answer are written onto the record they
-// were read from, and under the target branch's promotion lease so that the
-// merge queues where every promotion into that branch queues.
+// repeat asks the forge what it says about the request, checks the remote target,
+// spends the publication's re-arm, and makes the request — all under the run's own
+// lease so that the counter and the answer are written onto the record they were
+// read from, and under the target branch's promotion lease so that the merge and
+// the evidence authorizing it are serialized against every promotion into that
+// branch.
 //
 // The two are taken in that order, which is the order every other holder of both
 // takes them: the pipeline holds its run's lease across the promotion, and
@@ -268,10 +265,24 @@ func (r Rearmer) Rearm(ctx context.Context, request RearmRequest) (RearmResult, 
 // on the run this holds. Only the second wait blocks — a run somebody else holds
 // is refused here rather than queued for.
 //
+// # Why the checks are inside the lease rather than in front of it
+//
+// The pre-merge check on the remote target is the evidence that authorizes the
+// repeated merge, and it is worth exactly as long as the branch stands still. A
+// check made before the lease is a check a promotion admitted in the meantime has
+// invalidated: the target moves, and the forge is then asked to merge into a
+// branch nobody in this decision saw. That is the same reasoning publishIntegration
+// makes the identical check inside the merge's own retry for, rather than in front
+// of it, and this is the identical check.
+//
+// Everything cheaper than that refuses before either lease is taken, so an
+// ordinary refusal — nothing docketed, a live run, no decision to carry out —
+// holds up no promotion at all.
+//
 // The record is re-read under the lease rather than reused, for the reason every
 // other adoption here re-reads: what is rewritten has to be what is on disk now,
-// and a run something settled while the forge was being asked has had its
-// publication written by whatever settled it.
+// and a run something settled in the meantime has had its publication written by
+// whatever settled it.
 func (r Rearmer) repeat(ctx context.Context, runID, targetBranch string, checked int, result RearmResult) (RearmResult, error) {
 	state, lease, err := r.Runs.AdoptRun(ctx, runID)
 	if err != nil {
@@ -285,12 +296,27 @@ func (r Rearmer) repeat(ctx context.Context, runID, targetBranch string, checked
 	}
 	defer func() { _ = promotion.Release() }()
 
-	published, _, err := rearmablePublication(state)
+	published, integration, err := rearmablePublication(state)
 	if err != nil {
 		return result, fmt.Errorf("run %s was settled while its publication was being checked: %w", runID, err)
 	}
 	if published.Number != result.Number || published.MergeRearms != checked {
 		return result, fmt.Errorf("run %s was settled while its publication was being checked, so what would be repeated is no longer what was checked", runID)
+	}
+	// What the forge says decides whether this is a drop worth repeating at all,
+	// and it is asked before the local check because it is the cheaper of the two
+	// and the one that refuses most re-arms.
+	if err := r.forgeWouldTakeItBack(ctx, state, published, integration); err != nil {
+		return result, err
+	}
+	if err := r.Worktrees.VerifyRemoteTarget(ctx, gitworktree.Integration{
+		Branch:               state.Branch,
+		TargetBranch:         integration.TargetBranch,
+		SourceCommit:         integration.SourceCommit,
+		TargetCommit:         integration.TargetCommit,
+		PreviousTargetCommit: integration.PreviousTargetCommit,
+	}); err != nil {
+		return result, fmt.Errorf("check the remote target branch before repeating the merge request: %w; nothing was spent, so the publication keeps its re-arm", err)
 	}
 	// The counter is written before the request is made, which is the direction
 	// every triage counter fails in. A process that dies here has recorded a

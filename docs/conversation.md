@@ -1159,8 +1159,10 @@ by the method that verdict's own merge recorded, pinned to the commit that was
 integrated — and it overrides nothing to do it. Administrator privileges are
 never used, and repeating an identical request is not merging past a
 requirement: the forge runs its whole requirement machinery again. It takes the
-target branch's promotion lease first, so it queues behind whatever is promoting
-into that branch rather than racing it.
+target branch's promotion lease before it asks the forge anything and holds it
+across the check and the merge together, so it queues behind whatever is
+promoting into that branch rather than racing it — and so nothing can move the
+target between the check that authorizes the merge and the merge itself.
 
 Five things refuse it, all of them asked before anything is spent. The forge's
 own merge state has to name nothing only a person can satisfy — a conflict with
