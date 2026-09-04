@@ -225,7 +225,7 @@ func TestAGoalsDocumentStatingNoGoalsIsNamedRatherThanReadAsFewerGoals(t *testin
 // words — six children of yoyodyne-ifd.102 reading "it records no goal" — and a
 // test that resolved the goal by calling the parse directly would leave open
 // whether the loss was in how the audit locates an item and pulls its notes. So
-// this runs admittedWorkItems, which is the whole of that lookup, against a bd
+// this runs the audit's own scoped read, which is the whole of that lookup, against a bd
 // that answers with the item's notes, and then reportAttribution's own judging
 // and rendering over what came back.
 func TestTheAuditFindsADecompositionChildsGoalThroughItsOwnLookup(t *testing.T) {
@@ -250,9 +250,9 @@ func TestTheAuditFindsADecompositionChildsGoalThroughItsOwnLookup(t *testing.T) 
 		}},
 	}}
 
-	admitted, err := admittedWorkItems(context.Background(), beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"})
+	admitted, err := auditScopes[scopeAll].workItems(context.Background(), beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"})
 	if err != nil {
-		t.Fatalf("admittedWorkItems() error = %v", err)
+		t.Fatalf("workItems() error = %v", err)
 	}
 	if len(admitted) != 2 {
 		t.Fatalf("the audit's lookup found %d item(s): %#v", len(admitted), admitted)
@@ -268,14 +268,14 @@ func TestTheAuditFindsADecompositionChildsGoalThroughItsOwnLookup(t *testing.T) 
 	}
 
 	var rendered bytes.Buffer
-	printAttributions(&rendered, attributions, goals)
+	printAttributions(&rendered, auditScopes[scopeAll], attributions, goals)
 	report := rendered.String()
 	// The words the symptom was reported in. If a decomposition child ever reads
 	// as naming no goal again, it fails here in the same language the operator saw.
 	if strings.Contains(report, "it records no goal") {
 		t.Fatalf("a decomposition child reads as naming no goal:\n%s", report)
 	}
-	if !strings.Contains(report, "2 admitted item(s): 2 serve a recorded goal, 0 name none") {
+	if !strings.Contains(report, "2 work item(s): 2 serve a recorded goal, 0 name none") {
 		t.Fatalf("report = %q", report)
 	}
 }
@@ -308,9 +308,9 @@ func TestTheAuditFailsAnItemWhoseRecordedGoalWasWrittenOver(t *testing.T) {
 		}},
 	}}
 
-	admitted, err := admittedWorkItems(context.Background(), beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"})
+	admitted, err := auditScopes[scopeAll].workItems(context.Background(), beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"})
 	if err != nil {
-		t.Fatalf("admittedWorkItems() error = %v", err)
+		t.Fatalf("workItems() error = %v", err)
 	}
 	goals := goal.Set{
 		Sources: []string{"v1-goals"},
@@ -335,7 +335,7 @@ func TestTheAuditFailsAnItemWhoseRecordedGoalWasWrittenOver(t *testing.T) {
 	}
 
 	var rendered bytes.Buffer
-	printAttributions(&rendered, attributions, goals)
+	printAttributions(&rendered, auditScopes[scopeAll], attributions, goals)
 	report := rendered.String()
 	for _, want := range []string{
 		"1 lost the goal they recorded",
@@ -394,7 +394,7 @@ func TestWitnessingRecordsTheGoalAnItemAlreadyStatesAndDecidesNothing(t *testing
 	}}
 
 	tracker := beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}
-	swept, err := workItemsWithStatus(context.Background(), tracker, witnessStatuses)
+	swept, err := workItemsWithStatus(context.Background(), tracker, trackerStatuses)
 	if err != nil {
 		t.Fatalf("workItemsWithStatus() error = %v", err)
 	}
@@ -439,7 +439,7 @@ func TestWitnessingRecordsTheGoalAnItemAlreadyStatesAndDecidesNothing(t *testing
 		refusal: "bd: the tracker is read-only",
 	}
 	refused := beads.Client{Runner: refusing, Binary: "bd-test", Dir: "/repo"}
-	unwitnessed, err := workItemsWithStatus(context.Background(), refused, witnessStatuses)
+	unwitnessed, err := workItemsWithStatus(context.Background(), refused, trackerStatuses)
 	if err != nil {
 		t.Fatalf("workItemsWithStatus() error = %v", err)
 	}
@@ -526,27 +526,200 @@ func TestTheGuardRefusesTheWriterAndSaysNothingAboutAnythingElse(t *testing.T) {
 	}
 }
 
-// The sweep is deliberately wider than the audit, and every document that
-// describes either one now says which is which. Pinning the relationship is what
-// keeps the prose from drifting back into the overclaim it was corrected for: the
-// sweep must reach everything the audit reads, or an item could be reported as
-// having lost a goal with no witness holding the words to put back, and it must
-// reach more than that, which is the part that buys recovery on work the audit
-// never looks at.
-func TestTheSweepReachesEveryStatusTheAuditReadsAndMore(t *testing.T) {
+// The sweep must reach every status the audit reads, or an item could be
+// reported as having lost a goal with no witness holding the words to put back.
+// The two now walk the same list by default, which is the point rather than a
+// coincidence: the sweep reached closed work first, the audit could not see it,
+// and nine of the twelve recorded losses were in the gap.
+//
+// The narrower scope is pinned in the same place, because it is what the audit
+// used to do and a reader asking for it is asking for less coverage on purpose.
+func TestTheSweepReachesEveryStatusTheAuditCanRead(t *testing.T) {
 	t.Parallel()
 
 	swept := map[string]bool{}
-	for _, status := range witnessStatuses {
+	for _, status := range trackerStatuses {
 		swept[status] = true
 	}
-	for _, audited := range backlogStatuses {
-		if !swept[audited] {
-			t.Fatalf("the audit reads %q and the sweep does not reach it, so a loss there could be reported with no witness to put back", audited)
+	for name, scope := range auditScopes {
+		for _, audited := range scope.read {
+			if !swept[audited] {
+				t.Fatalf("--scope=%s reads %q and the sweep does not reach it, so a loss there could be reported with no witness to put back", name, audited)
+			}
 		}
 	}
-	if len(witnessStatuses) <= len(backlogStatuses) {
-		t.Fatalf("the sweep reaches %v, which is no wider than the audit's %v", witnessStatuses, backlogStatuses)
+	// The default is the wide one. An audit that has to be asked for its coverage
+	// is an audit whose blind spot is the default, which is the defect this closed.
+	if len(auditScopes[scopeAll].read) != len(trackerStatuses) {
+		t.Fatalf("the audit's default reads %v, not every status the tracker holds %v", auditScopes[scopeAll].read, trackerStatuses)
+	}
+	if len(auditScopes[scopeQueue].read) >= len(trackerStatuses) {
+		t.Fatalf("--scope=%s reads %v, which is not narrower than the tracker's %v", scopeQueue, auditScopes[scopeQueue].read, trackerStatuses)
+	}
+}
+
+// What the audit says it covered, in both the report a person reads and the one a
+// program does. It is here because a finding is worth what the ground it was
+// looked for on is worth: the audit read the queue alone for as long as it took
+// two diagnoses to be made wrong, and neither report said so.
+func TestTheAuditStatesWhatItReadAndWhatItDidNot(t *testing.T) {
+	t.Parallel()
+
+	goals := goal.Set{
+		Sources: []string{"v1-goals"},
+		Goals:   []goal.Goal{{Statement: "Maintain a traceable chain.", ArtifactID: "v1-goals", InForce: true}},
+	}
+	attributions := []itemAttribution{
+		{WorkItemID: "ifd.1", Title: "Attributed work", Status: "open", Attribution: goals.Attribute("Maintain a traceable chain.")},
+	}
+
+	var wide bytes.Buffer
+	printAttributions(&wide, auditScopes[scopeAll], attributions, goals)
+	if !strings.HasPrefix(wide.String(), "coverage: read open, in_progress, blocked, closed -- every status the tracker holds") {
+		t.Fatalf("report = %q, want it to open with what it read", wide.String())
+	}
+
+	// The narrow scope says what it left out and how to read it, so nobody has to
+	// know that "queue" means two of four statuses to know what was skipped.
+	var narrow bytes.Buffer
+	printAttributions(&narrow, auditScopes[scopeQueue], attributions, goals)
+	for _, want := range []string{
+		"coverage: read open, blocked",
+		"in_progress and closed work was not checked",
+		"--scope=all",
+	} {
+		if !strings.Contains(narrow.String(), want) {
+			t.Fatalf("report = %q, want it to contain %q", narrow.String(), want)
+		}
+	}
+
+	// A report with nothing in it is where the coverage matters most: an empty
+	// audit over the whole tracker and an empty audit over nothing at all are
+	// opposite answers, and the line above the tally is what tells them apart.
+	var empty bytes.Buffer
+	printAttributions(&empty, auditScopes[scopeQueue], nil, goals)
+	if !strings.Contains(empty.String(), "coverage: read open, blocked") || !strings.Contains(empty.String(), "nothing to attribute") {
+		t.Fatalf("empty report = %q", empty.String())
+	}
+
+	// The same thing a program reads, by the field names that are its contract.
+	encoded, err := json.Marshal(attributionOutput(auditScopes[scopeQueue], attributions, goals))
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded struct {
+		Coverage struct {
+			Scope  string   `json:"scope"`
+			Read   []string `json:"read"`
+			Unread []string `json:"unread"`
+		} `json:"coverage"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %s", err, encoded)
+	}
+	if decoded.Coverage.Scope != scopeQueue ||
+		strings.Join(decoded.Coverage.Read, ",") != "open,blocked" ||
+		strings.Join(decoded.Coverage.Unread, ",") != "in_progress,closed" {
+		t.Fatalf("coverage = %+v", decoded.Coverage)
+	}
+}
+
+// The gap this closed, in the words of what was missed: an attribution destroyed
+// on a closed item. The audit could not read it at all, so the loss was reported
+// nowhere and the same destruction was diagnosed wrong twice. Now it is counted,
+// named with the item, and failed for.
+//
+// Beside it, the finding on closed work that is deliberately not a failure: an
+// item naming a goal the goals no longer state in those words. It named what the
+// goals said when it was admitted, the work is finished, and there is nothing for
+// anybody to correct -- so it is counted and named, and the audit does not go red
+// over a goal somebody reworded afterwards.
+func TestTheAuditFailsADestroyedAttributionOnClosedWorkAndNamesTheRestOfIt(t *testing.T) {
+	t.Parallel()
+
+	autonomy := "Run development nearly autonomously."
+	stale := goal.Note("Run development autonomously.")
+	bd := &listingRunner{items: map[string][]map[string]any{
+		"closed": {
+			{
+				"id": "yoyodyne-ifd.121.3", "title": "Re-arm a dropped merge", "status": "closed",
+				"priority": 1, "issue_type": "task",
+				"notes":    "Constraints from the architect, recorded 2026-08-19.",
+				"metadata": map[string]any{"yoyodyne_goal_recorded": autonomy},
+			},
+			{
+				// Attributed under the goal's older wording, which was amended after
+				// this closed. Reported, and not a failure.
+				"id": "yoyodyne-ifd.68.10", "title": "Slack digest", "status": "closed",
+				"priority": 2, "issue_type": "task", "notes": stale,
+			},
+		},
+	}}
+
+	tracker := beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}
+	goals := goal.Set{
+		Sources: []string{"v1-goals"},
+		Goals:   []goal.Goal{{Statement: autonomy, ArtifactID: "v1-goals", InForce: true}},
+	}
+
+	// The scope the audit used to have reads none of it, which is the defect
+	// stated as a test: the loss is there and the report says nothing about it.
+	queued, err := auditScopes[scopeQueue].workItems(context.Background(), tracker)
+	if err != nil {
+		t.Fatalf("workItems() error = %v", err)
+	}
+	if len(queued) != 0 {
+		t.Fatalf("the queue scope read %#v", queued)
+	}
+
+	read, err := auditScopes[scopeAll].workItems(context.Background(), tracker)
+	if err != nil {
+		t.Fatalf("workItems() error = %v", err)
+	}
+	attributions := attributionsOf(read, goals)
+	states := map[string]goal.State{}
+	for _, entry := range attributions {
+		states[entry.WorkItemID] = entry.Attribution.State
+	}
+	if states["yoyodyne-ifd.121.3"] != goal.StateLost {
+		t.Fatalf("the destroyed attribution on closed work reads as %q: %#v", states["yoyodyne-ifd.121.3"], attributions)
+	}
+	if states["yoyodyne-ifd.68.10"] != goal.StateUnresolved {
+		t.Fatalf("the stale attribution on closed work reads as %q: %#v", states["yoyodyne-ifd.68.10"], attributions)
+	}
+	if code := attributionExitCode(attributions); code != 1 {
+		t.Fatalf("exit code over a destroyed attribution on closed work = %d", code)
+	}
+	// The stale one on its own does not fail, so a goal reworded after the work
+	// closed does not turn the audit permanently red.
+	finished := []itemAttribution{{WorkItemID: "yoyodyne-ifd.68.10", Status: "closed",
+		Attribution: goals.AttributionOf(stale, goal.Witness{})}}
+	if code := attributionExitCode(finished); code != 0 {
+		t.Fatalf("exit code over a wrong attribution on finished work alone = %d", code)
+	}
+	// The same wrong claim on work still to be done does fail: there it is a claim
+	// somebody can correct.
+	live := []itemAttribution{{WorkItemID: "yoyodyne-ifd.68.10", Status: "open",
+		Attribution: goals.AttributionOf(stale, goal.Witness{})}}
+	if code := attributionExitCode(live); code != 1 {
+		t.Fatalf("exit code over a wrong attribution on open work = %d", code)
+	}
+
+	var rendered bytes.Buffer
+	printAttributions(&rendered, auditScopes[scopeAll], attributions, goals)
+	report := rendered.String()
+	for _, want := range []string{
+		"2 work item(s): 0 serve a recorded goal",
+		"1 lost the goal they recorded",
+		"yoyodyne-ifd.121.3",
+		"[p1, closed]",
+		"1 of them on closed work, which fails like any other",
+		"yoyodyne-ifd.68.10",
+		"1 of them on closed work, which is counted here and does not fail",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report = %q, want it to contain %q", report, want)
+		}
 	}
 }
 
@@ -630,9 +803,9 @@ func TestTheAuditSeparatesWorkWithNoGoalFromWorkWhoseGoalIsWrong(t *testing.T) {
 	}
 
 	var rendered bytes.Buffer
-	printAttributions(&rendered, attributions, goals)
+	printAttributions(&rendered, auditScopes[scopeAll], attributions, goals)
 	report := rendered.String()
-	if !strings.Contains(report, "3 admitted item(s): 1 serve a recorded goal, 1 name none, 1 name a goal the goals do not state, 0 lost the goal they recorded") {
+	if !strings.Contains(report, "3 work item(s): 1 serve a recorded goal, 1 name none, 1 name a goal the goals do not state, 0 lost the goal they recorded") {
 		t.Fatalf("report = %q", report)
 	}
 	// Each item is under the heading that says what to do about it, so the two
@@ -669,7 +842,7 @@ func TestTheAuditCarriesNoBriefGoalsForNothingHereToBeReadAgainst(t *testing.T) 
 		{WorkItemID: "ifd.1", Title: "Attributed work", Attribution: goals.Attribute("Maintain a traceable chain.")},
 	}
 
-	encoded, err := json.Marshal(attributionOutput(attributions, goals))
+	encoded, err := json.Marshal(attributionOutput(auditScopes[scopeAll], attributions, goals))
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
@@ -698,7 +871,7 @@ func TestTheAuditReportsNothingCheckedRatherThanNothingFound(t *testing.T) {
 	// as unattributed: nothing was checked, and saying so is the whole of what is
 	// honest.
 	var rendered bytes.Buffer
-	printAttributions(&rendered, []itemAttribution{{WorkItemID: "ifd.1"}}, goal.Unreadable("the artifact homes are outside the repository"))
+	printAttributions(&rendered, auditScopes[scopeAll], []itemAttribution{{WorkItemID: "ifd.1"}}, goal.Unreadable("the artifact homes are outside the repository"))
 	if !strings.Contains(rendered.String(), "none of them checked: the goals could not be read") {
 		t.Fatalf("report = %q", rendered.String())
 	}
@@ -714,7 +887,7 @@ func TestTheAuditReportsNothingCheckedRatherThanNothingFound(t *testing.T) {
 			Attribution: unreadable.AttributionOf("Constraints from the architect.", goal.Witness{Recorded: true, Statement: "Run development nearly autonomously."})},
 	}
 	var withLoss bytes.Buffer
-	printAttributions(&withLoss, lost, unreadable)
+	printAttributions(&withLoss, auditScopes[scopeAll], lost, unreadable)
 	if !strings.Contains(withLoss.String(), "ifd.102.2") || !strings.Contains(withLoss.String(), "written over rather than never made") {
 		t.Fatalf("report = %q", withLoss.String())
 	}

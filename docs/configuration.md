@@ -1273,13 +1273,16 @@ tracker holds rather than the queue, because the command that destroys an
 attribution reaches a claimed or closed item just as easily, and most of the
 losses on record were on items that had already closed.
 
-**The sweep is wider than the audit, and what a witness buys differs across that
-line.** `attribution` reads the backlog — `open` and `blocked` — so on those a
-witnessed loss is a `lost` state it reports and exits non-zero for. On claimed
-and closed items the sweep also reaches, nothing reports the loss: what the
-witness buys there is recovery, because the statement is kept where replacing
-the notes cannot reach it and a destroyed attribution can be put back from the
-record rather than judged again.
+**The audit reads as far as the sweep does.** `attribution` walks every status
+the tracker holds — `open`, `in_progress`, `blocked`, and `closed` — so a
+witnessed loss is a `lost` state it reports and exits non-zero for wherever the
+item sits. It read the backlog alone until yoyodyne-ifd.276, and what that cost
+is the reason it does not now: nine of the twelve recorded losses were on closed
+items, so the slice the audit could not see is the slice the losses were actually
+in, and two diagnoses of the same destruction were made wrong against a report
+that said nothing about them. `--scope=queue` reads `open` and `blocked` alone
+for the narrower question, and either way the report opens with the statuses it
+read and the ones it did not.
 
 `yoyo goals guard` is the same loss stopped rather than reported. Wired as a
 `PreToolUse` hook on `Bash`, it reads the command an agent session is about to
@@ -1297,7 +1300,7 @@ the command runs as it did before and nothing reports that it did.
 
 ```sh
 yoyo goals list          # the goals work may be attributed to, and where each is stated
-yoyo goals attribution   # what each admitted work item says it is for
+yoyo goals attribution   # what each work item the tracker holds says it is for
 yoyo goals witness       # witness the goals already recorded on work items
 yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
@@ -1311,6 +1314,14 @@ opposite reason — it passed the check, and what is wrong is that the record of
 was written over. Attributing one is a judgement about what the work is for, so it
 is the product manager's to make in conversation and there is no command here that
 makes it.
+
+Work that has closed is held to one half of that rule. `lost` fails there like
+anywhere else, because the record was destroyed and the witness holds the words
+to put back. `unresolved` is counted and named on closed work and does not fail:
+the item named what the goals stated when it was admitted, the work is finished,
+and the ordinary way it stops resolving is a goal reworded afterwards — which is
+what `yoyo stale` reports rather than a claim anybody can now correct. Both halves
+are printed in the report, so neither is a rule to be inferred from an exit code.
 
 That leaves a pass still owed. When the check arrived, Yoyodyne's own backlog
 carried one attribution across seventeen open items, and **the rest are still to

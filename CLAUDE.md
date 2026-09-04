@@ -94,9 +94,9 @@ on `Bash` to `.claude/settings.json`:
 
 Codex hooks have no tool gate, so a Codex session is covered by this rule and
 not by the guard. `yoyo goals attribution` reports and fails on an attribution
-destroyed on an open or blocked item, whatever destroyed it; on a claimed or
-closed item the witness keeps the words to put back but nothing fails, so the
-rule above is the only thing standing between those items and a silent loss.
+destroyed on any item the tracker holds, whatever destroyed it and whatever
+status the item is in — closed work included, which is where nine of the twelve
+recorded losses were and which the audit could not see until yoyodyne-ifd.276.
 
 This rule binds whoever can actually write to the tracker — the harness, the
 product manager's conversation, and a person at an interactive session. It is

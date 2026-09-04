@@ -95,7 +95,7 @@ of them in the words that document states it in.
 
 ```sh
 ./bin/yoyo goals list          # the goals work can be attributed to, and where each is stated
-./bin/yoyo goals attribution   # what each admitted work item says it is for
+./bin/yoyo goals attribution   # what each work item the tracker holds says it is for
 ./bin/yoyo goals witness       # witness the goals already recorded on work items
 ./bin/yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
@@ -152,16 +152,32 @@ wiring the same command as a `PreToolUse` hook on `Bash` in
 {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}
 ```
 
-The two halves are not interchangeable, and neither of them covers everything.
-The guard covers the sessions it is wired into and says nothing about a command
-typed anywhere else; it is also passed to the provider rather than enforced by
-the harness, so a session where the hook does not fire runs the command exactly
-as it did before and nothing reports that it did. The witness reaches every item
-the sweep walked, but what it buys depends on where that item is: on work the
-audit reads — `open` and `blocked` — a loss becomes a `lost` state that `yoyo
-goals attribution` reports and exits non-zero for, and on claimed and closed
-work, which the audit does not read, it keeps the words so a destroyed
-attribution can be put back rather than judged again.
+The audit reads as far as the sweep does. `yoyo goals attribution` walks every
+status the tracker holds — `open`, `in_progress`, `blocked`, and `closed` —
+because nine of the twelve recorded losses were on closed items, and an audit
+that could not see them reported nothing about any of them: that blindness is why
+the intact counter-example was missed and the same destruction was diagnosed
+wrong twice. `--scope=queue` reads `open` and `blocked` alone, which is the
+narrower question of what the work still waiting traces to. Either way, the
+report opens with the statuses it read and the ones it did not, so a clean tally
+is never mistaken for a slice nobody looked at.
+
+Work that has closed is held to one half of the failure rule. A destroyed
+attribution fails there like anywhere else — the record was written over, the
+witness holds the words, and putting them back is something somebody can do. An
+item naming a goal no goals document states is counted and named on closed work
+and does not fail: it named what the goals stated when it was admitted, and a
+goal reworded after it closed is what [`yoyo stale`](configuration.md#what-a-change-upstream-leaves-stale)
+reports rather than a claim anybody can now correct.
+
+The two halves of the protection are not interchangeable, and neither of them
+covers everything. The guard covers the sessions it is wired into and says
+nothing about a command typed anywhere else; it is also passed to the provider
+rather than enforced by the harness, so a session where the hook does not fire
+runs the command exactly as it did before and nothing reports that it did. The
+witness is what survives a write the guard did not see: it keeps the words on
+every item the sweep walked, so the audit can say an attribution was destroyed
+and quote what it was.
 
 A goals document nobody can read goals out of — one with no `Goals` heading, or
 with nothing stated under it — is named on stderr rather than quietly shrinking
