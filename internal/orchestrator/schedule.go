@@ -339,9 +339,11 @@ type ScheduleEscalations interface {
 // the harness actually has, and gives back the ones with nothing alive behind
 // them. It is satisfied by ClaimAuditor.
 //
-// It is optional, and a pull wired without one pulls exactly the same work: what
-// is lost is the only thing that ever frees an item whose run died, which is why
-// every session the harness builds is given one.
+// It is optional, and a pull wired without one pulls exactly the same work and
+// spends exactly what it spent before — the tracker reading the audit needs is
+// made where the audit is, so a pull with no audit makes it where it always did.
+// What is lost is the only thing that ever frees an item whose run died, which is
+// why every session the harness builds is given one.
 type ScheduleClaims interface {
 	Audit(ctx context.Context, claimed []beads.WorkItem) (ClaimSweep, error)
 }
@@ -927,17 +929,10 @@ pulling:
 		// claimed items are read here and handed down to it rather than read twice.
 		//
 		// It costs a held or full session one tracker read a poll it did not pay
-		// before, and buys the only thing that ever frees those slots.
-		//
-		// A reading that fails here is reported rather than retried, which is the one
-		// place in this loop that is true. Every other reading is something the pass
-		// cannot go on without; this one is only the audit's, and routing it through
-		// the retry would make a held intake — which is answered from a switch and
-		// needs no tracker at all — stop being answerable on a machine whose tracker
-		// is down. So the audit says what it could not read, and the pass carries on
-		// to the readings that are actually its own.
-		claimed, claimedErr := pull.claimed(ctx)
-		s.audit(ctx, &schedule, pull, claimed, claimedErr)
+		// before, and buys the only thing that ever frees those slots. A pull wired
+		// without an audit spends nothing at all: the reading is the audit's, so
+		// that pull makes it where it always did, in the queue below.
+		claimed, claimedRead := s.audit(ctx, &schedule, pull)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -1018,7 +1013,7 @@ pulling:
 			continue
 		}
 
-		read, err := pull.queue(ctx, claimed, claimedErr == nil)
+		read, err := pull.queue(ctx, claimed, claimedRead)
 		if err != nil {
 			if !unreadable(err) {
 				break
@@ -1413,13 +1408,26 @@ func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) 
 // What it does cost is the pull's own thread while the records are read — the
 // runs and the log of what has already been given back, once per pass — and one
 // tracker write per stuck item, which on the ordinary pass is none.
-func (s Scheduler) audit(ctx context.Context, schedule *Schedule, pull Pull, claimed []beads.WorkItem, claimedErr error) {
+//
+// It returns what the tracker holds as claimed and whether that reading was made,
+// because the queue below needs the same listing: a pull makes it once, here,
+// and a pull with no audit wired makes it there instead and pays nothing for this.
+//
+// A reading that fails here is reported rather than retried, which is the one
+// place in this loop that is true of a reading. Every other one is something the
+// pass cannot go on without; this is only the audit's, and routing it through the
+// retry would make a held intake — which is answered from a switch and needs no
+// tracker at all — stop being answerable on a machine whose tracker is down. The
+// queue below still meets the same store and still rides it out, so a session in
+// contention behaves exactly as it did.
+func (s Scheduler) audit(ctx context.Context, schedule *Schedule, pull Pull) ([]beads.WorkItem, bool) {
 	if pull.Claims == nil {
-		return
+		return nil, false
 	}
-	if claimedErr != nil {
-		schedule.ClaimProblem = fmt.Sprintf("what the tracker holds as claimed could not be read, so an item whose run died stays claimed and nothing will pull it: %v", claimedErr)
-		return
+	claimed, err := pull.claimed(ctx)
+	if err != nil {
+		schedule.ClaimProblem = fmt.Sprintf("what the tracker holds as claimed could not be read, so an item whose run died stays claimed and nothing will pull it: %v", err)
+		return nil, false
 	}
 	sweep, err := pull.Claims.Audit(ctx, claimed)
 	var problems []string
@@ -1434,6 +1442,7 @@ func (s Scheduler) audit(ctx context.Context, schedule *Schedule, pull Pull, cla
 	// evidence that the problem before it is gone rather than evidence that it was
 	// not looked for.
 	schedule.ClaimProblem = strings.Join(problems, "; ")
+	return claimed, true
 }
 
 // priceRun is what one finished run cost, from the recorded evidence. A run that
