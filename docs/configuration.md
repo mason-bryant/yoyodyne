@@ -1913,7 +1913,8 @@ workflow definitions this build ships — `delivery.yaml` for a project whose
 integration the harness takes, and `delivery-human-approval.yaml` for one where a
 person still approves it. **Every new run compiles the one its integration policy
 binds and executes it beside the run**, which is the default and takes no
-configuration at all.
+configuration at all. A project that wants its own sequence
+[writes one and owns it whole](#the-definition-is-the-projects-to-own).
 
 What "executes" means here is exact, and it is worth being plain about: the
 definition resolves where the run goes next and records it. It does not perform
@@ -1929,6 +1930,64 @@ transition the definition resolves from them. The doors the definition holds are
 the registered delivery steps with their bodies replaced by nothing at all, so
 delivery is untouched and what the instance costs is one small file write per
 boundary.
+
+### The definition is the project's to own
+
+The built-in is the default and not the only option. A project that wants its own
+sequence writes it beside its personas, under the same configuration directory,
+named for the workflow it replaces:
+
+```
+.yoyodyne/workflows/delivery.yaml                  # automatic integration
+.yoyodyne/workflows/delivery-human-approval.yaml   # a person still approves
+```
+
+Which of the two a run reads is the integration policy above, exactly as it is
+for the built-ins: a project whose `approvals.integration` is `automatic` binds
+`delivery`, and one where it is not binds `delivery-human-approval`. A project
+that keeps neither file runs what this build ships, which is what every project
+did before this existed and still takes no configuration at all.
+
+**Nothing is merged between the two.** A project that writes one owns the whole
+sequence from then on — the states, the transitions, the terminals — which is the
+only arrangement where reading the file tells you what its runs execute. The
+other side of that is the cost: a later Yoyodyne that improves the built-in does
+not reach a project that ejected a copy, so the copy is worth a header saying
+where it came from. Yoyodyne's own repository keeps one — `.yoyodyne/workflows/delivery.yaml`
+here is the built-in verbatim, adopted so that this project runs the arrangement
+it ships, and a test holds the two to the same content digest so that editing one
+and not the other fails rather than passing quietly.
+
+**What a copy can change is the sequence and nothing else.** It selects among the
+actions this build registered — `work-item.claim`, `candidate.develop`,
+`candidate.check`, `candidate.review`, `candidate.integrate`, `run.complete` and
+`run.clean-up` — and each action's authority is declared in Go, so no file can
+make a run do anything the built-in could not. A state selecting an action
+nothing registers, a transition to a destination that does not exist, an outcome
+the step it selected never produces, a file answering to another workflow's name,
+or a key the schema does not describe: each is refused, all of them are reported
+together, and the file is refused whole.
+
+The gate is not among the things a file can rearrange away. A definition that can
+reach the promotion without a state that runs the checks and a state that buys an
+independent verdict between the last write of the change and the promotion is
+refused at compile, whatever order it puts its states in. Configuration selects
+the sequence; it cannot make a guarantee optional.
+
+**A copy that is wrong stops the run before it claims anything.** The refusal
+names the file and the defect, and nothing falls back to the built-in — a run
+that quietly executed a sequence nobody chose, under a name the project had
+already used for something else, is the failure this location exists to prevent.
+Refusing it costs nothing: no work item has been claimed, no worktree exists, and
+no provider has been paid.
+
+A run already in flight is treated differently, because by then the work is under
+way and what is broken is only the watching. Such a run finishes exactly as it
+would have and records a `workflow_divergence` naming the file, which is the same
+thing it records when a definition is edited under an instance already running
+it: an instance keeps the digest it pinned and is never migrated, so an edit — a
+correct one included — stops the observation of the runs already going and
+reaches the next one.
 
 **The rollback is one key.** A project that wants the legacy path — the same
 delivery with nothing observing it — writes:
