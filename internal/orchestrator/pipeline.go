@@ -348,6 +348,13 @@ type Pipeline struct {
 	StateRoot  string
 	Repository string
 	Config     config.Config
+	// ConfigPath is the configuration file this pipeline's configuration was read
+	// from. It is held beside the resolved values because a project keeps its own
+	// workflow definitions beside that file, exactly as it keeps its personas
+	// there: what a run executes is the project's own copy of the delivery
+	// definition where it has one, and a pipeline that does not know where its
+	// configuration is finds none and executes the definition this build ships.
+	ConfigPath string
 	// Build is the repository revision this harness binary was built from,
 	// recorded on every run this pipeline reserves. It is wired in rather than
 	// read here because which binary is executing is a fact about the process the
@@ -902,7 +909,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	// the definition's first state, before the first thing this run changes
 	// outside itself. Nothing about the run depends on it, and a project that
 	// rolled back to the legacy path records none.
-	run.beginDeliveryTrial()
+	//
+	// The one thing that stops the run is the project's own definition being
+	// wrong. It is refused here rather than anywhere later because here is where
+	// refusing is free: nothing has been claimed, no worktree exists, and no
+	// provider has been paid.
+	if err := run.beginDeliveryTrial(); err != nil {
+		return run.fail(err, runstate.StatusFailed)
+	}
 
 	if err := run.claim(ctx); err != nil {
 		run.observe(ctx, deliveryClaim, "unavailable")

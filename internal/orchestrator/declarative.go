@@ -1,8 +1,15 @@
 package orchestrator
 
-// The declarative path: the built-in delivery definition stepped beside a run
+// The declarative path: the delivery definition in force stepped beside a run
 // that is really happening. It is what a new run does unless its project rolled
 // back, which is `execution.declarative_delivery: false` and nothing else.
+//
+// Which definition that is, is the project's to decide. A project that keeps its
+// own copy under its configuration directory — `workflows/delivery.yaml` beside
+// the personas — runs that one, and one that keeps none runs the definition this
+// build ships. Nothing is merged between the two, and neither is silently
+// substituted for the other: a project file that does not compile stops the run
+// that would have executed it before it claims anything.
 //
 // `workflow.go` compiles the definitions and `parity_test.go` walks them against
 // the recorded baseline. Both of those are transcripts of runs that already
@@ -111,22 +118,33 @@ func deliveryInstanceID(runID string) string {
 // unless the project rolled back to the legacy path or this process has nowhere
 // to record one.
 //
-// Everything it can refuse leaves the run exactly as it was, with no instance
-// and nothing recorded: this is an observation of delivery and is never a reason
-// delivery does not happen. The refusals are silent for that reason — there is
-// no run yet for a divergence to be recorded on, and a project that rolled back
-// is one that asked for exactly this rather than something to report.
-func (a *activeRun) beginDeliveryTrial() {
+// Almost everything it can refuse leaves the run exactly as it was, with no
+// instance and nothing recorded: this is an observation of delivery and is never
+// a reason delivery does not happen. The refusals are silent for that reason —
+// there is no run yet for a divergence to be recorded on, and a project that
+// rolled back is one that asked for exactly this rather than something to
+// report.
+//
+// The one exception is a definition the project wrote itself, and it is returned
+// rather than swallowed. A project that keeps its own file asked for that
+// sequence; a defect in it is somebody's to fix, and this is the last moment
+// where saying so is free — before the item is claimed, before a worktree
+// exists, and before a provider has been paid for anything.
+func (a *activeRun) beginDeliveryTrial() error {
 	p := a.pipeline
 	if !p.Config.Execution.DeclarativeDelivery || p.Instances == nil {
-		return
+		return nil
 	}
 	trial, err := p.deliveryTrialOver(a.state.RunID)
 	if err != nil {
-		return
+		var refused projectDefinitionRefusal
+		if errors.As(err, &refused) {
+			return err
+		}
+		return nil
 	}
 	if _, err := trial.executor.Start(trial.instance); err != nil {
-		return
+		return nil
 	}
 	a.trial = trial
 	// The run's own record names the instance from here on, and it is what a
@@ -142,6 +160,7 @@ func (a *activeRun) beginDeliveryTrial() {
 	// run naming an instance that does not exist, which every later process would
 	// pick up and record a divergence over.
 	a.state.WorkflowInstanceID = trial.instance
+	return nil
 }
 
 // resumeDeliveryTrial picks the observation back up on a run this process did
@@ -159,6 +178,16 @@ func (a *activeRun) resumeDeliveryTrial() {
 	}
 	trial, err := p.deliveryTrialOver(a.state.RunID)
 	if err != nil {
+		// A run already in flight is never failed for its project's definition —
+		// the work is under way, and what is broken is the watching. But this run
+		// was being observed and now cannot be, so the reason is recorded rather
+		// than passed over: an observation that stops without saying so is exactly
+		// what the divergence exists to prevent, and a project that edited its file
+		// into something that no longer compiles is the case somebody has to see.
+		var refused projectDefinitionRefusal
+		if errors.As(err, &refused) {
+			a.recordDivergence(err)
+		}
 		return
 	}
 	if trial.instance != a.state.WorkflowInstanceID {
@@ -183,7 +212,7 @@ func (p Pipeline) deliveryTrialOver(runID string) (*deliveryTrial, error) {
 	if p.automatic() {
 		bound = DeliveryWorkflowID
 	}
-	graph, err := observedDeliveryGraph(bound)
+	graph, err := observedDeliveryGraph(bound, p.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
@@ -208,8 +237,9 @@ func (p Pipeline) deliveryTrialOver(runID string) (*deliveryTrial, error) {
 	return trial, nil
 }
 
-// observedDeliveryGraph compiles one shipped definition into a graph whose doors
-// perform nothing.
+// observedDeliveryGraph compiles the definition in force — the project's own
+// copy where it keeps one, otherwise the one this build ships — into a graph
+// whose doors perform nothing.
 //
 // Everything else about the actions is the registered thing: the names, the
 // summaries, the capabilities and what each wraps come from the same table
@@ -218,16 +248,17 @@ func (p Pipeline) deliveryTrialOver(runID string) (*deliveryTrial, error) {
 // every boundary against what the real action requires, and the separation
 // policies are asked the same question. Only `Perform` is replaced — and the
 // digest says the two are the same definition, so an instance pinned by this
-// graph is pinned to what the shipped one means.
-func observedDeliveryGraph(id string) (workflow.Graph[*activeRun], error) {
-	builtin, found := builtinDelivery{}, false
-	for _, shipped := range builtinDeliveryWorkflows() {
-		if shipped.ID == id {
-			builtin, found = shipped, true
-		}
-	}
-	if !found {
-		return workflow.Graph[*activeRun]{}, fmt.Errorf("no built-in definition is shipped as %q", id)
+// graph is pinned to what the file it was read from means.
+//
+// A project's own file is refused exactly as strictly as the shipped one and
+// answers to the same name: what a project can change is the sequence, and a
+// file selecting an action nothing registers, requiring authority the grant does
+// not confer, or routing an outcome no step produces is refused whole and named
+// here rather than half adopted.
+func observedDeliveryGraph(id, configPath string) (workflow.Graph[*activeRun], error) {
+	sequence, err := deliverySequenceFor(id, configPath)
+	if err != nil {
+		return workflow.Graph[*activeRun]{}, err
 	}
 	steps := deliverySteps()
 	inert := make([]action.Action[*activeRun], 0, len(steps))
@@ -240,18 +271,20 @@ func observedDeliveryGraph(id string) (workflow.Graph[*activeRun], error) {
 	if err != nil {
 		return workflow.Graph[*activeRun]{}, fmt.Errorf("the delivery steps this build registers are not a registry: %w", err)
 	}
-	observed, err := compileDeliveryWith(builtin, registry)
+	observed, err := compileDeliveryWith(sequence, registry)
 	if err != nil {
-		return workflow.Graph[*activeRun]{}, err
+		return workflow.Graph[*activeRun]{}, sequence.refuse(err)
 	}
 	// The graph compiled against the real registry is what the definition means;
 	// this one has to be the same definition, and the digest is what says so.
-	compiled, err := compileDelivery(builtin)
+	compiled, err := compileDelivery(sequence)
 	if err != nil {
-		return workflow.Graph[*activeRun]{}, err
+		return workflow.Graph[*activeRun]{}, sequence.refuse(err)
 	}
 	if observed.Digest() != compiled.Digest() {
-		return workflow.Graph[*activeRun]{}, fmt.Errorf("%s digests to %s with its doors performing nothing and to %s as it is shipped; they are not the same sequence", builtin.Source, observed.Digest(), compiled.Digest())
+		// Both graphs were compiled from the same bytes, so a disagreement here is
+		// a defect in this build rather than in whichever file supplied them.
+		return workflow.Graph[*activeRun]{}, fmt.Errorf("%s digests to %s with its doors performing nothing and to %s as it is compiled to be performed; they are not the same sequence", sequence.Source, observed.Digest(), compiled.Digest())
 	}
 	return observed, nil
 }
@@ -313,7 +346,19 @@ func (a *activeRun) recordDivergence(cause error) {
 // its own. Which divergence is kept is decided here and in one place, so the
 // two callers cannot disagree about it.
 func (a *activeRun) noteDivergence(cause error) bool {
-	if a.trial == nil || a.trial.stopped != "" {
+	if a.trial == nil {
+		// The observation could not be set up at all, so there is no trial to stop
+		// and the run's own record is the only place this can be kept. A run
+		// already carrying a divergence keeps the one it has, for the reason a
+		// trial keeps its first: the boundary where the two first disagreed is
+		// where somebody reading it has to start.
+		if a.state.WorkflowDivergence != "" {
+			return false
+		}
+		a.state.WorkflowDivergence = cause.Error()
+		return true
+	}
+	if a.trial.stopped != "" {
 		return false
 	}
 	a.trial.stopped = cause.Error()

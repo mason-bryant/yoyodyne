@@ -1058,7 +1058,11 @@ func walkTranscript(t *testing.T, scenario parityScenario) {
 func parityGraph(t *testing.T, id string) workflow.Graph[*activeRun] {
 	t.Helper()
 
-	graph, err := observedDeliveryGraph(id)
+	// No configuration path, so the definition walked is the one this build ships
+	// whatever any project keeps of its own: the baseline is what this build's
+	// sequence does, and a harness that read a project's file would be measuring
+	// the wrong thing.
+	graph, err := observedDeliveryGraph(id, "")
 	if err != nil {
 		t.Fatalf("observedDeliveryGraph(%s) error = %v", id, err)
 	}

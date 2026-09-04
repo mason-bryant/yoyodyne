@@ -384,6 +384,10 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		StateRoot:  parts.stateRoot,
 		Repository: parts.repository,
 		Config:     cfg,
+		// Where the configuration was read from, which is where this project keeps
+		// the files it owns: a run executes the project's own copy of the delivery
+		// definition where there is one under here, and the built-in otherwise.
+		ConfigPath: parts.configPath,
 		// Which harness is dispatching, read once here for the reason the watch
 		// session reads its own the same way: a process does not change binary
 		// while it lives, and that is exactly what has to be written down — a

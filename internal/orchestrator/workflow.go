@@ -1,8 +1,9 @@
 package orchestrator
 
 // The delivery loop as a workflow definition: the sequences this build ships,
-// the authority they are compiled under, what each registered step can answer
-// with, and the one call that turns a file into a graph.
+// where a project keeps its own copy of one instead, the authority they are
+// compiled under, what each registered step can answer with, and the one call
+// that turns a file into a graph.
 //
 // It is the third door onto the same steps and it opens no wider than the
 // second. `actions.go` registered the pipeline's steps under selectable names;
@@ -28,11 +29,14 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/capability"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/workflow"
 )
 
@@ -49,6 +53,18 @@ const (
 	// person still approves, which stops after the checks.
 	HumanApprovalWorkflowID = "delivery-human-approval"
 )
+
+// ProjectDefinitionPath is where a project's own copy of one delivery
+// definition lives, relative to its Yoyodyne configuration directory. A project
+// that wants a different sequence copies the built-in file there and edits it.
+//
+// Nothing is merged between the two. A project that writes one owns the whole
+// sequence from then on, which is the only arrangement where reading the file
+// tells somebody what its runs actually execute; the digest an instance pins
+// says which of the two it was.
+func ProjectDefinitionPath(id string) string {
+	return "workflows/" + id + ".yaml"
+}
 
 //go:embed delivery.yaml
 var deliveryDefinition []byte
@@ -113,30 +129,111 @@ var deliveryAnswers = map[string][]string{
 	"run.clean-up": {"cleaned", "partial"},
 }
 
-// builtinDelivery is one shipped definition: the name it answers to and the
-// bytes this build carries for it.
-type builtinDelivery struct {
-	// ID is the workflow the definition declares, checked against what it
-	// actually declares when it is compiled.
+// deliverySequence is one delivery definition in force: the name it answers to,
+// the bytes it was read from, and where those came from.
+type deliverySequence struct {
+	// ID is the workflow the definition is expected to declare, checked against
+	// what it actually declares when it is compiled.
 	ID string
-	// Definition is the file, embedded rather than read from disk so that a
-	// checkout is not a prerequisite for compiling it.
+	// Definition is the file's bytes — embedded for the one this build ships, so
+	// that a checkout is not a prerequisite for compiling it, and read from disk
+	// for a project's own.
 	Definition []byte
 	// Source is what a refusal calls the file, so a message read without this
 	// package in front of somebody still says which file to open.
 	Source string
+	// Project is whether the project wrote this definition itself rather than its
+	// being the one this build ships. It is what decides the cost of a defect: a
+	// project's own file is one somebody wrote on purpose and can fix, so a run
+	// that would have executed a broken one stops before it claims anything,
+	// while the shipped file being wrong is a defect in the build that the parity
+	// harness answers for and is no reason to stop delivering work.
+	Project bool
 }
 
 // builtinDeliveryWorkflows is every delivery sequence this build ships.
-func builtinDeliveryWorkflows() []builtinDelivery {
-	return []builtinDelivery{
+func builtinDeliveryWorkflows() []deliverySequence {
+	return []deliverySequence{
 		{ID: DeliveryWorkflowID, Definition: deliveryDefinition, Source: "delivery.yaml"},
 		{ID: HumanApprovalWorkflowID, Definition: humanApprovalDefinition, Source: "delivery-human-approval.yaml"},
 	}
 }
 
-// compileDelivery turns one shipped definition into the graph an executor would
-// walk, or refuses the whole of it.
+// deliverySequenceFor is the definition a run of one workflow executes: the
+// project's own copy where it keeps one, otherwise the one this build ships.
+//
+// A project file that exists and cannot be read is refused rather than passed
+// over. Falling back to the built-in there would execute a sequence nobody
+// chose, under a name the project has already used for something else, which is
+// exactly the silence the location exists to end.
+func deliverySequenceFor(id, configPath string) (deliverySequence, error) {
+	shipped, found := deliverySequence{}, false
+	for _, builtin := range builtinDeliveryWorkflows() {
+		if builtin.ID == id {
+			shipped, found = builtin, true
+		}
+	}
+	if !found {
+		return deliverySequence{}, fmt.Errorf("no built-in definition is shipped as %q", id)
+	}
+	path := projectDefinitionPath(id, configPath)
+	if path == "" {
+		return shipped, nil
+	}
+	definition, err := os.ReadFile(path)
+	if err != nil {
+		return deliverySequence{}, projectDefinitionRefusal{fmt.Errorf("read workflow definition: %w", err)}
+	}
+	return deliverySequence{ID: id, Definition: definition, Source: path, Project: true}, nil
+}
+
+// projectDefinitionPath is where this project keeps its own copy of one
+// definition, and "" where it keeps none.
+//
+// The directories are the ones a configuration file keeps everything else it
+// owns in — its personas first among them — so a project has one place its files
+// live rather than a rule per kind of file. A pipeline that does not know where
+// its configuration is has no project to read one from.
+func projectDefinitionPath(id, configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	for _, directory := range config.ConfigurationDirectories(configPath) {
+		candidate := filepath.Join(directory, filepath.FromSlash(ProjectDefinitionPath(id)))
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// projectDefinitionRefusal is a defect in a definition the project wrote itself.
+//
+// It is a type rather than a message because it is the one thing wrong with an
+// observation that stops a run. Everything else that can prevent a run being
+// observed leaves the run alone — a missing instance store, a build whose own
+// definitions do not compile — because observing delivery is never a reason
+// delivery does not happen. A file the project wrote is the other case: the
+// project asked for that sequence by writing it, so executing something else
+// instead, or quietly executing nothing, would be worse than refusing while
+// refusing is still free.
+type projectDefinitionRefusal struct{ err error }
+
+func (r projectDefinitionRefusal) Error() string { return r.err.Error() }
+
+func (r projectDefinitionRefusal) Unwrap() error { return r.err }
+
+// refuse marks what is wrong with a definition as the project's own where the
+// project is what wrote it, which is what decides whether a run stops for it.
+func (s deliverySequence) refuse(err error) error {
+	if !s.Project {
+		return err
+	}
+	return projectDefinitionRefusal{err}
+}
+
+// compileDelivery turns one definition into the graph an executor would walk, or
+// refuses the whole of it.
 //
 // Everything it can refuse, it refuses here: a schema this build does not read,
 // a state selecting an action nothing registers, a transition to a destination
@@ -144,38 +241,38 @@ func builtinDeliveryWorkflows() []builtinDelivery {
 // topology the separation policies will not admit, a file answering to another
 // name, and an outcome no step produces. That ordering is the loader's point --
 // a definition that cannot run is refused while refusing it still costs nothing.
-func compileDelivery(builtin builtinDelivery) (workflow.Graph[*activeRun], error) {
+func compileDelivery(sequence deliverySequence) (workflow.Graph[*activeRun], error) {
 	registry, err := deliveryRegistry()
 	if err != nil {
 		// The registry is a literal table in this package, so this is a defect in
 		// the build rather than anything wrong with the definition being read.
 		return workflow.Graph[*activeRun]{}, fmt.Errorf("the delivery steps this build registers are not a registry: %w", err)
 	}
-	return compileDeliveryWith(builtin, registry)
+	return compileDeliveryWith(sequence, registry)
 }
 
-// compileDeliveryWith is the shipped-definition compile over a registry the
-// caller supplies, which is the whole of what the observation needs that the
-// production compile does not: the same definition, the same grant, the same
-// refusals, and doors that perform nothing.
-func compileDeliveryWith(builtin builtinDelivery, registry action.Registry[*activeRun]) (workflow.Graph[*activeRun], error) {
+// compileDeliveryWith is the same compile over a registry the caller supplies,
+// which is the whole of what the observation needs that the production compile
+// does not: the same definition, the same grant, the same refusals, and doors
+// that perform nothing.
+func compileDeliveryWith(sequence deliverySequence, registry action.Registry[*activeRun]) (workflow.Graph[*activeRun], error) {
 	grant, err := deliveryGrant()
 	if err != nil {
 		return workflow.Graph[*activeRun]{}, fmt.Errorf("the authority a delivery run holds could not be stated: %w", err)
 	}
 	loader := workflow.Loader[*activeRun]{Registry: registry, Grant: grant}
-	graph, err := loader.Load(bytes.NewReader(builtin.Definition))
+	graph, err := loader.Load(bytes.NewReader(sequence.Definition))
 	if err != nil {
-		return workflow.Graph[*activeRun]{}, fmt.Errorf("%s: %w", builtin.Source, err)
+		return workflow.Graph[*activeRun]{}, fmt.Errorf("%s: %w", sequence.Source, err)
 	}
 	// A definition that validated and compiled and answers to another name is not
 	// the one that was asked for. Nothing downstream would notice: it would run
 	// whatever it said perfectly well, under this grant, as the workflow somebody
 	// meant to bind.
-	if graph.ID() != builtin.ID {
-		return workflow.Graph[*activeRun]{}, fmt.Errorf("%s declares the workflow %q; this build ships it as %q", builtin.Source, graph.ID(), builtin.ID)
+	if graph.ID() != sequence.ID {
+		return workflow.Graph[*activeRun]{}, fmt.Errorf("%s declares the workflow %q; it is bound as %q", sequence.Source, graph.ID(), sequence.ID)
 	}
-	if err := routesOnlyOutcomesTheStepsProduce(builtin, graph); err != nil {
+	if err := routesOnlyOutcomesTheStepsProduce(sequence, graph); err != nil {
 		return workflow.Graph[*activeRun]{}, err
 	}
 	return graph, nil
@@ -196,7 +293,7 @@ func compileDeliveryWith(builtin builtinDelivery, registry action.Registry[*acti
 //
 // Everything wrong is reported together, over the graph's sorted states, so one
 // definition refused twice is refused identically.
-func routesOnlyOutcomesTheStepsProduce(builtin builtinDelivery, graph workflow.Graph[*activeRun]) error {
+func routesOnlyOutcomesTheStepsProduce(sequence deliverySequence, graph workflow.Graph[*activeRun]) error {
 	var problems []error
 	for _, state := range graph.States() {
 		node, _ := graph.Node(state)
@@ -216,7 +313,7 @@ func routesOnlyOutcomesTheStepsProduce(builtin builtinDelivery, graph workflow.G
 		}
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("%s: %w", builtin.Source, errors.Join(problems...))
+		return fmt.Errorf("%s: %w", sequence.Source, errors.Join(problems...))
 	}
 	return nil
 }
