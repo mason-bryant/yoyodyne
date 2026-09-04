@@ -16,8 +16,10 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // testProduct is the product every sink in these tests reports on, and
@@ -522,6 +524,100 @@ func TestAMessageNamesTheRecordItWasReadFrom(t *testing.T) {
 	}
 	if text := renderText(rendered); !strings.Contains(text, "run run-a") {
 		t.Fatalf("rendered = %q, want the durable record named", text)
+	}
+}
+
+// The message the operator read, replayed.
+//
+// What he was shown of a priority change was an item said as yoyodyne-ifd.102.7,
+// a paragraph of the reasoning behind it, and a conversation identifier trailing
+// the whole thing — three ways of making a reader resolve something to find out
+// what happened. This is the same durable record, posted the way the channel
+// posts it now: the thread's header carries the identity, and the message inside
+// it names the work, says where it went, and stops.
+func TestThePriorityChangeTheOperatorReadNamesTheWorkAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	const (
+		item        = "yoyodyne-ifd.102.7"
+		chat        = "chat-91253e0e070c17b0663651cc48602122"
+		named       = "Re-arm the dropped-merge check"
+		firstOfIt   = "The dropped merge left the check disarmed."
+		restOfIt    = "It sits below the rendering work rather than above it"
+		itsPriority = "priority 2"
+	)
+	recorded, err := execution.NewEvent(chat, 1, time.Now(), execution.EventTrackerActionApplied, "harness.chat", map[string]any{
+		"action_id": "t1.1",
+		"turn":      187,
+		"action": map[string]any{
+			"action":   "reprioritize",
+			"id":       item,
+			"priority": 2,
+			"reason":   firstOfIt + " " + restOfIt + ", and nothing else in the epic depends on it.",
+		},
+		"work_item_id":    item,
+		"work_item_title": named,
+		"summary":         "the harness's own account of it",
+	})
+	if err != nil {
+		t.Fatalf("record the tracker action: %v", err)
+	}
+	conversation := runstate.Conversation{
+		SchemaVersion:  runstate.ConversationSchemaVersion,
+		ConversationID: chat,
+		ProductID:      testProduct,
+		RepositoryID:   "yoyodyne",
+		Agent:          string(domain.RoleProductManager),
+		Role:           domain.RoleProductManager,
+		Backend:        domain.BackendClaudeCode,
+		StartedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	notification, err := notify.FromConversation(conversation, []execution.Event{recorded}, 0)
+	if err != nil {
+		t.Fatalf("select the reprioritization: %v", err)
+	}
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{{
+		Stream:       "conversation:" + chat,
+		Cursor:       Cursor{Position: 1},
+		Notification: notification,
+	}}}, posts)
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %d, want the thread opened and the change said in it", len(posts.requests))
+	}
+	header, said := posts.requests[0].Text, posts.requests[1].Text
+
+	// The header is where identity lives, and it is why nothing under it has to
+	// carry an identifier.
+	if !strings.Contains(header, item) || !strings.Contains(header, named) {
+		t.Fatalf("header = %q, want the identifier and what the item is called", header)
+	}
+	if !strings.Contains(said, named) {
+		t.Fatalf("the change reads as %q, which does not name the work", said)
+	}
+	if strings.Contains(said, item) {
+		t.Fatalf("the change reads as %q, which repeats the identifier its header carries", said)
+	}
+	if strings.Contains(said, chat) {
+		t.Fatalf("the change reads as %q, which trails a conversation identifier nobody reading acts on", said)
+	}
+	if !strings.Contains(said, itsPriority) {
+		t.Fatalf("the change reads as %q, which does not say where the item went", said)
+	}
+	// One sentence of the reasoning, and the record for the rest of it.
+	if !strings.Contains(said, firstOfIt) {
+		t.Fatalf("the change reads as %q, which does not say why", said)
+	}
+	if strings.Contains(said, restOfIt) {
+		t.Fatalf("the change reads as %q, which carries the whole argument the record holds", said)
+	}
+	if !strings.Contains(said, "in the item's record") {
+		t.Fatalf("the change reads as %q, which does not say where the rest of the reason is", said)
 	}
 }
 

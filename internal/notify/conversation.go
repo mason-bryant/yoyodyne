@@ -342,10 +342,17 @@ func fromTrackerAction(conversation runstate.Conversation, earlier []execution.E
 	}
 	// A priority the record did not carry is stated as absent rather than read as
 	// the top of the queue, because zero is the highest priority there is.
+	//
+	// The reason a role gave the tracker is written for the item's record, where
+	// it is read in full by somebody deciding whether the change was right. The
+	// channel takes the first sentence of it and says where the rest is: a
+	// paragraph justifying a reordering, under the one line saying where the item
+	// went, is what a reader scrolls past — and the record loses nothing, because
+	// nothing here is what holds it.
 	detail := Detail{
 		Title:    strings.TrimSpace(recorded.Action.Title),
 		Goal:     strings.TrimSpace(recorded.Action.Goal),
-		Reason:   strings.TrimSpace(recorded.Action.Reason),
+		Reason:   oneSentence(recorded.Action.Reason),
 		Priority: -1,
 	}
 	var kind Kind

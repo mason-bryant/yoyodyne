@@ -506,12 +506,16 @@ type Refs struct {
 // Record names the durable record this message came out of, as a reader would
 // have to name it to go and find it. It is what a truncated body points at, so
 // nobody reads a cut message as the whole of what was recorded.
+//
+// The conversation is not offered, though the refs carry it: this is rendered
+// into a message a person reads, and a conversation identifier is not something
+// that reader does anything with. A message whose only reference is one is
+// pointed at the durable record in words instead, which is the same answer the
+// refs already give a message with no reference at all.
 func (r Refs) Record() string {
 	switch {
 	case strings.TrimSpace(r.RunID) != "":
 		return r.RunID
-	case strings.TrimSpace(r.ConversationID) != "":
-		return r.ConversationID
 	case strings.TrimSpace(r.ExchangeID) != "":
 		return r.ExchangeID
 	case strings.TrimSpace(r.WorkItemID) != "":

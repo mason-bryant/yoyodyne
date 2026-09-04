@@ -394,6 +394,20 @@ the tracker is asked what the item is called, once, as the thread is opened. A
 tracker that will not answer costs that header its title and nothing else: the
 thread opens either way. Threads that are already open stay exactly as they are.
 
+The header is the only place an identifier appears. **Every message inside a
+thread names the work in words** — `Re-arm the dropped-merge check`, not
+`yoyodyne-ifd.102.7` — because the header above it already carries the
+identifier, and an item nothing has ever recorded a name for is said as *this
+item* rather than as its slug. **No conversation identifier is posted at all**:
+the record still carries it and `yoyo status` still reads it, but it is not
+something anybody reading a channel does anything with. What a message does
+carry, in italics under it, is the record you would follow — the run, an
+exchange, a directive you can quote back to resolve it. And **the reasoning a
+role wrote into the tracker is one sentence here**, with the message saying that
+the rest of it is in the item's record: the argument is written for somebody
+weighing the decision in the tracker, and a paragraph of it under a one-line fact
+is what makes a channel go unread.
+
 Into the work item's thread, as they happen:
 
 - the item arriving in the backlog: **admitted, with the goal it serves**, or
