@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -670,6 +671,119 @@ func TestSeverityIsSaidInWordsBeforeItIsSaidInDecoration(t *testing.T) {
 	}
 	if stripped(bodies[report.SeverityCritical]) == stripped(bodies[report.SeverityNote]) {
 		t.Fatal("a critical report and a note are indistinguishable without decoration")
+	}
+}
+
+// trackerIdentifier is what a work item's identifier looks like whoever issued
+// it: a hyphenated prefix and a dotted number, as `yoyodyne-ifd.102.7` and
+// `beads-core.14` both are. It is matched by shape rather than by the two the
+// event happens to carry, because the failure this guards against is a voice
+// line reaching for some other item — the one a decomposition came out of, the
+// one a dependency names — and a test looking for two known strings passes
+// while that message goes out.
+//
+// What it deliberately does not match is the other things a message names: a
+// run, an exchange, a commit, a pull request, a source file. None of those has
+// the dotted number after a hyphenated word, and each of them is something a
+// reader follows rather than an item they would have to look up to know what
+// the message is about.
+var trackerIdentifier = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\.\d+(?:\.\d+)*\b`)
+
+// A channel is read by people, and an identifier is a name a reader has to go
+// and resolve before they know what a message is about. So every message says
+// the work in the words the record calls it, whatever the persona and whatever
+// the kind, and the identifier stays where identity belongs: the header the
+// thread hangs from.
+func TestAMessageNamesTheWorkInWordsRatherThanByItsIdentifier(t *testing.T) {
+	const identifier = "yoyodyne-ifd.102.7"
+	const named = "Re-arm the dropped-merge check"
+	topic, err := WorkItem(identifier)
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	topic = topic.WithTitle(named)
+	for _, speaker := range speakers() {
+		for _, kind := range Kinds() {
+			message, err := Render(topic, speaker, fullyRecorded(kind))
+			if err != nil {
+				t.Fatalf("the %s says %s: %v", speaker.Key(), kind, err)
+			}
+			if strings.Contains(message.Body, identifier) {
+				t.Fatalf("the %s says %s as %q, which makes a reader resolve an identifier", speaker.Key(), kind, message.Body)
+			}
+			// The reference the record correlates by is the same identifier said a
+			// second way, and it is no more readable for being in the refs.
+			if strings.Contains(message.Body, fullyRecorded(kind).Refs.WorkItemID) {
+				t.Fatalf("the %s says %s as %q, which names the item by its reference", speaker.Key(), kind, message.Body)
+			}
+			// And no other item's identifier either. The event this renders carries
+			// the item a decomposition was cut out of as well as its own, which is
+			// exactly the one a line can reach for without anybody noticing.
+			if found := trackerIdentifier.FindString(message.Body); found != "" {
+				t.Fatalf("the %s says %s as %q, which names an item by the identifier %q", speaker.Key(), kind, message.Body, found)
+			}
+		}
+	}
+}
+
+// An item whose record carried no name at all is said as this item rather than
+// as its identifier: the thread it is posted in is already headed by that
+// identifier, so repeating it under the header gives a reader the opaque half
+// of the header again and nothing they did not have.
+func TestAnItemNoRecordNamesIsSaidAsThisItemRatherThanAsItsIdentifier(t *testing.T) {
+	const identifier = "yoyodyne-ifd.102.7"
+	topic, err := WorkItem(identifier)
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	for _, kind := range []Kind{KindChecksPassed, KindItemReprioritized, KindPromoted} {
+		message, err := Render(topic, Harness(), Event{
+			Kind:     kind,
+			At:       moment,
+			Severity: report.SeverityNote,
+			Refs:     Refs{WorkItemID: identifier},
+			Detail:   Detail{Priority: 2, TargetBranch: "main", Commit: "0123456789abcdef"},
+		})
+		if err != nil {
+			t.Fatalf("say %s about an item nothing names: %v", kind, err)
+		}
+		if strings.Contains(message.Body, identifier) {
+			t.Fatalf("%s reads as %q, which repeats the identifier its thread is headed by", kind, message.Body)
+		}
+		if !strings.Contains(message.Body, "this item") {
+			t.Fatalf("%s reads as %q, which says nothing about which work it is", kind, message.Body)
+		}
+	}
+}
+
+// The reasoning behind a decision is written for the record, where somebody
+// weighing the decision reads all of it. A channel carries the first sentence
+// of it and says where the rest is, because a paragraph of justification under
+// a one-line fact is what makes a reader skip the next message too.
+func TestReasoningForADecisionIsOneSentenceAndSaysWhereTheRestIs(t *testing.T) {
+	for reason, want := range map[string]string{
+		// The whole of a one-sentence reason is the sentence, so nothing is cut
+		// and nothing points anywhere.
+		"the adapter is stopped and nothing is waiting on it": "the adapter is stopped and nothing is waiting on it",
+		"": "",
+		// A full stop inside an identifier ends no sentence. Cutting one in half
+		// would be worse than carrying the whole paragraph.
+		"yoyodyne-ifd.102.7 goes below the rendering work. The epic's order is unchanged by that.": "yoyodyne-ifd.102.7 goes below the rendering work." + restOfTheReason,
+		"It goes below the rendering work! Nothing depends on it.":                                 "It goes below the rendering work!" + restOfTheReason,
+		// Nor does the stop closing an abbreviation, whether what follows it is a
+		// word or the capital that starts the next clause. A message cut there
+		// would carry "e.g." and a pointer at the record, which is a message
+		// saying nothing at all.
+		"It waits on the adapter, e.g. the Codex one, which nobody has answered for.": "It waits on the adapter, e.g. the Codex one, which nobody has answered for.",
+		"It waits on an adapter, i.e. The Codex one. Nothing else is holding it.":     "It waits on an adapter, i.e. The Codex one." + restOfTheReason,
+		// A reason written in lower case throughout has no sentence boundary this
+		// can be sure of, so the whole of it is carried rather than a guess at
+		// half of it.
+		"the adapter is stopped. nothing is waiting on it": "the adapter is stopped. nothing is waiting on it",
+	} {
+		if got := oneSentence(reason); got != want {
+			t.Fatalf("oneSentence(%q) = %q, want %q", reason, got, want)
+		}
 	}
 }
 

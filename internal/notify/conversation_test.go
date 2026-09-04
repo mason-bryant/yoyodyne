@@ -143,8 +143,34 @@ func TestACreationUnderAParentIsDecompositionRatherThanAdmission(t *testing.T) {
 	if notification.Speaker.Role != domain.RoleDevelopmentManager {
 		t.Fatalf("spoken by %q", notification.Speaker.Key())
 	}
-	if !strings.Contains(message.Body, parent) {
-		t.Fatalf("body %q does not say what was decomposed", message.Body)
+	// The record keeps what it was cut out of, for anybody auditing where a piece
+	// of work came from.
+	if notification.Event.Detail.Parent != parent {
+		t.Fatalf("detail %+v does not record what was decomposed", notification.Event.Detail)
+	}
+	// A decomposition is addressed to the thread of the item it created, not of
+	// the item it came out of. That is what the words have to respect: the only
+	// item a reader has in front of them is the new one, named in the header
+	// above the message, so anything the sentence points at as nearby resolves to
+	// the item the sentence is already about.
+	if notification.Topic.Key() != "work-item:yoyodyne-ifd.68.5" {
+		t.Fatalf("addressed to %q, want the thread of the item that was created", notification.Topic.Key())
+	}
+	if strings.Contains(strings.ToLower(message.Body), "above") {
+		t.Fatalf("body %q points at what it was cut out of by where it sits, which is this item's own thread", message.Body)
+	}
+	// The message says it was decomposed and names the piece, in words. It does
+	// not say the parent's identifier: the record holds that identifier and
+	// nothing that names it, so saying it would hand a reader something to
+	// resolve in the one message that is about a piece of work having a name.
+	if !strings.Contains(message.Body, "The voice work under the reporting epic") {
+		t.Fatalf("body %q does not say what was cut out", message.Body)
+	}
+	if !strings.Contains(message.Body, "a larger item") {
+		t.Fatalf("body %q does not say what it was cut out of at all", message.Body)
+	}
+	if strings.Contains(message.Body, parent) {
+		t.Fatalf("body %q names the item it was cut out of by its identifier", message.Body)
 	}
 }
 
@@ -490,14 +516,17 @@ func TestTheFirstThingARoleDoesToHandedWorkIsSaidAsPickingItUp(t *testing.T) {
 	if notification.Speaker.Role != domain.RoleArchitect {
 		t.Fatalf("spoken by %q", notification.Speaker.Key())
 	}
-	if !strings.Contains(message.Body, "yoyodyne-ifd.138") {
-		t.Fatalf("body %q does not name the item taken up", message.Body)
-	}
 	// A pickup names no title of its own — the action is a note on an item that
 	// already exists — so the item's own name is what the message says, rather
 	// than a sentence stating the record carried none.
 	if !strings.Contains(message.Body, "Promote the brief to its next revision") {
 		t.Fatalf("body %q does not say what the item taken up is called", message.Body)
+	}
+	// And it says that and not the identifier: the thread this goes into is
+	// headed by the identifier already, so a message repeating it inside would
+	// give a reader the opaque half of the header on every line.
+	if strings.Contains(message.Body, "yoyodyne-ifd.138") {
+		t.Fatalf("body %q names the item by its identifier inside its own thread", message.Body)
 	}
 	if repeated, err := FromConversation(conversation, events, 2); err != nil || !repeated.Silent() {
 		t.Fatalf("a second change said %s (%v), want the pickup said once", repeated.Event.Kind, err)

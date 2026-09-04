@@ -506,12 +506,16 @@ type Refs struct {
 // Record names the durable record this message came out of, as a reader would
 // have to name it to go and find it. It is what a truncated body points at, so
 // nobody reads a cut message as the whole of what was recorded.
+//
+// The conversation is not offered, though the refs carry it: this is rendered
+// into a message a person reads, and a conversation identifier is not something
+// that reader does anything with. A message whose only reference is one is
+// pointed at the durable record in words instead, which is the same answer the
+// refs already give a message with no reference at all.
 func (r Refs) Record() string {
 	switch {
 	case strings.TrimSpace(r.RunID) != "":
 		return r.RunID
-	case strings.TrimSpace(r.ConversationID) != "":
-		return r.ConversationID
 	case strings.TrimSpace(r.ExchangeID) != "":
 		return r.ExchangeID
 	case strings.TrimSpace(r.WorkItemID) != "":
@@ -622,9 +626,16 @@ type Detail struct {
 	// KindItemAttributed. It is the goal in the words the goals document states
 	// it in, which is what makes the claim checkable rather than decorative.
 	Goal string `json:"goal,omitempty"`
-	// Parent is the admitted item a decomposition was created under, read by
-	// KindItemDecomposed. "Created under what" is the whole of what makes a
-	// decomposition auditable.
+	// Parent is the admitted item a decomposition was created under. "Created
+	// under what" is the whole of what makes a decomposition auditable, so the
+	// envelope carries it for anybody reading the record afterwards.
+	//
+	// No voice line says it. What the record holds is the parent's identifier and
+	// nothing that names it in words, and a message handing a reader an
+	// identifier to resolve is what these messages stopped doing: the
+	// decomposition is said as what it is, and the item it came out of is in the
+	// record and in the tracker. Recording the parent's title beside its
+	// identifier is what would let the channel name it.
 	Parent string `json:"parent,omitempty"`
 	// Priority is where in the queue a reprioritization put an item, read by
 	// KindItemReprioritized. It is negative where the record did not say, because

@@ -230,14 +230,20 @@ func TestMessageRefusesWhatCouldNotBePosted(t *testing.T) {
 
 func TestRefsNameTheRecordThatHoldsTheWhole(t *testing.T) {
 	for name, refs := range map[string]Refs{
-		"run-abc":            {RunID: "run-abc", WorkItemID: "yoyodyne-ifd.68"},
-		"chat-def":           {ConversationID: "chat-def"},
-		"exchange-1":         {ExchangeID: "exchange-1"},
-		"yoyodyne-ifd.68":    {WorkItemID: "yoyodyne-ifd.68"},
-		"the durable record": {},
+		"run-abc":         {RunID: "run-abc", WorkItemID: "yoyodyne-ifd.68"},
+		"exchange-1":      {ExchangeID: "exchange-1"},
+		"yoyodyne-ifd.68": {WorkItemID: "yoyodyne-ifd.68"},
+		// A conversation identifier is the one reference this never offers,
+		// because what it names is rendered into a message a person reads and a
+		// conversation is not something that reader goes and looks at. The refs
+		// still carry it for anybody tracing the record afterwards.
+		"the durable record": {ConversationID: "chat-def"},
 	} {
 		if got := refs.Record(); got != name {
 			t.Fatalf("record of %+v = %q, want %q", refs, got, name)
 		}
+	}
+	if got := (Refs{}).Record(); got != "the durable record" {
+		t.Fatalf("record of no references at all = %q", got)
 	}
 }

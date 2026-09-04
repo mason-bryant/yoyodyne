@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -155,15 +156,15 @@ var harnessVoice = voice{
 	title:  "Yoyodyne",
 	avatar: ":gear:",
 	lines: map[Kind]string{
-		KindItemAdmitted:        "{item} was admitted to the backlog: {title}. It serves: {goal}",
-		KindItemDecomposed:      "{item} was created under {parent}, decomposing it: {title}",
+		KindItemAdmitted:        "Admitted to the backlog: {title}. It serves: {goal}",
+		KindItemDecomposed:      "Decomposed out of a larger item: {title}",
 		KindItemAttributed:      "{item} was attributed to a goal: {goal}",
 		KindItemReprioritized:   "{item} was set to {priority}.",
 		KindTrackerBlockRefused: "The {asking} asked for {refused} in one reply and the harness refused the block whole, so none of them happened: {why}",
-		KindWorkApproved:        "The operator approved proposed work, and it was admitted as {item}: {title}. It serves: {goal}",
+		KindWorkApproved:        "The operator approved proposed work, and it was admitted: {title}. It serves: {goal}",
 		KindWorkDeclined:        "The operator declined proposed work — {title} — because: {why}",
 		KindWorkHandedOff:       "{item} was handed to {executor} rather than to a developer run: {why}",
-		KindWorkPickedUp:        "{item} was taken up in conversation: {title}",
+		KindWorkPickedUp:        "Taken up in conversation: {title}",
 		KindWorkCarriedOut:      "{item} was closed by the conversation carrying it: {why}",
 		KindRunStarted:          "{item} claimed and started as {run}, on account {account} at configuration {config}. Selected by {by}: {reason}",
 		KindChecksPassed:        "Checks passed on {item}.",
@@ -174,7 +175,7 @@ var harnessVoice = voice{
 		KindPublished:           "{item} published as {pr}.",
 		KindMergeQueued:         "The merge of {pr} is queued on the forge.",
 		KindMergeCompleted:      "{pr} merged.",
-		KindRunParked:           "{run} parked on {item}, waiting on {cause}.",
+		KindRunParked:           "{run} stopped part-way through {item}, waiting on {cause}.",
 		KindRunContinued:        "{run} continued on {item}.",
 		KindBlockerRecorded:     "{item} is blocked, and {remains}: {text}",
 		KindRunEnded:            "The run on {item} {ending}, and {remains}: {text}",
@@ -211,15 +212,15 @@ var developerVoice = voice{
 	title:  "Developer",
 	avatar: ":hammer_and_wrench:",
 	lines: map[Kind]string{
-		KindItemAdmitted:        "{item} is in the backlog and could reach me one day: {title}, admitted for {goal}.",
-		KindItemDecomposed:      "{parent} was broken down, and {item} is one of the pieces I could be handed: {title}.",
+		KindItemAdmitted:        "{title} is in the backlog and could reach me one day, admitted for {goal}.",
+		KindItemDecomposed:      "A larger item was broken down, and one of the pieces I could be handed is {title}.",
 		KindItemAttributed:      "{item} now says what it is for: {goal}. That is the intent I'd be building against.",
 		KindItemReprioritized:   "{item} sits at {priority} now. What I build doesn't change with the order it is queued in.",
 		KindTrackerBlockRefused: "A block the {asking} sent was refused together — {refused} — and nothing in the queue moved for any of it: {why}",
-		KindWorkApproved:        "The operator approved that one, so {item} is work somebody will be given: {title}, for {goal}.",
+		KindWorkApproved:        "The operator approved that one, so it is work somebody will be given: {title}, for {goal}.",
 		KindWorkDeclined:        "Proposed work was turned down before it reached anybody — {title} — because: {why}",
 		KindWorkHandedOff:       "{item} will never reach me: it is carried by {executor} rather than by a run, because {why}",
-		KindWorkPickedUp:        "Somebody has started {item} in conversation: {title}. There is no worktree and no diff in that.",
+		KindWorkPickedUp:        "Somebody has started {title} in conversation. There is no worktree and no diff in that.",
 		KindWorkCarriedOut:      "{item} is finished without a change of mine ever being written: {why}",
 		KindRunStarted:          "I've picked up {item} as {run}, on account {account} at configuration {config}. It came to me from {by}: {reason}",
 		KindChecksPassed:        "Checks are green on {item}. I ran them before calling anything done.",
@@ -267,15 +268,15 @@ var reviewerVoice = voice{
 	title:  "Reviewer",
 	avatar: ":mag:",
 	lines: map[Kind]string{
-		KindItemAdmitted:        "{item} was admitted: {title}. What it serves — {goal} — is what I will judge a change against.",
-		KindItemDecomposed:      "{item} was cut out of {parent}: {title}. Narrower work is work I can judge as finished or not.",
+		KindItemAdmitted:        "Admitted: {title}. What it serves — {goal} — is what I will judge a change against.",
+		KindItemDecomposed:      "Cut out of a larger item: {title}. Narrower work is work I can judge as finished or not.",
 		KindItemAttributed:      "{item} records the goal it serves: {goal}. Intent I can read beats intent I have to infer.",
 		KindItemReprioritized:   "{item} moved to {priority}. The order work arrives in changes nothing about the standard it meets.",
 		KindTrackerBlockRefused: "The {asking} asked for {refused} and the harness read none of them, so what the queue says now is what it said before: {why}",
-		KindWorkApproved:        "Approved and admitted as {item}: {title}, serving {goal}. I'll see it when a change comes back from it.",
+		KindWorkApproved:        "Approved and admitted: {title}, serving {goal}. I'll see it when a change comes back from it.",
 		KindWorkDeclined:        "{title} was declined, so there is no change coming and nothing for me to judge: {why}",
 		KindWorkHandedOff:       "{item} left the run queue for {executor}, so no change on it will come to me: {why}",
-		KindWorkPickedUp:        "{item} is under way in conversation: {title}. Nothing is coming to me for a verdict on it.",
+		KindWorkPickedUp:        "{title} is under way in conversation. Nothing is coming to me for a verdict on it.",
 		KindWorkCarriedOut:      "{item} is done and was never judged, because there was no change to judge: {why}",
 		KindRunStarted:          "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. I'll judge what comes back rather than how it got here.",
 		KindChecksPassed:        "The checks behind {item} pass. Passing checks are evidence, not a verdict.",
@@ -322,15 +323,15 @@ var developmentManagerVoice = voice{
 	title:  "Development Manager",
 	avatar: ":clipboard:",
 	lines: map[Kind]string{
-		KindItemAdmitted:        "{item} is in the queue: {title}, admitted for {goal}.",
-		KindItemDecomposed:      "I've broken {parent} down, and {item} is a bounded piece of it: {title}.",
+		KindItemAdmitted:        "In the queue now: {title}, admitted for {goal}.",
+		KindItemDecomposed:      "I've broken a larger item down, and a bounded piece of it is {title}.",
 		KindItemAttributed:      "{item} now carries the goal it serves: {goal}. Work I cannot say the purpose of is work I cannot order honestly.",
 		KindItemReprioritized:   "{item} is at {priority} now, so that is where it gets pulled from.",
 		KindTrackerBlockRefused: "A block from the {asking} never reached the queue I pull from — {refused} — so its order and its contents are unchanged: {why}",
-		KindWorkApproved:        "{item} was approved and is in my queue: {title}, for {goal}.",
+		KindWorkApproved:        "Approved and in my queue: {title}, for {goal}.",
 		KindWorkDeclined:        "{title} was declined, so nothing about it ever reaches my queue: {why}",
 		KindWorkHandedOff:       "{item} is out of what I pull: it is carried by {executor}, so a run would only spend itself on it — {why}",
-		KindWorkPickedUp:        "{item} is being carried in conversation now: {title}. It stays in flight until whoever holds it closes it.",
+		KindWorkPickedUp:        "{title} is being carried in conversation now. It stays in flight until whoever holds it closes it.",
 		KindWorkCarriedOut:      "{item} is done, closed by the conversation that carried it rather than by a run: {why}",
 		KindRunStarted:          "I've pulled {item} off the queue, and it is claimed and started as {run}, on account {account} at configuration {config}: {reason}",
 		KindChecksPassed:        "{item} cleared its checks and is on to review.",
@@ -341,7 +342,7 @@ var developmentManagerVoice = voice{
 		KindPublished:           "{item} is published as {pr} and still counts as in flight.",
 		KindMergeQueued:         "{pr} is queued to merge, so {item} stays in flight until the forge says otherwise.",
 		KindMergeCompleted:      "{pr} merged; {item} is done.",
-		KindRunParked:           "{item} is parked, waiting on {cause}. It keeps its claim.",
+		KindRunParked:           "{item} is stopped part-way, waiting on {cause}. It keeps its claim.",
 		KindRunContinued:        "{item} is moving again, from where it stopped.",
 		KindBlockerRecorded:     "{item} is blocked, and recorded as blocked rather than left implicit, with {remains}: {text}",
 		KindRunEnded:            "The run on {item} {ending} with nothing recorded for anybody to decide, and {remains}: {text}",
@@ -378,15 +379,15 @@ var productManagerVoice = voice{
 	title:  "Product Manager",
 	avatar: ":compass:",
 	lines: map[Kind]string{
-		KindItemAdmitted:        "I've admitted {item} to the backlog: {title}. It serves {goal}, and that claim is the operator's to disagree with.",
-		KindItemDecomposed:      "{parent} was decomposed into {item}: {title}. What the work is for stays what the parent was admitted for.",
+		KindItemAdmitted:        "I've admitted this to the backlog: {title}. It serves {goal}, and that claim is the operator's to disagree with.",
+		KindItemDecomposed:      "{title} was decomposed out of a larger item. What the work is for stays what that larger item was admitted for.",
 		KindItemAttributed:      "I've recorded what {item} is for: {goal}. Work that says nothing about intent is work nobody can decide to stop doing.",
 		KindItemReprioritized:   "I've put {item} at {priority}: {why}",
 		KindTrackerBlockRefused: "A block I sent was refused whole — {refused} — so nothing I meant to change about the backlog changed: {why}",
-		KindWorkApproved:        "The operator approved the work I proposed, and it is admitted as {item}: {title}, serving {goal}.",
+		KindWorkApproved:        "The operator approved the work I proposed, and it is admitted: {title}, serving {goal}.",
 		KindWorkDeclined:        "The operator turned down work I proposed — {title}, which would have served {goal} — because: {why}. Nothing was created.",
 		KindWorkHandedOff:       "{item} is work {executor} carries rather than a run, and it is marked as such so nothing spends a run on it: {why}",
-		KindWorkPickedUp:        "Somebody has taken {item} up: {title}. What the work serves is unchanged by who carries it.",
+		KindWorkPickedUp:        "Somebody has taken this up: {title}. What the work serves is unchanged by who carries it.",
 		KindWorkCarriedOut:      "{item} is delivered, in a conversation rather than in a change: {why}",
 		KindRunStarted:          "Work started on {item} as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. That reason is the operator's to disagree with.",
 		KindChecksPassed:        "{item} passed its checks — progress on what it was admitted for.",
@@ -434,15 +435,15 @@ var architectVoice = voice{
 	title:  "Architect",
 	avatar: ":triangular_ruler:",
 	lines: map[Kind]string{
-		KindItemAdmitted:        "{item} entered the backlog under {goal}: {title}. Work traceable to intent is what keeps the shape of the thing deliberate.",
-		KindItemDecomposed:      "{item} was carved out of {parent}: {title}. Decomposition is structure, and structure is where a design holds or does not.",
+		KindItemAdmitted:        "Entered the backlog under {goal}: {title}. Work traceable to intent is what keeps the shape of the thing deliberate.",
+		KindItemDecomposed:      "Carved out of a larger item: {title}. Decomposition is structure, and structure is where a design holds or does not.",
 		KindItemAttributed:      "{item} was traced back to {goal}. A queue nobody can trace is a system nobody can reason about.",
 		KindItemReprioritized:   "{item} moved to {priority}, which changes the order and nothing about the design it derives from.",
 		KindTrackerBlockRefused: "A block of {refused} from the {asking} was refused whole rather than partly applied, which is the contract holding: {why}",
-		KindWorkApproved:        "Approved and admitted as {item}: {title}, under {goal}. What it may become is bounded by the design it derives from.",
+		KindWorkApproved:        "Approved and admitted: {title}, under {goal}. What it may become is bounded by the design it derives from.",
 		KindWorkDeclined:        "{title} was declined, and the shape of the system is unchanged by work nobody started: {why}",
 		KindWorkHandedOff:       "{item} is executed by {executor} rather than by a run, and saying so is what keeps a run from discovering it by refusing an empty diff: {why}",
-		KindWorkPickedUp:        "{item} has been taken up in conversation: {title}. What it produces is a judgment rather than a diff.",
+		KindWorkPickedUp:        "{title} has been taken up in conversation. What it produces is a judgment rather than a diff.",
 		KindWorkCarriedOut:      "{item} is carried out, and what it settled is in the documents rather than in a promotion: {why}",
 		KindRunStarted:          "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. The design it derives from is unchanged.",
 		KindChecksPassed:        "{item} passed its checks. The gate held.",
@@ -453,7 +454,7 @@ var architectVoice = voice{
 		KindPublished:           "{item} is published as {pr}. The local branch remains the authoritative one.",
 		KindMergeQueued:         "{pr} is queued to merge; the forge settles it, not this run.",
 		KindMergeCompleted:      "{pr} merged, so the forge's history and the local target agree again.",
-		KindRunParked:           "{item} is parked, waiting on {cause}. A design that cannot survive an interruption is the wrong design.",
+		KindRunParked:           "{item} is stopped part-way, waiting on {cause}. A design that cannot survive an interruption is the wrong design.",
 		KindRunContinued:        "{item} resumed from exactly where it stopped.",
 		KindBlockerRecorded:     "{item} is blocked, which is a fact about the system rather than about the attempt, and {remains}: {text}",
 		KindRunEnded:            "The run on {item} {ending}, which is a fact about the attempt rather than about the work, and {remains}: {text}",
@@ -469,10 +470,10 @@ var architectVoice = voice{
 		KindIntakeHeld:          "Intake is held, which stops selection and nothing already running: {why}",
 		KindIntakeReleased:      "Intake is released; selection resumes.",
 		KindHoldPlaced:          "All harness activity is held, at the provider-call boundary rather than mid-generation.",
-		KindHoldLifted:          "The hold is lifted, and every parked run resumes from its own record.",
+		KindHoldLifted:          "The hold is lifted, and every run that stopped for it carries on from its own record.",
 		KindWatchStarted:        "Selection is now a loop rather than a pass, and nothing between its readings is cached: {why}",
 		KindWatchIdle:           "Selection read the queue and started nothing, which costs a tracker read and no provider call: {why}",
-		KindWatchBraked:         "Selection is stopped by the intake hold, which is the brake working rather than failing: {why}",
+		KindWatchBraked:         "Selection is stopped by the intake hold, which is that hold working rather than failing: {why}",
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
 		KindWatchRedeploying:    "The selection loop closes and restarts on the build deployed over it; every run it started was waited out rather than abandoned: {why}",
@@ -594,7 +595,7 @@ var nextMoves = map[Kind]string{
 	KindIntakeHeld:     "the operator's — nothing new is chosen until intake is released.",
 	KindIntakeReleased: "the harness's — the backlog is being pulled from again.",
 	KindHoldPlaced:     "the operator's — nothing runs until the hold is lifted.",
-	KindHoldLifted:     "the harness's — every parked run resumes from its own record.",
+	KindHoldLifted:     "the harness's — every run that stopped for the hold carries on from its own record.",
 	KindWatchStarted:   "the harness's — the queue is pulled from until somebody stops it.",
 	// The idle poll with nothing else to say: the queue was read, no run is going,
 	// and nothing passed over is a person's to carry. Admitting ready work is then
@@ -633,7 +634,11 @@ var nextMoves = map[Kind]string{
 // nobody to wait for — and a thread that told a reader to wait for a resolution
 // would be naming a move nobody has to make, on the ordinary case rather than
 // the rare one.
-const directiveInForceMove = "the harness's — the directive is in force from now, and no work is waiting on it."
+//
+// It says the directive applies now rather than that it is in force, which is
+// the operator's rule about every message here: the everyday word, not the term
+// of art, wherever a reader would have to already know the vocabulary.
+const directiveInForceMove = "the harness's — the directive applies from now on, and no work is waiting on it."
 
 // nextMove is whose move follows one event, and says whether anything does. A
 // kind nothing answers for is a kind added to the vocabulary without anybody
@@ -812,7 +817,7 @@ func Render(topic Topic, speaker Speaker, event Event) (Message, error) {
 func (e Event) fields(topic Topic) map[string]string {
 	detail := e.Detail
 	return map[string]string{
-		"item":      stated(itemOf(e.Refs, topic), "an unnamed work item"),
+		"item":      stated(itemOf(e.Refs, topic, detail), "an unnamed work item"),
 		"run":       stated(e.Refs.RunID, "an unrecorded run"),
 		"by":        stated(detail.SelectedBy, "nobody the record names"),
 		"account":   stated(detail.Account, "an account the record does not name"),
@@ -838,9 +843,15 @@ func (e Event) fields(topic Topic) map[string]string {
 		"exchange":  stated(exchangeOf(e.Refs, topic), "an unnamed exchange"),
 		"title":     stated(detail.Title, "a title the record does not carry"),
 		"goal":      stated(detail.Goal, "no goal the record names"),
-		"parent":    stated(detail.Parent, "an item the record does not name"),
-		"priority":  priorityOf(detail),
-		"executor":  stated(carrierOf(detail.Executor), "something the record does not name"),
+		// There is deliberately no placeholder for the item a decomposition was
+		// created under. The record holds that item's identifier and nothing that
+		// names it in words, so a line reaching for it could only hand a reader an
+		// identifier to resolve — which is the whole of what these messages stopped
+		// doing. A line that asks for one is refused as it renders, and every line
+		// in every voice is rendered by the tests, so one added later fails there
+		// rather than in somebody's channel.
+		"priority": priorityOf(detail),
+		"executor": stated(carrierOf(detail.Executor), "something the record does not name"),
 		// What a refused block asked for, and who asked. The count states an absence
 		// rather than reading as none: a block whose actions nobody could count is
 		// not a block that asked for nothing, and the two are opposite news.
@@ -927,12 +938,33 @@ func stated(value, absence string) string {
 	return absence
 }
 
-// itemOf prefers the topic's own identifier over the reference, because the
-// topic is what the thread is about and a message in an item's thread must name
-// that item whatever else it correlates to.
-func itemOf(refs Refs, topic Topic) string {
-	if topic.Kind == TopicWorkItem {
-		return topic.ID
+// itemOf is what a message calls the work it is about, and it is a name a
+// person reads rather than an identifier they have to go and resolve: the
+// item's title, as the thread's header carries it or as the record the message
+// was read from does.
+//
+// A message in the item's own thread whose record carried no title says "this
+// item" rather than falling back to the identifier. The thread it is in is
+// already headed by that identifier and the item's name, so a message repeating
+// the identifier under that header adds the opaque half of it to every line of
+// the narrative and adds nothing a reader did not have.
+//
+// The identifier survives in one place only: a message about an item that is
+// not the thread's own subject, where nothing else says which item is meant.
+// Nothing addressed that way is rendered today, and leaving the reference
+// unsaid there would be a message about no item at all rather than a tidier one.
+func itemOf(refs Refs, topic Topic, detail Detail) string {
+	itsOwnThread := topic.Kind == TopicWorkItem
+	if itsOwnThread {
+		if named := strings.TrimSpace(topic.Title); named != "" {
+			return named
+		}
+	}
+	if named := strings.TrimSpace(detail.Title); named != "" {
+		return named
+	}
+	if itsOwnThread {
+		return "this item"
 	}
 	return refs.WorkItemID
 }
@@ -985,6 +1017,82 @@ func requestedOf(requested []string) string {
 		lines = append(lines, "- "+boundLine(one))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// restOfTheReason says where the whole of a reason is, once the channel has
+// been given the first sentence of it. It names the record rather than trailing
+// off, because a reader who wants the argument has to know there is more of it
+// and where: the tracker keeps every word, and this is a view of it.
+const restOfTheReason = " The rest of the reason is in the item's record."
+
+// oneSentence is the reasoning behind a decision as a channel carries it: the
+// first sentence, and a pointer at the record holding the rest.
+//
+// The whole of a reason is written for the tracker, where somebody deciding
+// whether the decision was right reads it in full. In a channel it is one line
+// of a narrative somebody is scanning, and a paragraph of justification under a
+// one-line fact is what makes a reader skip the next message too. So the
+// channel takes the first sentence, which is where the reason a decision was
+// made is, and says where the argument for it is.
+//
+// Three things have to be true for a full stop to be the end of a sentence, and
+// each of them is a way somebody's reason gets cut into nonsense otherwise:
+// something other than a word character follows it, since yoyodyne-ifd.102.7 is
+// one word; what comes next begins a sentence, since a lower-case word after a
+// stop is the tail of something like "e.g. the adapter"; and the word it closes
+// is not one of the few whose stop never ends a sentence, since those are
+// followed by a capital as often as not. A boundary that fails any of them is
+// read past, so the worst this does is carry more of the reason than it needed
+// to — which is the safe direction, the record holding the whole either way.
+func oneSentence(text string) string {
+	trimmed := strings.TrimSpace(text)
+	for index, character := range trimmed {
+		switch character {
+		case '.', '!', '?':
+		default:
+			continue
+		}
+		rest := strings.TrimSpace(trimmed[index+1:])
+		if rest == "" {
+			return trimmed
+		}
+		if next := trimmed[index+1]; next != ' ' && next != '\t' && next != '\n' {
+			continue
+		}
+		if opening, _ := utf8.DecodeRuneInString(rest); !unicode.IsUpper(opening) {
+			continue
+		}
+		if abbreviated(trimmed[:index]) {
+			continue
+		}
+		return trimmed[:index+1] + restOfTheReason
+	}
+	return trimmed
+}
+
+// abbreviations are the short forms whose full stop closes a word rather than a
+// sentence. The list is short on purpose: it is the ones that actually turn up
+// in prose somebody wrote to justify a decision, and a form nobody thought of
+// costs a message that carries more of the reason than it had to rather than
+// one that carries none of it.
+var abbreviations = map[string]bool{
+	"e.g":    true,
+	"eg":     true,
+	"i.e":    true,
+	"ie":     true,
+	"etc":    true,
+	"vs":     true,
+	"cf":     true,
+	"approx": true,
+}
+
+// abbreviated reports prose whose last word is one of them.
+func abbreviated(said string) bool {
+	word := said
+	if space := strings.LastIndexAny(word, " \t\n"); space >= 0 {
+		word = word[space+1:]
+	}
+	return abbreviations[strings.ToLower(word)]
 }
 
 // boundLine cuts one line that would not read as one, and marks the cut so
@@ -1070,7 +1178,7 @@ func effectOf(detail Detail) string {
 	if unresolved := strings.TrimSpace(detail.Unresolved); unresolved != "" {
 		return "the work it affects waits until this is settled: " + unresolved
 	}
-	return "it is in force from now, and nothing waits on it"
+	return "it applies from now on, and nothing waits on it"
 }
 
 // outcomeOf says how an exchange ended. Closing unresolved at the round cap is
