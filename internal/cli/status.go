@@ -37,7 +37,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -537,7 +539,19 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 	// re-run with rounds to spare as a bug.
 	fmt.Fprintf(writer, "  repair grants: %d of %s permitted; re-runs: %d of %s; each is refused by its own budget or once no round remains\n",
 		counters.RepairGrants, triageCapFigure(caps.RepairGrants), counters.Reruns, triageCapFigure(caps.Reruns))
-	fmt.Fprintf(writer, "  merge re-arms: %d of %s permitted\n", counters.MergeRearms, triageCapFigure(caps.MergeRearms))
+	// The re-arm's ceiling is the only one here that is not the item's. A re-arm
+	// repeats one merge request the reviewer's verdict already authorized, so it
+	// is bounded per publication, and an item that published three times has three
+	// separate budgets. So the count is stated as the total it is, the cap beside
+	// what it actually bounds, and every publication that has spent any of it is
+	// named — an operator reading "3 of 1 permitted" against one figure would read
+	// a working budget as a broken one.
+	fmt.Fprintf(writer, "  merge re-arms: %d across every publication of this item, %s permitted per publication\n",
+		counters.MergeRearms, triageCapFigure(caps.MergeRearms))
+	for _, publication := range slices.Sorted(maps.Keys(counters.RearmedPublications)) {
+		fmt.Fprintf(writer, "    %s: %d of %s permitted\n",
+			publication, counters.RearmedPublications[publication], triageCapFigure(caps.MergeRearms))
+	}
 	// A grant that was cut is said out loud, because it is the fact that says the
 	// item is at the end of what it will be given: the next grant has nothing left
 	// to truncate to and is refused outright.

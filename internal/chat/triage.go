@@ -107,8 +107,13 @@ type TriageBudgets interface {
 	GrantRepair(ctx context.Context, workItemID string) (runstate.RepairGrant, error)
 	// RecordRerun records that triage caused this item to be run again.
 	RecordRerun(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
-	// RecordMergeRearm records that triage re-armed a merge the forge dropped.
-	RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
+	// RecordMergeRearm records that triage re-armed the merge the forge dropped
+	// for the publication of one run. The run is what a docket entry names and
+	// what a decision here already carries; which publication that is, is the
+	// harness's to resolve from its own records, because the budget a re-arm
+	// spends is that publication's rather than the item's and a conversation must
+	// not be the thing that says which one it was.
+	RecordMergeRearm(ctx context.Context, workItemID, runID string) (runstate.MergeRearmDecision, error)
 }
 
 // Stoppages is what the harness durably recorded about the runs triage decides
@@ -269,7 +274,7 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 		outcome.fail(err)
 		return
 	}
-	spent, err := s.spendTriageBudget(ctx, id, decision)
+	spent, err := s.spendTriageBudget(ctx, id, decision, run)
 	if err != nil {
 		outcome.fail(refusedPastCap(err))
 		return
@@ -377,7 +382,13 @@ func overrideCommand(err error) string {
 // attempt at work that already failed once, and those are the three the durable
 // budget bounds; re-scoping, waiting, and escalating buy no attempt at all and
 // are never refused for budget.
-func (s *Session) spendTriageBudget(ctx context.Context, workItemID, decision string) (string, error) {
+//
+// Two of the three are budgets of the work item's. The third is not: a re-arm
+// repeats one merge request the reviewer's verdict already authorized, so it is
+// bounded per publication, and what it says it recorded names that publication
+// rather than the item — a development manager told "1 re-arm of this item is
+// recorded" would read a second publication's untouched budget as a spent one.
+func (s *Session) spendTriageBudget(ctx context.Context, workItemID, decision, runID string) (string, error) {
 	switch decision {
 	case decisionRepair, decisionRerun, decisionRearm:
 	default:
@@ -404,10 +415,10 @@ func (s *Session) spendTriageBudget(ctx context.Context, workItemID, decision st
 		}
 		return fmt.Sprintf("; %d re-run(s) of it are now recorded", counters.Reruns), nil
 	default:
-		counters, err := s.options.Triage.RecordMergeRearm(ctx, workItemID)
+		decided, err := s.options.Triage.RecordMergeRearm(ctx, workItemID, runID)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("; %d merge re-arm(s) of it are now recorded", counters.MergeRearms), nil
+		return fmt.Sprintf("; %d merge re-arm(s) of publication %s are now recorded", decided.Rearms(), decided.Publication), nil
 	}
 }

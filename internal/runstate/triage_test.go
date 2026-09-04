@@ -376,7 +376,7 @@ func TestTriageActionsAreRefusedPastTheirCaps(t *testing.T) {
 	}
 	rearm := func(caps TriageCaps) func(*TriageStore) error {
 		return func(store *TriageStore) error {
-			_, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", time.Now(), caps)
+			_, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", "publication:run-a#7", time.Now(), caps)
 			return err
 		}
 	}
@@ -425,12 +425,12 @@ func TestTriageActionsAreRefusedPastTheirCaps(t *testing.T) {
 			spent:  func(counters TriageCounters) int { return counters.Reruns },
 		},
 		{
-			name:   "a second merge re-arm",
+			name:   "a second merge re-arm of one publication",
 			action: TriageMergeRearm,
 			budget: TriageMergeRearmBudget,
 			spend:  rearm(rounds),
 			take:   rearm(rounds),
-			spent:  func(counters TriageCounters) int { return counters.MergeRearms },
+			spent:  func(counters TriageCounters) int { return counters.RearmsOf("publication:run-a#7") },
 		},
 	} {
 		t.Run(action.name, func(t *testing.T) {
@@ -541,6 +541,57 @@ func TestASecondTriagePassIsVisibleFromTheItemsRecordAlone(t *testing.T) {
 	}
 	if again.Passes() != 2 || !again.TriagedAgain() {
 		t.Fatalf("counters after two passes = %+v, want the second pass visible", again)
+	}
+}
+
+// A re-arm repeats one merge request the reviewer's verdict already authorized,
+// so its budget is that publication's rather than the item's. Keyed to the item
+// it was both bounds at once and neither of them right: it granted one
+// publication a second re-arm the governed design calls an escalation, and it
+// refused a later publication of the same item its first.
+func TestMergeRearmsAreKeptPerPublication(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}
+	const item = "yoyodyne-ifd.7"
+	first, second := "publication:run-a#92", "publication:run-b#93"
+	if _, err := store.RecordMergeRearm(context.Background(), item, first, time.Now(), caps); err != nil {
+		t.Fatalf("RecordMergeRearm() error = %v", err)
+	}
+	// A second re-arm of the same publication is what a second drop of it is, and
+	// past the cap that is an escalation rather than a larger budget.
+	var refusal TriageCapError
+	err := func() error {
+		_, err := store.RecordMergeRearm(context.Background(), item, first, time.Now(), caps)
+		return err
+	}()
+	if !errors.As(err, &refusal) || refusal.Publication != first {
+		t.Fatalf("a second re-arm of one publication error = %v, want it refused and naming that publication", err)
+	}
+	// A different publication of the same item has spent nothing, so its own
+	// first re-arm stands.
+	counters, err := store.RecordMergeRearm(context.Background(), item, second, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("RecordMergeRearm() of a second publication error = %v", err)
+	}
+	if counters.RearmsOf(first) != 1 || counters.RearmsOf(second) != 1 {
+		t.Fatalf("re-armed publications = %+v, want one each", counters.RearmedPublications)
+	}
+	// The item's own total is what every reading of the item reports, and it
+	// counts both.
+	if counters.MergeRearms != 2 {
+		t.Fatalf("the item records %d re-arm(s) in total, want both", counters.MergeRearms)
+	}
+	// A publication nothing has been decided about is where every publication
+	// starts, whatever the item's total says.
+	if counters.RearmsOf("publication:run-c#94") != 0 {
+		t.Fatalf("an untouched publication reads as spent: %+v", counters.RearmedPublications)
+	}
+	// And a re-arm has to name the publication whose budget it spends: a decision
+	// recorded against the item alone is the accounting this replaced.
+	if _, err := store.RecordMergeRearm(context.Background(), item, "  ", time.Now(), caps); err == nil {
+		t.Fatal("RecordMergeRearm() naming no publication = nil error, want it refused")
 	}
 }
 
@@ -796,7 +847,7 @@ func TestNegativeTriageCapsAreRefused(t *testing.T) {
 	// action rather than the caps. `triage.review_rounds_cap` accepts zero for
 	// exactly this: an item that reaches triage is escalated or re-scoped rather
 	// than repaired again.
-	if _, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{}); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", "publication:run-a#7", time.Now(), TriageCaps{}); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordMergeRearm() under a zero cap = %v, want a cap refusal", err)
 	}
 	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), TriageCaps{ReviewRounds: 0}); !errors.Is(err, ErrTriageCapReached) {

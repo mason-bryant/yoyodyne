@@ -177,7 +177,7 @@ func (d Docketer) Build() (DocketBuild, error) {
 		problems = append(problems, fmt.Errorf("read the triage docket: %w", err))
 		return DocketBuild{Added: added}, errors.Join(problems...)
 	}
-	problems = append(problems, d.joinDecisions(entries)...)
+	problems = append(problems, d.joinDecisions(entries, publicationsOf(recorded))...)
 	return DocketBuild{Entries: entries, Added: added}, errors.Join(problems...)
 }
 
@@ -193,7 +193,12 @@ func (d Docketer) Build() (DocketBuild, error) {
 // a problem, and its counters are left as the entry recorded them rather than
 // blanked: a zero nobody could distinguish from a fresh item is the reading that
 // spends a decision twice.
-func (d Docketer) joinDecisions(entries []triage.Entry) []error {
+//
+// published is what each run's record says about the publication it made, which
+// is where the re-arms the harness has actually repeated are written. It is
+// indexed once for the same reason the item records are read once: a docket over
+// a long history would otherwise walk the runs per entry.
+func (d Docketer) joinDecisions(entries []triage.Entry, published map[string]publicationRearms) []error {
 	var problems []error
 	read := make(map[string]itemDecisions, len(entries))
 	for index := range entries {
@@ -217,7 +222,13 @@ func (d Docketer) joinDecisions(entries []triage.Entry) []error {
 		// The repair attempts stay as the entry recorded them: they are what the
 		// stopped run spent of its own budget, which is evidence about that run
 		// rather than a figure any guard reads.
-		entry.Counters = d.counters(decisions.counters, entry.Counters.RepairAttempts, len(decisions.claimed))
+		// A publication entry's re-arm figures are its own publication's; a stopped
+		// run is about none, and the zero value says exactly that.
+		publication := publicationRearms{}
+		if entry.Class == triage.ClassPublication {
+			publication = published[entry.RunID]
+		}
+		entry.Counters = d.counters(decisions.counters, entry.Counters.RepairAttempts, len(decisions.claimed), publication)
 		entry.Rerun = rerunOf(*entry, decisions.claimed)
 		// Joined here and never written, exactly as the re-run above is: an override
 		// answers the escalation this entry produced, so it is always made after the
@@ -462,7 +473,7 @@ func publicationApprovedAt(state runstate.State) time.Time {
 }
 
 func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.Entry, error) {
-	counters, err := d.recordedCounters(state)
+	counters, err := d.recordedCounters(state, publicationRearms{})
 	if err != nil {
 		return triage.Entry{}, err
 	}
@@ -495,7 +506,7 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 }
 
 func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.Entry, error) {
-	counters, err := d.recordedCounters(state)
+	counters, err := d.recordedCounters(state, rearmsOf(state))
 	if err != nil {
 		return triage.Entry{}, err
 	}
@@ -563,7 +574,11 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 // configured and no account of why is a number a reader has to decide whether to
 // trust, and they are joined where the docket is read for the reason the re-run
 // beside them is.
-func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerunsCarriedOut int) triage.Counters {
+// publication, when the entry is about one, is what the re-arm figures are read
+// per: that budget is the publication's rather than the item's, so the entry
+// carries what has been decided and made about the one publication it describes
+// beside the item's total.
+func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerunsCarriedOut int, publication publicationRearms) triage.Counters {
 	permitted := d.Caps.Overridden(ledger.Overrides)
 	return triage.Counters{
 		ReviewRounds:        ledger.ReviewRounds,
@@ -579,7 +594,38 @@ func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerun
 		RerunsCap:           permitted.Reruns,
 		MergeRearms:         ledger.MergeRearms,
 		MergeRearmsCap:      permitted.MergeRearms,
-		RerunsCarriedOut:    rerunsCarriedOut,
+		// Decided is read off the item's record under this publication's key, and
+		// made off the publication's own record, which is where the harness writes
+		// what it has actually repeated. The two are separate facts for the reason
+		// the re-run's decision and claim are: a decision waiting to be carried out
+		// and one already acted on are opposite answers to what the development
+		// manager is about to ask.
+		PublicationRearms:     ledger.RearmsOf(publication.key),
+		PublicationRearmsMade: publication.made,
+		RerunsCarriedOut:      rerunsCarriedOut,
+	}
+}
+
+// publicationRearms is the publication an entry is about, for the figures that
+// are read per publication: the key its decisions are recorded under, and how
+// many re-arms of it the harness has made. A stopped-run entry carries the zero
+// value, which names no publication and reads as nothing decided about one.
+type publicationRearms struct {
+	key  string
+	made int
+}
+
+// rearmsOf is the publication one run's record describes, or nothing where that
+// run published nothing. It is read from the record rather than from the entry
+// for the reason every other figure here is: the entry says what was true when
+// it was written, and what the guard reads is what is true now.
+func rearmsOf(state runstate.State) publicationRearms {
+	if state.PullRequest == nil {
+		return publicationRearms{}
+	}
+	return publicationRearms{
+		key:  triage.PublicationKey(state.RunID, state.PullRequest.Number),
+		made: state.PullRequest.MergeRearms,
 	}
 }
 
@@ -613,12 +659,26 @@ func docketedOverrides(recorded []runstate.TriageOverride) []triage.Override {
 // What has been carried out is not read here. A stoppage being docketed has had
 // nothing carried out about it yet, and reading the claims to write a zero would
 // buy nothing the read side does not do again properly.
-func (d Docketer) recordedCounters(state runstate.State) (triage.Counters, error) {
+func (d Docketer) recordedCounters(state runstate.State, publication publicationRearms) (triage.Counters, error) {
 	ledger, err := d.Decisions.Counters(state.WorkItemID)
 	if err != nil {
 		return triage.Counters{}, fmt.Errorf("read what triage has recorded about %s: %w", state.WorkItemID, err)
 	}
-	return d.counters(ledger, state.RepairAttempts, 0), nil
+	return d.counters(ledger, state.RepairAttempts, 0, publication), nil
+}
+
+// publicationsOf indexes what each run's record says about the publication it
+// made, by run. A run that published nothing is absent, which reads as the zero
+// value: no publication, and nothing re-armed about one.
+func publicationsOf(recorded []runstate.State) map[string]publicationRearms {
+	published := make(map[string]publicationRearms, len(recorded))
+	for _, state := range recorded {
+		if state.PullRequest == nil {
+			continue
+		}
+		published[state.RunID] = rearmsOf(state)
+	}
+	return published
 }
 
 func docketFindings(findings []runstate.Finding) []triage.Finding {

@@ -883,8 +883,8 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	}
 
 	// The caps the harness defaults give this configuration: four rounds in
-	// total, and two merge re-arms following the integration retries a run has.
-	caps := runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	// total, and one merge re-arm per publication.
+	caps := runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}
 	triage := store.Triage()
 	for _, attempt := range []string{"run-a#0", "run-a#1", "run-a#2"} {
 		if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", attempt, countingProcess, started); err != nil {
@@ -900,7 +900,7 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	if granted.Rounds != 1 || !granted.Truncated {
 		t.Fatalf("GrantRepair() = %+v, want one round of the two asked for", granted)
 	}
-	if _, err := triage.RecordMergeRearm(context.Background(), "yoyodyne-ifd.2.7", time.Now(), caps); err != nil {
+	if _, err := triage.RecordMergeRearm(context.Background(), "yoyodyne-ifd.2.7", "publication:run-a#92", time.Now(), caps); err != nil {
 		t.Fatalf("RecordMergeRearm() error = %v", err)
 	}
 
@@ -914,7 +914,11 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 		"triage of yoyodyne-ifd.2.7: triage has spent 2 passes on it",
 		"review rounds: 3 spent across every run of this item, under the cap of 4",
 		"repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains",
-		"merge re-arms: 1 of 2 permitted",
+		"merge re-arms: 1 across every publication of this item, 1 permitted per publication",
+		// The publication that spent it is named, because the cap bounds that
+		// publication rather than the item and a total alone says nothing about
+		// whether the next re-arm will be refused.
+		"publication:run-a#92: 1 of 1 permitted",
 		"1 grant(s) were cut down to the rounds the cap still had room for",
 	} {
 		if !strings.Contains(stdout, want) {

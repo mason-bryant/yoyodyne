@@ -480,8 +480,7 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	state.PullRequest = &published
 
 	if !observed.Merged {
-		state.PublishFailure = fmt.Sprintf("the forge dropped the queued merge of pull request %d: it is %s and has no merge queued for it. A requirement of %s went unmet, and the harness does not merge past one, so the pull request needs a person",
-			published.Number, strings.ToLower(nonEmpty(observed.State, "in an unreported state")), state.Integration.TargetBranch)
+		state.PublishFailure = droppedMerge(published, strings.ToLower(nonEmpty(observed.State, "in an unreported state")), state.Integration.TargetBranch)
 		return r.settleDroppedMerge(ctx, state)
 	}
 	detail := fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
@@ -537,6 +536,41 @@ func (r Reconciler) closeSettledMerge(ctx context.Context, state runstate.State)
 		return fmt.Errorf("close integrated work item for run %s: %w", state.RunID, err)
 	}
 	return nil
+}
+
+// droppedMerge is what the harness records about a merge the forge gave up on,
+// and it is two different facts depending on what has already been done about
+// this publication.
+//
+// A first drop is work for a person, and where the cause turns out to have been
+// transient it is also the one thing triage may re-arm: the identical
+// already-authorized request, repeated once. A drop of a publication that has
+// already been re-armed is not that. The request has been through the forge's
+// requirements twice and been dropped twice, which is a repository somebody has
+// to look at rather than a transient cause to repeat past — so what is recorded
+// says so, and says it on the item, because the blocker this becomes is what the
+// development manager reads before deciding anything.
+func droppedMerge(published runstate.PullRequest, observedState, targetBranch string) string {
+	dropped := fmt.Sprintf("the forge dropped the queued merge of pull request %d: it is %s and has no merge queued for it. A requirement of %s went unmet, and the harness does not merge past one, so the pull request needs a person",
+		published.Number, observedState, targetBranch)
+	if published.MergeRearms == 0 {
+		return dropped
+	}
+	return fmt.Sprintf("%s. This is the %s drop of this publication: its merge request has already been repeated %d time(s) on triage's decision and the forge has dropped it again, so it is an escalation rather than something to re-arm again",
+		dropped, ordinalDrop(published.MergeRearms+1), published.MergeRearms)
+}
+
+// ordinalDrop names which drop of one publication this is, in words, because a
+// blocker is read by a person and "the 2nd drop" is not how one is written.
+func ordinalDrop(count int) string {
+	switch count {
+	case 2:
+		return "second"
+	case 3:
+		return "third"
+	default:
+		return fmt.Sprintf("%dth", count)
+	}
 }
 
 // settleDroppedMerge settles a run whose queued merge the forge gave up on. The

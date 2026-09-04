@@ -125,9 +125,23 @@ type TriageCounters struct {
 	CommittedRounds int `json:"committed_rounds,omitempty"`
 	// Reruns is how many times triage has caused this item to be run again from
 	// the start, and MergeRearms how many times it has re-armed a merge the forge
-	// accepted and then dropped.
+	// accepted and then dropped, across every publication of the item.
 	Reruns      int `json:"reruns,omitempty"`
 	MergeRearms int `json:"merge_rearms,omitempty"`
+	// RearmedPublications is how much of that total each publication has had, keyed
+	// by the publication the re-arm repeats. It is what the re-arm is actually
+	// refused against, because a re-arm repeats one already-authorized merge
+	// request rather than buying the item another attempt at anything: an item that
+	// published three times has three separate merges the forge could drop, and a
+	// budget spent across them would refuse the third publication its first re-arm
+	// on the strength of the first publication's.
+	//
+	// A record written while the counter was kept per item names no publication and
+	// carries the total alone, which is the accounting that was in force when it
+	// was written rather than a record that is wrong. It reads as a publication
+	// nothing has been re-armed about, which is what the per-item counter could
+	// never tell anybody.
+	RearmedPublications map[string]int `json:"rearmed_publications,omitempty"`
 	// ReviewRounds is how many times a reviewer verdict has sent this item's work
 	// back, across every run of it. It is the figure a repair grant is truncated
 	// against, because it is the one that says what the item has actually cost:
@@ -251,6 +265,26 @@ func (c TriageCounters) Validate() error {
 	if c.CommittedRounds > 0 && c.RepairGrants == 0 {
 		problems = append(problems, errors.New("committed rounds require the grant that committed them"))
 	}
+	// The per-publication re-arms are a breakdown of the total rather than a
+	// second count of the same thing, so a breakdown larger than the total could
+	// not have been written by the only thing that writes both. The other way
+	// round is ordinary: it is every record written while the counter was per
+	// item, and every one where an operator's override was crossed on a
+	// publication some earlier record already counted.
+	rearmed := 0
+	for publication, count := range c.RearmedPublications {
+		if strings.TrimSpace(publication) == "" {
+			problems = append(problems, errors.New("a re-armed publication is required to name the publication it re-armed"))
+		}
+		if count < 1 {
+			problems = append(problems, fmt.Errorf("publication %q is recorded with %d re-arm(s), which is not a re-arm", publication, count))
+			continue
+		}
+		rearmed += count
+	}
+	if rearmed > c.MergeRearms {
+		problems = append(problems, fmt.Errorf("%d re-arm(s) are recorded against publications of %d recorded in total", rearmed, c.MergeRearms))
+	}
 	if c.LastRound != "" && c.ReviewRounds == 0 {
 		problems = append(problems, errors.New("a counted round requires the round count that includes it"))
 	}
@@ -279,6 +313,14 @@ func (c TriageCounters) Validate() error {
 // exists to tell apart — and it is answerable from the record alone.
 func (c TriageCounters) Passes() int {
 	return c.RepairGrants + c.Reruns + c.MergeRearms
+}
+
+// RearmsOf is how many re-arms triage has recorded against one publication of
+// this item. It is the figure the re-arm guard refuses against, and a
+// publication nothing has been decided about answers zero, which is where every
+// publication starts.
+func (c TriageCounters) RearmsOf(publicationKey string) int {
+	return c.RearmedPublications[strings.TrimSpace(publicationKey)]
 }
 
 // TriagedAgain reports an item triage has come back to. It is the question a
@@ -366,9 +408,13 @@ type TriageCaps struct {
 	// counter reading zero.
 	RepairGrants int `json:"repair_grants"`
 	Reruns       int `json:"reruns"`
-	// MergeRearms bounds the one action that buys no round. An action that costs
-	// no provider invocation is the one that can be taken forever, and a merge
-	// the forge keeps dropping is a repository somebody has to look at.
+	// MergeRearms bounds the one action that buys no round, and it bounds it per
+	// publication rather than per item: what a re-arm repeats is one merge request
+	// the reviewer's verdict already authorized, so an item that published three
+	// times has three of them and a budget spent across them would refuse the
+	// third publication for what the first cost. An action that costs no provider
+	// invocation is the one that can be taken forever, and a merge the forge keeps
+	// dropping is a repository somebody has to look at.
 	MergeRearms int `json:"merge_rearms"`
 }
 
@@ -407,15 +453,25 @@ type TriageCapError struct {
 	Action     string
 	Budget     string
 	WorkItemID string
-	Spent      int
-	Cap        int
+	// Publication names the publication a budget spent per publication rather
+	// than per item was refused against. It is empty on every other budget, and
+	// saying it is what keeps the refusal readable: an operator told only that a
+	// re-arm was refused for the item would go looking for a per-item figure that
+	// no longer decides anything.
+	Publication string
+	Spent       int
+	Cap         int
 }
 
 func (e TriageCapError) Error() string {
-	if e.Cap == 0 {
-		return fmt.Sprintf("no %s is permitted for %s: the %s cap is 0", e.Action, e.WorkItemID, e.Budget)
+	against := e.WorkItemID
+	if publication := strings.TrimSpace(e.Publication); publication != "" {
+		against = fmt.Sprintf("publication %s of %s", publication, e.WorkItemID)
 	}
-	return fmt.Sprintf("%s is refused for %s: %d of %d permitted %s(s) are spent", e.Action, e.WorkItemID, e.Spent, e.Cap, e.Budget)
+	if e.Cap == 0 {
+		return fmt.Sprintf("no %s is permitted for %s: the %s cap is 0", e.Action, against, e.Budget)
+	}
+	return fmt.Sprintf("%s is refused for %s: %d of %d permitted %s(s) are spent", e.Action, against, e.Spent, e.Cap, e.Budget)
 }
 
 func (e TriageCapError) Unwrap() error { return ErrTriageCapReached }
@@ -430,6 +486,21 @@ type RepairGrant struct {
 	Truncated bool
 	Counters  TriageCounters
 }
+
+// MergeRearmDecision is what recording a re-arm came to: the publication whose
+// budget it spent, and the item's counters with it on them. The publication is
+// reported rather than left to be worked out, because what a caller names is the
+// run whose merge was dropped and what the budget is keyed to is the publication
+// that run made — so the record and whatever the caller says about it afterwards
+// name one thing rather than two.
+type MergeRearmDecision struct {
+	Publication string
+	Counters    TriageCounters
+}
+
+// Rearms is what the publication this decision was recorded against now stands
+// at, which is the figure that refuses the next one.
+func (d MergeRearmDecision) Rearms() int { return d.Counters.RearmsOf(d.Publication) }
 
 // TriageStore is where the counters live: one directory under the product,
 // beside the runs rather than among them, and one file per work item inside it.
@@ -814,11 +885,20 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at tim
 }
 
 // RecordMergeRearm records that triage re-armed a merge the forge accepted and
-// then dropped, and refuses once the item has had the re-arms its cap permits.
-// It spends no provider invocation at all, which is exactly why it is bounded
-// separately: an action that costs nothing to take is the one that can be taken
-// forever, and a merge that keeps being dropped is a repository somebody has to
-// look at.
+// then dropped, and refuses once that publication has had the re-arms its cap
+// permits. It spends no provider invocation at all, which is exactly why it is
+// bounded separately: an action that costs nothing to take is the one that can
+// be taken forever, and a merge that keeps being dropped is a repository
+// somebody has to look at.
+//
+// publicationKey names the publication the re-arm repeats — the run that made it
+// and the pull request it made — and it is what the budget is keyed to. That is
+// the whole of the bound: a re-arm buys the item no further attempt at anything,
+// it repeats one merge request the reviewer's verdict already authorized, so what
+// may happen once is one publication being re-armed. Keyed to the item instead,
+// the counter refused the second publication of an item its own first re-arm,
+// and — at the integration-retry cap it was sized by — granted one publication a
+// second re-arm that the governed design says is an escalation.
 //
 // The re-arm cap this spends is one precondition among several, exactly as the
 // re-run's is: a re-arm is an integration retry against the target branch, so
@@ -827,21 +907,35 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at tim
 // that lease, and the re-arm repeats only the identical, already-authorized
 // forge request against a head and target the original gate's checks still
 // pass. Those belong to the action; this store counts what it has been given.
-func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, at time.Time, caps TriageCaps) (TriageCounters, error) {
+func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID, publicationKey string, at time.Time, caps TriageCaps) (TriageCounters, error) {
+	publication := strings.TrimSpace(publicationKey)
+	if publication == "" {
+		return TriageCounters{}, errors.New("a publication is required to record its merge re-arm: a re-arm repeats one already-authorized merge request, and the budget it spends is that publication's")
+	}
 	if err := caps.Validate(); err != nil {
 		return TriageCounters{}, err
 	}
 	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
 		permitted := caps.Overridden(counters.Overrides)
-		if counters.MergeRearms >= permitted.MergeRearms {
+		if spent := counters.RearmsOf(publication); spent >= permitted.MergeRearms {
 			return TriageCapError{
-				Action:     TriageMergeRearm,
-				Budget:     TriageMergeRearmBudget,
-				WorkItemID: counters.WorkItemID,
-				Spent:      counters.MergeRearms,
-				Cap:        permitted.MergeRearms,
+				Action:      TriageMergeRearm,
+				Budget:      TriageMergeRearmBudget,
+				WorkItemID:  counters.WorkItemID,
+				Publication: publication,
+				Spent:       spent,
+				Cap:         permitted.MergeRearms,
 			}
 		}
+		if counters.RearmedPublications == nil {
+			counters.RearmedPublications = make(map[string]int, 1)
+		}
+		counters.RearmedPublications[publication]++
+		// The item's own total is kept beside the breakdown rather than derived from
+		// it, because it is what every reading of the item reports as what triage has
+		// done to it — and because a record written while the counter was per item
+		// carries a total with no breakdown behind it, which the total must go on
+		// including.
 		counters.MergeRearms++
 		return nil
 	})

@@ -1154,7 +1154,7 @@ func TestARunThatSpendsItsRepairBudgetDocketsItselfAsItStops(t *testing.T) {
 	// from the runs, because that record is what the grant is truncated against.
 	want := triage.Counters{
 		ReviewRounds: 2, ReviewRoundsCap: 4, RepairAttempts: 1, RepairGrantAttempts: 2,
-		RepairGrantsCap: 1, RerunsCap: 1, MergeRearmsCap: 2,
+		RepairGrantsCap: 1, RerunsCap: 1, MergeRearmsCap: 1,
 	}
 	if entry.Counters != want {
 		t.Fatalf("counters = %#v, want %#v", entry.Counters, want)

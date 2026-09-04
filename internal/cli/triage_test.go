@@ -33,7 +33,7 @@ func TestTriageRefusesACommandItDoesNotHave(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Run([]string{"triage", "rearm", "run-0123456789abcdef0123456789abcdef"}, &stdout, &stderr, "test")
+	code := Run([]string{"triage", "requeue", "run-0123456789abcdef0123456789abcdef"}, &stdout, &stderr, "test")
 	if code != 2 {
 		t.Fatalf("Run() code = %d, want 2", code)
 	}

@@ -2174,8 +2174,9 @@ With both on, a run works like this:
    because something it required went unmet, records an outstanding publication
    and hands the item back to you with a blocker rather than closing it. It never
    merges anything itself: a requirement that stopped the forge is yours to
-   satisfy, and re-arming a dropped merge is a bounded triage decision rather
-   than something a sweep does.
+   satisfy, and re-arming a dropped merge is a bounded triage decision — one per
+   publication, carried out by `yoyo triage rearm` — rather than something a sweep
+   does.
 
 `gh` is invoked by the harness and never by a developer or reviewer: no role is
 given a credential, a tool, or a request to push or merge. For the reviewer that
@@ -2764,10 +2765,12 @@ round cap, which they share with each other and with every run of the item. The
 [table below](#what-one-work-item-has-been-given) says which bound refuses
 which.
 
-Recording a decision and carrying it out are two steps, and two of the six
-decisions have an action for the second. They are the two opposite answers to a
-run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
-repair` continues the run that stopped on the change it already has.
+Recording a decision and carrying it out are two steps, and three of the six
+decisions have an action for the second. Two of them are the opposite answers to
+a run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
+repair` continues the run that stopped on the change it already has. The third,
+`yoyo triage rearm`, is about a publication rather than a run: it repeats the
+merge request the forge dropped.
 
 `yoyo triage rerun <run-id> --reason "<the recorded decision>"` starts a fresh
 run of the item whose stopped run the docket entry names. It is refused unless that run is terminally recorded and
@@ -2960,12 +2963,48 @@ its state file, and they are what the continued run's repair loop adds to
 also how the harness knows what a grant has already bought: summed across an
 item's runs, they are what a second re-entry is refused against.
 
-The other four decisions still carry themselves out no further than the record:
-nothing in the harness repeats a merge request the forge dropped, and a re-scope,
-a wait, and an escalation ask for no action at all. The budget is spent when the
-decision is recorded, which is the same order every counter here is written in —
-an attempt nobody took rather than one nobody counted — so a decision nobody acts
-on has still cost the item its budget.
+`yoyo triage rearm <run-id> --reason "<the recorded decision>"` is the third
+carry-out, and it is about the other thing that stops: an approved change
+published to a forge that queued its merge and then dropped it. **It repeats
+exactly the request the reviewer's verdict authorized** — the same pull request,
+by the method that verdict's own merge recorded rather than one this action picks,
+pinned to the commit that was integrated — and it overrides nothing to do it.
+Administrator privileges are never used, and repeating an identical request is
+not merging past a requirement: the forge's requirement machinery runs again in
+full, which is the whole reason the design permits it.
+
+**It is bounded per publication rather than per item**, at one. The development
+manager's decision spends that publication's budget as it is recorded, and what
+says the decision has been acted on is the publication's own durable counter, on
+the run's record, written before the request is made. A publication with as many
+re-arms made as decided has had everything triage decided about it carried out,
+so a second drop of it is refused here and recorded as an escalation on the item:
+the blocker the sweep leaves for a second drop says so in as many words.
+
+**What refuses it, all of it asked before anything is spent.** The forge's own
+merge state has to name nothing only a person can satisfy — a conflict with the
+base branch, a request still in draft, a base branch that has moved ahead, a
+protection rule the request does not meet — and a state that could not be read
+refuses too, because this is a gate. The request has to be unchanged: its head is
+still the commit the run integrated, and the remote target still passes the same
+pre-merge content check the original gate ran. And the work has to be settled —
+the run that made the publication terminally recorded, and no run of the item in
+flight — which is the precondition a live incident bought, where a publication
+re-armed under a live run left a hand-written amendment stranded on a preserved
+branch. The intake hold does not apply, because a re-arm chooses no work: it
+finishes the publication of work that is already integrated.
+
+It takes the target branch's promotion lease before it asks the forge for
+anything, so it queues behind whatever is promoting into that branch now — a
+re-arm is an integration retry against the target branch, and
+`one-promotion-per-target-branch` binds it as it binds the promotion itself. A
+merge the forge queues again puts the run back where `yoyo reconcile` settles it.
+
+The other three decisions still carry themselves out no further than the record:
+a re-scope, a wait, and an escalation ask for no action at all. The budget is
+spent when the decision is recorded, which is the same order every counter here
+is written in — an attempt nobody took rather than one nobody counted — so a
+decision nobody acts on has still cost the item its budget.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a
@@ -2996,8 +3035,8 @@ triage's deliberate exception to that budget, not another helping of it.
 
 The thresholds above bound something, and what they bound is a durable record
 per work item: the repair grants triage has given it, the re-runs it has caused,
-the merge re-arms it has made, and the **review rounds** the item has cost across
-every run of it. It lives beside the runs under the state directory, one file per
+the merge re-arms it has made — with what each publication of the item has had of
+them — and the **review rounds** the item has cost across every run of it. It lives beside the runs under the state directory, one file per
 item, and it outlives them — a run is settled and its worktree and branch are
 removed, and what the item has been given is still there.
 
@@ -3027,10 +3066,19 @@ spends only its own budget, whatever the rounds say.
 
 ```text
   repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
-  merge re-arms: 1 of 2 permitted
+  merge re-arms: 1 across every publication of this item, 1 permitted per publication
+    publication:run-a#92: 1 of 1 permitted
   1 grant(s) were cut down to the rounds the cap still had room for; 1 round(s) were granted in total
   waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say
 ```
+
+The re-arm line is the one that reads differently, because its ceiling is not
+the item's. A re-arm repeats one already-authorized merge request, so it is
+bounded per publication: the count is the item's total across every publication
+it has made, the cap is what one publication may spend, and each publication
+that has spent any of it is named beneath. An item that published three times has
+three separate budgets, and one publication being out says nothing about the
+others.
 
 **The first line counts what has been spent, not how many times triage looked.**
 Three of the development manager's six decisions spend a budget here — a repair
@@ -3102,7 +3150,7 @@ Which threshold refuses which action:
 | --- | --- |
 | another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for — one precondition among several: the decision recorded here spends the budget, and `yoyo triage repair` re-enters the stopped run's repair loop on it, which is a claim the harness makes rather than the operator, so `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the run is continued and the reasoning recorded in the run's durable state. That action is bounded again by what the grant has already bought, read back from the continuations the item's runs record, and it refuses a preserved worktree that is not as the harness left it |
 | another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget; `yoyo triage rerun` starts the run and carries both, is bounded again by one re-run per docketed stoppage, and reads this counter back — against the re-runs already claimed for the item — as the proof that a decision is there to carry out |
-| re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the re-arm action (unbuilt today), which must repeat only the identical already-authorized forge request under the harness's own lease. The decision recorded here spends the per-item integration-retry budget as shipped; the design's once-per-publication counter arrives with the re-arm action, and performing the re-arm is that action's |
+| re-arming a merge the forge dropped | one per **publication**, not per item — a re-arm repeats one already-authorized merge request, so an item that published three times has three separate budgets. One precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds `yoyo triage rearm`, which takes the target branch's promotion lease and repeats only the identical already-authorized request. The decision recorded here spends that publication's budget; the action reads it back — against the re-arms the publication's own record says the harness has made — as the proof that a decision is there to carry out, and a second drop is an escalation rather than another re-arm |
 
 The first two buy review rounds, so the round cap bounds them, and a grant is
 **truncated** rather than refused where some rounds remain: at the defaults an
@@ -3129,8 +3177,17 @@ handed back and re-run without bound while every counter read zero.
 
 A merge re-arm buys no round at all, which is exactly why it needs a bound of
 its own: an action that costs nothing to take is the one that can be taken
-forever. It follows the integration retries a single run is already permitted,
-which is the same judgement about the same thing one level up.
+forever. It is also the only one of the three that is not the item's. What a
+re-arm repeats is one merge request the reviewer's verdict already authorized,
+so the governed design bounds it at **once per publication** and calls a second
+drop of the same publication an escalation.
+
+It shipped keyed to the item and sized by
+`execution.integration_retries_before_reconciliation`, which was a different
+bound in both halves: it granted one publication a second re-arm the design
+calls an escalation, and it refused a later publication of the same item its
+first. It is now once per publication and reads no configuration at all, so an
+operator raising the integration retries cannot move it back.
 
 #### Crossing a cap the operator decides to cross
 
