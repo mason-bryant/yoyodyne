@@ -206,12 +206,34 @@ harness choosing:
 ./bin/yoyo work --json
 ```
 
-It reads the admitted work in the order the product manager set, takes the items
-the tracker itself reports as ready to pull, and starts as many of them at once
-as `execution.max_concurrent_developers` leaves free — which is `1` until you
-raise it. Each run is the run above: its own branch, its own worktree, the same
-checks, the same independent reviewer, the same serial promotion. The command
-returns once every run it started has ended.
+It reads the admitted work in the order the product manager set, works out which
+of it can be pulled, and starts as many of those at once as
+`execution.max_concurrent_developers` leaves free — which is `1` until you raise
+it. Each run is the run above: its own branch, its own worktree, the same checks,
+the same independent reviewer, the same serial promotion. The command returns
+once every run it started has ended.
+
+Which items those are is asked of the records rather than of the item's status.
+For open work it is the tracker's own ready list, because a blocker lives in the
+tracker's dependency graph and a status listing does not reliably carry one. For
+work at status `blocked` it is that item's own blocking dependencies, because the
+ready list is computed from the same status field and so can never offer it. That
+distinction is the fix for a specific failure: a status is written when work
+stops and nothing rewrites it when what stopped it clears, so on 2026-09-04
+forty-one items sat at `blocked` with every dependency they had already closed —
+two-thirds of the backlog, two p0 items among it — and the line was idle for a
+morning with nothing saying why.
+
+What still holds a blocked item back is a **hold**, which is the harness's own
+durable record rather than a field: a run that stopped on the item and whose
+change is still on a branch, or a stoppage put in front of the development
+manager that nobody has decided about. Neither is ever released automatically.
+Releasing a stoppage would start a fresh run on top of a change that is still
+there, so a hold is lifted only by triage picking the change up or by the
+escalation being answered — at which point the records stop saying the item is
+held, and it becomes pullable without anybody having edited its status. A pass
+that cannot read those records holds every blocked item rather than releasing
+work whose hold it could not see.
 
 Capacity is enforced where a run is reserved rather than by the scheduler, so two
 of these, or one of these and a `yoyo run` beside it, share one limit rather than
@@ -219,8 +241,8 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Eight things keep an item out of a pass, and the pass accounts for them at two
-different grains. Five are named against the item, because nothing else would
+Nine things keep an item out of a pass, and the pass accounts for them at two
+different grains. Six are named against the item, because nothing else would
 report that this particular item was passed over. An **unresolved directive** is
 named with the directive's own words, because it needs a person. An item
 whose **unfinished children already carry its execution** is skipped with those
@@ -234,21 +256,25 @@ item that **would race work already in flight** is sequenced behind it rather
 than started beside it, with the run it would have raced and what the two share
 both named. An item whose **executor is a persona conversation** rather than
 a developer run is passed over with what carries it named, which the paragraph
-after next is about. And an item the product manager has **parked** is passed
-over with the parking reason named, which the paragraph after that is about. The other
-three — the tracker not reporting an item as ready, a run for it already being in
+after next is about. An item the product manager has **parked** is passed
+over with the parking reason named, which the paragraph after that is about. And
+an item **held for a person** — a stoppage whose change is still on a branch or
+one nobody has decided about, in the sense the hold paragraph above gives it — is
+passed over with the hold named, because like the parking it is not a wait for
+anything and will not clear on its own. The other
+three — nothing reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them
 ended the choosing, and
 a pass that got as far as reading the queue prints how many items were admitted,
-how many the tracker called ready to pull, and how many slots were taken. Counts
+how many of them could be pulled, and how many slots were taken. Counts
 rather than a list, deliberately — a line per unready item would be a line per
 backlog entry on every pass, which is how a listing stops being read. A pass that
 stopped before reading the queue at all, because you were holding intake or the
 machine was already full, says nothing about the backlog rather than reporting
 zeroes it never looked up.
 
-Sequencing is the one of those five that is a wait rather than a refusal. Two
+Sequencing is the one of those six that is a wait rather than a refusal. Two
 items race when they are siblings of one epic, when one is the epic the other was
 broken out of, or when the files they will change overlap. An item says which
 files those are by naming them after `conflict-surface:` on a line of its own, in

@@ -20,7 +20,7 @@ func TestOrderIsPriorityFirstAndHoldsWhatTheProductManagerDidNotDecide(t *testin
 		{ID: "yoyodyne-ifd.3", Title: "The scheduler that runs it", Status: statusOpen, Priority: 0},
 		{ID: "yoyodyne-ifd.25", Title: "Approval moves up to the goals", Status: statusOpen, Priority: 2},
 		{ID: "yoyodyne-ifd.4", Title: "The development manager that pulls", Status: statusOpen, Priority: 1},
-	}, []string{"yoyodyne-ifd.26", "yoyodyne-ifd.3", "yoyodyne-ifd.25", "yoyodyne-ifd.4"})
+	}, []string{"yoyodyne-ifd.26", "yoyodyne-ifd.3", "yoyodyne-ifd.25", "yoyodyne-ifd.4"}, ReadHolds(nil))
 
 	var order []string
 	for _, entry := range queue.Entries {
@@ -51,16 +51,20 @@ func TestOnlyAdmittedUnfinishedWorkIsInTheBacklog(t *testing.T) {
 		{ID: "yoyodyne-1", Title: "Being worked on", Status: "in_progress", Priority: 0},
 		{ID: "yoyodyne-2", Title: "Finished", Status: "closed", Priority: 0},
 		{ID: "yoyodyne-3", Title: "Admitted and waiting", Status: statusOpen, Priority: 3},
-		{ID: "yoyodyne-4", Title: "Admitted and blocked", Status: statusBlocked, Priority: 1},
+		{
+			ID: "yoyodyne-4", Title: "Admitted and blocked", Status: statusBlocked, Priority: 1,
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-3", Type: blocksDependency, Status: statusOpen}},
+		},
 		// A tracker that reports a claimed or closed item as ready cannot put it
 		// back in the queue: what has left the backlog has left it.
-	}, []string{"yoyodyne-1", "yoyodyne-2", "yoyodyne-3", "yoyodyne-4"})
+	}, []string{"yoyodyne-1", "yoyodyne-2", "yoyodyne-3", "yoyodyne-4"}, ReadHolds(nil))
 
 	if len(queue.Entries) != 2 {
 		t.Fatalf("entries = %#v", queue.Entries)
 	}
 	// A blocked item keeps its place in the order: it is admitted work that is
-	// not finished, and hiding it would understate what is queued.
+	// not finished, and hiding it would understate what is queued. What holds it
+	// back is the unfinished work it waits for rather than its status.
 	if queue.Entries[0].ID != "yoyodyne-4" || queue.Entries[0].Ready {
 		t.Fatalf("blocked entry = %#v", queue.Entries[0])
 	}
@@ -72,6 +76,110 @@ func TestOnlyAdmittedUnfinishedWorkIsInTheBacklog(t *testing.T) {
 	}
 	if queue.Ready() != 1 {
 		t.Fatalf("Ready() = %d, want 1", queue.Ready())
+	}
+}
+
+// The 2026-09-04 idle morning, at the grain the queue is read at: an item whose
+// status was set to blocked when its work stopped, whose every blocker has since
+// closed, and which nothing is holding. Nothing rewrites that status when the
+// gates clear, so trusting it hid two-thirds of the backlog — two p0 items among
+// it — while the line sat idle. What decides here is the dependencies.
+func TestABlockedStatusWithEveryBlockerClosedDoesNotHideTheWork(t *testing.T) {
+	t.Parallel()
+
+	queue := Order([]beads.WorkItem{
+		{
+			ID: "yoyodyne-ifd.192", Title: "Blocked months ago, blocker long closed",
+			Status: statusBlocked, Priority: 0,
+			// The blocker is closed, so it is not in the backlog any more. The
+			// dependency to it is still listed, exactly as Beads lists it.
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: blocksDependency}},
+		},
+		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 1},
+		// The tracker offers only the open one, because its ready list is computed
+		// from the same status field. That is exactly why it is not asked about the
+		// blocked one.
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil))
+
+	released := queue.Entries[0]
+	if !released.Ready || len(released.WaitingOn) != 0 || released.Awaiting != "" {
+		t.Fatalf("an item whose every blocker closed was still hidden by its status: %#v", released)
+	}
+	if next, ok := queue.Next(); !ok || next.ID != "yoyodyne-ifd.192" {
+		t.Fatalf("Next() = %#v, %v; the p0 item is what the order says comes first", next, ok)
+	}
+	if queue.Ready() != 2 {
+		t.Fatalf("Ready() = %d, want both items", queue.Ready())
+	}
+}
+
+// The other half, and the one that must never be got wrong: a stoppage somebody
+// has to decide about is not a dependency block. It has no unfinished blocker to
+// clear, so a queue that read readiness off the dependencies alone would pull it
+// and start a fresh run on top of a change that is still preserved. The hold is
+// what stops that, and nothing here lifts one.
+func TestAGovernanceHoldIsNotReleasedByADependencyThatCleared(t *testing.T) {
+	t.Parallel()
+
+	const stoppage = "run run-5035c832 stopped on it and its change is preserved"
+	queue := Order([]beads.WorkItem{
+		{
+			ID: "yoyodyne-ifd.153", Title: "Guard the notes writer", Status: statusBlocked, Priority: 1,
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: blocksDependency}},
+		},
+		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 2},
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]string{"yoyodyne-ifd.153": stoppage}))
+
+	held := queue.Entries[0]
+	if held.Ready || held.Awaiting != stoppage {
+		t.Fatalf("a held stoppage was released by a cleared dependency: %#v", held)
+	}
+	// It keeps its place, and what it says is the stoppage rather than a wait:
+	// reading it as a wait would send somebody looking for a blocker to release
+	// when what it needs is a decision.
+	if held.Position != 1 {
+		t.Fatalf("the held entry moved: %#v", held)
+	}
+	rendered := queue.Render()
+	if !strings.Contains(rendered, stoppage) {
+		t.Fatalf("rendered backlog = %q, want it to name the stoppage", rendered)
+	}
+	if strings.Contains(rendered, "waiting on") {
+		t.Fatalf("a stoppage was reported as a wait: %q", rendered)
+	}
+	if next, ok := queue.Next(); !ok || next.ID != "yoyodyne-ifd.4" {
+		t.Fatalf("Next() = %#v, %v", next, ok)
+	}
+}
+
+// Holds nobody could read are not holds of none. A reader that cannot tell a
+// dependency block from a stoppage must release neither, because releasing a
+// stoppage starts a run over work that is still there and holding a releasable
+// item costs one pull.
+func TestHoldsThatCouldNotBeReadHoldEveryBlockedItem(t *testing.T) {
+	t.Parallel()
+
+	queue := Order([]beads.WorkItem{
+		{ID: "yoyodyne-ifd.192", Title: "Blocked, nothing waiting", Status: statusBlocked, Priority: 0},
+		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 1},
+	}, []string{"yoyodyne-ifd.4"}, Holds{})
+
+	unread := queue.Entries[0]
+	if unread.Ready || unread.Hold() != unreadHold {
+		t.Fatalf("an unread hold released a blocked item: %#v", unread)
+	}
+	// The gap is a fact about the reading rather than about the item, so it is not
+	// carried as something somebody has to go and decide about.
+	if unread.Awaiting != "" {
+		t.Fatalf("a failed reading was reported against the item: %#v", unread)
+	}
+	// The open item is untouched: what could not be read is what is holding the
+	// blocked work, and the tracker still answers for everything else.
+	if !queue.Entries[1].Ready || queue.Entries[1].Awaiting != "" {
+		t.Fatalf("an unread hold reached open work: %#v", queue.Entries[1])
+	}
+	if !strings.Contains(queue.Render(), "could not be read") {
+		t.Fatalf("rendered backlog = %q, want it to say the reading failed", queue.Render())
 	}
 }
 
@@ -96,7 +204,7 @@ func TestAnItemWaitingOnUnfinishedWorkKeepsItsPlaceButIsNotPulled(t *testing.T) 
 		{ID: "yoyodyne-ifd.18", Title: "Give the product manager the backlog", Status: statusOpen, Priority: 1},
 		// The tracker holds the first one back and offers the second, which is
 		// what it does when a blocker is unfinished.
-	}, []string{"yoyodyne-ifd.18"})
+	}, []string{"yoyodyne-ifd.18"}, ReadHolds(nil))
 
 	waiting := queue.Entries[0]
 	if waiting.Ready || len(waiting.WaitingOn) != 1 || waiting.WaitingOn[0] != "yoyodyne-ifd.18" {
@@ -123,7 +231,7 @@ func TestADependencyOnFinishedWorkHoldsNothingBack(t *testing.T) {
 		// The blocker is closed, so it is not in the backlog any more. The
 		// dependency to it is still listed, exactly as Beads lists it.
 		Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: blocksDependency}},
-	}}, []string{"yoyodyne-ifd.4"})
+	}}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil))
 
 	entry := queue.Entries[0]
 	if !entry.Ready || len(entry.WaitingOn) != 0 {
@@ -151,7 +259,7 @@ func TestWorkAConversationCarriesIsNeverTheNextThingToPull(t *testing.T) {
 			Executor: domain.WorkItemExecutorConversation,
 		},
 		{ID: "yoyodyne-ifd.144", Title: "Mark the conversation items", Status: statusOpen, Priority: 1},
-	}, []string{"yoyodyne-ifd.138", "yoyodyne-ifd.144"})
+	}, []string{"yoyodyne-ifd.138", "yoyodyne-ifd.144"}, ReadHolds(nil))
 
 	held := queue.Entries[0]
 	if held.Ready {
@@ -193,7 +301,7 @@ func TestParkedWorkIsNeverPullableHoweverFarTheQueueDrains(t *testing.T) {
 			ID: "yoyodyne-ifd.6", Title: "The thin Codex backend", Status: statusOpen, Priority: 4,
 			Parking: "off the critical path by the scope decision; released when a second backend is wanted",
 		},
-	}, []string{"yoyodyne-ifd.188", "yoyodyne-ifd.6"})
+	}, []string{"yoyodyne-ifd.188", "yoyodyne-ifd.6"}, ReadHolds(nil))
 
 	parked := queue.Entries[1]
 	if parked.Ready {
@@ -213,7 +321,7 @@ func TestParkedWorkIsNeverPullableHoweverFarTheQueueDrains(t *testing.T) {
 	drained := Order([]beads.WorkItem{{
 		ID: "yoyodyne-ifd.6", Title: "The thin Codex backend", Status: statusOpen, Priority: 4,
 		Parking: "off the critical path by the scope decision",
-	}}, []string{"yoyodyne-ifd.6"})
+	}}, []string{"yoyodyne-ifd.6"}, ReadHolds(nil))
 	if next, ok := drained.Next(); ok {
 		t.Fatalf("a drained queue selected parked work: %#v", next)
 	}
@@ -245,7 +353,7 @@ func TestParkedWorkThatNoRunCouldCarryIsToldTheHoldThatWouldStillStand(t *testin
 		ID: "yoyodyne-ifd.138", Title: "Promote the brief", Status: statusOpen, Priority: 0,
 		Executor: domain.ConversationWith(domain.RoleArchitect),
 		Parking:  "waiting on the operator's answer about the goals",
-	}}, []string{"yoyodyne-ifd.138"})
+	}}, []string{"yoyodyne-ifd.138"}, ReadHolds(nil))
 
 	entry := queue.Entries[0]
 	if entry.Ready {
@@ -275,7 +383,7 @@ func TestAnItemTheTrackerDoesNotOfferIsNotPulledHoweverCleanItsListingLooks(t *t
 	queue := Order([]beads.WorkItem{
 		{ID: "yoyodyne-ifd.3", Title: "Blocked, but the listing does not say so", Status: statusOpen, Priority: 0},
 		{ID: "yoyodyne-ifd.4", Title: "Actually pullable", Status: statusOpen, Priority: 1},
-	}, []string{"yoyodyne-ifd.4"})
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil))
 
 	held := queue.Entries[0]
 	if held.Ready {
@@ -294,7 +402,7 @@ func TestAnItemTheTrackerDoesNotOfferIsNotPulledHoweverCleanItsListingLooks(t *t
 	// The degenerate case is the one that matters most: a readiness answer that
 	// arrives empty makes the whole queue unready rather than making all of it
 	// pullable.
-	none := Order([]beads.WorkItem{{ID: "yoyodyne-ifd.3", Title: "Admitted", Status: statusOpen}}, nil)
+	none := Order([]beads.WorkItem{{ID: "yoyodyne-ifd.3", Title: "Admitted", Status: statusOpen}}, nil, ReadHolds(nil))
 	if _, ok := none.Next(); ok || none.Ready() != 0 {
 		t.Fatalf("an empty ready set produced %#v", none.Entries)
 	}
@@ -309,8 +417,10 @@ func TestRenderSaysTheOrderWhatIsHeldBackAndWhatIsNext(t *testing.T) {
 		{ID: "yoyodyne-ifd.4", Title: "The development manager that pulls", Status: statusOpen, Priority: 1},
 		{ID: "yoyodyne-ifd.9", Title: "A run that failed and was blocked", Status: statusBlocked, Priority: 2},
 		// The tracker offers the one item nothing is holding: the first waits for
-		// unfinished work and the third carries a blocker of its own.
-	}, []string{"yoyodyne-ifd.4"})
+		// unfinished work and the third stopped on a change nobody has decided about.
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]string{
+		"yoyodyne-ifd.9": "run run-f4fbf60a stopped on it and its change is preserved",
+	}))
 
 	rendered := queue.Render()
 	for _, required := range []string{
@@ -319,7 +429,7 @@ func TestRenderSaysTheOrderWhatIsHeldBackAndWhatIsNext(t *testing.T) {
 		"waiting on yoyodyne-ifd.4",
 		"2. [yoyodyne-ifd.4] p1 The development manager that pulls",
 		"3. [yoyodyne-ifd.9] p2 A run that failed and was blocked",
-		"blocked; the item says what by",
+		"run run-f4fbf60a stopped on it and its change is preserved",
 		"next to be pulled: yoyodyne-ifd.4",
 	} {
 		if !strings.Contains(rendered, required) {
@@ -335,7 +445,8 @@ func TestRenderSaysTheOrderWhatIsHeldBackAndWhatIsNext(t *testing.T) {
 	// A backlog where everything waits says that rather than naming nothing at
 	// all, because "nothing is ready" and "nothing is queued" call for opposite
 	// responses from an operator.
-	stalled := Order([]beads.WorkItem{{ID: "yoyodyne-1", Title: "Blocked", Status: statusBlocked, Priority: 0}}, nil)
+	stalled := Order([]beads.WorkItem{{ID: "yoyodyne-1", Title: "Blocked", Status: statusBlocked, Priority: 0}}, nil,
+		ReadHolds(map[string]string{"yoyodyne-1": "its stoppage is in front of the development manager"}))
 	if !strings.Contains(stalled.Render(), "nothing is ready to be pulled") {
 		t.Fatalf("stalled backlog = %q", stalled.Render())
 	}
@@ -355,7 +466,7 @@ func TestARenderedBacklogIsCutWhileItsCountsStayExact(t *testing.T) {
 		})
 		ready = append(ready, id)
 	}
-	rendered := Order(items, ready).Render()
+	rendered := Order(items, ready, ReadHolds(nil)).Render()
 
 	if !strings.Contains(rendered, "backlog ("+strconv.Itoa(len(items))+" admitted") {
 		t.Fatalf("the count was cut with the list: %q", rendered)

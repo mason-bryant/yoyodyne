@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -5159,20 +5160,33 @@ func (p Pipeline) validateReviewPolicy() error {
 	return nil
 }
 
+// startableStatuses are the tracker statuses a run may be started on. Blocked is
+// one of them, and that is not a widening of what this gate accepts: the
+// dependency reading below is what refuses a blocked item, and it refuses one
+// whose blockers are unfinished whatever its status says. What the status
+// answered before was the same question worse — it is written when work stops
+// and never rewritten when what stopped it clears, so it went on refusing items
+// whose every blocker had closed, which is how two-thirds of this backlog came
+// to be unreachable on 2026-09-04.
+//
+// What it still refuses is an item that has left the backlog: work already
+// claimed by a run, and work that is closed. Neither is something to start.
+var startableStatuses = []string{"open", "blocked"}
+
 func validateReadyItem(item beads.WorkItem, requestedID string) error {
-	return validateWorkItem(item, requestedID, "open")
+	return validateWorkItem(item, requestedID, startableStatuses...)
 }
 
 func validateClaimedItem(item beads.WorkItem, requestedID string) error {
 	return validateWorkItem(item, requestedID, "in_progress")
 }
 
-func validateWorkItem(item beads.WorkItem, requestedID, expectedStatus string) error {
+func validateWorkItem(item beads.WorkItem, requestedID string, expectedStatuses ...string) error {
 	if item.ID != requestedID {
 		return fmt.Errorf("Beads returned work item %q for requested id %q", item.ID, requestedID)
 	}
-	if item.Status != expectedStatus {
-		return fmt.Errorf("work item %s status is %q, want %s", item.ID, item.Status, expectedStatus)
+	if !slices.Contains(expectedStatuses, item.Status) {
+		return fmt.Errorf("work item %s status is %q, want %s", item.ID, item.Status, strings.Join(expectedStatuses, " or "))
 	}
 	if blockers := blockingDependencies(item); len(blockers) > 0 {
 		return fmt.Errorf("work item %s is blocked by: %s", item.ID, strings.Join(blockers, ", "))

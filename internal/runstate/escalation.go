@@ -331,6 +331,15 @@ func (s *Store) Escalations() *EscalationStore {
 	}
 }
 
+// Escalated is every escalation this store's product holds, read through the
+// accessor above. It exists so a reader that wants both halves of what the
+// harness has stopped — the runs and what has been asked about them — takes one
+// store rather than two, which is what keeps the two readings of one product
+// from being wired to different roots.
+func (s *Store) Escalated() ([]Escalation, error) {
+	return s.Escalations().List()
+}
+
 func (s *EscalationStore) Root() string { return s.root }
 
 // Attempt records that the harness is about to put this stoppage in front of

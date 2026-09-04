@@ -16,6 +16,19 @@ import (
 
 var moment = time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 
+// fakeStoppages is what the harness has stopped and nobody has decided about.
+// A reading with none is a harness holding nothing, which is what every test
+// here means unless it says otherwise.
+type fakeStoppages struct {
+	runs        []runstate.State
+	escalations []runstate.Escalation
+	fail        error
+}
+
+func (f fakeStoppages) Recorded() ([]runstate.State, error) { return f.runs, f.fail }
+
+func (f fakeStoppages) Escalated() ([]runstate.Escalation, error) { return f.escalations, f.fail }
+
 type fakeRuns struct {
 	incomplete  []runstate.State
 	outstanding []runstate.State
@@ -128,6 +141,7 @@ func (f fakeSessions) List() ([]runstate.WatchTransition, error) { return f.tran
 func quietSources() Sources {
 	return Sources{
 		Runs:          fakeRuns{prices: map[string]runstate.ItemPrice{}},
+		Stoppages:     fakeStoppages{},
 		Conversations: fakeConversations{},
 		Tracker:       statusTracker{},
 		Directives:    fakeDirectives{},
@@ -196,6 +210,18 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		},
 		ready: []beads.WorkItem{{ID: "yoyodyne-ifd.194"}, {ID: "yoyodyne-ifd.200"}},
 	}}
+	// The blocked item is blocked because a run stopped on it and its change is
+	// still on a branch. That is what the line names, rather than the status
+	// field, which says the same word about work whose every blocker has closed.
+	sources.Stoppages = fakeStoppages{runs: []runstate.State{{
+		RunID:        "run-b",
+		WorkItemID:   "yoyodyne-ifd.201",
+		Status:       runstate.StatusFailed,
+		UpdatedAt:    moment.Add(-24 * time.Hour),
+		Branch:       "yoyodyne/yoyodyne-ifd-201/run-b",
+		WorktreePath: "/state/worktrees/run-b",
+		Blocker:      "Yoyodyne stopped this item: a configured check still failed after every permitted attempt.",
+	}}}
 	sources.IntakeHolds = fakeIntakeHolds{
 		hold: runstate.IntakeHold{HeldAt: moment.Add(-2 * time.Hour), Reason: "the overnight looked wrong"},
 		held: true,
@@ -209,7 +235,10 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		"  product-manager — product-manager, a turn in flight for 40s after 270 recorded turns\n",
 		"Not startable (2 of 3 admitted items):\n",
 		"  yoyodyne-ifd.200 — intake is held — the overnight looked wrong; `yoyo release` lifts it\n",
-		"  yoyodyne-ifd.201 — blocked; the item says what by\n",
+		// The whole line, because docs/operations.md prints it as the example an
+		// operator reads: a wording change has to break the document and the test
+		// together rather than leaving the two saying different things.
+		"  yoyodyne-ifd.201 — run run-b stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; triage decides what happens to it\n",
 		"Needs a human (1):\n",
 		"intake is held, since 2026-08-30T10:00:00Z: the overnight looked wrong — the operator's",
 	} {

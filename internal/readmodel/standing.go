@@ -151,6 +151,12 @@ type Sources struct {
 	Runs          Runs
 	Conversations Conversations
 	Tracker       Tracker
+	// Stoppages is what the harness has stopped and nobody has decided about, which
+	// is what separates an item held for a person from one whose dependencies have
+	// all landed. It is optional, and a reading without one holds every blocked
+	// item rather than releasing work whose hold it could not read; see
+	// backlog.Holds for why that is the safe direction.
+	Stoppages     Stoppages
 	Directives    Directives
 	Amendments    Amendments
 	OperatorHolds OperatorHolds
@@ -600,8 +606,9 @@ func alive(sessions []runstate.WatchTransition, keep func(runstate.WatchState) b
 }
 
 // readQueue assembles the admitted work in the product manager's order, from the
-// same two readings the scheduler makes: the listings that carry the order, and
-// the tracker's own account of what can be pulled.
+// same three readings the scheduler makes: the listings that carry the order, the
+// tracker's own account of what can be pulled, and what the harness is holding
+// for a person.
 func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	var admitted []beads.WorkItem
 	for _, status := range backlogStatuses {
@@ -621,7 +628,14 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	for _, item := range ready {
 		pullable = append(pullable, item.ID)
 	}
-	return backlog.Order(admitted, pullable), nil
+	var held backlog.Holds
+	if sources.Stoppages != nil {
+		held, err = HeldForAPerson(sources.Stoppages)
+		if err != nil {
+			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
+		}
+	}
+	return backlog.Order(admitted, pullable, held), nil
 }
 
 // readNeedsHuman is everything waiting on a person, with whose move it is.

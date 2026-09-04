@@ -792,9 +792,10 @@ Running (2 developer runs):
   yoyodyne-ifd.201 — reviewing, 3m elapsed, cost unknown (its event log is gone)
 Working (1 conversation):
   product-manager — product-manager, a turn in flight for 40s after 270 recorded turns
-Not startable (2 of 7 admitted items):
+Not startable (3 of 7 admitted items):
   yoyodyne-ifd.200 — waiting on yoyodyne-ifd.199
   yoyodyne-ifd.212 — parked, so no pull selects it however far the queue drains: the design is being reworked
+  yoyodyne-ifd.153 — run run-5035c832 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; triage decides what happens to it
 Needs a human (1):
   directive-4f2c… is unresolved: which branch does this land on? — the operator's — the work it affects waits until `yoyo directive resolve` settles it
 ```
@@ -823,6 +824,15 @@ Needs a human (1):
   which is a fact about one process rather than about the product. Work that is
   admitted and would be started next is not listed here at all; the count of
   admitted items beside the heading is where it shows.
+
+  One of the queue's own accounts is an item **held for a person**, which is the
+  third not-startable line in the example above: a run stopped on it and its
+  change is still on a branch, or its stoppage is in front of the development
+  manager and nobody has decided about it. It names the run and what has to be decided rather than
+  leaving the item to its `blocked` status, because a status says the same word
+  about a stoppage nobody has answered and about work whose every blocker closed
+  months ago — and reading that word as a refusal is what hid two-thirds of the
+  backlog on 2026-09-04.
 - **Needs a human** is always present, and says either `nothing` or the list with
   whose move each one is: the operator's two switches, an unresolved directive, a
   proposed change nobody has decided, a run that ended still owing a step, work

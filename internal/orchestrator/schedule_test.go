@@ -24,6 +24,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
@@ -2161,6 +2162,12 @@ type scheduleHarness struct {
 	// run stands in for the pipeline. The default completes the item; a test
 	// that cares about a refusal or a failure replaces it.
 	run func(*scheduleHarness, string) (Outcome, error)
+	// stoppages is the harness's own record of work it stopped and nobody has
+	// decided about, which is what separates a blocked status somebody has to
+	// release from one whose blockers have all closed. A pull is wired with one
+	// only where a test asks for it; without it a pull holds every blocked item,
+	// which is what every other test here means.
+	stoppages readmodel.Stoppages
 	// escalate stands in for putting stopped work to the development manager,
 	// with the number of passes already made. A pull is wired with one only where
 	// a test asks for it, so every other test's pass is what it always was.
@@ -2260,13 +2267,14 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	}
 	h.mu.Lock()
 	blockedRuns := h.blockedRuns
+	stoppages := h.stoppages
 	var escalations ScheduleEscalations
 	if h.escalate != nil {
 		escalations = h
 	}
 	h.mu.Unlock()
 	return Pull{
-		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
+		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h, Stoppages: stoppages,
 		Capacity: capacity, Start: h.start, Escalations: escalations,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
@@ -3125,5 +3133,96 @@ func TestASessionStopsOnItsBudgetOverDeliveriesAlone(t *testing.T) {
 	}
 	if schedule.SpentUSD < 1 {
 		t.Fatalf("spent = %.2f, want the deliveries counted up to the bound", schedule.SpentUSD)
+	}
+}
+
+// haltedWork is the harness's durable account of the work it stopped: the runs
+// it recorded and the stoppages it put in front of the development manager. It
+// is what tells a blocked status somebody still has to release from one whose
+// blockers have all closed.
+type haltedWork struct {
+	runs        []runstate.State
+	escalations []runstate.Escalation
+}
+
+func (h haltedWork) Recorded() ([]runstate.State, error) { return h.runs, nil }
+
+func (h haltedWork) Escalated() ([]runstate.Escalation, error) { return h.escalations, nil }
+
+// The idle morning of 2026-09-04, replayed at the grain the scheduler reads at.
+// Two items sit at status blocked with no unfinished dependency between them.
+// One of them stopped last night and its change is still on a branch; the other
+// was blocked months ago on work that has since landed, and nothing rewrote the
+// field when it did. The status says the same word about both, which is why the
+// scheduler asks the records instead: it starts the released one and passes over
+// the held one, naming what holds it.
+func TestSchedulerStartsBlockedWorkNothingIsHoldingAndPassesOverAStoppage(t *testing.T) {
+	t.Parallel()
+
+	stopped := beads.WorkItem{
+		ID: "yoyodyne-ifd.153", Title: "Guard the notes writer", Status: "blocked", Priority: 0,
+	}
+	released := beads.WorkItem{
+		ID: "yoyodyne-ifd.117.1", Title: "Split the configuration reference", Status: "blocked", Priority: 1,
+		// The blocker closed as the week's work landed, so it has left the backlog.
+		// The dependency is still listed, exactly as Beads lists it.
+		Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.117", Type: "blocks"}},
+	}
+	harness := newScheduleHarness(stopped, released)
+	// Neither is on the tracker's ready list, because that list is computed from
+	// the same status field. That is the whole of what hid them.
+	harness.ready = map[string]bool{}
+	harness.stoppages = haltedWork{runs: []runstate.State{{
+		RunID:        "run-5035c832",
+		WorkItemID:   stopped.ID,
+		Status:       runstate.StatusFailed,
+		UpdatedAt:    harness.now.Add(-8 * time.Hour),
+		Branch:       "yoyodyne/yoyodyne-ifd-153/5035c832",
+		WorktreePath: "/state/worktrees/yoyodyne-ifd-153-5035c832",
+		Blocker:      "Yoyodyne stopped this item: its independent reviewer still required repair after every permitted attempt.",
+	}}}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != released.ID {
+		t.Fatalf("started = %#v, want the released item pulled: %s", schedule.Started, schedule.Render())
+	}
+	// The stoppage keeps its place in the order and is passed over with what holds
+	// it named, rather than being started on top of the change it left behind.
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != stopped.ID {
+		t.Fatalf("deferred = %#v, want the stoppage named rather than counted among the unready", schedule.Deferred)
+	}
+	if !strings.Contains(schedule.Deferred[0].Reason, "run-5035c832") {
+		t.Fatalf("deferred reason = %q, want the preserved change named", schedule.Deferred[0].Reason)
+	}
+	// The released item has left the backlog by being pulled, and the stoppage is
+	// still admitted work in the product manager's order. What it is not is
+	// pullable, which is a different thing from being hidden.
+	if schedule.Admitted != 1 || schedule.Pullable != 0 {
+		t.Fatalf("backlog = %d admitted, %d pullable, want the stoppage queued and unpullable", schedule.Admitted, schedule.Pullable)
+	}
+}
+
+// And the safe direction when the records cannot be read at all: a pull wired
+// without them holds every blocked item rather than releasing work whose hold it
+// could not see. Holding a releasable item costs one pull; releasing a held one
+// starts a run over a change that is still there.
+func TestSchedulerHoldsBlockedWorkWhenNothingCanSayWhatIsHoldingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(beads.WorkItem{
+		ID: "yoyodyne-ifd.117.1", Title: "Split the configuration reference", Status: "blocked", Priority: 1,
+	})
+	harness.ready = map[string]bool{}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 0 || schedule.Pullable != 0 {
+		t.Fatalf("started = %#v, pullable = %d, want nothing released on an unread hold: %s",
+			schedule.Started, schedule.Pullable, schedule.Render())
 	}
 }

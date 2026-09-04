@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -202,7 +203,20 @@ func (w conversationWork) Backlog(ctx context.Context) (backlog.Queue, error) {
 	for _, item := range ready {
 		pullable = append(pullable, item.ID)
 	}
-	return backlog.Order(admitted, pullable), nil
+	// And what somebody still has to release comes from the harness's own records,
+	// through the derivation the scheduler and every operator surface read. A
+	// conversation that worked this out for itself would be a second opinion about
+	// which work is startable, in front of the role that decides what to start. A
+	// conversation wired without the records holds every blocked item rather than
+	// releasing work whose hold it could not read.
+	var held backlog.Holds
+	if w.store != nil {
+		held, err = readmodel.HeldForAPerson(w.store)
+		if err != nil {
+			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
+		}
+	}
+	return backlog.Order(admitted, pullable, held), nil
 }
 
 // Run executes one work item through the pipeline. The outcome is reported even
