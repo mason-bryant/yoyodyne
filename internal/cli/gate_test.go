@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/humangate"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -100,5 +102,37 @@ func TestGateListSaysWhatIsWaitingAndWhatWasDone(t *testing.T) {
 	// gate somebody has yet to record is exactly what would be missing.
 	if !strings.Contains(stdout, "could not be listed") {
 		t.Fatalf("stdout = %q, want the unread declarations stated", stdout)
+	}
+}
+
+// The listing is where the author of a declaration nothing could read finds out
+// why their item is held. Dropping it would show every gate but the one somebody
+// has to fix.
+func TestGateListNamesADeclarationNothingCouldRead(t *testing.T) {
+	t.Parallel()
+
+	declared := map[string]gateEntry{}
+	unreadable := collectGates([]beads.WorkItem{
+		{
+			ID:          "yoyodyne-ifd.209.7",
+			Description: humangate.DeclareMarker + " soak-reviewed — the operator has judged the soak\n",
+		},
+		{
+			ID:          "yoyodyne-ifd.209.8",
+			Description: humangate.DeclareMarker + " Soak Reviewed — the operator has judged the soak\n",
+		},
+	}, declared, nil)
+
+	if len(declared) != 1 || declared["soak-reviewed"].DeclaredBy[0] != "yoyodyne-ifd.209.7" {
+		t.Fatalf("declared = %#v", declared)
+	}
+	if len(unreadable) != 1 {
+		t.Fatalf("unreadable = %#v", unreadable)
+	}
+	if unreadable[0].WorkItemID != "yoyodyne-ifd.209.8" {
+		t.Fatalf("unreadable names %q", unreadable[0].WorkItemID)
+	}
+	if !strings.Contains(unreadable[0].Problem, "not a gate name") {
+		t.Fatalf("problem = %q", unreadable[0].Problem)
 	}
 }

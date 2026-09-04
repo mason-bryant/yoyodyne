@@ -45,8 +45,20 @@ type gateEntry struct {
 	Act *runstate.HumanAct `json:"act,omitempty"`
 }
 
+// unreadableGate is one declaration that holds an item and that nobody can
+// record an act against, because nothing could read it. It is listed beside the
+// gates rather than dropped: the item is not pullable until its author fixes the
+// line, and a listing that showed only the well-formed gates would leave them
+// with a held item and no reason for it.
+type unreadableGate struct {
+	WorkItemID string `json:"work_item_id"`
+	Problem    string `json:"problem"`
+}
+
 type gateOutput struct {
 	Gates []gateEntry `json:"gates,omitempty"`
+	// Unreadable is every declaration holding an item that nothing could read.
+	Unreadable []unreadableGate `json:"unreadable,omitempty"`
 	// Recorded is the act this invocation wrote, on `gate record` and nowhere
 	// else.
 	Recorded *runstate.HumanAct `json:"recorded,omitempty"`
@@ -109,6 +121,7 @@ func listGates(args []string, stdout, stderr io.Writer) int {
 	// longer anything for it to hold — what is listed instead is the act, if one
 	// was recorded, so the operator's own signatures stay readable.
 	declared := make(map[string]gateEntry)
+	var unreadable []unreadableGate
 	tracker := parts.tracker()
 	unread := ""
 	for _, status := range []string{"open", "blocked", "in_progress"} {
@@ -121,16 +134,7 @@ func listGates(args []string, stdout, stderr io.Writer) int {
 			unread = err.Error()
 			continue
 		}
-		for _, item := range items {
-			for _, gate := range humangate.Of(item) {
-				entry, seen := declared[gate.Name]
-				if !seen {
-					entry = gateEntry{Name: gate.Name, Statement: gate.Statement}
-				}
-				entry.DeclaredBy = append(entry.DeclaredBy, item.ID)
-				declared[gate.Name] = entry
-			}
-		}
+		unreadable = collectGates(items, declared, unreadable)
 	}
 	for name, act := range recorded {
 		entry, seen := declared[name]
@@ -148,14 +152,20 @@ func listGates(args []string, stdout, stderr io.Writer) int {
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	sort.Slice(unreadable, func(i, j int) bool {
+		if unreadable[i].WorkItemID != unreadable[j].WorkItemID {
+			return unreadable[i].WorkItemID < unreadable[j].WorkItemID
+		}
+		return unreadable[i].Problem < unreadable[j].Problem
+	})
 
 	if *jsonOutput {
-		return writeJSON(stdout, stderr, gateOutput{Gates: entries, Unread: unread})
+		return writeJSON(stdout, stderr, gateOutput{Gates: entries, Unreadable: unreadable, Unread: unread})
 	}
 	if unread != "" {
 		fmt.Fprintf(stdout, "the admitted work could not be listed, so a gate declared and not yet recorded is missing from this: %s\n", unread)
 	}
-	if len(entries) == 0 {
+	if len(entries) == 0 && len(unreadable) == 0 {
 		fmt.Fprintln(stdout, "no work declares a step only a person can take, and no act is recorded")
 		fmt.Fprintln(stdout, "an item declares one by naming it after `"+humangate.DeclareMarker+"` on its own line")
 		return 0
@@ -173,6 +183,11 @@ func listGates(args []string, stdout, stderr io.Writer) int {
 		if len(entry.DeclaredBy) > 0 {
 			fmt.Fprintf(stdout, "    declared by: %s\n", strings.Join(entry.DeclaredBy, ", "))
 		}
+	}
+	for _, broken := range unreadable {
+		fmt.Fprintf(stdout, "%s  declares a step nothing could read, and is held by it\n", broken.WorkItemID)
+		fmt.Fprintf(stdout, "    %s\n", broken.Problem)
+		fmt.Fprintln(stdout, "    no act records this one: correct the declaration on the item, and it becomes a gate somebody can pass")
 	}
 	return 0
 }
@@ -238,6 +253,32 @@ func recordGate(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "work that was held by this gate is pullable at the next reading of the queue; a workflow standing at it steps when it is next stepped")
 	fmt.Fprintln(stdout, "the record is not replaceable: it says who passed the gate, and a second write would change whose it was")
 	return 0
+}
+
+// collectGates reads what one slice of work items says about steps only a
+// person can take, adding to the gates found so far and returning the
+// declarations nothing could read.
+//
+// The unreadable ones are collected rather than skipped because each is holding
+// its item exactly as a gate does, and this listing is where its author finds
+// out why. A listing that showed every gate but the one somebody has to fix
+// would leave them with a held item and no account of it.
+func collectGates(items []beads.WorkItem, into map[string]gateEntry, unreadable []unreadableGate) []unreadableGate {
+	for _, item := range items {
+		reading := humangate.Of(item)
+		for _, gate := range reading.Gates {
+			entry, seen := into[gate.Name]
+			if !seen {
+				entry = gateEntry{Name: gate.Name, Statement: gate.Statement}
+			}
+			entry.DeclaredBy = append(entry.DeclaredBy, item.ID)
+			into[gate.Name] = entry
+		}
+		for _, problem := range reading.Unreadable {
+			unreadable = append(unreadable, unreadableGate{WorkItemID: item.ID, Problem: problem})
+		}
+	}
+	return unreadable
 }
 
 // listGateItems reads one tracker slice for the gates its items declare. The

@@ -775,14 +775,26 @@ func HandedOff(queue backlog.Queue) []Attention {
 func Gated(queue backlog.Queue) []Attention {
 	attention := make([]Attention, 0, len(queue.Entries))
 	for _, entry := range queue.Entries {
-		if len(entry.HumanGates) == 0 {
+		if !entry.HumanGates.Holds() {
 			continue
 		}
-		for _, gate := range entry.HumanGates {
+		for _, gate := range entry.HumanGates.Gates {
 			attention = append(attention, Attention{
 				What: fmt.Sprintf("%s waits on the gate %q: %s", entry.ID, gate.Name,
 					singleLine(gate.Statement, maxRefusalBytes)),
 				Whose: fmt.Sprintf("a person's — nothing machinery does passes it, closing an item included; `yoyo gate record %s` is the act", gate.Name),
+			})
+		}
+		// A declaration nothing could read holds the item exactly as a gate does,
+		// and is on this line for the same reason: it will wait forever without a
+		// person. What it waits for is different, so what it says is different —
+		// there is no name to record an act against, and the author has to correct
+		// the line.
+		for _, unreadable := range entry.HumanGates.Unreadable {
+			attention = append(attention, Attention{
+				What: fmt.Sprintf("%s declares a step only a person can take that nothing could read: %s",
+					entry.ID, singleLine(unreadable, maxRefusalBytes)),
+				Whose: "the item's author — no act records this one; the declaration on the item has to be corrected before anything pulls it",
 			})
 		}
 	}

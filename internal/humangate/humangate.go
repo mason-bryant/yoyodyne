@@ -55,23 +55,18 @@ import (
 // declares by accident.
 const DeclareMarker = "human-gate:"
 
-// DeclareInstruction is what an author is told about the marker, wherever the
-// harness has to explain it. It names the marker rather than describing one, so
-// a reader can copy the line rather than reconstruct it.
-const DeclareInstruction = "A step only a person can take is declared by naming it after `" + DeclareMarker +
-	"` on its own line, as `" + DeclareMarker + " <name> — <what the person has to do>`. Nothing else declares one, " +
-	"and nothing but `yoyo gate record <name>` ever passes one: closing an item does not, and no run does."
-
 // MaxStatementBytes bounds what a gate says the person has to do. It is generous
 // for the sentence it actually is and small enough that nothing can push a
 // document into a work item's gate.
+//
+// A declaration over it is unreadable rather than truncated, so it holds the
+// work exactly as a gate does; see Reading.
 const MaxStatementBytes = 480
 
-// MaxGates is how many gates one item or one workflow is expected to declare
-// before somebody should be told they have written a checklist. It is a
-// guideline Problems reports and never a cut: a gate dropped for being over the
-// line is a step nobody is ever asked to take, which is the whole failure here.
-const MaxGates = 10
+// Nothing here bounds how many gates one item may declare. Every one of them
+// holds the work until it is recorded, so a long list costs the person who wrote
+// it and nobody else — where a bound would have to decide which of them to drop,
+// and a gate dropped is a step nobody is ever asked to take.
 
 // namePattern is what a gate may be called. It is narrow because the name is
 // three things at once: what an author writes, what an operator types into
@@ -113,62 +108,118 @@ func NameProblem(name string) error {
 	}
 }
 
-// Of is every gate one work item declares, from the fields its author wrote.
-// The notes are deliberately not among them; see the package comment.
-func Of(item beads.WorkItem) []Gate {
-	return Declared(item.Title, item.Description, item.Design, item.AcceptanceCriteria)
+// Reading is everything one text says about steps only a person can take: the
+// gates it declares, and the declarations nothing could read.
+//
+// The second half is here rather than off to one side because of what a reader
+// does with it. A declaration with a mistyped name, no separator, or nothing
+// said about the act declares no gate — and if that were the end of it, an
+// author who meant to reserve their own step would have written a line that
+// silently reserved nothing, and the work would be pulled past it. That is the
+// failure this package exists to end, arriving by way of the parser instead of
+// by way of the tracker.
+//
+// So an unreadable declaration holds the work exactly as a gate does, and says
+// what is wrong with it where the hold is read. Nothing discharges one, because
+// there is nothing to record an act against: what clears it is the author fixing
+// the line.
+type Reading struct {
+	// Gates is every gate the text declares, by name, in sorted order.
+	Gates []Gate `json:"gates,omitempty"`
+	// Unreadable is every declaration nothing could read, in the words its author
+	// needs to fix it.
+	Unreadable []string `json:"unreadable,omitempty"`
 }
 
-// Declared reads the gates a text declares after the marker, from whichever
-// fields the caller passes. Which fields those are is the caller's decision,
-// because it is the caller that knows which of them the harness itself writes
-// into.
-//
-// A declaration this cannot read is left out here and reported by Problems. The
-// two are apart so that a reader assembling a queue is never handed half a gate,
-// while the place that can tell an author about it still can.
-func Declared(texts ...string) []Gate {
-	var declared []Gate
-	for _, gate := range parse(texts...) {
-		if gate.problem != nil {
-			continue
-		}
-		declared = appendUnique(declared, gate.Gate)
-	}
-	sort.Slice(declared, func(i, j int) bool { return declared[i].Name < declared[j].Name })
-	// Nothing is cut here, and MaxGates deliberately does not apply. A gate
-	// dropped for being the eleventh is a step nobody is ever asked to take,
-	// which is the failure this package exists to end — so the bound is something
-	// Problems tells an author about rather than something this quietly enforces.
-	return declared
+// Of is what one work item says about steps only a person can take, from the
+// fields its author wrote. The notes are deliberately not among them; see the
+// package comment.
+func Of(item beads.WorkItem) Reading {
+	return Read(item.Title, item.Description, item.Design, item.AcceptanceCriteria)
 }
 
-// Problems is everything wrong with the gate declarations in a text: a
-// declaration with no name, a name nothing could record, a gate that does not
-// say what the person has to do, one name declared twice as two different
-// things, and more gates than a listing can carry.
+// Read reads the declarations in a text, from whichever fields the caller
+// passes. Which fields those are is the caller's decision, because it is the
+// caller that knows which of them the harness itself writes into.
 //
-// It is reported rather than swallowed because a gate this cannot read is a gate
-// nobody will ever be asked to discharge, and work proceeding past one is
-// exactly the failure the package exists to end.
-func Problems(texts ...string) []error {
-	var problems []error
+// It is the only door: there is deliberately no reader that returns the sound
+// gates alone, because a caller handed those and not the rest is a caller that
+// will let a typo through.
+func Read(texts ...string) Reading {
+	var reading Reading
 	statements := make(map[string]string)
 	for _, parsed := range parse(texts...) {
 		if parsed.problem != nil {
-			problems = append(problems, parsed.problem)
+			reading.Unreadable = appendUniqueString(reading.Unreadable, parsed.problem.Error())
 			continue
 		}
+		// One name declared twice as two different things is unreadable rather than
+		// two gates: an operator recording it would not be saying which of the two
+		// they did, and one recorded act would pass both.
 		if existing, declared := statements[parsed.Name]; declared && existing != parsed.Statement {
-			problems = append(problems, fmt.Errorf("the gate %q is declared twice and says two different things; one name is one act, and an operator recording it would not say which they did", parsed.Name))
+			reading.Unreadable = appendUniqueString(reading.Unreadable, fmt.Sprintf(
+				"the gate %q is declared twice and says two different things; one name is one act, and an operator recording it would not say which they did", parsed.Name))
 			continue
 		}
 		statements[parsed.Name] = parsed.Statement
+		reading.Gates = appendUnique(reading.Gates, parsed.Gate)
 	}
-	if len(statements) > MaxGates {
-		problems = append(problems, fmt.Errorf("%d gates are declared against a guideline of %d; a list this long is a checklist rather than a step somebody takes, and every one of them holds the work until it is recorded", len(statements), MaxGates))
+	sort.Slice(reading.Gates, func(i, j int) bool { return reading.Gates[i].Name < reading.Gates[j].Name })
+	sort.Strings(reading.Unreadable)
+	return reading
+}
+
+// Pending is this reading with the gates a recorded act has passed taken out.
+// The unreadable declarations are kept whole, because nothing passes one: there
+// is no name to have recorded an act against.
+//
+// It takes the discharged names rather than reading them, because what has been
+// recorded is a durable fact this package deliberately does not own: the record
+// lives in the harness's state store, and a package that could both declare a
+// gate and decide it was satisfied would be the two halves this separates.
+func (r Reading) Pending(discharged []string) Reading {
+	recorded := make(map[string]struct{}, len(discharged))
+	for _, name := range discharged {
+		recorded[name] = struct{}{}
 	}
-	return problems
+	pending := Reading{Gates: make([]Gate, 0, len(r.Gates)), Unreadable: r.Unreadable}
+	for _, gate := range r.Gates {
+		if _, passed := recorded[gate.Name]; passed {
+			continue
+		}
+		pending.Gates = append(pending.Gates, gate)
+	}
+	if len(pending.Gates) == 0 {
+		pending.Gates = nil
+	}
+	return pending
+}
+
+// Holds reports whether this reading keeps the work behind it from proceeding:
+// a gate nobody has recorded passing, or a declaration nobody could read.
+func (r Reading) Holds() bool { return len(r.Gates) > 0 || len(r.Unreadable) > 0 }
+
+// Describe says what an unpassed reading is waiting for, in the one line every
+// surface prints it as. It is here rather than in each surface because the same
+// hold read in two places has to read the same way, and because the sentence has
+// one job: to say that no machinery clears this and to name what does.
+func (r Reading) Describe() string {
+	if !r.Holds() {
+		return ""
+	}
+	described := make([]string, 0, len(r.Gates)+len(r.Unreadable))
+	for _, gate := range r.Gates {
+		described = append(described, fmt.Sprintf("%s (%s)", gate.Name, gate.Statement))
+	}
+	described = append(described, r.Unreadable...)
+	sentence := "waiting on a person: " + strings.Join(described, "; ") +
+		". Nothing machinery does passes this, closing an item included; `yoyo gate record` is what records the act"
+	if len(r.Unreadable) > 0 {
+		// An unreadable declaration is not waiting for a command, and saying only
+		// the command would send its author to type a name that does not exist.
+		sentence += ". A declaration nothing could read holds the work too, and what clears one is its author correcting the line rather than anybody recording anything"
+	}
+	return sentence
 }
 
 // parsed is one declaration as the reader found it: the gate, or what is wrong
@@ -258,43 +309,6 @@ func undecorate(value string) string {
 	return strings.TrimSpace(strings.TrimRight(strings.TrimLeft(strings.TrimSpace(value), leadingDecoration), trailingDecoration))
 }
 
-// Pending is the gates in a set that no recorded act has passed. It takes the
-// discharged names rather than reading them, because what has been recorded is a
-// durable fact this package deliberately does not own: the record lives in the
-// harness's state store, and a package that could both declare a gate and decide
-// it was satisfied would be the two halves this separates.
-func Pending(gates []Gate, discharged []string) []Gate {
-	recorded := make(map[string]struct{}, len(discharged))
-	for _, name := range discharged {
-		recorded[name] = struct{}{}
-	}
-	pending := make([]Gate, 0, len(gates))
-	for _, gate := range gates {
-		if _, passed := recorded[gate.Name]; passed {
-			continue
-		}
-		pending = append(pending, gate)
-	}
-	return pending
-}
-
-// Describe says what an undischarged gate is waiting for, in the one line every
-// surface prints it as. It is here rather than in each surface because the same
-// gate read two places has to read the same way, and because the sentence has
-// one job: to say that no machinery clears this and to name the command that
-// does.
-func Describe(gates []Gate) string {
-	if len(gates) == 0 {
-		return ""
-	}
-	described := make([]string, 0, len(gates))
-	for _, gate := range gates {
-		described = append(described, fmt.Sprintf("%s (%s)", gate.Name, gate.Statement))
-	}
-	return "waiting on a person: " + strings.Join(described, "; ") +
-		". Nothing machinery does passes this, closing an item included; `yoyo gate record` is what records the act"
-}
-
 // cutMarker finds the marker at the start of one line and returns what follows
 // it. The marker has to start the line — after whatever a Markdown bullet,
 // quote, or emphasis put in front of it — so a sentence discussing the marker
@@ -307,6 +321,10 @@ func cutMarker(line string) (string, bool) {
 	return trimmed[len(DeclareMarker):], true
 }
 
+// appendUnique and appendUniqueString keep one line said twice from being read
+// as two holds. An author who wrote the same declaration in the description and
+// again in the acceptance criteria meant one step, and a queue that listed it
+// twice would be asking them to record it twice.
 func appendUnique(gates []Gate, gate Gate) []Gate {
 	for _, existing := range gates {
 		if existing.Name == gate.Name {
@@ -316,13 +334,11 @@ func appendUnique(gates []Gate, gate Gate) []Gate {
 	return append(gates, gate)
 }
 
-// Names is the names of a set of gates, in the order the set is in. It is what a
-// record, a listing, or a status line carries where the statement would be
-// noise.
-func Names(gates []Gate) []string {
-	names := make([]string, 0, len(gates))
-	for _, gate := range gates {
-		names = append(names, gate.Name)
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
 	}
-	return names
+	return append(values, value)
 }

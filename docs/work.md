@@ -348,12 +348,22 @@ human-gate: soak-reviewed — the operator has read a week of soak runs and is c
 ```
 
 Nothing is inferred: a gate invented out of prose would stop work nobody meant
-to stop, and a declaration this cannot read is refused rather than dropped. An
-item carrying an undischarged gate keeps its place in the order, is listed as
+to stop, so the marker is the whole of it. An item carrying an undischarged gate
+keeps its place in the order, is listed as
 waiting on a person wherever the queue is shown, is named on the status's
 needs-a-human line with what the person has to do, and is never selected however
 far the queue drains. It is not a wait: no run passes it, no check passes it, and
 closing anything passes it.
+
+A declaration nothing could read — a mistyped name, no separator between the name
+and the sentence, nothing said about the act — holds the work in exactly the same
+way, and the queue and the status both say what is wrong with it. That is
+deliberate and it is the same failure in miniature: you wrote a line meaning to
+reserve your own step, and a reader that quietly dropped what it could not parse
+would turn that into an item with no gate, pulled past a step nobody was ever
+asked to take. Nothing records an act against one of these, because there is no
+name to record against; what clears it is correcting the line on the item.
+`yoyo gate list` names the item and the problem.
 
 What passes it is `yoyo gate record <name> --by <you> --did "<what you did>"`,
 and that is the only thing that does. The record says who took the step and what

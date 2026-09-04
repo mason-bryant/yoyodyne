@@ -1606,7 +1606,7 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 		return conversationExecutedReason(entry.Executor), true
 	case entry.Parking.Parked():
 		return parkedReason(entry.Parking), true
-	case len(entry.HumanGates) > 0:
+	case entry.HumanGates.Holds():
 		return entry.Hold(), true
 	default:
 		return "", false
@@ -1624,7 +1624,7 @@ func unreadyClass(entry backlog.Entry) idleClass {
 		return idleCarriedInConversation
 	case entry.Parking.Parked():
 		return idleParked
-	case len(entry.HumanGates) > 0:
+	case entry.HumanGates.Holds():
 		return idleWaitingOnAPerson
 	default:
 		return idleWaitingOnOtherWork

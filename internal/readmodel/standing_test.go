@@ -677,3 +677,37 @@ func TestAnUnreadableGateRecordIsSaidOnlyWhereItOverstatesTheWait(t *testing.T) 
 		t.Fatalf("not startable problem = %q", problem)
 	}
 }
+
+// A declaration nothing could read holds the item and is on the attention line
+// too, saying the one thing that differs: no act records this one, and its
+// author has to correct the line. An operator told only "waiting on a person"
+// would go looking for a gate name to record and find none.
+func TestADeclarationNothingCouldReadIsNamedAsTheAuthorsMove(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": {{
+			ID: "yoyodyne-ifd.209.7", Title: "Declarative becomes the default", Status: "open",
+			Description: "human-gate: Soak Reviewed — the operator has judged the parity soak\n",
+		}}},
+		ready: []beads.WorkItem{{ID: "yoyodyne-ifd.209.7"}},
+	}}
+	// Every act anybody could have recorded is on the record, and it still holds.
+	sources.Gates = fakeGates{discharged: []string{"soak-reviewed", "soak"}}
+	standing := ReadStanding(context.Background(), sources)
+
+	if len(standing.NotStartable) != 1 {
+		t.Fatalf("not startable = %+v", standing.NotStartable)
+	}
+	if len(standing.NeedsHuman) != 1 {
+		t.Fatalf("needs human = %+v", standing.NeedsHuman)
+	}
+	attention := standing.NeedsHuman[0]
+	if !strings.Contains(attention.What, "nothing could read") {
+		t.Fatalf("what = %q", attention.What)
+	}
+	if !strings.Contains(attention.Whose, "author") {
+		t.Fatalf("whose = %q, want the author's move rather than an act to record", attention.Whose)
+	}
+}

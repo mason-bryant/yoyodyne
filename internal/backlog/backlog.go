@@ -80,7 +80,12 @@ type Entry struct {
 	// is answering is what is holding this item back now. A gate somebody has
 	// already passed holds nothing, and listing it would read as an outstanding
 	// step that is in fact done.
-	HumanGates []humangate.Gate `json:"human_gates,omitempty"`
+	//
+	// It carries the declarations nothing could read as well as the gates, and
+	// holds the item for either. An author who mistyped the name of the step they
+	// were reserving must not thereby reserve nothing: a typo that let the work
+	// through would be this machinery's own version of the failure it replaced.
+	HumanGates humangate.Reading `json:"human_gates,omitzero"`
 	// Ready reports that nothing is holding this item back, which is what
 	// separates the next item to pull from the next item in the order.
 	Ready bool `json:"ready"`
@@ -163,7 +168,7 @@ func Order(items []beads.WorkItem, ready []string, discharged []string) Queue {
 	queue := Queue{Entries: make([]Entry, 0, len(admitted))}
 	for position, item := range admitted {
 		_, reportedReady := pullable[item.ID]
-		gates := humangate.Pending(humangate.Of(item), discharged)
+		gates := humangate.Of(item).Pending(discharged)
 		queue.Entries = append(queue.Entries, Entry{
 			Position: position + 1,
 			ID:       item.ID,
@@ -187,7 +192,7 @@ func Order(items []beads.WorkItem, ready []string, discharged []string) Queue {
 			// person's recorded act and by nothing else, so an item carrying one is
 			// not pullable however ready the tracker calls it and however many of the
 			// items it depends on have been closed.
-			Ready:      reportedReady && item.Status == statusOpen && item.Executor.DeveloperRun() && !item.Parking.Parked() && len(gates) == 0,
+			Ready:      reportedReady && item.Status == statusOpen && item.Executor.DeveloperRun() && !item.Parking.Parked() && !gates.Holds(),
 			HumanGates: gates,
 			WaitingOn:  waitingOn(item, unfinished),
 		})
@@ -255,7 +260,7 @@ func (q Queue) Parked() int {
 func (q Queue) Gated() int {
 	gated := 0
 	for _, entry := range q.Entries {
-		if len(entry.HumanGates) > 0 {
+		if entry.HumanGates.Holds() {
 			gated++
 		}
 	}
@@ -345,8 +350,8 @@ func (e Entry) Hold() string {
 		return fmt.Sprintf("its executor is %q rather than a developer run, so no run carries it out; the item says which conversation does", e.Executor)
 	case e.Parking.Parked():
 		return "parked, so no pull selects it however far the queue drains: " + e.Parking.Reason()
-	case len(e.HumanGates) > 0:
-		return humangate.Describe(e.HumanGates)
+	case e.HumanGates.Holds():
+		return e.HumanGates.Describe()
 	case len(e.WaitingOn) > 0:
 		return "waiting on " + strings.Join(e.WaitingOn, ", ")
 	case e.Status == statusBlocked:

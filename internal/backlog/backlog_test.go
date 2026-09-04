@@ -412,7 +412,7 @@ func TestAnItemClosureNeverPassesAStepReservedForAPerson(t *testing.T) {
 	if entry.Ready {
 		t.Fatal("the flip was pullable with the operator's step still untaken, which is the whole of the regression")
 	}
-	if len(entry.HumanGates) != 1 || entry.HumanGates[0].Name != "soak-reviewed" {
+	if len(entry.HumanGates.Gates) != 1 || entry.HumanGates.Gates[0].Name != "soak-reviewed" {
 		t.Fatalf("gates = %#v", entry.HumanGates)
 	}
 	// The queue says it is a person rather than a wait, and says so where the
@@ -436,7 +436,7 @@ func TestAnItemClosureNeverPassesAStepReservedForAPerson(t *testing.T) {
 	if !passed.Entries[0].Ready {
 		t.Fatalf("the flip is still held after the act was recorded: %#v", passed.Entries[0])
 	}
-	if len(passed.Entries[0].HumanGates) != 0 {
+	if passed.Entries[0].HumanGates.Holds() {
 		t.Fatalf("a gate somebody passed is still reported as outstanding: %#v", passed.Entries[0].HumanGates)
 	}
 }
@@ -470,5 +470,61 @@ func TestAGateIsNamedAheadOfWorkThatWillClearOnItsOwn(t *testing.T) {
 	}}, []string{"yoyodyne-ifd.209.7"}, nil)
 	if !strings.Contains(parked.Entries[0].Hold(), "parked") {
 		t.Fatalf("hold = %q", parked.Entries[0].Hold())
+	}
+}
+
+// A gate declaration nothing could read holds the item exactly as a gate does.
+//
+// This is the same regression arriving through the parser instead of through the
+// tracker. An author who writes `human-gate:` with a mistyped name, or with
+// nothing said about the act, meant to reserve a step for a person; a reader
+// that dropped what it could not parse would turn that intention into an item
+// with no gate at all, and the work would be pulled past a step nobody was ever
+// asked to take. So the typo stops the work, and says what is wrong with it.
+func TestADeclarationNothingCouldReadHoldsTheItemToo(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		declaration string
+		want        string
+	}{
+		{name: "a name nothing could record", declaration: humangate.DeclareMarker + " Soak Reviewed — the operator has judged the soak\n", want: "not a gate name"},
+		{name: "nothing said about the act", declaration: humangate.DeclareMarker + " soak-reviewed\n", want: "does not say what the person has to do"},
+		{name: "a marker with nothing after it", declaration: humangate.DeclareMarker + "\n", want: "has no name"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			item := beads.WorkItem{
+				ID: "yoyodyne-ifd.209.7", Title: "Declarative becomes the default",
+				Status: statusOpen, Priority: 1, Description: testCase.declaration,
+			}
+			queue := Order([]beads.WorkItem{item}, []string{item.ID}, nil)
+			entry := queue.Entries[0]
+			if entry.Ready {
+				t.Fatalf("a declaration nothing could read left the item pullable: %#v", entry)
+			}
+			if len(entry.HumanGates.Unreadable) != 1 {
+				t.Fatalf("unreadable = %#v", entry.HumanGates)
+			}
+			hold := entry.Hold()
+			if !strings.Contains(hold, testCase.want) {
+				t.Fatalf("hold = %q, want it to mention %q", hold, testCase.want)
+			}
+			// It says what actually clears it, which is not a command: there is no
+			// name for anybody to have recorded an act against.
+			if !strings.Contains(hold, "correcting the line") {
+				t.Fatalf("hold = %q, want it to say the author has to fix the declaration", hold)
+			}
+			// And no recorded act passes it, however many are on the record.
+			recorded := Order([]beads.WorkItem{item}, []string{item.ID}, []string{"soak-reviewed", "soak"})
+			if recorded.Entries[0].Ready {
+				t.Fatalf("a recorded act passed a declaration nothing could read: %#v", recorded.Entries[0])
+			}
+			if recorded.Gated() != 1 {
+				t.Fatalf("Gated() = %d, want the unreadable declaration counted as waiting on a person", recorded.Gated())
+			}
+		})
 	}
 }

@@ -179,10 +179,15 @@ func (g Graph[S]) Node(state string) (Node[S], bool) {
 // compiled under and is often less.
 func (g Graph[S]) Capabilities() []capability.Capability { return slices.Clone(g.requires) }
 
-// Gates is every human gate this workflow waits behind, in sorted order. It is
-// what a surface asks so it can say a workflow needs a person before it needs
-// one, rather than reporting an instance that stopped and leaving somebody to
-// work out why.
+// Gates is every human gate this workflow waits behind, in sorted order.
+//
+// What reads it today is the executor, before it starts anything: a graph with a
+// gate in it and nothing wired to read the record is refused there rather than
+// at the state it would have stopped at. No status surface reads it yet, and one
+// eventually should — an instance standing at a gated state is currently visible
+// only through the refusal of the step somebody tried to take. Nothing shipped
+// declares a gate, so there is no such instance to report; the surface belongs
+// with the first definition that does.
 func (g Graph[S]) Gates() []string {
 	var gated []string
 	for _, state := range g.states {
