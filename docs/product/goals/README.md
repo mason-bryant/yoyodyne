@@ -7,11 +7,14 @@ non-goals that bound them. [The v1 goals](v1-goals.md) and
 the product manager's to own rather than the architect's. Every statement under
 a goals document's `Goals` heading is a goal work can be attributed to, in the
 words that document states it in; `yoyo goals list` is what they resolve to.
+[Writing a goal](writing-goals.md) is filed beside them and states none of its
+own: it says what a goal has to be, for whoever is writing one.
 
 **Owner.** The product manager, and the operator approves. It is the only role
-that changes a document filed here. Every other role proposes an amendment and
-waits for the owner to decide rather than editing one, and `yoyo amendment list`
-is what is waiting. See
+that changes a goals or non-goals document filed here; `writing-goals` is a
+specification, which the architect owns. Every other role proposes an amendment
+and waits for the owner to decide rather than editing one, and
+`yoyo amendment list` is what is waiting. See
 [artifact ownership](../../designs/v1-harness-design.md#artifact-ownership).
 
 **Editing by hand.** You may, and nothing here refuses it — you are the
@@ -29,20 +32,9 @@ when it opened.
 The shape and identity a goals document must carry — the `Goals` heading, the
 frontmatter, the *Supports* trailer resolved against the brief — is governed by
 [the artifact contract](../../designs/artifact-contract.md), the normative home
-for those rules. This index links and describes; it states no rules of its own,
-and [index-and-stray-identity-governance](../../decisions/index-and-stray-identity-governance.md)
+for those rules. What each goal itself has to be — traceable upstream, specific
+enough to design against, an outcome rather than an implementation — is
+[writing a goal](writing-goals.md), filed beside the goals it describes. This
+index links and describes; it states no rules of its own, and
+[index-and-stray-identity-governance](../../decisions/index-and-stray-identity-governance.md)
 is the decision that keeps it that way.
-
-Each goal states one outcome the product is trying to reach, and should be:
-
-- **traceable upstream** — it names how it supports the brief. A goal that
-  supports nothing in the brief is an orphan.
-- **specific enough to design against** — an architect should be able to turn it
-  into a design without first having to ask what was meant. Intent that is still
-  ambiguous is a question for the operator, not a goal.
-- **an outcome, not an implementation** — what should become true, and why. How
-  it gets built belongs to designs and specifications.
-
-(The three qualities above are the product manager's guidance and move into
-their goals documentation when they rehouse them; they stay here until then so
-nothing recorded is lost.)
