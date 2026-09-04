@@ -122,10 +122,13 @@ type Delivery struct {
 	// is named in the slack-reporting design rather than widened here:
 	//
 	//   - degraded: the harness itself stopped, stale, or choosing nothing over
-	//     ready work, which is something only a person fixes.
+	//     ready work, which is something only a person fixes. Its members are set
+	//     in stall.go.
 	//   - advisory-once: a fact addressed to a person that speaks exactly once per
-	//     fact, deduplicated durably, never repeated and never urgent. The
-	//     bundle-improvement notice is its first member.
+	//     fact, deduplicated durably, never repeated and never urgent. Its one
+	//     member today is the bundle-improvement notice, set in
+	//     improvementDeliveries (improvements.go), which is also where the dedup
+	//     that makes "once per fact" true lives.
 	//
 	// It names nobody. Who the operators are is the surface's — the same member
 	// ids a reply is authorized against — and a feed that named them would be a
