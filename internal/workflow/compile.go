@@ -88,6 +88,7 @@ type Destination struct {
 type Node[S any] struct {
 	state    string
 	summary  string
+	gate     string
 	performs action.Action[S]
 	next     map[string]Destination
 }
@@ -97,6 +98,11 @@ func (n Node[S]) State() string { return n.state }
 
 // Summary is what this step does here, as the definition said it.
 func (n Node[S]) Summary() string { return n.summary }
+
+// Gate is the human gate this step waits behind, or empty for a state nothing
+// holds. A gated state performs nothing until a person's act against that name
+// is on the record, and no outcome of any action ever puts one there.
+func (n Node[S]) Gate() string { return n.gate }
 
 // Action is the registered action this node performs. Nothing here performs it:
 // compiling resolves the door, and opening it belongs to the Executor.
@@ -172,6 +178,21 @@ func (g Graph[S]) Node(state string) (Node[S], bool) {
 // authority a graph actually draws on, which is never more than the grant it was
 // compiled under and is often less.
 func (g Graph[S]) Capabilities() []capability.Capability { return slices.Clone(g.requires) }
+
+// Gates is every human gate this workflow waits behind, in sorted order. It is
+// what a surface asks so it can say a workflow needs a person before it needs
+// one, rather than reporting an instance that stopped and leaving somebody to
+// work out why.
+func (g Graph[S]) Gates() []string {
+	var gated []string
+	for _, state := range g.states {
+		if gate := g.nodes[state].gate; gate != "" && !slices.Contains(gated, gate) {
+			gated = append(gated, gate)
+		}
+	}
+	slices.Sort(gated)
+	return gated
+}
 
 // Compile turns a validated definition into the graph an instance runs, or
 // refuses the whole of it.
@@ -253,6 +274,7 @@ func (l Loader[S]) Compile(validated Validated) (Graph[S], error) {
 		graph.nodes[name] = Node[S]{
 			state:    name,
 			summary:  state.Summary,
+			gate:     state.Gate,
 			performs: registered,
 			next:     destinations(definition, state),
 		}

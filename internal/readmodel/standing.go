@@ -143,6 +143,17 @@ type Sessions interface {
 	List() ([]runstate.WatchTransition, error)
 }
 
+// Gates is the human gates a person has recorded passing. It is read rather than
+// inferred, and it is read from the harness's own store rather than from the
+// tracker, because the tracker has no way to answer it: the only completion it
+// records is an item being closed, and closure passing a gate that reserved
+// somebody's step is the failure the gate exists to end.
+//
+// It is satisfied by *runstate.Store.
+type Gates interface {
+	DischargedGates() ([]string, error)
+}
+
 // Sources are the durable records one standing reading is assembled from, and
 // the two configured numbers it is read against. Every store is an interface so
 // that this derivation can be exercised without a state directory, which is the
@@ -156,6 +167,7 @@ type Sources struct {
 	OperatorHolds OperatorHolds
 	IntakeHolds   IntakeHolds
 	Sessions      Sessions
+	Gates         Gates
 	// Capacity is execution.max_concurrent_developers as the caller read it. It is
 	// what turns "nothing is starting" into "there is no slot", which are opposite
 	// things for an operator to do about.
@@ -282,7 +294,12 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// on each: the queue's line says why nothing pulls it, and this says who has
 	// to open the conversation. A reader looking for what waits on a person must
 	// not have to read the queue to find the longest wait there is.
-	standing.NeedsHuman = append(needs, HandedOff(queue)...)
+	needs = append(needs, HandedOff(queue)...)
+	// A human gate is on both lines for the same reason and is the plainest case
+	// of it: the queue says the item will not be pulled, and this says that the
+	// reason is a step reserved for a person and that nothing else will ever take
+	// it. An operator who only read the queue's line would be reading a wait.
+	standing.NeedsHuman = append(needs, Gated(queue)...)
 	standing.NeedsHumanProblem = needsProblem
 	return standing
 }
@@ -466,7 +483,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	if sources.Tracker == nil {
 		return nil, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
 	}
-	queue, err := readQueue(ctx, sources)
+	queue, gateProblem, err := readQueue(ctx, sources)
 	if err != nil {
 		return nil, backlog.Queue{}, Stall{}, fmt.Sprintf("the admitted work could not be read: %v", err)
 	}
@@ -484,8 +501,9 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	refusal := stopped.Refusal()
 	// What the stall could not read is said whatever the queue holds. It is a
 	// gap in this reading rather than a fact about the work, so a queue with
-	// nothing in it must not swallow it below.
-	problem := stopped.Problem
+	// nothing in it must not swallow it below. What could not be read about the
+	// gates is carried the same way and for the same reason.
+	problem := joinProblems(stopped.Problem, gateProblem)
 
 	// Whether the stall actually stopped anything. A stall over an empty queue is
 	// a state of the machine rather than something waiting on a person, and the
@@ -600,14 +618,21 @@ func alive(sessions []runstate.WatchTransition, keep func(runstate.WatchState) b
 }
 
 // readQueue assembles the admitted work in the product manager's order, from the
-// same two readings the scheduler makes: the listings that carry the order, and
-// the tracker's own account of what can be pulled.
-func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
+// same three readings the scheduler makes: the listings that carry the order,
+// the tracker's own account of what can be pulled, and the human gates a person
+// has recorded passing.
+//
+// The gates are the one of the three whose absence is survivable, so they are
+// reported as a problem rather than as a failure. Nothing discharged means every
+// declared gate holds, which overstates what is waiting on a person and never
+// understates it — and an overstated gate is a line an operator can read and
+// dismiss, where the other direction is work started past somebody's step.
+func readQueue(ctx context.Context, sources Sources) (backlog.Queue, string, error) {
 	var admitted []beads.WorkItem
 	for _, status := range backlogStatuses {
 		items, err := sources.list(ctx, status)
 		if err != nil {
-			return backlog.Queue{}, err
+			return backlog.Queue{}, "", err
 		}
 		admitted = append(admitted, items...)
 	}
@@ -615,13 +640,37 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	defer cancel()
 	ready, err := sources.Tracker.Ready(trackerCtx)
 	if err != nil {
-		return backlog.Queue{}, fmt.Errorf("list the work items the tracker reports as ready: %w", err)
+		return backlog.Queue{}, "", fmt.Errorf("list the work items the tracker reports as ready: %w", err)
 	}
 	pullable := make([]string, 0, len(ready))
 	for _, item := range ready {
 		pullable = append(pullable, item.ID)
 	}
-	return backlog.Order(admitted, pullable), nil
+	var discharged []string
+	unread := ""
+	switch {
+	case sources.Gates == nil:
+		unread = "nothing was wired to read them"
+	default:
+		passed, err := sources.Gates.DischargedGates()
+		if err != nil {
+			unread = err.Error()
+		} else {
+			discharged = passed
+		}
+	}
+	queue := backlog.Order(admitted, pullable, discharged)
+	// What could not be read is reported only where it changed the answer. No
+	// admitted item declares a gate on most readings, and a line that announced an
+	// unread source every time would be a line reporting a gap that cost nothing —
+	// which is how a caveat stops being read. Where it did cost something, the
+	// count is said, because that is exactly what is being overstated.
+	problem := ""
+	if unread != "" && queue.Gated() > 0 {
+		problem = fmt.Sprintf("the human gates a person has passed could not be read (%s), so all %d gated item(s) are reported as still waiting on somebody",
+			unread, queue.Gated())
+	}
+	return queue, problem, nil
 }
 
 // readNeedsHuman is everything waiting on a person, with whose move it is.
@@ -711,6 +760,31 @@ func HandedOff(queue backlog.Queue) []Attention {
 			What:  fmt.Sprintf("%s is admitted for %q rather than a developer run", entry.ID, entry.Executor),
 			Whose: whose,
 		})
+	}
+	return attention
+}
+
+// Gated is the admitted work held by a step only a person can take, as
+// attention rather than as a queue entry: the item is not waiting on anything
+// the harness will ever finish, and until somebody records the act it will sit
+// exactly where it is.
+//
+// It is derived from the same queue the not-startable line reads, and it is a
+// separate function for the reason HandedOff beside it is: the two lines say
+// different things about one item, and one of them has to say whose move it is.
+func Gated(queue backlog.Queue) []Attention {
+	attention := make([]Attention, 0, len(queue.Entries))
+	for _, entry := range queue.Entries {
+		if len(entry.HumanGates) == 0 {
+			continue
+		}
+		for _, gate := range entry.HumanGates {
+			attention = append(attention, Attention{
+				What: fmt.Sprintf("%s waits on the gate %q: %s", entry.ID, gate.Name,
+					singleLine(gate.Statement, maxRefusalBytes)),
+				Whose: fmt.Sprintf("a person's — nothing machinery does passes it, closing an item included; `yoyo gate record %s` is the act", gate.Name),
+			})
+		}
 	}
 	return attention
 }

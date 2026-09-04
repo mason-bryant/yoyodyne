@@ -174,7 +174,7 @@ func TestBacklogShowsTheOperatorTheOrderWorkIsPulledIn(t *testing.T) {
 		{ID: "yoyodyne-ifd.3", Title: "The scheduler that runs it", Status: "open", Priority: 0,
 			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.4", Type: "blocks", Status: "open"}}},
 		{ID: "yoyodyne-ifd.26", Title: "See and stop what is pulled", Status: "open", Priority: 3},
-	}, []string{"yoyodyne-ifd.4", "yoyodyne-ifd.26"})}
+	}, []string{"yoyodyne-ifd.4", "yoyodyne-ifd.26"}, nil)}
 	options := testOptions(t, &fakeBackend{})
 	options.Work = work
 	session := openTestSession(t, options)

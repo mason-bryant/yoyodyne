@@ -119,7 +119,7 @@ func TestBacklogIsTheAdmittedWorkInPriorityOrder(t *testing.T) {
 		"ready": `[{"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"},
 		           {"id":"yoyodyne-ifd.26","title":"See and stop what is pulled","status":"open","priority":3,"issue_type":"task"}]`,
 	}}
-	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), store: emptyRunStore(t), timeout: chatTrackerTimeout}
 
 	queue, err := work.Backlog(context.Background())
 	if err != nil {
@@ -169,7 +169,7 @@ func TestBacklogDoesNotCallAnItemReadyOnAListingWithNoDependencies(t *testing.T)
 		                   {"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"}]`,
 		"ready": `[{"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"}]`,
 	}}
-	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), store: emptyRunStore(t), timeout: chatTrackerTimeout}
 
 	queue, err := work.Backlog(context.Background())
 	if err != nil {
@@ -200,7 +200,7 @@ func TestBacklogFailsWhenTheTrackerWillNotSayWhatIsReady(t *testing.T) {
 		},
 		fail: map[string]bool{"ready": true},
 	}
-	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), store: emptyRunStore(t), timeout: chatTrackerTimeout}
 
 	queue, err := work.Backlog(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "reports as ready") {
@@ -217,7 +217,7 @@ func TestBacklogFailsRatherThanReportingHalfAQueue(t *testing.T) {
 	t.Parallel()
 
 	runner := &flakyRunner{stdout: `[{"id":"yoyodyne-9","title":"Pause on a usage limit","status":"open","priority":2,"issue_type":"task"}]`, failAfter: 1}
-	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), store: emptyRunStore(t), timeout: chatTrackerTimeout}
 
 	queue, err := work.Backlog(context.Background())
 	if err == nil {
@@ -701,4 +701,18 @@ func TestChangesAnswerFromTheRecordEvenAfterCleanup(t *testing.T) {
 	if _, err := work.Changes(context.Background(), "yoyodyne-ifd.99"); err == nil {
 		t.Fatal("Changes() invented a run for a work item nothing has run")
 	}
+}
+
+// emptyRunStore is a state store with nothing in it, for a fixture that reads
+// the backlog. The queue asks it which human gates a person has passed, and the
+// answer for work that declares none is that none were: a fixture with no store
+// at all would be a queue that could not ask.
+func emptyRunStore(t *testing.T) *runstate.Store {
+	t.Helper()
+
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	return store
 }

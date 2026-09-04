@@ -301,6 +301,10 @@ func standingSources(configPath string) readmodel.Sources {
 	}
 	if store, err := runstate.NewStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Runs = store
+		// The same store answers both, and it is set twice rather than once
+		// because the two are different questions about different records: what
+		// the runs are doing, and what a person has recorded doing.
+		sources.Gates = store
 	}
 	if store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Conversations = store

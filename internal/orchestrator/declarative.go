@@ -196,6 +196,11 @@ func (p Pipeline) deliveryTrialOver(runID string) (*deliveryTrial, error) {
 		Graph:     graph,
 		Instances: p.Instances,
 		Grant:     grant,
+		// The same store the instances live in is where a person's recorded act
+		// lives. The delivery definition declares no gate today, so nothing here
+		// reads it yet; it is wired because a definition that declares one has to
+		// meet the person's step rather than an executor that cannot see it.
+		Gates: p.Instances,
 		Outcome: func(_ string, _ *activeRun) (string, error) {
 			// What the state produced is what the run said it produced a moment ago.
 			// The state the executor is asking about is not re-checked here because

@@ -599,3 +599,81 @@ func TestAConversationThatCannotBeAskedIsSaidBesideTheCount(t *testing.T) {
 		t.Fatalf("rendered:\n%s", standing.Render())
 	}
 }
+
+// fakeGates stands in for the harness's record of what a person has done.
+type fakeGates struct {
+	discharged []string
+	fail       error
+}
+
+func (f fakeGates) DischargedGates() ([]string, error) { return f.discharged, f.fail }
+
+// An item held by a step only a person can take is on two lines and says a
+// different thing on each: the queue's line says why nothing pulls it, and the
+// attention line says whose move it is and what records the act. A reader given
+// only the first has been told the item is waiting, which is what a wait on
+// other work also looks like.
+func TestWorkHeldByAPersonsStepIsNamedAsWaitingOnThem(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": {{
+			ID: "yoyodyne-ifd.209.7", Title: "Declarative becomes the default", Status: "open",
+			Description: "human-gate: soak-reviewed — the operator has judged the parity soak\n",
+		}}},
+		ready: []beads.WorkItem{{ID: "yoyodyne-ifd.209.7"}},
+	}}
+	standing := ReadStanding(context.Background(), sources)
+
+	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "waiting on a person") {
+		t.Fatalf("not startable = %+v", standing.NotStartable)
+	}
+	if len(standing.NeedsHuman) != 1 {
+		t.Fatalf("needs human = %+v", standing.NeedsHuman)
+	}
+	attention := standing.NeedsHuman[0]
+	for _, want := range []string{"yoyodyne-ifd.209.7", "soak-reviewed", "judged the parity soak"} {
+		if !strings.Contains(attention.What, want) {
+			t.Fatalf("what = %q, want it to mention %q", attention.What, want)
+		}
+	}
+	for _, want := range []string{"closing an item", "yoyo gate record soak-reviewed"} {
+		if !strings.Contains(attention.Whose, want) {
+			t.Fatalf("whose = %q, want it to mention %q", attention.Whose, want)
+		}
+	}
+
+	// Once the act is on the record the item is startable and nobody is waiting.
+	sources.Gates = fakeGates{discharged: []string{"soak-reviewed"}}
+	passed := ReadStanding(context.Background(), sources)
+	if len(passed.NotStartable) != 0 || len(passed.NeedsHuman) != 0 {
+		t.Fatalf("not startable = %+v, needs human = %+v", passed.NotStartable, passed.NeedsHuman)
+	}
+}
+
+// What could not be read about the gates is said where it changed the answer,
+// and not where it changed nothing. A caveat printed on every quiet reading is a
+// caveat nobody reads by the time it matters.
+func TestAnUnreadableGateRecordIsSaidOnlyWhereItOverstatesTheWait(t *testing.T) {
+	t.Parallel()
+
+	quiet := quietSources()
+	quiet.Gates = fakeGates{fail: errors.New("the state store would not answer")}
+	if problem := ReadStanding(context.Background(), quiet).NotStartableProblem; problem != "" {
+		t.Fatalf("not startable problem = %q, want nothing said where no gate was declared", problem)
+	}
+
+	gated := quiet
+	gated.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": {{
+			ID: "yoyodyne-ifd.209.7", Status: "open",
+			Description: "human-gate: soak-reviewed — the operator has judged the parity soak\n",
+		}}},
+		ready: []beads.WorkItem{{ID: "yoyodyne-ifd.209.7"}},
+	}}
+	problem := ReadStanding(context.Background(), gated).NotStartableProblem
+	if !strings.Contains(problem, "would not answer") || !strings.Contains(problem, "1 gated item") {
+		t.Fatalf("not startable problem = %q", problem)
+	}
+}

@@ -95,6 +95,21 @@ type State struct {
 	// Summary is what this step does here, which is not always what the action
 	// does in general.
 	Summary string `yaml:"summary,omitempty" json:"summary,omitempty"`
+	// Gate is a step only a person can take, which has to have been taken before
+	// this state is performed. It names a human gate — see `internal/humangate` —
+	// and the only thing that ever passes one is a person's durable recorded act.
+	//
+	// It narrows and never widens, which is what makes it something a definition
+	// may say at all: a state with a gate performs strictly less than the same
+	// state without one, and no gate a definition writes grants anything. A
+	// definition cannot record the act either — the record lives in the harness's
+	// state store and no registered action writes it — so what a definition can do
+	// here is add a person's step to a sequence, and nothing else.
+	//
+	// It is omitted from the serialized form when empty, so a definition written
+	// before gates existed digests exactly as it did, and an instance pinned to
+	// one keeps running.
+	Gate string `yaml:"gate,omitempty" json:"gate,omitempty"`
 	// On maps each outcome of the action to where the instance goes next: another
 	// state, or a terminal. This is the only place a definition decides anything,
 	// and it decides by naming a destination rather than by evaluating anything.
