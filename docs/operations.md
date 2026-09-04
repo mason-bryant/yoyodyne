@@ -291,9 +291,16 @@ Some work must not start until you have actually done something — read a soak,
 signed a release off, checked a migration against production. Work that reserves
 such a step declares it as a gate, by naming it after `human-gate:` on a line of
 its own, and a workflow definition declares one on a state as `gate:`. Until the
-act is on the record, the item is never pulled, the workflow performs nothing at
-that state, and both say they are waiting on a person rather than on anything
-that will finish by itself:
+act is on the record, the item is never pulled and the workflow performs nothing
+at that state.
+
+The two are not equally visible yet, and it is worth knowing which you are
+looking at. A gated work item says it is waiting on a person wherever the queue
+is shown and on the needs-a-human line of `yoyo status`, with the step named. A
+workflow instance standing at a gated state says so only in the refusal raised
+when something tries to step it — no status surface lists it — so a gated
+definition is something to watch for rather than something the four lines will
+tell you about. Nothing shipped declares one today.
 
 ```sh
 ./bin/yoyo gate list

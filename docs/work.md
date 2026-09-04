@@ -353,7 +353,8 @@ keeps its place in the order, is listed as
 waiting on a person wherever the queue is shown, is named on the status's
 needs-a-human line with what the person has to do, and is never selected however
 far the queue drains. It is not a wait: no run passes it, no check passes it, and
-closing anything passes it.
+neither does closing anything — not the item that declares it, and not the item
+it depends on.
 
 A declaration nothing could read — a mistyped name, no separator between the name
 and the sentence, nothing said about the act — holds the work in exactly the same
@@ -376,6 +377,11 @@ A workflow definition declares one the same way, as `gate:` on a state, and the
 executor performs nothing at that state until the act is on the record — the
 instance stands exactly where it was, and steps on when it is next stepped after
 somebody records it. A gate whose record cannot be read is never treated as open.
+That half is less visible than this one: an instance held at a gated state says
+so in the refusal raised when something tries to step it, and no status surface
+lists it. Nothing shipped declares a gate on a state today, so there is no such
+instance to miss; a definition that declares the first one wants that surface
+with it.
 
 A tenth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
