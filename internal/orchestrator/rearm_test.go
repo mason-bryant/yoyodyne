@@ -29,7 +29,9 @@ const (
 )
 
 // rearmCaps are the harness defaults a re-arm decision is recorded against:
-// triage acts alone once, per publication.
+// triage acts alone once, per publication. They are spent where the decision is
+// recorded rather than read by the action, which is why the Rearmer carries no
+// cap of its own.
 var rearmCaps = runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}
 
 // forgeStub is the forge a re-arm speaks to: what it says about the request now,
@@ -152,7 +154,6 @@ func (h *rearmHarness) rearmer() Rearmer {
 		Forge:     h.forge,
 		Worktrees: h.worktrees,
 		Decisions: h.runs.Triage(),
-		Caps:      rearmCaps,
 		Clock:     docketClock{},
 	}
 }

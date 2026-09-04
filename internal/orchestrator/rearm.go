@@ -122,11 +122,15 @@ type Rearmer struct {
 	// development manager decided this at all. Required: a re-arm made on nobody's
 	// decision would ask a forge for a merge that no recorded decision stands
 	// behind.
+	//
+	// No cap is wired beside it, and none belongs here. The publication's re-arm
+	// ceiling is spent where the decision is recorded, which is the direction every
+	// triage budget is written in; what this action asks of the record is the
+	// narrower question of whether a decision remains uncarried. A cap read again
+	// here would be a second guard over a budget already spent, and the two could
+	// disagree.
 	Decisions RearmDecisions
-	// Caps are the ceilings the guards refuse against, as every other reader of
-	// the same record assembles them. The re-arm's own is read per publication.
-	Caps  runstate.TriageCaps
-	Clock execution.Clock
+	Clock     execution.Clock
 }
 
 // RearmRequest is one decision to carry out: the run whose publication the
@@ -154,8 +158,13 @@ type RearmResult struct {
 	// HeadCommit is the commit the repeated request was pinned to, which is the
 	// commit the run integrated.
 	HeadCommit string `json:"head_commit,omitempty"`
-	// Reason is what the harness recorded as why the request was repeated: the
-	// decision it verified, and the reasoning it was given.
+	// Reason is the harness's account of why the request was repeated: the
+	// decision it verified, and the reasoning it was given. It is reported to
+	// whoever asked for the re-arm rather than written to durable state, and
+	// nothing here is the only copy of it — the development manager's decision and
+	// its reasoning are on the work item, put there by the conversation that
+	// recorded them, which is where every triage decision's account of itself
+	// lives. What this run's own records keep is the count.
 	Reason string `json:"reason,omitempty"`
 	// Rearmed reports the request having actually been repeated, and Queued the
 	// forge having accepted it to perform later rather than performing it now.
@@ -186,7 +195,7 @@ func (r Rearmer) Rearm(ctx context.Context, request RearmRequest) (RearmResult, 
 		return RearmResult{}, fmt.Errorf("re-arm %q is not a run identifier; a triage decision names the run the docket entry is about", request.Run)
 	}
 	if reasoning == "" {
-		return RearmResult{}, errors.New("a re-arm records the development manager's reasoning as why the request was repeated, and none was given")
+		return RearmResult{}, errors.New("a re-arm reports the development manager's reasoning as why the request was repeated, and none was given")
 	}
 
 	prior, err := r.Runs.Load(runID)
@@ -509,15 +518,30 @@ func rearmRequirement(status string) string {
 	return "the forge reported no merge state for it"
 }
 
-// rearmReason is what the harness records as why the request was repeated: the
+// rearmReason is the harness's account of why the request was repeated: the
 // decision it verified, the publication it settles, and the reasoning it was
 // given.
 //
-// The two are worded apart for the reason the re-run's are. That the development
-// manager decided a re-arm of this publication is a fact read from the item's
-// durable triage record and is stated as one; the prose after it arrived with the
-// instruction to carry the decision out, and is attributed to that rather than
-// quoted as the development manager's own words.
+// It is reported rather than recorded, unlike the re-run's, and the difference is
+// that a re-run mints a run and this mints nothing. A run's selection reason is
+// durable because the run is a new thing the harness chose to do and
+// `selected-work-passes-intake-and-records-why` requires it to account for
+// itself; a re-arm chooses no work and creates no record to attribute — it
+// finishes the publication of work already integrated, and the decision behind it
+// is already on the work item where the development manager's conversation wrote
+// it.
+//
+// The two halves are worded apart for the reason the re-run's are. That the
+// development manager decided a re-arm of this publication is a fact read from
+// the item's durable triage record and is stated as one; the prose after it
+// arrived with the instruction to carry the decision out, and is attributed to
+// that rather than quoted as the development manager's own words.
+//
+// It is folded to the bound a run's selection reason is held to. That figure is
+// not this one's by rights, and it is used anyway because it is the harness's
+// settled answer to how long an account of a triage carry-out may be: an
+// unbounded one is a whole argument printed into a terminal, and having two
+// different bounds for the same sentence would be worse than borrowing one.
 func rearmReason(state runstate.State, published runstate.PullRequest, decided runstate.TriageCounters, key, reasoning string) string {
 	reason := fmt.Sprintf(
 		"the development manager's triage decided a re-arm of publication %s — %d recorded against that publication's durable triage budget, %d already made — and the harness repeated the merge request of pull request %d by the %s method, on the promotion run %s made.%s The reasoning given to the harness when it was asked to: ",
@@ -531,8 +555,9 @@ func rearmReason(state runstate.State, published runstate.PullRequest, decided r
 
 // crossedRearmCap names the operator override this decision stands on, and says
 // nothing on the ordinary publication. A re-arm recorded past the cap exists
-// because a person crossed it, and the reason this records is where that survives
-// the conversation it was argued in.
+// because a person crossed it, and whoever reads this carry-out is owed that in
+// the same breath as the decision rather than being left to find it on the item's
+// record. The override itself is durable there and is not this account's to keep.
 func crossedRearmCap(counters runstate.TriageCounters) string {
 	override, found := counters.OverrideOf(runstate.TriageMergeRearmBudget)
 	if !found {

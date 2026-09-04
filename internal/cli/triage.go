@@ -184,7 +184,6 @@ func buildRearmer(configPath string) (orchestrator.Rearmer, error) {
 		// `yoyo status` reports, so what proves the decision was made and what an
 		// operator reads about it can never be two different records.
 		Decisions: parts.store.Triage(),
-		Caps:      orchestrator.TriageCaps(parts.config.Execution, parts.config.Triage),
 	}, nil
 }
 
