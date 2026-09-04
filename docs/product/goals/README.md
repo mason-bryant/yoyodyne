@@ -11,10 +11,9 @@ words that document states it in; `yoyo goals list` is what they resolve to.
 own: it says what a goal has to be, for whoever is writing one.
 
 **Owner.** The product manager, and the operator approves. It is the only role
-that changes a goals or non-goals document filed here; `writing-goals` is a
-specification, which the architect owns. Every other role proposes an amendment
-and waits for the owner to decide rather than editing one, and
-`yoyo amendment list` is what is waiting. See
+that changes a document filed here. Every other role proposes an amendment and
+waits for the owner to decide rather than editing one, and `yoyo amendment list`
+is what is waiting. See
 [artifact ownership](../../designs/v1-harness-design.md#artifact-ownership).
 
 **Editing by hand.** You may, and nothing here refuses it — you are the

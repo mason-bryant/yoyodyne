@@ -1,13 +1,13 @@
 ---
 id: writing-goals
-kind: specification
+kind: non-goals
 title: Writing a goal
 supports:
-    - artifact-contract
+    - v1-goals
 status: active
 revisions:
     - action: created
-      by: architect
+      by: product-manager
       at: 2026-09-04T00:46:19Z
       reason: yoyodyne-ifd.262 - the qualities of a good goal move out of the goals directory index, which is ungoverned by design, into a governed companion filed beside the goals; the prose is unchanged from the index it left, and neither approved goals document is touched
 ---
@@ -15,8 +15,8 @@ revisions:
 # Writing a goal
 
 What each goal has to be, for whoever is writing one and for whoever is reading
-the goals to see whether one holds up. It is filed beside the goals rather than
-inside them: [the v1 goals](v1-goals.md) and
+the goals to see whether one holds up. It is filed beside the goals and states
+none of its own: [the v1 goals](v1-goals.md) and
 [the operations goals](operations-goals.md) state the outcomes the product is
 trying to reach, and this states what a statement filed there has to be to be
 one of them.
@@ -27,6 +27,10 @@ the *Supports* trailer resolved against the brief — is
 normative home for those rules and is not restated here. This document is the
 other half of the same question: the contract says what the harness checks of
 the file, and this says what makes the sentence inside it a goal.
+
+It is recorded as `non-goals` because that is the only kind the contract has for
+a product manager's document in this directory that states no goals of its own.
+The kind undersells it, and it moves when the contract grows one for guidance.
 
 ## What a goal looks like
 
