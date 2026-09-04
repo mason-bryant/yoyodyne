@@ -529,13 +529,16 @@ func TestSchedulerLeavesAnEpicItsOpenChildrenAlreadyCover(t *testing.T) {
 	}
 }
 
-// The same guard against the shape the tracker actually hands it. The pair above
-// states its parentage as a field, and no item in this project's own tracker
-// ever has: parentage is recorded there as a parent-child edge, and a guard that
-// read only the field saw a backlog with nothing decomposed in it. So it passed
-// yoyodyne-ifd.121 and yoyodyne-ifd.121.2 straight through, and the two runs it
-// started produced two conflicting wholesale README rewrites, one of them
-// guaranteed to lose at integration.
+// The same guard against a shape a tracker can hand it. The pair above states
+// its parentage as a field; this one states it only as a parent-child edge,
+// which is what the tracker's own export does — carrying no parent field on any
+// item in it — and a guard that read only the field would see such a store as a
+// backlog with nothing decomposed in it.
+//
+// The identifiers are yoyodyne-ifd.121's because that is the decomposition the
+// guard was written for, not because this reading is what failed on it: nothing
+// keyed on parentage was in the tree when those two runs were started. See
+// docs/diagnoses/yoyodyne-ifd-273-121-double-run-mechanism.md.
 func TestSchedulerLeavesAnEpicCoveredByAChildTheTrackerStatesAsAnEdge(t *testing.T) {
 	t.Parallel()
 
@@ -566,6 +569,75 @@ func TestSchedulerLeavesAnEpicCoveredByAChildTheTrackerStatesAsAnEdge(t *testing
 	}
 	if !strings.Contains(schedule.Deferred[0].Reason, child.ID) {
 		t.Fatalf("deferred reason = %q, want the child that covers it named", schedule.Deferred[0].Reason)
+	}
+}
+
+// The shape of the double-run as it actually happened, rather than of the cause
+// that was recorded for it. From the two runs' own durable state: the scheduler
+// pulled yoyodyne-ifd.121.2 at 2026-08-20T06:05:34Z as position 1 of 48, and
+// twenty minutes later pulled the epic yoyodyne-ifd.121 at 06:25:43Z as position
+// 2, while that first run was still going — it ended at 06:47:15Z. Both were
+// started from the same base commit, which carried nothing keyed on parentage in
+// either direction; the coverage guard landed 12h43m after that second pull. So
+// the failure was the absence of a guard, and this is what the one that exists
+// now does when handed that pull.
+//
+// Three things about that pull have to be together for it to be the observed
+// one, and each is a separate way through the guard:
+//
+//   - the child is claimed rather than queued, so a reading of the queue alone
+//     cannot see it;
+//   - its parentage is stated only as an edge, so a reading of the parent field
+//     alone cannot see it; and
+//   - the epic carries a parent-child edge of its own, pointing up at the root
+//     epic it belongs to, so a reading that took an edge's ends the other way
+//     round would defer the child and run the epic — the double-run over again
+//     with the two runs swapped.
+func TestSchedulerLeavesTheEpicWhoseClaimedChildIsTheOneThe121DoubleRunStarted(t *testing.T) {
+	t.Parallel()
+
+	const root = "yoyodyne-ifd"
+	epic := beads.WorkItem{
+		ID: "yoyodyne-ifd.121", Title: "Docs architecture: a readable README", Status: "open", Priority: 2,
+		Dependencies: []beads.Dependency{
+			{IssueID: "yoyodyne-ifd.121", ID: root, Type: "parent-child"},
+		},
+	}
+	child := beads.WorkItem{
+		ID: "yoyodyne-ifd.121.2", Title: "Execute the README split", Status: "in_progress", Priority: 2,
+		Dependencies: []beads.Dependency{
+			{IssueID: "yoyodyne-ifd.121.2", ID: epic.ID, Type: "parent-child"},
+		},
+	}
+	harness := newScheduleHarness(epic, child)
+	harness.capacity = 2
+	harness.inFlight[child.ID] = runstate.State{
+		RunID: "run-44940ec3d71cdbc6e47e39745fedf15f", WorkItemID: child.ID, Status: runstate.StatusRunning,
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	// The whole of the failure: a second developer run of the same scope, beside
+	// the one already going.
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want nothing started beside the run already carrying this scope: %s",
+			schedule.Started, schedule.Render())
+	}
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != epic.ID {
+		t.Fatalf("deferred = %#v, want the epic named as covered by the run in flight under it", schedule.Deferred)
+	}
+	if !strings.Contains(schedule.Deferred[0].Reason, child.ID) {
+		t.Fatalf("deferred reason = %q, want the child that covers it named", schedule.Deferred[0].Reason)
+	}
+	// And not the other way round, which is what a mirrored reading of the edges
+	// would produce from this same pull.
+	for _, deferred := range schedule.Deferred {
+		if deferred.WorkItemID == child.ID {
+			t.Fatalf("deferred = %#v, want the child left alone: it is the work, and its own edge points up at %s",
+				schedule.Deferred, epic.ID)
+		}
 	}
 }
 
