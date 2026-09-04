@@ -500,6 +500,46 @@ func FromStall(stall Stall, at time.Time) Notification {
 	return notification
 }
 
+// FromReleasedClaim says that an item the tracker called in progress had nothing
+// working on it, and that the harness has given it back to the queue.
+//
+// It is addressed to the work item rather than to the product, unlike the stall
+// beside it, and the difference is what each is about: a stall is the whole line
+// having stopped, and this is one item that was stuck. The thread it lands in is
+// the item's own, which is where the run that died already said everything it
+// said — so a reader arrives at the release with the run above it.
+//
+// The speaker is the harness. Nobody judged anything here: an audit found a claim
+// with no run alive behind it, and no persona should be made to narrate a
+// process's death as though it were their account of the work.
+//
+// It is a warning for the reason the stall is. A run that ended badly is already
+// said in this thread and is nobody's surprise; a claim that outlived its run is
+// the harness having been quietly degraded — an item nothing would ever pull
+// again — and that is the one class of thing this surface takes to somebody
+// directly.
+func FromReleasedClaim(released runstate.ReleasedClaim) (Notification, error) {
+	topic, err := topicForItem(released.WorkItemID)
+	if err != nil {
+		return Notification{}, fmt.Errorf("address the claim released on %s: %w", released.WorkItemID, err)
+	}
+	return Notification{
+		Topic:   topic.WithTitle(released.WorkItemTitle),
+		Speaker: Harness(),
+		Event: Event{
+			Kind:     KindClaimReleased,
+			At:       released.ReleasedAt,
+			Severity: report.SeverityWarning,
+			Refs:     Refs{RunID: released.RunID, WorkItemID: released.WorkItemID},
+			Detail: Detail{
+				Title:   released.WorkItemTitle,
+				Stopped: strings.TrimSpace(released.Because),
+				Since:   released.Since,
+			},
+		},
+	}, nil
+}
+
 // Improvement is one value the project's template has improved that this
 // project has never edited: which setting it is, and what the three-way
 // comparison says about it.

@@ -124,6 +124,11 @@ type components struct {
 	// backlog and because the two are read together: a session that is choosing
 	// nothing and a hold that says why are one story to whoever reads them.
 	watch *runstate.WatchStore
+	// releasedClaims is where a claim the harness gave back is written down. It is
+	// built under the product beside the watch log, and read together with it for
+	// the same reason: a claim outlives its run only when the process holding it
+	// died, which is the same silence the session log is read for.
+	releasedClaims *runstate.ClaimStore
 	// usageLimits is where a provider refusing the harness outside a run is
 	// recorded. It is built under the product beside the watch log, because a
 	// limit is exhausted for an account and read as a fact about one product's
@@ -210,6 +215,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	releasedClaims, err := runstate.NewClaimStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	usageLimits, err := runstate.NewUsageLimitStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -235,25 +244,26 @@ func buildComponents(configPath string) (components, error) {
 		return components{}, err
 	}
 	return components{
-		config:        cfg,
-		configPath:    resolved.Path,
-		repository:    repository,
-		stateRoot:     stateRoot,
-		runner:        processRunner,
-		store:         store,
-		reports:       reports,
-		amendments:    amendments,
-		evaluations:   evaluations,
-		docket:        docket,
-		branchReviews: branchReviews,
-		directives:    directives,
-		holds:         holds,
-		intake:        intake,
-		watch:         watch,
-		usageLimits:   usageLimits,
-		spend:         spendLog,
-		worktrees:     worktrees,
-		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
+		config:         cfg,
+		configPath:     resolved.Path,
+		repository:     repository,
+		stateRoot:      stateRoot,
+		runner:         processRunner,
+		store:          store,
+		reports:        reports,
+		amendments:     amendments,
+		evaluations:    evaluations,
+		docket:         docket,
+		branchReviews:  branchReviews,
+		directives:     directives,
+		holds:          holds,
+		intake:         intake,
+		watch:          watch,
+		releasedClaims: releasedClaims,
+		usageLimits:    usageLimits,
+		spend:          spendLog,
+		worktrees:      worktrees,
+		redactValues:   execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
 }
 

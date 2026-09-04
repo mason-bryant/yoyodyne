@@ -569,6 +569,36 @@ func (c Client) Block(ctx context.Context, id, reason string) (WorkItem, error) 
 	return item, nil
 }
 
+// Release gives a claimed work item back to the queue, carrying the reason into
+// the item's notes. It is the opposite of Claim and the same shape as Block: the
+// applied status is verified rather than assumed, because a release that did not
+// take leaves work nothing will ever pull and no error saying so — which is the
+// harder of the two directions to notice, exactly as it is for a parking.
+//
+// The caller is responsible for having established that nothing is working on
+// the item. This is the mechanism and never the judgement: a claim released out
+// from under a live run would put two developers on one piece of work.
+func (c Client) Release(ctx context.Context, id, reason string) (WorkItem, error) {
+	if err := validateIssueID(id); err != nil {
+		return WorkItem{}, err
+	}
+	if strings.TrimSpace(reason) == "" {
+		return WorkItem{}, errors.New("release reason is required")
+	}
+	data, err := c.run(ctx, "update", id, "--status=open", "--append-notes="+reason, "--json")
+	if err != nil {
+		return WorkItem{}, err
+	}
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if item.Status != "open" {
+		return WorkItem{}, fmt.Errorf("work item %s status is %q after its claim was released, want open", item.ID, item.Status)
+	}
+	return item, nil
+}
+
 func (c Client) AddBlocker(ctx context.Context, id, blockerID string) error {
 	return c.changeBlocker(ctx, "add", "added", id, blockerID)
 }

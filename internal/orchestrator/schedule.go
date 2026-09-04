@@ -335,6 +335,17 @@ type ScheduleEscalations interface {
 	Escalate(ctx context.Context) (EscalationSweep, error)
 }
 
+// ScheduleClaims audits the items the tracker says are claimed against the runs
+// the harness actually has, and gives back the ones with nothing alive behind
+// them. It is satisfied by ClaimAuditor.
+//
+// It is optional, and a pull wired without one pulls exactly the same work: what
+// is lost is the only thing that ever frees an item whose run died, which is why
+// every session the harness builds is given one.
+type ScheduleClaims interface {
+	Audit(ctx context.Context, claimed []beads.WorkItem) (ClaimSweep, error)
+}
+
 // Starter runs one chosen item to its end. It is a function rather than the
 // pipeline itself because a pull hands each run the configuration that pull
 // read, and because what the scheduler needs from a run is only its outcome.
@@ -377,7 +388,10 @@ type Pull struct {
 	// Escalations delivers stopped work to the development manager. Optional; see
 	// ScheduleEscalations.
 	Escalations ScheduleEscalations
-	Start       Starter
+	// Claims gives back the claims with nothing alive behind them. Optional; see
+	// ScheduleClaims.
+	Claims ScheduleClaims
+	Start  Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -554,6 +568,17 @@ type Schedule struct {
 	// stopping it — but never left unsaid, because stopped work nobody was told
 	// about is exactly what the delivery exists to prevent.
 	EscalationProblem string `json:"escalation_problem,omitempty"`
+	// Released is the claims this pass audited against the runs the harness has,
+	// found nothing alive behind, and gave back to the queue. It is on the schedule
+	// for the reason the started runs are: a pass that freed work somebody would
+	// otherwise have found stuck in the morning is a pass that did something.
+	//
+	// ClaimProblem names the claims it found dead and could not give back. It costs
+	// the pass nothing it was doing, so it is reported beside the pull rather than
+	// stopping it — and never left unsaid, because an item nothing will ever pull
+	// is exactly what the audit exists to stop being invisible.
+	Released     []runstate.ReleasedClaim `json:"released,omitempty"`
+	ClaimProblem string                   `json:"claim_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -933,6 +958,26 @@ pulling:
 		}
 		schedule.IntakeHeld = nil
 
+		// What the tracker says is already being worked on, read before the machine's
+		// own capacity rather than with the queue below it. The placement is the whole
+		// point: a machine whose every slot is held by a run that died never reaches
+		// the queue at all, and that is exactly the state the audit exists for — on
+		// 2026-09-03 both slots went that way inside an hour and the line was idle
+		// until morning. It costs a full machine one tracker read a poll that it did
+		// not pay before, and buys the only thing that ever frees those slots.
+		//
+		// The reading is handed to the queue below so it is made once per pull: what
+		// is claimed is read here, and the queue that also needs it takes this rather
+		// than asking again.
+		claimed, err := pull.claimed(ctx)
+		if err != nil {
+			if !unreadable(err) {
+				break
+			}
+			continue
+		}
+		s.audit(ctx, &schedule, pull, claimed)
+
 		occupied, err := occupiedItems(pull.Runs)
 		if err != nil {
 			if !unreadable(err) {
@@ -968,7 +1013,7 @@ pulling:
 			continue
 		}
 
-		read, err := pull.queue(ctx)
+		read, err := pull.queue(ctx, claimed)
 		if err != nil {
 			if !unreadable(err) {
 				break
@@ -1349,6 +1394,37 @@ func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) 
 	case delivered:
 		schedule.EscalationProblem = ""
 	}
+}
+
+// audit gives back the claims with nothing alive behind them, and records on the
+// schedule what it freed and what it could not.
+//
+// Nothing here stops the pass, for the reason nothing in escalate does: an audit
+// that failed costs the pass nothing it was doing, and a pass that stopped
+// choosing work because it could not read a claim would be a worse failure than
+// the stuck item it was looking for. What must not happen is silence, which is
+// the whole of what this exists to end.
+//
+// What it does cost is the pull's own thread while the records are read — the
+// runs and the log of what has already been given back, once per pass — and one
+// tracker write per stuck item, which on the ordinary pass is none.
+func (s Scheduler) audit(ctx context.Context, schedule *Schedule, pull Pull, claimed []beads.WorkItem) {
+	if pull.Claims == nil {
+		return
+	}
+	sweep, err := pull.Claims.Audit(ctx, claimed)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("the claims the tracker holds could not be audited against the runs the harness has, so an item whose run died stays claimed and nothing will pull it: %v", err))
+	}
+	schedule.Released = append(schedule.Released, sweep.Released...)
+	problems = append(problems, sweep.Problems...)
+	// What the pass says is replaced by what this sweep found, and cleared by a
+	// sweep that found nothing wrong. Unlike a stopped delivery there is no retry
+	// delay here — every pull audits every claim — so a sweep with no problems is
+	// evidence that the problem before it is gone rather than evidence that it was
+	// not looked for.
+	schedule.ClaimProblem = strings.Join(problems, "; ")
 }
 
 // priceRun is what one finished run cost, from the recorded evidence. A run that
@@ -1834,11 +1910,27 @@ type pulled struct {
 	children map[string][]string
 }
 
+// claimed is the tracker slice that has left the backlog by being pulled. It is
+// read on its own because two things in one pull need it and neither is the
+// other's: the claim audit reads it before the machine's capacity is even
+// consulted, and the queue below reads it for coverage. One reading serves both,
+// so a pull spawns `bd` for it once.
+func (p Pull) claimed(ctx context.Context) ([]beads.WorkItem, error) {
+	items, err := p.Tracker.List(ctx, claimedStatus)
+	if err != nil {
+		return nil, fmt.Errorf("list %s work items: %w", claimedStatus, err)
+	}
+	return items, nil
+}
+
 // queue assembles the admitted work into the product manager's order. It is the
 // same assembly a conversation's backlog uses and the same one a development
 // manager reads, built from the tracker every pull rather than stored, so what
 // the scheduler pulls can never drift from the priorities actually set.
-func (p Pull) queue(ctx context.Context) (pulled, error) {
+//
+// The claimed slice is passed in rather than read here because the pull has
+// already read it for the claim audit; see Pull.claimed.
+func (p Pull) queue(ctx context.Context, claimed []beads.WorkItem) (pulled, error) {
 	var admitted []beads.WorkItem
 	for _, status := range scheduledStatuses {
 		items, err := p.Tracker.List(ctx, status)
@@ -1863,10 +1955,6 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	// Coverage is read one status wider than the backlog. A claimed child has left
 	// the queue and is never chosen from here, but it is a run in flight over the
 	// same work, so its parent is the last thing that should be started beside it.
-	claimed, err := p.Tracker.List(ctx, claimedStatus)
-	if err != nil {
-		return pulled{}, fmt.Errorf("list %s work items: %w", claimedStatus, err)
-	}
 	for _, item := range claimed {
 		items[item.ID] = item
 	}
@@ -1984,6 +2072,16 @@ func (s Schedule) Render() string {
 	rendered.WriteString(EscalationSweep{Escalated: s.Escalated}.Render())
 	if s.EscalationProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.EscalationProblem)
+	}
+	// What the pass gave back, said beside what it pulled: an item the harness
+	// unstuck is work that will be started again, and a reader who is not told
+	// would find a second run for it with nothing accounting for the first.
+	for _, released := range s.Released {
+		fmt.Fprintf(&rendered, "%s was claimed with nothing working on it and was given back to the queue: %s\n",
+			released.WorkItemID, released.Because)
+	}
+	if s.ClaimProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.ClaimProblem)
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))

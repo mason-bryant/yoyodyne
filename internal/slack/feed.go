@@ -41,6 +41,7 @@ const (
 	heartbeatStream  = "heartbeat"
 	residentStream   = "resident"
 	stallStream      = "stall"
+	claimStream      = "claims"
 	directiveStream  = "directives"
 	// improvementStream is what the project's template offers that the project
 	// has never edited. It is a stream of its own rather than a mark on the
@@ -224,6 +225,16 @@ type HarnessFeed struct {
 	// never notices a stall — which is the seven and a half hours that asked for
 	// this, so every sink the harness builds is given one.
 	Stalls *runstate.StallStore
+	// Claims is the durable record of the claims the harness gave back because
+	// nothing was working on them. Unlike the stalls above it, this feed only reads
+	// it: the audit that writes it runs in the watch loop, because giving a claim
+	// back is directing work and this surface does not direct work.
+	//
+	// It is optional, and a feed assembled without one says everything else and
+	// never mentions a claim the harness unstuck — which is a second run for an
+	// item with nothing accounting for the first, so every sink the harness builds
+	// is given one.
+	Claims ReleasedClaims
 	// Improvements is what the project's template supplies now against what it
 	// supplied when this project was generated, read for the one class of value
 	// that is an offer: improved by the template and never edited here. It is
@@ -428,6 +439,17 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, stalled...)
+
+	// The claims the harness gave back, said beside the stall above because the two
+	// answer one question from opposite ends: that one asks whether anything has
+	// started, and this one asks whether what the tracker calls started actually
+	// is. Neither can see the other's case — an item under a dead claim has left
+	// the ready queue, so the stall reading is structurally silent about it.
+	unstuck, err := f.claimDeliveries(cursors.Streams[claimStream], since, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, unstuck...)
 
 	// What the project's template offers that this project never edited. It is
 	// last because it is the one reading here that is not about the work at all:
