@@ -16,13 +16,21 @@ moment the README's install or getting-started sections move. Re-run
 | | |
 |---|---|
 | Run on | 2026-09-05 |
-| Base commit | `8672f4dd124550e84d4d48c55040fbdd6b59f347` |
-| Working tree | the yoyodyne-ifd.121.5 change, uncommitted; the harness commits it |
+| `HEAD` at the walk | `11c45d2e8d235b38ba8d1b09b3b7d294a1d5b6f5` — this branch's tip, which carries every README edit this change makes |
 | `README.md` sha256 | `9db4bdab2b1a33c945145bb4201f351572ed495033185f8f82f9730246203771` |
+| Modified in the working tree at the walk | `docs/developing-yoyo.md`, `internal/doclink/doclink.go`, `internal/doclink/doclink_test.go` — this file is the fourth, written afterwards from the output below |
 
-The digest is what binds this record to a README rather than to a commit, since
-a developer run does not make its own commits: a README that no longer hashes to
-that value is not the one these steps were walked against.
+**The digest is what binds this record, not the commit**, because a developer
+run makes no commits: the walk runs against a working tree, and the harness
+commits it afterwards under a hash that did not exist while the walk was
+happening. So `HEAD` above names where the walk stood and the digest names what
+it actually walked. A README that no longer hashes to that value is not the one
+these steps were taken against, whatever any commit says.
+
+`yoyo version` inside the output reports `-dirty` for the three files listed
+above. None of them is `README.md`, which was unmodified against `HEAD` when the
+walk ran, so the README exercised here is the README being merged, byte for
+byte.
 
 ## Result
 
@@ -52,32 +60,32 @@ go env GOPATH: /Users/mbryant/go
   ok: the documented default destination, ~/go/bin, is where go would install
   SKIPPED: go install of a published tag, and the yoyo version check on it: needs network access and a pushed tag, neither assumed here
   ok: make build wrote ./bin/yoyo
-built version: v0.4.0-251-g8672f4d-dirty
+built version: v0.4.0-254-g11c45d2-dirty
   ok: yoyo version names the build it came from
 
 === the scratch project: not this repository, not Go
-  ok: created a Python project with one commit at /tmp/claude-501/yoyodyne-walk.cuNLj5/calc
+  ok: created a Python project with one commit at /tmp/claude-501/yoyodyne-walk.TvXL8X/calc
 
 === 2. initialize the tracker
   ok: bd init created .beads
   ok: bd ready answers in the scratch project
 
 === 3. write the configuration
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/.yoyodyne/config.yaml
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/.yoyodyne/personas/architect.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/.yoyodyne/personas/developer.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/.yoyodyne/personas/development-manager.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/.yoyodyne/personas/product-manager.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/.yoyodyne/personas/reviewer.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/.yoyodyne/config.lock
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/docs/product/README.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/docs/product/goals/README.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/docs/designs/README.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/docs/decisions/README.md
-wrote /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/docs/decisions/invariants/README.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/.yoyodyne/config.yaml
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/.yoyodyne/personas/architect.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/.yoyodyne/personas/developer.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/.yoyodyne/personas/development-manager.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/.yoyodyne/personas/product-manager.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/.yoyodyne/personas/reviewer.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/.yoyodyne/config.lock
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/docs/product/README.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/docs/product/goals/README.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/docs/designs/README.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/docs/decisions/README.md
+wrote /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/docs/decisions/invariants/README.md
 the configuration is complete and inherits nothing
-checks is empty: 2 candidates are commented in /tmp/claude-501/yoyodyne-walk.cuNLj5/calc/.yoyodyne/config.yaml, and one of them has to be chosen before work can run
-the tracker already syncs through origin: git+file:///tmp/claude-501/yoyodyne-walk.cuNLj5/origin.git; name a URL with --tracker-remote to point it elsewhere
+checks is empty: 2 candidates are commented in /tmp/claude-501/yoyodyne-walk.TvXL8X/calc/.yoyodyne/config.yaml, and one of them has to be chosen before work can run
+the tracker already syncs through origin: git+file:///tmp/claude-501/yoyodyne-walk.TvXL8X/origin.git; name a URL with --tracker-remote to point it elsewhere
   ok: wrote personas/architect.md
   ok: wrote personas/developer.md
   ok: wrote personas/development-manager.md
@@ -85,7 +93,7 @@ the tracker already syncs through origin: git+file:///tmp/claude-501/yoyodyne-wa
   ok: wrote personas/reviewer.md
   ok: a second init refuses rather than overwriting
   ok: init leaves the tracker syncing over the project's Git remote
-origin               git+file:///tmp/claude-501/yoyodyne-walk.cuNLj5/origin.git
+origin               git+file:///tmp/claude-501/yoyodyne-walk.TvXL8X/origin.git
   ok: bd holds the sync remote init configured
 
 === 4. init proposes checks from what this project already declares
@@ -98,7 +106,7 @@ origin               git+file:///tmp/claude-501/yoyodyne-walk.cuNLj5/origin.git
   ok: carries a commented # TypeScript / Node example
   ok: carries a commented # Python example
   ok: carries a commented # Java (Maven) example
-{"bundle":"builtin:v1","checks":["python3 -m pytest -q"],"config":"/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/.yoyodyne/config.yaml","detected":{"checks":[{"command":"python3 -m pytest -q","source":"pyproject.toml"}],"candidates":[],"alternatives":[]},"external":false,"files":["/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/.yoyodyne/config.yaml","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/.yoyodyne/personas/architect.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/.yoyodyne/personas/developer.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/.yoyodyne/personas/development-manager.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/.yoyodyne/personas/product-manager.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/.yoyodyne/personas/reviewer.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/.yoyodyne/config.lock","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/docs/product/README.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/docs/product/goals/README.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/docs/designs/README.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/docs/decisions/README.md","/tmp/claude-501/yoyodyne-walk.cuNLj5/decided/docs/decisions/invariants/README.md"],"ignored":{"ignored":false},"repository":"/tmp/claude-501/yoyodyne-walk.cuNLj5/decided","status":"written","tracker":{"status":"skipped","reason":"fatal: not a git repository (or any of the parent directories): .git"}}
+{"bundle":"builtin:v1","checks":["python3 -m pytest -q"],"config":"/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/.yoyodyne/config.yaml","detected":{"checks":[{"command":"python3 -m pytest -q","source":"pyproject.toml"}],"candidates":[],"alternatives":[]},"external":false,"files":["/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/.yoyodyne/config.yaml","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/.yoyodyne/personas/architect.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/.yoyodyne/personas/developer.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/.yoyodyne/personas/development-manager.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/.yoyodyne/personas/product-manager.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/.yoyodyne/personas/reviewer.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/.yoyodyne/config.lock","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/docs/product/README.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/docs/product/goals/README.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/docs/designs/README.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/docs/decisions/README.md","/tmp/claude-501/yoyodyne-walk.TvXL8X/decided/docs/decisions/invariants/README.md"],"ignored":{"ignored":false},"repository":"/tmp/claude-501/yoyodyne-walk.TvXL8X/decided","status":"written","tracker":{"status":"skipped","reason":"fatal: not a git repository (or any of the parent directories): .git"}}
   ok: a project that names pytest gets a runnable check written
   ok: the report names the file the check was derived from
   ok: the written check carries its provenance as a comment
@@ -110,7 +118,7 @@ origin               git+file:///tmp/claude-501/yoyodyne-walk.cuNLj5/origin.git
 
 === 5. an empty checks list validates, but a run refuses it
   ok: config validate passes with checks: []
-work item: calc-ycs
+work item: calc-q2a
   ok: yoyo run refuses a run with no checks
 
 === 6. choose one of the candidates init offered
@@ -135,7 +143,7 @@ work item: calc-ycs
   ok: the refusal names the file that is dirty
   ok: the refusal names every file that is dirty
 $ go test ./internal/gitworktree -run TestManagerAllowsOnlyConfiguredPrimaryControlPlaneChanges -count=1
-ok  	github.com/mason-bryant/yoyodyne/internal/gitworktree	0.353s
+ok  	github.com/mason-bryant/yoyodyne/internal/gitworktree	0.484s
   ok: .beads/issues.jsonl and .beads/interactions.jsonl are excepted from that refusal
   ok: committed the adoption
 

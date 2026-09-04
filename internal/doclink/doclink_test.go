@@ -212,6 +212,34 @@ func TestAFragmentCitedFromSourceIsResolvedAgainstTheDocument(t *testing.T) {
 	}
 }
 
+func TestAFragmentCitedFromSourceRelativeToTheCitingFileIsResolved(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// A script cites the document above it the way a reader of that script would
+	// write the path. Resolving only the root form would pass this over as if it
+	// named a document in somebody else's repository, which is the same silent gap
+	// the sweep was widened to close.
+	write(t, root, "docs/landing.md", "# Landing\n\n## Getting started\n")
+	write(t, root, "scripts/walk.sh", "#!/bin/sh\n"+
+		"# walks ../docs/landing.md#getting-started\n"+
+		"# and cites ../docs/landing.md#getting-startd\n")
+
+	problems := check(t, root)
+	if len(problems) != 1 {
+		t.Fatalf("problems = %v", problems)
+	}
+	if problems[0].Path != "scripts/walk.sh" || problems[0].Line != 3 {
+		t.Fatalf("problem = %#v", problems[0])
+	}
+	// The document is named as it resolves rather than as it was written, so what
+	// somebody has to open is not left to be worked out from the citing file's
+	// directory.
+	if !strings.Contains(problems[0].Reason, "docs/landing.md carries no heading") {
+		t.Fatalf("reason = %q, want it to name where the citation resolves to", problems[0].Reason)
+	}
+}
+
 func TestAFragmentCitedFromSourceForADocumentThisRepositoryHasNotIsPassedOver(t *testing.T) {
 	t.Parallel()
 

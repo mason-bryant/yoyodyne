@@ -306,10 +306,11 @@ func resolve(root, document, directory, target string, headings map[string]map[s
 
 // citationPattern matches a Markdown path carrying a fragment, which is how a
 // source file names a heading: `docs/configuration.md#checks` bare in a comment
-// or a string, or the same path inside the forge URL for this repository's blob
-// view. It is deliberately narrower than the Markdown link pattern above — there
-// is no link syntax to key on in Go or YAML, so the path and the `#` are the
-// whole of the evidence that a citation is what this is.
+// or a string, the same path spelled from the citing file's own directory, or
+// either inside the forge URL for this repository's blob view. It is
+// deliberately narrower than the Markdown link pattern above — there is no link
+// syntax to key on in Go or YAML, so the path and the `#` are the whole of the
+// evidence that a citation is what this is.
 var citationPattern = regexp.MustCompile(`[A-Za-z0-9_.\-/]+\.md#[A-Za-z0-9_\-]+`)
 
 // blobPrefixPattern matches what a forge URL puts in front of a
@@ -328,10 +329,11 @@ var blobPrefixPattern = regexp.MustCompile(`^.*/blob/[^/]+/`)
 // heading somebody moved and a citation nobody could see go dead.
 func citationsIn(source, content string, headings map[string]map[string]bool) []Problem {
 	var problems []Problem
+	directory := path.Dir(source)
 	for index, raw := range strings.Split(content, "\n") {
 		for _, citation := range citationPattern.FindAllString(raw, -1) {
 			reference, fragment, _ := strings.Cut(citation, "#")
-			document, anchors := citedDocument(reference, headings)
+			document, anchors := citedDocument(directory, reference, headings)
 			if document == "" || anchors[slug(fragment)] {
 				continue
 			}
@@ -347,12 +349,27 @@ func citationsIn(source, content string, headings map[string]map[string]bool) []
 }
 
 // citedDocument is the document a citation names and the fragments it answers
-// to, resolved in the two spellings a citation is written in: the
-// repository-relative path itself, and that path inside a forge blob URL. A
-// reference naming neither returns the empty path, which is how a citation this
+// to, resolved in the three spellings a citation is written in: the path from
+// the repository root, that path inside a forge blob URL, and the path from the
+// directory the citing file sits in — `../README.md#further-reading` from a
+// script in scripts/ names a document this repository has, and resolving only
+// the root form would pass it over as if it named somebody else's. A reference
+// naming none of the three returns the empty path, which is how a citation this
 // repository has no document for is passed over.
-func citedDocument(reference string, headings map[string]map[string]bool) (string, map[string]bool) {
-	for _, candidate := range []string{reference, blobPrefixPattern.ReplaceAllString(reference, "")} {
+//
+// The root form is tried first, because that is the form the citations here are
+// written in and it is the one a generated file carries. Where a repository has
+// both a root `README.md` and one in the citing file's own directory, a bare
+// `README.md#…` therefore resolves to the root one. That is a guess rather than
+// a reading, and it is the right way round: passing over a citation that names a
+// document twice over would lose the check for the sake of an ambiguity nothing
+// in the citation settles.
+func citedDocument(directory, reference string, headings map[string]map[string]bool) (string, map[string]bool) {
+	for _, candidate := range []string{
+		reference,
+		blobPrefixPattern.ReplaceAllString(reference, ""),
+		path.Join(directory, reference),
+	} {
 		candidate = path.Clean(candidate)
 		if anchors, known := headings[candidate]; known {
 			return candidate, anchors
