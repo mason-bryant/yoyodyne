@@ -15,6 +15,12 @@
         },
         "failure": "verification infrastructure failed: persist check event: state store is unavailable",
         "phase": "checking",
+        "preservation": {
+          "branch": "yoyodyne/yoyodyne-task/01234567",
+          "branch_present": true,
+          "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+          "worktree_present": true
+        },
         "provider_model": "opus",
         "provider_resolved_model": "claude-opus-5-developer",
         "provider_session_id": "developer-session",
@@ -94,16 +100,16 @@
     "blocked": true,
     "notes": [
       [
-        "Yoyodyne bootstrap run failed; branch and worktree are preserved when present.",
+        "Yoyodyne bootstrap run failed.",
         "Run: run-0123456789abcdef0123456789abcdef",
         "Failure: verification infrastructure failed: persist check event: state store is unavailable",
         "Phase: checking",
-        "Branch: yoyodyne/yoyodyne-task/01234567",
-        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+        "Branch: yoyodyne/yoyodyne-task/01234567 (checked and there)",
+        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567 (checked and there)",
         "Base commit: \u003ccommit-1\u003e",
         "Claude session: developer-session",
         "Developer model: opus (resolved: claude-opus-5-developer)",
-        "Preserved changes:",
+        "Changes when the run ended:",
         "?? feature.txt"
       ]
     ],

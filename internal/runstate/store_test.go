@@ -700,6 +700,41 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "removed artifacts require recorded integration",
 		},
 		{
+			// The fourth way a removal is earned: the same sweep deleted a branch
+			// whose work the target provably carries. Recording it is what stops the
+			// run going on reading as one whose change is preserved on a branch that
+			// is gone.
+			name: "branch removal earned by the convergence sweep",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.BranchRemoved = true
+				state.BranchSweptAt = &swept
+			},
+		},
+		{
+			// It earns the branch and nothing else, because the branch sweep never
+			// touches a checkout.
+			name: "a checkout removal claimed on the branch sweep",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.BranchRemoved = true
+				state.BranchSweptAt = &swept
+			},
+			problem: "removed artifacts require recorded integration",
+		},
+		{
+			name: "a branch sweep that deleted nothing",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.BranchSweptAt = &swept
+			},
+			problem: "a recorded branch sweep names a branch that was deleted",
+		},
+		{
 			name: "a checkout sweep that removed nothing",
 			mutate: func(state *State) {
 				swept := state.UpdatedAt

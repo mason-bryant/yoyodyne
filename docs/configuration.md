@@ -2842,10 +2842,16 @@ run's state — which is the second way a recorded removal is earned beside a
 promotion of the run's own. The third is `worktree_swept_at`, written by the
 [convergence sweep](operations.md#recovering-interrupted-runs) when it retires
 an old stoppage's checkout to keep a machine's worktree registrations bounded;
-it earns the checkout alone, because that sweep never touches a branch. Where
-that checkout held uncommitted work, `preserved_work_ref` names the ref it was
-recorded on first — the run's record is the only place that connects the ref to
-the item it belonged to. A
+it earns the checkout alone. Where that checkout held uncommitted work,
+`preserved_work_ref` names the ref it was recorded on first — the run's record is
+the only place that connects the ref to the item it belonged to, and the sweep
+writes the ref onto the work item too, so the person picking that item up has a
+route to the work rather than only the failed run's own note naming a directory
+that is gone. The fourth is `branch_swept_at`, written by the same sweep when it
+deletes a branch whose work the target provably carries; it earns the branch
+alone, and it is recorded because `Preserved()` asks `branch_removed` and nothing
+else — a deletion nothing wrote down leaves the run advertising a branch that is
+not there. A
 retirement the harness could not write onto that run is reported rather than
 swallowed: the artifacts are gone and its record still says otherwise, which is
 a thing to go and correct.

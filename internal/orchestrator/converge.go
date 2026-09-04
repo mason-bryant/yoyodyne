@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
@@ -98,6 +99,12 @@ type WorktreeSweep struct {
 	// not there. Reporting it as a failed retirement would send somebody to
 	// remove what is already removed.
 	RecordProblem string `json:"record_problem,omitempty"`
+	// ItemProblem is a capture the work item could not be told about. It is beside
+	// RecordProblem because it is the same class and not the same reader: the run
+	// record is what a sweep or a re-run consults, and the item is what a person
+	// picking the work up reads. A capture only the run record names is how the
+	// work of run-48216ea9 came to be reported destroyed while it sat on a ref.
+	ItemProblem string `json:"item_problem,omitempty"`
 }
 
 // RegistrationSweep is what the repository-wide prune removed, and what stopped
@@ -121,6 +128,11 @@ type BranchSweep struct {
 	Removed      bool   `json:"removed"`
 	Kept         string `json:"kept,omitempty"`
 	Failure      string `json:"failure,omitempty"`
+	// RecordProblem is a branch that is gone and whose run's record could not be
+	// told so, and it is the same class as the checkout sweep's: the branch is
+	// gone either way, and what needs acting on is that every reader of that run
+	// will go on being told its change is preserved on it.
+	RecordProblem string `json:"record_problem,omitempty"`
 }
 
 // Converge brings the primary checkout and the local branches onto what the
@@ -284,8 +296,15 @@ func (r Reconciler) sweepWorktree(ctx context.Context, recorded runstate.State) 
 	if removal.Removed {
 		sweep.Removed = removal.Registered
 		sweep.RecordProblem = r.recordSweptWorktree(state, removal.PreservedWork)
+		// The item is told wherever a capture happened, and only then. What the run
+		// failed with was written on that item hours or days earlier, naming a
+		// checkout that was there when it was written; this is the correction, and
+		// it is the only thing a person reading the item can follow to the work.
+		if removal.PreservedWork != "" {
+			sweep.ItemProblem = r.recordPreservedWork(ctx, state, removal.PreservedWork)
+		}
 	}
-	if !sweep.Removed && sweep.Kept == "" && sweep.Failure == "" && sweep.RecordProblem == "" {
+	if !sweep.Removed && sweep.Kept == "" && sweep.Failure == "" && sweep.RecordProblem == "" && sweep.ItemProblem == "" {
 		// The checkout was gone before this sweep reached it and its record now
 		// says so. There is nothing left for anybody to read, and nothing left to
 		// probe: the run drops out of the candidates on every later pass.
@@ -318,6 +337,45 @@ func (r Reconciler) recordSweptWorktree(state runstate.State, preservedWork stri
 			state.RunID, err)
 	}
 	return ""
+}
+
+// recordPreservedWork tells the work item where a retired checkout's
+// uncommitted work went, and reports what stopped it where it could not.
+//
+// It is the correction to a note the item already carries. A run that failed
+// wrote its own ending onto this item naming a checkout that was there at the
+// time; retiring that checkout makes those words describe a directory nobody
+// will find, and the ref the work moved to is recorded on the run rather than
+// anywhere a person picking the item up would look. Run-48216ea9's 23 files were
+// reported destroyed for exactly that gap, while the ref that held them was two
+// commands away —
+// `docs/diagnoses/yoyodyne-ifd-275-preservation-claimed-without-a-check.md`.
+//
+// A note that could not be written never fails the sweep, for the reason the
+// record problem beside it does not: the capture happened, the ref is a
+// garbage-collection root, and what is missing is somebody being told.
+func (r Reconciler) recordPreservedWork(ctx context.Context, state runstate.State, preservedWork string) string {
+	recordCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := r.Tracker.RecordOutcome(recordCtx, state.WorkItemID, renderPreservedWorkNotes(state, preservedWork)); err != nil {
+		return fmt.Sprintf(
+			"the checkout of run %s was retired and what it held was recorded on %s, and %s could not be told, so anything read from that item still names a directory that is gone: %v",
+			state.RunID, preservedWork, state.WorkItemID, err)
+	}
+	return ""
+}
+
+// renderPreservedWorkNotes is what the item is told: where the work went, and
+// the one command that gets it back.
+func renderPreservedWorkNotes(state runstate.State, preservedWork string) string {
+	return strings.Join([]string{
+		"Yoyodyne retired the checkout of a run of this item and kept what it held.",
+		"Run: " + state.RunID,
+		"Retired worktree: " + state.WorktreePath,
+		"Preserved work: " + preservedWork,
+		"Any earlier note of this run naming that worktree describes a directory that is no longer there. Everything it held, committed and uncommitted, is on the ref above; recover it with:",
+		"    git worktree add --detach <path> " + preservedWork,
+	}, "\n")
 }
 
 // pruneRegistrations removes the registrations of checkouts that are no longer
@@ -369,7 +427,39 @@ func (r Reconciler) catchUp(ctx context.Context, targetBranch string) gitworktre
 // A run that still owes a step is left entirely alone: settling it may yet need
 // the branch, and reconciliation is what decides that. A run in flight is one of
 // those, so a live developer's branch is never a candidate here.
-func (r Reconciler) sweepBranch(ctx context.Context, state runstate.State) (BranchSweep, bool) {
+//
+// The deletion is written onto the run, as the checkout sweep's is and for the
+// same reason. `Artifacts.Preserved()` asks BranchRemoved and nothing else, so a
+// branch this deleted with nothing recorded goes on reading everywhere as a
+// change preserved on a branch — which is what run-48216ea9 read as, both its
+// artifacts gone, when a developer went looking for the work and reported it
+// destroyed. It is taken under the run's own lease so the deletion and the
+// record of it are one act rather than a write against a snapshot something else
+// has moved on from.
+func (r Reconciler) sweepBranch(ctx context.Context, recorded runstate.State) (BranchSweep, bool) {
+	if recorded.Outstanding() || recorded.Branch == "" || recorded.TargetBranch == "" {
+		return BranchSweep{}, false
+	}
+	state, lease, err := r.Store.AdoptRun(ctx, recorded.RunID)
+	switch {
+	case errors.Is(err, runstate.ErrRunHeld):
+		// A live process owns this run, so the branch is that process's rather than
+		// debris, whatever the listing snapshot said a moment ago.
+		return BranchSweep{}, false
+	case err != nil:
+		return BranchSweep{
+			RunID:        recorded.RunID,
+			WorkItemID:   recorded.WorkItemID,
+			Branch:       recorded.Branch,
+			TargetBranch: recorded.TargetBranch,
+			Failure:      fmt.Errorf("take the record of run %s to delete its branch: %w", recorded.RunID, err).Error(),
+		}, true
+	}
+	defer lease.Release()
+
+	// Re-read under the lease, so a run something else settled, retired, or
+	// re-entered in the meantime is never swept from the snapshot this loop
+	// started with.
 	if state.Outstanding() || state.Branch == "" || state.TargetBranch == "" {
 		return BranchSweep{}, false
 	}
@@ -387,14 +477,50 @@ func (r Reconciler) sweepBranch(ctx context.Context, state runstate.State) (Bran
 	}
 	// A branch that is already gone is the ordinary outcome — cleanup removed it
 	// when the run finished — and reporting it as a sweep would bury the ones
-	// that are actually still there.
+	// that are actually still there. The record is still corrected where it
+	// claims a branch nothing can find, for the reason the checkout sweep
+	// corrects one: the artifact is gone either way, and only one of the two
+	// answers sends somebody after it.
 	if removal.Commit == "" {
+		if state.BranchRemoved {
+			return BranchSweep{}, false
+		}
+		if problem := r.recordSweptBranch(state); problem != "" {
+			sweep.RecordProblem = problem
+			return sweep, true
+		}
 		return BranchSweep{}, false
 	}
 	sweep.Commit = removal.Commit
 	sweep.Removed = removal.Removed
 	sweep.Kept = removal.Kept
+	// A record that already says the branch is gone needs no second writing. That
+	// is a run whose own cleanup removed it and whose branch something put back —
+	// the leftover this sweep exists for — and the record was right both times.
+	if removal.Removed && !state.BranchRemoved {
+		sweep.RecordProblem = r.recordSweptBranch(state)
+	}
 	return sweep, true
+}
+
+// recordSweptBranch writes the deletion onto the run it belongs to, and reports
+// what stopped it where it could not. A record left saying the branch is still
+// there is the claim this whole path exists to stop: it is what `yoyo status`,
+// the triage docket, and a re-run all read as the answer to whether the change
+// survived.
+func (r Reconciler) recordSweptBranch(state runstate.State) string {
+	swept := r.clock().Now()
+	state.BranchRemoved = true
+	state.BranchSweptAt = &swept
+	// When the run ended is what dates it; this dates the last thing the harness
+	// did to what it left behind, which is what UpdatedAt has always meant.
+	state.UpdatedAt = swept
+	if err := r.Store.Save(state); err != nil {
+		return fmt.Sprintf(
+			"the branch of run %s is gone and its own record still says otherwise, so anything reading that run will name a branch that is not there: %v",
+			state.RunID, err)
+	}
+	return ""
 }
 
 // recordedTargets lists the distinct target branches the recorded runs name, in

@@ -59,6 +59,11 @@ type WorktreeManager interface {
 	ValidateReady(ctx context.Context) error
 	CurrentBranch(ctx context.Context) (string, error)
 	Create(ctx context.Context, request gitworktree.CreateRequest) (gitworktree.Worktree, error)
+	// Observe reports what is actually there of a run's branch and checkout. A
+	// failing run asks it before it writes its own failure down, because a note
+	// saying the work is preserved is a claim about the repository rather than
+	// about the record, and only this can settle it.
+	Observe(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Observation, error)
 	SummarizeChanges(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.ChangeSummary, error)
 	UnifiedChanges(ctx context.Context, worktree gitworktree.Worktree, limits gitworktree.DiffLimits) (gitworktree.ChangeDiff, error)
 	// ChangedPaths names every path the change touches. It is what the gate in
@@ -454,6 +459,48 @@ func (p Pipeline) accountFor(alias string) config.AccountEndpoint {
 	return config.AccountEndpoint{Alias: alias, Directory: config.AccountConfigDirectory(p.StateRoot, alias)}
 }
 
+// Preservation is what the harness actually found of a failing run's own branch
+// and checkout, looked at as the run's failure was written down rather than
+// inferred from the record.
+//
+// It exists because the record cannot answer the question the note asks. A run's
+// state names the branch and the worktree it made and carries a flag for each
+// removal the harness performed, so a note derived from it says "preserved"
+// whenever no removal was recorded — which is a claim about what the harness did
+// and not about what is there. On 2026-09-03 a run that died on a provider
+// output bound wrote exactly that note, naming its worktree and 23 files of
+// uncommitted work; the checkout was retired hours later by the convergence
+// sweep, and the next developer read the note, went to the path, found nothing,
+// and reported the work destroyed. It was not — the sweep had recorded it on a
+// run-scoped ref — but nothing the developer could read said so.
+// `docs/diagnoses/yoyodyne-ifd-275-preservation-claimed-without-a-check.md` is
+// that sequence established from the records and the code.
+//
+// So this says only what was seen. Unverified is why nothing could be seen at
+// all, which is a third answer rather than a missing artifact: a check that
+// could not be made must not be rendered as either preservation or loss.
+type Preservation struct {
+	Branch          string `json:"branch,omitempty"`
+	BranchPresent   bool   `json:"branch_present"`
+	WorktreePath    string `json:"worktree_path,omitempty"`
+	WorktreePresent bool   `json:"worktree_present"`
+	Unverified      string `json:"unverified,omitempty"`
+}
+
+// Verified reports a check that actually reached the repository. Everything else
+// here is only meaningful when it is true.
+func (p Preservation) Verified() bool { return strings.TrimSpace(p.Unverified) == "" }
+
+// Lost reports an artifact the run recorded making and the check found gone.
+// That is the state this whole type exists to make sayable: nothing removed it
+// on the record, and it is not there.
+func (p Preservation) Lost() bool {
+	if !p.Verified() {
+		return false
+	}
+	return (p.Branch != "" && !p.BranchPresent) || (p.WorktreePath != "" && !p.WorktreePresent)
+}
+
 type Outcome struct {
 	RunID        string          `json:"run_id"`
 	WorkItemID   string          `json:"work_item_id"`
@@ -462,6 +509,12 @@ type Outcome struct {
 	Branch       string          `json:"branch,omitempty"`
 	WorktreePath string          `json:"worktree_path,omitempty"`
 	BaseCommit   string          `json:"base_commit,omitempty"`
+	// Preservation is what was actually found of the branch and the worktree
+	// above when this run failed. It is present on a failed run that made either
+	// of them and absent everywhere else, because a run that made neither has
+	// nothing to claim and a run that succeeded had its artifacts cleaned up by
+	// the step that earned the removal.
+	Preservation *Preservation `json:"preservation,omitempty"`
 	// ProviderSessionID identifies the developer session; ReviewSessionID
 	// identifies the separate reviewer session that judged its work. The model
 	// pairs are the requested selector and what the provider reported serving.
@@ -4270,6 +4323,10 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	a.outcome.WorktreePath = a.state.WorktreePath
 	a.outcome.BaseCommit = a.state.BaseCommit
 	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	// Asked before the note is written and never after, because the note is the
+	// only thing anybody reads about a failed run's remains and it must not
+	// promise a checkout on the strength of no removal having been recorded.
+	a.outcome.Preservation = a.verifyPreservation()
 	if a.claimed {
 		recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_, recordErr := p.Tracker.RecordOutcome(recordCtx, a.state.WorkItemID, renderFailureNotes(a.outcome))
@@ -4277,6 +4334,13 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 		if recordErr != nil {
 			cause = errors.Join(cause, fmt.Errorf("record failed run outcome: %w", recordErr))
 		}
+	}
+	// A preservation that did not happen is reported rather than left to whoever
+	// reads the note: the run is failing either way, and an artifact this run made
+	// that is already gone is the one thing about its ending nobody can recover
+	// from later.
+	if a.outcome.Preservation != nil && a.outcome.Preservation.Lost() {
+		cause = errors.Join(cause, errors.New(preservationLoss(*a.outcome.Preservation)))
 	}
 	// A run that stopped on something a person has to decide reaches the
 	// development manager by being docketed as it ends, rather than by an
@@ -4429,6 +4493,41 @@ func (a *activeRun) prepareScratch() error {
 	}
 	a.scratch = directory
 	return nil
+}
+
+// verifyPreservation looks at what is actually left of this run's branch and
+// checkout, so the failure note it is about to write says work is preserved only
+// where the repository agrees.
+//
+// A run that made neither returns nothing, which is not the same answer as work
+// that is gone: a bootstrap failure before the worktree existed preserved
+// nothing and must not be rendered as having lost anything.
+//
+// It is given its own deadline for the reason recording the outcome and the
+// price are: a run's own context is usually already cancelled by the time it
+// ends, and a check that could not be made is what the note has to say rather
+// than a reason to claim preservation anyway. Nothing here can fail the run —
+// the run has already failed — so an unreadable repository becomes the recorded
+// reason the check could not be made.
+func (a *activeRun) verifyPreservation() *Preservation {
+	if a.state.Branch == "" && a.state.WorktreePath == "" {
+		return nil
+	}
+	preservation := &Preservation{Branch: a.state.Branch, WorktreePath: a.state.WorktreePath}
+	if a.pipeline.Worktrees == nil {
+		preservation.Unverified = "this process has no repository access to check them with"
+		return preservation
+	}
+	observeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	observed, err := a.pipeline.Worktrees.Observe(observeCtx, worktreeOf(a.state))
+	if err != nil {
+		preservation.Unverified = err.Error()
+		return preservation
+	}
+	preservation.BranchPresent = observed.BranchExists
+	preservation.WorktreePresent = observed.WorktreePresent
+	return preservation
 }
 
 // recordChanges keeps the account of what the run has changed, in the outcome
@@ -5756,20 +5855,27 @@ func renderInvariantNotes(outcome Outcome) []string {
 	return lines
 }
 
+// renderFailureNotes describes a failed run on its work item.
+//
+// No headline here claims preservation, and neither does any line below one.
+// What survives of the change is said once, from the check the run made against
+// the repository as it ended, by renderPreservationNotes — because a headline
+// that promises a branch and a worktree on the strength of the record alone is
+// exactly the note that sent a developer to a checkout that was not there.
 func renderFailureNotes(outcome Outcome) string {
-	headline := "Yoyodyne bootstrap run failed; branch and worktree are preserved when present."
+	headline := "Yoyodyne bootstrap run failed."
 	switch {
 	case outcome.WorktreeRemoved || outcome.BranchRemoved:
 		headline = "Yoyodyne run failed after the change was integrated and its artifacts were cleaned up; the integrated commit is the surviving evidence."
 	case outcome.Integration != nil:
-		headline = "Yoyodyne run failed after the change was already integrated; the integrated commit, branch, and worktree are preserved for reconciliation."
+		headline = "Yoyodyne run failed after the change was already integrated; the integrated commit is what reconciliation settles from."
 	}
 	if outcome.Blocked {
 		// A run is blocked by a spent repair budget, by a target branch it could
 		// not promote into, or by a provider that kept killing it, and the recorded
 		// blocker says which. This headline deliberately does not: naming one of
 		// them would be wrong more often than not.
-		headline = "Yoyodyne blocked this item; the branch and worktree are preserved, and the blocker recorded on the item says what stopped it."
+		headline = "Yoyodyne blocked this item; the blocker recorded on the item says what stopped it."
 	}
 	lines := []string{
 		headline,
@@ -5795,12 +5901,7 @@ func renderFailureNotes(outcome Outcome) string {
 	if outcome.TransientRelaunches > 0 {
 		lines = append(lines, "Relaunches after a provider death: "+strconv.Itoa(outcome.TransientRelaunches))
 	}
-	if outcome.Branch != "" {
-		lines = append(lines, "Branch: "+outcome.Branch)
-	}
-	if outcome.WorktreePath != "" {
-		lines = append(lines, "Worktree: "+outcome.WorktreePath)
-	}
+	lines = append(lines, renderPreservationNotes(outcome)...)
 	if outcome.BaseCommit != "" {
 		lines = append(lines, "Base commit: "+outcome.BaseCommit)
 	}
@@ -5810,13 +5911,97 @@ func renderFailureNotes(outcome Outcome) string {
 	if outcome.ProviderModel != "" {
 		lines = append(lines, "Developer model: "+renderModel(outcome.ProviderModel, outcome.ProviderResolvedModel))
 	}
+	// The change summary is the run's own record of what it had done and stays
+	// true whatever became of the checkout, so it is named for what it is rather
+	// than as preserved work. Where the artifacts are gone, the lines above are
+	// what say so, and this is all that is left of the change.
 	if outcome.Changes.Status != "" {
-		lines = append(lines, "Preserved changes:\n"+outcome.Changes.Status)
+		lines = append(lines, "Changes when the run ended:\n"+outcome.Changes.Status)
 	}
 	if outcome.Changes.DiffStat != "" {
-		lines = append(lines, "Preserved diff stat:\n"+outcome.Changes.DiffStat)
+		lines = append(lines, "Diff stat when the run ended:\n"+outcome.Changes.DiffStat)
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// renderPreservationNotes says what is left of a failed run's change, from what
+// the run saw of it rather than from what its record claims.
+//
+// Every branch here is a different sentence on purpose. "Checked and there" is
+// the only one that promises anything, and it is the only one earned by an
+// observation; a check that could not be made says so and promises nothing; and
+// an artifact the run made that is not there is stated as the loss it is, at the
+// top of the note, with the two places the work can still be rather than a
+// verdict this cannot reach.
+func renderPreservationNotes(outcome Outcome) []string {
+	preservation := outcome.Preservation
+	if preservation == nil {
+		// Nothing was made, so there is nothing to say. A note that said "no work
+		// preserved" here would read as work thrown away.
+		if outcome.Branch == "" && outcome.WorktreePath == "" {
+			return nil
+		}
+		// The record names an artifact and nothing checked it. Naming it without
+		// the check is what this exists to stop, so it is named as unchecked.
+		return renderUncheckedArtifacts(outcome, "nothing checked them as this run ended")
+	}
+	if !preservation.Verified() {
+		return renderUncheckedArtifacts(outcome, preservation.Unverified)
+	}
+	var lines []string
+	if preservation.Lost() {
+		lines = append(lines, "PRESERVATION FAILED: "+preservationLoss(*preservation))
+	}
+	if preservation.Branch != "" {
+		lines = append(lines, "Branch: "+preservation.Branch+describePresence(preservation.BranchPresent))
+	}
+	if preservation.WorktreePath != "" {
+		lines = append(lines, "Worktree: "+preservation.WorktreePath+describePresence(preservation.WorktreePresent))
+	}
+	return lines
+}
+
+// renderUncheckedArtifacts names what the record holds and says plainly that
+// nothing confirmed it. It is deliberately not silence: an operator who is told
+// nothing goes to the path anyway, which is the same walk the false claim sends
+// them on.
+func renderUncheckedArtifacts(outcome Outcome, reason string) []string {
+	var lines []string
+	if outcome.Branch != "" {
+		lines = append(lines, "Branch (unchecked): "+outcome.Branch)
+	}
+	if outcome.WorktreePath != "" {
+		lines = append(lines, "Worktree (unchecked): "+outcome.WorktreePath)
+	}
+	return append(lines, "Preservation unchecked: "+reason+", so nothing here says the branch or the worktree is still there.")
+}
+
+// preservationLoss says which artifact this run made is gone and where its work
+// can still be, in one line that reads the same in the note, in the run's own
+// error, and anywhere else it is reported.
+//
+// The two pointers are the whole of what is recoverable. Commits the checkout
+// carried are on the branch when that survived, and a checkout the convergence
+// sweep retired had whatever it held uncommitted recorded on the run-scoped ref
+// that sweep writes — which is where this run's own record names it.
+func preservationLoss(preservation Preservation) string {
+	var lost []string
+	if preservation.Branch != "" && !preservation.BranchPresent {
+		lost = append(lost, "the branch "+preservation.Branch)
+	}
+	if preservation.WorktreePath != "" && !preservation.WorktreePresent {
+		lost = append(lost, "the worktree "+preservation.WorktreePath)
+	}
+	return strings.Join(lost, " and ") + " this run made is already gone. What it held is recoverable only from what survives: the branch above where it still exists, and the preserved-work ref named on this run's record where the checkout was retired by the convergence sweep."
+}
+
+// describePresence is the one phrase an artifact's fate is said in, so a branch
+// and a worktree are never described in two different vocabularies.
+func describePresence(present bool) string {
+	if present {
+		return " (checked and there)"
+	}
+	return " (checked and NOT there)"
 }
 
 // renderReviewNotes carries the invariant, review, and integration evidence into
