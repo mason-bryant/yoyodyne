@@ -17,6 +17,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // The conversation asks the repository and the tracker how old its picture is
@@ -408,8 +409,24 @@ func TestTheDevelopmentManagerIsWiredTheProductsTriageBudget(t *testing.T) {
 	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); err != nil {
 		t.Fatalf("RecordRerun() through the wired budget error = %v", err)
 	}
-	if _, err := budgets.RecordMergeRearm(context.Background(), "yoyodyne-ifd.90"); err != nil {
+	// A re-arm's budget is the publication's rather than the item's, so what the
+	// wiring has to resolve is which publication the named run made. A run that
+	// published nothing has no merge to re-arm and no budget to spend for one.
+	published := recordedRun(t, parts.store, runstate.StatusFailed, "yoyodyne-ifd.90", time.Now().UTC())
+	published.PullRequest = &runstate.PullRequest{
+		Remote:     "origin",
+		Branch:     "yoyodyne/yoyodyne-ifd.90/abcd",
+		Number:     92,
+		URL:        "https://forge/pull/92",
+		HeadCommit: strings.Repeat("b", 40),
+	}
+	saveRun(t, parts.store, published)
+	decided, err := budgets.RecordMergeRearm(context.Background(), "yoyodyne-ifd.90", published.RunID)
+	if err != nil {
 		t.Fatalf("RecordMergeRearm() through the wired budget error = %v", err)
+	}
+	if want := triage.PublicationKey(published.RunID, 92); decided.Publication != want {
+		t.Fatalf("the re-arm was recorded against %q, want the publication the run made, %q", decided.Publication, want)
 	}
 
 	// It is the product's own record under the state root, which is what

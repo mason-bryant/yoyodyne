@@ -984,8 +984,8 @@ Four of the six the harness holds to more than a note. **A repair, a re-run, and
 a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names the budget, which is the evidence for
 escalating instead, and says that nothing in the conversation crosses that cap.
-A repair and a re-run are each once per item — a second of
-either is an escalation rather than a larger budget — and past the
+A repair and a re-run are each once per item, and a re-arm once per publication
+— a second of any of them is an escalation rather than a larger budget — and past the
 [review-round cap](configuration.md#what-one-work-item-has-been-given) even
 the first is refused. What you can do about that is
 [`yoyo triage override`](configuration.md#crossing-a-cap-the-operator-decides-to-cross),
@@ -994,11 +994,12 @@ records it: the caps refuse the machine and not your ruling on it. **The command
 is the only thing that crosses a cap**, and the refusal prints it with the budget
 and the item already filled in, because naming the remedy without naming the verb
 sent two of these overrides into the item's notes instead — where no guard reads
-them, and where the resubmitted decision met the identical refusal. A merge re-arm is bounded per item by the
-integration-retry budget rather than the rounds, because it buys no round at
-all; the design's stricter rule — once per publication — arrives with the
-re-arm action itself, whose counter will be keyed to the publication it
-repeats. **An escalation is a durable blocker on the item and a report at
+them, and where the resubmitted decision met the identical refusal. **A merge
+re-arm is bounded once per publication** rather than by the rounds, because it
+buys no round at all and because what it repeats is one merge request the
+reviewer's verdict already authorized: an item that published three times has
+three separate budgets, and a second drop of one publication is an escalation
+rather than another re-arm. **An escalation is a durable blocker on the item and a report at
 `warning` severity or above**, in the same reply: the item itself says it is
 waiting on a person, and the report reaches [the pile you
 read](reporting.md#what-agents-report-and-where-it-reaches-you). Prose alone is not an escalation, and the
@@ -1007,10 +1008,12 @@ were never told about. `rescope` and `wait` are the two that are a note and
 nothing else — a re-scope's real work is the child item it creates beside the
 note, and a wait asks for nothing at all.
 
-Recording a decision is not carrying it out, and two of the six now have an
-action that does. They are the two opposite answers to a run that stopped:
-`yoyo triage rerun` starts the item over, and `yoyo triage repair` continues the
-run that stopped on the change it already has.
+Recording a decision is not carrying it out, and three of the six now have an
+action that does. Two are the opposite answers to a run that stopped: `yoyo
+triage rerun` starts the item over, and `yoyo triage repair` continues the run
+that stopped on the change it already has. The third, `yoyo triage rearm`, is
+about a publication rather than a run: it repeats the merge request the forge
+dropped.
 
 `yoyo triage rerun <run-id> --reason "<what the development
 manager decided>"` starts a fresh run of the item whose stopped run the docket
@@ -1148,11 +1151,36 @@ way. That is what makes the refusal above a backstop rather than the only
 defense — every recorded case of a repair round going missing was a dispatch
 that started something fresh in its place.
 
-The harness carries out none of the other four. One of them asks for something
-and it is still yours to do: for a re-arm, asking the forge to merge the pull
-request again yourself — nothing in the harness repeats a merge request the forge
-dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
-recorded whether or not you or the harness act on it, which is the same direction
+`yoyo triage rearm <run-id> --reason "<what the development manager decided>"`
+is the third, and it is about the other thing that stops: an approved change
+published to a forge that queued its merge and then dropped it. **It repeats
+exactly the request your reviewer's verdict authorized** — the same pull request,
+by the method that verdict's own merge recorded, pinned to the commit that was
+integrated — and it overrides nothing to do it. Administrator privileges are
+never used, and repeating an identical request is not merging past a
+requirement: the forge runs its whole requirement machinery again. It takes the
+target branch's promotion lease first, so it queues behind whatever is promoting
+into that branch rather than racing it.
+
+Five things refuse it, all of them asked before anything is spent. The forge's
+own merge state has to name nothing only a person can satisfy — a conflict with
+the base, a draft, a base branch that moved ahead, a protection rule the request
+does not meet — and a merge state that could not be read refuses too. The request
+has to be unchanged: its head is still the commit that was integrated, and the
+remote target still passes the same pre-merge content check the original gate
+ran. The run that made the publication has to be terminally recorded and the item
+has to have no run in flight — a re-arm against live work is what stranded a
+hand-written amendment on a preserved branch on 2026-08-19, when the forge merged
+an earlier promotion mid-run and that run's republish then failed. And a decision
+of the development manager's has to be there to carry out and not already carried
+out: **one re-arm per publication**, after which a further drop is an escalation
+rather than another re-arm, and the blocker the sweep leaves for a second drop
+says exactly that. Your hold on intake does not apply, because a re-arm chooses
+no work — it finishes the publication of work that is already integrated.
+
+The harness carries out none of the other three: a re-scope, a wait, and an
+escalation ask for no action at all. The budget is spent when the decision is
+recorded whether or not the harness acts on it, which is the same direction
 every counter here fails in: an attempt nobody took rather than one nobody
 counted. What triage changed is that stopped work is decided by the role that
 owns it, the decision is durable on the item, and it reaches you only when the

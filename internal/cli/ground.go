@@ -101,6 +101,7 @@ func conversationTriage(parts components, role domain.AgentRole) chat.TriageBudg
 	}
 	return conversationTriageBudgets{
 		store:  parts.store.Triage(),
+		runs:   parts.store,
 		caps:   orchestrator.TriageCaps(parts.config.Execution, parts.config.Triage),
 		rounds: orchestrator.TriageRepairGrantRounds(parts.config.Triage),
 		clock:  execution.RealClock{},
@@ -108,11 +109,17 @@ func conversationTriage(parts components, role domain.AgentRole) chat.TriageBudg
 }
 
 // conversationTriageBudgets is what a conversation supplies that the role does
-// not get to assert: what the project configured an item may be given, and when
-// the giving happened. The role decides; the sizes and the clock are the
+// not get to assert: what the project configured an item may be given, when the
+// giving happened, and which publication a re-arm is about. The role decides;
+// the sizes, the clock, and the identity of what a decision spends are the
 // harness's.
 type conversationTriageBudgets struct {
-	store  *runstate.TriageStore
+	store *runstate.TriageStore
+	// runs is where a re-arm's publication is resolved from. A conversation names
+	// the run its docket entry is about, and the budget a re-arm spends is keyed
+	// to the publication that run made, so the run's own record is what says which
+	// publication that is rather than anything the conversation asserted.
+	runs   *runstate.Store
 	caps   runstate.TriageCaps
 	rounds int
 	clock  execution.Clock
@@ -126,8 +133,26 @@ func (b conversationTriageBudgets) RecordRerun(ctx context.Context, workItemID s
 	return b.store.RecordRerun(ctx, workItemID, b.clock.Now(), b.caps)
 }
 
-func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
-	return b.store.RecordMergeRearm(ctx, workItemID, b.clock.Now(), b.caps)
+// RecordMergeRearm spends the re-arm budget of the publication the named run
+// made. The publication is resolved from that run's own record rather than from
+// the decision, because the decision names a run and the budget is the
+// publication's: a run that published nothing has no merge for anybody to
+// re-arm, and recording the decision against the item anyway is what made the
+// counter mean the wrong thing.
+func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workItemID, runID string) (runstate.MergeRearmDecision, error) {
+	state, err := b.runs.Load(runID)
+	if err != nil {
+		return runstate.MergeRearmDecision{}, fmt.Errorf("read the publication run %s made, whose re-arm budget this decision spends: %w", runID, err)
+	}
+	if state.PullRequest == nil {
+		return runstate.MergeRearmDecision{}, fmt.Errorf("run %s published nothing, so it has no dropped merge to re-arm and no budget to spend for one", runID)
+	}
+	publication := triage.PublicationKey(runID, state.PullRequest.Number)
+	counters, err := b.store.RecordMergeRearm(ctx, workItemID, publication, b.clock.Now(), b.caps)
+	if err != nil {
+		return runstate.MergeRearmDecision{}, err
+	}
+	return runstate.MergeRearmDecision{Publication: publication, Counters: counters}, nil
 }
 
 // conversationStoppages wires the durable run records a triage decision is

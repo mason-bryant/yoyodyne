@@ -36,12 +36,14 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 type triageOutput struct {
 	Rerun    *orchestrator.RerunResult          `json:"rerun,omitempty"`
 	Repair   *orchestrator.RepairContinueResult `json:"repair,omitempty"`
+	Rearm    *orchestrator.RearmResult          `json:"rearm,omitempty"`
 	Override *triageOverrideResult              `json:"override,omitempty"`
 	Error    string                             `json:"error,omitempty"`
 }
@@ -69,6 +71,8 @@ func runTriage(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return rerunStoppage(ctx, args[1:], stdout, stderr)
 	case "repair":
 		return repairStoppage(ctx, args[1:], stdout, stderr)
+	case "rearm":
+		return rearmPublication(ctx, args[1:], stdout, stderr)
 	case "override":
 		return overrideTriageCap(ctx, args[1:], stdout, stderr)
 	default:
@@ -124,6 +128,98 @@ func repairStoppage(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	result, err := continuer.Continue(ctx, orchestrator.RepairContinueRequest{Run: positional[0], Reason: *reason})
 	return reportRepair(stdout, stderr, *jsonOutput, result, err)
+}
+
+func rearmPublication(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("triage rearm", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
+	reason := flags.String("reason", "", "the development manager's recorded reasoning for deciding a re-arm")
+	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	positional, err := parseArguments(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(positional) != 1 {
+		fmt.Fprintln(stderr, "triage rearm requires exactly one run identifier, the run whose publication the docket entry names")
+		printTriageUsage(stderr)
+		return 2
+	}
+
+	rearmer, err := buildRearmer(*configPath)
+	if err != nil {
+		return reportRearm(stdout, stderr, *jsonOutput, orchestrator.RearmResult{}, err)
+	}
+	result, err := rearmer.Rearm(ctx, orchestrator.RearmRequest{Run: positional[0], Reason: *reason})
+	return reportRearm(stdout, stderr, *jsonOutput, result, err)
+}
+
+// buildRearmer wires the re-arm action over the same parts every other command
+// acts on, so the docket it reads, the runs it proves the publication from, the
+// forge it asks, and the pre-merge check it makes are the ones the rest of the
+// harness uses.
+func buildRearmer(configPath string) (orchestrator.Rearmer, error) {
+	parts, err := buildComponents(configPath)
+	if err != nil {
+		return orchestrator.Rearmer{}, err
+	}
+	return orchestrator.Rearmer{
+		Docket: parts.docket,
+		Runs:   parts.store,
+		// The same forge access the run's own merge was made through and the same
+		// reconciliation asks what became of one, so what repeats a request and what
+		// opened it speak to the same repository.
+		Forge: publish.GitHub{
+			Runner:       parts.runner,
+			Dir:          parts.repository,
+			Remote:       parts.config.Execution.Remote,
+			PushRemote:   parts.config.Execution.PushRemote,
+			RedactValues: parts.redactValues,
+		},
+		// The same manager the run's own merge checked the remote target with, so
+		// the check that gated the original merge and the check that gates its
+		// repeat are one thing rather than two.
+		Worktrees: parts.worktrees,
+		// The same per-item counters the development manager's decision spends and
+		// `yoyo status` reports, so what proves the decision was made and what an
+		// operator reads about it can never be two different records.
+		Decisions: parts.store.Triage(),
+		Caps:      orchestrator.TriageCaps(parts.config.Execution, parts.config.Triage),
+	}, nil
+}
+
+// reportRearm describes what the action did. A re-arm refused before anything
+// was spent and one whose repeated request the forge then answered are different
+// things for an operator to do something about, and a refusal always says why.
+func reportRearm(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.RearmResult, err error) int {
+	if jsonOutput {
+		output := triageOutput{}
+		if result.WorkItemID != "" || result.RunID != "" {
+			output.Rearm = &result
+		}
+		if err != nil {
+			output.Error = err.Error()
+		}
+		if code := writeJSON(stdout, stderr, output); code != 0 {
+			return code
+		}
+		if err != nil {
+			return 1
+		}
+		return 0
+	}
+	if !result.Rearmed {
+		fmt.Fprintf(stderr, "the re-arm was refused and no merge was asked for: %v\n", err)
+		if errors.Is(err, runstate.ErrTriageCapReached) {
+			fmt.Fprintln(stderr, "triage repeats one publication's merge request once; a second drop is an escalation rather than a larger budget")
+		}
+		return 1
+	}
+	fmt.Fprint(stdout, result.Render())
+	if result.RecordProblem != "" {
+		return 1
+	}
+	return 0
 }
 
 // overrideTriageCap records the operator's decision to cross one of a work
@@ -436,12 +532,13 @@ func reportRerun(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.
 func printTriageUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo triage rerun    [options] <run-id>
        yoyo triage repair   [options] <run-id>
+       yoyo triage rearm    [options] <run-id>
        yoyo triage override [options] <beads-id>
 
-"rerun" and "repair" carry out a decision the development manager recorded about
-a docketed stoppage. "override" is yours rather than theirs: it crosses one of a
-work item's triage caps so that a decision they could not record becomes one they
-can.
+"rerun", "repair", and "rearm" carry out a decision the development manager
+recorded about a docketed entry. "override" is yours rather than theirs: it
+crosses one of a work item's triage caps so that a decision they could not record
+becomes one they can.
 
 The first two are opposites. "rerun" starts a fresh run of the item, which
 is what a correct change whose ground moved needs. "repair" continues the run
@@ -462,7 +559,21 @@ if the preserved worktree is not as the harness left it, or holds none of the
 change it is a repair of -- what is in that worktree is what a continued
 developer would be handed back, and an empty one buys an empty repair.
 
-The intake hold applies to both, because the harness is the one spending here.
+"rearm" is about the other thing that stops: an approved change published to a
+forge that queued its merge and then dropped it. It repeats exactly the request
+the reviewer's verdict authorized -- the same pull request, by the method that
+verdict's own merge recorded, pinned to the commit that was integrated -- and it
+overrides nothing to do it: the forge's requirements run again in full. It is
+refused where the forge's own merge state names something only a person can
+satisfy, refused while the run that made the publication is still alive or the
+item has any run in flight, and refused past one re-arm per publication, where a
+further drop is an escalation rather than another re-arm. It takes the target
+branch's promotion lease, so it queues behind whatever is promoting into that
+branch now.
+
+The intake hold applies to the first two, because the harness is choosing work
+there. A re-arm chooses none: it finishes a publication of work that is already
+integrated.
 
 A harness with no free developer is not a refusal at all: nothing is claimed or
 granted, the decision stands, and asking again once a slot frees carries out the
@@ -489,8 +600,9 @@ spending it are two decisions and stay two.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
-  --reason <text>   rerun/repair: the development manager's recorded reasoning
-                    (required); override: why the cap is being crossed (required)
+  --reason <text>   rerun/repair/rearm: the development manager's recorded
+                    reasoning (required); override: why the cap is being crossed
+                    (required)
   --budget <name>   override: which cap to cross -- "review round" (the default),
                     "repair grant", "re-run", or "merge re-arm"
   --cap <n>         override: the ceiling to raise that budget to

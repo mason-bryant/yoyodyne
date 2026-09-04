@@ -145,14 +145,24 @@ func TestAClearedBudgetStopsRefusing(t *testing.T) {
 			t.Fatalf("RecordRerun() %d past a cleared cap error = %v", taken+1, err)
 		}
 	}
-	// Clearing one budget clears one budget. The merge re-arms are still two.
+	// Clearing one budget clears one budget. The merge re-arms are still two, and
+	// they are still two per publication: a budget spent on one publication of the
+	// item leaves every other publication's untouched.
+	const publication = "publication:run-a#7"
 	for taken := range 2 {
-		if _, err := store.RecordMergeRearm(ctx, item, time.Now(), overrideCaps); err != nil {
+		if _, err := store.RecordMergeRearm(ctx, item, publication, time.Now(), overrideCaps); err != nil {
 			t.Fatalf("RecordMergeRearm() %d error = %v", taken+1, err)
 		}
 	}
-	if _, err := store.RecordMergeRearm(ctx, item, time.Now(), overrideCaps); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.RecordMergeRearm(ctx, item, publication, time.Now(), overrideCaps); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordMergeRearm() past its own cap error = %v, want it still refused", err)
+	}
+	spent, err := store.RecordMergeRearm(ctx, item, "publication:run-b#8", time.Now(), overrideCaps)
+	if err != nil {
+		t.Fatalf("RecordMergeRearm() of a second publication error = %v, want its own budget untouched", err)
+	}
+	if got := spent.RearmsOf("publication:run-b#8"); got != 1 {
+		t.Fatalf("the second publication stands at %d re-arm(s), want the one just recorded", got)
 	}
 }
 

@@ -211,7 +211,10 @@ func TestARenderedEntrySaysWhatTriageHasAlreadyDecided(t *testing.T) {
 	for _, want := range []string{
 		"1 of 1 repair grant(s)",
 		"1 of 1 re-run(s), 0 carried out",
-		"0 of 1 merge re-arm(s)",
+		// The re-arms are stated as the item total they are, with no ceiling
+		// beside them: the ceiling is read per publication, and a stopped run is
+		// about none.
+		"0 merge re-arm(s) across every publication",
 		"already recorded and not yet carried out",
 	} {
 		if rendered := decided.Render(); !strings.Contains(rendered, want) {
@@ -325,15 +328,37 @@ func TestARenderedEntrySaysWhatARepeatedDecisionWouldMeet(t *testing.T) {
 		t.Fatalf("rendered entry does not say the grant still stands:\n%s", rendered)
 	}
 
-	// The re-arms are the third budget, and silent until one is spent.
-	rearmed := stoppedRunEntry()
-	rearmed.Counters.MergeRearms, rearmed.Counters.MergeRearmsCap = 2, 2
+	// The re-arms are the third budget, and the only one read per publication
+	// rather than per item: what a re-arm repeats is one already-authorized merge
+	// request, so an item that published three times has three of them. So the
+	// standing is stated against this entry's own publication and not against the
+	// item's total.
+	rearmed := publicationEntry()
+	rearmed.Counters.MergeRearms, rearmed.Counters.MergeRearmsCap = 3, 1
+	rearmed.Counters.PublicationRearms, rearmed.Counters.PublicationRearmsMade = 1, 1
 	if rendered := rearmed.Render(); !strings.Contains(rendered,
-		"A further merge re-arm for yoyodyne-task is refused: 2 of 2 permitted re-arm(s) are already recorded") {
+		"A further merge re-arm of this publication is refused: 1 of 1 permitted re-arm(s) are already recorded against it") {
 		t.Fatalf("rendered entry does not say a further re-arm is refused:\n%s", rendered)
 	}
-	if rendered := stoppedRunEntry().Render(); strings.Contains(rendered, "merge re-arm for") {
-		t.Fatalf("an item with no re-arm recorded was rendered as standing somewhere with them:\n%s", rendered)
+	// Decided and not yet made is the standing a re-arm's carry-out reads, and it
+	// is the opposite answer to the one above.
+	standingRearm := publicationEntry()
+	standingRearm.Counters.MergeRearms, standingRearm.Counters.MergeRearmsCap = 1, 1
+	standingRearm.Counters.PublicationRearms = 1
+	if rendered := standingRearm.Render(); !strings.Contains(rendered,
+		"is recorded and the harness has not made it, so its merge request may be repeated on the decision that stands") {
+		t.Fatalf("rendered entry does not say the re-arm still stands:\n%s", rendered)
+	}
+	// An item's own total says nothing about this publication, so an entry whose
+	// publication has spent nothing announces nothing however many re-arms the
+	// item has had elsewhere.
+	elsewhere := publicationEntry()
+	elsewhere.Counters.MergeRearms, elsewhere.Counters.MergeRearmsCap = 4, 1
+	if rendered := elsewhere.Render(); strings.Contains(rendered, "merge re-arm of this publication") {
+		t.Fatalf("a publication with nothing spent was rendered against the item's total:\n%s", rendered)
+	}
+	if rendered := stoppedRunEntry().Render(); strings.Contains(rendered, "merge re-arm of this publication") {
+		t.Fatalf("a stopped run was rendered as standing somewhere with a publication's re-arms:\n%s", rendered)
 	}
 }
 

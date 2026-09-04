@@ -570,7 +570,9 @@ first: something the base branch required went unmet, the harness does not
 merge past a requirement, and nothing about that publication is confirmed — so
 the item is handed back to you with a blocker rather than closed as integrated,
 which is also what puts it where a bounded re-arm of the dropped merge can be
-decided. A
+decided — once per publication, carried out by `yoyo triage rearm`, after which a
+further drop of the same publication is recorded as an escalation rather than
+re-armed again. A
 merge that **landed but could not be confirmed** is the second: the forge
 performed it, and the steps that confirm it — verifying the remote carries the
 promotion, recording the merge commit, retiring the consumed branch — failed,
@@ -1019,7 +1021,8 @@ counters are what bound it:
 triage of yoyodyne-ifd.90: triage has spent 2 passes on it
   review rounds: 3 spent across every run of this item, under the cap of 4
   repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
-  merge re-arms: 1 of 2 permitted
+  merge re-arms: 1 across every publication of this item, 1 permitted per publication
+    publication:run-a#92: 1 of 1 permitted
   waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say
 ```
 
@@ -1051,9 +1054,14 @@ double-grant, and each is refused once its budget is spent. A grant and a re-run
 are each once per item and are also refused by the rounds — the grant truncated
 to what the cap still has room for, the re-run refused outright once none
 remain — and a merge re-arm is bounded on its own because it buys no round at
-all. The rounds alone would bound neither of the first two on an item whose runs
+all. It is the one budget here that is not the item's: what a re-arm repeats is
+one merge request the reviewer's verdict already authorized, so it is bounded
+once per publication, and the line above names each publication that has spent
+any of it. An item that published three times has three separate budgets, and a
+second drop of one publication is an escalation rather than another re-arm. The
+rounds alone would bound neither of the first two on an item whose runs
 keep stopping before a reviewer ever sees them. The
-numbers are the `triage` keys and the integration retries in [the configuration
+numbers are the `triage` keys in [the configuration
 guide](configuration.md#what-one-work-item-has-been-given). An item triage
 has spent more than one pass on says so in the first line, which is the fact
 worth looking for: work that keeps coming back is usually work where something

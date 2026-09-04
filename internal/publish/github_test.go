@@ -434,15 +434,15 @@ func TestGitHubStateReportsAQueuedMergeSeparatelyFromADroppedOne(t *testing.T) {
 		})
 	}
 
-	// The queued merge is only knowable if it was asked for, so the query has to
-	// ask for it.
+	// The queued merge and the head the request carries are only knowable if they
+	// were asked for, so the query has to ask for them.
 	runner := &scriptedRunner{}
 	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
 	runner.reply("pr list", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]"})
 	_, _ = (GitHub{Runner: runner}).State(context.Background(), "yoyodyne/task/abcd1234")
 	listed := runner.matching("pr list")
-	if len(listed) != 1 || !contains(listed[0], "number,url,state,mergedAt,autoMergeRequest") {
-		t.Errorf("pr list args = %v, want the queued merge among the requested fields", listed)
+	if len(listed) != 1 || !contains(listed[0], "number,url,state,mergedAt,autoMergeRequest,headRefOid") {
+		t.Errorf("pr list args = %v, want the queued merge and the head among the requested fields", listed)
 	}
 }
 
@@ -791,5 +791,56 @@ func TestGitHubMergeStillReportsAnUnavailableSettingWhenSomethingIsWaiting(t *te
 	}
 	if merges := runner.matching("pr merge"); len(merges) != 1 {
 		t.Errorf("pr merge calls = %v, want no second merge attempt when something is waiting", merges)
+	}
+}
+
+// What a caller about to repeat a dropped merge has to be able to ask: whether
+// what the forge is holding the request on is something a person supplies. The
+// harness never merges past one, so the line decides whether the request may be
+// made again at all.
+func TestAwaitsOnlyAPersonSeparatesWhatAPersonSuppliesFromWhatHasPassed(t *testing.T) {
+	t.Parallel()
+
+	// Nothing outstanding a person has to supply: the forge has no requirement
+	// left, or has not finished deciding, so a merge that was dropped was dropped
+	// for a cause that has passed.
+	for _, status := range []string{"CLEAN", "unstable", "HAS_HOOKS", "UNKNOWN"} {
+		if AwaitsOnlyAPerson(status) {
+			t.Errorf("AwaitsOnlyAPerson(%q) = true, want a request nothing is holding", status)
+		}
+	}
+	// Each of these names somebody's work, and an unrecognized state is one too:
+	// a forge vocabulary that grew a word since must not read as nothing
+	// outstanding.
+	for _, status := range []string{"BLOCKED", "BEHIND", "DIRTY", "DRAFT", "", "SOMETHING_NEW"} {
+		if !AwaitsOnlyAPerson(status) {
+			t.Errorf("AwaitsOnlyAPerson(%q) = false, want it left to a person", status)
+		}
+	}
+}
+
+// The merge state a gate reads reports its failures rather than swallowing them,
+// unlike the reading that only explains a refusal that already happened: a state
+// nothing could be read of must refuse rather than read as clean.
+func TestMergeStateReportsWhatItCouldNotRead(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr view", execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "not found"})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	if _, err := forge.MergeState(context.Background(), 7); err == nil {
+		t.Fatal("MergeState() over a forge that would not answer = nil error, want the failure reported")
+	}
+	answering := &scriptedRunner{}
+	answering.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	answering.reply("pr view", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"mergeStateStatus":"BLOCKED"}`})
+	status, err := (GitHub{Runner: answering, Dir: t.TempDir()}).MergeState(context.Background(), 7)
+	if err != nil || status != "BLOCKED" {
+		t.Fatalf("MergeState() = %q, %v, want the forge's own word for it", status, err)
+	}
+	if requirement := MergeRequirement(status); !strings.Contains(requirement, "protection rules") {
+		t.Fatalf("MergeRequirement(%q) = %q, want the rule stated in words", status, requirement)
 	}
 }

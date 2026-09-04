@@ -252,8 +252,22 @@ type Counters struct {
 	CommittedRounds int `json:"committed_rounds"`
 	Reruns          int `json:"reruns"`
 	RerunsCap       int `json:"reruns_cap"`
-	MergeRearms     int `json:"merge_rearms"`
-	MergeRearmsCap  int `json:"merge_rearms_cap"`
+	// MergeRearms is what triage has decided across every publication of this
+	// item, and PublicationRearms what it has decided about the one this entry is
+	// about. The cap beside them is read per publication, so the second is the
+	// figure that says whether another re-arm may be decided and the first says
+	// only how often this item has needed one. A publication entry carries both; a
+	// stopped-run entry is about no publication and carries the total alone.
+	MergeRearms       int `json:"merge_rearms"`
+	PublicationRearms int `json:"publication_rearms,omitempty"`
+	MergeRearmsCap    int `json:"merge_rearms_cap"`
+	// PublicationRearmsMade is how many of this publication's decided re-arms the
+	// harness has actually made. It is the other half of the re-arm gate, exactly
+	// as the re-runs carried out are the re-run's: a decision authorizes one
+	// repeat of the merge request, so a publication with as many made as decided
+	// has had everything triage decided about it carried out, and a further drop
+	// of it is an escalation rather than another re-arm.
+	PublicationRearmsMade int `json:"publication_rearms_made,omitempty"`
 	// RerunsCarriedOut is how many of the recorded re-runs the harness has
 	// actually claimed. It is the other half of the re-run gate: a decision
 	// authorizes one re-run, so an item with as many claims as decisions has had
@@ -627,10 +641,10 @@ func (e Entry) renderDecisions() string {
 			e.CountersProblem+"\nThis says nothing about what has been decided: read the record before deciding anything that spends a budget.")
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "      Triage decisions recorded: %d of %s repair grant(s)%s; %d of %s re-run(s), %d carried out; %d of %s merge re-arm(s)\n",
+	fmt.Fprintf(&rendered, "      Triage decisions recorded: %d of %s repair grant(s)%s; %d of %s re-run(s), %d carried out; %d merge re-arm(s) across every publication%s\n",
 		e.Counters.RepairGrants, capFigure(e.Counters.RepairGrantsCap), grantedNote(e.Counters),
 		e.Counters.Reruns, capFigure(e.Counters.RerunsCap), e.Counters.RerunsCarriedOut,
-		e.Counters.MergeRearms, capFigure(e.Counters.MergeRearmsCap))
+		e.Counters.MergeRearms, e.rearmNote())
 	rendered.WriteString(e.renderOverrides())
 	rendered.WriteString(e.renderGrantStanding())
 	rendered.WriteString(e.renderRerunStanding())
@@ -720,16 +734,45 @@ func (e Entry) renderGrantStanding() string {
 	return ""
 }
 
-// renderRearmStanding says when the merge re-arms are gone. It is silent until
-// one has been recorded, because a re-arm is not the decision a stopped run is
-// about and an entry that announced an untouched budget on every stoppage would
-// be a line every reader learns to skip.
-func (e Entry) renderRearmStanding() string {
-	if e.Counters.MergeRearms == 0 || e.Counters.MergeRearms < e.Counters.MergeRearmsCap {
+// rearmNote states this publication's own re-arm budget beside the item's total,
+// which is the only one of the three budgets the total does not answer for: a
+// re-arm is bounded per publication, so the cap belongs beside the publication's
+// figure and printing it beside the total would state a ceiling for a count it
+// does not bound. A stopped-run entry is about no publication and gets none.
+func (e Entry) rearmNote() string {
+	if e.Class != ClassPublication {
 		return ""
 	}
-	return fmt.Sprintf("      A further merge re-arm for %s is refused: %d of %d permitted re-arm(s) are already recorded, and a merge the forge keeps dropping is a repository somebody has to look at.\n",
-		e.WorkItemID, e.Counters.MergeRearms, e.Counters.MergeRearmsCap)
+	return fmt.Sprintf(", %d of %s for this publication, %d made",
+		e.Counters.PublicationRearms, capFigure(e.Counters.MergeRearmsCap), e.Counters.PublicationRearmsMade)
+}
+
+// renderRearmStanding says where this entry's publication stands with the
+// re-arms it may still be given, in the figures the re-arm guard reads. The
+// budget is the publication's rather than the item's, so the item's total cannot
+// answer it: an item that published three times has three separate merges the
+// forge could drop, and the total would report the third publication as spent
+// for what the first cost.
+//
+// It is silent until one has been recorded, because an entry that announced an
+// untouched budget on every publication would be a line every reader learns to
+// skip — and silent on a stopped run, which is about no publication at all.
+func (e Entry) renderRearmStanding() string {
+	if e.Class != ClassPublication || e.Counters.PublicationRearms == 0 {
+		return ""
+	}
+	// A decision nothing has acted on is the more particular answer and is given
+	// first, exactly as the re-run's is: at a cap of one those two are the same
+	// arithmetic, and "refused" would be the wrong half of it — the decision that
+	// spent the budget is still there to be carried out.
+	if e.Counters.PublicationRearms > e.Counters.PublicationRearmsMade {
+		return "      A merge re-arm of this publication is recorded and the harness has not made it, so its merge request may be repeated on the decision that stands; deciding another would spend a further one rather than repeat it.\n"
+	}
+	if e.Counters.PublicationRearms >= e.Counters.MergeRearmsCap {
+		return fmt.Sprintf("      A further merge re-arm of this publication is refused: %d of %d permitted re-arm(s) are already recorded against it, and a merge the forge keeps dropping is a repository somebody has to look at.\n",
+			e.Counters.PublicationRearms, e.Counters.MergeRearmsCap)
+	}
+	return ""
 }
 
 // renderRerunStanding says where this stoppage stands with the one re-run it

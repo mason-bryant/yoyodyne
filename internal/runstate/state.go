@@ -365,12 +365,33 @@ type PullRequest struct {
 	// commit the local target branch does not carry.
 	MergeMethod string `json:"merge_method,omitempty"`
 	MergeCommit string `json:"merge_commit,omitempty"`
-	// MergeQueued reports a merge the forge accepted but has not performed: it
+	// MergeQueued reports a merge the forge accepted and the harness has not seen
+	// the end of. Ordinarily that is a merge the forge has not performed: it
 	// merges the request itself once the base branch's requirements are met,
 	// which happens long after the run that asked for it has finished. It keeps
 	// the run outstanding until somebody knows which way that went, and is
 	// cleared when reconciliation observes the merge land or be dropped.
+	//
+	// A repeated merge request sets it on either answer, including a merge the
+	// forge performed on the spot. Finishing a publication — confirming the remote
+	// target, recording the merge commit, deleting the consumed branch, catching
+	// the local target up — is the settle path's work and needs a worktree the
+	// re-arm has not got, so what it records is that the forge took the request
+	// and the harness has not confirmed the end of it. Reconciliation asks, finds
+	// it landed, and finishes it.
 	MergeQueued bool `json:"merge_queued,omitempty"`
+	// MergeRearms is how many times the harness has repeated this publication's
+	// merge request after the forge dropped the merge it had queued. It is the
+	// durable once-per-publication counter the re-arm is bounded by, and it lives
+	// on the publication rather than beside it because the publication is what it
+	// bounds: the development manager's decision is counted on the work item, and
+	// this is what says the decision has been carried out. Without it one recorded
+	// decision would authorize every repeat anybody asked for.
+	//
+	// It is written before the repeated request is made, which is the direction
+	// every triage counter fails in: a process that dies between the two has
+	// recorded a re-arm it did not make rather than made one it did not record.
+	MergeRearms int `json:"merge_rearms,omitempty"`
 }
 
 // Validate rejects a published record that cannot describe a real pull request.
@@ -390,6 +411,16 @@ func (p PullRequest) Validate() error {
 	}
 	if !commitPattern.MatchString(p.HeadCommit) {
 		problems = append(problems, errors.New("pull_request head_commit is invalid"))
+	}
+	if p.MergeRearms < 0 {
+		problems = append(problems, errors.New("pull_request merge_rearms cannot be negative"))
+	}
+	// A re-arm repeats the request the run's own merge asked for, so a
+	// publication that records one and no method could not have been re-armed by
+	// the only thing that re-arms one: the method is what says which request was
+	// repeated.
+	if p.MergeRearms > 0 && strings.TrimSpace(p.MergeMethod) == "" {
+		problems = append(problems, errors.New("pull_request merge_rearms requires the merge method the repeated request was made by"))
 	}
 	return errors.Join(problems...)
 }
