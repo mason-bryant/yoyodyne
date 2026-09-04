@@ -340,7 +340,7 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	// attempt was published — and it is reported rather than republished, because
 	// the checks and the review ran against what was published.
 	if published.HeadCommit != integration.SourceCommit {
-		a.recordPublishFailure(fmt.Errorf("pull request %d carries %s, but the promotion integrated %s; the published branch is not what would merge",
+		a.recordDroppedMerge(fmt.Errorf("pull request %d carries %s, but the promotion integrated %s; the published branch is not what would merge",
 			published.Number, published.HeadCommit, integration.SourceCommit))
 		return nil
 	}
@@ -384,14 +384,20 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	})
 	if verifyFailure != nil {
 		cause := fmt.Errorf("check the remote target branch before merging: %w", verifyFailure)
-		a.recordPublishFailure(cause)
+		// The merge was never asked for, and nothing here will ask again: this is
+		// the origin-moved refusal that four promotions once waited hours on with
+		// nothing said. The divergence below stops the run as well where the
+		// movement is one no fast-forward reconciles, and the two say different
+		// things — that the publication is not going to happen by itself, and that
+		// this run is stopped on something a person has to settle.
+		a.recordDroppedMerge(cause)
 		if errors.Is(verifyFailure, gitworktree.ErrRemoteTargetDrift) {
 			return a.settlePromotedDivergence(ctx, integration, cause)
 		}
 		return nil
 	}
 	if err != nil {
-		a.recordPublishFailure(err)
+		a.recordDroppedMerge(err)
 		return nil
 	}
 	published.MergeMethod = string(mergeMethod)
@@ -421,7 +427,7 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	a.state.PullRequest = &published
 	a.outcome.PullRequest = &published
 	if !merged.Merged {
-		a.recordPublishFailure(fmt.Errorf("pull request %d is still %s after the forge accepted the merge into %s",
+		a.recordDroppedMerge(fmt.Errorf("pull request %d is still %s after the forge accepted the merge into %s",
 			published.Number, strings.ToLower(nonEmpty(merged.State, "in an unreported state")), integration.TargetBranch))
 		return nil
 	}
@@ -572,6 +578,23 @@ func (a *activeRun) recordPublishFailure(cause error) {
 	if err := a.pipeline.Store.Save(a.state); err != nil {
 		a.outcome.PublishFailure = errors.Join(cause, fmt.Errorf("record the outstanding publication: %w", err)).Error()
 	}
+}
+
+// recordDroppedMerge records an outstanding publication whose merge is also over:
+// the forge refused it, or the state of the remote target says it must not be
+// asked for. It is the same record recordPublishFailure writes with the moment
+// the merge stopped being expected written beside it, and it is separate because
+// most publication failures are not that. A merge the forge performed and a step
+// after it that failed — the confirmation, the branch removal, the save — leaves
+// a publication to finish rather than a merge that is not going to happen, and a
+// record saying otherwise would announce a dropped merge over a merged change.
+//
+// The moment is what makes the drop sayable at all. Everything else about it was
+// always readable from the record by whoever went and looked; what nothing held
+// was when it became true, so nothing could say it as it happened.
+func (a *activeRun) recordDroppedMerge(cause error) {
+	a.state.MergeDrop = &runstate.MergeDrop{At: a.pipeline.clock().Now(), Reason: cause.Error()}
+	a.recordPublishFailure(cause)
 }
 
 // attemptMessage describes one developer attempt in the harness-owned commit

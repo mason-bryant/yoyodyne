@@ -105,6 +105,141 @@ func TestAnIdleLineWithNothingReadyStaysSilent(t *testing.T) {
 	}
 }
 
+// The other thing a quiet line is worth saying over. A promotion the forge has
+// not published is work already paid for that is sitting nowhere a person would
+// see it, and the message that said it — the drop — is said once as it happens.
+// A reader who was away for that one has nothing else that would ever tell them,
+// so the count comes back on the next quiet tick and every one after it.
+func TestAPromotionWaitingOnTheForgeIsCountedOnEveryQuietTick(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	// Nothing at all is ready to pull: before this, that alone kept the line
+	// silent, and the outstanding publication with it.
+	harness.ready(0)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	harness.record(t, harness.awaitingForge(t))
+
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksPassed,
+		notify.KindReviewApproved, notify.KindPromoted, notify.KindPublished,
+		notify.KindMergeQueued, notify.KindWatchStopped)
+	harness.now = harness.now.Add(time.Hour)
+	said := harness.say(t, cursors, notify.KindLineWaiting)
+	for _, fact := range []string{"no items ready to pull", "one promotion awaiting the forge"} {
+		if !strings.Contains(said.Body, fact) {
+			t.Fatalf("body %q does not carry %q", said.Body, fact)
+		}
+	}
+}
+
+// And it stops the moment the publication is settled, because silence has to go
+// on meaning nothing to do. A merged publication is nobody's move.
+func TestTheCountStopsWhenThePublicationIsSettled(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(0)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	waiting := harness.awaitingForge(t)
+	harness.record(t, waiting)
+
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksPassed,
+		notify.KindReviewApproved, notify.KindPromoted, notify.KindPublished,
+		notify.KindMergeQueued, notify.KindWatchStopped)
+	harness.now = harness.now.Add(time.Hour)
+	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
+
+	merged := *waiting.PullRequest
+	merged.MergeQueued = false
+	merged.Merged = true
+	waiting.PullRequest = &merged
+	harness.save(t, waiting)
+
+	cursors = harness.poll(t, cursors, notify.KindMergeCompleted)
+	harness.now = harness.now.Add(2 * time.Hour)
+	harness.poll(t, cursors)
+}
+
+// The case this was written for, replayed end to end: a run whose merge the
+// forge queued, a drop nothing was watching for, and a channel that said
+// nothing about either for four hours. Now the drop is a warning as it happens,
+// and the count says it again while the publication stands.
+func TestADroppedMergeIsAnnouncedAtDropTimeAndCountedUntilItIsSettled(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(0)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	queued := harness.awaitingForge(t)
+	harness.record(t, queued)
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksPassed,
+		notify.KindReviewApproved, notify.KindPromoted, notify.KindPublished,
+		notify.KindMergeQueued, notify.KindWatchStopped)
+
+	// The forge gives up on it, and reconciliation records the moment.
+	dropped := queued
+	request := *queued.PullRequest
+	request.MergeQueued = false
+	dropped.PullRequest = &request
+	dropped.PublishFailure = "the forge dropped the queued merge of pull request 84: it is open and has no merge queued for it"
+	dropped.MergeDrop = &runstate.MergeDrop{At: harness.now, Reason: dropped.PublishFailure}
+	harness.save(t, dropped)
+
+	said := harness.say(t, cursors, notify.KindMergeDropped)
+	if said.Severity != report.SeverityWarning {
+		t.Fatalf("the drop is said at %q, want a warning so the channel is broadcast to", said.Severity)
+	}
+	if !broadcast(said.Severity) {
+		t.Fatalf("a drop said at %q does not reach the channel", said.Severity)
+	}
+	cursors = harness.poll(t, cursors, notify.KindMergeDropped)
+
+	// And for as long as nobody settles it, the hourly line carries the count —
+	// which is what a reader who was not looking at four in the morning gets.
+	for hour := 0; hour < 2; hour++ {
+		harness.now = harness.now.Add(time.Hour)
+		beat := harness.say(t, cursors, notify.KindLineWaiting)
+		if !strings.Contains(beat.Body, "one promotion awaiting the forge") {
+			t.Fatalf("body %q does not carry the outstanding publication", beat.Body)
+		}
+		cursors = harness.poll(t, cursors, notify.KindLineWaiting)
+	}
+}
+
+// awaitingForge is a run that did everything right and is waiting on the forge:
+// promoted, published, and with the merge the forge accepted still queued. It is
+// the state the four silent hours were spent in.
+func (h *testHarness) awaitingForge(t *testing.T) runstate.State {
+	t.Helper()
+	state := h.run(t, runstate.StatusSucceeded)
+	state.Phase = runstate.PhaseCleaningUp
+	state.WorktreePath = "/tmp/worktrees/" + state.RunID
+	state.Branch = "yoyodyne/ifd-68-3"
+	state.BaseCommit = strings.Repeat("d", 40)
+	state.ReviewDecision = runstate.ReviewApprove
+	state.ReviewRounds = 1
+	state.ProviderSessionID = "developer-session"
+	state.ProviderModel = "opus"
+	state.ReviewSessionID = "reviewer-session"
+	state.ReviewModel = "opus"
+	state.Integration = &runstate.Integration{
+		TargetBranch:         "main",
+		SourceCommit:         strings.Repeat("c", 40),
+		TargetCommit:         strings.Repeat("c", 40),
+		PreviousTargetCommit: strings.Repeat("d", 40),
+	}
+	state.PullRequest = &runstate.PullRequest{
+		Remote:      "origin",
+		Branch:      state.Branch,
+		Number:      84,
+		URL:         "https://example.test/pull/84",
+		HeadCommit:  strings.Repeat("c", 40),
+		MergeMethod: "merge",
+		MergeQueued: true,
+	}
+	return state
+}
+
 // A product nobody has ever watched has no line that stopped. An operator who
 // runs items by name has a queue by choice, and an hourly message about it is
 // the nagging this is written not to be.

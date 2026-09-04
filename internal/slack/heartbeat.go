@@ -23,6 +23,15 @@ package slack
 // the moment the state clears. A line that is idle with nothing ready is not
 // waiting on anybody, and stays as silent as it always was.
 //
+// A promotion the forge has not published is the second thing that makes a quiet
+// line worth saying, and it is here for the same reason the line itself is. A
+// dropped merge is announced once, as it happens; a reader who was away for that
+// message has nothing that would ever tell them, and the change sits published
+// nowhere while the item reads as landed. So the count rides with the line, and
+// the line is said while there is one — which puts a missed announcement back in
+// front of somebody at the next quiet tick, and every one after it until the
+// publication is settled.
+//
 // It costs one tracker read per interval and no provider call, and it is read
 // only when something is actually due: a healthy machine polling every fifteen
 // seconds asks the tracker nothing at all.
@@ -121,7 +130,7 @@ type switches struct {
 // happened, and a second message a moment later would be the sink repeating what
 // the channel already has. What this adds is the hour after that, and every hour
 // after that.
-func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, held switches, sessions []runstate.WatchTransition, inFlight int, ready func(context.Context) (int, error), streams map[string]struct{}) ([]Delivery, error) {
+func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, held switches, sessions []runstate.WatchTransition, inFlight, awaitingForge int, ready func(context.Context) (int, error), streams map[string]struct{}) ([]Delivery, error) {
 	if f.Backlog == nil {
 		return nil, nil
 	}
@@ -159,11 +168,11 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 			state.Since.UTC().Format(time.RFC3339), err)
 		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
 	}
-	if count == 0 {
-		// Idle with nothing ready is the healthy quiet the operator asked to keep,
-		// so it is silent. The clock is still reset, because what a poll costs is a
-		// tracker read and there is no reason to spend one every fifteen seconds on
-		// a machine that is behaving.
+	if count == 0 && awaitingForge == 0 {
+		// Idle with nothing ready and nothing waiting on the forge is the healthy
+		// quiet the operator asked to keep, so it is silent. The clock is still
+		// reset, because what a poll costs is a tracker read and there is no reason
+		// to spend one every fifteen seconds on a machine that is behaving.
 		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
 	}
 	// The four lines are read here rather than assembled from what this pass
@@ -176,10 +185,11 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		Stream: heartbeatStream,
 		Cursor: armed,
 		Notification: notify.FromLine(notify.Line{
-			Stopped:  state.Says,
-			Since:    state.Since,
-			Ready:    count,
-			Standing: f.standing(ctx),
+			Stopped:     state.Says,
+			Since:       state.Since,
+			Ready:       count,
+			Outstanding: awaitingForge,
+			Standing:    f.standing(ctx),
 		}, now),
 	}}, nil
 }

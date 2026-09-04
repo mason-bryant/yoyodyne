@@ -138,6 +138,24 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	if merged(after) && !merged(before) {
 		say(KindMergeCompleted, report.SeverityNote, Harness(), Detail{PullRequest: describePullRequest(after.PullRequest)})
 	}
+	// A merge that is not going to happen, said as loudly as a park by a cause
+	// nobody chose is. Nobody decided it, the change is promoted and reads as
+	// landed everywhere else, and what follows it is a publication sitting on the
+	// forge for as long as it takes somebody to notice — which on 2026-08-20 was
+	// four promotions and most of a day.
+	//
+	// It is read from the moment the record holds rather than from the queued flag
+	// going out: the flag is cleared by a merge that happened as well as by one
+	// that did not, and a sink that had not yet seen the merge queued would have
+	// no crossing to compare against at all. A drop the record stamps is a fact
+	// about the run, so a sink reading the record for the first time hours later
+	// says it exactly as one watching would have.
+	if after.MergeDrop != nil && before.MergeDrop == nil {
+		say(KindMergeDropped, report.SeverityWarning, Harness(), Detail{
+			PullRequest: describePullRequest(after.PullRequest),
+			Cause:       after.MergeDrop.Reason,
+		})
+	}
 	if !parked(before) && parked(after) {
 		say(KindRunParked, parkSeverity(after), Harness(), Detail{Cause: causeOf(after)})
 	}
@@ -357,8 +375,9 @@ var watchKinds = map[runstate.WatchState]Kind{
 }
 
 // Line is a product's line with nothing being chosen from it: what stopped the
-// choosing, when it became that way, and how much admitted work the tracker
-// reports as ready behind it.
+// choosing, when it became that way, how much admitted work the tracker reports
+// as ready behind it, and how many promoted changes are waiting on the forge to
+// publish them.
 //
 // It is the one thing selection says that is not a crossing. Everything else
 // here compares two readings of a record and reports the difference, which says
@@ -376,9 +395,14 @@ type Line struct {
 	// worth repeating: the state does not change and its age does.
 	Since time.Time
 	// Ready is how much admitted work the tracker itself calls ready. It is what
-	// separates a line waiting on somebody from an honestly quiet one, so a line
-	// with nothing ready is never said at all.
+	// separates a line waiting on somebody from an honestly quiet one.
 	Ready int
+	// Outstanding is how many promoted changes are waiting on the forge to
+	// publish them. It is the other thing that makes a quiet line worth saying:
+	// a merge the forge dropped is announced once as it happens, and a reader who
+	// missed that message has nothing else that would ever tell them — so the
+	// count is said with the line for as long as the publication is unsettled.
+	Outstanding int
 	// Standing is where the harness stands, in the four lines the read model
 	// renders. It is said with the line because the two answer one question at
 	// different grains: the sentence says the choosing has stopped and for how
@@ -389,7 +413,8 @@ type Line struct {
 	Standing string
 }
 
-// FromLine says that nothing is being chosen while work is ready to be chosen.
+// FromLine says that nothing is being chosen while there is something to choose
+// or something already done waiting to be published.
 // It is addressed to the product and spoken by the harness for the same reason
 // the holds and the watch sessions are: a line is about every item rather than
 // any one of them, and what stopped it is nobody's judgement to narrate.
@@ -399,10 +424,11 @@ type Line struct {
 // point is that it is being looked at again.
 func FromLine(line Line, at time.Time) Notification {
 	return productNotification(KindLineWaiting, at, Detail{
-		Stopped:  strings.TrimSpace(line.Stopped),
-		Since:    line.Since,
-		Ready:    line.Ready,
-		Standing: strings.TrimRight(line.Standing, "\n"),
+		Stopped:     strings.TrimSpace(line.Stopped),
+		Since:       line.Since,
+		Ready:       line.Ready,
+		Outstanding: line.Outstanding,
+		Standing:    strings.TrimRight(line.Standing, "\n"),
 	})
 }
 

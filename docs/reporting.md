@@ -566,7 +566,8 @@ One message there is a state rather than an event, and it is the one an overnigh
 asked for. A line that is **choosing nothing while work is ready** — intake held,
 everything held, the watch session idle, or no session running — says so again
 every `--heartbeat`, an hour by default, naming what stopped it, how long that has
-been true, and how much ready work is behind it. That count is what a developer
+been true, how much ready work is behind it, and how many promotions are waiting
+on the forge to publish them. That count is what a developer
 run could actually be started for rather than everything the tracker calls ready:
 the tracker's readiness is about dependencies alone, so its answer includes work
 marked for a conversation and work the product manager parked, neither of which
@@ -576,8 +577,19 @@ transition and is said once, which is right for a thread and wrong for a night:
 "intake is held" posted at 00:02 is ten hours stale by the time anybody reads it,
 and the silence after it is indistinguishable from a healthy queue or a dead sink.
 It stops the moment the state clears, says nothing while a run is in flight, and
-stays completely silent on an idle line with nothing a run could take — silence has to keep
+stays completely silent on an idle line with nothing a run could take and nothing
+waiting on the forge — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
+
+The promotions are counted for the sake of the one message a reader cannot afford
+to miss. A **merge the forge will not make** — refused while the run watched
+because the remote target moved under it, or dropped after the forge had queued
+it — is recorded as it happens and said as a `warning` in that item's thread, and
+like every other crossing it is said once. Nothing else would ever mention it
+again: the change is promoted, the item reads as landed, and the pull request
+waits on somebody who does not know it is theirs. So the count of promotions the
+forge has not published rides with the hourly line while any of them stands, and
+it is why a line with nothing at all ready still says something.
 
 Under that sentence it carries [the four lines](operations.md#where-the-harness-stands-the-four-lines)
 — Running, Working, Not startable, Needs a human — from the same derivation

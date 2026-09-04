@@ -1279,6 +1279,80 @@ func integratedState(t *testing.T, phase Phase) State {
 	return state
 }
 
+// The moment a merge stopped being expected is a fact about the run, so it has
+// to outlive the process that found it out — which is usually a reconcile sweep
+// somebody ran once and will not run again for hours.
+func TestStoreRoundTripsADroppedMerge(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := integratedState(t, PhaseCleaningUp)
+	state.PullRequest = &PullRequest{
+		Remote: "origin", Branch: state.Branch, Number: 84,
+		URL: "https://example.test/pull/84", HeadCommit: strings.Repeat("b", 40),
+	}
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	dropped := state.StartedAt.Add(time.Hour).UTC()
+	state.PublishFailure = "the forge dropped the queued merge of pull request 84"
+	state.MergeDrop = &MergeDrop{At: dropped, Reason: state.PublishFailure}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.MergeDrop == nil || !loaded.MergeDrop.At.Equal(dropped) || loaded.MergeDrop.Reason != state.PublishFailure {
+		t.Fatalf("Load() = %#v, want the recorded drop", loaded.MergeDrop)
+	}
+	// The publication is what is still waiting, and it goes on being counted
+	// whatever the sweep did to the run: a drop stops the harness owing a step
+	// and leaves the change published nowhere.
+	if !loaded.AwaitingForge() {
+		t.Fatalf("a promotion whose merge was dropped is not awaiting the forge: %#v", loaded)
+	}
+}
+
+// A drop is a drop of something. Without the request it was going to merge, the
+// record says a publication needs a person and nothing says which one.
+func TestStateRejectsADroppedMergeWithNoPublication(t *testing.T) {
+	t.Parallel()
+
+	state := integratedState(t, PhaseCleaningUp)
+	state.MergeDrop = &MergeDrop{At: state.StartedAt, Reason: "the forge dropped it"}
+	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "requires the pull request") {
+		t.Fatalf("Validate() error = %v, want a drop with no publication refused", err)
+	}
+}
+
+// What AwaitingForge answers and Outstanding does not: a run the harness owes
+// nothing on can still have a promotion nobody has published.
+func TestAMergedPublicationIsNotAwaitingTheForge(t *testing.T) {
+	t.Parallel()
+
+	state := integratedState(t, PhaseComplete)
+	state.PullRequest = &PullRequest{
+		Remote: "origin", Branch: state.Branch, Number: 84,
+		URL: "https://example.test/pull/84", HeadCommit: strings.Repeat("b", 40),
+		MergeMethod: "merge", Merged: true,
+	}
+	if state.Outstanding() {
+		t.Fatalf("a settled run still owes a step: %#v", state)
+	}
+	if state.AwaitingForge() {
+		t.Fatalf("a merged publication is still waiting on the forge: %#v", state.PullRequest)
+	}
+	unmerged := *state.PullRequest
+	unmerged.Merged = false
+	state.PullRequest = &unmerged
+	if !state.AwaitingForge() {
+		t.Fatalf("an unmerged publication of a promoted change is not waiting on the forge: %#v", state.PullRequest)
+	}
+}
+
 func TestIncompleteRejectsCorruptStateRatherThanDuplicatingIt(t *testing.T) {
 	t.Parallel()
 

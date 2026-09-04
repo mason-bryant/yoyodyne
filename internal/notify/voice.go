@@ -175,6 +175,7 @@ var harnessVoice = voice{
 		KindPublished:           "{item} published as {pr}.",
 		KindMergeQueued:         "The merge of {pr} is queued on the forge.",
 		KindMergeCompleted:      "{pr} merged.",
+		KindMergeDropped:        "The merge of {pr} is not going to happen: {cause}. The change is promoted; the publication is not.",
 		KindRunParked:           "{run} stopped part-way through {item}, waiting on {cause}.",
 		KindRunContinued:        "{run} continued on {item}.",
 		KindBlockerRecorded:     "{item} is blocked, and {remains}: {text}",
@@ -198,7 +199,7 @@ var harnessVoice = voice{
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
 		KindWatchRedeploying:    "The watch session is restarting into the build deployed over it, having waited out every run it started: {why}",
-		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.\n\n{standing}",
+		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull and {publications}.\n\n{standing}",
 		KindStallNoticed:        "Nothing at all has started on this product for {age}, with {ready} ready to pull and nothing accounting for it. {stopped}.\n\n{standing}",
 		KindResidentStale:       "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
 		KindBundleImprovement:   "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows {setting} beside everything else the template moved, and it is adopted by hand or not at all.",
@@ -231,6 +232,7 @@ var developerVoice = voice{
 		KindPublished:           "I've published the change on {item} as {pr}.",
 		KindMergeQueued:         "{pr} is queued to merge; there is nothing more from me on {item}.",
 		KindMergeCompleted:      "{pr} is merged, so {item} is out of my hands.",
+		KindMergeDropped:        "{pr} was never merged and will not be by itself: {cause}. My change is on the target branch; what is on the forge is not.",
 		KindRunParked:           "I've stopped mid-change on {item}, waiting on {cause}. The worktree keeps everything.",
 		KindRunContinued:        "Back on {item}, picking the change up where I left it.",
 		KindBlockerRecorded:     "I could not finish {item}, and {remains}: {text}",
@@ -254,7 +256,7 @@ var developerVoice = voice{
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
 		KindWatchRedeploying:    "The session that hands me work is restarting into a newer build of itself; work will keep arriving once it is back: {why}",
-		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.\n\n{standing}",
+		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been and {publications} from work already done.\n\n{standing}",
 		KindStallNoticed:        "Nothing has been handed to me for {age} and nothing explains it — {ready} sat ready the whole time. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
 		KindBundleImprovement:   "{improvement}. What the template says about {setting} is what I'd be run under if this project took it up, and until somebody does I go on being run under what it holds now.",
@@ -287,6 +289,7 @@ var reviewerVoice = voice{
 		KindPublished:           "{item} is published as {pr}. My verdict was on the change, not on the request.",
 		KindMergeQueued:         "{pr} is queued to merge with my approval behind it.",
 		KindMergeCompleted:      "{pr} is merged, so what I approved is what landed.",
+		KindMergeDropped:        "{pr} did not merge: {cause}. What I approved is on the target branch, and the request carrying it is still open.",
 		KindRunParked:           "{item} stopped before there was a verdict, waiting on {cause}.",
 		KindRunContinued:        "{item} is moving again; I'll see the change when it is ready.",
 		KindBlockerRecorded:     "{item} is blocked and there is no change to judge, though {remains}: {text}",
@@ -310,7 +313,7 @@ var reviewerVoice = voice{
 		KindWatchResumed:        "Work is starting again, so changes will come back to me: {why}",
 		KindWatchStopped:        "No more changes will arrive from this session; what I judged already stands: {why}",
 		KindWatchRedeploying:    "The session sending me changes is restarting into a newer build of itself, so what arrives next was chosen by the build that was deployed: {why}",
-		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.\n\n{standing}",
+		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it and {publications} I have already approved.\n\n{standing}",
 		KindStallNoticed:        "No change has reached me for a verdict in {age}, and none was written: {ready} ready, no run started, nothing holding it. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back, and installing that build is what stops me granting one — the session takes it up itself between runs.",
 		KindBundleImprovement:   "{improvement}. It changes nothing about the standard I hold a change to today, and it would change {setting} for every change judged after somebody adopts it.",
@@ -342,6 +345,7 @@ var developmentManagerVoice = voice{
 		KindPublished:           "{item} is published as {pr} and still counts as in flight.",
 		KindMergeQueued:         "{pr} is queued to merge, so {item} stays in flight until the forge says otherwise.",
 		KindMergeCompleted:      "{pr} merged; {item} is done.",
+		KindMergeDropped:        "{pr} will not merge on its own: {cause}. {item} is promoted, and its publication is now somebody's to settle by hand.",
 		KindRunParked:           "{item} is stopped part-way, waiting on {cause}. It keeps its claim.",
 		KindRunContinued:        "{item} is moving again, from where it stopped.",
 		KindBlockerRecorded:     "{item} is blocked, and recorded as blocked rather than left implicit, with {remains}: {text}",
@@ -365,7 +369,7 @@ var developmentManagerVoice = voice{
 		KindWatchResumed:        "I'm pulling from the top of the queue again: {why}",
 		KindWatchStopped:        "The queue stops being pulled from here; what is in it stays in it: {why}",
 		KindWatchRedeploying:    "The queue stops being pulled from only until the session is back on the build deployed over it, and nothing in it moved: {why}",
-		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.\n\n{standing}",
+		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now and {publications} still counting as in flight.\n\n{standing}",
 		KindStallNoticed:        "My queue has not been pulled from in {age} — {ready} pullable, no hold, no full machine, no run in flight. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does, and they stop when that build is installed — the session takes it up itself between runs.",
 		KindBundleImprovement:   "{improvement}. Nothing in the queue moves for it, and nothing I hand out changes until {setting} is adopted by hand.",
@@ -398,6 +402,7 @@ var productManagerVoice = voice{
 		KindPublished:           "{item} is published as {pr}.",
 		KindMergeQueued:         "{pr} is queued to merge; {item} is not delivered until it lands.",
 		KindMergeCompleted:      "{pr} merged, so {item} is delivered.",
+		KindMergeDropped:        "{pr} is not merging: {cause}. {item} is built and promoted, and it is not delivered until somebody publishes it.",
 		KindRunParked:           "{item} is waiting on {cause}. Nothing about its priority changed while it waits.",
 		KindRunContinued:        "{item} is moving again.",
 		KindBlockerRecorded:     "{item} is blocked and stays in the backlog until somebody decides otherwise, with {remains}: {text}",
@@ -421,7 +426,7 @@ var productManagerVoice = voice{
 		KindWatchResumed:        "Work is being chosen again, and what I admit is what gets spent on: {why}",
 		KindWatchStopped:        "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
 		KindWatchRedeploying:    "Choosing and spending pause only while the session restarts into the build deployed over it, and the backlog is untouched by that: {why}",
-		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.\n\n{standing}",
+		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on, and {publications} paid for and not yet delivered.\n\n{standing}",
 		KindStallNoticed:        "Nothing has been spent on this product for {age}, and {ready} I admitted is still waiting. This is not a quiet queue; it is a queue nothing is reading. {stopped}.\n\n{standing}",
 		KindResidentStale:       "What is being spent on this product was built at {commit}, before {behind} landed. Until that build is installed, some of that spend buys work the system has already paid for once; the session takes it up itself between runs once it is.",
 		KindBundleImprovement:   "{improvement}. Whether {setting} is worth taking is the operator's to decide and nobody else's, which is why it is offered once rather than asked for repeatedly.",
@@ -454,6 +459,7 @@ var architectVoice = voice{
 		KindPublished:           "{item} is published as {pr}. The local branch remains the authoritative one.",
 		KindMergeQueued:         "{pr} is queued to merge; the forge settles it, not this run.",
 		KindMergeCompleted:      "{pr} merged, so the forge's history and the local target agree again.",
+		KindMergeDropped:        "{pr} was dropped rather than merged: {cause}. The local target carries the promotion and the forge does not, which is the divergence somebody has to close.",
 		KindRunParked:           "{item} is stopped part-way, waiting on {cause}. A design that cannot survive an interruption is the wrong design.",
 		KindRunContinued:        "{item} resumed from exactly where it stopped.",
 		KindBlockerRecorded:     "{item} is blocked, which is a fact about the system rather than about the attempt, and {remains}: {text}",
@@ -477,7 +483,7 @@ var architectVoice = voice{
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
 		KindWatchRedeploying:    "The selection loop closes and restarts on the build deployed over it; every run it started was waited out rather than abandoned: {why}",
-		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} a run could have been started for behind it. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
+		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} a run could have been started for behind it and {publications}. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
 		KindStallNoticed:        "Selection has started nothing for {age} over {ready} ready, and no record says why — which is the failure this watches for: the process that would have said something is the process that died. {stopped}.\n\n{standing}",
 		KindResidentStale:       "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
 		KindBundleImprovement:   "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; saying {setting} once makes the difference visible without deciding it for anybody.",
@@ -556,8 +562,13 @@ var nextMoves = map[Kind]string{
 	KindPublished:      "the forge's, until the request merges.",
 	KindMergeQueued:    "the forge's, until it settles.",
 	KindMergeCompleted: "nobody's — the item is done.",
-	KindRunParked:      "whatever it is waiting on; the run resumes from its own record once that clears.",
-	KindRunContinued:   "the developer's, from where the change stopped.",
+	// A dropped merge is the one crossing in this stretch whose move is a
+	// person's. The forge is done with it — it refused the merge or gave up on
+	// one it had queued, and asking again earns the same answer — so nothing
+	// happens to the publication until somebody makes it happen.
+	KindMergeDropped: "the operator's — the forge will not merge this by itself, and the publication stands until somebody settles it.",
+	KindRunParked:    "whatever it is waiting on; the run resumes from its own record once that clears.",
+	KindRunContinued: "the developer's, from where the change stopped.",
 	// Work that stopped and stayed stopped, and capacity that ran out. Neither
 	// clears on its own, which is why naming who has to act on it is the whole of
 	// what a reader needs.
@@ -867,8 +878,14 @@ func (e Event) fields(topic Topic) map[string]string {
 		"stopped": stated(detail.Stopped, "nothing the record names has stopped it"),
 		"age":     ageOf(detail.Since, e.At),
 		"ready":   countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
-		"behind":  countOf(detail.Behind, "harness change", "harness changes", "a number of harness changes the record does not carry"),
-		"events":  countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
+		// What is waiting on the forge, said at zero as well: a reader scanning a
+		// quiet channel is checking that nothing is, and a clause that vanished
+		// when the count was nought would leave them unable to tell a line with no
+		// outstanding publication from a message written before they were counted.
+		"publications": countOf(detail.Outstanding, "promotion awaiting the forge", "promotions awaiting the forge",
+			"a number of promotions the record does not carry"),
+		"behind": countOf(detail.Behind, "harness change", "harness changes", "a number of harness changes the record does not carry"),
+		"events": countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
 		// The four lines, already rendered by the read model. A surface with no way
 		// to read them says so rather than leaving the block out, because a message
 		// that simply lacks the lines is indistinguishable from a harness with
