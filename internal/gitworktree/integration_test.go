@@ -349,6 +349,51 @@ func TestManagerCleanupIsResumableAcrossItsDestructiveSteps(t *testing.T) {
 	})
 }
 
+// The one place cleanup could destroy work nothing else records: a worktree that
+// gained uncommitted changes after the commit that authorized its removal. The
+// removal is refused and the directory is left exactly as it is, which is what
+// makes "preservation survives cleanup" true for the integrated path — the
+// retirement sweep is what moves such a checkout, and it records the tree on a
+// ref before it does.
+func TestManagerCleanupRefusesAWorktreeHoldingUncommittedWork(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-dirty",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	// Somebody's half-finished work, arriving after the promotion this cleanup is
+	// authorized by. No commit, no branch, and no ref holds a copy of it.
+	writeFile(t, worktree.Path, "unsaved.txt", "half-finished\n")
+
+	cleanup, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+		Worktree:     worktree,
+		TargetBranch: worktree.TargetBranch,
+		SourceCommit: integration.SourceCommit,
+	})
+	if err == nil || !strings.Contains(err.Error(), "dirty worktree") {
+		t.Fatalf("CleanupIntegrated() dirty worktree error = %v", err)
+	}
+	if cleanup.WorktreeRemoved {
+		t.Fatalf("cleanup = %#v, want nothing reported removed", cleanup)
+	}
+	if content := readFile(t, worktree.Path, "unsaved.txt"); content != "half-finished\n" {
+		t.Fatalf("unsaved.txt = %q, want the uncommitted work exactly as it was", content)
+	}
+}
+
 func TestManagerCleanupRefusesUnprovenOrForeignArtifacts(t *testing.T) {
 	t.Parallel()
 

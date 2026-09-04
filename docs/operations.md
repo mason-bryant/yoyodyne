@@ -615,6 +615,10 @@ steps for deciding it are
 branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
+A deletion is written onto the run it belonged to, under that run's own lease, as
+a retired checkout is: `yoyo status` and the triage docket read the run's record
+for whether its change survived, so a branch deleted with nothing written down
+leaves the run advertising one that is not there.
 
 The same sweep retires the leftover checkouts, which is what makes the worktree
 registrations a machine carries live runs plus a bounded tail rather than
@@ -645,7 +649,16 @@ only then does the directory go.
   uncommitted work preserved at refs/yoyodyne/preserved-work/run-4f2a…9c1b
 ```
 
-That ref is on the run's own record too, which is where to look months later.
+That ref is on the run's own record too, and the sweep writes it onto the work
+item as well, naming the checkout it retired and the command that opens the ref.
+The item is where somebody picking the work up actually reads, and what it
+already carries is that run's own failure note — written while the checkout was
+still there and naming it. Without the correction, that note goes on pointing at
+a directory that is gone: run-48216ea9's 23 files were reported destroyed on
+exactly that gap, while the ref holding them was two commands away. A note the
+tracker refuses is reported on the sweep rather than failing it, because the
+work is on the ref either way.
+
 Open it as a checkout again with `git worktree add --detach <path> <ref>`, or
 read it with `git show` and `git diff`. It is deliberately not a branch: a branch
 would be swept by the branch sweep above, listed by `git branch`, and answer the

@@ -873,9 +873,11 @@ type State struct {
 	// WorktreeSweptAt is when the convergence sweep retired this run's checkout
 	// as hygiene, on a settled run that neither promoted anything nor was
 	// superseded. It is the third way a removal is earned and it covers the
-	// checkout alone, because the sweep only ever unregisters an empty checkout
-	// and never touches a branch: what that checkout carried is still on the
-	// branch, so nothing about the run stops being recoverable.
+	// checkout alone, because retiring a checkout never touches a branch: what
+	// that checkout carried in commits is still on the branch, and what it held
+	// uncommitted is on PreservedWorkRef below, so nothing about the run stops
+	// being recoverable. Deleting the branch is earned separately, by
+	// BranchSweptAt.
 	//
 	// It is recorded for the reason the other two are. `yoyo status`, the triage
 	// docket, and a re-run all read WorktreeRemoved as the answer to whether the
@@ -885,6 +887,28 @@ type State struct {
 	// Absent is every run whose checkout the sweep has not taken, which is all of
 	// them while it is still within the tail the sweep holds back.
 	WorktreeSweptAt *time.Time `json:"worktree_swept_at,omitempty"`
+	// BranchSweptAt is when the convergence sweep deleted this run's branch as
+	// hygiene, on a settled run whose work the target branch provably carries. It
+	// is the fourth way a removal is earned and it covers the branch alone, for
+	// the reason the sweep is allowed to make it at all: containment is proved in
+	// the repository before the deletion, so what the branch held is in the target
+	// and the deletion loses nothing.
+	//
+	// It is recorded because the alternative is the claim this field exists to
+	// stop. The sweep deleted branches for weeks and wrote nothing down, so every
+	// run it swept went on reading as one whose change was preserved on a branch —
+	// `Artifacts.Preserved()` asks BranchRemoved and nothing else — and run
+	// run-48216ea9 was still advertising a branch and a worktree that were both
+	// gone when a developer went looking for its work.
+	//
+	// It dates a branch the sweep found gone as well as one it deleted, as
+	// WorktreeSweptAt does and for the same reason: the branch is gone either way,
+	// and only one of the two answers stops sending somebody after it.
+	//
+	// Absent is every run whose branch the sweep has not deleted, which is every
+	// run whose work the target does not carry and every run that cleaned up after
+	// its own promotion.
+	BranchSweptAt *time.Time `json:"branch_swept_at,omitempty"`
 	// PreservedWorkRef names the ref carrying whatever this run left uncommitted
 	// in its checkout, written when the sweep retired that checkout and had
 	// something to move out of it first. It is deliberately not a branch: a branch
@@ -1478,21 +1502,27 @@ func (s State) Validate() error {
 		}
 	}
 	// A removal is only ever recorded with the evidence that earned it. There are
-	// three kinds: the run promoted its own work and cleaned up after it, triage
-	// retired what it preserved once another run superseded it, or the
-	// convergence sweep retired an empty checkout as hygiene. A record carrying
-	// none of them describes cleanup nothing authorized.
+	// four kinds: the run promoted its own work and cleaned up after it, triage
+	// retired what it preserved once another run superseded it, the convergence
+	// sweep retired an empty checkout as hygiene, or that same sweep deleted a
+	// branch the target branch provably carries. A record carrying none of them
+	// describes cleanup nothing authorized.
 	//
-	// The third covers the checkout alone. The sweep never touches a branch, so a
-	// branch removed with no integration and no superseding run behind it is
-	// still a removal with no evidence for it.
+	// The last two are recorded apart because they are earned apart and performed
+	// apart: the checkout sweep never touches a branch, and the branch sweep
+	// proves containment in the repository and never touches a checkout. Each
+	// therefore only ever excuses its own artifact.
 	retiredBy := strings.TrimSpace(s.ArtifactsRetiredBy)
 	sweptWorktree := s.WorktreeSweptAt != nil
-	if ((s.WorktreeRemoved && !sweptWorktree) || s.BranchRemoved) && s.Integration == nil && retiredBy == "" {
-		problems = append(problems, errors.New("removed artifacts require recorded integration, the run that superseded this one and retired them, or the convergence sweep that retired the checkout"))
+	sweptBranch := s.BranchSweptAt != nil
+	if ((s.WorktreeRemoved && !sweptWorktree) || (s.BranchRemoved && !sweptBranch)) && s.Integration == nil && retiredBy == "" {
+		problems = append(problems, errors.New("removed artifacts require recorded integration, the run that superseded this one and retired them, or the convergence sweep that retired the checkout or deleted the branch"))
 	}
 	if sweptWorktree && !s.WorktreeRemoved {
 		problems = append(problems, errors.New("a recorded checkout sweep names a checkout that was removed, and this one removed none"))
+	}
+	if sweptBranch && !s.BranchRemoved {
+		problems = append(problems, errors.New("a recorded branch sweep names a branch that was deleted, and this one deleted none"))
 	}
 	if preservedWork := strings.TrimSpace(s.PreservedWorkRef); preservedWork != "" {
 		// Only the sweep writes it, and it writes it as part of the removal, so a

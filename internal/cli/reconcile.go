@@ -259,6 +259,13 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 		case worktree.Kept != "":
 			fmt.Fprintf(stdout, "%s kept: %s\n", worktree.RunID, worktree.Kept)
 		}
+		// Read outside the switch because it stands beside a retirement that
+		// otherwise went perfectly: the work is on the ref either way, and what is
+		// missing is the work item saying so — which is the only place the person
+		// who picks that item up would find it.
+		if worktree.ItemProblem != "" {
+			fmt.Fprintf(stderr, "%s not told where the retired work went: %s\n", worktree.WorkItemID, worktree.ItemProblem)
+		}
 	}
 	// The prune says something only when it removed registrations or could not
 	// run. A repository with none to remove is the status quo, and a line about
@@ -271,6 +278,12 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 	}
 	for _, branch := range convergence.Branches {
 		switch {
+		// A branch that is gone whose run was not told so is read first, for the
+		// reason the same case is among the checkouts: it is the only one here where
+		// doing nothing leaves every reader of that run being told its change is
+		// preserved on a branch that does not exist.
+		case branch.RecordProblem != "":
+			fmt.Fprintf(stderr, "%s deleted but not recorded: %s\n", branch.Branch, branch.RecordProblem)
 		case branch.Failure != "":
 			fmt.Fprintf(stderr, "%s not removed: %s\n", branch.Branch, branch.Failure)
 		case branch.Removed:

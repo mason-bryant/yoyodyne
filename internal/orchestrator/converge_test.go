@@ -153,6 +153,71 @@ func TestConvergeRemovesTheLeftoverBranchOfASettledRun(t *testing.T) {
 	}
 }
 
+// Deleting the branch is written onto the run, which is the half that was
+// missing while the sweep deleted branches and recorded nothing. Every reader of
+// a run asks BranchRemoved for whether the change survived, so a deletion
+// nothing wrote down leaves the run advertising a branch that is not there —
+// which is what run-48216ea9 was still doing, both its artifacts gone, when a
+// developer went looking for the work and reported it destroyed.
+func TestSweepingRecordsTheBranchItDeleted(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
+	}
+	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the interrupted run blocked with its artifacts preserved", results)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.BranchRemoved || !settled.Artifacts().Preserved() {
+		t.Fatalf("record = %#v, want a stopped run whose change is preserved on its branch", settled)
+	}
+	reconciler := Reconciler{Tracker: tracker, Worktrees: newObserver(t, repository, worktreeRoot), Store: store}
+
+	// The checkout goes first, as the sweep does it: a branch a checkout still
+	// holds is kept, and that checkout is the one being retired.
+	if _, swept := reconciler.sweepWorktree(context.Background(), settled); !swept {
+		t.Fatal("the checkout was not retired, so the branch cannot be swept")
+	}
+	retired, err := store.Load(settled.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The branch carries nothing the target does not, because the run stopped
+	// before it committed anything — which is what earns the deletion.
+	sweep, swept := reconciler.sweepBranch(context.Background(), retired)
+	if !swept || !sweep.Removed || sweep.Kept != "" || sweep.Failure != "" || sweep.RecordProblem != "" {
+		t.Fatalf("sweep = %#v, swept = %t, want the branch deleted and written down", sweep, swept)
+	}
+	recorded, err := store.Load(settled.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.BranchRemoved || recorded.BranchSweptAt == nil {
+		t.Fatalf("record = %#v, want the deletion written down", recorded)
+	}
+	// Which is the whole point: nothing reading this run says its work is
+	// preserved on a branch that is gone.
+	if recorded.Artifacts().Preserved() {
+		t.Errorf("artifacts = %#v, still read as preserved with both of them gone", recorded.Artifacts())
+	}
+	// Asking again says there was nothing there, so a sweep that runs on every
+	// pass does not report the same long-gone branch forever.
+	if again, swept := reconciler.sweepBranch(context.Background(), recorded); swept {
+		t.Fatalf("sweep = %#v, want a branch that is already gone reported as nothing to do", again)
+	}
+}
+
 // A run that still owes a step is left entirely alone. Settling it may yet need
 // the branch, and deciding that is reconciliation's rather than hygiene's — so a
 // live developer's branch is never a candidate here.
@@ -327,7 +392,8 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 		t.Fatalf("the fixture left no uncommitted work to preserve: %v", err)
 	}
 	retired, swept := reconciler.sweepWorktree(context.Background(), settled)
-	if !swept || !retired.Removed || retired.Kept != "" || retired.Failure != "" || retired.RecordProblem != "" {
+	if !swept || !retired.Removed || retired.Kept != "" || retired.Failure != "" ||
+		retired.RecordProblem != "" || retired.ItemProblem != "" {
 		t.Fatalf("sweep = %#v, swept = %t, want the checkout retired", retired, swept)
 	}
 	if _, err := os.Stat(settled.WorktreePath); !os.IsNotExist(err) {
@@ -368,6 +434,17 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	}
 	if recorded.BranchRemoved {
 		t.Error("the record claims the branch was removed, which the sweep never touches")
+	}
+
+	// And the work item is told, which the run record alone does not do. What that
+	// item already carries is the failed run's own note naming this checkout, and
+	// from the moment above it describes a directory that is not there; the person
+	// who picks the item up reads the item rather than the run's state file, and
+	// the ref is the only route from what they read back to the work.
+	if !strings.Contains(tracker.notes, retired.PreservedWork) ||
+		!strings.Contains(tracker.notes, "Retired worktree: "+settled.WorktreePath) ||
+		!strings.Contains(tracker.notes, "git worktree add --detach") {
+		t.Errorf("the item was not told where the retired checkout's work went: %q", tracker.notes)
 	}
 
 	// Asking again says there was nothing there, so a sweep that runs on every

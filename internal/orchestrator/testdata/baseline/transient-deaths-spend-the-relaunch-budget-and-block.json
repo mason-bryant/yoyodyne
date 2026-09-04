@@ -16,6 +16,12 @@
         },
         "failure": "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: the provider ended this invocation and named no reason for it",
         "phase": "developing",
+        "preservation": {
+          "branch": "yoyodyne/yoyodyne-task/01234567",
+          "branch_present": true,
+          "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
+          "worktree_present": true
+        },
         "provider_model": "opus",
         "provider_session_id": "developer-session",
         "run_id": "run-0123456789abcdef0123456789abcdef",
@@ -68,13 +74,13 @@
     "blocked": true,
     "notes": [
       [
-        "Yoyodyne blocked this item; the branch and worktree are preserved, and the blocker recorded on the item says what stopped it.",
+        "Yoyodyne blocked this item; the blocker recorded on the item says what stopped it.",
         "Run: run-0123456789abcdef0123456789abcdef",
         "Failure: the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): api_error: API Error: the provider ended this invocation and named no reason for it",
         "Phase: developing",
         "Relaunches after a provider death: 2",
-        "Branch: yoyodyne/yoyodyne-task/01234567",
-        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
+        "Branch: yoyodyne/yoyodyne-task/01234567 (checked and there)",
+        "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567 (checked and there)",
         "Base commit: \u003ccommit-1\u003e",
         "Claude session: developer-session",
         "Developer model: opus"

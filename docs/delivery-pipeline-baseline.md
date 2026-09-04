@@ -365,6 +365,26 @@ where they were: the environment refused the round rather than the work failing,
 so a caller that reported the blocker without it would say the item had spent a
 round it never spent.
 
+A run that fails having made a branch or a worktree looks at both before it
+writes its ending down, and records what it saw as `preservation`:
+`branch_present` and `worktree_present`, or `unverified` where the check could
+not be made at all. Nothing else in the note claims preservation. The record
+cannot supply the claim — `branch_removed` and `worktree_removed` say what the
+harness removed, and both are false for an artifact something else took — so a
+note derived from them promises a checkout it has never looked at, which is how a
+developer came to be sent to a directory that was gone and to report the work in
+it destroyed.
+
+The removal flags do settle the other direction, and the check reads them for
+that: an artifact this run's own cleanup removed is gone on purpose, so it is
+carried onto the `preservation` as removed, never looked for, and never reported
+lost — a run that promoted its work and failed afterwards has the integrated
+commit as its surviving evidence and no preserved-work ref to send anybody to.
+What is left is stated as the loss it is, at the top of the note and in the run's
+own failure: an artifact the run made, nothing recorded removing, and the check
+did not find, with the branch and the sweep's preserved-work ref named as the two
+places the work can still be.
+
 ## Reconciliation
 
 `Reconciler.Reconcile` settles every run no live process owns. It takes each
