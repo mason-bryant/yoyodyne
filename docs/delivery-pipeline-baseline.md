@@ -443,12 +443,24 @@ is unmeasured. Most of these are asserted somewhere in
   publish and could not ever carries, so the scenarios here leave it empty), and
   the catch-up after a forge merge. It has its own assertions in
   `internal/orchestrator/publish_test.go`.
-- **Every `retries` boundary except the provider's.** The one recorded trace of a
-  recovery is a provider death waited out past its budget; the eight forge and
-  remote boundaries are the publishing half above, so what they record when a
-  connection is reset — and what a spent window leaves as an outstanding
-  publication — is asserted in `internal/orchestrator/recovery_test.go` and held
-  by no trace here.
+- **Six of the nine `retries` boundaries.** The one recorded trace of a recovery
+  is a provider death waited out past its budget. Three more are asserted in
+  `internal/orchestrator/recovery_test.go` and held by no trace here: the branch
+  push (including that the retry does not read as an empty change), opening the
+  pull request, and the merge — the merge twice over, for the reset that is
+  waited out and for the window that runs out and leaves an outstanding
+  publication.
+
+  The remaining six have neither a trace nor an assertion: republishing a
+  replayed run branch, reading the remote target, confirming it after the merge,
+  confirming the merge with the forge, deleting the merged remote branch, and
+  catching the local target up. Two of them are worth naming rather than
+  counting, because a retry there is not simply a second read: republishing and
+  deleting the remote branch are both compare-and-swap writes, so a reset that
+  arrived *after* the write reached the forge leaves the retry refused by the
+  swap rather than succeeding. Such a run stops exactly as it would have stopped
+  without the retry, and the failure it names is the refused swap rather than the
+  reset that caused it.
 - `yoyo triage repair` and `yoyo triage rerun`, which re-enter a stopped run
   through their own preconditions.
 - **Seven of the sixteen pre-claim steps, and the order of all sixteen.** The

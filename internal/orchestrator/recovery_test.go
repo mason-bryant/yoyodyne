@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/recovery"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -82,6 +83,82 @@ func TestOneConnectionResetAtTheForgeNoLongerLosesCompletedWork(t *testing.T) {
 				t.Errorf("the work item does not say the network was waited out:\n%s", tracker.notes)
 			}
 		})
+	}
+}
+
+// resettingPushWorktrees drops the connection under the first branch push, after
+// the push itself has been made. That is the shape the real failure takes: the
+// harness commits, the push goes out, and the reply never arrives — so the
+// worktree is left clean and the retry is made against a worktree that has
+// nothing more to commit.
+type resettingPushWorktrees struct {
+	WorktreeManager
+	// reported is what each PublishBranch call answered with, so a test can hold
+	// the retry's answer against the one the dropped attempt gave.
+	reported []gitworktree.Publication
+}
+
+func (w *resettingPushWorktrees) PublishBranch(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Publication, error) {
+	publication, err := w.WorktreeManager.PublishBranch(ctx, worktree, message)
+	w.reported = append(w.reported, publication)
+	if err == nil && len(w.reported) == 1 {
+		return publication, connectionReset("push " + worktree.Branch)
+	}
+	return publication, err
+}
+
+// The push is the boundary whose retry rests on an assumption rather than on a
+// documented contract: publishing again after a dropped push commits nothing,
+// because the commit the dropped attempt made is already in the worktree, and
+// answers with that same commit rather than reporting that the attempt changed
+// nothing. An empty change is what publishAttempt treats as nothing to publish,
+// so if that assumption were wrong the retry would silently skip opening the
+// pull request and the run would publish nothing at all — a recoverable failure
+// converted into an unrecoverable one, with no failure anywhere to say so.
+func TestAResetPushIsRetriedAndDoesNotReadAsAnEmptyChange(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	pushes := &resettingPushWorktrees{WorktreeManager: pipeline.Worktrees}
+	pipeline.Worktrees = pushes
+	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the reset push waited out", err)
+	}
+	if len(pushes.reported) != 2 {
+		t.Fatalf("branch pushes = %d, want the dropped one and the retry", len(pushes.reported))
+	}
+	// The assumption, asserted: the retry answered with the commit the dropped
+	// attempt had already made, rather than reporting an empty change.
+	dropped, retried := pushes.reported[0], pushes.reported[1]
+	if retried.Commit == "" || retried.Commit != dropped.Commit {
+		t.Fatalf("retried push reported %#v, want the commit %q the dropped push made", retried, dropped.Commit)
+	}
+	// And the publication actually happened, which is what an empty change would
+	// have skipped without failing anything.
+	if len(forge.opened) != 1 {
+		t.Fatalf("pull requests opened = %d, want the retry to have opened exactly one", len(forge.opened))
+	}
+	if outcome.PullRequest == nil || !outcome.PullRequest.Merged || outcome.PublishFailure != "" {
+		t.Fatalf("outcome = %#v, want a clean publication of the pushed commit", outcome.PullRequest)
+	}
+	if outcome.PullRequest.HeadCommit != dropped.Commit {
+		t.Errorf("published head = %q, want the commit the dropped push made, %q", outcome.PullRequest.HeadCommit, dropped.Commit)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if attempts := state.RetryAttempts(runstate.RetryPublishBranch); attempts != 1 {
+		t.Fatalf("retries recorded at the push = %d, want the one reset that was waited out: %#v", attempts, state.Retries)
 	}
 }
 

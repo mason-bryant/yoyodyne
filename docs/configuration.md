@@ -2352,8 +2352,14 @@ retries that itself, and the harness does not duplicate the wait. What the
 harness acts on is the terminal result that CLI ends on once its own retries are
 spent — an `api_error` reporting HTTP 529 — because the provider has stopped
 retrying by then and something has to. An overload is the only terminal
-`api_error` that becomes a wait; the rest are covered by
-[the relaunch budget](#relaunching-a-run-the-provider-killed) below.
+`api_error` that becomes a wait *of this kind* — one on a deadline the provider
+named, spending `usage_limit_max_pause`. The rest are covered by
+[the relaunch budget](#relaunching-a-run-the-provider-killed) below, and one of
+them becomes a wait of the other kind once that budget is spent: a terminal
+`api_error` whose detail is plainly a dropped connection —
+`API Error: Connection closed mid-response` is the specimen — is then
+[waited out on the recovery window](#waiting-out-a-network-that-dropped) rather
+than blocking the item.
 
 `yoyo resume <beads-id>` is the one thing that overrides a recorded deadline,
 and it overrides nothing else. It moves the next probe to now, for when the

@@ -100,19 +100,25 @@ func (a *activeRun) publishAttempt(ctx context.Context) error {
 	}
 	// The push is the first place a run touches the network, and a reset one is
 	// what killed a run at this exact step. Asking again is safe as well as
-	// necessary: the commit the first attempt made is already in the worktree, so
-	// a second attempt commits nothing and pushes the same commit.
+	// necessary: the commit the dropped attempt made is already in the worktree,
+	// so a second attempt commits nothing and pushes that same commit.
+	//
+	// What makes it safe is the recording below happening inside the attempt
+	// rather than after the last one. The commit the harness made is what permits
+	// this worktree's HEAD to have moved, so it is recorded the moment it exists —
+	// including when the push that followed it failed — and a later step, a later
+	// process resuming this run, or the very next attempt here then accepts
+	// exactly that commit and nothing an agent could put in its place. Recorded
+	// after the retries instead, the retry's own ownership check would read a HEAD
+	// the run had not yet been told about and refuse the push it was asked to
+	// repeat.
 	publication, err := recoveringValue(ctx, a, runstate.RetryPublishBranch, func(ctx context.Context) (gitworktree.Publication, error) {
-		return a.pipeline.Worktrees.PublishBranch(ctx, a.worktree, attemptMessage(a.item, a.outcome))
+		published, publishErr := a.pipeline.Worktrees.PublishBranch(ctx, a.worktree, attemptMessage(a.item, a.outcome))
+		if published.Commit != "" {
+			a.recordHarnessCommit(published.Commit)
+		}
+		return published, publishErr
 	})
-	// The commit the harness made is what permits this worktree's HEAD to have
-	// moved, so it is recorded the moment it exists — including when the push
-	// that followed it failed. A later step, or a later process resuming this
-	// run, then accepts exactly that commit and nothing an agent could put in
-	// its place.
-	if publication.Commit != "" {
-		a.recordHarnessCommit(publication.Commit)
-	}
 	if errors.Is(err, gitworktree.ErrNoChanges) {
 		// An attempt that changed nothing has nothing to publish. It is not a
 		// failure here: the checks and the reviewer are what judge an empty
