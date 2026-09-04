@@ -67,9 +67,10 @@ The sibling sequencing followed in `79cf794` (`yoyodyne-ifd.133`) at 2026-08-21
 `yoyodyne-ifd.256` (`cdf4dfb`, 2026-09-03) widened the coverage reading from the
 parent field to `WorkItem.DecomposedFrom`, which consults the field and the
 `parent-child` edge. **The widening is right and stands.** Its stated reason is
-not. It recorded, in four comments — `internal/beads/client.go`,
-`internal/orchestrator/schedule.go`, `internal/orchestrator/conflict.go`, and
-`internal/orchestrator/schedule_test.go` — some variant of this:
+not. ifd.256 touched four comments, and **three of them assert the cause** —
+`internal/beads/client.go`, `internal/orchestrator/schedule.go`, and
+`internal/orchestrator/schedule_test.go`. The fullest of the three, as ifd.256
+wrote it into `client.go`, read:
 
 > This project's own tracker uses only the second — not one of its items carries
 > the field […] That is what let the scheduler start yoyodyne-ifd.121 and the
@@ -87,12 +88,31 @@ Both halves are false:
    populated on both items
    (`internal/beads/testdata/bd-list-parent-child.json`: the child carries
    `"parent": "yoyodyne-ifd.121"`, the epic `"parent": "yoyodyne-ifd"`). ifd.259
-   corrected two of the four comments — `client.go` and `schedule.go` — and left
-   the first half of the claim standing in `client.go` and the whole of it in
-   `schedule_test.go`. `yoyodyne-ifd.267` then wrote a fifth statement of it into
-   `internal/beads/conformance_test.go`. This change corrects those three.
-   `conflict.go`'s comment does not assert the cause and is left alone here; what
-   is wrong with its reasoning is a separate matter, below.
+   corrected two of the three — `client.go` and `schedule.go` — and left the
+   first half of the claim standing in `client.go` and the whole of it in
+   `schedule_test.go`. `yoyodyne-ifd.267` then restated it in a comment of its
+   own, in `internal/beads/conformance_test.go`. **This change corrects the three
+   that still carried it**, which is every statement of the cause left in the
+   tree.
+
+**The one comment ifd.256 touched that asserts neither half is `conflict.go`'s**,
+which is why it is not corrected here. `inFlight.epics`
+(`internal/orchestrator/conflict.go:61-68`) says only:
+
+> The parent read here is the one the tracker states as a field, and
+> deliberately not the wider reading `beads.WorkItem.DecomposedFrom` does. A
+> tracker that hangs its whole backlog off one root epic states that the wider
+> way too, and holding every item back behind whichever child of the root is
+> already running is serializing the queue rather than declining one race […]
+> Widening it wants a container epic told from a decomposed one first, and that
+> question is not answered here.
+
+That names no guard and makes no claim about whether the field is populated: it
+is a design rationale for keeping one reading narrow, not an account of the
+double-run. Nothing anywhere else in `conflict.go` states the cause either. Its
+rationale is wrong for a different reason, which is `yoyodyne-ifd.261`'s scope
+and is set out under [What is live](#what-is-live-and-is-not-this-incident)
+rather than fixed here.
 
 What is true, and what the widened reading is genuinely for, is narrower: the
 tracker's **export**, `.beads/issues.jsonl`, states parentage only as an edge and
