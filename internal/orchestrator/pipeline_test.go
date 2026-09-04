@@ -3586,6 +3586,25 @@ func transientDeathBackend(deaths int, verdicts ...string) *fakeBackend {
 	}, verdicts...)
 }
 
+// opaqueDeathMessage is a provider death whose class says nothing about whether
+// asking again would help. It is what a test uses to reach the relaunch budget's
+// own bound: since yoyodyne-ifd.264 a death that is plainly a dropped connection
+// carries on past that budget on a backoff, so a scenario that wants the budget
+// to be what stops the run has to die of something the harness does not classify
+// as recoverable.
+const opaqueDeathMessage = "API Error: the provider ended this invocation and named no reason for it"
+
+// opaqueDeathBackend kills the developer's first deaths invocations with a death
+// nothing can classify, and serves the work afterwards.
+func opaqueDeathBackend(deaths int, verdicts ...string) *fakeBackend {
+	return refusingBackend(deaths, func(result backend.RunResult) backend.RunResult {
+		result.StopReason = "api_error"
+		result.FinalText = opaqueDeathMessage
+		result.TransientFailure = &backend.TransientFailure{Detail: "api_error: " + opaqueDeathMessage}
+		return result
+	}, verdicts...)
+}
+
 // dyingRepairBackend serves the first developer attempt and then dies the way a
 // dropped connection does on every attempt after it. What it produces is a run
 // that reaches its repair loop and is killed inside it, which is the interrupted
@@ -3699,8 +3718,10 @@ func TestRunBlocksWhenTheRelaunchBudgetIsSpent(t *testing.T) {
 	repository := pipelineRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// More deaths than the budget can pay for, so what stops the run is the budget
-	// rather than the provider recovering.
-	provider := transientDeathBackend(10, approveVerdict)
+	// rather than the provider recovering. The deaths are of something the harness
+	// cannot classify, which is what leaves the budget as the bound: a plainly
+	// recoverable one carries on past it.
+	provider := opaqueDeathBackend(10, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
 
@@ -3714,7 +3735,7 @@ func TestRunBlocksWhenTheRelaunchBudgetIsSpent(t *testing.T) {
 	if !tracker.blocked || !outcome.Blocked {
 		t.Fatalf("the spent budget left no blocker: tracker=%t outcome=%t", tracker.blocked, outcome.Blocked)
 	}
-	for _, want := range []string{"Relaunches: 2 of 2 permitted", connectionClosedMessage, "nothing here says the change is wrong"} {
+	for _, want := range []string{"Relaunches: 2 of 2 permitted", opaqueDeathMessage, "nothing here says the change is wrong"} {
 		if !strings.Contains(tracker.blockReason, want) {
 			t.Fatalf("blocker is missing %q:\n%s", want, tracker.blockReason)
 		}
@@ -3843,7 +3864,7 @@ func TestARestartCannotBuyAFreshRelaunchBudget(t *testing.T) {
 
 	// The second process adopts it, with room for one relaunch that the run has
 	// already spent, and the same provider keeps killing it.
-	second := transientDeathBackend(10, approveVerdict)
+	second := opaqueDeathBackend(10, approveVerdict)
 	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{command}), second)
 	resumed.Config.Execution.TransientRelaunchesBeforeBlocking = 1
 	outcome, err := resumed.Run(context.Background(), tracker.item.ID)

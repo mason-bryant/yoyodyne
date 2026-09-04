@@ -831,6 +831,8 @@ var notAStep = map[string]string{
 	"recordProviderStop":         "records that the harness stopped the provider on time",
 	"recordRelaunch":             "spends one of the run's relaunches",
 	"mayRelaunch":                "reads whether the run has a relaunch left",
+	"recoverProvider":            "waits out a provider death whose class says the next invocation may well succeed",
+	"carrySession":               "keeps the session an ended invocation established, so the next one resumes in it",
 	"recordEnvironmentalRefusal": "records that the machine, not the work, refused the round",
 
 	// The environment an invocation is made in, prepared before the first one and

@@ -2219,7 +2219,10 @@ decides which history is right.
 
 If a promotion cannot be published — the forge is unreachable, the remote target
 moved, or the forge refused the merge — the run still succeeds and closes its
-item, and reports an *outstanding publication*. The change is integrated where
+item, and reports an *outstanding publication*. A forge that could not be reached
+is [waited out and asked again](#waiting-out-a-network-that-dropped) first, so
+an outstanding publication over a dropped connection is one that went on being
+dropped rather than one reset the next attempt would have survived. The change is integrated where
 it counts; only its publication is unfinished, and it is reconciled by hand.
 Nothing is ever force-pushed to resolve it.
 
@@ -2398,9 +2401,18 @@ developer, so a relaunch spends no repair attempt.
 
 Relaunches are counted in durable run state before each one begins, so a process
 that dies mid-relaunch resumes against the budget it had rather than a fresh one.
-A run that spends the budget stops and records a blocker on the work item naming
-the provider's own last message. Setting the bound to `0` restores the earlier
-behavior: the first provider death ends the run.
+Setting the bound to `0` restores the earlier behavior: the first provider death
+ends the run.
+
+What happens once the budget is spent depends on what killed the invocation. A
+death nothing can classify stops the run and records a blocker on the work item
+naming the provider's own last message. A death that is plainly a dropped
+connection does not: it is
+[waited out and asked again](#waiting-out-a-network-that-dropped) past the
+budget, on the backoff every other transport failure gets, and only a run that
+spends that window as well stops. This budget is the right bound for provider
+weather nobody has classified; a reset connection is not that, and stopping on
+one is what cost four runs their finished work on 2026-09-03.
 
 What else that blocker says depends on what the run was carrying, because a
 provider dies during a repair attempt as readily as during the first one. A run
@@ -2417,6 +2429,53 @@ fails the run as it always did; so does a 529, which is a wait rather than a
 relaunch, and so does any terminal the API did not report at all. The invocation
 ended twice is the one thing outside the API's own errors that still relaunches,
 because it is not a verdict on anything.
+
+## Waiting out a network that dropped
+
+A run touches somebody else's network at its most expensive moments: it pushes
+the run branch, opens and updates the pull request, reads where the remote target
+branch stands, asks the forge to merge, confirms the merge, deletes the merged
+branch, catches the local branch up, and makes every provider invocation over it.
+**A failure at one of those whose class says the next attempt may well succeed —
+a connection reset, a network drop, a transport-level refusal — is waited out and
+asked again rather than recorded as terminal.**
+
+The rule is the operator's, and what produced it is four runs killed in one day
+on 2026-09-03, each at its final publish or integrate step, each by one
+connection reset, each with the work already completed and some of it already
+reviewed. The
+[intake hold](#watching-instead-of-draining) then held the whole line three
+times, because the blocked runs came one after another.
+
+**There is nothing to configure.** The waits are Fibonacci seconds — 1s, 1s, 2s,
+3s, 5s, 8s, 13s — capped at half an hour and reaching that cap after about
+seventy minutes, and each boundary gets a two-hour window of its own, which is
+about twenty attempts. The numbers are the harness's and the same for every
+product, exactly as the [watching session's](#watching-instead-of-draining)
+retry of a tracker it could not read is: what they measure is how long a
+connection that comes back takes rather than anything about a project. Each
+boundary has its own window because a network that dropped a push says nothing
+about a merge.
+
+**Nothing that is an answer is waited on.** An authentication failure, a merge
+the forge refused, a protected branch whose requirements are unmet, a conflict,
+and any 4xx all earn the identical answer next time, so they are reported as
+promptly as they always were. So is a failure whose class the harness does not
+recognize: the set is deliberately small, and anything outside it keeps exactly
+the behavior it had. The full recoverable-versus-terminal taxonomy is the
+architect's, and this does not wait on it.
+
+**Every wait is recorded before it is taken**, on the run itself, with the
+boundary, which attempt it was, the interval, and the failure it waited out. So a
+process that dies mid-wait comes back to the window it had already spent rather
+than to a fresh one, and a run that waited a network out and finished says so on
+the work item rather than merely looking slow. A window that runs out escalates
+rather than going quiet: what the boundary would have produced is produced — an
+outstanding publication, a blocker on the item — with the attempts and the time
+in front of it.
+
+[Waiting out a network that dropped](operations.md#waiting-out-a-network-that-dropped)
+in the operations guide is the same thing said for an operator reading a run.
 
 ## Losing a race for the target branch
 

@@ -108,9 +108,10 @@ func TestEveryEndingTheHarnessHandsToAPersonIsReadBackAsStopped(t *testing.T) {
 			reason: "the provider ended this run without judging the work",
 			build: func(t *testing.T) (Pipeline, *runstate.Store, *fakeTracker) {
 				tracker := newOutcomeTracker()
-				// More deaths than the budget can pay for, so what stops the run is
-				// the budget rather than the provider recovering.
-				provider := transientDeathBackend(10, approveVerdict)
+				// More deaths than the budget can pay for, and of something the
+				// harness cannot classify, so what stops the run is the budget rather
+				// than the provider recovering or the recovery window running out.
+				provider := opaqueDeathBackend(10, approveVerdict)
 				pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 				pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
 				return pipeline, store, tracker
