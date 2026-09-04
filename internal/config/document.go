@@ -75,10 +75,11 @@ type executionDocument struct {
 	CheckTimeout                           *Duration `yaml:"check_timeout"`
 	WorkPoll                               *Duration `yaml:"work_poll"`
 	BlockedRunsBeforeIntakeHold            *int      `yaml:"blocked_runs_before_intake_hold"`
-	// DeclarativeDelivery is absent from every file written before the trial
-	// existed, and from every file whose project has not asked for it. A layer
-	// that does not supply it leaves the trial off, which is the state a project
-	// stays in until its operator writes the key.
+	// DeclarativeDelivery is absent from every file written before it existed and
+	// from every file whose project is content with the default. A layer that does
+	// not supply it leaves the harness default in force, which is the declarative
+	// path; a layer that writes `false` is a project rolling back to the legacy
+	// one.
 	DeclarativeDelivery *bool `yaml:"declarative_delivery"`
 }
 

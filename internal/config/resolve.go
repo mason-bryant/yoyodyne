@@ -214,6 +214,11 @@ func newResolution() *resolution {
 				CheckTimeout:                      defaultCheckTimeout,
 				WorkPoll:                          defaultWorkPoll,
 				BlockedRunsBeforeIntakeHold:       defaultBlockedRunsBeforeIntakeHold,
+				// The declarative path is what a new run executes unless the project
+				// says otherwise, so it is a harness default like every other value
+				// here rather than the absence of a key. A project that wrote nothing
+				// gets it, and a project that rolled back is one that wrote `false`.
+				DeclarativeDelivery: true,
 			},
 			// The repair grant is deliberately absent here. It is derived from
 			// the effective repair budget once every layer has been applied, so
@@ -271,6 +276,7 @@ func newResolution() *resolution {
 			"execution.check_timeout":                             OriginDefault,
 			"execution.work_poll":                                 OriginDefault,
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,
+			"execution.declarative_delivery":                      OriginDefault,
 			"triage.stuck_merge_age":                              OriginDefault,
 			"triage.review_rounds_cap":                            OriginDefault,
 			"exchange.max_rounds":                                 OriginDefault,
@@ -308,10 +314,11 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.check_timeout", execution.CheckTimeout, &r.config.Execution.CheckTimeout, applied.origin)
 		setValue(r.origins, "execution.work_poll", execution.WorkPoll, &r.config.Execution.WorkPoll, applied.origin)
 		setValue(r.origins, "execution.blocked_runs_before_intake_hold", execution.BlockedRunsBeforeIntakeHold, &r.config.Execution.BlockedRunsBeforeIntakeHold, applied.origin)
-		// No harness default is recorded for the trial, for the reason push_remote
-		// records none: off is the absence of the key rather than a value the
-		// harness filled in, and an origin of harness-default on it would read as a
-		// setting somebody has to opt out of.
+		// The declarative path carries a harness default like the values above it,
+		// because it is what a run does rather than something a project opts into.
+		// A layer that writes the key — `false` for the rollback to the legacy
+		// path, `true` to state the default explicitly — takes the origin with it,
+		// so `config show --origins` names the file a rollback came from.
 		setValue(r.origins, "execution.declarative_delivery", execution.DeclarativeDelivery, &r.config.Execution.DeclarativeDelivery, applied.origin)
 	}
 	if triage := document.Triage; triage != nil {

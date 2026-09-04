@@ -93,7 +93,7 @@ type parityScenario struct {
 // in a file without being renamed here would be a count that quietly stopped
 // measuring anything.
 //
-// They are the same constants the declarative trial names a run's boundaries
+// They are the same constants the declarative path names a run's boundaries
 // with rather than a second copy: what this harness measures and what a real run
 // is observed against have to be the same seven states or one of them is
 // measuring a definition nobody runs.
@@ -1029,7 +1029,7 @@ func walkTranscript(t *testing.T, scenario parityScenario) {
 // parityGraph compiles one built-in definition into a graph whose doors perform
 // nothing.
 //
-// It is the same graph the declarative trial steps beside a real run, built by
+// It is the same graph the declarative path steps beside a real run, built by
 // the same function, which is the point: a harness that walked a topology of its
 // own would be measuring something no run is ever observed against. Everything
 // about the actions except Perform is the registered thing — the names, the

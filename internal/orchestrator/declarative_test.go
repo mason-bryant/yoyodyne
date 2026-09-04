@@ -1,23 +1,22 @@
 package orchestrator
 
-// The declarative trial, driven against real runs.
+// The declarative path, driven against real runs, and the one key that rolls it
+// back.
 //
 // The parity harness beside this file walks transcripts somebody wrote down and
 // holds them against the recorded baseline. That answers whether the definitions
 // can express what the pipeline did; it cannot answer whether a run happening
 // now produces those transitions, because a transcript is written by hand and a
-// run is not. This drives the real pipeline into each path with the trial turned
-// on and reads the instance back off the store, so what is compared is a
-// sequence the run actually produced against the transcript the harness measures
-// that same path by. A divergence here is the observation being wrong about the
-// pipeline, which is the one thing a soak of it must not be.
+// run is not. This reads the instance back off the store after a real run, so
+// what is compared is a sequence the run actually produced against the
+// transcript the harness measures that same path by. A divergence here is the
+// observation being wrong about the pipeline.
 //
-// The traces those transcripts belong to are the same ones baseline_test.go
-// drives, and these scenarios drive them the same way. They are re-driven rather
-// than shared because the baseline scenarios must stay exactly as they are: the
-// trial writes a `workflow_instance_id` onto the run record, and a trace
-// re-recorded with one in it would be the baseline moving because something was
-// watching it.
+// The runs are the baseline's own scenarios rather than copies of them, which is
+// what the default buys: a baseline scenario is a run executing the definition,
+// so the transcripts below are read off exactly the runs the recorded traces are
+// of. What each file measures still differs — a trace is the delivery, and this
+// is where the definition sent it.
 
 import (
 	"context"
@@ -34,21 +33,22 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// trial is this fixture's pipeline with the opt-in turned on and somewhere to
-// record instances, which is the whole of what a project does to enter it.
-func (f *baselineFixture) trial(t *testing.T, provider *fakeBackend, commands []string) Pipeline {
+// legacy is this fixture's pipeline rolled back to the path that executes
+// nothing declarative, which is the whole of what a project writes to roll back.
+// It keeps somewhere to record instances, so what it measures is the key rather
+// than the absence of a store.
+func (f *baselineFixture) legacy(t *testing.T, provider *fakeBackend, commands []string) Pipeline {
 	t.Helper()
 	pipeline := f.pipeline(t, provider, commands)
-	pipeline.Instances = f.store
-	pipeline.Config.Execution.DeclarativeDelivery = true
+	pipeline.Config.Execution.DeclarativeDelivery = false
 	return pipeline
 }
 
-// automaticTrial is the same under automatic integration, which is the policy
+// automaticLegacy is the same under automatic integration, which is the policy
 // every path but the human-approval one runs under.
-func (f *baselineFixture) automaticTrial(t *testing.T, provider *fakeBackend, commands []string) Pipeline {
+func (f *baselineFixture) automaticLegacy(t *testing.T, provider *fakeBackend, commands []string) Pipeline {
 	t.Helper()
-	return automatic(f.trial(t, provider, commands), provider)
+	return automatic(f.legacy(t, provider, commands), provider)
 }
 
 // observedRun reads back the instance a run was observed through, and fails if
@@ -122,8 +122,8 @@ func transcriptOf(t *testing.T, trace string) ([]string, string) {
 	return nil, ""
 }
 
-// declarativeScenario is one delivery path driven with the trial on, named by
-// the recorded trace whose transcript it has to reproduce.
+// declarativeScenario is one delivery path, named by the recorded trace whose
+// transcript the instance observing it has to reproduce.
 type declarativeScenario struct {
 	// trace is the recorded path this run is one of, and the transcript the
 	// parity harness measures that path by is what the instance must record.
@@ -131,109 +131,50 @@ type declarativeScenario struct {
 	drive func(t *testing.T) *baselineFixture
 }
 
+// declarativeScenarios is every recorded path the parity harness holds a
+// transcript for, driven by the baseline scenario that recorded it.
+//
+// The list is the transcripts rather than the traces: a path the harness does
+// not measure has nothing here to compare an instance against, so naming it
+// would be a scenario that asserted nothing. The baseline drives the rest, and
+// their instances are read there.
 func declarativeScenarios() []declarativeScenario {
-	return []declarativeScenario{
-		{
-			trace: "human-approved-change-is-preserved-for-its-approver",
-			drive: func(t *testing.T) *baselineFixture {
-				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(baselineImplements, approveVerdict)
-				fixture.invoke(t, "run", fixture.trial(t, provider, []string{"test -f feature.txt"}))
-				return fixture
-			},
-		},
-		{
-			trace: "automatic-run-promotes-reviews-closes-and-cleans-up",
-			drive: func(t *testing.T) *baselineFixture {
-				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(baselineImplements, approveVerdict)
-				fixture.invoke(t, "run", fixture.automaticTrial(t, provider, []string{"test -f feature.txt"}))
-				return fixture
-			},
-		},
-		{
-			trace: "failing-check-is-repaired-and-then-promoted",
-			drive: func(t *testing.T) *baselineFixture {
-				fixture := newBaselineFixture(t, baselineItem())
-				attempts := 0
-				provider := roleBackend(func(request backend.RunRequest) error {
-					attempts++
-					if attempts == 1 {
-						return baselineImplements(request)
-					}
-					return os.WriteFile(filepath.Join(request.WorkingDirectory, "repaired.txt"), []byte("repaired\n"), 0o600)
-				}, approveVerdict)
-				fixture.invoke(t, "run", fixture.automaticTrial(t, provider, []string{"test -f repaired.txt"}))
-				return fixture
-			},
-		},
-		{
-			trace: "failing-check-spends-the-repair-budget-and-blocks",
-			drive: func(t *testing.T) *baselineFixture {
-				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(baselineImplements, approveVerdict)
-				fixture.invoke(t, "run", fixture.automaticTrial(t, provider, []string{"exit 1"}))
-				return fixture
-			},
-		},
-		{
-			trace: "review-findings-are-repaired-and-then-promoted",
-			drive: func(t *testing.T) *baselineFixture {
-				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(baselineImplements, repairVerdict, approveVerdict)
-				fixture.invoke(t, "run", fixture.automaticTrial(t, provider, []string{"test -f feature.txt"}))
-				return fixture
-			},
-		},
-		{
-			trace: "review-findings-spend-the-repair-budget-and-block",
-			drive: func(t *testing.T) *baselineFixture {
-				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(baselineImplements, repairVerdict)
-				fixture.invoke(t, "run", fixture.automaticTrial(t, provider, []string{"test -f feature.txt"}))
-				return fixture
-			},
-		},
-		{
-			trace: "protected-path-refusal-is-repaired-before-any-check-runs",
-			drive: func(t *testing.T) *baselineFixture {
-				fixture := newBaselineFixture(t, baselineItem())
-				attempts := 0
-				provider := roleBackend(func(request backend.RunRequest) error {
-					attempts++
-					if err := baselineImplements(request); err != nil {
-						return err
-					}
-					if attempts == 1 {
-						return writeUpstream(t, request.WorkingDirectory, "docs/product/brief.md", "the product is whatever this run needed it to be\n")
-					}
-					return os.RemoveAll(filepath.Join(request.WorkingDirectory, "docs", "product"))
-				}, approveVerdict)
-				fixture.invoke(t, "run", fixture.automaticTrial(t, provider, []string{"test -f feature.txt"}))
-				return fixture
-			},
-		},
-		{
-			trace: "usage-limit-pause-exits-resumable-and-a-later-invocation-finishes-it",
-			drive: func(t *testing.T) *baselineFixture {
-				fixture := newBaselineFixture(t, baselineItem())
-				resetsAt := baseTime.Add(2 * time.Hour)
-				limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
-				refused := usageLimitBackend(1, limit, approveVerdict)
-				fixture.invoke(t, "paused invocation", waiting(fixture.automaticTrial(t, refused, []string{"test -f feature.txt"}),
-					&pausingClock{now: baseTime}, 6*time.Hour, time.Minute))
-				served := usageLimitBackend(0, limit, approveVerdict)
-				fixture.invoke(t, "resumed invocation", waiting(fixture.automaticTrial(t, served, []string{"test -f feature.txt"}),
-					&pausingClock{now: resetsAt.Add(time.Minute)}, 6*time.Hour, time.Minute))
-				return fixture
-			},
-		},
+	measured := []string{
+		"human-approved-change-is-preserved-for-its-approver",
+		"automatic-run-promotes-reviews-closes-and-cleans-up",
+		"failing-check-is-repaired-and-then-promoted",
+		"failing-check-spends-the-repair-budget-and-blocks",
+		"review-findings-are-repaired-and-then-promoted",
+		"review-findings-spend-the-repair-budget-and-block",
+		"protected-path-refusal-is-repaired-before-any-check-runs",
+		"usage-limit-pause-exits-resumable-and-a-later-invocation-finishes-it",
+	}
+	scenarios := make([]declarativeScenario, 0, len(measured))
+	for _, trace := range measured {
+		scenarios = append(scenarios, declarativeScenario{trace: trace, drive: baselineDrive(trace)})
+	}
+	return scenarios
+}
+
+// baselineDrive is the baseline scenario that recorded one trace, looked up by
+// name so a scenario renamed there fails here rather than quietly measuring
+// nothing.
+func baselineDrive(trace string) func(t *testing.T) *baselineFixture {
+	return func(t *testing.T) *baselineFixture {
+		t.Helper()
+		for _, scenario := range baselineScenarios() {
+			if scenario.name == trace {
+				return scenario.drive(t)
+			}
+		}
+		t.Fatalf("no baseline scenario drives the trace %q", trace)
+		return nil
 	}
 }
 
-// TestADeclarativeRunRecordsTheSequenceTheDefinitionChose is the trial itself:
-// every path driven for real with the opt-in on, and the instance's own record
-// of where the definition sent it held against the transcript the parity harness
+// TestADeclarativeRunRecordsTheSequenceTheDefinitionChose is the default path
+// itself: every measured path driven for real, and the instance's own record of
+// where the definition sent it held against the transcript the parity harness
 // measures that path by.
 //
 // The instance rather than anything this test watched is deliberate, and it is
@@ -292,7 +233,7 @@ func TestARunThatEndsOffTheDefinitionRecordsThatItDid(t *testing.T) {
 	// The reviewer answers with something that is not a verdict, twice: the run
 	// asks once more and then fails on it, having bought no verdict at all.
 	provider := roleBackend(baselineImplements, "not a verdict at all", "still not a verdict")
-	fixture.invoke(t, "run", fixture.automaticTrial(t, provider, []string{"test -f feature.txt"}))
+	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
 
 	state, instance := observedRun(t, fixture.store)
 	if !state.Status.Terminal() {
@@ -314,47 +255,54 @@ func TestARunThatEndsOffTheDefinitionRecordsThatItDid(t *testing.T) {
 	}
 }
 
-// TestTheDeclarativeTrialIsOffUntilTheProjectAsksForIt holds the opt-in to being
-// one: the same run under the same pipeline with the flag left alone records no
-// instance and is indistinguishable from every run made before the trial
-// existed.
-func TestTheDeclarativeTrialIsOffUntilTheProjectAsksForIt(t *testing.T) {
+// TestTheRollbackLeavesARunExecutingNothingDeclarative holds the one key to
+// being the whole rollback: the same run under the same pipeline with
+// `declarative_delivery: false` records no instance and delivers the work
+// exactly as a run made before the definition existed did.
+func TestTheRollbackLeavesARunExecutingNothingDeclarative(t *testing.T) {
 	t.Parallel()
 
 	fixture := newBaselineFixture(t, baselineItem())
 	provider := roleBackend(baselineImplements, approveVerdict)
-	pipeline := fixture.pipeline(t, provider, []string{"test -f feature.txt"})
-	// Somewhere to record instances, and nothing asking for any: the wiring is
-	// what production does, so what this measures is the flag rather than the
+	// The pipeline keeps somewhere to record instances, which is what production
+	// wires unconditionally, so what this measures is the key rather than the
 	// absence of a store.
-	pipeline.Instances = fixture.store
-	if pipeline.Config.Execution.DeclarativeDelivery {
-		t.Fatalf("a configuration nobody edited already opts into the trial")
+	pipeline := automatic(fixture.legacy(t, provider, []string{"test -f feature.txt"}), provider)
+	if pipeline.Instances == nil {
+		t.Fatalf("the rolled-back pipeline has nowhere to record an instance; this measures the key")
 	}
-	fixture.invoke(t, "run", pipeline)
+	outcome := fixture.invoke(t, "run", pipeline)
+	if outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("the rolled-back run ended in %s; the legacy path did not deliver the work", outcome.Status)
+	}
 
 	state, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if state.WorkflowInstanceID != "" {
-		t.Errorf("the run records the instance %q and nothing opted into the trial", state.WorkflowInstanceID)
+		t.Errorf("the run records the instance %q and its project had rolled back", state.WorkflowInstanceID)
+	}
+	if state.WorkflowDivergence != "" {
+		t.Errorf("the run records the divergence %q and nothing was observing it", state.WorkflowDivergence)
 	}
 	if _, err := fixture.store.LoadWorkflowInstance(deliveryInstanceID(pipelineRunID)); err == nil {
 		t.Errorf("an instance was recorded for a run nothing observed")
 	}
 }
 
-// TestALegacyRunInFlightIsNeverMigratedIntoTheTrial is the resumability half of
-// the opt-in, driven the only way it can be shown: a run started while the trial
-// was off, left in flight, and picked up by a process whose configuration has
-// the trial on.
+// TestALegacyRunInFlightIsNeverMigratedIntoTheDefinition is the resumability
+// half of the flip, driven the only way it can be shown: a run started under the
+// rollback, left in flight, and picked up by a process whose configuration is on
+// the default.
 //
-// The rule it holds is that the run's own record decides. A run reserved before
-// the opt-in names no instance, and no later process invents one for it however
+// The rule it holds is that the run's own record decides. A run reserved on the
+// legacy path names no instance, and no later process invents one for it however
 // its configuration reads — so a legacy run stays a legacy run for the whole of
-// its life, and the flag reaches new runs only.
-func TestALegacyRunInFlightIsNeverMigratedIntoTheTrial(t *testing.T) {
+// its life, and the default reaches new runs only. It is what an operator who
+// undoes a rollback, or who upgrades a build whose default has moved, gets: the
+// runs in flight finish on what they started on.
+func TestALegacyRunInFlightIsNeverMigratedIntoTheDefinition(t *testing.T) {
 	t.Parallel()
 
 	fixture := newBaselineFixture(t, baselineItem())
@@ -362,13 +310,12 @@ func TestALegacyRunInFlightIsNeverMigratedIntoTheTrial(t *testing.T) {
 	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
 
 	// The first invocation is refused for want of capacity and the wait is longer
-	// than this process holds open, so it exits with the run in flight. The trial
-	// is off, which is what makes this a legacy run.
+	// than this process holds open, so it exits with the run in flight. The
+	// project has rolled back, which is what makes this a legacy run.
 	refused := usageLimitBackend(1, limit, approveVerdict)
-	legacy := waiting(automatic(fixture.pipeline(t, refused, []string{"test -f feature.txt"}), refused),
+	rolledBack := waiting(fixture.automaticLegacy(t, refused, []string{"test -f feature.txt"}),
 		&pausingClock{now: baseTime}, 6*time.Hour, time.Minute)
-	legacy.Instances = fixture.store
-	fixture.invoke(t, "paused invocation", legacy)
+	fixture.invoke(t, "paused invocation", rolledBack)
 
 	paused, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -378,13 +325,13 @@ func TestALegacyRunInFlightIsNeverMigratedIntoTheTrial(t *testing.T) {
 		t.Fatalf("the first invocation ended the run in %s; there is nothing left in flight to resume", paused.Status)
 	}
 	if paused.WorkflowInstanceID != "" {
-		t.Fatalf("the run was started with the trial off and records the instance %q", paused.WorkflowInstanceID)
+		t.Fatalf("the run was started on the legacy path and records the instance %q", paused.WorkflowInstanceID)
 	}
 
-	// The flag is flipped between the two invocations, which is the whole of what
-	// this test is about.
+	// The rollback is undone between the two invocations, which is the whole of
+	// what this test is about.
 	served := usageLimitBackend(0, limit, approveVerdict)
-	resuming := waiting(fixture.automaticTrial(t, served, []string{"test -f feature.txt"}),
+	resuming := waiting(fixture.automatic(t, served, []string{"test -f feature.txt"}),
 		&pausingClock{now: resetsAt.Add(time.Minute)}, 6*time.Hour, time.Minute)
 	outcome := fixture.invoke(t, "resumed invocation", resuming)
 	if outcome.Status != runstate.StatusSucceeded {
@@ -396,7 +343,7 @@ func TestALegacyRunInFlightIsNeverMigratedIntoTheTrial(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if finished.WorkflowInstanceID != "" {
-		t.Errorf("the resumed run records the instance %q; a run in flight is never migrated into the trial", finished.WorkflowInstanceID)
+		t.Errorf("the resumed run records the instance %q; a run in flight is never migrated onto the definition", finished.WorkflowInstanceID)
 	}
 	if finished.WorkflowDivergence != "" {
 		t.Errorf("the resumed run records the divergence %q and was never observed", finished.WorkflowDivergence)
@@ -406,13 +353,14 @@ func TestALegacyRunInFlightIsNeverMigratedIntoTheTrial(t *testing.T) {
 	}
 }
 
-// TestARunInTheTrialIsObservedAfterTheTrialIsTurnedOff is the same rule read the
-// other way, and it is worth its own run because the other direction is the one
-// that leaves a half-observed instance: a run that started in the trial keeps
-// being stepped by a process whose configuration no longer asks for it, so the
-// instance a soak is counting reaches a terminal rather than stopping wherever
-// the operator happened to edit the file.
-func TestARunInTheTrialIsObservedAfterTheTrialIsTurnedOff(t *testing.T) {
+// TestARunOnTheDefinitionIsFinishedOnItAfterARollback is the same rule read the
+// other way, and it is worth its own run because it is the direction a rollback
+// takes: a run that started on the definition keeps being stepped by a process
+// whose configuration no longer asks for it, so its instance reaches a terminal
+// rather than stopping wherever the operator happened to edit the file. That is
+// what "in-flight instances finish on whatever they started on" costs the
+// rollback, and it is the behaviour rather than an oversight.
+func TestARunOnTheDefinitionIsFinishedOnItAfterARollback(t *testing.T) {
 	t.Parallel()
 
 	fixture := newBaselineFixture(t, baselineItem())
@@ -420,7 +368,7 @@ func TestARunInTheTrialIsObservedAfterTheTrialIsTurnedOff(t *testing.T) {
 	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
 
 	refused := usageLimitBackend(1, limit, approveVerdict)
-	fixture.invoke(t, "paused invocation", waiting(fixture.automaticTrial(t, refused, []string{"test -f feature.txt"}),
+	fixture.invoke(t, "paused invocation", waiting(fixture.automatic(t, refused, []string{"test -f feature.txt"}),
 		&pausingClock{now: baseTime}, 6*time.Hour, time.Minute))
 
 	paused, err := fixture.store.Load(pipelineRunID)
@@ -428,16 +376,12 @@ func TestARunInTheTrialIsObservedAfterTheTrialIsTurnedOff(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if paused.WorkflowInstanceID == "" {
-		t.Fatalf("the run was started in the trial and records no instance")
+		t.Fatalf("the run was started on the default path and records no instance")
 	}
 
 	served := usageLimitBackend(0, limit, approveVerdict)
-	off := waiting(automatic(fixture.pipeline(t, served, []string{"test -f feature.txt"}), served),
+	off := waiting(automatic(fixture.legacy(t, served, []string{"test -f feature.txt"}), served),
 		&pausingClock{now: resetsAt.Add(time.Minute)}, 6*time.Hour, time.Minute)
-	off.Instances = fixture.store
-	if off.Config.Execution.DeclarativeDelivery {
-		t.Fatalf("the resuming pipeline still opts into the trial; this test turns it off")
-	}
 	fixture.invoke(t, "resumed invocation", off)
 
 	state, instance := observedRun(t, fixture.store)
@@ -453,7 +397,7 @@ func TestARunInTheTrialIsObservedAfterTheTrialIsTurnedOff(t *testing.T) {
 	}
 }
 
-// observedFixture is a run standing where a fresh one stands, with the trial
+// observedFixture is a run standing where a fresh one stands, with its instance
 // begun and nothing performed. It is built directly rather than driven because
 // what the tests below are about is what the observation does when the run and
 // the definition stop agreeing, and none of the paths driven above reaches that.
@@ -469,6 +413,9 @@ func observedFixture(t *testing.T) (*activeRun, *runstate.Store) {
 	}
 	state := completingRun("yoyodyne-task", runstate.PhaseDeveloping)
 	pipeline := Pipeline{Store: store, Instances: store}
+	// Stated rather than left to the zero value, because this configuration is
+	// built here rather than loaded and the harness default is what a loaded one
+	// would carry.
 	pipeline.Config.Execution.DeclarativeDelivery = true
 	pipeline.Config.Approvals.Integration = domain.ApprovalAutomatic
 	if err := store.Create(state); err != nil {
@@ -477,7 +424,7 @@ func observedFixture(t *testing.T) (*activeRun, *runstate.Store) {
 	run := &activeRun{pipeline: pipeline, state: state}
 	run.beginDeliveryTrial()
 	if run.trial == nil {
-		t.Fatalf("the trial did not begin over a store that can record it")
+		t.Fatalf("the observation did not begin over a store that can record it")
 	}
 	return run, store
 }
@@ -548,16 +495,16 @@ func TestAnObservationTheDefinitionCannotFollowIsRecordedOnTheRun(t *testing.T) 
 	}
 }
 
-// TestTheTrialReportsOnlyOutcomesTheRegisteredStepsProduce holds the observation
-// to the same vocabulary the definitions are compiled against.
+// TestTheObservationReportsOnlyOutcomesTheRegisteredStepsProduce holds the
+// observation to the same vocabulary the definitions are compiled against.
 //
-// An outcome the trial can report and the registry does not declare is a
+// An outcome the observation can report and the registry does not declare is a
 // transition no definition routes, which would reach a run as a divergence
 // against nothing — the definition would be right and the observation wrong. The
 // other direction is checked too: an outcome a step produces and nothing here
-// can report is a branch the trial would never exercise, which is a soak that
+// can report is a branch no run would ever exercise, which is coverage that
 // looks broader than it is.
-func TestTheTrialReportsOnlyOutcomesTheRegisteredStepsProduce(t *testing.T) {
+func TestTheObservationReportsOnlyOutcomesTheRegisteredStepsProduce(t *testing.T) {
 	t.Parallel()
 
 	for _, builtin := range builtinDeliveryWorkflows() {
@@ -626,12 +573,11 @@ func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
 			}, approveVerdict)
 			halting := &haltingStore{StateStore: store, at: test.haltAt}
 			pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-			// The trial wired as a project that opted in wires it. Instances go to
-			// the store itself rather than through the halting wrapper, because what
-			// the halt models is a process that stopped writing its run record: the
-			// instance on disk is whatever the dead process had already recorded.
+			// Instances go to the store itself rather than through the halting
+			// wrapper, because what the halt models is a process that stopped writing
+			// its run record: the instance on disk is whatever the dead process had
+			// already recorded.
 			pipeline.Instances = store
-			pipeline.Config.Execution.DeclarativeDelivery = true
 
 			if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
 				t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
@@ -670,7 +616,7 @@ func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
 				t.Fatalf("the instance ended in the terminal %q; there is no gap here to record", instance.State)
 			}
 			if settled.WorkflowDivergence == "" {
-				t.Fatalf("the sweep made the run terminal as %s with its instance standing in %q and recorded no divergence; the soak would count it as clean",
+				t.Fatalf("the sweep made the run terminal as %s with its instance standing in %q and recorded no divergence; the run would read as having walked the definition to the end",
 					settled.Status, instance.State)
 			}
 			if !strings.Contains(settled.WorkflowDivergence, instance.State) {
@@ -681,8 +627,8 @@ func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
 }
 
 // The same sweep over a run nobody was observing records nothing, which is what
-// keeps the opt-in an opt-in on this path as well: settling a legacy run must
-// not invent an observation of it.
+// the rollback has to reach on this path as well: settling a legacy run must not
+// invent an observation of it.
 func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
 	t.Parallel()
 
@@ -692,10 +638,11 @@ func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCompleting}
-	// Somewhere to record instances and nothing asking for any, so what this
-	// measures is the flag rather than the absence of a store.
+	// Somewhere to record instances and a project that rolled back, so what this
+	// measures is the key rather than the absence of a store.
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
 	pipeline.Instances = store
+	pipeline.Config.Execution.DeclarativeDelivery = false
 
 	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
@@ -708,7 +655,7 @@ func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
 		t.Fatalf("Load() settled state error = %v", err)
 	}
 	if settled.WorkflowInstanceID != "" || settled.WorkflowDivergence != "" {
-		t.Errorf("a run outside the trial was settled carrying instance %q and divergence %q",
+		t.Errorf("a run on the legacy path was settled carrying instance %q and divergence %q",
 			settled.WorkflowInstanceID, settled.WorkflowDivergence)
 	}
 }

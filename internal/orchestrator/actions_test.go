@@ -853,7 +853,7 @@ var notAStep = map[string]string{
 	"prepareIntegrationRetry": "replays a change whose promotion lost its race, so candidate.integrate can be re-earned",
 	"verifyHandback":          "checks a resumed run still has the change it preserved",
 
-	// The declarative trial. These step the workflow instance a run is observed
+	// The declarative path. These step the workflow instance a run is observed
 	// through and are the one group here that is not part of the delivery at all:
 	// they perform nothing, decide nothing, and a run that skipped every one of
 	// them delivers identically. Registering one would be registering the

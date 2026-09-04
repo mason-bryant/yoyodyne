@@ -3,7 +3,7 @@ package orchestrator
 // The delivery pipeline's steps, named and registered.
 //
 // This is a second door onto functions the pipeline already calls, and nothing
-// yet walks through it to perform anything. The declarative trial in
+// yet walks through it to perform anything. The declarative path in
 // declarative.go steps copies of these actions whose Perform does nothing, so
 // what it exercises is the topology and the authority they declare rather than
 // the code behind them. Run still calls claim and develop directly; develop
