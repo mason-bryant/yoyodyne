@@ -276,6 +276,84 @@ func TestARefreshedExportInTheChangeIsRefusedHoweverTheIndexBitEnded(t *testing.
 	}
 }
 
+// Lifting the hold is the obvious way to smuggle the export in and not the only
+// one, and the other one is what says why the guard is this gate rather than a
+// re-reading of the bit. A developer that stages the refreshed copy and then
+// puts the bit back leaves an index Git still reports as `S`: a check that
+// re-verified the hold at submission would find it intact and pass, while the
+// commit the harness makes carries the staged blob anyway, because `git add
+// --all` skipping a held path does not unstage what is already in the index. The
+// gate reads the change against the run's base commit instead, and for a held
+// path that comparison is against the index — so the state that defeats a bit
+// check is the same one this refuses.
+func TestAStagedExportIsRefusedThoughTheHoldLooksIntact(t *testing.T) {
+	t.Parallel()
+
+	repository := exportingRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	var heldAtAttack string
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return err
+		}
+		if attempts == 1 {
+			// Stage the harness's own refresh, then hand the index back looking
+			// exactly as it did before.
+			for _, args := range [][]string{
+				{"update-index", "--no-skip-worktree", "--", trackerExport},
+				{"add", "--", trackerExport},
+				{"update-index", "--skip-worktree", "--", trackerExport},
+			} {
+				if output, err := attemptPipelineGit(request.WorkingDirectory, args...); err != nil {
+					return fmt.Errorf("git %v on %s: %v: %s", args, trackerExport, err, output)
+				}
+			}
+			output, err := attemptPipelineGit(request.WorkingDirectory, "ls-files", "-v", "--", trackerExport)
+			if err != nil {
+				return fmt.Errorf("read the index state of %s: %v: %s", trackerExport, err, output)
+			}
+			heldAtAttack = strings.TrimSpace(output)
+			return nil
+		}
+		// The repair the refusal asks for: let Git compare the path again, and put
+		// it at the content the base commit carries so the change no longer has it.
+		if output, err := attemptPipelineGit(request.WorkingDirectory, "update-index", "--no-skip-worktree", "--", trackerExport); err != nil {
+			return fmt.Errorf("compare %s again: %v: %s", trackerExport, err, output)
+		}
+		writeTrackerExport(t, request.WorkingDirectory, committedExport)
+		return nil
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The premise of the test: at the moment the gate ran, the hold was still on,
+	// so nothing that only asked the index about it would have caught this.
+	if !strings.HasPrefix(heldAtAttack, "S ") {
+		t.Fatalf("the index state at the attack = %q, want the hold still set", heldAtAttack)
+	}
+	if outcome.Integration == nil || outcome.RepairAttempts != 1 {
+		t.Fatalf("the repaired change was not integrated on one refusal: %#v", outcome)
+	}
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 1 {
+		t.Fatalf("reviews = %d, want only the attempt that carried no export", reviews)
+	}
+	if promoted := gitOutput(t, repository, "show", "main:"+trackerExport); promoted != committedExport {
+		t.Fatalf("the promoted export = %q, want the committed copy %q", promoted, committedExport)
+	}
+	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 2 {
+		t.Fatalf("developer invocations = %d, want the first attempt and its repair", len(developerRequests))
+	}
+	if !strings.Contains(developerRequests[1].Prompt, "Held out of every run's change by the harness: "+trackerExport) {
+		t.Fatalf("the refusal does not name the export it caught:\n%s", developerRequests[1].Prompt)
+	}
+}
+
 // The other half of the same rule: the export a run leaves held is not part of
 // its change, so a run that reads it and writes its own work costs nothing. A
 // gate that refused the ordinary case would refuse every run this project makes.

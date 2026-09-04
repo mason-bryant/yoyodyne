@@ -23,6 +23,13 @@ import "sort"
 // matters most for the case the read-only posture already takes seriously — an
 // agent following injected instructions is exactly who would flip the bit.
 //
+// Reading the change rather than the bit is what covers the states a bit check
+// would pass. Staging the refreshed copy and then setting the hold again leaves
+// an index Git still reports as held, while the commit carries the staged blob
+// regardless — so the guard has to be a comparison against the run's base
+// commit, which for a held path is a comparison against the index and catches
+// both spellings of the same smuggle.
+//
 // A grant lifts this refusal exactly as it lifts the other, because a grant is
 // item text authored and reviewed before the run starts, which is the one thing
 // the flipped bit is not. A gate with no stated way out is a gate agents work
