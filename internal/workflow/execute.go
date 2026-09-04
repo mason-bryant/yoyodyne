@@ -69,9 +69,29 @@ type Executor[S any] struct {
 	// Now is where checkpoint timestamps come from. The zero value is the wall
 	// clock in UTC.
 	Now func() time.Time
+	// Gates reads whether a person has recorded the act a gated state waits for.
+	// It is satisfied by *runstate.Store.
+	//
+	// It is a reader and never a writer, which is the whole shape of the thing: an
+	// executor can find out that a person acted and has no way to make it true. So
+	// no outcome of any action passes a gate, no definition passes one by routing
+	// around it, and an instance standing at a gated state stands there until
+	// somebody records the act — which is what a gate is for, and what an
+	// item-closed dependency could never be.
+	//
+	// A gated graph with no reader wired is refused before anything runs; see
+	// ready.
+	Gates HumanGates
 	// Bound is how many transitions one Run performs before it refuses to go on.
 	// The zero value is DefaultBound.
 	Bound int
+}
+
+// HumanGates is the recorded human acts, as the executor reads them. Only the
+// question is here: whether the act that passes one gate is on the record. There
+// is deliberately no way to answer it from in here.
+type HumanGates interface {
+	HumanActRecorded(gate string) (bool, error)
 }
 
 // Start creates the durable record of a new instance, standing on the graph's
@@ -155,6 +175,14 @@ func (e Executor[S]) Step(ctx context.Context, id string, subject S) (runstate.W
 	if err := withinGrant(e.Grant, instance.State, node); err != nil {
 		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s: %w", id, err)
 	}
+	// The gate is asked after the authority and before anything else, because it
+	// is the same kind of question and has the same answer when it refuses: the
+	// instance stays exactly where it is, and whoever fixes what was refused steps
+	// this state again. What differs is who can fix it — an authority refusal
+	// waits on a wider grant, and this waits on a person.
+	if err := gateOpen(e.Gates, instance.State, node); err != nil {
+		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s: %w", id, err)
+	}
 	// Whether the boundary this step would produce can be recorded is asked here,
 	// before the action, because the answer stops being useful afterwards: an
 	// action performed and not recordable is an instance nothing can move on.
@@ -236,6 +264,13 @@ func (e Executor[S]) ready() error {
 	if len(e.Grant.granted) == 0 {
 		problems = append(problems, errors.New("the grant the executor performs under confers no capabilities; a workflow is performed under the authority its actions require"))
 	}
+	// A graph with a gate in it and nothing to read the record with would stop at
+	// the first gated state and say so there. Saying it here instead costs the
+	// caller nothing and is the difference between an instance that never starts
+	// and one that is created, pinned, and stuck.
+	if gated := e.Graph.Gates(); len(gated) > 0 && e.Gates == nil {
+		problems = append(problems, fmt.Errorf("this workflow waits on the human gates %v and the executor has no way to read whether anybody has passed them", gated))
+	}
 	if len(problems) > 0 {
 		return errors.Join(problems...)
 	}
@@ -261,6 +296,38 @@ func (e Executor[S]) now() time.Time {
 // the one step about to happen under the grant held now, which is what keeps a
 // narrowed authority from being carried by an instance that started under a wider
 // one.
+// gateOpen is the human gate check at execution: a gated state performs nothing
+// until a person's act against that gate is on the record.
+//
+// It refuses rather than waits. An instance standing at a gated state is not
+// blocked on a clock or on another process, so there is nothing to sleep for and
+// nothing that would wake it — what changes is somebody typing `yoyo gate
+// record`, and until they do, the honest thing for a step to say is that it is
+// waiting on them. A caller stepping the state again after that finds the gate
+// open.
+//
+// A reader that cannot answer is a refusal too, not a pass. A gate whose record
+// could not be read is a gate nobody has shown was passed, and treating an
+// unreadable answer as an open gate is exactly the shape of the failure gates
+// exist to end.
+func gateOpen[S any](gates HumanGates, state string, node Node[S]) error {
+	gate := node.Gate()
+	if gate == "" {
+		return nil
+	}
+	if gates == nil {
+		return fmt.Errorf("the state %q waits on the human gate %q and this executor has no way to read whether anybody has passed it; a gate nothing can read is never treated as open", state, gate)
+	}
+	recorded, err := gates.HumanActRecorded(gate)
+	if err != nil {
+		return fmt.Errorf("the state %q waits on the human gate %q and whether it was passed could not be read: %w", state, gate, err)
+	}
+	if !recorded {
+		return fmt.Errorf("the state %q waits on the human gate %q, which no recorded act has passed; nothing machinery does passes it, closing a work item included, and `yoyo gate record %s` is what does", state, gate, gate)
+	}
+	return nil
+}
+
 func withinGrant[S any](grant Grant, state string, node Node[S]) error {
 	var problems []error
 	for _, needed := range node.Action().Capabilities {

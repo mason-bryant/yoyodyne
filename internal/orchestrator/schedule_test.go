@@ -2062,6 +2062,11 @@ type scheduleHarness struct {
 	held     *runstate.IntakeHold
 	capacity int
 	openErr  error
+	// discharged is the human gates a person has recorded passing, and gatesErr
+	// is a store that will not answer. Nothing recorded is the default, so an item
+	// declaring a gate is one no pass may pull.
+	discharged []string
+	gatesErr   error
 	// blockedRuns is the brake bound each pull reports, and prices is what each
 	// run this harness ran cost. Both are per pull for the reason capacity is:
 	// the scheduler re-reads them, and a test changes them under it.
@@ -2194,7 +2199,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	}
 	h.mu.Unlock()
 	return Pull{
-		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
+		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h, Gates: h,
 		Capacity: capacity, Start: h.start, Escalations: escalations,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
@@ -2473,6 +2478,18 @@ func (h *scheduleHarness) Held() (runstate.IntakeHold, bool, error) {
 	return *h.held, true, nil
 }
 
+// DischargedGates is the human gates a person has recorded passing, as this
+// harness is told to report them. Nothing recorded is the ordinary fixture: an
+// item declaring a gate is then an item the scheduler must not pull.
+func (h *scheduleHarness) DischargedGates() ([]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.gatesErr != nil {
+		return nil, h.gatesErr
+	}
+	return append([]string(nil), h.discharged...), nil
+}
+
 func (h *scheduleHarness) Pausing(workItemID string) ([]directive.Directive, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -2605,7 +2622,7 @@ func (h *realScheduleHarness) open(context.Context) (Pull, error) {
 	capacity := h.capacity
 	h.mu.Unlock()
 	return Pull{
-		Tracker: h, Runs: h.store, Intake: h.intake, Directives: h.directives,
+		Tracker: h, Runs: h.store, Intake: h.intake, Directives: h.directives, Gates: h.store,
 		Capacity: capacity, Start: h.start,
 	}, nil
 }

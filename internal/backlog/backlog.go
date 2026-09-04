@@ -22,6 +22,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/humangate"
 )
 
 // The tracker statuses admitted work can be in. Open work is waiting to be
@@ -70,6 +71,21 @@ type Entry struct {
 	// not in the queue is a parking the queue's readers do not share, and what
 	// they do instead is pull the work.
 	Parking domain.WorkItemParking `json:"parking,omitempty"`
+	// HumanGates is the steps this item declares that only a person can take and
+	// that nobody has recorded taking yet. It is on the entry for the reason the
+	// parking is: a gate that is not in the queue is a gate the queue's readers do
+	// not share, and what they do instead is pull the work past it.
+	//
+	// It is the undischarged ones rather than all of them, because what the queue
+	// is answering is what is holding this item back now. A gate somebody has
+	// already passed holds nothing, and listing it would read as an outstanding
+	// step that is in fact done.
+	//
+	// It carries the declarations nothing could read as well as the gates, and
+	// holds the item for either. An author who mistyped the name of the step they
+	// were reserving must not thereby reserve nothing: a typo that let the work
+	// through would be this machinery's own version of the failure it replaced.
+	HumanGates humangate.Reading `json:"human_gates,omitzero"`
 	// Ready reports that nothing is holding this item back, which is what
 	// separates the next item to pull from the next item in the order.
 	Ready bool `json:"ready"`
@@ -118,7 +134,18 @@ type Queue struct {
 // somebody decided it is not to be started yet. The tracker answers neither: it
 // knows about dependencies, and not about the harness's roles or the product
 // manager's deferrals, so it reports both as ready forever.
-func Order(items []beads.WorkItem, ready []string) Queue {
+//
+// discharged is the human gates a person has recorded taking, from the harness's
+// own store. It is asked for rather than read here for the reason readiness is
+// taken rather than inferred: a gate is passed by a durable record of somebody's
+// act, and a package that both read an item's declared gates and decided they
+// were satisfied would be holding both halves of the thing this separates. A
+// caller that knows of no discharged gates passes none, and every declared gate
+// then holds — which is the direction this fails in on purpose. The tracker is
+// not asked about gates at all and could not answer: the only completion it
+// knows is an item being closed, and an item's closure passing a gate that
+// reserved a person's step is the exact failure that put this here.
+func Order(items []beads.WorkItem, ready []string, discharged []string) Queue {
 	pullable := make(map[string]struct{}, len(ready))
 	for _, id := range ready {
 		pullable[id] = struct{}{}
@@ -141,6 +168,7 @@ func Order(items []beads.WorkItem, ready []string) Queue {
 	queue := Queue{Entries: make([]Entry, 0, len(admitted))}
 	for position, item := range admitted {
 		_, reportedReady := pullable[item.ID]
+		gates := humangate.Of(item).Pending(discharged)
 		queue.Entries = append(queue.Entries, Entry{
 			Position: position + 1,
 			ID:       item.ID,
@@ -158,8 +186,15 @@ func Order(items []beads.WorkItem, ready []string) Queue {
 			// Deciding both here is what keeps the answer the same everywhere the
 			// order is read, instead of one for each thing that reads it — which is
 			// exactly what parking-by-priority was, and what it cost.
-			Ready:     reportedReady && item.Status == statusOpen && item.Executor.DeveloperRun() && !item.Parking.Parked(),
-			WaitingOn: waitingOn(item, unfinished),
+			//
+			// An undischarged human gate is a third such axis, and the only one
+			// nothing about the tracker's state can ever clear: it is passed by a
+			// person's recorded act and by nothing else, so an item carrying one is
+			// not pullable however ready the tracker calls it and however many of the
+			// items it depends on have been closed.
+			Ready:      reportedReady && item.Status == statusOpen && item.Executor.DeveloperRun() && !item.Parking.Parked() && !gates.Holds(),
+			HumanGates: gates,
+			WaitingOn:  waitingOn(item, unfinished),
 		})
 	}
 	return queue
@@ -216,6 +251,22 @@ func (q Queue) Parked() int {
 	return parked
 }
 
+// Gated counts the entries held by a step only a person can take. It is counted
+// apart from the unready rest for the reason parking is, and for one more: it is
+// the count that says how much of a stalled queue is waiting on the reader. An
+// operator who sees that nothing is pullable and does not see that three items
+// are waiting on them has been told the machine is idle rather than that it is
+// their move.
+func (q Queue) Gated() int {
+	gated := 0
+	for _, entry := range q.Entries {
+		if entry.HumanGates.Holds() {
+			gated++
+		}
+	}
+	return gated
+}
+
 // Render describes the backlog for an operator: the order the product manager
 // set, what is holding each unready item back, and what would be pulled next. An
 // empty backlog is stated rather than printed as nothing at all, because "there
@@ -232,6 +283,12 @@ func (q Queue) Render() string {
 	// the line about the queue rather than about a state most queues are not in.
 	if parked := q.Parked(); parked > 0 {
 		fmt.Fprintf(&rendered, ", %d parked", parked)
+	}
+	// Counted in the header for the same reason parking is, and because this is
+	// the count that is about the reader: a queue where nothing is pullable and
+	// two items are waiting on them is not a quiet machine.
+	if gated := q.Gated(); gated > 0 {
+		fmt.Fprintf(&rendered, ", %d waiting on a person", gated)
 	}
 	rendered.WriteString("):\n")
 	listed := q.Entries
@@ -264,19 +321,25 @@ func (q Queue) Render() string {
 	return rendered.String()
 }
 
-// Hold says what is keeping an unready entry from being pulled. The five
+// Hold says what is keeping an unready entry from being pulled. The six
 // answers are different things to act on: an executor no run can be, a parking
-// somebody decided, named work it waits for, a blocker recorded on the item
-// itself, and the tracker simply not offering it, which is what a dependency the
-// listing did not carry looks like from here.
+// somebody decided, a step only a person can take, named work it waits for, a
+// blocker recorded on the item itself, and the tracker simply not offering it,
+// which is what a dependency the listing did not carry looks like from here.
 //
 // The executor and the parking answer first because they are the two that are
-// not waiting for anything. The other three are an item that will be pulled once
+// not waiting for anything. The rest are an item that will be pulled once
 // something clears; these two never will be until a person acts, and reading
 // "waiting on" against either would send somebody looking for a blocker to
 // release. Between the two, the executor answers first: an item that is both is
 // one no run could take even after the parking is lifted, so naming the parking
 // there would offer a release that changes nothing.
+//
+// A human gate answers next, ahead of everything that is a wait on other work,
+// because it is the one hold that no amount of other work finishing will pass.
+// An item that is gated and also waiting on a blocker is told about the gate:
+// the blocker will clear on its own and the gate will not, so naming the blocker
+// would have somebody watch for a moment that changes nothing.
 //
 // It is exported because the refusal is the same fact wherever the queue is
 // read, and the standing status names it per item: a second surface wording the
@@ -287,6 +350,8 @@ func (e Entry) Hold() string {
 		return fmt.Sprintf("its executor is %q rather than a developer run, so no run carries it out; the item says which conversation does", e.Executor)
 	case e.Parking.Parked():
 		return "parked, so no pull selects it however far the queue drains: " + e.Parking.Reason()
+	case e.HumanGates.Holds():
+		return e.HumanGates.Describe()
 	case len(e.WaitingOn) > 0:
 		return "waiting on " + strings.Join(e.WaitingOn, ", ")
 	case e.Status == statusBlocked:

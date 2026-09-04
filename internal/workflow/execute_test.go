@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -670,5 +671,169 @@ func TestAStepThatCouldNotBeRecordedIsRefusedBeforeItIsPerformed(t *testing.T) {
 	}
 	if recorded.State != filled.State || len(recorded.Checkpoints) != len(filled.Checkpoints) {
 		t.Errorf("the instance stands in %q with %d checkpoints, want %q with %d", recorded.State, len(recorded.Checkpoints), filled.State, len(filled.Checkpoints))
+	}
+}
+
+// gatedGraph is the delivery fixture with its integration held behind a step
+// only a person can take.
+func gatedGraph(t *testing.T) Graph[*journal] {
+	t.Helper()
+
+	registry := deliveryActions(t, func(name string) func(context.Context, *journal) error {
+		return func(_ context.Context, acting *journal) error {
+			return acting.perform(name)
+		}
+	})
+	grant, err := NewGrant(capability.All()...)
+	if err != nil {
+		t.Fatalf("NewGrant() error = %v", err)
+	}
+	graph, err := Loader[*journal]{Registry: registry, Grant: grant}.LoadFile("testdata/delivery-gated.yaml")
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	return graph
+}
+
+// recordedActs stands in for the harness's store of what a person has recorded
+// doing. It is a reader and has no writer at all, which is the shape the
+// executor is given: nothing it can reach makes a gate pass.
+type recordedActs struct {
+	passed map[string]bool
+	err    error
+}
+
+func (r recordedActs) HumanActRecorded(gate string) (bool, error) {
+	if r.err != nil {
+		return false, r.err
+	}
+	return r.passed[gate], nil
+}
+
+// A gated state performs nothing until a person's act is on the record, and the
+// instance stays exactly where it was — so the step that was refused is the step
+// that runs once somebody records it, rather than a boundary the instance
+// crossed without the act.
+func TestAGatedStepWaitsOnAPersonAndThenPerforms(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	acts := recordedActs{passed: map[string]bool{}}
+	executor := checkpointing(t, root)
+	executor.Graph = gatedGraph(t)
+	executor.Gates = acts
+
+	instance, err := executor.Start("gated-run")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	recording := &journal{path: filepath.Join(root, "performed")}
+	instance, err = executor.Run(context.Background(), instance.InstanceID, recording)
+	if err == nil {
+		t.Fatal("Run() reached a terminal with the person's step untaken")
+	}
+	for _, want := range []string{"integration-approved", "closing a work item", "yoyo gate record"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal = %v, want it to mention %q", err, want)
+		}
+	}
+	// The instance is standing at the gated state rather than past it, and
+	// nothing was performed there.
+	stopped, err := executor.Resume("gated-run")
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if stopped.State != "integrate" || stopped.Terminal {
+		t.Fatalf("instance = %#v, want it standing at the gated state", stopped)
+	}
+	for _, action := range performed(t, recording.path) {
+		if action == "candidate.integrate" {
+			t.Fatal("the gated action was performed with the person's step untaken")
+		}
+	}
+
+	// The person records the act, and the same instance steps on from where it
+	// stood.
+	acts.passed["integration-approved"] = true
+	executor.Gates = acts
+	finished, err := executor.Run(context.Background(), "gated-run", recording)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !finished.Terminal || finished.State != "delivered" {
+		t.Fatalf("instance = %#v", finished)
+	}
+}
+
+// A gate whose record cannot be read is a gate nobody has shown was passed.
+// Reading an unreadable answer as an open gate is the exact shape of the failure
+// gates exist to end.
+func TestAGateThatCannotBeReadIsNeverTreatedAsOpen(t *testing.T) {
+	t.Parallel()
+
+	executor := checkpointing(t, t.TempDir())
+	executor.Graph = gatedGraph(t)
+	executor.Gates = recordedActs{err: errors.New("the state store would not answer")}
+	if _, err := executor.Start("unreadable-gate"); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	_, err := executor.Run(context.Background(), "unreadable-gate", &journal{path: filepath.Join(t.TempDir(), "performed")})
+	if err == nil {
+		t.Fatal("Run() stepped past a gate it could not read")
+	}
+	if !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("refusal = %v", err)
+	}
+}
+
+// An executor with no way to read the record would stop at the first gated
+// state and say so there. Saying it before anything runs is the difference
+// between an instance that never starts and one that is created, pinned, and
+// stuck.
+func TestAGatedGraphWithNothingToReadTheRecordIsRefusedBeforeItStarts(t *testing.T) {
+	t.Parallel()
+
+	executor := checkpointing(t, t.TempDir())
+	executor.Graph = gatedGraph(t)
+	executor.Gates = nil
+	if _, err := executor.Start("unwired-gate"); err == nil {
+		t.Fatal("Start() created an instance of a gated graph with nothing to read the record with")
+	} else if !strings.Contains(err.Error(), "integration-approved") {
+		t.Fatalf("refusal = %v, want it to name the gate", err)
+	}
+	// An ungated graph is unaffected: nothing about it needs the reader.
+	ungated := checkpointing(t, t.TempDir())
+	if _, err := ungated.Start("ungated"); err != nil {
+		t.Fatalf("Start() error = %v, want a graph with no gate to be unaffected", err)
+	}
+}
+
+// What a definition may say about a gate is which one a step waits for, and
+// nothing else. It cannot name the act, record it, or route around it, and the
+// graph reports the gates it waits on so a surface can say so before an instance
+// stops at one.
+func TestADefinitionDeclaresWhichGateAndNothingMore(t *testing.T) {
+	t.Parallel()
+
+	gated := gatedGraph(t)
+	if want := []string{"integration-approved"}; len(gated.Gates()) != 1 || gated.Gates()[0] != want[0] {
+		t.Fatalf("Gates() = %v, want %v", gated.Gates(), want)
+	}
+	node, isAState := gated.Node("integrate")
+	if !isAState || node.Gate() != "integration-approved" {
+		t.Fatalf("node = %#v", node)
+	}
+	if ungated, _ := gated.Node("develop"); ungated.Gate() != "" {
+		t.Fatalf("an ungated state reports the gate %q", ungated.Gate())
+	}
+	if plain := journalGraph(t); len(plain.Gates()) != 0 {
+		t.Fatalf("Gates() = %v, want none for a definition that declares none", plain.Gates())
+	}
+	// Adding the gate changed what the definition says, so it changed the digest
+	// an instance pins itself to. A definition that declared no gate digests
+	// exactly as it did before gates existed, which is what keeps every instance
+	// already in flight running.
+	if gated.Digest() == journalGraph(t).Digest() {
+		t.Fatal("a gated definition and an ungated one digest the same")
 	}
 }

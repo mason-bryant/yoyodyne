@@ -579,7 +579,7 @@ func TestPipelineRunsAConversationExecutedItemTheOperatorNamed(t *testing.T) {
 
 	// The contrast, in one place: the same item the harness would never have
 	// chosen for itself.
-	queue := backlog.Order([]beads.WorkItem{item}, []string{item.ID})
+	queue := backlog.Order([]beads.WorkItem{item}, []string{item.ID}, nil)
 	if _, ok := queue.Next(); ok {
 		t.Fatal("the backlog offered an item no run carries, so the two paths no longer differ")
 	}

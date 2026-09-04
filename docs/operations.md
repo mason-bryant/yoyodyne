@@ -285,6 +285,39 @@ named item has no run in flight, or has one that is not waiting on the provider
 at all, because a release recorded against a run that is not waiting would be
 acted on by whatever pause that run took next.
 
+## Recording a step only you can take
+
+Some work must not start until you have actually done something — read a soak,
+signed a release off, checked a migration against production. Work that reserves
+such a step declares it as a gate, by naming it after `human-gate:` on a line of
+its own, and a workflow definition declares one on a state as `gate:`. Until the
+act is on the record, the item is never pulled and the workflow performs nothing
+at that state.
+
+The two are not equally visible yet, and it is worth knowing which you are
+looking at. A gated work item says it is waiting on a person wherever the queue
+is shown and on the needs-a-human line of `yoyo status`, with the step named. A
+workflow instance standing at a gated state says so only in the refusal raised
+when something tries to step it — no status surface lists it — so a gated
+definition is something to watch for rather than something the four lines will
+tell you about. Nothing shipped declares one today.
+
+```sh
+./bin/yoyo gate list
+./bin/yoyo gate record soak-reviewed --by mason --did "read a week of soak runs; they diverge nowhere"
+```
+
+`yoyo gate record` is the only thing that passes a gate. No run passes one, no
+check passes one, and closing a work item does not pass one — which is the whole
+reason gates exist. Before them, the only way to write down "a person has to
+sign this off first" was an item somebody closes, and on 2026-09-04 machinery
+closed exactly such an item and the work behind it became pullable with the
+reserved step untaken. The record names who took the step and what they say they
+did, because a gate passed by nobody in particular and described by nothing is
+the flag that failed; a gate already passed is refused rather than overwritten,
+so the record keeps saying whose act it was. A gate whose record cannot be read
+is never treated as open.
+
 ## When the provider dies mid-run
 
 Not every way a provider ends an invocation is a refusal it names in advance.
@@ -728,7 +761,8 @@ Needs a human (1):
 - **Needs a human** is always present, and says either `nothing` or the list with
   whose move each one is: the operator's two switches, an unresolved directive, a
   proposed change nobody has decided, a run that ended still owing a step, work
-  marked for a conversation rather than for a run, and a queue nothing is pulling
+  marked for a conversation rather than for a run, work held by a step only a
+  person can take, and a queue nothing is pulling
   from — a session sitting idle over it, or no session at all — while admitted
   work waits behind that. A stall over an empty queue is not listed: it is a
   state of the machine rather than something waiting on you.

@@ -242,6 +242,19 @@ type ScheduleRuns interface {
 	Incomplete() ([]runstate.State, error)
 }
 
+// ScheduleGates is the human gates a person has recorded passing. It is required
+// rather than optional, and it is required of the pull rather than read from the
+// tracker, because it is the one refusal the tracker cannot express: a step
+// somebody reserved for themselves has no encoding there but an item to close,
+// and machinery closing that item is how a reserved step was jumped once
+// already. A pull that cannot read it schedules nothing rather than scheduling
+// past a gate.
+//
+// It is satisfied by *runstate.Store.
+type ScheduleGates interface {
+	DischargedGates() ([]string, error)
+}
+
 // ScheduleStaleness reports the admitted work something upstream of changed
 // after it was admitted. It is optional and it decides nothing: a pull wired
 // without one schedules exactly the same items in exactly the same order, and
@@ -349,6 +362,9 @@ type Pull struct {
 	Runs       ScheduleRuns
 	Intake     IntakeHolds
 	Directives Directives
+	// Gates is the human gates a person has passed; see ScheduleGates for why a
+	// pull without one is refused rather than run.
+	Gates ScheduleGates
 	// Staleness is optional; see ScheduleStaleness for what a pull without one
 	// loses, which is a sentence rather than a constraint.
 	Staleness ScheduleStaleness
@@ -411,6 +427,13 @@ func (p Pull) validate(needs pullNeeds) error {
 	}
 	if p.Directives == nil {
 		problems = append(problems, errors.New("a pull requires the recorded directives"))
+	}
+	// A pull with no way to read the recorded human acts cannot tell a gate
+	// somebody passed from one nobody has, so it would either hold every gated
+	// item forever or start past all of them. Refusing here is the only reading
+	// of that which is neither.
+	if p.Gates == nil {
+		problems = append(problems, errors.New("a pull requires the human gates a person has passed"))
 	}
 	if p.Start == nil {
 		problems = append(problems, errors.New("a pull requires a way to start a run"))
@@ -1405,6 +1428,7 @@ type idleClass string
 const (
 	idleCarriedInConversation idleClass = "carried in conversation"
 	idleParked                idleClass = "parked"
+	idleWaitingOnAPerson      idleClass = "waiting on a person"
 	idleWaitingOnOtherWork    idleClass = "waiting on other work"
 	idleAlreadyTried          idleClass = "already tried this session"
 	idleAlreadyInFlight       idleClass = "already in flight"
@@ -1571,17 +1595,19 @@ func conversationExecutedReason(executor domain.WorkItemExecutor) string {
 }
 
 // passedOverReason says why an unready entry is being named rather than counted,
-// and says nothing for the entries that are counted. Two kinds are named: work no
-// run can carry, and work somebody parked. They are the two that are not waiting
-// for anything, and the order between them is the order the queue's own account
-// gives — an item that is both is one releasing the parking would not make
-// pullable, so what it is told is the thing that would still hold.
+// and says nothing for the entries that are counted. Three kinds are named: work
+// no run can carry, work somebody parked, and work held by a step only a person
+// can take. None of the three is a wait on anything the harness will finish, and
+// the order between them is the order the queue's own account gives — an item in
+// more than one is told the thing that would still hold once the others lifted.
 func passedOverReason(entry backlog.Entry) (string, bool) {
 	switch {
 	case !entry.Executor.DeveloperRun():
 		return conversationExecutedReason(entry.Executor), true
 	case entry.Parking.Parked():
 		return parkedReason(entry.Parking), true
+	case entry.HumanGates.Holds():
+		return entry.Hold(), true
 	default:
 		return "", false
 	}
@@ -1589,15 +1615,17 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 
 // unreadyClass is which class an unready entry is passed over in, and it makes
 // the same distinction passedOverReason does and in the same order: work no run
-// can carry, then work somebody parked, then everything that is genuinely
-// waiting for something. An item that is both is told the thing that would still
-// hold once the other was lifted.
+// can carry, then work somebody parked, then work held by a step only a person
+// can take, then everything that is genuinely waiting for something. An item in
+// more than one is told the thing that would still hold once the others lifted.
 func unreadyClass(entry backlog.Entry) idleClass {
 	switch {
 	case !entry.Executor.DeveloperRun():
 		return idleCarriedInConversation
 	case entry.Parking.Parked():
 		return idleParked
+	case entry.HumanGates.Holds():
+		return idleWaitingOnAPerson
 	default:
 		return idleWaitingOnOtherWork
 	}
@@ -1859,7 +1887,17 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	for _, item := range admitted {
 		items[item.ID] = item
 	}
-	queue := backlog.Order(admitted, pullable)
+	// The gates a person has recorded passing come from the harness's own store,
+	// because the tracker cannot answer the question: the only completion it
+	// records is an item being closed, and an item's closure passing a step the
+	// operator reserved for themselves is what these exist to stop. A pull that
+	// could not read them treats every declared gate as still holding, which
+	// stops work rather than starting it past somebody's step.
+	discharged, err := p.Gates.DischargedGates()
+	if err != nil {
+		return pulled{}, fmt.Errorf("read the human gates a person has passed: %w", err)
+	}
+	queue := backlog.Order(admitted, pullable, discharged)
 	// Coverage is read one status wider than the backlog. A claimed child has left
 	// the queue and is never chosen from here, but it is a run in flight over the
 	// same work, so its parent is the last thing that should be started beside it.

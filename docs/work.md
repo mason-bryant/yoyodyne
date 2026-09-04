@@ -219,8 +219,8 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Eight things keep an item out of a pass, and the pass accounts for them at two
-different grains. Five are named against the item, because nothing else would
+Nine things keep an item out of a pass, and the pass accounts for them at two
+different grains. Six are named against the item, because nothing else would
 report that this particular item was passed over. An **unresolved directive** is
 named with the directive's own words, because it needs a person. An item
 whose **unfinished children already carry its execution** is skipped with those
@@ -234,8 +234,10 @@ item that **would race work already in flight** is sequenced behind it rather
 than started beside it, with the run it would have raced and what the two share
 both named. An item whose **executor is a persona conversation** rather than
 a developer run is passed over with what carries it named, which the paragraph
-after next is about. And an item the product manager has **parked** is passed
-over with the parking reason named, which the paragraph after that is about. The other
+after next is about. An item the product manager has **parked** is passed
+over with the parking reason named, which the paragraph after that is about. An
+item **held by a step only a person can take** is passed over with that step
+named and with what records it, which the section after those is about. The other
 three — the tracker not reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them
@@ -248,7 +250,7 @@ stopped before reading the queue at all, because you were holding intake or the
 machine was already full, says nothing about the backlog rather than reporting
 zeroes it never looked up.
 
-Sequencing is the one of those five that is a wait rather than a refusal. Two
+Sequencing is the one of those six that is a wait rather than a refusal. Two
 items race when they are siblings of one epic, when one is the epic the other was
 broken out of, or when the files they will change overlap. An item says which
 files those are by naming them after `conflict-surface:` on a line of its own, in
@@ -327,7 +329,61 @@ rather than what you may ask for. Parking is not retroactive either: it covers
 exactly the items that carry it, so a queue parked by convention stays selectable
 until each is parked in fact, one `park` each.
 
-A ninth thing deliberately keeps nothing out: an item whose goal was amended
+**A step only a person can take is a gate, and closing an item never passes
+one.** Some work must not start until somebody has actually done something —
+read a soak, signed a release off, checked a migration against production. The
+tracker cannot say that. It knows one kind of completion, an item being closed,
+and machinery closes items: on 2026-09-04 the parity soak's done condition
+reserved the operator's own reading of that soak, the only encoding available
+was an item somebody closes, a run closed it, and the flip that depended on it
+became pullable with the operator's step untaken.
+
+So the step is declared on the work it holds, by naming it after `human-gate:`
+on a line of its own — in the item's title, description, design guidance, or
+acceptance criteria, the fields somebody authored and not the notes the harness
+appends each run's record to:
+
+```
+human-gate: soak-reviewed — the operator has read a week of soak runs and is content to flip
+```
+
+Nothing is inferred: a gate invented out of prose would stop work nobody meant
+to stop, so the marker is the whole of it. An item carrying an undischarged gate
+keeps its place in the order, is listed as
+waiting on a person wherever the queue is shown, is named on the status's
+needs-a-human line with what the person has to do, and is never selected however
+far the queue drains. It is not a wait: no run passes it, no check passes it, and
+neither does closing anything — not the item that declares it, and not the item
+it depends on.
+
+A declaration nothing could read — a mistyped name, no separator between the name
+and the sentence, nothing said about the act — holds the work in exactly the same
+way, and the queue and the status both say what is wrong with it. That is
+deliberate and it is the same failure in miniature: you wrote a line meaning to
+reserve your own step, and a reader that quietly dropped what it could not parse
+would turn that into an item with no gate, pulled past a step nobody was ever
+asked to take. Nothing records an act against one of these, because there is no
+name to record against; what clears it is correcting the line on the item.
+`yoyo gate list` names the item and the problem.
+
+What passes it is `yoyo gate record <name> --by <you> --did "<what you did>"`,
+and that is the only thing that does. The record says who took the step and what
+they say they did, because a gate passed by nobody in particular and described by
+nothing is the flag this replaced; a gate already passed is refused rather than
+overwritten, so the record keeps saying whose act it was. `yoyo gate list` shows
+what is still waiting and what has been recorded.
+
+A workflow definition declares one the same way, as `gate:` on a state, and the
+executor performs nothing at that state until the act is on the record — the
+instance stands exactly where it was, and steps on when it is next stepped after
+somebody records it. A gate whose record cannot be read is never treated as open.
+That half is less visible than this one: an instance held at a gated state says
+so in the refusal raised when something tries to step it, and no status surface
+lists it. Nothing shipped declares a gate on a state today, so there is no such
+instance to miss; a definition that declares the first one wants that surface
+with it.
+
+A tenth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.

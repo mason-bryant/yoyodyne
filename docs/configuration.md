@@ -1710,8 +1710,8 @@ happens at a time, and a change whose target moved while it was being reviewed i
 replayed onto where the target went and promoted by fast-forward, or blocked if
 it will not replay. Nothing is ever forced.
 
-Six things keep an item out of a pass, reported at two different grains. Three are
-named against the item, because nothing else would report that this item was
+Seven things keep an item out of a pass, reported at two different grains. Four
+are named against the item, because nothing else would report that this item was
 passed over. An unresolved directive is named with the directive's own words: it
 needs a person. An item whose unfinished children already carry its execution is
 named with those children: a decomposed epic and the child doing its work are
@@ -1730,7 +1730,14 @@ by naming them after `conflict-surface:` on a line of its own, in its title,
 description, design guidance, or acceptance criteria; an item that declares
 nothing has those same fields read for the files it plainly names, and that
 inference takes only a path with a separator and an extension on the end, because
-a surface invented out of prose would hold unrelated work back. The tracker not
+a surface invented out of prose would hold unrelated work back. And an item that
+declares a step only a person can take — named after `human-gate:` on a line of
+its own, in those same authored fields — is passed over with that step and what
+records it both named, until somebody has recorded taking it with `yoyo gate
+record`. That one is neither a wait nor something any run clears: closing a work
+item does not pass it, which is the whole reason it exists. See
+[a step only a person can take](work.md#letting-the-harness-choose-the-work) for
+what it replaced. The tracker not
 reporting an item as ready, a run for it
 already being in flight anywhere, and there being no free slot are facts about
 the pass rather than about any one item, so the pass reports them as such — the
@@ -1742,7 +1749,7 @@ on every pass and bury the deferrals worth reading. A pass that stopped before
 reading the queue at all — held intake, or every slot already taken — says
 nothing about the backlog rather than reporting zeroes it never looked up.
 
-A seventh thing deliberately keeps nothing out: an item whose goal was amended
+An eighth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, and what changed
 goes into the run's recorded reason instead. See
 [what a change upstream leaves stale](#what-a-change-upstream-leaves-stale) for

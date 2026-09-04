@@ -9,6 +9,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/action"
 	"github.com/mason-bryant/yoyodyne/internal/capability"
+	"github.com/mason-bryant/yoyodyne/internal/humangate"
 )
 
 // Catalog is what code says a definition may select: every registered action, by
@@ -201,6 +202,16 @@ func (d Definition) stateProblems(name string, state State, catalog Catalog) []e
 		problems = append(problems, fmt.Errorf("the state %q selects no action; a state is a step and a step performs something", name))
 	} else if _, registered := catalog.Capabilities(state.Action); !registered {
 		problems = append(problems, fmt.Errorf("the state %q selects the action %q, which no registered action provides; a definition selects among %s", name, state.Action, registeredList(catalog)))
+	}
+
+	// A gate name nothing could record an act against is refused here rather than
+	// at the step it would have held, because a gate nobody can discharge is a
+	// workflow that stops forever at a state whose name somebody mistyped — and
+	// the whole value of a gate is that the person it waits for can find it.
+	if state.Gate != "" {
+		if problem := humangate.NameProblem(state.Gate); problem != nil {
+			problems = append(problems, fmt.Errorf("the state %q is gated on %q: %w", name, state.Gate, problem))
+		}
 	}
 
 	if len(state.On) == 0 {

@@ -202,7 +202,15 @@ func (w conversationWork) Backlog(ctx context.Context) (backlog.Queue, error) {
 	for _, item := range ready {
 		pullable = append(pullable, item.ID)
 	}
-	return backlog.Order(admitted, pullable), nil
+	// The human gates a person has recorded passing come from the harness's own
+	// store rather than from the tracker, which has no way to know about them:
+	// the only completion a tracker records is an item being closed, and closure
+	// passing a gate that reserved somebody's step is what this exists to stop.
+	discharged, err := w.store.DischargedGates()
+	if err != nil {
+		return backlog.Queue{}, fmt.Errorf("read the human gates a person has passed: %w", err)
+	}
+	return backlog.Order(admitted, pullable, discharged), nil
 }
 
 // Run executes one work item through the pipeline. The outcome is reported even

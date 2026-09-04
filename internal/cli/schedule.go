@@ -390,6 +390,11 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		Runs:       parts.store,
 		Intake:     parts.intake,
 		Directives: parts.directives,
+		// The gates a person has passed live in the harness's own store, because
+		// the tracker has no way to record one: an item's closure is the only
+		// completion it knows, and that is exactly what must not pass a step
+		// somebody reserved for themselves.
+		Gates: parts.store,
 		Staleness: repositoryStaleness{
 			repository: parts.repository,
 			product:    parts.config.Product,
