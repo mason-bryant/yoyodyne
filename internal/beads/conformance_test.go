@@ -302,10 +302,13 @@ func TestGoalWitnessConformance(t *testing.T) {
 //
 // The direction is what a listing turns on. bd states parentage as an edge
 // attributed to the child and naming the parent, and the epic beside it carries
-// no such edge of its own; a reading with those the other way round sees an epic
-// as work broken out of its own child, which is how yoyodyne-ifd.121 and the
-// child carrying its execution came to be started as two developer runs of one
-// scope.
+// no such edge of its own; a reading with those the other way round would see an
+// epic as work broken out of its own child, defer the child, and run the epic.
+// That is a failure the guard could have rather than one it has had:
+// yoyodyne-ifd.121 and the child carrying its execution were started as two
+// developer runs of one scope thirteen hours before any parentage-keyed guard
+// existed, so the double-run says nothing about the direction either way. See
+// docs/diagnoses/yoyodyne-ifd-273-121-double-run-mechanism.md.
 //
 // The edge is asserted directly rather than only through DecomposedFrom, because
 // bd answers the parent as a field as well, and a reading that found the field
@@ -364,6 +367,100 @@ func TestDecompositionEdgeConformance(t *testing.T) {
 	}
 	if got := whole.DecomposedFrom(); got != "" {
 		t.Fatalf("the epic's DecomposedFrom() = %q, want nothing: it was broken out of nothing", got)
+	}
+}
+
+// TestParentFieldConformance pins the other half of how bd states parentage: the
+// field beside the item, on every read path selection consumes.
+//
+// It is here because a reading in the harness rests on the field alone.
+// orchestrator's in-flight sequencing keys on beads.WorkItem.Parent and
+// deliberately not on the wider DecomposedFrom, so a bd that stopped populating
+// the field would leave that half of the guard reading an empty map — inert, and
+// silently, because every other check of it drives a scripted runner that
+// replays whatever it was handed.
+//
+// The field's history is settled rather than assumed: bd 1.1.2 is the version
+// this project has had installed since 2026-07-26, twenty-five days before the
+// yoyodyne-ifd.121 double-run, and it populates the field. So the field was not
+// gained after that incident and no version floor is owed to it. What this check
+// is for is the other direction — a bd that drops the field later — which is why
+// it asserts rather than trusts. The floor it pins the behaviour at is the bd
+// this ran against, and `bd version` names it.
+//
+// The export is the one shape that states only the edge, carrying no parent
+// field on any item; nothing here reads the export, and beads.WorkItem's own
+// DecomposedFrom is what covers it.
+func TestParentFieldConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	epic, err := client.Create(ctx, NewWorkItem{
+		Title:       "Split the README",
+		Description: "The work it was broken into is below it.",
+		Type:        "epic",
+	})
+	if err != nil {
+		t.Fatalf("Create() an epic error = %v", err)
+	}
+	child, err := client.Create(ctx, NewWorkItem{
+		Title:       "Execute the README split",
+		Description: "One piece of it.",
+		Type:        "task",
+		Parent:      epic.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create() a child error = %v; bd must accept --parent", err)
+	}
+
+	// Every read path a pull makes, because the guard that rests on the field
+	// reads the queue and the claimed slice alike, and a field carried on one
+	// listing and not another is the same inertness in a narrower place.
+	listed, err := client.List(ctx, "open")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	ready, err := client.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	shown, err := client.Show(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	shownEpic, err := client.Show(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("Show() the epic error = %v", err)
+	}
+
+	for _, path := range []struct {
+		name  string
+		items []WorkItem
+	}{
+		{name: "List(open)", items: listed},
+		{name: "Ready()", items: ready},
+		{name: "Show()", items: []WorkItem{shown, shownEpic}},
+	} {
+		byID := make(map[string]WorkItem, len(path.items))
+		for _, item := range path.items {
+			byID[item.ID] = item
+		}
+		decomposed, hasChild := byID[child.ID]
+		whole, hasEpic := byID[epic.ID]
+		if !hasChild || !hasEpic {
+			t.Fatalf("%s did not answer both %s and %s", path.name, epic.ID, child.ID)
+		}
+		if decomposed.Parent != epic.ID {
+			t.Fatalf("%s gave the child's parent field as %q, want the epic %s; a bd that stops populating it leaves the "+
+				"scheduler's in-flight sequencing reading an empty map and holding nothing back",
+				path.name, decomposed.Parent, epic.ID)
+		}
+		if whole.Parent != "" {
+			t.Fatalf("%s gave the epic's parent field as %q, want nothing: it was broken out of nothing", path.name, whole.Parent)
+		}
 	}
 }
 

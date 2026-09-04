@@ -199,10 +199,14 @@ const parentChildDependency = "parent-child"
 // it answered for yoyodyne-ifd.121.2 and its parent — but the tracker's own
 // export states only the edge, carrying no parent field on any item in it, so a
 // reading that consults only the field sees such a store as a backlog with no
-// decomposition anywhere in it. The scheduler started yoyodyne-ifd.121 and the
-// child carrying its execution as two developer runs of one scope with the guard
-// against exactly that already in place, which is why which way the store states
-// parentage is not something this reading assumes either way.
+// decomposition anywhere in it. That is the whole of why both are read: a reader
+// handed one of these stores cannot tell which it has.
+//
+// It is not, despite what an earlier version of this comment said, what let
+// yoyodyne-ifd.121 and the child carrying its execution be started as two
+// developer runs of one scope. Nothing keyed on parentage was in the tree when
+// that happened, in either direction. See
+// docs/diagnoses/yoyodyne-ifd-273-121-double-run-mechanism.md.
 //
 // The field wins where both are stated, because that is the tracker answering
 // the question directly. An edge the tracker attributes to some other item is
