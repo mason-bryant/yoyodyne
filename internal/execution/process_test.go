@@ -66,11 +66,21 @@ func TestOSProcessRunnerFailure(t *testing.T) {
 	}
 }
 
+// The total budget stops a process that is still running when it expires.
+//
+// The deadline is seconds rather than milliseconds because the budget covers the
+// spawn as well as the run: the helper is this test binary re-executed, which on
+// a machine busy with the rest of the suite has taken tens of milliseconds to
+// come up, and a deadline that expires first fails the test with "the process
+// was never started" rather than with anything about timeouts. Two seconds is
+// far beyond any spawn observed here and still far short of the five seconds the
+// helper sleeps, so what the deadline stops is a process that was demonstrably
+// still running.
 func TestOSProcessRunnerTimeout(t *testing.T) {
 	t.Parallel()
 
 	command := helperCommand("sleep", "")
-	command.Timeout = 20 * time.Millisecond
+	command.Timeout = 2 * time.Second
 	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
