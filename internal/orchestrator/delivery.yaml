@@ -11,10 +11,10 @@
 # Nothing in the delivery path performs anything through it. Production still
 # runs the sequence Go control flow puts it in, and this file changes none of
 # that; what it adds is that the sequence is somewhere a reviewer can read whole
-# and something a test can diff against the frozen behaviour -- and, for a
-# project that has opted into the declarative trial, something a real run is
-# stepped through beside the work, so the sequence this file would have chosen is
-# recorded next to the sequence the run took.
+# and something a test can diff against the frozen behaviour -- and, for every
+# run a project that has not rolled back starts, something a real run is stepped
+# through beside the work, so the sequence this file chooses is recorded next to
+# the sequence the run took.
 #
 # Three things about it are worth knowing before reading it as the pipeline.
 #

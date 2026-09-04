@@ -252,12 +252,12 @@ type Pipeline struct {
 	Store     StateStore
 	Backend   backend.Backend
 	Checks    CheckRunner
-	// Instances is where a declarative trial's workflow instances are recorded.
-	// It is the same store the runs are in — a harness has one durable state root
-	// — and it is named separately because an instance is written through the
-	// store itself rather than through the interface a run's record goes through.
-	// A pipeline without one observes nothing, which is what every pipeline that
-	// has not opted in does anyway.
+	// Instances is where the workflow instances runs are executed against are
+	// recorded. It is the same store the runs are in — a harness has one durable
+	// state root — and it is named separately because an instance is written
+	// through the store itself rather than through the interface a run's record
+	// goes through. A pipeline without one observes nothing, which is what a
+	// pipeline whose project rolled back to the legacy path does anyway.
 	Instances *runstate.Store
 	// Reviewer is required only when integration is automatic, because nothing
 	// is ever integrated without an independent verdict.
@@ -892,9 +892,10 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		invariants: invariants,
 	}
 
-	// A project in the declarative trial records its instance here, standing on
+	// The run records its instance of the delivery definition here, standing on
 	// the definition's first state, before the first thing this run changes
-	// outside itself. Nothing about the run depends on it.
+	// outside itself. Nothing about the run depends on it, and a project that
+	// rolled back to the legacy path records none.
 	run.beginDeliveryTrial()
 
 	if err := run.claim(ctx); err != nil {
@@ -1244,10 +1245,11 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 		},
 	}
 	// Whether this run is observed is read off its own record rather than off the
-	// configuration this process loaded. A run started before the opt-in names no
-	// instance and is served here exactly as it was before the trial existed, and
-	// a run started under it keeps being observed however the configuration has
-	// since changed: what a run is was settled when it was created.
+	// configuration this process loaded. A run started on the legacy path names no
+	// instance and is served here exactly as it was before the definition existed,
+	// and a run started on the definition keeps being observed however the
+	// configuration has since changed — a rollback included: what a run is was
+	// settled when it was created.
 	run.resumeDeliveryTrial()
 	// A stop the operator asked for is honored before anything is resumed. The
 	// process that was serving this run may have exited before it reached a
@@ -1528,9 +1530,10 @@ type activeRun struct {
 	// later invocation of the same run is a different process and gets one of its
 	// own, which is exactly what stops it returning this one's round.
 	charger string
-	// trial is the workflow instance this run is observed through, when the
-	// project opted into the declarative trial and this run was created under it.
-	// Nil is a run nothing is watching, which is every run on the legacy path.
+	// trial is the workflow instance this run is observed through, created with
+	// the run unless the project had rolled back to the legacy path. Nil is a run
+	// nothing is watching, which is every run a rolled-back project starts and
+	// every run started before the definition existed.
 	trial *deliveryTrial
 }
 

@@ -447,14 +447,6 @@ is unmeasured. Most of these are asserted somewhere in
   than the behavior.
 - `completion_recording_failure`, which is a succeeded run whose final record
   arrived late.
-- `workflow_instance_id` and `workflow_divergence`, which only a run in the
-  declarative trial carries. The trial is off by default and every trace here is
-  of a run that was not in it, which is deliberate: a trace re-recorded with the
-  instance on it would be the baseline moving because something was watching it.
-  What a run in the trial records is measured in
-  `internal/orchestrator/declarative_test.go`, which drives eight of these paths
-  again with the opt-in on and holds the instance's own sequence against the
-  transcript the parity harness measures that path by.
 - The environmental classification of a refused round, and the budgets it hands
   back.
 - `usage_limit_paused_seconds` reaching `execution.usage_limit_max_pause`, and
@@ -524,11 +516,35 @@ them.
   and each one is a single call to the function the pipeline itself calls, but
   nothing in the delivery path walks through that door: `Pipeline.Run` still
   runs the sequence Go control flow puts it in, and these traces are of that
-  sequence. That stays true under the declarative trial
-  (`execution.declarative_delivery`, off by default): a run in the trial records
-  a workflow instance and steps it at each boundary, and the doors that instance
-  is stepped through perform nothing, so the delivery is the same delivery and
-  the instance is an observation beside it.
+  sequence. That stays true now that the declarative path is the default
+  (`execution.declarative_delivery`, `true` unless a project rolls back): a run
+  records a workflow instance and steps it at each boundary, and the doors that
+  instance is stepped through perform nothing, so the delivery is the same
+  delivery and the instance is an observation beside it.
+
+  Every scenario here is driven on that default, which is what makes these
+  traces the baseline of what a run actually does rather than of a path nothing
+  takes any more. Each one that reserves a run therefore carries the
+  `workflow_instance_id` its observation was recorded under, and the delivery
+  they record is otherwise unmoved by the flip — the whole of what changed when
+  the default moved is that one line per trace. One trace carries a
+  `workflow_divergence` as well:
+  `reconciliation-completes-a-run-interrupted-inside-integration`, where a
+  process killed inside integration is settled as succeeded with its instance
+  still standing in `integrate`, and the gap that leaves is recorded rather than
+  smoothed over. The other interrupted scenario,
+  `reconciliation-blocks-a-run-interrupted-while-developing`, carries none, and
+  that is the observation having finished rather than the blocked settlement
+  skipping it: the process survives the refused write, records its own ending,
+  and the developer's ending is one the definition has an outcome for, so the
+  instance is on the `abandoned` terminal before the sweep looks at it.
+  `TestASweepRecordsTheGapAnInterruptedObservationLeaves` and
+  `TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal` hold both
+  halves of that, the first of them over a blocked settlement as well as a
+  completed one. Where each instance *went* is not read off these traces:
+  `internal/orchestrator/declarative_test.go` drives the eight paths the parity
+  harness holds a transcript for and compares the instance's own sequence
+  against it.
 
   What now reads them is the parity harness in
   `internal/orchestrator/parity_test.go`, which walks the built-in workflow

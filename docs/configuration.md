@@ -1906,42 +1906,56 @@ having only if the thing that chooses actually consults it. Both halves are
 enforced rather than conventional: an item you name yourself is exempt from the
 hold, because naming it is you deciding it is the exception.
 
-## Observing a run against the workflow definition
+## Running a work item against the workflow definition
 
 The delivery loop's sequence is also written down as data, in the two built-in
 workflow definitions this build ships — `delivery.yaml` for a project whose
 integration the harness takes, and `delivery-human-approval.yaml` for one where a
-person still approves it. Nothing runs from them. What runs a work item is the
-same Go control flow it always was, and the conversion that changes that is a
-later step with its own configuration.
+person still approves it. **Every new run compiles the one its integration policy
+binds and executes it beside the run**, which is the default and takes no
+configuration at all.
 
-What a project can turn on now is the observation:
+What "executes" means here is exact, and it is worth being plain about: the
+definition resolves where the run goes next and records it. It does not perform
+anything. What runs a work item is the same Go control flow it always was — the
+run claims the item, invokes the developer, runs the checks, buys the verdict and
+takes the promotion lease exactly as it always has — and the conversion that
+moves the performing too is a later step with its own configuration.
+
+A new run records a **workflow instance** beside its own record, standing on the
+definition's first state, and every boundary the run crosses is put to the
+definition: the state the run just performed, the outcome it produced, and the
+transition the definition resolves from them. The doors the definition holds are
+the registered delivery steps with their bodies replaced by nothing at all, so
+delivery is untouched and what the instance costs is one small file write per
+boundary.
+
+**The rollback is one key.** A project that wants the legacy path — the same
+delivery with nothing observing it — writes:
 
 ```yaml
 execution:
-  declarative_delivery: true   # off unless you write this
+  declarative_delivery: false   # the rollback; the default is true
 ```
 
-A run started while this is on records a **workflow instance** beside its own
-record, standing on the definition's first state, and every boundary the run
-crosses is put to the definition: the state the run just performed, the outcome
-it produced, and the transition the definition resolves from them. Nothing is
-performed through the definition — the doors it holds are the registered delivery
-steps with their bodies replaced by nothing at all — so delivery is untouched and
-what the instance costs is one small file write per boundary.
+That is the whole of it. It reaches new runs only: everything already in flight
+finishes on whatever it started on, in both directions, which is the section
+below. `yoyo config show --effective` prints the value in force and
+`--origins` names the file it came from, so a rollback is something you can
+confirm rather than assume.
 
 Two fields on the run say what happened:
 
-- `workflow_instance_id` names the instance, and a run carrying one is a run in
-  the trial. It is written when the run is created and never afterwards.
+- `workflow_instance_id` names the instance, and a run carrying one is a run
+  executing the definition. It is written when the run is created and never
+  afterwards.
 - `workflow_divergence` is why the run stopped being observed: the definition
   sent it somewhere it did not go, refused an outcome it produced, could not be
   stepped at all, or had no outcome for the way the run ended. A run carrying one
-  is a run to read before the definition is trusted with anything, and it is the
-  whole measure of the trial — a clean soak is N real items observed with none of
-  these.
+  is a run to read before the definition is trusted with anything, which is still
+  ahead of it: nothing about the work changes either way.
 
-  That last case is what keeps the count honest. A run can end by a route no
+  That last case is what keeps the record honest. A run can end by a route no
   definition expresses — a review that ended without a verdict and without the
   operator's stop, a `complete` that failed, a worktree that could not be cut
   before the first attempt — and none of those is observed, deliberately, because
@@ -1949,7 +1963,7 @@ Two fields on the run say what happened:
   the instance is left standing where the two last agreed, and a run that reaches
   a terminal status with its instance still mid-graph records the gap itself as
   the divergence, naming the state it stopped in. Without that, the runs least
-  entitled to pass would be the ones counted as clean.
+  entitled to read as clean would be exactly the ones that did.
 
   That holds however the run reaches its terminal. A run its own process ends
   records it there; a run whose process died and is settled by `yoyo reconcile`
@@ -1957,35 +1971,49 @@ Two fields on the run say what happened:
   the settlement closes it as completed, blocks it, or fails it. The completed
   case is the one worth naming: the work lands and the item closes, so a run
   whose observation stopped halfway would otherwise read exactly like one that
-  walked the definition to the end. A soak is not a quiet period — processes die
-  to the network, to the provider, and to the machine — so a count that only
-  spoke for the runs that ended tidily would be a count of the wrong runs.
+  walked the definition to the end. Processes die — to the network, to the
+  provider, and to the machine — so a record that only spoke for the runs that
+  ended tidily would be a record of the wrong runs.
+
+  **What is recorded is the gap, not the settlement.** A process that died can
+  still have left its instance on a terminal — an ending the definition has an
+  outcome for is stepped before the process stops writing — and such a run is
+  settled carrying no divergence, on every one of those three settlements. That
+  is the recorded baseline's blocked trace:
+  `reconciliation-blocks-a-run-interrupted-while-developing` stops writing as the
+  developer's attempt ends, the developer's ending sends its instance to
+  `abandoned`, and the sweep blocks the run with nothing to record. An empty
+  divergence there is the observation having finished rather than the sweep
+  having missed it, which is why it is measured rather than left to be read off
+  an absent field.
 
 Both are on the run's summary, so `yoyo status <beads-id>` and its `--json` carry
 them like every other fact about a run, and a divergence is named on its own line
 there. It is printed beside the reasons a run ended without being one of them: the
-run delivered exactly as it would have, and what diverged is the observation. That
-line is how the soak is counted, because a divergence nobody is shown is a soak
-that looks clean.
+run delivered exactly as it would have, and what diverged is the observation.
 
-One divergence is already known and expected: a run interrupted while its
+Two divergences are already known and expected, and both are interrupted
+processes rather than anything about the work. A run interrupted while its
 reviewer was being asked resumes at the checks rather than at the review, because
 a resumed run re-earns the whole gate, and no definition has a transition from
-the review back to the check. Such a run records a divergence naming both. It is
-left as a divergence deliberately — the definition is missing a path the pipeline
+the review back to the check; such a run records a divergence naming both. A
+process killed inside integration is settled by the sweep as succeeded with its
+instance still standing in `integrate`, and records the gap that leaves. Both are
+left as divergences deliberately — the definition is missing a path the pipeline
 takes, and an observation that quietly agreed with itself would be worth nothing.
 
-**The flag reaches new runs only.** Whether a run is observed is settled once,
-when the run is reserved, and read back off the run's own record by every later
-process. So a run already in flight when you turn the trial on carries on exactly
-as it was, with no instance and nothing watching it, and a run that started in
-the trial keeps being observed to its terminal even if you turn the trial off
-underneath it. There is no migration in either direction, which is the same rule
-an in-flight instance is held to when the definition itself changes: it keeps
+**The default and the rollback both reach new runs only.** Whether a run is
+observed is settled once, when the run is reserved, and read back off the run's
+own record by every later process. So a run already in flight when you roll back
+keeps being observed to its terminal, and a run started under a rollback you have
+since undone carries on to its own terminal with no instance and nothing watching
+it. There is no migration in either direction, which is the same rule an
+in-flight instance is held to when the definition itself changes: it keeps
 running the definition it was pinned to, or it stops being stepped and says so.
 
-Turning it off is one line: delete the setting, or set it to `false`. Runs
-already in flight finish as they started.
+That is the price of the rollback, and it is worth stating plainly: writing
+`declarative_delivery: false` does not stop the runs that are already going. It
+decides what the next one does.
 
 ## Publishing through pull requests
 

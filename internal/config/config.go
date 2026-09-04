@@ -280,20 +280,30 @@ type Execution struct {
 	// through a run each and dock every one of them. Zero never brakes, which is
 	// the behaviour a pass had before this bound existed.
 	BlockedRunsBeforeIntakeHold int `yaml:"blocked_runs_before_intake_hold" json:"blocked_runs_before_intake_hold"`
-	// DeclarativeDelivery opts this project's new runs into the declarative
-	// trial: each of them records a workflow instance of the built-in delivery
-	// definition and steps it beside the run, so the sequence the definition
-	// would have chosen is compared against the sequence the run actually took.
+	// DeclarativeDelivery is how a new run is executed, and it defaults on: each
+	// run compiles the built-in delivery definition, records a workflow instance
+	// of it, and steps that instance beside the run, so the sequence the
+	// definition chooses is recorded against the sequence the run actually took.
 	// It changes nothing about how work is delivered — the pipeline performs
-	// every step exactly as it always has — and what it buys is the evidence the
-	// conversion needs before the definition is allowed to decide anything: real
-	// items through the definition, with any divergence recorded on the run.
+	// every step exactly as it always has, and the definition's doors perform
+	// nothing — so what the default buys is the record: every run says where the
+	// definition sent it, and any disagreement is on the run.
 	//
-	// It defaults off, and it is read once per run, when the run is created. A
-	// run already in flight keeps whatever it started under, so turning this on
-	// never migrates a run that is mid-flight and turning it off never strands
-	// one.
-	DeclarativeDelivery bool `yaml:"declarative_delivery,omitempty" json:"declarative_delivery,omitempty"`
+	// Setting it to `false` is the rollback to the legacy path, which is the
+	// same delivery with nothing observing it. It is one key and it is the whole
+	// of the rollback; docs/configuration.md says so where the default is
+	// described.
+	//
+	// It is read once per run, when the run is created. A run already in flight
+	// keeps whatever it started under, so a rollback never strands a run that is
+	// mid-flight and undoing one never migrates a legacy run into the
+	// definition.
+	//
+	// It carries no `omitempty`: a project that rolled back would otherwise
+	// serialize exactly like one running the default, so both `config show
+	// --effective` and the configuration revision would be unable to tell the
+	// two apart.
+	DeclarativeDelivery bool `yaml:"declarative_delivery" json:"declarative_delivery"`
 }
 
 const (

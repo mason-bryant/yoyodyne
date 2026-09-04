@@ -425,7 +425,13 @@ func (f *baselineFixture) pipeline(t *testing.T, provider *fakeBackend, commands
 func (f *baselineFixture) pipelineOver(t *testing.T, store StateStore, provider *fakeBackend, commands []string) Pipeline {
 	t.Helper()
 	f.providers = append(f.providers, provider)
-	return newSharedPipeline(t, f.repository, f.worktreeRoot, store, f.tracker, provider, commands)
+	pipeline := newSharedPipeline(t, f.repository, f.worktreeRoot, store, f.tracker, provider, commands)
+	// Instances go to the store itself rather than through whatever the scenario
+	// wrapped it in: a scenario that wraps its store is modelling a process that
+	// stopped writing its run record, and what such a process leaves behind is an
+	// instance standing wherever it had got to.
+	pipeline.Instances = f.store
+	return pipeline
 }
 
 // automatic is the same pipeline with the reviewer wired and integration taken
