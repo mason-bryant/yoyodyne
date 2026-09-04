@@ -20,6 +20,7 @@ outside the worktree and is named where it is used.
 | bd gained the field between 2026-08-20 and 1.1.2 | **No** — the same 1.1.2 binary was installed 25 days before the incident |
 | A version floor is owed | **No** — nothing changed in that window; the behaviour is pinned by a check instead |
 | ifd.256's recorded cause ("the parentage the guard keyed on was never populated") | **No** — false in both halves |
+| A prior document in `docs/diagnoses` records that cause | **No** — the directory carries none for ifd.121 or ifd.256; see [What docs/diagnoses already held](#what-docsdiagnoses-already-held) |
 | The epic-coverage guard existed when the double-run happened | **No** — it landed 12h43m after the second run started |
 | The shipped edge-keyed guard would prevent the pull that was actually observed | **Yes** — three separate ways, now pinned by a test |
 | A mechanism from that incident is still live | **No** |
@@ -66,7 +67,9 @@ The sibling sequencing followed in `79cf794` (`yoyodyne-ifd.133`) at 2026-08-21
 `yoyodyne-ifd.256` (`cdf4dfb`, 2026-09-03) widened the coverage reading from the
 parent field to `WorkItem.DecomposedFrom`, which consults the field and the
 `parent-child` edge. **The widening is right and stands.** Its stated reason is
-not. It recorded, in three comments:
+not. It recorded, in four comments — `internal/beads/client.go`,
+`internal/orchestrator/schedule.go`, `internal/orchestrator/conflict.go`, and
+`internal/orchestrator/schedule_test.go` — some variant of this:
 
 > This project's own tracker uses only the second — not one of its items carries
 > the field […] That is what let the scheduler start yoyodyne-ifd.121 and the
@@ -84,7 +87,12 @@ Both halves are false:
    populated on both items
    (`internal/beads/testdata/bd-list-parent-child.json`: the child carries
    `"parent": "yoyodyne-ifd.121"`, the epic `"parent": "yoyodyne-ifd"`). ifd.259
-   corrected the three comments; what it left standing was the first half.
+   corrected two of the four comments — `client.go` and `schedule.go` — and left
+   the first half of the claim standing in `client.go` and the whole of it in
+   `schedule_test.go`. `yoyodyne-ifd.267` then wrote a fifth statement of it into
+   `internal/beads/conformance_test.go`. This change corrects those three.
+   `conflict.go`'s comment does not assert the cause and is left alone here; what
+   is wrong with its reasoning is a separate matter, below.
 
 What is true, and what the widened reading is genuinely for, is narrower: the
 tracker's **export**, `.beads/issues.jsonl`, states parentage only as an edge and
@@ -95,6 +103,34 @@ export — `Pull.queue` (`internal/orchestrator/schedule.go:1841`) calls
 the incident. It bears on any reader handed a store that states parentage one way
 and not the other, which is a real thing for a client to be robust to and not a
 thing that has happened here.
+
+## What docs/diagnoses already held
+
+ifd.273 asks for the diagnoses of ifd.121 and ifd.256 to be corrected or
+confirmed, so the directory was swept rather than assumed. **Neither item has a
+diagnosis.** `docs/diagnoses/` held twelve documents before this one, none named
+for either item, and the recorded cause this document disproves never lived in
+any of them — it lived in the code comments named above, and nowhere else that a
+sweep of this directory or of `docs/` finds.
+
+Three existing documents mention `yoyodyne-ifd.121` in passing. Each was read,
+none states or depends on a cause for the double-run, and **all three are
+confirmed unchanged**:
+
+- `yoyodyne-ifd-195-repair-dispatch-route.md:27` records
+  `run-9f79dcee` — the epic's run above — as a run owed a repair, with
+  `run-6ff896ba` dispatched in its place by the **operator** rather than the
+  scheduler. That is about who dispatches a repair, and it corroborates the
+  timeline here rather than bearing on it: the epic's *second* run that day was a
+  hand-dispatched repair of the first, not a third scheduler pull.
+- `yoyodyne-ifd-122-goal-attribution-loss.md:213-214` lists `yoyodyne-ifd.121`
+  and two of its children among the items whose goal attributions were destroyed
+  by `bd update --notes`. Unrelated writer, unrelated failure.
+- `yoyodyne-ifd-206-coined-terms-sweep.md:202` cites `ifd.121.6` as the single
+  use of one coined term. Unrelated.
+
+So this document is the first diagnosis of the incident, and there is no second
+one in the directory for it to contradict.
 
 ## Whether bd gained the field after the incident
 

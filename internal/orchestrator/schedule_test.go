@@ -578,9 +578,9 @@ func TestSchedulerLeavesAnEpicCoveredByAChildTheTrackerStatesAsAnEdge(t *testing
 // twenty minutes later pulled the epic yoyodyne-ifd.121 at 06:25:43Z as position
 // 2, while that first run was still going — it ended at 06:47:15Z. Both were
 // started from the same base commit, which carried nothing keyed on parentage in
-// either direction; the coverage guard landed thirteen hours later. So the
-// failure was the absence of a guard, and this is what the one that exists now
-// does when handed that pull.
+// either direction; the coverage guard landed 12h43m after that second pull. So
+// the failure was the absence of a guard, and this is what the one that exists
+// now does when handed that pull.
 //
 // Three things about that pull have to be together for it to be the observed
 // one, and each is a separate way through the guard:
