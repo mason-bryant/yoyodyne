@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
@@ -52,7 +53,11 @@ type goalsOutput struct {
 	Problems     []goal.Problem     `json:"problems,omitempty"`
 	LinkProblems []goal.LinkProblem `json:"link_problems,omitempty"`
 	WrapProblems []goal.WrapProblem `json:"wrap_problems,omitempty"`
-	// Attributions are the admitted work items and what each says it is for.
+	// Coverage is what the audit read and what it left unread. It belongs to the
+	// audit and to nothing else here: a listing of the goals reads no work, and a
+	// sweep reports what it wrote rather than what it judged.
+	Coverage *auditCoverage `json:"coverage,omitempty"`
+	// Attributions are the work items the audit read and what each says it is for.
 	Attributions []itemAttribution `json:"attributions,omitempty"`
 	// Witnessed are the items a sweep recorded a witness on, and the goal each
 	// one's own notes stated.
@@ -185,9 +190,16 @@ func printGoalsUpstream(stdout io.Writer, theme console.Theme, goals goal.Set) {
 	fmt.Fprint(stdout, theme.Detail(line+"\n"))
 }
 
-// reportAttribution says what the admitted work is for: which items name a goal
-// the goals state, which name none, which name something they do not state, and
-// which recorded one and lost it.
+// reportAttribution says what the work the tracker holds is for: which items
+// name a goal the goals state, which name none, which name something they do not
+// state, and which recorded one and lost it.
+//
+// It reads every status by default, closed work included. That is a widening --
+// it read the queue alone until yoyodyne-ifd.276 -- and the reason is that nine
+// of the twelve recorded attribution losses were on closed items, so the slice
+// the audit could not see is the slice the losses were actually in. What it
+// covered is printed with what it found, because a report that says only what it
+// found is one whose blind spot reads as a clean bill.
 //
 // The exit status separates the three ways an item is not attributed, because
 // they are not the same finding. Work admitted before goals were checked names
@@ -195,11 +207,21 @@ func printGoalsUpstream(stdout io.Writer, theme console.Theme, goals goal.Set) {
 // nobody has had the chance to attribute yet. An item naming a goal the goals do
 // not state is a claim that is wrong, and an item whose recorded goal was written
 // over is a record that was destroyed; those two are what this exits non-zero
-// for.
+// for, on the terms attributionExitCode states for finished work.
 func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := newGoalsFlags("goals attribution", stderr)
+	// The scope is this command's alone, so it is registered on this command's
+	// own flag set rather than on the one every goals command shares.
+	scopeName := flags.set.String("scope", scopeAll,
+		"which work to read: all (every status the tracker holds) or queue (open and blocked only)")
 	if code, ok := flags.parse(args); !ok {
 		return code
+	}
+	scope, known := auditScopes[*scopeName]
+	if !known {
+		fmt.Fprintf(stderr, "unknown scope %q: it is %q or %q\n", *scopeName, scopeAll, scopeQueue)
+		printGoalsUsage(stderr)
+		return 2
 	}
 	parts, err := buildComponents(*flags.configPath)
 	if err != nil {
@@ -208,22 +230,22 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 	goals, err := loadGoals(parts.repository, parts.config.Product)
 	if err != nil {
 		// The goals could not be read, so nothing here is a judgement about any
-		// item. It is still reported against the queue, because "nothing checked
+		// item. It is still reported against the work, because "nothing checked
 		// this" is the answer and an empty report is not.
 		fmt.Fprintf(stderr, "warning: %v\n", err)
 	}
-	admitted, err := admittedWorkItems(ctx, parts.tracker())
+	read, err := scope.workItems(ctx, parts.tracker())
 	if err != nil {
 		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
 	}
 
-	attributions := attributionsOf(admitted, goals)
+	attributions := attributionsOf(read, goals)
 	if *flags.jsonOutput {
-		if code := writeJSON(stdout, stderr, attributionOutput(attributions, goals)); code != 0 {
+		if code := writeJSON(stdout, stderr, attributionOutput(scope, attributions, goals)); code != 0 {
 			return code
 		}
 	} else {
-		printAttributions(stdout, attributions, goals)
+		printAttributions(stdout, scope, attributions, goals)
 		printGoalsProblems(stderr, goals)
 	}
 	return attributionExitCode(attributions)
@@ -237,8 +259,15 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 // printing where both ends of the link are, and this report holds neither the
 // goals the link points from nor anything that resolves against it — the
 // upstream half alone is a list a reader has nothing to read it against.
-func attributionOutput(attributions []itemAttribution, goals goal.Set) goalsOutput {
+//
+// It does carry what was read and what was not, for the same reason the printed
+// report opens with it: a program deciding anything from an empty findings list
+// has to be able to tell an audit that found nothing from one that looked
+// nowhere.
+func attributionOutput(scope auditScope, attributions []itemAttribution, goals goal.Set) goalsOutput {
+	coverage := scope.coverage()
 	return goalsOutput{
+		Coverage:     &coverage,
 		Attributions: attributions,
 		Problems:     goals.Problems,
 		LinkProblems: goals.LinkProblems,
@@ -252,7 +281,7 @@ func attributionOutput(attributions []itemAttribution, goals goal.Set) goalsOutp
 // before the witness existed is protected by nothing, and replacing its notes
 // tomorrow would leave it reading as work nobody ever attributed.
 //
-// It walks every status rather than the backlog -- see witnessStatuses for why
+// It walks every status rather than the backlog -- see trackerStatuses for why
 // the item somebody is working on and the item somebody closed are exactly the
 // ones a backlog-scoped sweep would have left out.
 //
@@ -273,7 +302,7 @@ func witnessRecordedGoals(ctx context.Context, args []string, stdout, stderr io.
 		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
 	}
 	tracker := parts.tracker()
-	swept, err := workItemsWithStatus(ctx, tracker, witnessStatuses)
+	swept, err := workItemsWithStatus(ctx, tracker, trackerStatuses)
 	if err != nil {
 		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
 	}
@@ -443,17 +472,34 @@ func attributionsOf(admitted []beads.WorkItem, goals goal.Set) []itemAttribution
 // Reporting a destroyed attribution without failing is how six items stayed
 // orphaned for as long as it took somebody to read the report by eye, which is
 // why the status is taken from the report rather than left to the reader.
+//
+// Closed work is read now, and it is held to one half of that rule rather than
+// both. A destroyed attribution fails wherever it is found: a record written over
+// after the item closed is a record written over, the witness holds the words,
+// and putting them back is something somebody can actually do. A wrong
+// attribution on closed work is counted and named and does not fail, because the
+// item named what the goals stated when it was admitted and the ordinary way that
+// stops resolving is a goal reworded afterwards -- which is `yoyo stale`'s to
+// report, and is not a claim anybody can correct on work that is finished. Both
+// halves are said in the report, so neither is a rule a reader has to infer from
+// an exit code.
 func attributionExitCode(attributions []itemAttribution) int {
 	for _, entry := range attributions {
-		if entry.Attribution.Divergent() {
-			return 1
+		if !entry.Attribution.Divergent() {
+			continue
 		}
+		if entry.Status == closedStatus && entry.Attribution.State != goal.StateLost {
+			continue
+		}
+		return 1
 	}
 	return 0
 }
 
-// witnessStatuses are the tracker slices the sweep covers: every status an item
-// can be in, rather than the backlog's `open` and `blocked`.
+// trackerStatuses is every status an item can be in, rather than the backlog's
+// `open` and `blocked`. Both the sweep and the audit's default scope walk all of
+// it, and they walk one list so that the work a loss is reported on is work the
+// sweep held the words to put back for.
 //
 // The scope is wider than the backlog's deliberately, because what destroys an
 // attribution is a command somebody types and it reaches a claimed or a closed
@@ -462,21 +508,92 @@ func attributionExitCode(attributions []itemAttribution) int {
 // those written over after the item closed -- so a sweep scoped to the backlog
 // would have covered two of the twelve.
 //
-// What the witness buys is not the same on both sides of that line, and saying
-// so is the difference between this scope and an overclaim. On work the audit
-// reads, a witnessed loss becomes a `lost` state that `goals attribution`
-// reports and exits non-zero for. On claimed and closed work, which
-// admittedWorkItems does not list, it buys recovery rather than detection: the
-// statement is kept where replacing the notes cannot reach it, so a destroyed
-// attribution can be put back from the record instead of being judged again.
-// That is precisely what the nine closed losses needed and what nothing else
-// would have held, which is why the sweep goes wider than the audit rather than
-// the audit being widened to match. Widening the audit is a change to what the
-// backlog means, and it is not this sweep's to make.
-var witnessStatuses = []string{"open", "in_progress", "blocked", "closed"}
+// The sweep reached this far before the audit did, and what the gap cost is why
+// the audit reaches it now: an audit that could not read closed work reported
+// nothing about nine of those twelve losses, which is how the intact
+// counter-example on a closed item was missed and the same destruction was
+// misdiagnosed twice.
+var trackerStatuses = []string{"open", "in_progress", "blocked", "closed"}
+
+// closedStatus is the tracker's name for work that is finished. The audit reads
+// it and judges it by a rule of its own -- see attributionExitCode.
+const closedStatus = "closed"
+
+const (
+	// scopeAll reads every status the tracker holds, and is what the audit does
+	// unless it is asked for less. An attribution destroyed on closed work is
+	// destroyed all the same, and an audit that cannot see it reports nothing
+	// rather than reporting nothing wrong.
+	scopeAll = "all"
+	// scopeQueue reads what the backlog is assembled from, which is all this
+	// audit could read before. It is kept because what the work still to be done
+	// traces to is a narrower question somebody may actually be asking, and
+	// answering it should not mean reading past the whole tracker by eye.
+	scopeQueue = "queue"
+)
+
+// auditScope is the tracker slices one run of the audit reads. It is a named
+// thing rather than a list passed around because the audit has to say what it
+// covered: a report that leaves the coverage to be guessed is one where "nothing
+// wrong" and "nothing looked at" read alike, which is the whole of what went
+// wrong here.
+type auditScope struct {
+	name string
+	read []string
+}
+
+var auditScopes = map[string]auditScope{
+	scopeAll:   {name: scopeAll, read: trackerStatuses},
+	scopeQueue: {name: scopeQueue, read: backlogStatuses},
+}
+
+// workItems is the audit's read path: the tracker slices this scope covers, in
+// the order the backlog is ordered.
+func (s auditScope) workItems(ctx context.Context, tracker beads.Client) ([]beads.WorkItem, error) {
+	return workItemsWithStatus(ctx, tracker, s.read)
+}
+
+// coverage is what this scope read and what it left unread, taken from the one
+// list of statuses rather than written down twice.
+func (s auditScope) coverage() auditCoverage {
+	covered := map[string]bool{}
+	for _, status := range s.read {
+		covered[status] = true
+	}
+	var unread []string
+	for _, status := range trackerStatuses {
+		if !covered[status] {
+			unread = append(unread, status)
+		}
+	}
+	return auditCoverage{Scope: s.name, Read: s.read, Unread: unread}
+}
+
+// auditCoverage is what one run of the audit read and what it did not, carried
+// in the report itself. A finding is only worth what the ground it was looked
+// for on is worth, and the reader of a report that does not say which statuses
+// were walked has no way to tell a clean audit from a blind one.
+type auditCoverage struct {
+	Scope  string   `json:"scope"`
+	Read   []string `json:"read"`
+	Unread []string `json:"unread,omitempty"`
+}
+
+// saying is the coverage as a line to be read rather than parsed.
+func (c auditCoverage) saying() string {
+	line := "coverage: read " + strings.Join(c.Read, ", ")
+	if len(c.Unread) == 0 {
+		return line + " -- every status the tracker holds, so nothing went unchecked"
+	}
+	return line + fmt.Sprintf("; %s work was not checked, which --scope=%s reads",
+		strings.Join(c.Unread, " and "), scopeAll)
+}
 
 // admittedWorkItems is the work that has been admitted and is not finished,
-// assembled from the same tracker slices the backlog is.
+// assembled from the same tracker slices the backlog is. The audit no longer
+// reads through it -- it has a scope of its own, and reads wider by default --
+// but the staleness report, the conformance sweep, and the scheduler all ask
+// this narrower question and mean it.
 func admittedWorkItems(ctx context.Context, tracker beads.Client) ([]beads.WorkItem, error) {
 	return workItemsWithStatus(ctx, tracker, backlogStatuses)
 }
@@ -499,16 +616,21 @@ func workItemsWithStatus(ctx context.Context, tracker beads.Client, statuses []s
 	return read, nil
 }
 
-func printAttributions(stdout io.Writer, attributions []itemAttribution, goals goal.Set) {
+// printAttributions is the report itself, and it opens with what was read rather
+// than with what was found. The order is the point: an audit blind to a slice of
+// the tracker prints the same clean tally as one that checked it, and the line
+// above the tally is what tells the two apart.
+func printAttributions(stdout io.Writer, scope auditScope, attributions []itemAttribution, goals goal.Set) {
+	fmt.Fprintln(stdout, scope.coverage().saying())
 	if len(attributions) == 0 {
-		fmt.Fprintln(stdout, "no work is admitted, so there is nothing to attribute")
+		fmt.Fprintln(stdout, "no work was read, so there is nothing to attribute")
 		return
 	}
 	if reason, uncheckable := goals.Uncheckable(); uncheckable {
 		// Nothing was checked, so no count is reported. A tally against goals
 		// nobody could read would say the queue traces to intent that was never
 		// consulted.
-		fmt.Fprintf(stdout, "%d admitted item(s), none of them checked: %s\n", len(attributions), reason)
+		fmt.Fprintf(stdout, "%d work item(s), none of them checked: %s\n", len(attributions), reason)
 		// An attribution that was destroyed is still said, because saying it needs
 		// no goals document: what it rests on is that the tracker witnesses a goal
 		// was written and the item no longer carries one. It is also what this
@@ -525,32 +647,55 @@ func printAttributions(stdout io.Writer, attributions []itemAttribution, goals g
 	for _, entry := range attributions {
 		grouped[entry.Attribution.State] = append(grouped[entry.Attribution.State], entry)
 	}
-	fmt.Fprintf(stdout, "%d admitted item(s): %d serve a recorded goal, %d name none, %d name a goal the goals do not state, %d lost the goal they recorded\n",
+	fmt.Fprintf(stdout, "%d work item(s): %d serve a recorded goal, %d name none, %d name a goal the goals do not state, %d lost the goal they recorded\n",
 		len(attributions), len(grouped[goal.StateAttributed]), len(grouped[goal.StateUnattributed]),
 		len(grouped[goal.StateUnresolved]), len(grouped[goal.StateLost]))
 	for _, group := range []struct {
 		state  goal.State
 		saying string
+		// closed is what having finished means for this group, said where the group
+		// holds any finished work. The audit reads closed items now and does not
+		// treat every finding on them alike, so the difference is printed rather
+		// than left to be worked out from an exit code.
+		closed string
 	}{
 		// The destroyed attributions are listed first, above the wrong ones. They
 		// are the only group that got there without anybody deciding anything, and
 		// the only one where the answer may already be known: each item's own line
 		// says whether the tracker kept the words to put back.
-		{goal.StateLost, "having recorded a goal and lost it, which is a record destroyed rather than a judgement nobody made"},
-		{goal.StateUnresolved, "naming a goal no goals document states, which is a claim to correct"},
-		{goal.StateUnattributed, "naming no goal, which is what work admitted before goals were checked looks like"},
-		{goal.StateAttributed, "serving a recorded goal"},
+		{goal.StateLost, "having recorded a goal and lost it, which is a record destroyed rather than a judgement nobody made",
+			"%d of them on closed work, which fails like any other: a record written over after the item closed is still a record written over, and the words to put back are the tracker's to give\n"},
+		{goal.StateUnresolved, "naming a goal no goals document states, which is a claim to correct",
+			"%d of them on closed work, which is counted here and does not fail: the item named what the goals stated at the time, and a goal reworded after it closed is what `yoyo stale` reports rather than a claim anybody can correct\n"},
+		{goal.StateUnattributed, "naming no goal, which is what work admitted before goals were checked looks like", ""},
+		{goal.StateAttributed, "serving a recorded goal", ""},
 	} {
 		entries := grouped[group.state]
 		if len(entries) == 0 {
 			continue
 		}
 		fmt.Fprintf(stdout, "\n%s:\n", group.saying)
+		if closed := closedIn(entries); closed > 0 && group.closed != "" {
+			fmt.Fprintf(stdout, "  "+group.closed, closed)
+		}
 		for _, entry := range entries {
 			fmt.Fprintf(stdout, "  %s [p%d, %s] %s\n", entry.WorkItemID, entry.Priority, entry.Status, entry.Title)
 			fmt.Fprintf(stdout, "    %s\n", attributionDetail(entry.Attribution))
 		}
 	}
+}
+
+// closedIn counts the entries in a group that are on work already finished. What
+// that means is the group's to say; how many there are is the same question in
+// both groups that say it.
+func closedIn(entries []itemAttribution) int {
+	closed := 0
+	for _, entry := range entries {
+		if entry.Status == closedStatus {
+			closed++
+		}
+	}
+	return closed
 }
 
 // attributionDetail is the one line under an item that says what its
@@ -665,7 +810,7 @@ manager's judgement, made in the conversation where the operator can see it;
 what the harness owns is resolving what an item names and saying what it found.
 
   list          the goals work may be attributed to, and where each is stated
-  attribution   what each admitted work item says it is for
+  attribution   what each work item the tracker holds says it is for
   witness       record, where a careless writer cannot reach it, the goal each
                 work item's notes already state
   guard         refuse a shell command that would replace an item's notes and
@@ -686,16 +831,30 @@ which is a claim that is wrong rather than one nobody has made, and for an item
 the tracker witnesses recorded a goal and no longer carries one, which is a
 record something wrote over rather than a judgement nobody made.
 
+"attribution" reads every status the tracker holds -- open, in_progress, blocked,
+and closed -- because nine of the twelve recorded attribution losses were on
+closed items, and an audit that could not see them reported nothing about any of
+them. "--scope=queue" reads open and blocked alone, which is the narrower
+question of what the work still to be done traces to. Either way the report opens
+with what it read and what it did not, so a clean tally cannot be mistaken for a
+slice nobody looked at.
+
+Finished work is held to one half of the failure rule. A destroyed attribution on
+a closed item fails like any other, because the record was written over and the
+witness holds the words to put back. An item naming a goal no goals document
+states is counted and named on closed work and does not fail: it named what the
+goals stated at the time, and a goal reworded after it closed is what "yoyo
+stale" reports rather than a claim anybody can now correct.
+
 "witness" is the one command here that writes, and it writes no attribution: the
 goal it stores is the one the item's own notes state, copied into the tracker's
 metadata so that replacing those notes is a loss "attribution" can report rather
 than one it cannot see. An attribution made before this existed carries no
 witness until it is swept, which is why it is worth running once over a backlog.
-It sweeps every work item the tracker holds and not only the queue: the command
-that destroys an attribution reaches a claimed or a closed item just as easily,
-and most of the losses on record were on closed ones. "attribution" reads the
-queue, so a loss it reports is a loss on the queue; on a claimed or closed item
-the witness holds the words to put back and nothing fails.
+It sweeps every work item the tracker holds and not only the queue, for the same
+reason the audit reads that far: the command that destroys an attribution reaches
+a claimed or a closed item just as easily, and most of the losses on record were
+on closed ones.
 
 "guard" is the same loss stopped before it happens. It reads a `+"`PreToolUse`"+` tool
 call on stdin, as an agent session's hook gives it, and refuses a shell command
@@ -710,5 +869,7 @@ a session over a payload it did not recognise.
 
 Options:
   --config <path>       configuration file (default: the nearest .yoyodyne/config.yaml)
-  --json                emit machine-readable JSON`)
+  --json                emit machine-readable JSON
+  --scope <all|queue>   ("attribution" only) which work to read: every status the
+                        tracker holds, or open and blocked alone (default: all)`)
 }

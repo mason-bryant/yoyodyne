@@ -112,9 +112,9 @@ func (f Finding) Diverges() bool { return f.Outcome == OutcomeDiverges }
 // It is a value the caller assembles rather than something this package goes
 // and fetches, for two reasons. The tracker is read through the client the rest
 // of the harness reads it through, and which statuses count as admitted is a
-// decision `yoyo goals attribution` already owns — a second copy of it here
-// would be a second answer to "what is in the backlog". And gathering once means
-// one tracker read for a sequence that asks about the backlog twice.
+// decision the backlog already owns — a second copy of it here would be a second
+// answer to "what is in the backlog". And gathering once means one tracker read
+// for a sequence that asks about the backlog twice.
 type Sources struct {
 	// Repository is the repository root every file check is rooted at.
 	Repository string
