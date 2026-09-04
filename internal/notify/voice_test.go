@@ -770,6 +770,16 @@ func TestReasoningForADecisionIsOneSentenceAndSaysWhereTheRestIs(t *testing.T) {
 		// would be worse than carrying the whole paragraph.
 		"yoyodyne-ifd.102.7 goes below the rendering work. The epic's order is unchanged by that.": "yoyodyne-ifd.102.7 goes below the rendering work." + restOfTheReason,
 		"It goes below the rendering work! Nothing depends on it.":                                 "It goes below the rendering work!" + restOfTheReason,
+		// Nor does the stop closing an abbreviation, whether what follows it is a
+		// word or the capital that starts the next clause. A message cut there
+		// would carry "e.g." and a pointer at the record, which is a message
+		// saying nothing at all.
+		"It waits on the adapter, e.g. the Codex one, which nobody has answered for.": "It waits on the adapter, e.g. the Codex one, which nobody has answered for.",
+		"It waits on an adapter, i.e. The Codex one. Nothing else is holding it.":     "It waits on an adapter, i.e. The Codex one." + restOfTheReason,
+		// A reason written in lower case throughout has no sentence boundary this
+		// can be sure of, so the whole of it is carried rather than a guess at
+		// half of it.
+		"the adapter is stopped. nothing is waiting on it": "the adapter is stopped. nothing is waiting on it",
 	} {
 		if got := oneSentence(reason); got != want {
 			t.Fatalf("oneSentence(%q) = %q, want %q", reason, got, want)

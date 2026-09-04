@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -156,7 +157,7 @@ var harnessVoice = voice{
 	avatar: ":gear:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "Admitted to the backlog: {title}. It serves: {goal}",
-		KindItemDecomposed:      "Decomposed out of the item above it: {title}",
+		KindItemDecomposed:      "Decomposed out of a larger item: {title}",
 		KindItemAttributed:      "{item} was attributed to a goal: {goal}",
 		KindItemReprioritized:   "{item} was set to {priority}.",
 		KindTrackerBlockRefused: "The {asking} asked for {refused} in one reply and the harness refused the block whole, so none of them happened: {why}",
@@ -212,7 +213,7 @@ var developerVoice = voice{
 	avatar: ":hammer_and_wrench:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "{title} is in the backlog and could reach me one day, admitted for {goal}.",
-		KindItemDecomposed:      "The item above this one was broken down, and one of the pieces I could be handed is {title}.",
+		KindItemDecomposed:      "A larger item was broken down, and one of the pieces I could be handed is {title}.",
 		KindItemAttributed:      "{item} now says what it is for: {goal}. That is the intent I'd be building against.",
 		KindItemReprioritized:   "{item} sits at {priority} now. What I build doesn't change with the order it is queued in.",
 		KindTrackerBlockRefused: "A block the {asking} sent was refused together — {refused} — and nothing in the queue moved for any of it: {why}",
@@ -268,7 +269,7 @@ var reviewerVoice = voice{
 	avatar: ":mag:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "Admitted: {title}. What it serves — {goal} — is what I will judge a change against.",
-		KindItemDecomposed:      "Cut out of the item above it: {title}. Narrower work is work I can judge as finished or not.",
+		KindItemDecomposed:      "Cut out of a larger item: {title}. Narrower work is work I can judge as finished or not.",
 		KindItemAttributed:      "{item} records the goal it serves: {goal}. Intent I can read beats intent I have to infer.",
 		KindItemReprioritized:   "{item} moved to {priority}. The order work arrives in changes nothing about the standard it meets.",
 		KindTrackerBlockRefused: "The {asking} asked for {refused} and the harness read none of them, so what the queue says now is what it said before: {why}",
@@ -323,7 +324,7 @@ var developmentManagerVoice = voice{
 	avatar: ":clipboard:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "In the queue now: {title}, admitted for {goal}.",
-		KindItemDecomposed:      "I've broken the item above this one down, and a bounded piece of it is {title}.",
+		KindItemDecomposed:      "I've broken a larger item down, and a bounded piece of it is {title}.",
 		KindItemAttributed:      "{item} now carries the goal it serves: {goal}. Work I cannot say the purpose of is work I cannot order honestly.",
 		KindItemReprioritized:   "{item} is at {priority} now, so that is where it gets pulled from.",
 		KindTrackerBlockRefused: "A block from the {asking} never reached the queue I pull from — {refused} — so its order and its contents are unchanged: {why}",
@@ -379,7 +380,7 @@ var productManagerVoice = voice{
 	avatar: ":compass:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "I've admitted this to the backlog: {title}. It serves {goal}, and that claim is the operator's to disagree with.",
-		KindItemDecomposed:      "{title} was decomposed out of the item above it. What the work is for stays what that item was admitted for.",
+		KindItemDecomposed:      "{title} was decomposed out of a larger item. What the work is for stays what that larger item was admitted for.",
 		KindItemAttributed:      "I've recorded what {item} is for: {goal}. Work that says nothing about intent is work nobody can decide to stop doing.",
 		KindItemReprioritized:   "I've put {item} at {priority}: {why}",
 		KindTrackerBlockRefused: "A block I sent was refused whole — {refused} — so nothing I meant to change about the backlog changed: {why}",
@@ -435,7 +436,7 @@ var architectVoice = voice{
 	avatar: ":triangular_ruler:",
 	lines: map[Kind]string{
 		KindItemAdmitted:        "Entered the backlog under {goal}: {title}. Work traceable to intent is what keeps the shape of the thing deliberate.",
-		KindItemDecomposed:      "Carved out of the item above it: {title}. Decomposition is structure, and structure is where a design holds or does not.",
+		KindItemDecomposed:      "Carved out of a larger item: {title}. Decomposition is structure, and structure is where a design holds or does not.",
 		KindItemAttributed:      "{item} was traced back to {goal}. A queue nobody can trace is a system nobody can reason about.",
 		KindItemReprioritized:   "{item} moved to {priority}, which changes the order and nothing about the design it derives from.",
 		KindTrackerBlockRefused: "A block of {refused} from the {asking} was refused whole rather than partly applied, which is the contract holding: {why}",
@@ -1034,9 +1035,15 @@ const restOfTheReason = " The rest of the reason is in the item's record."
 // channel takes the first sentence, which is where the reason a decision was
 // made is, and says where the argument for it is.
 //
-// A full stop is the end of a sentence only where what follows it is a space or
-// nothing. An identifier is full of the other kind — yoyodyne-ifd.102.7 is one
-// word — and cutting one in half would be worse than carrying the paragraph.
+// Three things have to be true for a full stop to be the end of a sentence, and
+// each of them is a way somebody's reason gets cut into nonsense otherwise:
+// something other than a word character follows it, since yoyodyne-ifd.102.7 is
+// one word; what comes next begins a sentence, since a lower-case word after a
+// stop is the tail of something like "e.g. the adapter"; and the word it closes
+// is not one of the few whose stop never ends a sentence, since those are
+// followed by a capital as often as not. A boundary that fails any of them is
+// read past, so the worst this does is carry more of the reason than it needed
+// to — which is the safe direction, the record holding the whole either way.
 func oneSentence(text string) string {
 	trimmed := strings.TrimSpace(text)
 	for index, character := range trimmed {
@@ -1049,14 +1056,43 @@ func oneSentence(text string) string {
 		if rest == "" {
 			return trimmed
 		}
-		// A full stop inside a word — an identifier, a version — ends no sentence,
-		// so what decides it is whether the writer put a space after it.
 		if next := trimmed[index+1]; next != ' ' && next != '\t' && next != '\n' {
+			continue
+		}
+		if opening, _ := utf8.DecodeRuneInString(rest); !unicode.IsUpper(opening) {
+			continue
+		}
+		if abbreviated(trimmed[:index]) {
 			continue
 		}
 		return trimmed[:index+1] + restOfTheReason
 	}
 	return trimmed
+}
+
+// abbreviations are the short forms whose full stop closes a word rather than a
+// sentence. The list is short on purpose: it is the ones that actually turn up
+// in prose somebody wrote to justify a decision, and a form nobody thought of
+// costs a message that carries more of the reason than it had to rather than
+// one that carries none of it.
+var abbreviations = map[string]bool{
+	"e.g":    true,
+	"eg":     true,
+	"i.e":    true,
+	"ie":     true,
+	"etc":    true,
+	"vs":     true,
+	"cf":     true,
+	"approx": true,
+}
+
+// abbreviated reports prose whose last word is one of them.
+func abbreviated(said string) bool {
+	word := said
+	if space := strings.LastIndexAny(word, " \t\n"); space >= 0 {
+		word = word[space+1:]
+	}
+	return abbreviations[strings.ToLower(word)]
 }
 
 // boundLine cuts one line that would not read as one, and marks the cut so

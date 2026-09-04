@@ -148,12 +148,26 @@ func TestACreationUnderAParentIsDecompositionRatherThanAdmission(t *testing.T) {
 	if notification.Event.Detail.Parent != parent {
 		t.Fatalf("detail %+v does not record what was decomposed", notification.Event.Detail)
 	}
+	// A decomposition is addressed to the thread of the item it created, not of
+	// the item it came out of. That is what the words have to respect: the only
+	// item a reader has in front of them is the new one, named in the header
+	// above the message, so anything the sentence points at as nearby resolves to
+	// the item the sentence is already about.
+	if notification.Topic.Key() != "work-item:yoyodyne-ifd.68.5" {
+		t.Fatalf("addressed to %q, want the thread of the item that was created", notification.Topic.Key())
+	}
+	if strings.Contains(strings.ToLower(message.Body), "above") {
+		t.Fatalf("body %q points at what it was cut out of by where it sits, which is this item's own thread", message.Body)
+	}
 	// The message says it was decomposed and names the piece, in words. It does
 	// not say the parent's identifier: the record holds that identifier and
 	// nothing that names it, so saying it would hand a reader something to
 	// resolve in the one message that is about a piece of work having a name.
 	if !strings.Contains(message.Body, "The voice work under the reporting epic") {
 		t.Fatalf("body %q does not say what was cut out", message.Body)
+	}
+	if !strings.Contains(message.Body, "a larger item") {
+		t.Fatalf("body %q does not say what it was cut out of at all", message.Body)
 	}
 	if strings.Contains(message.Body, parent) {
 		t.Fatalf("body %q names the item it was cut out of by its identifier", message.Body)

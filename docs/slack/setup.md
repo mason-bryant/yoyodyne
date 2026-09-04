@@ -399,9 +399,10 @@ inside a thread names the work in words** — `Re-arm the dropped-merge check`, 
 `yoyodyne-ifd.102.7` — because the header above it already carries the
 identifier, and an item nothing has ever recorded a name for is said as *this
 item* rather than as its slug. That holds for every item a message mentions: a
-decomposition says it was cut out of the item above it rather than naming that
-item's slug, because the record keeps the parent's identifier and nothing that
-says what it is called. **No conversation identifier is posted at all**: the
+decomposition lands in the thread of the item it created, and says that item was
+cut out of a larger one rather than naming that larger item's slug, because the
+record keeps its identifier and nothing that says what it is called. Which item
+that was is in the tracker and in the durable record. **No conversation identifier is posted at all**: the
 record still carries it and `yoyo status` still reads it, but it is not something
 anybody reading a channel does anything with. What a message does carry — in
 words where the sentence needs it, and in italics under it — is what you would
