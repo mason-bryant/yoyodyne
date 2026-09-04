@@ -87,22 +87,70 @@ func TestAStoppageWhoseWorkWasCleanedUpHoldsNothing(t *testing.T) {
 	}
 }
 
-// A stoppage the harness ran out of ways to deliver is the case that reads as
-// quiet and is not. It is held like any other undecided one, and what it says is
-// that nobody was ever asked — which is a different person to go to from a
-// stoppage sitting in a conversation.
-func TestAStoppageThatReachedNobodyIsHeldAndSaysSo(t *testing.T) {
+// What an undecided stoppage says is which person it is waiting on, and the
+// three answers are three different people to go to: the development manager who
+// has it and has not answered, the harness that has not finished putting it to
+// her, and — once the tries are gone — whoever reads the queue next. Each is
+// pinned rather than left to whichever branch a fixture happens to take, because
+// the one that reads as quiet and is not, a stoppage nobody was ever asked
+// about, is the one that costs a morning.
+func TestAnUndecidedStoppageSaysWhichPersonItIsWaitingOn(t *testing.T) {
 	t.Parallel()
 
-	held := heldForAPerson(nil, []runstate.Escalation{{
-		WorkItemID: "yoyodyne-ifd.153", RunID: "run-5035c832",
-		Attempts: runstate.MaxEscalationAttempts,
-		Problem:  "development manager reported failure: cancelled",
-	}})
+	const (
+		stoppedItem = "yoyodyne-ifd.153"
+		stoppedRun  = "run-5035c832"
+	)
+	delivered := time.Date(2026, 9, 3, 1, 31, 0, 0, time.UTC)
 
-	reason := heldReason(t, held, "yoyodyne-ifd.153")
-	if !strings.Contains(reason, "could not be put in front of") || !strings.Contains(reason, "needs a person") {
-		t.Fatalf("an undelivered stoppage is held for %q, want it to say nobody was asked", reason)
+	for _, stoppage := range []struct {
+		name       string
+		escalation runstate.Escalation
+		want       string
+	}{
+		{
+			name: "delivered and unanswered",
+			escalation: runstate.Escalation{
+				WorkItemID: stoppedItem, RunID: stoppedRun,
+				Attempts: 1, DeliveredAt: &delivered,
+			},
+			// "is in front of" rather than "in front of": the exhausted case below
+			// says "could not be put in front of", so the shorter phrase would pass
+			// on either branch and pin neither.
+			want: "is in front of the development manager",
+		},
+		{
+			// An attempt failed and there are tries left, so the harness is still
+			// going to ask. It is held meanwhile: nobody has decided anything, and a
+			// fresh run started under a stoppage still on its way to her is the same
+			// mistake as one started under a stoppage she is holding.
+			name: "not delivered with attempts left",
+			escalation: runstate.Escalation{
+				WorkItemID: stoppedItem, RunID: stoppedRun,
+				Attempts: runstate.MaxEscalationAttempts - 1,
+				Problem:  "her conversation was busy",
+			},
+			want: "has not reached the development manager yet",
+		},
+		{
+			name: "delivery attempts exhausted",
+			escalation: runstate.Escalation{
+				WorkItemID: stoppedItem, RunID: stoppedRun,
+				Attempts: runstate.MaxEscalationAttempts,
+				Problem:  "development manager reported failure: cancelled",
+			},
+			want: "needs a person",
+		},
+	} {
+		t.Run(stoppage.name, func(t *testing.T) {
+			t.Parallel()
+
+			held := heldForAPerson(nil, []runstate.Escalation{stoppage.escalation})
+			reason := heldReason(t, held, stoppedItem)
+			if !strings.Contains(reason, stoppage.want) {
+				t.Fatalf("the hold says %q, want it to name %q", reason, stoppage.want)
+			}
+		})
 	}
 }
 

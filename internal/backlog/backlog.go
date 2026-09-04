@@ -138,13 +138,22 @@ type Entry struct {
 	// exactly the state a blocked status left this backlog in.
 	Awaiting string `json:"awaiting,omitempty"`
 	// WaitingOn names the unfinished work this item waits for. It explains an
-	// unready entry; it never decides one. Both halves of that are forced by what
-	// a listing actually carries: a listing that omitted dependencies would make
-	// every item look unblocked, and the dependencies it does carry say what an
-	// item depends on without saying whether that work is finished. So a
-	// dependency is named here only when the depended-on item is itself still in
-	// the backlog, and what decides readiness is the tracker's own account of what
-	// can be pulled.
+	// unready open entry and decides a blocked one, which is not two behaviours
+	// but one rule applied where each answer comes from: an open item's readiness
+	// is the tracker's own, so this only annotates it, and a blocked item is
+	// missing from that answer by construction — the tracker computes it from the
+	// same status — so nothing named here is what makes it startable.
+	//
+	// What that asks of a listing is asked in both directions, because neither
+	// half of one is reliable alone. A listing may record only that a dependency
+	// exists, reading the same after the blocker closed as before, so a dependency
+	// is named when the depended-on item is itself still in the backlog. A listing
+	// that does carry a status is believed on it, so work the tracker reports as
+	// unfinished is named whether or not it is still queued — which is the same
+	// reading the harness's own run-start gate makes, so an entry this calls
+	// startable is not one the pipeline then refuses at the door. Order says why
+	// deciding a blocked entry from this beats deciding it from a status field
+	// nothing maintains.
 	WaitingOn []string `json:"waiting_on,omitempty"`
 }
 
