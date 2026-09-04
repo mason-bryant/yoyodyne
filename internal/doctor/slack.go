@@ -86,26 +86,13 @@ func (d *diagnosis) checkSlack(ctx context.Context, resolved config.Resolved, in
 // checkSlackSecrets asks whether this product's own token pair is stored under
 // the namespaced names, and asks it without ever producing a token: the keychain
 // is queried for the item's attributes rather than its password, and the
-// environment file is checked for existence and mode rather than read.
+// environment file is read for which names it assigns rather than for what it
+// assigns them.
 func (d *diagnosis) checkSlackSecrets(ctx context.Context, productID domain.ProductID) Finding {
 	bot, app := slack.BotSecret(productID), slack.AppSecret(productID)
 
 	if file, found := d.namespacedEnvFile(productID); found {
-		if info, err := os.Stat(file); err == nil && info.Mode().Perm()&0o077 != 0 {
-			return Finding{
-				Check:   "slack-secrets",
-				Status:  StatusWarning,
-				Summary: "this project's Slack secrets are readable by other users on this machine",
-				Detail:  fmt.Sprintf("%s is mode %04o", file, info.Mode().Perm()),
-				Remedy:  fmt.Sprintf("chmod 600 %s", shellQuote(file)),
-			}
-		}
-		return Finding{
-			Check:   "slack-secrets",
-			Status:  StatusOK,
-			Summary: fmt.Sprintf("this project's Slack secrets are stored for %s", productID),
-			Detail:  file,
-		}
+		return d.checkSlackEnvFile(file, productID)
 	}
 
 	if d.env.GOOS == "darwin" {
@@ -137,6 +124,104 @@ func (d *diagnosis) checkSlackSecrets(ctx context.Context, productID domain.Prod
 		Detail:  fmt.Sprintf("no %s, and this platform has no keychain to hold %s and %s", file, bot, app),
 		Remedy:  fmt.Sprintf("mkdir -p %s && install -m 600 /dev/null %s && ${EDITOR:-vi} %s", directory, file, file),
 	}
+}
+
+// checkSlackEnvFile asks the environment file the question the sink will ask it:
+// does it assign the two variables the sink reads its tokens from. Existence is
+// not that question and must not stand in for it -- the documented way to make
+// this file installs an empty one and then opens an editor, so an operator who
+// left the editor without saving has a file every check about the file passes
+// and a sink that refuses to start saying SLACK_BOT_TOKEN is not set. A
+// diagnosis that certifies what the sink then dies of is worse than no check,
+// because it sends somebody looking anywhere but here.
+//
+// Values are compared against emptiness and against nothing else, and none of
+// them reaches a finding: this output goes to a terminal, a scrollback, and
+// whatever collects them, which is the same reason the keychain is asked for its
+// items rather than for its passwords.
+func (d *diagnosis) checkSlackEnvFile(file string, productID domain.ProductID) Finding {
+	contents, err := os.ReadFile(file)
+	if err != nil {
+		return Finding{
+			Check:   "slack-secrets",
+			Status:  StatusWarning,
+			Summary: "this project's Slack secrets file could not be read, so whether the secrets are stored is unknown",
+			Detail:  err.Error(),
+			Remedy:  fmt.Sprintf("ls -l %s", shellQuote(file)),
+		}
+	}
+	if missing := unassignedVariables(contents, slack.BotTokenVariable, slack.AppTokenVariable); len(missing) > 0 {
+		return Finding{
+			Check:   "slack-secrets",
+			Status:  StatusWarning,
+			Summary: fmt.Sprintf("this project's Slack secrets file assigns no %s", strings.Join(missing, " and no ")),
+			Detail:  fmt.Sprintf("%s is there, and a sink launched from it refuses to start for want of the names it does not assign", file),
+			Remedy:  fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(file)),
+		}
+	}
+	if info, err := os.Stat(file); err == nil && info.Mode().Perm()&0o077 != 0 {
+		return Finding{
+			Check:   "slack-secrets",
+			Status:  StatusWarning,
+			Summary: "this project's Slack secrets are readable by other users on this machine",
+			Detail:  fmt.Sprintf("%s is mode %04o", file, info.Mode().Perm()),
+			Remedy:  fmt.Sprintf("chmod 600 %s", shellQuote(file)),
+		}
+	}
+	return Finding{
+		Check:   "slack-secrets",
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("this project's Slack secrets are stored for %s", productID),
+		Detail:  file,
+	}
+}
+
+// unassignedVariables names which of the given variables the environment file
+// leaves without a value. It reads the file the way the launcher's `set -a; .`
+// does, near enough for what is being asked: `export` is optional, the quotes
+// around a value are the shell's rather than part of it, and a comment assigns
+// nothing.
+func unassignedVariables(contents []byte, names ...string) []string {
+	assigned := map[string]bool{}
+	for _, line := range strings.Split(string(contents), "\n") {
+		if name, ok := assignment(line); ok {
+			assigned[name] = true
+		}
+	}
+	var missing []string
+	for _, name := range names {
+		if !assigned[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+// assignment reads one line as the assignment it is, and answers with the name
+// and whether anything was assigned to it rather than with what was: a token
+// this returned would be one something above it could print.
+func assignment(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	if rest, found := strings.CutPrefix(line, "export "); found {
+		line = strings.TrimSpace(rest)
+	}
+	name, value, found := strings.Cut(line, "=")
+	if !found {
+		return "", false
+	}
+	return strings.TrimSpace(name), unquote(strings.TrimSpace(value)) != ""
+}
+
+// unquote strips the quotes the shell would strip, so that a name assigned `""`
+// is read as the empty assignment it becomes rather than as two characters.
+func unquote(value string) string {
+	if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+		return strings.TrimSpace(value[1 : len(value)-1])
+	}
+	return value
 }
 
 // checkSlackSink asks what is actually reporting for this product. The lease

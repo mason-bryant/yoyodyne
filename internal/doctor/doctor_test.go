@@ -133,6 +133,11 @@ func brokenInstallations() map[string]func(*world) {
 			w.runner.reply("find-generic-password", failed("The specified item could not be found in the keychain."))
 			w.sinkRunning(slack.Presence{Version: currentVersion, SecretNamespace: "yoyodyne", Channel: "C1"})
 		},
+		"reporting is on and this project's secrets file was made and never filled in": func(w *world) {
+			w.configuration = reportingConfig
+			w.secretsFile("")
+			w.sinkRunning(slack.Presence{Version: currentVersion, SecretNamespace: "yoyodyne", Channel: "C1"})
+		},
 		"reporting is on, this is not macOS, and no environment file holds the secrets": func(w *world) {
 			w.goos = "linux"
 			w.configuration = reportingConfig
@@ -420,6 +425,122 @@ func TestSecretsAreCheckedForThisInstanceRatherThanForAnyToken(t *testing.T) {
 	// history. The keychain prompts for it instead, which `-w` with no value is.
 	if strings.Contains(finding.Remedy, "xoxb") || strings.Contains(finding.Remedy, "-w '") {
 		t.Fatalf("slack-secrets remedy = %q, want the value prompted for rather than written", finding.Remedy)
+	}
+}
+
+// storedTokens is a filled environment file, written the way the setup document
+// says to write one: two `export` lines, one of them quoted, because both are
+// what an operator's own file looks like. Neither value is a token; what they
+// are for is being findable in a report that should never contain them.
+const storedTokens = "export SLACK_BOT_TOKEN=\"xoxb-not-a-real-token\"\nexport SLACK_APP_TOKEN=xapp-not-a-real-token\n"
+
+// TestAnEmptySecretsFileIsNotSecretsStored is the state the file check used to
+// certify. `yoyo doctor`'s own remedy for missing secrets installs an empty file
+// and opens an editor on it, so an operator who leaves that editor without
+// saving has exactly this: a file of the right name, in the right place, with
+// the right mode, and no tokens in it. Told the secrets are stored, the next
+// thing they meet is a sink refusing to start for want of the names this said
+// nothing about.
+func TestAnEmptySecretsFileIsNotSecretsStored(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = reportingConfig
+	// The keychain answers for everything, which is what makes this about the
+	// file: with the file there, the keychain is not what the sink will read.
+	file := world.secretsFile("")
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "slack-secrets")
+	if !found || finding.Status != StatusWarning {
+		t.Fatalf("slack-secrets = %#v, want the empty file reported: %s", finding, render(report))
+	}
+	// The names are the whole of the diagnosis: they are what the sink says it
+	// wants when it dies, so a report that has them is one somebody can act on.
+	for _, want := range []string{slack.BotTokenVariable, slack.AppTokenVariable} {
+		if !strings.Contains(finding.Summary, want) {
+			t.Fatalf("slack-secrets summary = %q, want %q named", finding.Summary, want)
+		}
+	}
+	if !strings.Contains(finding.Detail, file) {
+		t.Fatalf("slack-secrets detail = %q, want the file that is missing them named", finding.Detail)
+	}
+}
+
+// TestASecretsFileMissingOneTokenNamesOnlyThatOne holds the report to what is
+// actually wrong. Half a pair is the ordinary shape of an interrupted setup, and
+// a diagnosis that named both would send somebody back to a line they already
+// wrote.
+func TestASecretsFileMissingOneTokenNamesOnlyThatOne(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = reportingConfig
+	// The second line is there and assigns nothing, which is what the file looks
+	// like when the second token was pasted somewhere else.
+	world.secretsFile("export SLACK_BOT_TOKEN=xoxb-not-a-real-token\nexport SLACK_APP_TOKEN=\n")
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "slack-secrets")
+	if !found || finding.Status != StatusWarning {
+		t.Fatalf("slack-secrets = %#v, want the half-filled file reported: %s", finding, render(report))
+	}
+	if !strings.Contains(finding.Summary, slack.AppTokenVariable) {
+		t.Fatalf("slack-secrets summary = %q, want the one that is missing named", finding.Summary)
+	}
+	if strings.Contains(finding.Summary, slack.BotTokenVariable) {
+		t.Fatalf("slack-secrets summary = %q, want the one that is stored left out of it", finding.Summary)
+	}
+	if strings.Contains(render(report), "xoxb-not-a-real-token") {
+		t.Fatalf("a stored token was printed: %s", render(report))
+	}
+}
+
+// TestAFilledSecretsFilePassesWithoutPrintingAToken is the other half: the file
+// an operator finished is healthy, and reading it to find that out must not put
+// what is in it anywhere. This output goes to a terminal, a scrollback, and
+// whatever collects them, which is the same reason the keychain is asked for its
+// items rather than for its passwords.
+func TestAFilledSecretsFilePassesWithoutPrintingAToken(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = reportingConfig
+	world.secretsFile(storedTokens)
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "slack-secrets")
+	if !found || finding.Status != StatusOK {
+		t.Fatalf("slack-secrets = %#v, want a filled file to pass: %s", finding, render(report))
+	}
+	for _, secret := range []string{"xoxb-not-a-real-token", "xapp-not-a-real-token"} {
+		if strings.Contains(render(report), secret) {
+			t.Fatalf("a stored token was printed: %s", render(report))
+		}
+	}
+}
+
+// TestSecretsReadableByOthersAreStillReported keeps the check the token check
+// was put in front of. Whose tokens they are is asked first because a file with
+// no tokens in it has no permissions worth complaining about, and a file that
+// does have them is still every other user's to read.
+func TestSecretsReadableByOthersAreStillReported(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = reportingConfig
+	file := world.secretsFile(storedTokens)
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "slack-secrets")
+	if !found || finding.Status != StatusWarning {
+		t.Fatalf("slack-secrets = %#v, want the mode reported: %s", finding, render(report))
+	}
+	if !strings.Contains(finding.Remedy, "chmod 600") {
+		t.Fatalf("slack-secrets remedy = %q, want the mode fixed", finding.Remedy)
 	}
 }
 
@@ -912,6 +1033,23 @@ func (w *world) rewriteIndex(directory, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		w.t.Fatalf("WriteFile() error = %v", err)
 	}
+}
+
+// secretsFile writes this project's environment file, which is the other place
+// the pair is kept and the only one on a machine with no keychain. The contents
+// are the test's, because what is in it -- both tokens, one, or nothing at all
+// -- is the whole of what the states here differ by.
+func (w *world) secretsFile(contents string) string {
+	w.t.Helper()
+	directory := filepath.Join(w.project, ".config", "yoyo", "yoyodyne")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		w.t.Fatalf("MkdirAll() error = %v", err)
+	}
+	path := filepath.Join(directory, "slack.env")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		w.t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
 }
 
 // sinkRecorded leaves the record a sink writes, without a process behind it.

@@ -772,10 +772,11 @@ const setupSlackRecipe = "docs/slack/setup.md, or " +
 // reading one back.
 //
 // Everywhere else the store is a file this project's launch sources, and setup
-// deliberately does not create it. An empty file would be indistinguishable from
-// a filled one to everything that asks whether this project's secrets are
-// stored, so a half-finished step here would turn into a sink that will not
-// start over a diagnosis that says it should.
+// deliberately does not create it. Existence is what this step reads as secrets
+// stored, so a file it wrote and nobody filled in is a half-finished step this
+// walk would afterwards report as already done, over a sink that will not start.
+// `yoyo doctor` asks the file for the two names instead of for its existence, so
+// what it reports on an empty one is which of them is missing.
 func (s *setup) ensureSlackSecrets(ctx context.Context, productID domain.ProductID) setupStep {
 	bot, app := slack.BotSecret(productID), slack.AppSecret(productID)
 	if file, found := s.namespacedEnvFile(productID); found {
@@ -792,7 +793,7 @@ func (s *setup) ensureSlackSecrets(ctx context.Context, productID domain.Product
 			Step:    stepSlackSecrets,
 			Status:  setupHandedOff,
 			Summary: fmt.Sprintf("this platform has no keychain, so %s's two tokens go in a file only its own launch reads", productID),
-			Detail: fmt.Sprintf("setup does not write it half-finished: a file that exists reads as secrets stored, and an empty one would be a sink that will not start over a diagnosis that says it should. It wants %s and %s as exports",
+			Detail: fmt.Sprintf("setup does not write it half-finished: a file that exists reads here as secrets stored, and an empty one would be a step reported as done over a sink that will not start. It wants %s and %s as exports",
 				botTokenVariable, appTokenVariable),
 			Remedy: fmt.Sprintf("mkdir -p %s && install -m 600 /dev/null %s && ${EDITOR:-vi} %s", directory, file, file),
 		}
