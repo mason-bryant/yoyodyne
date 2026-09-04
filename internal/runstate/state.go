@@ -54,7 +54,10 @@ import (
 // further repair attempts triage has continued a stopped run on are the newest
 // and behave identically: absent means nothing ever continued this run, which is
 // what every run written before triage could meant, and the configured budget is
-// then the whole of what bounded its repairs.
+// then the whole of what bounded its repairs. What the work item's notes lost to
+// the context budget is the newest of them and behaves the same way: absent
+// means the item was delivered whole, which is what every run written before the
+// notes were ever truncated meant.
 const StateSchemaVersion = 1
 
 // The shape of the three things a run records about how it was configured and
@@ -272,6 +275,41 @@ func (p PathRefusal) Validate() error {
 	}
 	if p.Omitted < 0 {
 		problems = append(problems, errors.New("omitted cannot be negative"))
+	}
+	return errors.Join(problems...)
+}
+
+// ContextTruncation is what an item's notes lost to the context budget when the
+// run's context was assembled. It is recorded because the loss is otherwise
+// visible only inside the text an agent was handed, and it is the kind of thing
+// that arrives quietly: an item's notes grow with every run appended to them and
+// nothing removes them, so the first item to outgrow the budget does so between
+// one run and the next, without anybody deciding it. The context still says so
+// in its own marker; this is how a reader of the record sees it without opening
+// the context.
+type ContextTruncation struct {
+	// DroppedNotes is how many of the oldest notes the context left out.
+	DroppedNotes int `json:"dropped_notes"`
+	// DroppedBytes is how much of the notes that was.
+	DroppedBytes int `json:"dropped_bytes"`
+	// KeptBytes is how much of the notes the context still carried, recorded
+	// beside the loss because the two are read together: what was dropped means
+	// something different against an item still carrying most of its notes than
+	// against one carrying almost none.
+	KeptBytes int `json:"kept_bytes,omitempty"`
+}
+
+// Validate reports every contract violation in the recorded truncation at once.
+func (c ContextTruncation) Validate() error {
+	var problems []error
+	if c.DroppedNotes < 1 {
+		problems = append(problems, errors.New("a recorded truncation drops at least one note"))
+	}
+	if c.DroppedBytes < 1 {
+		problems = append(problems, errors.New("a recorded truncation drops at least one byte"))
+	}
+	if c.KeptBytes < 0 {
+		problems = append(problems, errors.New("kept_bytes cannot be negative"))
 	}
 	return errors.Join(problems...)
 }
@@ -806,6 +844,12 @@ type State struct {
 	// gate is decided before the checks, recording a refusal clears both of the
 	// others rather than competing with them for the next attempt.
 	PathRefusal *PathRefusal `json:"path_refusal,omitempty"`
+	// ContextTruncation is what the work item's own notes lost to the context
+	// budget when this run's context was assembled. It is not repair input and
+	// nothing is handed back for it: the run proceeds exactly as it would have,
+	// on an item saying slightly less than the tracker holds. Absent is every run
+	// whose item fitted whole, which is nearly all of them.
+	ContextTruncation *ContextTruncation `json:"context_truncation,omitempty"`
 	// RepairAttempts counts the repair attempts already handed back to the
 	// developer, whichever kind of failure triggered them: one budget covers
 	// both, so it bounds the developer invocations a run can make rather than
@@ -1143,6 +1187,11 @@ func (s State) Validate() error {
 	if s.PathRefusal != nil {
 		if err := s.PathRefusal.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("path_refusal: %w", err))
+		}
+	}
+	if s.ContextTruncation != nil {
+		if err := s.ContextTruncation.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("context_truncation: %w", err))
 		}
 	}
 	if s.Changes != nil {

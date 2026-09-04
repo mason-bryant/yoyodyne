@@ -805,6 +805,64 @@ func TestValidateReviewPolicyGatesOnTheRoleHoldingTheVerdict(t *testing.T) {
 	}
 }
 
+// An item whose notes have outgrown the context budget still runs, and the loss
+// is on the run record rather than only inside the text the developer was
+// handed. Every run appends to an item's notes and nothing removes them, so the
+// run where a long-lived item first stops fitting is an ordinary run nobody
+// decided anything about — and if the record does not say so, nobody finds out
+// that the item is being worked from part of what was recorded on it.
+func TestPipelineRecordsWhatAnOversizedItemLostToTheContextBudget(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID:                 "yoyodyne-task",
+		Title:              "A long-lived item",
+		Description:        "Add the feature",
+		AcceptanceCriteria: "feature.txt exists",
+		Status:             "open",
+		Notes: strings.Join([]string{
+			"the oldest note, from a run nobody remembers",
+			strings.Repeat("a later run recorded what it did, at length. ", 8000),
+			"the newest note, which is what this item is being worked from",
+		}, "\n\n"),
+	}}
+	var delivered string
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if request.Role == domain.RoleDeveloper {
+			delivered = request.Prompt
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("Run() outcome = %#v, want an oversized item to run rather than be refused", outcome)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.ContextTruncation == nil {
+		t.Fatal("the run record says nothing about the notes the context dropped")
+	}
+	if state.ContextTruncation.DroppedNotes != 2 || state.ContextTruncation.DroppedBytes < 1 {
+		t.Fatalf("recorded truncation = %#v, want the two oldest notes and what they cost", *state.ContextTruncation)
+	}
+	// And the developer was handed the item saying so, with the newest of the
+	// notes still on it.
+	if !strings.Contains(delivered, "[the oldest 2 note(s) on yoyodyne-task,") {
+		t.Fatal("the developer's context does not say which notes were dropped")
+	}
+	if !strings.Contains(delivered, "the newest note, which is what this item is being worked from") {
+		t.Fatal("the developer's context dropped the newest note")
+	}
+}
+
 func TestPipelineIntegratesReviewedWorkAndClosesTheItem(t *testing.T) {
 	t.Parallel()
 

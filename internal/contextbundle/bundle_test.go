@@ -309,6 +309,173 @@ func TestElisionMarkerFitsWhatIsChargedForIt(t *testing.T) {
 	}
 }
 
+// An item's notes are appended to by every run and removed by nobody, so a
+// long-lived item eventually renders past any budget — and its notes are
+// append-only, so nothing can edit it back under one. It is delivered with the
+// oldest of its notes dropped and a marker saying so, rather than refused into
+// an item no run can start and no human can unwedge.
+func TestAssembleTruncatesNotesThatOutgrowTheBudget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	item := beads.WorkItem{
+		ID:                 "yoyodyne-1",
+		Title:              "A long-lived item",
+		Status:             "in_progress",
+		Description:        "What this item is for.",
+		Design:             "How to go about it.",
+		AcceptanceCriteria: "What finished means.",
+		Notes: strings.Join([]string{
+			"the oldest note nobody reads any more",
+			strings.Repeat("a run recorded what it did here. ", 400),
+			strings.Repeat("and the run after it recorded this. ", 400),
+			"the newest note, which is what this item is being worked from",
+		}, "\n\n"),
+	}
+	maxBytes := 8 << 10
+	bundle, err := Assemble(Request{RepositoryRoot: root, WorkItem: item, MaxBytes: maxBytes})
+	if err != nil {
+		t.Fatalf("Assemble() error = %v", err)
+	}
+	if bundle.Bytes > maxBytes || len(bundle.Text) > maxBytes {
+		t.Fatalf("bundle is %d bytes, exceeding the %d it was budgeted", len(bundle.Text), maxBytes)
+	}
+	// What the item is for is never what is dropped.
+	for _, required := range []string{"What this item is for.", "How to go about it.", "What finished means."} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("bundle dropped %q, which is not the notes: %s", required, bundle.Text)
+		}
+	}
+	// The oldest goes first and the newest is what survives: the newest notes are
+	// what the item is being worked from.
+	if strings.Contains(bundle.Text, "the oldest note nobody reads any more") {
+		t.Fatalf("bundle kept the oldest note: %s", bundle.Text)
+	}
+	if !strings.Contains(bundle.Text, "the newest note, which is what this item is being worked from") {
+		t.Fatalf("bundle dropped the newest note: %s", bundle.Text)
+	}
+	if bundle.NotesTruncation == nil {
+		t.Fatalf("bundle reported no truncation: %s", bundle.Text)
+	}
+	if bundle.NotesTruncation.DroppedNotes != 3 {
+		t.Fatalf("dropped notes = %d, want the three that did not fit", bundle.NotesTruncation.DroppedNotes)
+	}
+	if bundle.NotesTruncation.DroppedBytes < 1 || bundle.NotesTruncation.KeptBytes < 1 {
+		t.Fatalf("truncation = %#v, want what was dropped and what was kept", *bundle.NotesTruncation)
+	}
+	// And the reader is told, in the place the dropped notes would have been.
+	marker := "[the oldest 3 note(s) on yoyodyne-1,"
+	if !strings.Contains(bundle.Text, marker) {
+		t.Fatalf("bundle did not mark what it dropped: %s", bundle.Text)
+	}
+	if !strings.Contains(bundle.Text, "read them there, or in the tracker's export in this worktree") {
+		t.Fatalf("bundle did not say where the whole of the notes lives: %s", bundle.Text)
+	}
+}
+
+// A truncated item is cut to leave room for what the references still cost to
+// state. These are the items whose accumulated notes name the most documents,
+// and an item cut to the last byte of the budget would be one whose references
+// went unmentioned rather than stated as left out.
+func TestAssembleLeavesATruncatedItemRoomToStateItsReferences(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	// Notes short enough that what is kept fills the budget almost exactly, and
+	// enough oversized documents that stating them all costs more than the little
+	// left over. That is the shape this reservation is for: a long-lived item
+	// whose accumulated notes name document after document.
+	var notes []string
+	var referenced []string
+	for index := 0; index < 8; index++ {
+		document := fmt.Sprintf("docs/design-%d.md", index)
+		writeFile(t, filepath.Join(root, document), strings.Repeat("what the design says. ", 2000))
+		referenced = append(referenced, document)
+	}
+	for index := 0; index < 400; index++ {
+		notes = append(notes, fmt.Sprintf("run %d recorded what it did, and named %s.", index, referenced[index%len(referenced)]))
+	}
+	item := beads.WorkItem{
+		ID:          "yoyodyne-1",
+		Title:       "A long-lived item",
+		Status:      "in_progress",
+		Description: "Do the work.",
+		Notes:       strings.Join(notes, "\n\n"),
+	}
+	maxBytes := 8 << 10
+	bundle, err := Assemble(Request{RepositoryRoot: root, WorkItem: item, MaxBytes: maxBytes})
+	if err != nil {
+		t.Fatalf("Assemble() error = %v", err)
+	}
+	if bundle.NotesTruncation == nil {
+		t.Fatalf("bundle reported no truncation: %s", bundle.Text)
+	}
+	if len(bundle.Text) > maxBytes {
+		t.Fatalf("bundle is %d bytes, exceeding the %d it was budgeted", len(bundle.Text), maxBytes)
+	}
+	for _, document := range referenced {
+		if !strings.Contains(bundle.Text, document+" was referenced but exceeds the context budget") {
+			t.Fatalf("bundle left %s unmentioned: %s", document, bundle.Text)
+		}
+	}
+}
+
+// The refusal is what is left for an item that does not fit with none of its
+// notes at all. Nothing about that item is the notes' to give back, and
+// delivering the description with a piece cut out of it would hand a developer
+// an item saying something other than what it was written to say.
+func TestAssembleRefusesAnItemThatDoesNotFitWithoutItsNotes(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	item := beads.WorkItem{
+		ID:          "yoyodyne-1",
+		Title:       "An item written past the budget",
+		Status:      "open",
+		Description: strings.Repeat("what this item is for, at length. ", 400),
+		Notes:       "a note that could be dropped, and is not enough",
+	}
+	_, err := Assemble(Request{RepositoryRoot: root, WorkItem: item, MaxBytes: 4 << 10})
+	if err == nil {
+		t.Fatal("Assemble() error = nil, want an item whose core does not fit to be refused")
+	}
+	if !strings.Contains(err.Error(), "before any of its notes") {
+		t.Fatalf("Assemble() error = %v, want it to say the core alone does not fit", err)
+	}
+}
+
+// A work item whose notes fit is rendered exactly as it always was: no marker,
+// and nothing reported to the run record.
+func TestAssembleLeavesNotesThatFitAlone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	item := beads.WorkItem{ID: "yoyodyne-1", Title: "Task", Status: "open", Notes: "one note.\n\nand another."}
+	bundle, err := Assemble(Request{RepositoryRoot: root, WorkItem: item})
+	if err != nil {
+		t.Fatalf("Assemble() error = %v", err)
+	}
+	if bundle.NotesTruncation != nil {
+		t.Fatalf("truncation = %#v, want none for an item that fits", *bundle.NotesTruncation)
+	}
+	if !strings.Contains(bundle.Text, "## Notes\n\none note.\n\nand another.") {
+		t.Fatalf("bundle did not carry the notes whole: %s", bundle.Text)
+	}
+}
+
+// TestNotesTruncationMarkerFitsWhatIsChargedForIt guards the arithmetic the
+// truncation rests on: the marker is charged before any note is kept, so a
+// marker that outgrew its charge would let a truncated item overrun the budget
+// it was assembled against.
+func TestNotesTruncationMarkerFitsWhatIsChargedForIt(t *testing.T) {
+	t.Parallel()
+
+	marker := renderNotesTruncation(strings.Repeat("y", 4096), NotesTruncation{DroppedNotes: 999999, DroppedBytes: 999999999})
+	if len(marker) > maxNotesTruncationBytes {
+		t.Fatalf("truncation marker is %d bytes, exceeding the %d charged for it", len(marker), maxNotesTruncationBytes)
+	}
+}
+
 // sectionedDocument writes a Markdown document of the given number of sections,
 // each padded with the given number of filler sentences, with the given phrase
 // carried by exactly one of them.
