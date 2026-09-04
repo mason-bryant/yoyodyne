@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/recovery"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -159,6 +160,145 @@ func TestAResetPushIsRetriedAndDoesNotReadAsAnEmptyChange(t *testing.T) {
 	}
 	if attempts := state.RetryAttempts(runstate.RetryPublishBranch); attempts != 1 {
 		t.Fatalf("retries recorded at the push = %d, want the one reset that was waited out: %#v", attempts, state.Retries)
+	}
+}
+
+// Waiting is a gap in time, and evidence has to survive it. A merge reissued
+// after a wait that can reach half an hour is a merge performed now, so the
+// remote target has to be read now: an integration authorized by a check made
+// before the wait is authorized by evidence a later change to the target branch
+// may have invalidated, which is the case
+// integration-requires-revision-bound-evidence names. The head commit pins the
+// candidate and says nothing about the base, so nothing else here would catch a
+// target that moved while the run waited.
+func TestARetriedMergeVerifiesTheRemoteTargetAgainBeforeItIsAsked(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// The first merge is dropped, and the target moves during the wait that
+	// follows — the window a check made in front of the retry would leave open.
+	forge := &fakeForge{remote: remote, mergeResets: 1}
+	forge.afterMergeReset = func() { driftRemoteTarget(t, remote, "main") }
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err == nil {
+		t.Fatal("Run() error = nil, want the target that moved during the wait to stop the run")
+	}
+	// The retry re-read the target and refused, so the forge was never asked to
+	// merge into a branch it would have reconciled itself.
+	if len(forge.merges) != 0 {
+		t.Fatalf("the harness merged into a target that moved while it waited: %#v", forge.merges)
+	}
+	if !strings.Contains(outcome.PublishFailure, "check the remote target branch before merging") {
+		t.Fatalf("publish failure = %q, want the re-read that refused the retried merge", outcome.PublishFailure)
+	}
+	if !outcome.Blocked || !tracker.blocked {
+		t.Fatalf("blocked = %t (tracker %t), want the divergence handed to a person", outcome.Blocked, tracker.blocked)
+	}
+	// And the wait itself is on the record, so what happened reads as a reset
+	// waited out and a target that moved underneath it rather than as a bare
+	// divergence.
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if attempts := state.RetryAttempts(runstate.RetryMerge); attempts != 1 {
+		t.Fatalf("retries recorded at the merge = %d, want the one reset that was waited out: %#v", attempts, state.Retries)
+	}
+}
+
+// dyingReviewerBackend serves the developer once and then kills the first deaths
+// reviewer invocations the way a dropped connection does, approving afterwards.
+func dyingReviewerBackend(deaths int) *fakeBackend {
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	killed := 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role != domain.RoleReviewer {
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				ResolvedModel: developerResolved, FinalText: "implemented the work item",
+				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		if killed < deaths {
+			killed++
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				IsError: true, StopReason: "api_error", FinalText: connectionClosedMessage,
+				TransientFailure: &backend.TransientFailure{Detail: "api_error: " + connectionClosedMessage},
+				Process:          execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+				LastEvent:        request.LastSequence,
+			}, nil
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+			ResolvedModel: reviewerResolved, FinalText: approveVerdict,
+			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	return provider
+}
+
+// The reviewer half of the provider recovery, which is the costliest case the
+// rule covers: the change is built, checked, and waiting on the one invocation
+// that has to happen before it can be promoted, so a dropped connection there
+// stops a run with nothing at all wrong with its work. It shares the developer's
+// relaunch budget and the developer's recovery window, and neither is charged to
+// the change.
+func TestARecoverableReviewerDeathCarriesOnPastTheRelaunchBudget(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// Four reviewer deaths against a budget of two: two relaunches, then two
+	// waits, then the verdict.
+	provider := dyingReviewerBackend(4)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
+	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the dropped connections waited out", err)
+	}
+	if tracker.blocked || outcome.Blocked {
+		t.Fatalf("the run blocked the item: tracker=%t outcome=%t", tracker.blocked, outcome.Blocked)
+	}
+	if outcome.Integration == nil || !outcome.WorkItemClosed {
+		t.Fatalf("outcome = %#v, want the approved change promoted and the item closed", outcome)
+	}
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 5 {
+		t.Fatalf("reviewer invocations = %d, want the four deaths and the one that answered", reviews)
+	}
+	// The change was never handed back: nothing here is a fault in the work, so
+	// neither the repair budget nor the developer is charged for it.
+	if outcome.RepairAttempts != 0 {
+		t.Errorf("repair attempts = %d, want the provider's weather charged to nobody", outcome.RepairAttempts)
+	}
+	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 1 {
+		t.Errorf("developer invocations = %d, want the change developed once", developers)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The budget and the window are the same two the developer's deaths spend,
+	// which is what stops a run alternating between the roles absorbing twice
+	// what either is worth.
+	if state.TransientRelaunches != 2 {
+		t.Errorf("relaunches = %d, want the configured budget spent", state.TransientRelaunches)
+	}
+	if attempts := state.RetryAttempts(runstate.RetryProviderInvocation); attempts != 2 {
+		t.Fatalf("provider retries = %d, want the two deaths past the budget: %#v", attempts, state.Retries)
 	}
 }
 

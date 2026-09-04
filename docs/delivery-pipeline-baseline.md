@@ -443,24 +443,28 @@ is unmeasured. Most of these are asserted somewhere in
   publish and could not ever carries, so the scenarios here leave it empty), and
   the catch-up after a forge merge. It has its own assertions in
   `internal/orchestrator/publish_test.go`.
-- **Six of the nine `retries` boundaries.** The one recorded trace of a recovery
-  is a provider death waited out past its budget. Three more are asserted in
-  `internal/orchestrator/recovery_test.go` and held by no trace here: the branch
-  push (including that the retry does not read as an empty change), opening the
-  pull request, and the merge — the merge twice over, for the reset that is
-  waited out and for the window that runs out and leaves an outstanding
-  publication.
+- **Four of the nine `retries` boundaries.** The boundaries are the nine
+  `runstate.Retry*` constants, counted as constants rather than as call sites —
+  `reading the remote target branch` is one boundary with three call sites and
+  one window, and is counted once.
 
-  The remaining six have neither a trace nor an assertion: republishing a
-  replayed run branch, reading the remote target, confirming it after the merge,
-  confirming the merge with the forge, deleting the merged remote branch, and
-  catching the local target up. Two of them are worth naming rather than
-  counting, because a retry there is not simply a second read: republishing and
-  deleting the remote branch are both compare-and-swap writes, so a reset that
-  arrived *after* the write reached the forge leaves the retry refused by the
-  swap rather than succeeding. Such a run stops exactly as it would have stopped
-  without the retry, and the failure it names is the refused swap rather than the
-  reset that caused it.
+  One has a recorded trace: a provider death waited out past its budget. Four
+  more are asserted in `internal/orchestrator/recovery_test.go` and held by no
+  trace here — the branch push (including that the retry does not read as an
+  empty change), opening the pull request, the merge (twice over: the reset that
+  is waited out, and the window that runs out and leaves an outstanding
+  publication), and reading the remote target, which a retried merge re-reads
+  before each attempt.
+
+  The remaining four have neither a trace nor an assertion: republishing a
+  replayed run branch, confirming the merge with the forge, deleting the merged
+  remote branch, and catching the local target up. Two are worth naming rather
+  than counting, because a retry there is not simply a second read: republishing
+  and deleting the remote branch are both compare-and-swap writes, so a reset
+  that arrived *after* the write reached the forge leaves the retry refused by
+  the swap rather than succeeding. Such a run stops exactly as it would have
+  stopped without the retry, and the failure it names is the refused swap rather
+  than the reset that caused it.
 - `yoyo triage repair` and `yoyo triage rerun`, which re-enter a stopped run
   through their own preconditions.
 - **Seven of the sixteen pre-claim steps, and the order of all sixteen.** The
@@ -515,10 +519,11 @@ them.
   record does not carry, found in the target branch by containment — so what no
   trace holds is the sweep disbelieving a record that claims more than the
   repository shows.
-- **The developer and the reviewer sharing `transient_relaunches`.** Both
-  relaunch traces kill only the developer, so the budget is frozen as one the
-  developer draws on; that a reviewer's death draws on the same one is stated
-  here and recorded nowhere.
+- **The developer and the reviewer sharing `transient_relaunches`.** Every
+  relaunch trace kills only the developer, so the budget is frozen as one the
+  developer draws on. That a reviewer's death draws on the same budget — and on
+  the same recovery window past it — is asserted in
+  `internal/orchestrator/recovery_test.go` and held by no trace here.
 - **Every counter being recorded before the thing it bounds.** No scenario dies
   mid-attempt and resumes, so the guarantee that an interrupted attempt still
   counts — and that a restart therefore cannot buy a fresh budget — is untraced

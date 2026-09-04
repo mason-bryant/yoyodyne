@@ -283,6 +283,14 @@ func (a *activeRun) settleRemoteTarget(ctx context.Context) error {
 // exactly its content — rather than an equality no forge merge can produce.
 const mergeMethod = publish.MergeCommit
 
+// errPreMergeVerification stands in, inside the retried merge, for a
+// verification of the remote target that is over — drifted, or failing on
+// something no further wait would outlast. The real failure is kept beside it
+// and is what gets reported; this is what the merge's own recovery sees, and it
+// carries no recoverable class, so a verification that already spent its window
+// cannot be read as a merge failure worth a second one.
+var errPreMergeVerification = errors.New("the remote target branch could not be verified before the merge")
+
 // publishIntegration merges the run's pull request, which the approving verdict
 // has just authorized. The harness asks the forge to merge and treats its answer
 // as the outcome, rather than pushing the integrated commit at the target
@@ -336,19 +344,6 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 			published.Number, published.HeadCommit, integration.SourceCommit))
 		return nil
 	}
-	// A forge asked to merge into a branch that moved would reconcile that
-	// movement itself. The drift check the promotion made locally is therefore
-	// made again here, against the remote, immediately before the merge.
-	if err := a.recovering(ctx, runstate.RetryRemoteTarget, func(ctx context.Context) error {
-		return a.pipeline.Worktrees.VerifyRemoteTarget(ctx, integration)
-	}); err != nil {
-		cause := fmt.Errorf("check the remote target branch before merging: %w", err)
-		a.recordPublishFailure(cause)
-		if errors.Is(err, gitworktree.ErrRemoteTargetDrift) {
-			return a.settlePromotedDivergence(ctx, integration, cause)
-		}
-		return nil
-	}
 	// The merge is the last thing a run asks of the network and the most expensive
 	// one to lose: the change is promoted locally by the time it is asked, so a
 	// reset connection here is a publication left outstanding on work nobody found
@@ -356,13 +351,45 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	// own rules earns the identical answer next time — so only the transport
 	// classes are asked again, and the head commit passed along keeps a request
 	// that somehow merged in between from being merged twice.
+	//
+	// A forge asked to merge into a branch that moved would reconcile that
+	// movement itself, so the drift check the promotion made locally is made again
+	// here, against the remote — and made inside the retry rather than in front of
+	// it, so that it is immediately before *this* merge rather than immediately
+	// before the first one. A merge reissued after a wait that can reach half an
+	// hour is a merge performed on evidence that old, and evidence a later change
+	// to the target branch has invalidated is exactly what may not authorize an
+	// integration. The head commit pins the candidate and says nothing about the
+	// base, so nothing else here would have caught it.
+	//
+	// The verification's own transport failures are waited out under their own
+	// boundary, so a network that drops the read does not spend the merge's window
+	// on it; what reaches the merge's recovery is a verification that is over, and
+	// it is handed back as a sentinel rather than as its own failure so the merge
+	// does not read a recoverable class in it and buy a second window for a
+	// question already answered.
+	var verifyFailure error
 	result, err := recoveringValue(ctx, a, runstate.RetryMerge, func(ctx context.Context) (publish.MergeResult, error) {
+		verifyFailure = a.recovering(ctx, runstate.RetryRemoteTarget, func(ctx context.Context) error {
+			return a.pipeline.Worktrees.VerifyRemoteTarget(ctx, integration)
+		})
+		if verifyFailure != nil {
+			return publish.MergeResult{}, errPreMergeVerification
+		}
 		return a.pipeline.Publisher.Merge(ctx, publish.MergeRequest{
 			Number:     published.Number,
 			HeadCommit: published.HeadCommit,
 			Method:     mergeMethod,
 		})
 	})
+	if verifyFailure != nil {
+		cause := fmt.Errorf("check the remote target branch before merging: %w", verifyFailure)
+		a.recordPublishFailure(cause)
+		if errors.Is(verifyFailure, gitworktree.ErrRemoteTargetDrift) {
+			return a.settlePromotedDivergence(ctx, integration, cause)
+		}
+		return nil
+	}
 	if err != nil {
 		a.recordPublishFailure(err)
 		return nil

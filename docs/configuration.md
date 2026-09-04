@@ -2059,7 +2059,11 @@ With both on, a run works like this:
    same independent-reviewer evidence, and the same fast-forward rule that gate
    integration also gate the merge, and the remote target is checked again right
    before the call, so a target that moved in the meantime refuses the merge
-   rather than having the forge reconcile it.
+   rather than having the forge reconcile it. That holds of a merge
+   [reissued after a dropped connection](#waiting-out-a-network-that-dropped)
+   too: the check is made again on each attempt rather than once in front of
+   them, so what authorizes a merge made after a wait is a reading of the target
+   taken after that wait.
    The merge is asked for as of *when your branch protection is satisfied*
    rather than as of now, so required checks that are still running are waited
    for by the forge instead of refused seconds after the approval. Administrator

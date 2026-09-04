@@ -1208,6 +1208,10 @@ type fakeForge struct {
 	// the class says the next attempt may well succeed.
 	ensureResets int
 	mergeResets  int
+	// afterMergeReset runs when a merge attempt is dropped, which is the moment
+	// the run then spends waiting before it asks again. It is how a test
+	// expresses the world moving during that wait.
+	afterMergeReset func()
 }
 
 // connectionReset is what the transport writes when it drops a request, in the
@@ -1251,6 +1255,9 @@ func (f *fakeForge) Ensure(_ context.Context, request publish.Request) (publish.
 func (f *fakeForge) Merge(_ context.Context, request publish.MergeRequest) (publish.MergeResult, error) {
 	if f.mergeResets > 0 {
 		f.mergeResets--
+		if f.afterMergeReset != nil {
+			f.afterMergeReset()
+		}
 		return publish.MergeResult{}, connectionReset(fmt.Sprintf("merge pull request %d", request.Number))
 	}
 	if f.mergeErr != nil {
