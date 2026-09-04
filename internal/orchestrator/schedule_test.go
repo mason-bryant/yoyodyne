@@ -2094,11 +2094,16 @@ type scheduleHarness struct {
 	// a test asks for it, so every other test's pass is what it always was.
 	escalations int
 	escalate    func(*scheduleHarness, int) (EscalationSweep, error)
-	// audit stands in for the claim audit, with the claimed items the pull read.
-	// A pull is wired with one only where a test asks for it, so every other
+	// audit stands in for the claim audit, with the claimed items the pull read,
+	// and claims is the real one where a test drives it end to end. A pull is
+	// wired with at most one of them and only where a test asks, so every other
 	// test's pass is what it always was.
 	audits int
 	audit  func(*scheduleHarness, []beads.WorkItem) (ClaimSweep, error)
+	claims ScheduleClaims
+	// finished is every run this harness has recorded an ending for, which is what
+	// a claim audit settling a dead run produces.
+	finished []runstate.State
 
 	pulls      int
 	order      []string
@@ -2197,7 +2202,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	if h.escalate != nil {
 		escalations = h
 	}
-	var claims ScheduleClaims
+	claims := h.claims
 	if h.audit != nil {
 		claims = h
 	}

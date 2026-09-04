@@ -621,13 +621,13 @@ var nextMoves = map[Kind]string{
 	// what has to be looked at is the thing that chooses work, and whether it is
 	// dead or merely wedged is in the message above this clause.
 	KindStallNoticed: "the operator's — nothing starts until whatever chooses work is looked at, and started again if it has died.",
-	// The item is already back in the queue, so nothing is waiting on anybody for
-	// it to move. What is worth a person's attention is the other half: a claim
-	// outlives its run only when a run died without settling, and the record of
-	// that run is still sitting there. Saying so is not a move somebody has to
-	// make now, which is why the clause names it as the harness's rather than
-	// handing out a chore.
-	KindClaimReleased: "the harness's — the item is pullable again and will be chosen in its turn; `yoyo reconcile` settles the run that left it, if nothing has.",
+	// Nobody's move, and the message is still worth sending. The item is back in
+	// the queue, the run that left it is ended, and the slot it was filling is
+	// free — so the state this reports is one the harness has already put right,
+	// and a clause naming a chore would be inventing one. What it is for is that
+	// the line was quietly degraded until it was, and a second run for an item is
+	// something a reader has to be able to account for afterwards.
+	KindClaimReleased: "nobody's — the item is pullable again and will be chosen in its turn, and whatever the run that left it produced is still on its branch.",
 	// The restart is no longer anybody's: a watch session takes up a build
 	// installed over it by itself, between the runs it is carrying and without
 	// interrupting one. What is left is the install, which is why this names it

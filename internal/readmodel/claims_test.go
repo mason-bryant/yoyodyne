@@ -146,7 +146,6 @@ func TestARunWaitingToBeContinuedKeepsItsClaimHoweverQuietItIs(t *testing.T) {
 			s.DependencyPause = &runstate.DependencyPause{}
 		},
 		"parked by the operator's hold": func(s *runstate.State) { s.OperatorHeldSince = &held },
-		"owed a repair round":           func(s *runstate.State) { s.RepairAttempts = 1 },
 	} {
 		run := inFlight("run-parked", "yoyodyne-ifd.9", 30*time.Hour)
 		park(&run)
@@ -169,6 +168,23 @@ func TestAClaimIsNotDeadUntilItHasBeenQuietPastTheThreshold(t *testing.T) {
 	past := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Just ended")}, runs, noon, 30*time.Second, 0)
 	if len(past) != 1 {
 		t.Fatalf("DeadClaims() = %+v, want the same claim dead once the threshold is shorter than the silence", past)
+	}
+}
+
+// A killed run that had already been round a repair is a dead claim like any
+// other. The count of rounds it took is history rather than a wait: it never goes
+// back down, so reading it as a continuation being owed would exempt every
+// long-running item from every audit for the rest of the product's life — which
+// is the shape of the item that sat claimed for two days.
+func TestARunKilledAfterARepairRoundIsStillADeadClaim(t *testing.T) {
+	t.Parallel()
+
+	repaired := inFlight("run-repaired", "yoyodyne-ifd.264", 9*time.Hour)
+	repaired.RepairAttempts = 2
+	repaired.Phase = runstate.PhaseReviewing
+	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.264", "Round once already")}, []runstate.State{repaired}, noon, 0, 0)
+	if len(dead) != 1 {
+		t.Fatalf("DeadClaims() = %+v, want a killed run read as dead however many repair rounds it took", dead)
 	}
 }
 
@@ -198,9 +214,9 @@ func TestAClaimWithNoRunBehindItIsNobodysToGiveBack(t *testing.T) {
 	}
 }
 
-// The two cases are said apart, because an operator does different things about
-// them: a run that ended has freed the item outright, and a run still recorded as
-// in flight is holding a developer slot that only reconciliation gives back.
+// The two histories are said apart, because a reader acts on the difference: a
+// run that ended without giving its claim back is a hole in the pipeline, and a
+// run still recorded as in flight is a process something killed.
 func TestWhatBecameOfTheRunTellsTheTwoDeathsApart(t *testing.T) {
 	t.Parallel()
 
@@ -211,8 +227,16 @@ func TestWhatBecameOfTheRunTellsTheTwoDeathsApart(t *testing.T) {
 	}
 	killed := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Killed")},
 		[]runstate.State{inFlight("run-killed", "yoyodyne-ifd.9", 9*time.Hour)}, noon, 0, 0)
-	if len(killed) != 1 || !strings.Contains(killed[0].Because, "yoyo reconcile") {
-		t.Fatalf("Because = %q, want a killed process told what settles the run it left", because(killed))
+	if len(killed) != 1 || !strings.Contains(killed[0].Because, "the process holding it is gone") {
+		t.Fatalf("Because = %q, want a killed process said as one", because(killed))
+	}
+	// Neither clause hands anybody a chore: the audit settles the run and gives the
+	// item back itself, so a message that named a command would be telling somebody
+	// to do what has already been done.
+	for _, dead := range append(over, killed...) {
+		if strings.Contains(dead.Because, "yoyo reconcile") {
+			t.Fatalf("Because = %q, want no command in a clause about work already put right", dead.Because)
+		}
 	}
 }
 

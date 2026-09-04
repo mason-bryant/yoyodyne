@@ -913,6 +913,31 @@ pulling:
 		// held or braked queue is usually waiting on. What it delivers is bounded to
 		// one stoppage per pass; see Escalator.
 		s.escalate(ctx, &schedule, pull)
+		// The claims the tracker holds are audited here, for the reason the
+		// escalation above it runs here: it chooses nothing and starts nothing, so
+		// none of what follows is allowed to stop it happening.
+		//
+		// Each of the three things below would, and each is a state the audit is most
+		// needed in. A held intake is often this session's own brake, which is placed
+		// exactly when runs are failing one after another — the pass where a claim is
+		// most likely to have just died is the pass a hold would have silenced. A full
+		// machine is the state a dead claim produces: two slots held by runs nobody is
+		// running, and no pull that stops at the capacity check ever gets as far as
+		// the queue. And the queue read below is the last of them, which is why the
+		// claimed items are read here and handed down to it rather than read twice.
+		//
+		// It costs a held or full session one tracker read a poll it did not pay
+		// before, and buys the only thing that ever frees those slots.
+		//
+		// A reading that fails here is reported rather than retried, which is the one
+		// place in this loop that is true. Every other reading is something the pass
+		// cannot go on without; this one is only the audit's, and routing it through
+		// the retry would make a held intake — which is answered from a switch and
+		// needs no tracker at all — stop being answerable on a machine whose tracker
+		// is down. So the audit says what it could not read, and the pass carries on
+		// to the readings that are actually its own.
+		claimed, claimedErr := pull.claimed(ctx)
+		s.audit(ctx, &schedule, pull, claimed, claimedErr)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -958,26 +983,6 @@ pulling:
 		}
 		schedule.IntakeHeld = nil
 
-		// What the tracker says is already being worked on, read before the machine's
-		// own capacity rather than with the queue below it. The placement is the whole
-		// point: a machine whose every slot is held by a run that died never reaches
-		// the queue at all, and that is exactly the state the audit exists for — on
-		// 2026-09-03 both slots went that way inside an hour and the line was idle
-		// until morning. It costs a full machine one tracker read a poll that it did
-		// not pay before, and buys the only thing that ever frees those slots.
-		//
-		// The reading is handed to the queue below so it is made once per pull: what
-		// is claimed is read here, and the queue that also needs it takes this rather
-		// than asking again.
-		claimed, err := pull.claimed(ctx)
-		if err != nil {
-			if !unreadable(err) {
-				break
-			}
-			continue
-		}
-		s.audit(ctx, &schedule, pull, claimed)
-
 		occupied, err := occupiedItems(pull.Runs)
 		if err != nil {
 			if !unreadable(err) {
@@ -1013,7 +1018,7 @@ pulling:
 			continue
 		}
 
-		read, err := pull.queue(ctx, claimed)
+		read, err := pull.queue(ctx, claimed, claimedErr == nil)
 		if err != nil {
 			if !unreadable(err) {
 				break
@@ -1408,8 +1413,12 @@ func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) 
 // What it does cost is the pull's own thread while the records are read — the
 // runs and the log of what has already been given back, once per pass — and one
 // tracker write per stuck item, which on the ordinary pass is none.
-func (s Scheduler) audit(ctx context.Context, schedule *Schedule, pull Pull, claimed []beads.WorkItem) {
+func (s Scheduler) audit(ctx context.Context, schedule *Schedule, pull Pull, claimed []beads.WorkItem, claimedErr error) {
 	if pull.Claims == nil {
+		return
+	}
+	if claimedErr != nil {
+		schedule.ClaimProblem = fmt.Sprintf("what the tracker holds as claimed could not be read, so an item whose run died stays claimed and nothing will pull it: %v", claimedErr)
 		return
 	}
 	sweep, err := pull.Claims.Audit(ctx, claimed)
@@ -1929,8 +1938,11 @@ func (p Pull) claimed(ctx context.Context) ([]beads.WorkItem, error) {
 // the scheduler pulls can never drift from the priorities actually set.
 //
 // The claimed slice is passed in rather than read here because the pull has
-// already read it for the claim audit; see Pull.claimed.
-func (p Pull) queue(ctx context.Context, claimed []beads.WorkItem) (pulled, error) {
+// already read it for the claim audit; see Pull.claimed. Where that reading did
+// not happen — the audit's read failed, and it is reported rather than retried —
+// this makes it, because the coverage below is not optional the way the audit is
+// and a pull that skipped it would start a parent beside the child running it.
+func (p Pull) queue(ctx context.Context, claimed []beads.WorkItem, read bool) (pulled, error) {
 	var admitted []beads.WorkItem
 	for _, status := range scheduledStatuses {
 		items, err := p.Tracker.List(ctx, status)
@@ -1955,6 +1967,12 @@ func (p Pull) queue(ctx context.Context, claimed []beads.WorkItem) (pulled, erro
 	// Coverage is read one status wider than the backlog. A claimed child has left
 	// the queue and is never chosen from here, but it is a run in flight over the
 	// same work, so its parent is the last thing that should be started beside it.
+	if !read {
+		claimed, err = p.claimed(ctx)
+		if err != nil {
+			return pulled{}, err
+		}
+	}
 	for _, item := range claimed {
 		items[item.ID] = item
 	}

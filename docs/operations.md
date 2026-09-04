@@ -884,31 +884,63 @@ hour on the last of them, and each time the line was idle until somebody looked
 in the morning.
 
 A watching session now audits the claims against the runs on every pull, before
-it even consults its own capacity — which is the placement that matters, because
-a machine whose every slot is held by a run that died never gets as far as
-reading the queue. A claim with no run alive behind it for half an hour is given
-back:
+it consults the intake hold or its own capacity — which is the placement that
+matters, because a held queue is often the session's own brake, placed exactly
+when runs are failing one after another, and a machine whose every slot is held
+by a run that died never gets as far as reading the queue at all. A claim with no
+run alive behind it for half an hour is given back:
 
 ```text
 yoyodyne-ifd.264 was claimed with nothing working on it and was given back to the queue: its run run-264 ended failed at 2026-09-03T22:14:00Z and the claim outlived it
 ```
 
+Giving the claim back is only half of it, and the other half is what makes the
+item actually startable. A killed process leaves a run record that still says it
+is in flight, so it goes on filling a developer slot and the scheduler goes on
+passing the item over as already running however open the tracker says it is. So
+the audit ends that record too, under the run's own lease — which is also the
+only test of liveness that is not a guess, because a lease belongs to a live
+process and the operating system drops it when that process dies, so a lease the
+audit can take is a process that is gone. The ending is recorded as **cancelled**:
+nothing here judged the change, and the branch and worktree the killed run left
+are untouched, exactly where they were. The item is then pulled again on the same
+pass, with nobody having typed anything.
+
+This settles a much narrower set than [`yoyo reconcile`](#recovering-interrupted-runs)
+does and never overlaps it: it moves no refs, removes nothing, closes nothing,
+and touches only runs that have gone quiet past the threshold with no wait
+recorded on them.
+
+A tracker that will not answer costs the audit and nothing else. It is the one
+reading in the pass that is reported rather than retried, because the pass has
+answers that need no tracker at all — a held intake is read from a switch — and
+an operator running `yoyo work` on a machine whose tracker is down should still
+be told what is holding it.
+
 Alive means the run's own record still moving, not the status field saying it is
-in flight: a killed process leaves a record that goes on claiming to be running
-until `yoyo reconcile` settles it, so the test is whether anything has been
-written to it within the hour.
+in flight: a killed process leaves a record that goes on claiming to be running,
+so the test is whether anything has been written to it within the hour — and then
+whether its lease can be taken, which is the answer the timestamps were standing
+in for.
 
 Two kinds of claim are never given back. A run that stopped short and is owed a
 continuation keeps its claim however quiet it has gone — one waiting out a
 [usage limit](#waiting-out-a-provider-usage-limit) or an
 [overloaded provider](#waiting-out-an-overloaded-provider), one parked by
-[`yoyo pause`](#pausing-everything-and-resuming-it), one held up by an unresolved
-directive or by work its item depends on, and one owed a repair round. Each of
-those returns and lets its process exit, so its record goes as still as a killed
-one's, and its item is claimed on purpose with the worktree and developer session
-that continuation needs. And a claim with no recorded run behind it at all is
-left alone: the harness reserves a run before it claims anything, so such a claim
-is somebody's own and not the harness's to take back.
+[`yoyo pause`](#pausing-everything-and-resuming-it), and one held up by an
+unresolved directive or by work its item depends on. Each of those returns and
+lets its process exit, so its record goes as still as a killed one's, and its
+item is claimed on purpose with the worktree and developer session that
+continuation needs. Every one of those is a wait that is still pending, which is
+the whole rule: how many repair rounds a run has already been through is history
+rather than a wait, so it says nothing about whether the run is coming back and a
+run killed after one is a dead claim like any other. The question is asked again
+under the run's lease before anything is written, so a run that parks between the
+two keeps its claim.
+
+And a claim with no recorded run behind it at all is left alone: the harness
+reserves a run before it claims anything, so such a claim is somebody's own and
+not the harness's to take back.
 
 An item whose latest run already promoted its change is left alone too, and that
 one is left for `yoyo reconcile` rather than for a person: the change is on the
@@ -920,12 +952,11 @@ Each release is
 own thread, as the degraded harness it is. It is said once and never repeated:
 what follows a release is the item being pulled again, which says so itself.
 
-The two deaths are worded apart because they want different things. A run that
-ended left the claim behind by finishing without giving it back, and the item is
-pullable the moment the claim goes. A run still recorded as in flight is a
-process somebody or something killed, and its record is still holding a developer
-slot — the release makes the tracker true, and `yoyo reconcile` is what settles
-the run itself and frees the slot.
+The two deaths are worded apart because they are two different histories and a
+reader acts on the difference: a run that ended left the claim behind by
+finishing without giving it back, which is a hole in the pipeline, and a run
+still recorded as in flight is a process something killed. What is done about
+them is the same either way, so neither line hands you a chore.
 
 ## What became of the runs, and what remains of them
 

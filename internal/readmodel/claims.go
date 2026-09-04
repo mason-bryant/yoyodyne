@@ -62,8 +62,8 @@ type DeadClaim struct {
 	// RunID is the most recent run recorded for the item, which is the one whose
 	// ending or whose silence left the claim behind.
 	RunID string `json:"run_id,omitempty"`
-	// Since is the last moment any run for this item recorded anything, which is
-	// what the age of the dead claim is measured from.
+	// Since is the last moment that run recorded anything, which is what the age of
+	// the dead claim is measured from.
 	Since time.Time `json:"since,omitempty"`
 	// Because is what the record says about that run, as the clause a message is
 	// written around. It is what tells a run the harness finished from a process
@@ -125,17 +125,26 @@ func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold,
 	return dead
 }
 
-// readClaim reads one item's runs: the most recent of them, the last moment any
-// of them recorded anything, and whether one of them still holds the claim.
+// readClaim reads one item's runs: the most recent of them, the last moment that
+// run recorded anything, and whether any of them still holds the claim.
 //
 // The most recent is by the same ordering the run store keeps — the start orders
 // them, and the last update settles a tie — because what is true of an item now
 // is decided by the last run that said anything about it.
+//
+// The age is that run's alone rather than the newest stamp across all of them,
+// and the difference is not academic: a run this audit has already ended carries
+// the moment it was ended, so a reading that took the newest stamp anywhere would
+// date an item from the audit's own writing and call every later death of it
+// fresh for the length of the threshold.
+//
+// Whether the claim is held is asked of every run rather than only the latest,
+// because a run is only ever started for an item nothing else is running — so a
+// second one that is alive means the ordering here disagrees with the reservation
+// that let it start, and the safe reading of that disagreement is the one that
+// keeps the claim.
 func readClaim(runs []runstate.State, now time.Time, within time.Duration) (latest runstate.State, since time.Time, held bool) {
 	for _, run := range runs {
-		if moment := lastWord(run); moment.After(since) {
-			since = moment
-		}
 		if holdsItsClaim(run, now, within) {
 			held = true
 		}
@@ -143,28 +152,14 @@ func readClaim(runs []runstate.State, now time.Time, within time.Duration) (late
 			latest = run
 		}
 	}
-	return latest, since, held
+	return latest, lastWord(latest), held
 }
 
 // holdsItsClaim reports a run that still owns the item it claimed: one that is
 // visibly working, and one that is deliberately waiting.
 //
 // The first is the run's own UpdatedAt, which is the test ActiveRuns uses. The
-// second is the half that cannot be read from a clock at all. A run that stopped
-// short for a directive, for work its item depends on, for the operator's pause,
-// for a provider that refused it, or for a repair it is owed does not just go
-// quiet — it returns, and its process exits, leaving a record nothing writes to
-// again until somebody continues it. Its item stays claimed on purpose, with the
-// worktree and the developer session that continuation needs, and giving that
-// claim back would put a second run on work that is waiting to be picked up
-// where it left off.
-//
-// This is deliberately wider than the pipeline's own account of which runs it can
-// continue, and it is not a second copy of it: that one decides whether to resume
-// a run and checks the artifacts and the phase it would resume into, and this
-// only asks whether anything at all is recorded that says the run is owed
-// something. Being wider is the safe direction, because every way it is wrong
-// keeps a claim rather than taking one.
+// second is AwaitingContinuation below.
 func holdsItsClaim(run runstate.State, now time.Time, within time.Duration) bool {
 	if run.Status.Terminal() {
 		return false
@@ -172,13 +167,43 @@ func holdsItsClaim(run runstate.State, now time.Time, within time.Duration) bool
 	if !run.UpdatedAt.IsZero() && now.Sub(run.UpdatedAt) < within {
 		return true
 	}
+	return AwaitingContinuation(run)
+}
+
+// AwaitingContinuation reports a run that stopped short on purpose and is owed
+// the rest of what it was doing.
+//
+// It is the half of a claim's liveness that cannot be read from a clock at all. A
+// run that stopped for a provider that refused it, for the operator's pause, for
+// an unresolved directive, or for work its item depends on does not just go quiet
+// — it returns, and its process exits, leaving a record nothing writes to again
+// until somebody continues it. Its item stays claimed on purpose, with the
+// worktree and the developer session that continuation needs, so a record that
+// looks as still as a killed one's is the ordinary state of every one of these.
+//
+// Every field read here records a wait that is still pending, and that is the
+// whole rule: a marker is only evidence of a continuation being owed while it
+// still says one is being waited for. A count of rounds already taken is not one
+// of them and must not be added — RepairAttempts is the example that was tried
+// and is wrong, because it never goes back down, so a killed run that had been
+// round once would be exempt from every audit for the rest of the product's life.
+// Nothing is lost by leaving it out: a repair the harness would rather continue
+// than replace is recognized from the run's recorded blocker, which the pipeline
+// reads for itself before it starts anything fresh.
+//
+// It is exported because the audit re-asks it under the run's lease, where the
+// answer is authoritative rather than a snapshot: a run that parked between the
+// reading and the lease must not be settled by what the reading saw.
+func AwaitingContinuation(run runstate.State) bool {
+	if run.Status.Terminal() {
+		return false
+	}
 	return run.UsageLimitResetsAt != nil ||
 		run.PauseCause != "" ||
 		run.ProviderStop != "" ||
 		run.DirectivePause != nil ||
 		run.DependencyPause != nil ||
-		run.OperatorHeldSince != nil ||
-		run.RepairAttempts > 0
+		run.OperatorHeldSince != nil
 }
 
 // laterRun reports the more recent of two runs on one item, in the order
@@ -208,19 +233,18 @@ func lastWord(run runstate.State) time.Time {
 
 // whatBecameOfIt is the clause a message about a dead claim is written around.
 //
-// The two cases are said apart because they are two different things to do
-// about. A run that ended left the claim behind by finishing without giving it
-// back, and the item is free the moment the claim goes. A run that simply stopped
-// saying anything is a process somebody or something killed, and its record is
-// still in flight — so releasing the claim makes the tracker true and the
-// scheduler will not pull the item until `yoyo reconcile` settles the run that is
-// still holding its slot.
+// The two cases are said apart because they are two different histories, and a
+// reader acts on the difference: a run that ended left the claim behind by
+// finishing without giving it back, and one still recorded as in flight is a
+// process that was killed. What is done about them is the same either way — the
+// claim goes back and the item is pullable again — so neither clause hands
+// anybody a chore.
 func whatBecameOfIt(latest runstate.State, since time.Time) string {
 	stamp := since.UTC().Format(time.RFC3339)
 	if latest.Status.Terminal() {
 		return fmt.Sprintf("its run %s ended %s at %s and the claim outlived it",
 			latest.RunID, latest.Outcome(), stamp)
 	}
-	return fmt.Sprintf("its run %s is recorded as still in flight and last said anything at %s, so the process holding it is gone; `yoyo reconcile` settles the run itself",
+	return fmt.Sprintf("its run %s was recorded as still in flight and last wrote to its own record at %s, so the process holding it is gone",
 		latest.RunID, stamp)
 }

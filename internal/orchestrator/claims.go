@@ -44,17 +44,26 @@ type ClaimTracker interface {
 	Release(ctx context.Context, id, reason string) (beads.WorkItem, error)
 }
 
-// ClaimRuns is the durable run state one claim audit reads. It reads every run
-// the harness holds rather than only the ones in flight, because the case this
-// exists for is a claim whose run is over: a listing of what is still going
-// cannot tell an item nothing ever ran from an item whose run ended without
-// giving its claim back.
+// ClaimRuns is the durable run state one claim audit reads and settles.
 //
-// It reads and never adopts. Deciding a claim is dead is a question about
-// records, and taking a lease to answer it would be this pass acting on runs it
-// is not making.
+// Recorded is every run the harness holds rather than only the ones in flight,
+// because the case this exists for is a claim whose run is over: a listing of
+// what is still going cannot tell an item nothing ever ran from an item whose run
+// ended without giving its claim back.
+//
+// AdoptRun and Save are what make a release worth making. Giving the claim back
+// is only half of freeing an item whose process was killed: the run's own record
+// still says it is in flight, so it goes on filling a developer slot and the
+// scheduler goes on passing the item over as already running. The record has to
+// be settled too, and it is settled under the run's own lease — which is also the
+// only test of liveness that is not a guess, because a lease belongs to a live
+// process and is dropped by the operating system when that process dies.
+//
+// It is satisfied by runstate.Store.
 type ClaimRuns interface {
 	Recorded() ([]runstate.State, error)
+	AdoptRun(ctx context.Context, runID string) (runstate.State, *runstate.Lease, error)
+	Save(state runstate.State) error
 }
 
 // ClaimReleases is where a release is written down and read back. The reading is
@@ -167,6 +176,22 @@ func (a ClaimAuditor) Audit(ctx context.Context, claimed []beads.WorkItem) (Clai
 			Because:       dead.Because,
 			ReleasedAt:    now,
 		}
+		// The run's own record is settled first, because it is the half that
+		// actually frees the item: a record still saying in flight fills a developer
+		// slot and keeps the scheduler passing the item over however open the tracker
+		// says it is. A release made without it would be a fix that reads as one and
+		// leaves the line exactly as idle as it was.
+		settled, problem := a.settle(ctx, dead, now)
+		if problem != "" {
+			sweep.Problems = append(sweep.Problems, problem)
+			continue
+		}
+		if !settled {
+			// A live process holds the run after all. The reading that called this
+			// claim dead was a snapshot and the lease is the authority, so the claim
+			// is left exactly where it is and nothing is said about it.
+			continue
+		}
 		if _, err := a.Tracker.Release(ctx, dead.WorkItemID, releaseNotes(released)); err != nil {
 			sweep.Problems = append(sweep.Problems, fmt.Sprintf(
 				"%s is claimed with nothing working on it and the claim could not be given back, so nothing will pull it: %v",
@@ -187,6 +212,72 @@ func (a ClaimAuditor) Audit(ctx context.Context, claimed []beads.WorkItem) (Clai
 		sweep.Released = append(sweep.Released, released)
 	}
 	return sweep, nil
+}
+
+// settle ends the record of the run that left the claim, so the developer slot it
+// was filling comes back with the item. It reports whether the claim may now be
+// given back, and the sentence to say where it may not.
+//
+// A run that is already terminal needs nothing: its slot is already free, and
+// this is every claim left behind by a run that ended in its own process.
+//
+// The rest are settled under the run's own lease, which is doing two jobs at
+// once. It is the exclusion — nothing else may be deciding about this run while
+// this writes to it — and it is the liveness test that is not a guess: a lease is
+// an advisory lock a live holder owns and the operating system drops when that
+// holder dies, so a lease this pass can take is a process that is gone. That is
+// why a claim the reading called dead is still left alone when the lease refuses:
+// the reading was a snapshot of timestamps, and this is the answer.
+//
+// The ending recorded is cancelled rather than failed, in the read model's own
+// vocabulary: nothing here judged the change. The worktree and the branch are
+// untouched, so whatever the killed run produced is exactly where it left it, and
+// the fresh run this frees the item for is a fresh run rather than a repair —
+// which is what a process nobody can resume leaves either way.
+//
+// This settles a narrower set than `yoyo reconcile` does and never overlaps it:
+// it moves no refs, removes nothing, closes nothing, and touches only runs that
+// have gone quiet past the audit's threshold with no wait recorded on them.
+func (a ClaimAuditor) settle(ctx context.Context, dead readmodel.DeadClaim, now time.Time) (bool, string) {
+	state, lease, err := a.Runs.AdoptRun(ctx, dead.RunID)
+	switch {
+	case errors.Is(err, runstate.ErrRunHeld):
+		return false, ""
+	case err != nil:
+		return false, fmt.Sprintf(
+			"%s is claimed with nothing working on it and its run %s could not be taken up to be settled, so the slot it holds is not free and nothing will pull the item: %v",
+			dead.WorkItemID, dead.RunID, err)
+	}
+	defer lease.Release()
+
+	// Re-read under the lease, because only now is this process the one entitled
+	// to act on what it reads. A run that ended or parked between the reading and
+	// the lease is owed exactly what its record now says it is.
+	if state.Status.Terminal() {
+		return true, ""
+	}
+	if readmodel.AwaitingContinuation(state) {
+		return false, ""
+	}
+	completedAt := now
+	state.Status = runstate.StatusCancelled
+	state.UpdatedAt = completedAt
+	state.CompletedAt = &completedAt
+	state.Failure = settledRunFailure(dead)
+	if err := a.Runs.Save(state); err != nil {
+		return false, fmt.Sprintf(
+			"%s is claimed with nothing working on it and the ending of its run %s could not be recorded, so the slot it holds is not free and nothing will pull the item: %v",
+			dead.WorkItemID, dead.RunID, err)
+	}
+	return true, ""
+}
+
+// settledRunFailure is what the ended record says about itself, in the words
+// somebody reading the run afterwards needs: not that it failed at anything, but
+// that the process carrying it stopped existing and this is who noticed.
+func settledRunFailure(dead readmodel.DeadClaim) string {
+	return fmt.Sprintf("the process carrying this run stopped writing to its record at %s and did not come back, so the claim audit ended the run and gave %s back to the queue. Nothing about the change was judged, and the branch and worktree it left are untouched.",
+		dead.Since.UTC().Format(time.RFC3339), dead.WorkItemID)
 }
 
 // saidAlready reports a claim already given back over this same dead run.

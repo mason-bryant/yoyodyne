@@ -541,19 +541,25 @@ pass.
 
 Every pull also audits the claims the tracker holds against the runs the harness
 actually has. An item the tracker calls in progress with no run alive behind it
-for half an hour is given back to the queue, with the reason on its notes, so the
-scheduler can pull it again -- a killed process leaves its item claimed forever
-otherwise, and a claimed item has left the ready queue, so a machine stuck behind
-one looks exactly like a drained one. The audit runs before the machine's own
-capacity is consulted, because a machine whose every slot is held by a run that
-died never gets as far as reading the queue. Alive means the run's own record
-still moving rather than its status saying it is in flight. A run that is owed a
-continuation keeps its claim however quiet it has gone -- one waiting out a
-provider, one parked by "yoyo pause", one held up by a directive or by work it
-depends on, one owed a repair -- and so does a claim with no recorded run behind
-it, which is somebody else's rather than the harness's to take back. Each release
-is on the pass and sent to the operators once. "yoyo reconcile" is still what
-settles the run record itself, which is what frees the developer slot it holds.
+for half an hour is given back to the queue, with the reason on its notes, and
+the record of the run that left it is ended so the developer slot it was filling
+comes back with it -- a killed process leaves its item claimed and its slot taken
+forever otherwise, and a claimed item has left the ready queue, so a machine
+stuck behind one looks exactly like a drained one. Both halves happen before the
+intake hold and the machine's own capacity are even consulted, because a held or
+full session is exactly where a dead claim hides and neither pass gets as far as
+reading the queue.
+
+Alive means the run's own record still moving rather than its status saying it is
+in flight, and it is settled under that run's lease, which a live process holds
+and the operating system drops when it dies. A run that is owed a continuation
+keeps its claim however quiet it has gone -- one waiting out a provider, one
+parked by "yoyo pause", one held up by a directive or by work it depends on --
+and so does a claim with no recorded run behind it, which is somebody else's
+rather than the harness's to take back. The ended run is recorded as cancelled
+rather than failed: nothing about its change was judged, and the branch and
+worktree it left are untouched. Each release is on the pass and sent to the
+operators once.
 
 A watching session guards itself three ways. It does not start the same item
 twice unless the item has changed -- what it says, what it is for, its priority,

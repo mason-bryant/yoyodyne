@@ -704,12 +704,12 @@ that way in the week of 2026-09-01.
 The audit is the watch loop's rather than the sink's, because giving a claim back
 is directing work and this surface does not direct work. What arrives here is
 what it did:
-[the harness gives the claim back](operations.md#claims-with-nothing-working-on-them)
-and records having done it, and the sink says each release once, in the item's own
-thread, as a direct message. Once is the log's position rather than this
-process's memory, so a restarted sink re-says nothing; and it is never repeated
-while it stands, because what follows a release is the item being pulled again,
-which says so itself.
+[the harness gives the claim back and ends the record of the run that left it](operations.md#claims-with-nothing-working-on-them),
+so the item is pullable again and the developer slot is free, and the sink says
+each release once, in the item's own thread, as a direct message. Once is the
+log's position rather than this process's memory, so a restarted sink re-says
+nothing; and it is never repeated, because what follows a release is the item
+being pulled again, which says so itself.
 
 ### What arrives as a direct message
 

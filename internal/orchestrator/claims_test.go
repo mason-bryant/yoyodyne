@@ -9,6 +9,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -37,15 +38,74 @@ type claimHarness struct {
 	order []string
 	runs  []runstate.State
 	log   []runstate.ReleasedClaim
-	// failRelease and failAppend stand in for a tracker that refuses and a log
-	// that cannot be written.
+	// saved is every run record the audit ended, by run, which is the half of a
+	// release that actually frees the developer slot.
+	saved map[string]runstate.State
+	// held names the runs whose lease a live process owns, which is the only
+	// answer about liveness that is not a guess.
+	held map[string]bool
+	// adopted names the runs whose lease this audit took, so a test can say that a
+	// claim was settled under one rather than written to from outside.
+	adopted []string
+	// parkOnAdopt replaces what a run's record says once its lease is taken, which
+	// is how a run that parked between the reading and the lease is driven.
+	parkOnAdopt map[string]runstate.State
+	// failRelease, failAppend, failRuns, failAdopt, and failSave stand in for a
+	// tracker that refuses, a log that cannot be written, and a run store that
+	// will not answer or will not be written.
 	failRelease error
 	failAppend  error
 	failRuns    error
+	failAdopt   error
+	failSave    error
 }
 
 func newClaimHarness(runs ...runstate.State) *claimHarness {
-	return &claimHarness{released: map[string]string{}, runs: runs}
+	return &claimHarness{
+		released:    map[string]string{},
+		runs:        runs,
+		saved:       map[string]runstate.State{},
+		held:        map[string]bool{},
+		parkOnAdopt: map[string]runstate.State{},
+	}
+}
+
+// AdoptRun stands in for taking a run's lease. The nil lease is what a released
+// one is: runstate.Lease.Release tolerates it, so a fake needs nothing more.
+func (h *claimHarness) AdoptRun(_ context.Context, runID string) (runstate.State, *runstate.Lease, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.failAdopt != nil {
+		return runstate.State{}, nil, h.failAdopt
+	}
+	if h.held[runID] {
+		return runstate.State{}, nil, runstate.ErrRunHeld
+	}
+	h.adopted = append(h.adopted, runID)
+	if parked, changed := h.parkOnAdopt[runID]; changed {
+		return parked, nil, nil
+	}
+	for _, run := range h.runs {
+		if run.RunID == runID {
+			return run, nil, nil
+		}
+	}
+	return runstate.State{}, nil, errors.New("no such run")
+}
+
+func (h *claimHarness) Save(state runstate.State) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.failSave != nil {
+		return h.failSave
+	}
+	h.saved[state.RunID] = state
+	for index, run := range h.runs {
+		if run.RunID == state.RunID {
+			h.runs[index] = state
+		}
+	}
+	return nil
 }
 
 func (h *claimHarness) Release(_ context.Context, id, reason string) (beads.WorkItem, error) {
@@ -141,6 +201,29 @@ func TestADeadClaimIsGivenBackAndRecorded(t *testing.T) {
 	if recorded.WorkItemID != "yoyodyne-ifd.264" || recorded.RunID != "run-264" {
 		t.Fatalf("recorded = %+v, want the item and the run that left it", recorded)
 	}
+	// The other half of freeing the item: the run's own record is ended, so it
+	// stops filling a developer slot and the scheduler stops passing the item over
+	// as already running. It is ended under the run's lease rather than written to
+	// from outside.
+	if len(harness.adopted) != 1 || harness.adopted[0] != "run-264" {
+		t.Fatalf("adopted = %v, want the dead run taken up under its own lease", harness.adopted)
+	}
+	settled, ended := harness.saved["run-264"]
+	if !ended {
+		t.Fatal("the dead run's record was left in flight, so the slot it holds is still taken and nothing will pull the item")
+	}
+	if settled.Status != runstate.StatusCancelled {
+		t.Fatalf("the settled run reads %q, want a killed process recorded as cancelled rather than judged", settled.Status)
+	}
+	if settled.CompletedAt == nil || !settled.CompletedAt.Equal(auditMoment) {
+		t.Fatalf("the settled run completed at %v, want the moment of the audit", settled.CompletedAt)
+	}
+	if settled.Status.Terminal() != true || settled.Outcome() != runstate.OutcomeCancelled {
+		t.Fatalf("the settled run reads as %q, want cancelled", settled.Outcome())
+	}
+	if !strings.Contains(settled.Failure, "stopped writing to its record") {
+		t.Fatalf("the settled run says %q, want it to say the process stopped existing", settled.Failure)
+	}
 	if recorded.WorkItemTitle != "Recoverable failures retry with backoff" {
 		t.Fatalf("title = %q, want the item's own title carried onto the record", recorded.WorkItemTitle)
 	}
@@ -149,6 +232,99 @@ func TestADeadClaimIsGivenBackAndRecorded(t *testing.T) {
 	}
 	if len(harness.log) != 1 {
 		t.Fatalf("the release log holds %d record(s), want the release written down", len(harness.log))
+	}
+}
+
+// A claim left by a run that ended in its own process needs no settling: its slot
+// is already free, so the audit gives the claim back and writes nothing to the
+// run.
+func TestAClaimLeftByARunThatAlreadyEndedIsNotWrittenTo(t *testing.T) {
+	t.Parallel()
+
+	over := deadRun("run-over", "yoyodyne-ifd.9")
+	completed := auditMoment.Add(-9 * time.Hour)
+	over.Status = runstate.StatusFailed
+	over.CompletedAt = &completed
+	harness := newClaimHarness(over)
+	sweep, err := harness.auditor().Audit(context.Background(),
+		[]beads.WorkItem{claimedItem("yoyodyne-ifd.9", "Ended in its own process")})
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(sweep.Released) != 1 {
+		t.Fatalf("released = %+v, want the claim given back", sweep.Released)
+	}
+	if len(harness.saved) != 0 {
+		t.Fatalf("saved = %+v, want a run that already ended left exactly as it is", harness.saved)
+	}
+}
+
+// The lease is the authority on liveness, and the reading before it is a
+// snapshot. A run a live process still holds keeps its claim and is said nothing
+// about, because the timestamps that called it dead were wrong.
+func TestAClaimWhoseRunIsStillHeldIsLeftToTheProcessHoldingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newClaimHarness(deadRun("run-alive", "yoyodyne-ifd.9"))
+	harness.held["run-alive"] = true
+	sweep, err := harness.auditor().Audit(context.Background(),
+		[]beads.WorkItem{claimedItem("yoyodyne-ifd.9", "Quiet but alive")})
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(sweep.Released) != 0 || len(sweep.Problems) != 0 {
+		t.Fatalf("sweep = %+v, want a held run left alone and nothing said", sweep)
+	}
+	if len(harness.released) != 0 || len(harness.saved) != 0 {
+		t.Fatal("a run a live process holds was written to or had its claim taken")
+	}
+}
+
+// And a run that parked between the reading and the lease is owed what its record
+// now says, not what the snapshot said. It is re-read under the lease for exactly
+// this.
+func TestARunThatParkedUnderTheLeaseKeepsItsClaim(t *testing.T) {
+	t.Parallel()
+
+	harness := newClaimHarness(deadRun("run-parking", "yoyodyne-ifd.9"))
+	parked := deadRun("run-parking", "yoyodyne-ifd.9")
+	resets := auditMoment.Add(time.Hour)
+	parked.UsageLimitResetsAt = &resets
+	harness.parkOnAdopt["run-parking"] = parked
+	sweep, err := harness.auditor().Audit(context.Background(),
+		[]beads.WorkItem{claimedItem("yoyodyne-ifd.9", "Parked while we looked")})
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(sweep.Released) != 0 || len(sweep.Problems) != 0 {
+		t.Fatalf("sweep = %+v, want the parked run left alone", sweep)
+	}
+	if len(harness.saved) != 0 || len(harness.released) != 0 {
+		t.Fatal("a run that parked under the lease was ended or had its claim taken")
+	}
+}
+
+// A run whose ending could not be recorded leaves the slot taken, so the claim is
+// not given back either: an item back in the queue that nothing can pull is a fix
+// that reads as one. The failure is named instead.
+func TestARunThatCouldNotBeSettledLeavesTheClaimAloneAndIsNamed(t *testing.T) {
+	t.Parallel()
+
+	harness := newClaimHarness(deadRun("run-stuck", "yoyodyne-ifd.9"))
+	harness.failSave = errors.New("the run store is read-only")
+	sweep, err := harness.auditor().Audit(context.Background(),
+		[]beads.WorkItem{claimedItem("yoyodyne-ifd.9", "Unsettleable")})
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(sweep.Released) != 0 {
+		t.Fatalf("released = %+v, want no release over a slot that is still taken", sweep.Released)
+	}
+	if len(sweep.Problems) != 1 || !strings.Contains(sweep.Problems[0], "nothing will pull the item") {
+		t.Fatalf("problems = %v, want the unsettled run named with what it costs", sweep.Problems)
+	}
+	if len(harness.released) != 0 {
+		t.Fatal("the claim was given back over a run whose slot is still held")
 	}
 }
 
@@ -284,35 +460,108 @@ func TestAnAuditorWithoutItsPartsRefuses(t *testing.T) {
 	}
 }
 
-// The placement in the loop, which is the half of this that decides whether the
-// failure it exists for is ever reached. Both developer slots are held by runs
-// that died, so the pass never gets as far as the queue — and the audit still
-// runs, because it is asked before the machine's own capacity is consulted.
-func TestAFullMachineOfDeadRunsStillAuditsItsClaims(t *testing.T) {
+// claimLog is the release log as a scheduler test needs it. It is its own type
+// rather than another method on the harness because the harness already answers
+// List for the tracker, and one type cannot answer it two ways.
+type claimLog struct {
+	mu      sync.Mutex
+	records []runstate.ReleasedClaim
+}
+
+func (l *claimLog) Append(released runstate.ReleasedClaim) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.records = append(l.records, released)
+	return nil
+}
+
+func (l *claimLog) List() ([]runstate.ReleasedClaim, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]runstate.ReleasedClaim(nil), l.records...), nil
+}
+
+// Release gives a claimed item back to the harness's queue, exactly as the
+// tracker does: the item is open, and pullable again.
+func (h *scheduleHarness) Release(_ context.Context, id, _ string) (beads.WorkItem, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for index, item := range h.items {
+		if item.ID == id {
+			h.items[index].Status = "open"
+			h.ready[id] = true
+			return h.items[index], nil
+		}
+	}
+	return beads.WorkItem{}, fmt.Errorf("no such work item %s", id)
+}
+
+// Recorded is every run this harness holds, in flight or finished.
+func (h *scheduleHarness) Recorded() ([]runstate.State, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	states := make([]runstate.State, 0, len(h.inFlight)+len(h.finished))
+	for _, state := range h.inFlight {
+		states = append(states, state)
+	}
+	return append(states, h.finished...), nil
+}
+
+// AdoptRun hands over a run the way the store does, with the nil lease a released
+// one is.
+func (h *scheduleHarness) AdoptRun(_ context.Context, runID string) (runstate.State, *runstate.Lease, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, state := range h.inFlight {
+		if state.RunID == runID {
+			return state, nil, nil
+		}
+	}
+	return runstate.State{}, nil, runstate.ErrRunHeld
+}
+
+// Save records a run's ending. A terminal record leaves the in-flight set, which
+// is the whole of what frees the developer slot it was filling.
+func (h *scheduleHarness) Save(state runstate.State) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if state.Status.Terminal() {
+		delete(h.inFlight, state.WorkItemID)
+		h.finished = append(h.finished, state)
+		return nil
+	}
+	h.inFlight[state.WorkItemID] = state
+	return nil
+}
+
+// The whole of the fix in one pass, against the real audit rather than a stand-in
+// for it: both developer slots are held by runs that died, the machine reads as
+// full, and the item is claimed so nothing would pull it anyway. Nobody types
+// anything. The pass audits the claims before it consults its own capacity,
+// settles the dead runs, gives the items back, and starts one of them.
+//
+// This is the placement and the completeness together, because they only mean
+// anything together: an audit the pass never reaches fixes nothing, and a release
+// that leaves the run record in flight frees no slot.
+func TestDeadRunsFillingTheMachineAreSettledAndTheirItemsPulledAgain(t *testing.T) {
 	t.Parallel()
 
 	harness := newScheduleHarness()
 	harness.capacity = 2
+	harness.now = auditMoment
 	harness.inFlight["yoyodyne-ifd.209.7"] = deadRun("run-209-7", "yoyodyne-ifd.209.7")
 	harness.inFlight["yoyodyne-ifd.264"] = deadRun("run-264", "yoyodyne-ifd.264")
 	harness.items = []beads.WorkItem{
 		claimedItem("yoyodyne-ifd.209.7", "The first of the pair"),
 		claimedItem("yoyodyne-ifd.264", "The second of the pair"),
 	}
-	var audited [][]string
-	harness.audit = func(_ *scheduleHarness, claimed []beads.WorkItem) (ClaimSweep, error) {
-		ids := make([]string, 0, len(claimed))
-		for _, item := range claimed {
-			ids = append(ids, item.ID)
-		}
-		audited = append(audited, ids)
-		return ClaimSweep{Released: []runstate.ReleasedClaim{{
-			SchemaVersion: runstate.ReleasedClaimSchemaVersion,
-			ProductID:     "yoyodyne",
-			WorkItemID:    "yoyodyne-ifd.264",
-			Because:       "its run run-264 is recorded as still in flight",
-			ReleasedAt:    auditMoment,
-		}}}, nil
+	log := &claimLog{}
+	harness.claims = ClaimAuditor{
+		Tracker:   harness,
+		Runs:      harness,
+		Releases:  log,
+		ProductID: "yoyodyne",
+		Clock:     fixedClock{at: auditMoment},
 	}
 
 	scheduler := Scheduler{Open: harness.open, Sleep: harness.sleep, Now: harness.clock}
@@ -320,20 +569,112 @@ func TestAFullMachineOfDeadRunsStillAuditsItsClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
 	}
-	if schedule.Stopped != ScheduleCapacityFull {
-		t.Fatalf("stopped = %q, want the pass to have found the machine full", schedule.Stopped)
+	if len(schedule.Released) != 2 {
+		t.Fatalf("released = %+v, want both dead claims given back", schedule.Released)
 	}
-	if len(audited) != 1 {
-		t.Fatalf("the claims were audited %d time(s), want once on the pull that found the machine full", len(audited))
+	if schedule.ClaimProblem != "" {
+		t.Fatalf("claim problem = %q, want none", schedule.ClaimProblem)
 	}
-	if len(audited[0]) != 2 {
-		t.Fatalf("audited %v, want both claimed items handed to the audit", audited[0])
+	// The runs that were filling the machine are ended, so the slots are free.
+	for _, state := range harness.finished {
+		if state.Status != runstate.StatusCancelled {
+			t.Fatalf("run %s ended %q, want a killed process recorded as cancelled", state.RunID, state.Status)
+		}
 	}
-	if len(schedule.Released) != 1 || schedule.Released[0].WorkItemID != "yoyodyne-ifd.264" {
-		t.Fatalf("released = %+v, want what the audit gave back on the schedule", schedule.Released)
+	if len(harness.inFlight) != 0 {
+		t.Fatalf("%d run(s) are still in flight, want the dead ones settled", len(harness.inFlight))
+	}
+	// And the items are pulled again in the same pass, with nobody having typed
+	// anything: this is what "released so the scheduler can retry it" has to mean.
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %d run(s) (%s), want both released items pulled again", len(schedule.Started), schedule.Render())
+	}
+	pulled := map[string]bool{}
+	for _, started := range schedule.Started {
+		pulled[started.WorkItemID] = true
+	}
+	for _, id := range []string{"yoyodyne-ifd.209.7", "yoyodyne-ifd.264"} {
+		if !pulled[id] {
+			t.Fatalf("%s was never pulled again: %s", id, schedule.Render())
+		}
+	}
+	if len(log.records) != 2 {
+		t.Fatalf("the release log holds %d record(s), want one per item given back", len(log.records))
 	}
 	if !strings.Contains(schedule.Render(), "given back to the queue") {
 		t.Fatalf("the rendered pass does not say what it gave back:\n%s", schedule.Render())
+	}
+}
+
+// The audit is asked before the intake hold short-circuits the pass, and that
+// placement is deliberate: a held queue is often this session's own brake, placed
+// exactly when runs are failing one after another, which is the pass a dead claim
+// is most likely to have just appeared on. Giving a claim back chooses nothing
+// and starts nothing, so a hold has no business suppressing it.
+func TestAHeldIntakeStillAuditsTheClaims(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.held = &runstate.IntakeHold{HeldAt: auditMoment.Add(-time.Hour), Reason: "runs kept blocking"}
+	harness.inFlight["yoyodyne-ifd.264"] = deadRun("run-264", "yoyodyne-ifd.264")
+	harness.items = []beads.WorkItem{claimedItem("yoyodyne-ifd.264", "Stuck while intake is held")}
+	log := &claimLog{}
+	harness.claims = ClaimAuditor{
+		Tracker:   harness,
+		Runs:      harness,
+		Releases:  log,
+		ProductID: "yoyodyne",
+		Clock:     fixedClock{at: auditMoment},
+	}
+
+	scheduler := Scheduler{Open: harness.open, Sleep: harness.sleep, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleIntakeHeld {
+		t.Fatalf("stopped = %q, want the hold to have stopped the choosing", schedule.Stopped)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %d run(s), want a held intake to still choose nothing", len(schedule.Started))
+	}
+	if len(schedule.Released) != 1 {
+		t.Fatalf("released = %+v, want the dead claim given back under a held intake", schedule.Released)
+	}
+}
+
+// The audit's own tracker reading is the one in this loop that is reported rather
+// than retried, and a held intake is why. A hold is answered from a switch and
+// needs no tracker at all, so a pass that routed the audit's read through the
+// retry would stop answering "intake is held" on a machine whose tracker is down
+// — which is a command an operator runs precisely when things are going wrong.
+func TestATrackerThatWillNotAnswerDoesNotStopTheHoldBeingReported(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-alpha")...)
+	harness.held = &runstate.IntakeHold{HeldAt: auditMoment.Add(-time.Hour), Reason: "the queue needs reordering first"}
+	harness.failList = func(*scheduleHarness, int) error { return errors.New("no beads database found") }
+	harness.claims = ClaimAuditor{
+		Tracker:   harness,
+		Runs:      harness,
+		Releases:  &claimLog{},
+		ProductID: "yoyodyne",
+		Clock:     fixedClock{at: auditMoment},
+	}
+
+	scheduler := Scheduler{Open: harness.open, Sleep: harness.sleep, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v, want the hold reported rather than the reading raised", err)
+	}
+	if schedule.Stopped != ScheduleIntakeHeld {
+		t.Fatalf("stopped = %q, want the hold to be why the choosing stopped", schedule.Stopped)
+	}
+	if schedule.IntakeHeld == nil {
+		t.Fatal("the hold was not named, so an operator reading this is told nothing they can act on")
+	}
+	if !strings.Contains(schedule.ClaimProblem, "could not be read") {
+		t.Fatalf("claim problem = %q, want the unread claims said beside the hold", schedule.ClaimProblem)
 	}
 }
 
