@@ -130,6 +130,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
 )
@@ -345,8 +346,15 @@ type Starter func(ctx context.Context, workItemID string, selection runstate.Sel
 // for every pull rather than once for the command, which is what makes a
 // configuration edit take effect at the next selection.
 type Pull struct {
-	Tracker    ScheduleTracker
-	Runs       ScheduleRuns
+	Tracker ScheduleTracker
+	Runs    ScheduleRuns
+	// Stoppages is the harness's own record of the work it stopped and nobody has
+	// decided about, which is what tells a dependency block that has since cleared
+	// from a stoppage somebody still has to release. It is optional, and a pull
+	// wired without it holds every blocked item rather than choosing work whose
+	// hold it could not read; see backlog.Holds for why that is the safe
+	// direction. It is satisfied by *runstate.Store.
+	Stoppages  readmodel.Stoppages
 	Intake     IntakeHolds
 	Directives Directives
 	// Staleness is optional; see ScheduleStaleness for what a pull without one
@@ -1405,6 +1413,7 @@ type idleClass string
 const (
 	idleCarriedInConversation idleClass = "carried in conversation"
 	idleParked                idleClass = "parked"
+	idleHeldForAPerson        idleClass = "held for a person"
 	idleWaitingOnOtherWork    idleClass = "waiting on other work"
 	idleAlreadyTried          idleClass = "already tried this session"
 	idleAlreadyInFlight       idleClass = "already in flight"
@@ -1582,6 +1591,8 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 		return conversationExecutedReason(entry.Executor), true
 	case entry.Parking.Parked():
 		return parkedReason(entry.Parking), true
+	case entry.Awaiting != "":
+		return heldReason(entry.Awaiting), true
 	default:
 		return "", false
 	}
@@ -1598,9 +1609,26 @@ func unreadyClass(entry backlog.Entry) idleClass {
 		return idleCarriedInConversation
 	case entry.Parking.Parked():
 		return idleParked
+	case entry.Awaiting != "":
+		return idleHeldForAPerson
 	default:
 		return idleWaitingOnOtherWork
 	}
+}
+
+// heldReason says that the item is somebody's to release, and what they have to
+// decide. Like the parking above it is not a wait, and it is named against the
+// item for the same reason: the count it would otherwise disappear into is work
+// that becomes pullable on its own, and this never does.
+//
+// Naming it is the whole of what the status field could not do. A blocked status
+// says one word about a stoppage nobody has decided and about work whose every
+// blocker closed months ago, so a queue that reported both as unready reported
+// nothing anybody could act on — which is how 41 items, two of them p0, went a
+// morning without one line saying which of them were waiting on a person.
+func heldReason(awaiting string) string {
+	return fmt.Sprintf("it is held for a person and this is not a wait for anything: %s. Until they decide, it is passed over at every pull",
+		singleLine(awaiting, maxScheduleReasonBytes))
 }
 
 // parkedReason says that the work was deliberately taken out of reach, and says
@@ -1859,7 +1887,19 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	for _, item := range admitted {
 		items[item.ID] = item
 	}
-	queue := backlog.Order(admitted, pullable)
+	// What the harness is holding for a person, which is what a status of blocked
+	// cannot say: it is written when work stops and never rewritten when what
+	// stopped it clears. A pull wired without the records reads no holds and the
+	// queue then holds every blocked item, which is what this did before the
+	// records were consulted at all.
+	var held backlog.Holds
+	if p.Stoppages != nil {
+		held, err = readmodel.HeldForAPerson(p.Stoppages)
+		if err != nil {
+			return pulled{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
+		}
+	}
+	queue := backlog.Order(admitted, pullable, held)
 	// Coverage is read one status wider than the backlog. A claimed child has left
 	// the queue and is never chosen from here, but it is a run in flight over the
 	// same work, so its parent is the last thing that should be started beside it.

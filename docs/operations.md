@@ -813,7 +813,12 @@ Needs a human (1):
 - **Not startable** is each admitted item nothing will pull, with the refusal
   that stops it — the queue's own account where the queue has one, the directive
   where a directive pauses the work, and otherwise what has stopped the harness
-  choosing at all. That last one comes from a closed set of named reasons, each
+  choosing at all. The queue's own account includes an item **held for a person**:
+  a run stopped on it and its change is still on a branch, or its stoppage is in
+  front of the development manager and nobody has decided about it. That is
+  named per item rather than left to its `blocked` status, because a status says
+  the same word about work whose every blocker closed months ago, and reading it
+  as a refusal is what hid two-thirds of the backlog on 2026-09-04. That last one comes from a closed set of named reasons, each
   of which says whose move it is: the operator's hold, a held intake, every
   developer slot taken, a live watch session that has found nothing it can
   start, no watch session running any more, and a product no session has ever

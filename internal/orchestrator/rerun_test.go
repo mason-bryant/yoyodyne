@@ -544,22 +544,36 @@ func TestARerunOfAnItemNoRunCanStartOnIsRefusedAndSpendsNothing(t *testing.T) {
 		want string
 	}{
 		{
-			// The 102.5 seam: stopping the run blocked the item, and a fresh run
-			// starts on an open one.
-			name: "the item is blocked",
-			item: beads.WorkItem{ID: docketedItem, Status: "blocked"},
-			want: `status is "blocked", want open`,
+			// A status a run has already taken. Blocked is deliberately not here:
+			// stopping a run blocks the item, and refusing the re-run for that was
+			// the 102.5 seam — a decision spent on the field rather than on
+			// anything the item was actually waiting for.
+			name: "the item is already claimed",
+			item: beads.WorkItem{ID: docketedItem, Status: "in_progress"},
+			want: `status is "in_progress", want open or blocked`,
 		},
 		{
 			name: "the item is closed",
 			item: beads.WorkItem{ID: docketedItem, Status: "closed"},
-			want: `status is "closed", want open`,
+			want: `status is "closed", want open or blocked`,
 		},
 		{
 			name: "something the item depends on is not done",
 			item: beads.WorkItem{
 				ID:           docketedItem,
 				Status:       "open",
+				Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.102.5", Type: "blocks", Status: "open"}},
+			},
+			want: "blocked by: yoyodyne-ifd.102.5",
+		},
+		{
+			// And the same reading of a blocked one: what refuses it is the
+			// unfinished work it waits for, which is a fact about the dependency
+			// graph rather than about the status field.
+			name: "a blocked item is still waiting on unfinished work",
+			item: beads.WorkItem{
+				ID:           docketedItem,
+				Status:       "blocked",
 				Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.102.5", Type: "blocks", Status: "open"}},
 			},
 			want: "blocked by: yoyodyne-ifd.102.5",
@@ -1064,37 +1078,22 @@ func TestARerunRacedForTheLastSlotGivesTheClaimBackAndLaunchesLater(t *testing.T
 }
 
 // The sequence that was worked around by hand on yoyodyne-ifd.125.1, replayed
-// over the real pipeline: the stopped run had blocked its item, so the first
-// carry-out is refused — and because the refusal is made before anything is
-// claimed, the same decision launches on the first attempt that is not refused,
-// with nobody having had to remember to reopen the item beforehand.
-func TestARerunRefusedOnABlockedItemLaunchesOnTheNextAttempt(t *testing.T) {
+// over the real pipeline — and no longer a sequence at all. Stopping the run
+// blocked the item, and a status set when work stops and never rewritten when
+// what stopped it clears is not something to refuse a decision over. Nothing the
+// item is waiting for is unfinished, so the development manager's decision is
+// carried out on the first attempt, with nobody having had to remember to reopen
+// the item beforehand.
+func TestARerunOnABlockedItemIsCarriedOutWithoutAnybodyReopeningIt(t *testing.T) {
 	t.Parallel()
 
 	pipelined := newPipelinedRerun(t, nil)
 	// What stopping the run did to the item, which is the state a docketed
 	// stoppage is ordinarily found in.
 	pipelined.tracker.item.Status = "blocked"
-	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
-	if err == nil || !strings.Contains(err.Error(), `status is "blocked", want open`) {
-		t.Fatalf("Rerun() error = %v, want a refusal naming the item's status", err)
-	}
-	if result.Started {
-		t.Fatalf("result = %#v, want nothing started", result)
-	}
-	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
-		t.Fatalf("developer invocations = %d, want none behind a refusal", invocations)
-	}
-	if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
-		t.Fatalf("claimed = %t, error = %v, want the stoppage to keep its re-run", claimed, err)
-	}
-
-	// The item is put back, and the same decision is carried out — rather than
-	// being refused by the once-only guard for a run that never happened.
-	pipelined.tracker.item.Status = "open"
 	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
 	if err != nil {
-		t.Fatalf("Rerun() after the item was put back error = %v", err)
+		t.Fatalf("Rerun() on a blocked item error = %v, want the decision carried out", err)
 	}
 	if !rerun.Started || rerun.Outcome.Integration == nil {
 		t.Fatalf("result = %#v, want the fresh run started and landed", rerun)

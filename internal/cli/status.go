@@ -301,6 +301,7 @@ func standingSources(configPath string) readmodel.Sources {
 	}
 	if store, err := runstate.NewStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Runs = store
+		sources.Stoppages = store
 	}
 	if store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Conversations = store

@@ -388,6 +388,7 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 	return orchestrator.Pull{
 		Tracker:    tracker,
 		Runs:       parts.store,
+		Stoppages:  parts.store,
 		Intake:     parts.intake,
 		Directives: parts.directives,
 		Staleness: repositoryStaleness{

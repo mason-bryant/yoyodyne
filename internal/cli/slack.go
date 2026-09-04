@@ -342,6 +342,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	// could adjudicate. Every store here is one this sink already holds.
 	standing := &readmodel.Sources{
 		Runs:           runs,
+		Stoppages:      runs,
 		Conversations:  conversations,
 		Tracker:        tracker,
 		Directives:     directives,
