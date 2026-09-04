@@ -242,9 +242,16 @@ type RunSummary struct {
 	// same kind of fact — what a repair attempt was handed, and usually the thing
 	// behind the reason rather than a second reason — and because it is the one
 	// the reader cannot go and reproduce: the worktree it describes is gone.
-	RefusedPaths   *PathRefusal `json:"refused_paths,omitempty"`
-	PublishFailure string       `json:"publish_failure,omitempty"`
-	CleanupFailure string       `json:"cleanup_failure,omitempty"`
+	RefusedPaths *PathRefusal `json:"refused_paths,omitempty"`
+	// ContextTruncation is what the work item's notes lost to the context budget
+	// when this run's context was assembled. It says nothing about the work — a
+	// run whose item was truncated delivered exactly as it would have — and it is
+	// here because it is otherwise legible only inside the text an agent was
+	// handed: an item's notes only ever grow, so the loss arrives without anybody
+	// deciding it and stays until somebody sees it.
+	ContextTruncation *ContextTruncation `json:"context_truncation,omitempty"`
+	PublishFailure    string             `json:"publish_failure,omitempty"`
+	CleanupFailure    string             `json:"cleanup_failure,omitempty"`
 	// CompletionRecordingFailure is on the summary for the reason it is on the
 	// state: the run record is the one durable home this failure class has.
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
@@ -418,6 +425,10 @@ func (s *Store) summarize(state State) RunSummary {
 	if state.PathRefusal != nil {
 		refused := *state.PathRefusal
 		summary.RefusedPaths = &refused
+	}
+	if state.ContextTruncation != nil {
+		truncated := *state.ContextTruncation
+		summary.ContextTruncation = &truncated
 	}
 	if state.Selection != nil {
 		selection := *state.Selection

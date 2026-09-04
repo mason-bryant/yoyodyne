@@ -46,6 +46,19 @@ const maxOmissionCauseBytes = 160
 // for exactly that.
 const minTermBytes = 4
 
+// maxNotesTruncationBytes is the allowance the marker standing in for dropped
+// notes is charged before any note is kept, so what the marker costs is settled
+// before the notes are chosen rather than discovered once they are rendered. The
+// counts inside it grow with the item, so it is roughly twice the marker's own
+// length; TestNotesTruncationMarkerFitsWhatIsChargedForIt renders it at
+// implausible counts and requires the headroom to still be there.
+const maxNotesTruncationBytes = 768
+
+// maxTruncatedItemIDBytes keeps the item the marker names to part of a line, so
+// what the marker costs is bounded by the sentence rather than by an identifier
+// the tracker chose.
+const maxTruncatedItemIDBytes = 80
+
 type Request struct {
 	RepositoryRoot string
 	WorkItem       beads.WorkItem
@@ -72,6 +85,13 @@ type Bundle struct {
 	// structure, so a caller can report them to the operator as well as to the
 	// product manager.
 	SpecificationProblems []SpecificationProblem
+	// NotesTruncation says the work item's own notes did not fit and what was
+	// dropped to make them, and is nil for the ordinary item whose notes fit
+	// whole. It is reported rather than only marked in the rendered text: an item
+	// silently carrying half of what was recorded on it is exactly the thing an
+	// operator has to be able to see from the run record rather than by reading
+	// the context an agent was handed.
+	NotesTruncation *NotesTruncation
 	// SpecificationsIncluded counts the specifications among the references,
 	// which the references alone no longer answer: a role that reads its own
 	// documents as well has references whether or not the product records any
@@ -112,14 +132,6 @@ func Assemble(request Request) (Bundle, error) {
 		return Bundle{}, err
 	}
 
-	base := renderWorkItem(request.WorkItem)
-	if len(base) > maxBytes {
-		return Bundle{}, fmt.Errorf("work item context is %d bytes, exceeding limit %d", len(base), maxBytes)
-	}
-	bundle := Bundle{Bytes: len(base)}
-	var output bytes.Buffer
-	output.WriteString(base)
-
 	// What the statements of omission can cost is reserved before any reference is
 	// read and released as each one is decided. Without it the reference that
 	// filled the budget would be the one whose omission there was no room left to
@@ -128,6 +140,23 @@ func Assemble(request Request) (Bundle, error) {
 	for _, plan := range plans {
 		pendingNotes += len(plan.note())
 	}
+
+	base := renderWorkItem(request.WorkItem)
+	var truncation *NotesTruncation
+	if len(base) > maxBytes {
+		// The notes are cut against what is left after that reservation rather than
+		// against the whole budget: an item truncated to the last byte would leave
+		// nothing to say a reference with, and these are the items whose notes name
+		// the most of them.
+		base, truncation = truncateNotes(request.WorkItem, maxBytes-pendingNotes)
+		if truncation == nil {
+			return Bundle{}, fmt.Errorf("work item context is %d bytes before any of its notes, exceeding limit %d",
+				len(renderWorkItem(withoutNotes(request.WorkItem))), maxBytes)
+		}
+	}
+	bundle := Bundle{Bytes: len(base), NotesTruncation: truncation}
+	var output bytes.Buffer
+	output.WriteString(base)
 
 	for _, plan := range plans {
 		pendingNotes -= len(plan.note())
@@ -617,6 +646,103 @@ Depends on: %s
 %s
 `, item.ID, item.Title, item.Status, renderDependencies(item),
 		emptyFallback(item.Description), emptyFallback(item.Design), emptyFallback(item.AcceptanceCriteria), emptyFallback(item.Notes))
+}
+
+// NotesTruncation is what an item's notes lost to the context budget: how many
+// of the oldest of them were dropped, how much of the notes that was, and how
+// much of them the context still carries.
+type NotesTruncation struct {
+	DroppedNotes int
+	DroppedBytes int
+	KeptBytes    int
+}
+
+// truncateNotes renders a work item too large for the budget by dropping the
+// oldest of its notes until it fits, and reports what it dropped.
+//
+// The notes are the one part of a work item that grows without bound: every run
+// appends to them and nothing removes them, so a long-lived item eventually
+// renders past any budget — and in exactly the way nobody can edit it back out
+// of, because the notes are append-only. That is why they are what is cut. The
+// description and the acceptance criteria are what the item is for and are never
+// dropped, so an item that does not fit with none of its notes is refused
+// instead: this returns no truncation for one, and the caller refuses on that.
+//
+// The oldest go first because the newest are what the item is being worked from:
+// the reviewer's last findings, the operator's most recent guidance, the round
+// that just stopped.
+func truncateNotes(item beads.WorkItem, maxBytes int) (string, *NotesTruncation) {
+	// What the marker costs is charged before any note is kept, so keeping one
+	// more note can never be what leaves no room to say the rest were dropped —
+	// the one thing this rendering must never be silent about.
+	available := maxBytes - len(renderWorkItem(withoutNotes(item))) - maxNotesTruncationBytes
+	if available < 0 {
+		return "", nil
+	}
+	notes := splitNotes(item.Notes)
+	kept, keptBytes := 0, 0
+	for index := len(notes) - 1; index >= 0; index-- {
+		if keptBytes+len(notes[index]) > available {
+			break
+		}
+		kept++
+		keptBytes += len(notes[index])
+	}
+	dropped := notes[:len(notes)-kept]
+	truncation := &NotesTruncation{DroppedNotes: len(dropped), KeptBytes: keptBytes}
+	for _, note := range dropped {
+		truncation.DroppedBytes += len(note)
+	}
+	truncated := item
+	truncated.Notes = renderNotesTruncation(item.ID, *truncation) + strings.Join(notes[len(notes)-kept:], "")
+	return renderWorkItem(truncated), truncation
+}
+
+// splitNotes cuts an item's notes into the notes they were appended as. A note
+// is appended with a blank line in front of it, so a blank line is where one note
+// ends and the next begins; the blank lines themselves stay with the note above
+// them, which is what leaves what survives starting on a note rather than on the
+// gap after a dropped one.
+func splitNotes(notes string) []string {
+	var split []string
+	var current strings.Builder
+	blank := false
+	for _, raw := range strings.SplitAfter(notes, "\n") {
+		if strings.TrimSpace(raw) == "" {
+			blank = true
+			current.WriteString(raw)
+			continue
+		}
+		if blank && current.Len() > 0 {
+			split = append(split, current.String())
+			current.Reset()
+		}
+		blank = false
+		current.WriteString(raw)
+	}
+	if current.Len() > 0 {
+		split = append(split, current.String())
+	}
+	return split
+}
+
+// renderNotesTruncation says what was dropped and where the whole of it is, in
+// the place the dropped notes would have been. A gap left unmarked is what would
+// let notes that were cut for size be read as notes nobody ever wrote.
+func renderNotesTruncation(itemID string, truncation NotesTruncation) string {
+	return fmt.Sprintf(`[the oldest %d note(s) on %s, %d bytes of them, are not included here: this item's
+notes do not fit in this context, so the most recent of them were kept and the
+rest were dropped. Nothing else about the item was: the description and the
+acceptance criteria above are whole. The notes are held whole on the work item
+itself — read them there, or in the tracker's export in this worktree, rather
+than reading what follows as all of them.]
+
+`, truncation.DroppedNotes, singleLine(itemID, maxTruncatedItemIDBytes), truncation.DroppedBytes)
+}
+
+func withoutNotes(item beads.WorkItem) beads.WorkItem {
+	item.Notes = ""
+	return item
 }
 
 // blocksDependency is the tracker relation that makes one item wait for another.

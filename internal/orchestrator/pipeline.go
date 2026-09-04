@@ -956,7 +956,25 @@ func (a *activeRun) claim(ctx context.Context) error {
 		return fmt.Errorf("assemble claimed work item context: %w", err)
 	}
 	a.context = bundle.Text
+	a.state.ContextTruncation = recordedContextTruncation(bundle)
 	return nil
+}
+
+// recordedContextTruncation carries what an item's notes lost to the context
+// budget onto the run record, and nothing where they lost nothing. The context
+// says so in its own marker, which is what the agent reading it sees; this is
+// what a reader of the record sees without opening the context, and it is worth
+// seeing because an item's notes only ever grow — the run where an item first
+// stops fitting is a run nobody decided anything about.
+func recordedContextTruncation(bundle contextbundle.Bundle) *runstate.ContextTruncation {
+	if bundle.NotesTruncation == nil {
+		return nil
+	}
+	return &runstate.ContextTruncation{
+		DroppedNotes: bundle.NotesTruncation.DroppedNotes,
+		DroppedBytes: bundle.NotesTruncation.DroppedBytes,
+		KeptBytes:    bundle.NotesTruncation.KeptBytes,
+	}
 }
 
 // ErrNoRunToContinue is what a continuation refused for not finding the run it
@@ -1118,6 +1136,11 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	if err != nil {
 		return Outcome{}, fmt.Errorf("assemble resumed work item context: %w", err)
 	}
+	// The item's notes have grown since the interrupted process read them — this
+	// run's own stoppage is among them — so what they lost to the budget is
+	// recorded from the context this process actually assembled rather than left
+	// as what the earlier one recorded.
+	state.ContextTruncation = recordedContextTruncation(bundle)
 	// Refusing here costs the run nothing: it stays exactly as the interrupted
 	// process left it, still resumable, rather than spending an attempt on work
 	// that could not be integrated afterwards anyway.

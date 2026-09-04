@@ -683,6 +683,16 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		fmt.Fprintf(writer, "  refused paths: %s\n", singleLine(refused))
 		printed = true
 	}
+	// Nor is a truncated item, and for the same reason: the run delivered exactly
+	// as it would have, on an item saying slightly less than the tracker holds. It
+	// is printed because nothing else shows it — an item's notes only ever grow,
+	// so this arrives on some ordinary run nobody decided anything about, and stays
+	// on every run of that item afterwards until somebody sees it.
+	if run.ContextTruncation != nil {
+		fmt.Fprintf(writer, "  work item truncated for context: the oldest %d note(s), %d bytes, were not delivered\n",
+			run.ContextTruncation.DroppedNotes, run.ContextTruncation.DroppedBytes)
+		printed = true
+	}
 	// A divergence is not a reason the run ended and is never read as one: the run
 	// delivered exactly as it would have, and what diverged is the observation
 	// beside it. It is printed because the declarative soak is counted off it, and
