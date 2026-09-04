@@ -515,9 +515,10 @@ func (s *Sink) pass(ctx context.Context) error {
 			// which is said to them by name: it is set per delivery rather than per
 			// poster because the poster is one and the deliveries are many.
 			into.mention = delivery.Mention
-			// The one class of message that is about the harness being degraded
-			// rather than about any work goes to the operators as well as to the
-			// channel, because a channel is somewhere somebody chooses to look.
+			// The two classes the direct-message tier admits — the harness being
+			// degraded, and a fact said exactly once to a person — go to the
+			// operators as well as to the channel, because a channel is somewhere
+			// somebody chooses to look.
 			into.direct = nil
 			if delivery.Direct {
 				into.direct = s.operators
