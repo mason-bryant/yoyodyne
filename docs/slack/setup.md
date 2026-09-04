@@ -424,6 +424,11 @@ Into the work item's thread, as they happen:
 - the reviewer's verdict, approved or sent back for repairs
 - the promotion onto the target branch
 - the pull request, a merge the forge queued, and the merge itself
+- a merge that is not going to happen — the forge refused it, usually because
+  the remote target moved under the run, or gave up on one it had queued — said
+  as a `warning`, because nobody chose it and nothing else in the record says it:
+  the change is promoted, the thread reads as landed, and what is left is a
+  publication waiting on a person
 - the run waiting — an exhausted usage limit, an overloaded provider, an
   operator hold, an unresolved directive — and the run carrying on afterwards. A
   run waiting out an exhausted usage limit is said as a `warning`, because it
@@ -495,11 +500,13 @@ held at 00:02 and a session that stopped at its budget both said so, correctly,
 and then nothing said anything for ten hours that could be told from a healthy
 quiet queue or a dead sink. So a line that is **choosing nothing while work is
 ready** says so again while it stands — every `--heartbeat`, an hour by default —
-naming what stopped it, how long that has been true, and how much ready work a
-run could have been started for behind it:
+naming what stopped it, how long that has been true, how much ready work a
+run could have been started for behind it, and how many promotions are waiting on
+the forge to publish them:
 
 > Nothing is being chosen on this product: intake is held — the harness held
-> intake after runs kept blocking, for 10 hours now, with 4 items ready to pull.
+> intake after runs kept blocking, for 10 hours now, with 4 items ready to pull
+> and one promotion awaiting the forge.
 
 Four states count: the operator holding all harness activity, a held intake
 (whoever held it), a watch session that has found nothing it can start, and no
@@ -507,14 +514,21 @@ watch session running at all. It stops the moment the state clears, and says
 nothing about the clearing — the release, the session opening, or the run it
 starts says that itself.
 
-It is deliberately narrow about when it speaks. A run in flight is not a stalled
-line, so nothing is said while work is visibly moving. A product nobody has ever
-watched is not one either: running items by name is a queue you are choosing to
-keep, not a harness waiting on you. And **an idle line with nothing ready stays
-completely silent**, which is the whole point — silence has to keep meaning
-nothing to do, so that the times it does not are worth reading. Turning it off is
-not offered, because what that buys is silence that means waiting on you; how
-often is `--heartbeat`.
+The count of promotions is the second thing that makes it speak, and it is there
+because a **dropped merge** is said once, as it happens. A reader who was away
+for that message has nothing else that would ever tell them: the change is
+promoted, the thread reads as landed, and the pull request sits on the forge. So
+the count comes back with the line while the publication stands, and a line with
+nothing ready at all says so as long as there is one.
+
+It is otherwise deliberately narrow about when it speaks. A run in flight is not
+a stalled line, so nothing is said while work is visibly moving. A product nobody
+has ever watched is not one either: running items by name is a queue you are
+choosing to keep, not a harness waiting on you. And **an idle line with nothing
+ready and nothing waiting on the forge stays completely silent**, which is the
+whole point — silence has to keep meaning nothing to do, so that the times it
+does not are worth reading. Turning it off is not offered, because what that buys
+is silence that means waiting on you; how often is `--heartbeat`.
 
 **And one thing is the absence of a state.** All four of those are read from
 something a process wrote down, which works only while that process is alive to

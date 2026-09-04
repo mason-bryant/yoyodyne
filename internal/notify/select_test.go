@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -562,6 +563,71 @@ func TestPublicationQueuedMergeAndMergeAreThreeSeparateFacts(t *testing.T) {
 	}
 	if !strings.Contains(message.Body, "#84") {
 		t.Fatalf("body %q does not name the request", message.Body)
+	}
+}
+
+// The fourth fact about getting a change out, and the one that used to be said
+// nowhere: the merge is not going to happen. It is a warning because nobody
+// chose it and nothing else in the record says it — the change is promoted, the
+// thread reads as landed, and what follows is a publication sitting on the forge
+// until somebody happens to look.
+func TestAMergeTheForgeWillNotMakeIsSaidAsAWarningWhenItIsDropped(t *testing.T) {
+	queued := running()
+	queued.PullRequest = &runstate.PullRequest{
+		Remote: "origin", Branch: "yoyodyne/ifd-68-2", Number: 84,
+		URL: "https://example.test/pull/84", HeadCommit: strings.Repeat("c", 40), MergeQueued: true,
+	}
+	dropped := queued
+	request := *queued.PullRequest
+	request.MergeQueued = false
+	dropped.PullRequest = &request
+	dropped.PublishFailure = "the forge dropped the queued merge of pull request 84: it is open and has no merge queued for it"
+	dropped.MergeDrop = &runstate.MergeDrop{At: moment, Reason: dropped.PublishFailure}
+
+	kinds, notifications := crossed(t, queued, dropped)
+	if len(kinds) != 1 || kinds[0] != KindMergeDropped {
+		t.Fatalf("a dropped merge crossed %v", kinds)
+	}
+	said := notifications[0]
+	if said.Event.Severity != report.SeverityWarning {
+		t.Fatalf("a dropped merge is said at %q, want a warning", said.Event.Severity)
+	}
+	if !said.Speaker.IsHarness() {
+		t.Fatalf("a dropped merge is spoken by %q, want the harness", said.Speaker.Key())
+	}
+	message, err := Render(said.Topic, said.Speaker, said.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, fact := range []string{"#84", "dropped the queued merge"} {
+		if !strings.Contains(message.Body, fact) {
+			t.Fatalf("body %q does not carry %q", message.Body, fact)
+		}
+	}
+	// Said once, like every other crossing: a thread is a narrative, and the
+	// resurfacing is the heartbeat's count rather than this message again.
+	if kinds, _ := crossed(t, dropped, dropped); len(kinds) != 0 {
+		t.Fatalf("the same drop crossed again as %v", kinds)
+	}
+}
+
+// The drop is read from the moment the record holds rather than from the queued
+// flag going out, and this is why: a sink that first reads a run after the drop
+// has to say it, and comparing flags it never saw set would say nothing at all.
+// The four merges that waited hours were exactly this reading — nobody was
+// watching when they were queued.
+func TestADropIsSaidToASinkThatNeverSawTheMergeQueued(t *testing.T) {
+	dropped := running()
+	dropped.PullRequest = &runstate.PullRequest{
+		Remote: "origin", Branch: "yoyodyne/ifd-68-2", Number: 84,
+		URL: "https://example.test/pull/84", HeadCommit: strings.Repeat("c", 40),
+	}
+	dropped.PublishFailure = "check the remote target branch before merging: origin main moved"
+	dropped.MergeDrop = &runstate.MergeDrop{At: moment, Reason: dropped.PublishFailure}
+
+	kinds, _ := crossed(t, runstate.State{}, dropped)
+	if !slices.Contains(kinds, KindMergeDropped) {
+		t.Fatalf("a run first read after its merge was dropped crossed %v", kinds)
 	}
 }
 

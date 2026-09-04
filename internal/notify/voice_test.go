@@ -77,6 +77,7 @@ func fullyRecorded(kind Kind) Event {
 			Reason:          "reordering the backlog first",
 			Since:           moment.Add(-3 * time.Hour),
 			Ready:           4,
+			Outstanding:     2,
 			Behind:          12,
 			Accumulated:     37,
 			Ending:          string(runstate.OutcomeTimedOut),

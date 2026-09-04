@@ -80,6 +80,13 @@ const (
 	KindPublished      Kind = "publication.opened"
 	KindMergeQueued    Kind = "merge.queued"
 	KindMergeCompleted Kind = "merge.completed"
+	// A merge that is not going to happen: the forge refused it, or gave up on
+	// one it had queued. It is the fourth fact about getting a change out and the
+	// only one nobody finds out about on their own — the change is promoted, the
+	// item usually reads as landed, and what is left is a publication waiting on a
+	// person with nothing saying so. It said nothing at all until the moment it
+	// happens became part of the record.
+	KindMergeDropped Kind = "merge.dropped"
 	// A run that stopped and one that carried on. Both are said because a queue
 	// that goes quiet at night is indistinguishable from a broken one until
 	// something says which it is.
@@ -230,6 +237,7 @@ func Kinds() []Kind {
 		KindPublished,
 		KindMergeQueued,
 		KindMergeCompleted,
+		KindMergeDropped,
 		KindRunParked,
 		KindRunContinued,
 		KindBlockerRecorded,
@@ -271,7 +279,7 @@ func (k Kind) Valid() bool {
 		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut,
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
-		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
+		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindRunEnded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
@@ -669,6 +677,14 @@ type Detail struct {
 	Stopped string    `json:"stopped,omitempty"`
 	Since   time.Time `json:"since,omitempty"`
 	Ready   int       `json:"ready,omitempty"`
+	// Outstanding is how many promoted changes are waiting on the forge to
+	// publish them, read by KindLineWaiting beside the ready count. It is the
+	// resurfacing half of a dropped merge: the drop is said once as it happens,
+	// and a reader who was not there is told again, as a count, every time the
+	// line reports itself — until the publication is settled. Zero is the
+	// ordinary answer and is said as itself, because "no promotions waiting" is
+	// the fact somebody scanning a quiet channel is actually checking for.
+	Outstanding int `json:"outstanding,omitempty"`
 	// Running is how many developer runs the session could see in flight, read by
 	// KindWatchIdle. It is half of whose move follows a poll that started nothing:
 	// a session idle on one slot while a run works on the other is the harness

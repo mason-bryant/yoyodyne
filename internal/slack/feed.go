@@ -291,13 +291,20 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// selected from, rather than asked for a second time: a run is in flight or it
 	// is not, and two readings of the same files a moment apart could disagree
 	// about it.
-	inFlight := 0
+	// What is waiting on the forge is counted from that same reading, for the same
+	// reason and from the record's own predicate rather than from a reading of the
+	// publication fields taken here: a count this surface derived for itself is a
+	// count `yoyo status` could come to disagree with about one run.
+	inFlight, awaitingForge := 0, 0
 	for _, state := range states {
 		if err := ctx.Err(); err != nil {
 			return Batch{}, err
 		}
 		if !state.Status.Terminal() {
 			inFlight++
+		}
+		if state.AwaitingForge() {
+			awaitingForge++
 		}
 		stream := runStream(state.RunID)
 		batch.Streams[stream] = struct{}{}
@@ -391,7 +398,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// one tracker read a heartbeat this surface promises rather than two.
 	ready := f.readyOnce()
 
-	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, ready, batch.Streams)
+	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, awaitingForge, ready, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}

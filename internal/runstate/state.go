@@ -373,6 +373,38 @@ type PullRequest struct {
 	MergeQueued bool `json:"merge_queued,omitempty"`
 }
 
+// MergeDrop is the moment a promoted change stopped being something the forge
+// was going to merge: the merge was refused while the run watched — the remote
+// target moved under it is the ordinary way — or the forge gave up on one it had
+// already queued.
+//
+// It is recorded rather than derived because a state that only exists at read
+// time cannot be said. That the publication is outstanding was always readable
+// from the record, by a status surface or a reconcile sweep somebody ran; what
+// nothing held was the moment it became true, so nothing could announce it and
+// four such merges once waited hours with the channel silent. This is that
+// moment, written where it happens and never revised afterwards.
+type MergeDrop struct {
+	At time.Time `json:"at"`
+	// Reason is why the merge is not going to happen, in the words of whoever
+	// found out. It is the same sentence the publication failure carries, kept
+	// beside the moment so a reader of the drop alone is not sent to another
+	// field to find out what it was.
+	Reason string `json:"reason"`
+}
+
+// Validate rejects a drop that cannot describe a real one.
+func (d MergeDrop) Validate() error {
+	var problems []error
+	if d.At.IsZero() {
+		problems = append(problems, errors.New("merge_drop at is required"))
+	}
+	if strings.TrimSpace(d.Reason) == "" {
+		problems = append(problems, errors.New("merge_drop reason is required: a drop nobody can say the cause of is not worth recording"))
+	}
+	return errors.Join(problems...)
+}
+
 // Validate rejects a published record that cannot describe a real pull request.
 func (p PullRequest) Validate() error {
 	var problems []error
@@ -1114,6 +1146,12 @@ type State struct {
 	// be pushed is an outstanding publication rather than a failed run — the same
 	// kind of fact as an outstanding cleanup.
 	PublishFailure string `json:"publish_failure,omitempty"`
+	// MergeDrop is when the merge of this run's promotion stopped being something
+	// the forge was going to do, and why. It is absent from every run whose merge
+	// happened, is still queued, or was never asked for, and it is written once by
+	// whoever found out — the run whose merge the forge refused, or the sweep that
+	// asked what became of a queued one.
+	MergeDrop *MergeDrop `json:"merge_drop,omitempty"`
 	// Failure is why this run ended, in the words of whoever ended it, and it is
 	// what every surface prints where it answers "why did this stop". It is
 	// written by whatever made the run terminal — the pipeline as it fails a run,
@@ -1501,6 +1539,17 @@ func (s State) Validate() error {
 			problems = append(problems, errors.New("a merged pull request the run asked the forge for requires recorded integration"))
 		}
 	}
+	if s.MergeDrop != nil {
+		if err := s.MergeDrop.Validate(); err != nil {
+			problems = append(problems, err)
+		}
+		// A dropped merge is a merge of something, so the record has to name the
+		// request it was going to merge. Without one the drop says a publication
+		// somebody has to look at is outstanding and nothing says which.
+		if s.PullRequest == nil {
+			problems = append(problems, errors.New("a recorded merge_drop requires the pull request whose merge was dropped"))
+		}
+	}
 	// A removal is only ever recorded with the evidence that earned it. There are
 	// four kinds: the run promoted its own work and cleaned up after it, triage
 	// retired what it preserved once another run superseded it, the convergence
@@ -1681,6 +1730,25 @@ func (s State) Outstanding() bool {
 		return false
 	}
 	return s.Phase != PhaseComplete || (s.PullRequest != nil && s.PullRequest.MergeQueued)
+}
+
+// AwaitingForge reports a promotion whose publication the forge has not
+// finished: the run is over, its change is on the target branch, and the pull
+// request that carries it to the remote is not recorded merged. A merge the
+// forge still has queued is one of these, and so is one it dropped — the drop
+// is the moment somebody has to be told about, and the waiting goes on until a
+// person or a later sweep resolves it.
+//
+// It is deliberately not Outstanding above, which asks whether the harness still
+// owes a step: a dropped merge stops the harness owing anything the moment the
+// run is settled, and the publication is still not on the remote. The two are
+// separate questions and reading one for the other is what let a settled run's
+// unpublished promotion stop being counted anywhere.
+func (s State) AwaitingForge() bool {
+	if !s.Status.Terminal() || s.Integration == nil || s.PullRequest == nil {
+		return false
+	}
+	return !s.PullRequest.Merged
 }
 
 // validateIndependentInvocations enforces what an integrated change claims: two

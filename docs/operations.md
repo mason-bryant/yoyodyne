@@ -570,7 +570,11 @@ first: something the base branch required went unmet, the harness does not
 merge past a requirement, and nothing about that publication is confirmed — so
 the item is handed back to you with a blocker rather than closed as integrated,
 which is also what puts it where a bounded re-arm of the dropped merge can be
-decided. A
+decided. The moment the drop is found out is recorded on the run as well, so it
+is announced in the item's thread as a `warning` rather than waiting for the next
+person who runs a status command — and until the publication is settled, it is
+counted in the [heartbeat](reporting.md) as a promotion awaiting the
+forge. A
 merge that **landed but could not be confirmed** is the second: the forge
 performed it, and the steps that confirm it — verifying the remote carries the
 promotion, recording the merge commit, retiring the consumed branch — failed,

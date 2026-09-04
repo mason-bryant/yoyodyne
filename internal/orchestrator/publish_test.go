@@ -710,6 +710,17 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 	if !strings.Contains(state.PublishFailure, "moved away from the content the promotion was written against") {
 		t.Errorf("durable publish failure = %q, want the drift named", state.PublishFailure)
 	}
+	// And the moment the merge stopped being expected, which is the half of this
+	// nothing held before: the outstanding publication was always readable by
+	// whoever went and looked, and a state that only exists at read time is one
+	// no channel can announce. Four promotions refused this way waited hours in
+	// silence for exactly that reason.
+	if state.MergeDrop == nil {
+		t.Fatalf("state = %#v, want the moment the merge was refused recorded", state)
+	}
+	if state.MergeDrop.At.IsZero() || state.MergeDrop.Reason != state.PublishFailure {
+		t.Errorf("merge drop = %#v, want the moment and the publication's own reason", state.MergeDrop)
+	}
 }
 
 // remoteMovingWorktrees is the real worktree manager with one seam: the callback
@@ -1600,6 +1611,9 @@ func TestReconcileFinishesAQueuedMergeTheForgePerformed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	if settled.MergeDrop != nil {
+		t.Errorf("merge drop = %#v recorded over a merge the forge performed", settled.MergeDrop)
+	}
 	if settled.PullRequest.MergeQueued || !settled.PullRequest.Merged {
 		t.Fatalf("settled pull request = %#v, want a merge that is no longer queued", settled.PullRequest)
 	}
@@ -1715,6 +1729,15 @@ func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 	}
 	if !strings.Contains(settled.PublishFailure, "dropped the queued merge") {
 		t.Errorf("durable publish failure = %q, want the dropped merge recorded", settled.PublishFailure)
+	}
+	// The drop is a moment as well as a state, and the moment is what a channel
+	// can say. Without it the only account of a dropped merge was a status
+	// surface somebody thought to run.
+	if settled.MergeDrop == nil {
+		t.Fatalf("settled state = %#v, want the moment the forge dropped the merge recorded", settled)
+	}
+	if settled.MergeDrop.At.IsZero() || !strings.Contains(settled.MergeDrop.Reason, "dropped the queued merge") {
+		t.Errorf("merge drop = %#v, want the moment and the reason it was dropped", settled.MergeDrop)
 	}
 	if !strings.Contains(fixture.tracker.notes, "Publication outstanding") {
 		t.Errorf("tracker notes do not report the outstanding publication:\n%s", fixture.tracker.notes)

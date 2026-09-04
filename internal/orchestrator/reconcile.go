@@ -482,6 +482,11 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	if !observed.Merged {
 		state.PublishFailure = fmt.Sprintf("the forge dropped the queued merge of pull request %d: it is %s and has no merge queued for it. A requirement of %s went unmet, and the harness does not merge past one, so the pull request needs a person",
 			published.Number, strings.ToLower(nonEmpty(observed.State, "in an unreported state")), state.Integration.TargetBranch)
+		// The moment the drop was found out, written down rather than left to be
+		// worked out again by whoever next reads the record. It is the one thing a
+		// channel can be told, and it is stamped here — before the settlement below
+		// takes the run in either of its two directions — so both of them carry it.
+		state.MergeDrop = &runstate.MergeDrop{At: r.clock().Now(), Reason: state.PublishFailure}
 		return r.settleDroppedMerge(ctx, state)
 	}
 	detail := fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
