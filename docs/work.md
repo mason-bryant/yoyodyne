@@ -209,7 +209,9 @@ harness choosing:
 It reads the admitted work in the order the product manager set, works out which
 of it can be pulled, and starts as many of those at once as
 `execution.max_concurrent_developers` leaves free — which is `1` until you raise
-it.
+it. Each run is the run above: its own branch, its own worktree, the same checks,
+the same independent reviewer, the same serial promotion. The command returns
+once every run it started has ended.
 
 Which items those are is asked of the records rather than of the item's status.
 For open work it is the tracker's own ready list, because a blocker lives in the
@@ -231,9 +233,7 @@ there, so a hold is lifted only by triage picking the change up or by the
 escalation being answered — at which point the records stop saying the item is
 held, and it becomes pullable without anybody having edited its status. A pass
 that cannot read those records holds every blocked item rather than releasing
-work whose hold it could not see. Each run is the run above: its own branch, its own worktree, the same
-checks, the same independent reviewer, the same serial promotion. The command
-returns once every run it started has ended.
+work whose hold it could not see.
 
 Capacity is enforced where a run is reserved rather than by the scheduler, so two
 of these, or one of these and a `yoyo run` beside it, share one limit rather than
@@ -258,9 +258,10 @@ both named. An item whose **executor is a persona conversation** rather than
 a developer run is passed over with what carries it named, which the paragraph
 after next is about. An item the product manager has **parked** is passed
 over with the parking reason named, which the paragraph after that is about. And
-an item **held for a person** — a stoppage whose change is still on a branch, or
-one nobody has decided about — is passed over with the hold named, because like
-the parking it is not a wait for anything and will not clear on its own. The other
+an item **held for a person** — a stoppage whose change is still on a branch or
+one nobody has decided about, in the sense the hold paragraph above gives it — is
+passed over with the hold named, because like the parking it is not a wait for
+anything and will not clear on its own. The other
 three — nothing reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them

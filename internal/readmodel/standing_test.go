@@ -235,7 +235,10 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		"  product-manager — product-manager, a turn in flight for 40s after 270 recorded turns\n",
 		"Not startable (2 of 3 admitted items):\n",
 		"  yoyodyne-ifd.200 — intake is held — the overnight looked wrong; `yoyo release` lifts it\n",
-		"  yoyodyne-ifd.201 — run run-b stopped on it and its change is preserved",
+		// The whole line, because docs/operations.md prints it as the example an
+		// operator reads: a wording change has to break the document and the test
+		// together rather than leaving the two saying different things.
+		"  yoyodyne-ifd.201 — run run-b stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; triage decides what happens to it\n",
 		"Needs a human (1):\n",
 		"intake is held, since 2026-08-30T10:00:00Z: the overnight looked wrong — the operator's",
 	} {
