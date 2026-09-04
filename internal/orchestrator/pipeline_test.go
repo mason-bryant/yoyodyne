@@ -440,6 +440,108 @@ func TestPipelineFailureNoteReportsArtifactsThatAreNotThere(t *testing.T) {
 	}
 }
 
+// The note says one of four things about each artifact, and the failure this
+// item exists to stop runs in both directions. Claiming an artifact is preserved
+// because nothing recorded removing it sends a reader after a checkout that is
+// gone; reporting one as lost because an observation did not find it sends a
+// reader after work that was integrated and cleaned up on purpose. Only an
+// artifact the run made, nothing removed, and the check did not find is a loss.
+func TestFailureNoteDescribesEachArtifactFromWhatWasSettledAboutIt(t *testing.T) {
+	t.Parallel()
+
+	const branch = "yoyodyne/yoyodyne-task/01234567"
+	const worktree = "/worktrees/yoyodyne-task-01234567"
+	for _, want := range []struct {
+		name         string
+		preservation *Preservation
+		outcome      Outcome
+		lost         bool
+		says         []string
+		omits        []string
+	}{
+		{
+			name:         "both there",
+			preservation: &Preservation{Branch: branch, BranchPresent: true, WorktreePath: worktree, WorktreePresent: true},
+			says:         []string{"Branch: " + branch + " (checked and there)", "Worktree: " + worktree + " (checked and there)"},
+			omits:        []string{"PRESERVATION FAILED"},
+		},
+		{
+			// The checkout went and nothing recorded removing it, which is the sweep
+			// having retired it or somebody having deleted it by hand.
+			name:         "a checkout nothing recorded removing",
+			preservation: &Preservation{Branch: branch, BranchPresent: true, WorktreePath: worktree},
+			lost:         true,
+			says:         []string{"PRESERVATION FAILED", "the worktree " + worktree, "Worktree: " + worktree + " (checked and NOT there)"},
+			omits:        []string{"the branch " + branch},
+		},
+		{
+			// The run promoted its work, cleaned up after it, and then failed. Both
+			// artifacts are gone on purpose and the integrated commit is what
+			// survives, so nothing is looked for and nothing is a loss.
+			name:         "both removed by the run's own cleanup",
+			preservation: &Preservation{Branch: branch, BranchRemoved: true, WorktreePath: worktree, WorktreeRemoved: true},
+			says:         []string{"Branch: " + branch + " (removed by this run's cleanup)", "Worktree: " + worktree + " (removed by this run's cleanup)"},
+			omits:        []string{"PRESERVATION FAILED", "checked and NOT there", "unchecked"},
+		},
+		{
+			// Cleanup interrupted between its two steps: the checkout is gone on
+			// purpose and the branch is still there.
+			name:         "a cleanup that removed only the checkout",
+			preservation: &Preservation{Branch: branch, BranchPresent: true, WorktreePath: worktree, WorktreeRemoved: true},
+			says:         []string{"Branch: " + branch + " (checked and there)", "Worktree: " + worktree + " (removed by this run's cleanup)"},
+			omits:        []string{"PRESERVATION FAILED"},
+		},
+		{
+			name:         "a check that could not be made",
+			preservation: &Preservation{Branch: branch, WorktreePath: worktree, Unverified: "the repository could not be read"},
+			says:         []string{"Branch: " + branch + " (unchecked)", "Preservation unchecked: the repository could not be read"},
+			omits:        []string{"PRESERVATION FAILED", "checked and there"},
+		},
+		{
+			// An outcome nothing checked at all, which is any caller that built one
+			// without going through a run's ending. A removal the record carries is
+			// still settled without a check.
+			name:    "no check recorded, and a cleanup that removed both",
+			outcome: Outcome{Branch: branch, BranchRemoved: true, WorktreePath: worktree, WorktreeRemoved: true},
+			says:    []string{"Branch: " + branch + " (removed by this run's cleanup)"},
+			omits:   []string{"PRESERVATION FAILED", "Preservation unchecked"},
+		},
+		{
+			name:    "no check recorded, and artifacts nothing removed",
+			outcome: Outcome{Branch: branch, WorktreePath: worktree},
+			says:    []string{"Branch: " + branch + " (unchecked)", "Preservation unchecked: nothing checked them as this run ended"},
+			omits:   []string{"PRESERVATION FAILED"},
+		},
+	} {
+		t.Run(want.name, func(t *testing.T) {
+			t.Parallel()
+
+			outcome := want.outcome
+			if want.preservation != nil {
+				outcome.Branch = want.preservation.Branch
+				outcome.BranchRemoved = want.preservation.BranchRemoved
+				outcome.WorktreePath = want.preservation.WorktreePath
+				outcome.WorktreeRemoved = want.preservation.WorktreeRemoved
+				outcome.Preservation = want.preservation
+				if lost := want.preservation.Lost(); lost != want.lost {
+					t.Errorf("Lost() = %t, want %t", lost, want.lost)
+				}
+			}
+			notes := strings.Join(renderPreservationNotes(outcome), "\n")
+			for _, says := range want.says {
+				if !strings.Contains(notes, says) {
+					t.Errorf("notes = %q, want %q in them", notes, says)
+				}
+			}
+			for _, omits := range want.omits {
+				if strings.Contains(notes, omits) {
+					t.Errorf("notes = %q, want nothing saying %q", notes, omits)
+				}
+			}
+		})
+	}
+}
+
 // vanishedWorktrees is a repository in which this run's checkout is gone by the
 // time anybody asks. It answers every other question the way the manager it
 // wraps does, so the run reaches its ending exactly as it otherwise would.

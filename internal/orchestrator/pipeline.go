@@ -479,26 +479,59 @@ func (p Pipeline) accountFor(alias string) config.AccountEndpoint {
 // So this says only what was seen. Unverified is why nothing could be seen at
 // all, which is a third answer rather than a missing artifact: a check that
 // could not be made must not be rendered as either preservation or loss.
+//
+// The removal flags are the fourth answer, and they are here because the same
+// false claim runs the other way. A run that promoted its work, cleaned up after
+// it, and then failed has a branch and a worktree that are legitimately gone —
+// the integrated commit is what survives — and an observation alone cannot tell
+// that from an artifact something took. Reported as a loss it would send a reader
+// after a branch and a preserved-work ref for work that is in the target branch,
+// which is this item's own defect pointed backwards. So an artifact whose earned
+// removal the record already carries is not checked and never reported lost.
 type Preservation struct {
-	Branch          string `json:"branch,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	// BranchRemoved and WorktreeRemoved are the run record's own account of a
+	// removal this run earned: its promotion's cleanup, in the only phase that can
+	// reach one. Neither is ever set from an observation — that is what the
+	// present flags are — and each one says the artifact beside it is gone on
+	// purpose.
+	BranchRemoved   bool   `json:"branch_removed,omitempty"`
 	BranchPresent   bool   `json:"branch_present"`
 	WorktreePath    string `json:"worktree_path,omitempty"`
+	WorktreeRemoved bool   `json:"worktree_removed,omitempty"`
 	WorktreePresent bool   `json:"worktree_present"`
 	Unverified      string `json:"unverified,omitempty"`
 }
 
-// Verified reports a check that actually reached the repository. Everything else
-// here is only meaningful when it is true.
+// Verified reports that nothing stopped the check the note needed. It is true
+// where the check was made and true where there was nothing left to check,
+// because both leave the note with no unanswered question; Unverified is only
+// ever a check that was wanted and could not be made.
 func (p Preservation) Verified() bool { return strings.TrimSpace(p.Unverified) == "" }
 
-// Lost reports an artifact the run recorded making and the check found gone.
-// That is the state this whole type exists to make sayable: nothing removed it
-// on the record, and it is not there.
+// Lost reports an artifact the run recorded making, nothing recorded removing,
+// and the check did not find. That is the state this whole type exists to make
+// sayable, and all three parts of it are load-bearing: an artifact this run's own
+// cleanup removed is gone on purpose and is not a loss.
 func (p Preservation) Lost() bool {
 	if !p.Verified() {
 		return false
 	}
-	return (p.Branch != "" && !p.BranchPresent) || (p.WorktreePath != "" && !p.WorktreePresent)
+	return p.branchLost() || p.worktreeLost()
+}
+
+func (p Preservation) branchLost() bool {
+	return p.Branch != "" && !p.BranchRemoved && !p.BranchPresent
+}
+
+func (p Preservation) worktreeLost() bool {
+	return p.WorktreePath != "" && !p.WorktreeRemoved && !p.WorktreePresent
+}
+
+// checkable reports an artifact whose fate the record does not already settle,
+// which is the only kind there is anything to look for.
+func (p Preservation) checkable() bool {
+	return (p.Branch != "" && !p.BranchRemoved) || (p.WorktreePath != "" && !p.WorktreeRemoved)
 }
 
 type Outcome struct {
@@ -4503,6 +4536,13 @@ func (a *activeRun) prepareScratch() error {
 // that is gone: a bootstrap failure before the worktree existed preserved
 // nothing and must not be rendered as having lost anything.
 //
+// Neither is an artifact this run's own cleanup already removed. That removal is
+// earned — the work is in the target branch and the record says so — and looking
+// for the artifact would find it absent and report the integrated change as
+// lost. So the record's removal flags are carried through and the repository is
+// only asked about what they leave open; a run that cleaned up both artifacts
+// asks nothing at all.
+//
 // It is given its own deadline for the reason recording the outcome and the
 // price are: a run's own context is usually already cancelled by the time it
 // ends, and a check that could not be made is what the note has to say rather
@@ -4513,7 +4553,15 @@ func (a *activeRun) verifyPreservation() *Preservation {
 	if a.state.Branch == "" && a.state.WorktreePath == "" {
 		return nil
 	}
-	preservation := &Preservation{Branch: a.state.Branch, WorktreePath: a.state.WorktreePath}
+	preservation := &Preservation{
+		Branch:          a.state.Branch,
+		BranchRemoved:   a.state.BranchRemoved,
+		WorktreePath:    a.state.WorktreePath,
+		WorktreeRemoved: a.state.WorktreeRemoved,
+	}
+	if !preservation.checkable() {
+		return preservation
+	}
 	if a.pipeline.Worktrees == nil {
 		preservation.Unverified = "this process has no repository access to check them with"
 		return preservation
@@ -5927,12 +5975,14 @@ func renderFailureNotes(outcome Outcome) string {
 // renderPreservationNotes says what is left of a failed run's change, from what
 // the run saw of it rather than from what its record claims.
 //
-// Every branch here is a different sentence on purpose. "Checked and there" is
-// the only one that promises anything, and it is the only one earned by an
-// observation; a check that could not be made says so and promises nothing; and
-// an artifact the run made that is not there is stated as the loss it is, at the
-// top of the note, with the two places the work can still be rather than a
-// verdict this cannot reach.
+// Every phrase here is a different answer on purpose. "Checked and there" is the
+// only one that promises anything, and it is the only one earned by an
+// observation; "removed by this run's cleanup" is the record's own account of a
+// removal the run earned, which is why nothing looks for that artifact and
+// nothing calls it lost; a check that could not be made says so and promises
+// nothing; and an artifact the run made that nothing removed and the check did
+// not find is stated as the loss it is, at the top of the note, with the two
+// places the work can still be rather than a verdict this cannot reach.
 func renderPreservationNotes(outcome Outcome) []string {
 	preservation := outcome.Preservation
 	if preservation == nil {
@@ -5941,39 +5991,37 @@ func renderPreservationNotes(outcome Outcome) []string {
 		if outcome.Branch == "" && outcome.WorktreePath == "" {
 			return nil
 		}
-		// The record names an artifact and nothing checked it. Naming it without
-		// the check is what this exists to stop, so it is named as unchecked.
-		return renderUncheckedArtifacts(outcome, "nothing checked them as this run ended")
-	}
-	if !preservation.Verified() {
-		return renderUncheckedArtifacts(outcome, preservation.Unverified)
+		// The record names an artifact and nothing checked it. Naming it without the
+		// check is what this exists to stop, so it is named as unchecked — except for
+		// an artifact the record already says the run's cleanup removed, which is
+		// settled without any check.
+		preservation = &Preservation{
+			Branch:          outcome.Branch,
+			BranchRemoved:   outcome.BranchRemoved,
+			WorktreePath:    outcome.WorktreePath,
+			WorktreeRemoved: outcome.WorktreeRemoved,
+		}
+		if preservation.checkable() {
+			preservation.Unverified = "nothing checked them as this run ended"
+		}
 	}
 	var lines []string
 	if preservation.Lost() {
 		lines = append(lines, "PRESERVATION FAILED: "+preservationLoss(*preservation))
 	}
 	if preservation.Branch != "" {
-		lines = append(lines, "Branch: "+preservation.Branch+describePresence(preservation.BranchPresent))
+		lines = append(lines, "Branch: "+preservation.Branch+describeArtifact(preservation.BranchRemoved, preservation.BranchPresent, preservation.Verified()))
 	}
 	if preservation.WorktreePath != "" {
-		lines = append(lines, "Worktree: "+preservation.WorktreePath+describePresence(preservation.WorktreePresent))
+		lines = append(lines, "Worktree: "+preservation.WorktreePath+describeArtifact(preservation.WorktreeRemoved, preservation.WorktreePresent, preservation.Verified()))
+	}
+	if !preservation.Verified() {
+		// Said once, under the artifacts it applies to. It is deliberately not
+		// silence: an operator who is told nothing goes to the path anyway, which is
+		// the same walk the false claim sends them on.
+		lines = append(lines, "Preservation unchecked: "+preservation.Unverified+", so nothing here says the branch or the worktree is still there.")
 	}
 	return lines
-}
-
-// renderUncheckedArtifacts names what the record holds and says plainly that
-// nothing confirmed it. It is deliberately not silence: an operator who is told
-// nothing goes to the path anyway, which is the same walk the false claim sends
-// them on.
-func renderUncheckedArtifacts(outcome Outcome, reason string) []string {
-	var lines []string
-	if outcome.Branch != "" {
-		lines = append(lines, "Branch (unchecked): "+outcome.Branch)
-	}
-	if outcome.WorktreePath != "" {
-		lines = append(lines, "Worktree (unchecked): "+outcome.WorktreePath)
-	}
-	return append(lines, "Preservation unchecked: "+reason+", so nothing here says the branch or the worktree is still there.")
 }
 
 // preservationLoss says which artifact this run made is gone and where its work
@@ -5986,22 +6034,31 @@ func renderUncheckedArtifacts(outcome Outcome, reason string) []string {
 // that sweep writes — which is where this run's own record names it.
 func preservationLoss(preservation Preservation) string {
 	var lost []string
-	if preservation.Branch != "" && !preservation.BranchPresent {
+	if preservation.branchLost() {
 		lost = append(lost, "the branch "+preservation.Branch)
 	}
-	if preservation.WorktreePath != "" && !preservation.WorktreePresent {
+	if preservation.worktreeLost() {
 		lost = append(lost, "the worktree "+preservation.WorktreePath)
 	}
 	return strings.Join(lost, " and ") + " this run made is already gone. What it held is recoverable only from what survives: the branch above where it still exists, and the preserved-work ref named on this run's record where the checkout was retired by the convergence sweep."
 }
 
-// describePresence is the one phrase an artifact's fate is said in, so a branch
-// and a worktree are never described in two different vocabularies.
-func describePresence(present bool) string {
-	if present {
+// describeArtifact is the one phrase an artifact's fate is said in, so a branch
+// and a worktree are never described in two different vocabularies. The removal
+// is read first because it settles the question without an observation: an
+// artifact the run's own cleanup removed is gone on purpose, and nothing looked
+// for it.
+func describeArtifact(removed, present, verified bool) string {
+	switch {
+	case removed:
+		return " (removed by this run's cleanup)"
+	case !verified:
+		return " (unchecked)"
+	case present:
 		return " (checked and there)"
+	default:
+		return " (checked and NOT there)"
 	}
-	return " (checked and NOT there)"
 }
 
 // renderReviewNotes carries the invariant, review, and integration evidence into

@@ -67,7 +67,10 @@ Three gaps, and each of them is now closed:
   writes — `Observe` for the branch ref and the worktree directory — and the note
   says `(checked and there)` or `(checked and NOT there)`, or that the check
   could not be made. Nothing in the note claims preservation from the record any
-  more.
+  more. The removal flags are still read, for the case that runs the other way:
+  an artifact this run's own cleanup removed is `(removed by this run's cleanup)`
+  and is never looked for, because reporting an integrated-and-cleaned-up branch
+  as lost would send a reader after a preserved-work ref that does not exist.
 - **The capture never reached the work item.** `recordSweptWorktree` wrote the
   ref onto the run's own state file and stopped there. The item — the thing a
   person picking the work up actually reads — went on carrying only the failure
