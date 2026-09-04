@@ -24,6 +24,16 @@
 // deliberately not resolved is anything outside the repository: an absolute URL
 // is somebody else's to keep working, and reaching for one would make the check
 // depend on the network.
+//
+// Source files are read for the same fragments, because prose is not the only
+// thing that cites a heading. `internal/config/scaffold.go` writes
+// `docs/configuration.md#checks` into every `.yoyodyne/config.yaml` `yoyo init`
+// has ever generated, and a workflow definition names an anchor in a comment.
+// Those are the citations that cost most when they die — a generated
+// configuration is on a disk this repository cannot rewrite — and they were the
+// ones nothing here resolved, so a documentation split that moved a heading
+// could pass every check and break them. yoyodyne-ifd.121 moved twenty-two
+// README sections at once, which is the size of that exposure.
 package doclink
 
 import (
@@ -62,15 +72,19 @@ func (p Problem) String() string {
 }
 
 // Check reports every link the repository's Markdown documents make to
-// themselves that resolves to nothing. Problems are reported in the order the
-// documents are walked and the order the links are written, so two runs over one
-// checkout report the same thing in the same order.
+// themselves that resolves to nothing, and every fragment its source files cite
+// that names no heading. Problems are reported in the order the documents are
+// walked and the order the links are written, and the source files after them,
+// so two runs over one checkout report the same thing in the same order.
 //
 // A document that cannot be read fails the whole check rather than being
 // reported as a document with no links: a walk that quietly skipped what it
 // could not open would report a repository with fewer links instead of a named
 // problem, which is the failure this exists to prevent arrived at from the other
-// side.
+// side. A source file is treated the other way and skipped when it cannot be
+// read, because it is read opportunistically for something it may not contain
+// at all, and failing the documentation check over a file nobody was documenting
+// would be the check reaching past what it is for.
 func Check(root string) ([]Problem, error) {
 	documents, err := Documents(root)
 	if err != nil {
@@ -89,6 +103,17 @@ func Check(root string) ([]Problem, error) {
 	var problems []Problem
 	for _, document := range documents {
 		problems = append(problems, problemsIn(root, document, contents[document], headings)...)
+	}
+	sources, err := Sources(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, source := range sources {
+		content, err := read(filepath.Join(root, filepath.FromSlash(source)))
+		if err != nil {
+			continue
+		}
+		problems = append(problems, citationsIn(source, content, headings)...)
 	}
 	return problems, nil
 }
@@ -109,7 +134,36 @@ var skippedDirectories = map[string]bool{".git": true, ".dolt": true, "testdata"
 // reports: a walk that found nothing and a repository with no documentation are
 // the same result otherwise.
 func Documents(root string) ([]string, error) {
-	var documents []string
+	return walkFor(root, "documentation", func(name string) bool {
+		return strings.EqualFold(filepath.Ext(name), ".md")
+	})
+}
+
+// sourceExtensions are the kinds of file that are read for citations of this
+// repository's documentation. It is an allow-list rather than "everything that
+// is not Markdown" for two reasons: a binary read as text produces matches
+// nobody wrote, and the tracker's JSON export carries the anchors of work items
+// this repository must not rewrite, so reporting one would be a check nobody can
+// clear. These four are the kinds that carry a citation here — Go source, the
+// workflow and CI definitions, and the shell beside them. A repository that
+// grows a fifth adds it here, which is the same moment internal/composition
+// makes it write down what exercises the new class.
+var sourceExtensions = map[string]bool{".go": true, ".yaml": true, ".yml": true, ".sh": true}
+
+// Sources is every file under the root whose kind can carry a citation of this
+// repository's documentation, repository-relative and in sorted order. It is
+// exported beside Documents and for the same reason: what was read is part of
+// what the check reports.
+func Sources(root string) ([]string, error) {
+	return walkFor(root, "citations", func(name string) bool {
+		return sourceExtensions[strings.ToLower(filepath.Ext(name))]
+	})
+}
+
+// walkFor is every file under the root the predicate accepts, skipping the trees
+// nothing is checked in.
+func walkFor(root, what string, wanted func(name string) bool) ([]string, error) {
+	var found []string
 	err := filepath.WalkDir(root, func(current string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -120,21 +174,21 @@ func Documents(root string) ([]string, error) {
 			}
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+		if !wanted(entry.Name()) {
 			return nil
 		}
 		relative, err := filepath.Rel(root, current)
 		if err != nil {
 			return err
 		}
-		documents = append(documents, filepath.ToSlash(relative))
+		found = append(found, filepath.ToSlash(relative))
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("walk %s for documentation: %w", root, err)
+		return nil, fmt.Errorf("walk %s for %s: %w", root, what, err)
 	}
-	sort.Strings(documents)
-	return documents, nil
+	sort.Strings(found)
+	return found, nil
 }
 
 // linkPattern matches a Markdown inline link and captures its target: the text
@@ -248,6 +302,63 @@ func resolve(root, document, directory, target string, headings map[string]map[s
 		return fmt.Sprintf("it links to %q, and %s carries no heading with that anchor", target, linked)
 	}
 	return ""
+}
+
+// citationPattern matches a Markdown path carrying a fragment, which is how a
+// source file names a heading: `docs/configuration.md#checks` bare in a comment
+// or a string, or the same path inside the forge URL for this repository's blob
+// view. It is deliberately narrower than the Markdown link pattern above — there
+// is no link syntax to key on in Go or YAML, so the path and the `#` are the
+// whole of the evidence that a citation is what this is.
+var citationPattern = regexp.MustCompile(`[A-Za-z0-9_.\-/]+\.md#[A-Za-z0-9_\-]+`)
+
+// blobPrefixPattern matches what a forge URL puts in front of a
+// repository-relative path in its blob view, so the URL form of a citation
+// resolves to the same document the bare form does.
+var blobPrefixPattern = regexp.MustCompile(`^.*/blob/[^/]+/`)
+
+// citationsIn reports the fragments one source file cites that name no heading.
+//
+// A citation whose path is not a document this repository has is passed over
+// rather than reported. A source file names paths for every reason there is —
+// a fixture written to be broken on purpose, a document in somebody else's
+// repository, a string assembled from parts — and this is read opportunistically
+// rather than because anything declared it a link. What it exists to catch is
+// the other case: a path that is here and a fragment that is not, which is a
+// heading somebody moved and a citation nobody could see go dead.
+func citationsIn(source, content string, headings map[string]map[string]bool) []Problem {
+	var problems []Problem
+	for index, raw := range strings.Split(content, "\n") {
+		for _, citation := range citationPattern.FindAllString(raw, -1) {
+			reference, fragment, _ := strings.Cut(citation, "#")
+			document, anchors := citedDocument(reference, headings)
+			if document == "" || anchors[slug(fragment)] {
+				continue
+			}
+			problems = append(problems, Problem{
+				Path:   source,
+				Line:   index + 1,
+				Target: citation,
+				Reason: fmt.Sprintf("it cites %q, and %s carries no heading with that anchor", citation, document),
+			})
+		}
+	}
+	return problems
+}
+
+// citedDocument is the document a citation names and the fragments it answers
+// to, resolved in the two spellings a citation is written in: the
+// repository-relative path itself, and that path inside a forge blob URL. A
+// reference naming neither returns the empty path, which is how a citation this
+// repository has no document for is passed over.
+func citedDocument(reference string, headings map[string]map[string]bool) (string, map[string]bool) {
+	for _, candidate := range []string{reference, blobPrefixPattern.ReplaceAllString(reference, "")} {
+		candidate = path.Clean(candidate)
+		if anchors, known := headings[candidate]; known {
+			return candidate, anchors
+		}
+	}
+	return "", nil
 }
 
 // anchorsIn is every fragment one document answers to: the slug of each of its

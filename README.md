@@ -451,8 +451,14 @@ yoyo chat
 `product.specifications` — `docs/product` by default — and nothing else in the
 repository is read as intent. Beside it, and labeled as description rather than
 intent, it is given the documentation of what the product ships today: this
-README, the documents it links to under [Further reading](#further-reading), the
-configuration guide, and the help the commands print. Not the
+README, the six operator documents beside it — [the conversation](docs/conversation.md),
+[how work flows](docs/work.md), [what comes back to you](docs/reporting.md),
+[artifacts, goals, and invariants](docs/artifacts.md),
+[operations and recovery](docs/operations.md), and
+[working on yoyo itself](docs/developing-yoyo.md) — the
+[configuration guide](docs/configuration.md), and the help the commands print.
+That is eight documents, named one at a time rather than swept up from
+[Further reading](#further-reading), which reaches more than these. Not the
 source, and not the design document. A specification opens with an introduction
 saying what the thing is and why it exists, and states the goals that serve it
 after that introduction:

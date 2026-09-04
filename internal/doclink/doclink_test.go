@@ -175,6 +175,84 @@ func TestFixturesWrittenToBeBrokenAreNotWalked(t *testing.T) {
 	}
 }
 
+// Every fixture below names documents this repository does not have, which is
+// the convention the fixtures above already keep and which the source sweep
+// makes load-bearing: this file is itself Go source under the repository root,
+// so a fixture citing a real document at a deliberately wrong anchor would be
+// reported by the sweep of this repository as a broken citation in the test that
+// proves the sweep works.
+
+func TestAFragmentCitedFromSourceIsResolvedAgainstTheDocument(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// The citation that costs most when it dies: the anchor `yoyo init` writes
+	// into every generated configuration, in a file its owner edits. Nothing in
+	// the prose points at it, so only a sweep of the source finds it.
+	write(t, root, "docs/settings-guide.md", "# Settings\n\n## Checks\n")
+	write(t, root, "internal/config/scaffold.go", "package config\n\n"+
+		"const checksGuide = \"https://github.com/mason-bryant/yoyodyne/blob/main/docs/settings-guide.md#checks\"\n"+
+		"const movedGuide = \"docs/settings-guide.md#what-a-check-is\"\n")
+
+	problems := check(t, root)
+	if len(problems) != 1 {
+		t.Fatalf("problems = %v", problems)
+	}
+	if problems[0].Path != "internal/config/scaffold.go" || problems[0].Line != 4 {
+		t.Fatalf("problem = %#v", problems[0])
+	}
+	if problems[0].Target != "docs/settings-guide.md#what-a-check-is" {
+		t.Fatalf("target = %q", problems[0].Target)
+	}
+	// The blob URL on line 3 resolves to the same document as the bare path, so a
+	// heading that moves is reported once from each spelling rather than from
+	// neither.
+	if !strings.Contains(problems[0].Reason, "docs/settings-guide.md") {
+		t.Fatalf("reason = %q, want it to name the document the fragment misses", problems[0].Reason)
+	}
+}
+
+func TestAFragmentCitedFromSourceForADocumentThisRepositoryHasNotIsPassedOver(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// Source names paths for every reason there is, and a fixture written to be
+	// broken is one of them. Reporting a path this repository has no document for
+	// would be the check guessing, which is worse than saying nothing.
+	write(t, root, "README.md", "# Readme\n")
+	write(t, root, "internal/doclink/doclink_test.go", "package doclink\n\n"+
+		"// See [the invariants](docs/design.md#design-invariants).\n")
+	write(t, root, "scripts/walk.sh", "#!/bin/sh\n# elsewhere/guide.md#a-heading is not ours\n")
+
+	if problems := check(t, root); len(problems) != 0 {
+		t.Fatalf("problems = %v", problems)
+	}
+}
+
+func TestOnlyTheKindsOfSourceThatCarryACitationAreRead(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	write(t, root, "docs/landing.md", "# Landing\n\n## Getting started\n")
+	// The tracker's export carries the anchors of work items this repository must
+	// not rewrite, so a citation there is one nobody could clear. It is not a kind
+	// this reads, and the walk says so rather than the reporting doing it later.
+	write(t, root, ".beads/issues.jsonl", `{"description":"see docs/landing.md#getting-startd"}`)
+	write(t, root, "internal/cli/init.go", "package cli\n\n// docs/landing.md#getting-startd\n")
+
+	sources, err := Sources(root)
+	if err != nil {
+		t.Fatalf("Sources() error = %v", err)
+	}
+	if len(sources) != 1 || sources[0] != "internal/cli/init.go" {
+		t.Fatalf("Sources() = %v", sources)
+	}
+	problems := check(t, root)
+	if len(problems) != 1 || problems[0].Path != "internal/cli/init.go" {
+		t.Fatalf("problems = %v", problems)
+	}
+}
+
 // check runs the checker over a repository the test wrote, failing rather than
 // returning when the walk itself could not be done: a walk that could not read a
 // document reports nothing, which reads exactly like a repository whose links

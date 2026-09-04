@@ -22,6 +22,21 @@ runs. Those same four are what this project declares as its
 let a change reach review or integration — so anything a run has to exercise has
 to reach one of the four, and for content that is not Go that means `make test`.
 
+`make adoption` is the fifth thing and deliberately not one of them. It runs
+[`scripts/walk-adoption.sh`](../scripts/walk-adoption.sh), which executes the
+README's "Getting started" against a throwaway Python project — its own scratch
+repository and state directory, removed when it exits — and asserts what each
+step is documented to do. It is the gate on a change to the README's install or
+getting-started sections, and it is out of `check` because it needs `bd` and a
+scratch clone that CI has not got, so folding it in would fail every CI run
+rather than gate anything. It needs no provider unless you pass
+`WALK_PROVIDER=1`, and it names any claim it could not exercise rather than
+passing over it.
+[`scripts/walk-adoption-output.md`](../scripts/walk-adoption-output.md) is the
+last recorded walk, kept because the README split made this the merge gate on
+the reduction; it is a record rather than a check, and it goes stale as soon as
+those sections move.
+
 ## Before you change how a run works
 
 [What the delivery pipeline actually guarantees](delivery-pipeline-baseline.md)
@@ -159,7 +174,7 @@ Go check has ever run a line of bash.
 
 | What fails | Where it lives | What it means |
 | --- | --- | --- |
-| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. |
+| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry — or a fragment cited from Go, YAML, or shell source naming a heading the document it names does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. Source is read for citations because prose is not the only thing that names a heading: `docs/configuration.md#checks` is written into every `.yoyodyne/config.yaml` `yoyo init` has ever generated, on disks this repository cannot reach. A citation there naming a document this repository does not have is passed over rather than reported — a fixture written to be broken is a path too, and guessing would be worse than saying nothing — so a fixture in a test must name a document this repository has not got, which is the convention the fixtures in `internal/doclink` keep. |
 | A goal in an in-force goals document written across more than one physical line | `internal/cli` (`goals_repository_test.go`) | Rejoin the statement onto one line. The goal is recorded whole either way; what the check holds is that the words an attribution must match are what the file says outright. |
 | A goal in an in-force goals document naming a brief goal the brief does not state | `internal/goal` (`goal_test.go`) | Correct the `*Supports: ...*` trailer, or the brief claim it names. What fails here is a document asserting something false about another one, which is what silently orphans the work attributed under it. The states beside it deliberately do not fail: a goal that has not said yet what it supports, a goals document that states no goals, a brief that states none, and a configured artifact home nobody has created are intent still being written rather than intent contradicted, and `yoyo goals list` reports each of them on stderr. Editing what the product intends must not be the thing that reddens a build. |
 | A coined term in a document under `docs/product`, `docs/designs`, or `docs/decisions` that [the register](terms.md) does not define — or a register entry with no definition, no place of use, or a second row for a term already listed | `internal/terms` | Write the ordinary word, or add the entry. The register decides and the check only reports: adding a row permits a term and removing it refuses the term again, neither of which is a change to any code. Frontmatter and fenced blocks are not read — a revision's recorded reason is what somebody decided in their own words, and a fenced block is code. A term of more than one word is looked for however its parts are spaced, so a hyphen, a doubled space, or a line wrap between them does not get one past the check, and a row permits every spelling of its term rather than the one the row happens to write. What no check can recognize is a word coined this morning, which is why the reviewer persona carries the same rule as a finding class. |

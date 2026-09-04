@@ -13,7 +13,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck cachecheck check dist dist-verify clean-dist release release-notes
+.PHONY: build test race vet fmt fmtcheck cachecheck check adoption dist dist-verify clean-dist release release-notes
 .NOTPARALLEL: check
 
 # Every Go command below writes what it compiles to the build cache before it
@@ -62,6 +62,18 @@ fmtcheck:
 	fi
 
 check: fmtcheck test race vet
+
+# The README's "Getting started" executed against a throwaway project that is
+# neither this one nor written in Go, so that section is verified rather than
+# asserted. It is the gate on a change to the README's install or
+# getting-started sections, and it is deliberately not part of `check`: it needs
+# `bd` and a scratch clone, and CI has neither, so folding it in would fail every
+# CI run rather than gate anything.
+#
+#   make adoption                    every step that needs no provider
+#   WALK_PROVIDER=1 make adoption    also hand an item to a developer agent
+adoption:
+	scripts/walk-adoption.sh
 
 clean-dist:
 	rm -rf $(DIST)
