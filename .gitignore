@@ -17,3 +17,7 @@
 /bin/*
 !/bin/yoyo-status
 !/bin/yoyo-account
+
+# bd's atomic-write temp files: an export mid-write must never read as a dirty
+# checkout (two reviewed rounds died on this race in one afternoon, 2026-09-05)
+.beads/.~*
