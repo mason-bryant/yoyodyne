@@ -78,19 +78,28 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # This job gets a current Go rather than the repository's own version:
+      # it installs the tracker, whose releases (v1.1.2 onward) require a newer
+      # Go than this project pins for itself. The build job keeps go.mod's
+      # version; only the walkthrough's toolchain floats.
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
           cache: true
 
       # The walkthrough runs `bd init` against its own scratch project, so the
-      # tracker has to be here. This is the same install the README, `yoyo
-      # doctor`, and `yoyo setup` all name, so CI gets the tracker the way a
-      # reader is told to.
+      # tracker has to be here. The upstream's prebuilt release binary, pinned:
+      # `go install` of this tool now needs a newer Go than this repo pins, a
+      # module path its own tags disagree about, and a C++ ICU toolchain — all
+      # of which broke every PR here on 2026-09-05 when @latest moved. A pinned
+      # binary has none of those moving parts; bump the version deliberately.
       - name: Install the tracker the walkthrough needs
         run: |
-          go install github.com/gastownhall/beads/cmd/bd@latest
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          curl -fsSL -o /tmp/beads.tar.gz https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz
+          tar -xzf /tmp/beads.tar.gz -C /tmp
+          BD=$(find /tmp -maxdepth 2 -name bd -type f | head -1)
+          install -m 0755 "$BD" /usr/local/bin/bd 2>/dev/null || sudo install -m 0755 "$BD" /usr/local/bin/bd
+          bd version
 
       # `make adoption` builds this checkout's own binary and walks the
       # documented steps against a throwaway Python project -- its own scratch
