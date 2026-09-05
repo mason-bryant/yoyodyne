@@ -144,7 +144,7 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if !schedule.Redeploying() || binary == nil {
 		return code
 	}
-	return takeUpTheDeploy(binary, sessions, stderr, code, *budget, schedule.SpentUSD, *limit, len(schedule.Started))
+	return takeUpTheDeploy(ctx, binary, sessions, stderr, code, *budget, schedule.SpentUSD, *limit, len(schedule.Started))
 }
 
 // deployedBinary is what taking up a deploy needs of the file this session is
@@ -157,16 +157,31 @@ type deployedBinary interface {
 	Take([]string) error
 }
 
+// takeoverDeadline bounds the re-execution itself: how long the session waits
+// for the operating system to replace it with the build deployed over it before
+// it stops waiting and exits.
+//
+// It exists because the alternative turned out not to be "the restart fails".
+// On 2026-09-05 a session logged the stop that begins the takeover and then went
+// silent for an hour — alive, holding the queue, choosing nothing, and answering
+// no signal below SIGKILL. A re-execution that is going to happen happens in
+// milliseconds, so anything past a minute is not a slow restart, it is a restart
+// that is not coming; and a session that exits instead is one the supervisor
+// starts again from the build that was deployed, which is where the takeover was
+// trying to get to anyway.
+const takeoverDeadline = time.Minute
+
 // takeUpTheDeploy is everything the command does after the scheduler has stopped
 // the session in order to become the build deployed over it. It returns only
 // where the restart did not happen, with the code the command exits on.
 //
-// Both of its refusals correct the durable record before returning. The stop is
-// already in the watch log marked as a restart — the scheduler writes it as it
-// stops, which is the only moment there is, because a re-execution that works
-// never comes back to write anything — so a refusal that said nothing would
-// leave every surface telling a reader that a stopped line is on its way back.
-func takeUpTheDeploy(binary deployedBinary, sessions orchestrator.WatchSessions, stderr io.Writer, code int, budget, spent float64, limit, started int) int {
+// Every way it declines corrects the durable record before returning. The
+// stop is already in the watch log marked as a restart — the scheduler writes it
+// as it stops, which is the only moment there is, because a re-execution that
+// works never comes back to write anything — so a refusal that said nothing
+// would leave every surface telling a reader that a stopped line is on its way
+// back.
+func takeUpTheDeploy(ctx context.Context, binary deployedBinary, sessions orchestrator.WatchSessions, stderr io.Writer, code int, budget, spent float64, limit, started int) int {
 	// A bounded session arrives here with something left of both its bounds: what
 	// it has spent and how many runs it has started are checked at the top of
 	// every pull, ahead of the redeploy, so a bound that is gone stops the session
@@ -187,12 +202,44 @@ func takeUpTheDeploy(binary deployedBinary, sessions orchestrator.WatchSessions,
 	// was deployed: the account of the session that just ended has been printed,
 	// and nothing returns from this when it works — the process goes on as the new
 	// build, watching the same queue under what is left of the same bounds.
-	if err := binary.Take(continued(binary.Args(), budget, spent, limit, started)); err != nil {
+	if err := takeWithin(ctx, binary, continued(binary.Args(), budget, spent, limit, started), takeoverDeadline); err != nil {
 		fmt.Fprintf(stderr, "work stopped to restart into the build deployed over it, and could not: %v\n", err)
 		endedInstead(sessions, stderr, fmt.Sprintf("the session stopped to restart into the build deployed over it and could not: %v", err))
 		return 1
 	}
 	return code
+}
+
+// takeWithin re-executes this process from the deployed build, and gives up on
+// it rather than waiting on it forever.
+//
+// The re-execution runs beside this rather than in it for one reason: a call
+// that replaces the process image does not return, so there is nothing to bound
+// from inside it. What is bounded is the waiting — the deadline, and the session
+// being asked to stop, which is the other thing that must not be answered by
+// standing here. A signal that arrived while the session was waiting to become
+// the new build is an operator asking for this process to end, and ending is
+// something it can still do.
+//
+// The call it walked away from is still armed, and that is worth being plain
+// about: if the operating system replaces this image a moment after the deadline
+// passed, the process becomes the new build with the log saying it ended
+// instead. That is a correction that reads wrong for one line, against an hour
+// of a session that was alive and choosing nothing, and the exchange is not
+// close.
+func takeWithin(ctx context.Context, binary deployedBinary, args []string, deadline time.Duration) error {
+	refused := make(chan error, 1)
+	go func() { refused <- binary.Take(args) }()
+	waited := time.NewTimer(deadline)
+	defer waited.Stop()
+	select {
+	case err := <-refused:
+		return err
+	case <-waited.C:
+		return fmt.Errorf("the re-execution had not happened %s after it was asked for, so the session exits and whatever started it starts the next one", deadline)
+	case <-ctx.Done():
+		return fmt.Errorf("the session was asked to stop before the re-execution happened, so it exits rather than restarting: %w", ctx.Err())
+	}
 }
 
 // endedInstead corrects the durable account of a session that stopped in order

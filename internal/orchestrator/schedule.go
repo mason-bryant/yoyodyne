@@ -1348,9 +1348,9 @@ func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) 
 	// evidence that the failure before it was resolved — the stoppage may simply
 	// be waiting out its retry delay — and a pass that erased its own account of
 	// having failed to reach her would end reporting nothing at all about stopped
-	// work, which is the silence this exists to end. A stoppage the harness has
-	// given up on is restated by every sweep, so what stands at the end of a pass
-	// is what is still true.
+	// work, which is the silence this exists to end. A failure that is still
+	// happening is restated by the sweep that meets it again, so what stands at
+	// the end of a pass is what is still true.
 	switch {
 	case len(problems) > 0:
 		schedule.EscalationProblem = strings.Join(problems, "; ")

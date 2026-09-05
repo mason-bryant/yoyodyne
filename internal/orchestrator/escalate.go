@@ -360,17 +360,12 @@ func (e Escalator) Escalate(ctx context.Context) (EscalationSweep, error) {
 	// saying even where none of them is being delivered.
 	delivering := true
 	for _, entry := range entries {
-		standing, recorded, err := e.standingOf(entry)
+		standing, err := e.standingOf(entry)
 		if err != nil {
 			problems = append(problems, err)
 			continue
 		}
 		switch standing {
-		case standingAbandoned:
-			// Said on every pass, for as long as it is true. The harness has stopped
-			// trying and nothing else will notice: a stoppage that reached nobody and
-			// is reported nowhere is precisely the silence this exists to end.
-			sweep.Escalated = append(sweep.Escalated, abandoned(entry, recorded))
 		case standingAwaiting:
 			if !delivering {
 				continue
@@ -389,11 +384,20 @@ func (e Escalator) Escalate(ctx context.Context) (EscalationSweep, error) {
 			}
 			sweep.Escalated = append(sweep.Escalated, escalated)
 			delivering = false
-		case standingSettled, standingCooling:
+		case standingSettled, standingCooling, standingAbandoned:
 			// Nothing to do and nothing to say. A settled stoppage is somebody
 			// else's business now, and a cooling one was reported by the pass that
 			// attempted it — saying it again on every pull between here and its next
 			// attempt would bury what the pass actually did.
+			//
+			// An abandoned one was said on every pass until yoyodyne-ifd.288, on the
+			// reasoning that nothing else would mention it. Something else does: the
+			// read model holds the item for a person and says its stoppage could not
+			// be put to the development manager, so every operator surface carries it
+			// for as long as it is true. What restating it here bought was a session
+			// start that opened with twelve sentences about stoppages nothing was
+			// going to do anything about, which is the standing fact drowning out
+			// what the pass did rather than the silence this exists to end.
 		}
 	}
 	return sweep, errors.Join(problems...)
@@ -414,66 +418,54 @@ const (
 	// repeating yet. The pass that made that attempt is what said so; repeating
 	// the sentence every pull would bury it.
 	standingCooling
-	// standingAbandoned is one the harness tried and stopped trying. It is said
-	// out loud rather than skipped, because what it needs now is a person and
-	// nothing else in the harness is going to mention it.
+	// standingAbandoned is one the harness tried and stopped trying. This pass
+	// makes no further attempt at it and says nothing about it: what it needs is a
+	// person, and the surface that asks for one is the read model's account of
+	// work held for somebody rather than a line on every pull.
 	standingAbandoned
 )
 
-// abandoned is what a pass says about a stoppage the harness has given up
-// delivering. The words are the store's own refusal, so what the pass says and
-// what a second attempt would be refused with are one sentence rather than two.
-func abandoned(entry triage.Entry, recorded runstate.Escalation) Escalated {
-	return Escalated{
-		WorkItemID: entry.WorkItemID,
-		RunID:      entry.RunID,
-		DocketKey:  entry.Key,
-		Problem:    runstate.EscalationSpentError{Existing: recorded}.Error(),
-	}
-}
-
-// standingOf reports what one docket entry is to this pass, and the escalation
-// record behind that answer.
+// standingOf reports what one docket entry is to this pass.
 //
 // It asks the run's own record rather than the entry, for the reason every
 // triage action does: the entry says what was true when it was written, and what
 // decides whether this is the 2-of-2 stoppage is what the run recorded about how
 // it ended.
-func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, runstate.Escalation, error) {
+func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, error) {
 	if entry.Class != triage.ClassStoppedRun {
-		return standingSettled, runstate.Escalation{}, nil
+		return standingSettled, nil
 	}
 	recorded, found, err := e.Records.Find(entry.Key)
 	if err != nil {
-		return standingSettled, runstate.Escalation{}, fmt.Errorf("read whether the stoppage of run %s has been put to the development manager: %w", entry.RunID, err)
+		return standingSettled, fmt.Errorf("read whether the stoppage of run %s has been put to the development manager: %w", entry.RunID, err)
 	}
 	if found && recorded.Delivered() {
-		return standingSettled, recorded, nil
+		return standingSettled, nil
 	}
 	state, err := e.Runs.Load(entry.RunID)
 	if err != nil {
-		return standingSettled, recorded, fmt.Errorf("read the run the docket entry is about: %w", err)
+		return standingSettled, fmt.Errorf("read the run the docket entry is about: %w", err)
 	}
 	if !reviewRepairStoppage(state) {
-		return standingSettled, recorded, nil
+		return standingSettled, nil
 	}
 	// Asked before the record's own state, so a stoppage she has since judged
 	// stops being this pass's business whether the harness delivered it, gave up
 	// delivering it, or never reached it at all.
 	judged, err := e.alreadyJudged(entry)
 	if err != nil {
-		return standingSettled, recorded, err
+		return standingSettled, err
 	}
 	if judged {
-		return standingSettled, recorded, nil
+		return standingSettled, nil
 	}
 	switch {
 	case found && recorded.Spent():
-		return standingAbandoned, recorded, nil
+		return standingAbandoned, nil
 	case found && recorded.Cooling(e.now()):
-		return standingCooling, recorded, nil
+		return standingCooling, nil
 	default:
-		return standingAwaiting, recorded, nil
+		return standingAwaiting, nil
 	}
 }
 

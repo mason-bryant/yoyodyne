@@ -61,8 +61,9 @@ const EscalationSchemaVersion = 1
 // evidence she may already have read, so a bound of three is what separates
 // riding out a provider that briefly failed mid-turn from a loop that spends
 // every poll saying the same thing to her again. A stoppage that exhausts it is
-// still on the docket, and what it then needs is a person — which is stated
-// where the attempts run out rather than left to be inferred from the quiet.
+// still on the docket, and what it then needs is a person — which the read
+// model says by holding the item for one, rather than leaving it to be inferred
+// from the quiet.
 //
 // What it bounds is turns that may have been taken, and only those. A delivery
 // that provably asked her nothing gives its attempt back through Withdraw, so a

@@ -3039,10 +3039,14 @@ func TestAPassDoesNotEraseWhatItSaidAboutStoppedWork(t *testing.T) {
 	}
 }
 
-// A stoppage the harness has given up delivering is said on every pass for as
-// long as it is true, so a pass that ends hours later still names what needs a
-// person.
-func TestAnAbandonedStoppageIsSaidByEveryPass(t *testing.T) {
+// A delivery failure the sweep meets again is said again, so a pass that ends
+// hours later still names what is still true rather than what one sweep
+// happened to find last.
+//
+// What the sweep no longer hands up is a stoppage the harness has given up
+// delivering: that one is on every operator surface as work held for a person,
+// and restating it per pull buried what the pass had done. See the escalator.
+func TestADeliveryFailureIsSaidByEveryPassThatMeetsIt(t *testing.T) {
 	t.Parallel()
 
 	harness := newScheduleHarness()
@@ -3050,7 +3054,7 @@ func TestAnAbandonedStoppageIsSaidByEveryPass(t *testing.T) {
 		return EscalationSweep{Escalated: []Escalated{{
 			WorkItemID: "yoyodyne-stopped",
 			RunID:      "run-0123456789abcdef0123456789abcdef",
-			Problem:    "the stoppage of run run-0123456789abcdef0123456789abcdef could not be put to the development manager in 3 attempt(s), so the harness stopped trying and it needs a person",
+			Problem:    "the stoppage of run run-0123456789abcdef0123456789abcdef could not be put to the development manager: the conversation could not be opened",
 		}}}, nil
 	}
 	scheduler := Scheduler{}
@@ -3059,13 +3063,13 @@ func TestAnAbandonedStoppageIsSaidByEveryPass(t *testing.T) {
 
 	for pass := 1; pass <= 3; pass++ {
 		scheduler.escalate(context.Background(), &schedule, pull)
-		if !strings.Contains(schedule.EscalationProblem, "needs a person") {
-			t.Fatalf("pass %d says %q, want the abandoned stoppage still named", pass, schedule.EscalationProblem)
+		if !strings.Contains(schedule.EscalationProblem, "could not be opened") {
+			t.Fatalf("pass %d says %q, want the failure that is still happening still named", pass, schedule.EscalationProblem)
 		}
 	}
 	// Said once, however many passes have found it: what a reader needs is the
 	// standing fact rather than one line per pull.
-	if strings.Count(schedule.EscalationProblem, "needs a person") != 1 {
+	if strings.Count(schedule.EscalationProblem, "could not be opened") != 1 {
 		t.Fatalf("the pass says %q, want the standing fact once rather than once per pull", schedule.EscalationProblem)
 	}
 	if len(schedule.Escalated) != 0 {
