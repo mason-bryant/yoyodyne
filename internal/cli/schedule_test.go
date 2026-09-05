@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -261,7 +263,7 @@ func TestARestartThatDoesNotHappenLeavesNoRecordSayingTheSessionIsComingBack(t *
 	// executable, a path that went away between the stat and the exec.
 	refused := &refusedRestart{args: []string{"/usr/local/bin/yoyo", "work", "--watch"}}
 	var said strings.Builder
-	if code := takeUpTheDeploy(refused, sessions, &said, 0, 0, 0, 0, 0); code != 1 {
+	if code := takeUpTheDeploy(context.Background(), refused, sessions, &said, 0, 0, 0, 0, 0); code != 1 {
 		t.Fatalf("takeUpTheDeploy() = %d, want the failed restart to fail the command", code)
 	}
 	if !strings.Contains(said.String(), "could not") {
@@ -303,7 +305,7 @@ func TestARestartThatDoesNotHappenLeavesNoRecordSayingTheSessionIsComingBack(t *
 	// than on a failure, because nothing failed.
 	unspent := &refusedRestart{args: []string{"/usr/local/bin/yoyo", "work", "--watch", "--budget", "50"}}
 	said.Reset()
-	if code := takeUpTheDeploy(unspent, sessions, &said, 0, 50, 50, 0, 0); code != 0 {
+	if code := takeUpTheDeploy(context.Background(), unspent, sessions, &said, 0, 50, 50, 0, 0); code != 0 {
 		t.Fatalf("takeUpTheDeploy() = %d, want a session stopped on its bound rather than a failure", code)
 	}
 	if unspent.attempts != 0 {
@@ -331,6 +333,100 @@ func (r *refusedRestart) Args() []string { return append([]string(nil), r.args..
 func (r *refusedRestart) Take(args []string) error {
 	r.attempts++
 	return fmt.Errorf("re-execute %s: permission denied", args[0])
+}
+
+// wedgedRestart is the re-execution that neither happens nor fails: the shape a
+// session met on 2026-09-05, where the takeover was asked for, the log said the
+// session was coming back, and nothing else ever happened.
+//
+// held is closed when the re-execution is asked for, so a test can tell a
+// takeover that was never attempted from one waiting on a call that is not
+// coming back. released is the test's own end, so the imitation does not outlive
+// it.
+type wedgedRestart struct {
+	args     []string
+	held     chan struct{}
+	released chan struct{}
+}
+
+func newWedgedRestart(t *testing.T) *wedgedRestart {
+	t.Helper()
+	wedged := &wedgedRestart{
+		args:     []string{"/usr/local/bin/yoyo", "work", "--watch"},
+		held:     make(chan struct{}),
+		released: make(chan struct{}),
+	}
+	t.Cleanup(func() { close(wedged.released) })
+	return wedged
+}
+
+func (w *wedgedRestart) Args() []string { return append([]string(nil), w.args...) }
+
+func (w *wedgedRestart) Take([]string) error {
+	close(w.held)
+	<-w.released
+	return errors.New("the re-execution was released by the test rather than by the operating system")
+}
+
+// A takeover that is not going to happen is given up on rather than waited out.
+//
+// The session this is modelled on stayed alive for an hour after it had stopped
+// choosing: the queue was held by a process doing nothing, no run could start,
+// and nothing short of SIGKILL ended it. What the deadline buys is the ordinary
+// ending instead -- the session exits, and whatever started it starts the next
+// one from the build that was deployed, which is where the takeover was going.
+func TestATakeoverThatDoesNotHappenIsGivenUpOnWithinItsDeadline(t *testing.T) {
+	t.Parallel()
+
+	wedged := newWedgedRestart(t)
+	failed := make(chan error, 1)
+	// A deadline short enough to sit through. What the command uses is a minute,
+	// which bounds a wedge rather than something a test waits out.
+	go func() { failed <- takeWithin(context.Background(), wedged, wedged.Args(), 50*time.Millisecond) }()
+
+	<-wedged.held
+	select {
+	case err := <-failed:
+		if err == nil {
+			t.Fatal("takeWithin() reported nothing about a re-execution that never happened")
+		}
+		if !strings.Contains(err.Error(), "had not happened") {
+			t.Fatalf("takeWithin() = %v, want it to say the re-execution did not happen in the time it was given", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the takeover was still waiting on a re-execution that is not coming, which is the wedge itself")
+	}
+}
+
+// A session asked to stop while it is waiting to become the new build stops.
+//
+// This is the other half of the same wedge: the takeover runs after the loop
+// that was watching the cancellation has returned, so a signal arriving during
+// it has nothing watching for it unless the takeover watches for it itself.
+func TestASignalDuringTheTakeoverEndsTheSession(t *testing.T) {
+	t.Parallel()
+
+	wedged := newWedgedRestart(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	var said strings.Builder
+	done := make(chan int, 1)
+	go func() { done <- takeUpTheDeploy(ctx, wedged, nil, &said, 0, 0, 0, 0, 0) }()
+
+	// Asked for the re-execution and waiting on it, which is where the signal has
+	// to land.
+	<-wedged.held
+	cancel()
+	select {
+	case code := <-done:
+		if code != 1 {
+			t.Fatalf("takeUpTheDeploy() = %d, want a takeover the operator stopped to fail the command", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session went on waiting to restart after it was asked to stop")
+	}
+	if !strings.Contains(said.String(), "asked to stop") {
+		t.Fatalf("stderr = %q, want it to say the session was stopped rather than that the re-execution failed on its own", said.String())
+	}
 }
 
 // The session's account of itself lands in the product's own watch log, under

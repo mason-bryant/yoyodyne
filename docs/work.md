@@ -425,6 +425,13 @@ conversation** — a run that failed independent review after every permitted
 attempt, rather than it waiting on the docket for somebody to tell her. Only the
 courier changes, and `yoyo work --help` has what bounds it.
 
+A stoppage the harness tried to deliver and gave up on is not restated by every
+pass after that. It is not lost either: the item stays held for a person, with
+the reason on it, wherever `yoyo status` reports what the harness is holding. The
+restating was worth having until there were twelve of them, at which point what a
+session start said was a paragraph per stoppage nobody was going to act on and
+nothing about what the pass had just done.
+
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
 until you stop it. Nothing else about the pass changes, and nothing needed to:
@@ -476,10 +483,10 @@ one.
 
 A restart has to be recorded before it is known to have happened, because one
 that works never comes back to record anything. So on the rare occasion it does
-not — the operating system refuses the re-execution, or a bound turns out to have
-nothing left of it — the session writes a second stop saying it ended after all,
-and both surfaces correct themselves. What you never get is a stopped line that
-both places tell you needs nothing from you.
+not — the operating system refuses the re-execution, a bound turns out to have
+nothing left of it, or the restart is given up on below — the session writes a
+second stop saying it ended after all, and both surfaces correct themselves. What
+you never get is a stopped line that both places tell you needs nothing from you.
 
 Nothing outside the process could do that. Killing a session cancels the run it
 is carrying, so an external job may only bounce it while nothing is running; with
@@ -489,6 +496,22 @@ claim anything more is what makes the window exist, which is why the session is
 the only thing that can close this. A run in flight is never interrupted for it,
 and the queue is re-read from scratch on the way back in exactly as it is at
 every poll.
+
+**The restart is given a minute, and a session you ask to stop stops.** A
+re-execution that is going to happen happens at once, so a session still waiting
+on one a minute later is not restarting slowly — it is not restarting. It exits
+instead, and whatever started it starts the next one from the build that was
+deployed, which is where the restart was going. A stop signal that arrives while
+it is waiting ends it the same way: you asked for the session to stop, so it
+stops rather than finishing turning into something else first.
+
+Every command gets the other half of that. The first stop signal cancels what
+the process is doing and hands the signal back to the operating system, so a
+second one ends a process that turned out not to be listening; and a process that
+has not stopped two minutes after being asked to exits on its own. On 2026-09-05
+one did none of this: it logged the restart, went quiet for an hour holding the
+queue, ignored SIGTERM, and had to be killed. Stopping a session should take the
+signal and nothing else.
 
 **The bounds you set cross the restart reduced to what is left of them.** A
 session given `--budget 50` that has spent $45.01 comes back with $4.99, and one
