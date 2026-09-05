@@ -155,6 +155,14 @@ func (a ClaimAuditor) Audit(ctx context.Context, claimed []beads.WorkItem) (Clai
 	for _, item := range claimed {
 		claims = append(claims, readmodel.Claim{WorkItemID: item.ID, Title: item.Title})
 	}
+	// The runs by identifier, so the settlement below can act on the record the
+	// derivation actually read rather than reading it again. What it needs from it
+	// is whether the run already ended, which is the one fact about a run that
+	// cannot become untrue: nothing takes a terminal record back to running.
+	recorded := make(map[string]runstate.State, len(runs))
+	for _, run := range runs {
+		recorded[run.RunID] = run
+	}
 	now := a.clock().Now()
 	var sweep ClaimSweep
 	for _, dead := range readmodel.DeadClaims(claims, runs, now, a.Threshold, a.Window) {
@@ -181,7 +189,7 @@ func (a ClaimAuditor) Audit(ctx context.Context, claimed []beads.WorkItem) (Clai
 		// slot and keeps the scheduler passing the item over however open the tracker
 		// says it is. A release made without it would be a fix that reads as one and
 		// leaves the line exactly as idle as it was.
-		settled, problem := a.settle(ctx, dead, now)
+		settled, problem := a.settle(ctx, dead, recorded[dead.RunID], now)
 		if problem != "" {
 			sweep.Problems = append(sweep.Problems, problem)
 			continue
@@ -218,8 +226,14 @@ func (a ClaimAuditor) Audit(ctx context.Context, claimed []beads.WorkItem) (Clai
 // was filling comes back with the item. It reports whether the claim may now be
 // given back, and the sentence to say where it may not.
 //
-// A run that is already terminal needs nothing: its slot is already free, and
-// this is every claim left behind by a run that ended in its own process.
+// A run that already ended is not taken up at all: its slot is free the moment it
+// went terminal, so there is nothing here to settle and nothing to take a lease
+// for. That is decided from the record the derivation read rather than from a
+// fresh one, and it is the one fact about a run that may be decided that way —
+// nothing takes a terminal record back to running, so a snapshot saying a run
+// ended cannot go stale. Adopting it anyway would rest the whole
+// run-ended-without-giving-the-claim-back case on how the store answers for a
+// record nobody holds, which is a question this has no reason to ask.
 //
 // The rest are settled under the run's own lease, which is doing two jobs at
 // once. It is the exclusion — nothing else may be deciding about this run while
@@ -238,7 +252,10 @@ func (a ClaimAuditor) Audit(ctx context.Context, claimed []beads.WorkItem) (Clai
 // This settles a narrower set than `yoyo reconcile` does and never overlaps it:
 // it moves no refs, removes nothing, closes nothing, and touches only runs that
 // have gone quiet past the audit's threshold with no wait recorded on them.
-func (a ClaimAuditor) settle(ctx context.Context, dead readmodel.DeadClaim, now time.Time) (bool, string) {
+func (a ClaimAuditor) settle(ctx context.Context, dead readmodel.DeadClaim, recorded runstate.State, now time.Time) (bool, string) {
+	if recorded.Status.Terminal() {
+		return true, ""
+	}
 	state, lease, err := a.Runs.AdoptRun(ctx, dead.RunID)
 	switch {
 	case errors.Is(err, runstate.ErrRunHeld):
@@ -251,12 +268,16 @@ func (a ClaimAuditor) settle(ctx context.Context, dead readmodel.DeadClaim, now 
 	defer lease.Release()
 
 	// Re-read under the lease, because only now is this process the one entitled
-	// to act on what it reads. A run that ended or parked between the reading and
-	// the lease is owed exactly what its record now says it is.
+	// to act on what it reads. Everything the snapshot decided on is asked again
+	// here: a run that ended, parked, or promoted between the reading and the
+	// lease is owed exactly what its record now says it is, and the last of those
+	// is the one that would cost the most — an item whose change has landed and is
+	// developed a second time is the same change bought twice and a conflict at the
+	// end of it.
 	if state.Status.Terminal() {
 		return true, ""
 	}
-	if readmodel.AwaitingContinuation(state) {
+	if readmodel.AwaitingContinuation(state) || state.Integration != nil {
 		return false, ""
 	}
 	completedAt := now

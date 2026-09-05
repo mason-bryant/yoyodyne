@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -72,6 +73,12 @@ func newClaimHarness(runs ...runstate.State) *claimHarness {
 
 // AdoptRun stands in for taking a run's lease. The nil lease is what a released
 // one is: runstate.Lease.Release tolerates it, so a fake needs nothing more.
+//
+// A terminal run is refused outright, which the real store does not do — the
+// point is the opposite of imitation. How runstate.Store answers for a record
+// nobody holds is a question the audit must not depend on, so this fake makes
+// asking it a failure rather than something that quietly works here and is
+// decided by the store in production.
 func (h *claimHarness) AdoptRun(_ context.Context, runID string) (runstate.State, *runstate.Lease, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -80,6 +87,11 @@ func (h *claimHarness) AdoptRun(_ context.Context, runID string) (runstate.State
 	}
 	if h.held[runID] {
 		return runstate.State{}, nil, runstate.ErrRunHeld
+	}
+	for _, run := range h.runs {
+		if run.RunID == runID && run.Status.Terminal() {
+			return runstate.State{}, nil, fmt.Errorf("run %s already ended and must not be taken up to be settled", runID)
+		}
 	}
 	h.adopted = append(h.adopted, runID)
 	if parked, changed := h.parkOnAdopt[runID]; changed {
@@ -257,6 +269,116 @@ func TestAClaimLeftByARunThatAlreadyEndedIsNotWrittenTo(t *testing.T) {
 	if len(harness.saved) != 0 {
 		t.Fatalf("saved = %+v, want a run that already ended left exactly as it is", harness.saved)
 	}
+	// And it is never taken up. A record that says a run ended cannot go back to
+	// running, so it is decided from the reading rather than from a lease — which
+	// is what keeps this whole case off however the store answers for a run nobody
+	// holds.
+	if len(harness.adopted) != 0 {
+		t.Fatalf("adopted = %v, want a run that already ended never taken up at all", harness.adopted)
+	}
+}
+
+// Both settlements against the real run store rather than a stand-in for it,
+// because what each of them rests on is how that store actually behaves: one on
+// a lease being takeable for a process that is gone, and the other on a record
+// that ended needing no lease at all. A fake can be made to agree with either
+// answer, which is exactly why neither is proven by one.
+func TestBothDeathsAreSettledAgainstTheRealRunStore(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := runstate.NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	// The killed process: a record still saying it is in flight, filling a slot,
+	// with nothing written to it since the night before.
+	killed := recordedRun(t, "yoyodyne-ifd.209.7", runstate.StatusRunning, auditMoment.Add(-9*time.Hour))
+	// And the run that recorded its own ending and left the claim standing.
+	ended := recordedRun(t, "yoyodyne-ifd.264", runstate.StatusFailed, auditMoment.Add(-9*time.Hour))
+	for _, state := range []runstate.State{killed, ended} {
+		if err := store.Create(state); err != nil {
+			t.Fatalf("Create(%s) error = %v", state.RunID, err)
+		}
+	}
+	// Both slots read as taken before the audit: the killed run because its record
+	// says so, and that is the whole of what keeps the item from being pulled.
+	if incomplete, err := store.Incomplete(); err != nil || len(incomplete) != 1 {
+		t.Fatalf("Incomplete() = %d run(s), %v, want the killed run holding a slot", len(incomplete), err)
+	}
+
+	tracker := newClaimHarness()
+	auditor := ClaimAuditor{
+		Tracker:   tracker,
+		Runs:      store,
+		Releases:  &claimLog{},
+		ProductID: "yoyodyne",
+		Clock:     fixedClock{at: auditMoment},
+	}
+	sweep, err := auditor.Audit(context.Background(), []beads.WorkItem{
+		claimedItem("yoyodyne-ifd.209.7", "Killed on the network"),
+		claimedItem("yoyodyne-ifd.264", "Ended in its own process"),
+	})
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(sweep.Problems) != 0 {
+		t.Fatalf("problems = %v, want both claims settled against the real store", sweep.Problems)
+	}
+	if len(sweep.Released) != 2 {
+		t.Fatalf("released = %+v, want both claims given back", sweep.Released)
+	}
+	// The killed run is ended, so its slot is free and the scheduler will pull the
+	// item again.
+	incomplete, err := store.Incomplete()
+	if err != nil {
+		t.Fatalf("Incomplete() error = %v", err)
+	}
+	if len(incomplete) != 0 {
+		t.Fatalf("Incomplete() = %+v, want the killed run settled and its slot free", incomplete)
+	}
+	settled, err := store.Load(killed.RunID)
+	if err != nil {
+		t.Fatalf("Load(%s) error = %v", killed.RunID, err)
+	}
+	if settled.Outcome() != runstate.OutcomeCancelled {
+		t.Fatalf("the killed run reads as %q, want cancelled", settled.Outcome())
+	}
+	// And the run that ended in its own process is left exactly as it was, ending
+	// and all: there was nothing to settle, and rewriting it would replace the
+	// account it made of itself.
+	untouched, err := store.Load(ended.RunID)
+	if err != nil {
+		t.Fatalf("Load(%s) error = %v", ended.RunID, err)
+	}
+	if untouched.Status != runstate.StatusFailed || !untouched.UpdatedAt.Equal(ended.UpdatedAt) {
+		t.Fatalf("the ended run reads %+v, want the record it wrote for itself", untouched)
+	}
+}
+
+// recordedRun is a run the store will accept, quiet since the moment given.
+func recordedRun(t *testing.T, workItemID string, status runstate.Status, last time.Time) runstate.State {
+	t.Helper()
+	runID, err := runstate.NewRunID()
+	if err != nil {
+		t.Fatalf("NewRunID() error = %v", err)
+	}
+	state := runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         runID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    workItemID,
+		Backend:       domain.BackendClaudeCode,
+		Status:        status,
+		StartedAt:     last.Add(-time.Hour),
+		UpdatedAt:     last,
+	}
+	if status.Terminal() {
+		completed := last
+		state.CompletedAt = &completed
+	}
+	return state
 }
 
 // The lease is the authority on liveness, and the reading before it is a
