@@ -528,6 +528,57 @@ func TestADirectivePauseIsTheItemsOwnRefusal(t *testing.T) {
 	}
 }
 
+// What holds one item is asked for on its own by a surface that has to name the
+// pauses rather than count them, and it is the same reading the four lines are
+// assembled from: in force, reaching this item, and a directive that named no
+// scope reaching it too.
+func TestPausingIsWhatHoldsOneItem(t *testing.T) {
+	t.Parallel()
+	settled := moment
+	sources := quietSources()
+	sources.Directives = fakeDirectives{recorded: []directive.Directive{
+		{
+			ID: "dir-1", Kind: directive.KindAmbiguous, ReceivedAt: moment.Add(-2 * time.Hour),
+			Text: "which branch", Unresolved: "which branch", Scope: []string{"item-1"},
+		},
+		{
+			ID: "dir-2", Kind: directive.KindArtifact, ReceivedAt: moment.Add(-time.Hour),
+			Text: "the design changes", Artifact: "slack-reporting-design",
+			Unresolved: "whether product threads may carry directives",
+		},
+		{
+			ID: "dir-3", Kind: directive.KindAmbiguous, ReceivedAt: moment,
+			Text: "which branch", Unresolved: "which branch", Scope: []string{"item-2"},
+		},
+		{
+			ID: "dir-4", Kind: directive.KindAmbiguous, ReceivedAt: moment,
+			Text: "answered already", Unresolved: "answered already", Scope: []string{"item-1"},
+			Resolution: "the target branch", ResolvedAt: &settled,
+		},
+		{
+			ID: "dir-5", Kind: directive.KindOperational, ReceivedAt: moment,
+			Text: "prefer the smaller change", Scope: []string{"item-1"},
+		},
+	}}
+
+	held, err := Pausing(sources, "item-1")
+	if err != nil {
+		t.Fatalf("Pausing() error = %v", err)
+	}
+	if len(held) != 2 || held[0].ID != "dir-1" || held[1].ID != "dir-2" {
+		t.Fatalf("Pausing() = %+v, want the scoped and the unscoped pause, in the order they were received", held)
+	}
+
+	sources.Directives = fakeDirectives{fail: errors.New("the record could not be read")}
+	if _, err := Pausing(sources, "item-1"); err == nil {
+		t.Fatal("Pausing() error = nil, want a record that could not be read to say so rather than read as nothing held")
+	}
+	sources.Directives = nil
+	if _, err := Pausing(sources, "item-1"); err == nil {
+		t.Fatal("Pausing() error = nil, want an unwired source to say so rather than read as nothing held")
+	}
+}
+
 // A run that ended still owing a step waits forever without somebody running the
 // sweep, so it is named with the command that settles it.
 func TestAnOutstandingRunNeedsAHuman(t *testing.T) {

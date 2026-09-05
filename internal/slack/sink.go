@@ -100,11 +100,13 @@ type Options struct {
 	// connection is acknowledged to Slack and read no further.
 	Directives Directives
 	// Standing is where the harness stands, as the read model derives it. The
-	// sink reads it for one thing the feed does not: answering somebody who
-	// asked, in the channel, where things stand. It is the same value the feed is
-	// given rather than a second assembly of one, because a channel and a terminal
-	// disagreeing about one standing is a disagreement only the operator could
-	// adjudicate.
+	// sink reads it for two things the feed does not: answering somebody who
+	// asked, in the channel, where things stand, and — for a reply settling what a
+	// thread is waiting on without naming it — which directives are holding that
+	// thread's item. It is the same value the feed is given rather than a second
+	// assembly of one, because a channel and a terminal disagreeing about one
+	// standing is a disagreement only the operator could adjudicate, and the same
+	// holds for which pause is in force.
 	//
 	// It is optional, and a sink assembled without one says so when it is asked
 	// rather than answering with an empty standing.
@@ -198,9 +200,10 @@ type Sink struct {
 	// now is the clock the watermark is taken from, injected for the same reason.
 	now func() time.Time
 	// sources is where the four lines are read from when somebody asks for them
-	// in the channel. It is read and never written, from either goroutine, which
-	// is what makes it safe to sit above the divide with the rest of what New
-	// wrote once.
+	// in the channel, and where a thread settling its own pause reads which
+	// directives are holding its item. It is read and never written, from either
+	// goroutine, which is what makes it safe to sit above the divide with the rest
+	// of what New wrote once.
 	sources *readmodel.Sources
 	// pace is what keeps a catch-up from being posted faster than Slack will
 	// carry it. Every post goes through it, including the message that opens a

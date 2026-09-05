@@ -43,6 +43,7 @@ package readmodel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -727,6 +728,38 @@ func HandedOff(queue backlog.Queue) []Attention {
 		})
 	}
 	return attention
+}
+
+// Pausing is every directive holding one work item up, for a surface that has to
+// name them rather than count them: a thread settling what it is waiting on has
+// to know whether that is one thing or several before it settles anything.
+//
+// It is here rather than in the surface that asks, and it reads through the same
+// source the four lines do, because which directives hold an item is the reading
+// the run pipeline enforces on: a channel that worked it out its own way could
+// lift a pause the pipeline still holds. Nothing about it revises the record —
+// this says what is in force, and settling one stays with the acts that settle
+// directives. That division is the architect's standing ruling rather than this
+// package's preference; docs/developing-yoyo.md records which ruling and what it
+// said, under "Where a surface reads the work's own state from".
+//
+// A directive that named no scope holds every item, so it is here too. That is
+// the pipeline's own reading and the honest one: it is what stops this item, and
+// settling it from here settles it wherever else it was stopping work. A surface
+// acting on this says so where it acts — a settlement that reached past the item
+// somebody was looking at is the one thing they could not have known from the
+// thread they were in.
+func Pausing(sources Sources, workItemID string) ([]directive.Directive, error) {
+	if sources.Directives == nil {
+		return nil, errors.New("nothing was wired to read the recorded directives")
+	}
+	recorded, err := sources.Directives.List()
+	if err != nil {
+		return nil, fmt.Errorf("the recorded directives could not be read: %w", err)
+	}
+	pausing := directive.Pausing(recorded, workItemID)
+	directive.Sort(pausing)
+	return pausing, nil
 }
 
 // pausedBy is the unresolved directive that stops one item, or nothing.
