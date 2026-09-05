@@ -84,12 +84,13 @@ jobs:
           cache: true
 
       # The walkthrough runs `bd init` against its own scratch project, so the
-      # tracker has to be here. This is the same install the README, `yoyo
-      # doctor`, and `yoyo setup` all name, so CI gets the tracker the way a
-      # reader is told to.
+      # tracker has to be here. Pinned rather than @latest: beads v1.2.2
+      # (2026-09-05) began requiring a newer Go than this runner carries, and
+      # @latest let an upstream release fail every PR here on its own schedule.
+      # v1.1.2 is what this project's own machines run; bump it deliberately.
       - name: Install the tracker the walkthrough needs
         run: |
-          go install github.com/gastownhall/beads/cmd/bd@latest
+          go install github.com/gastownhall/beads/cmd/bd@v1.1.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       # `make adoption` builds this checkout's own binary and walks the
