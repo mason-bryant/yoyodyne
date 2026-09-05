@@ -2758,6 +2758,10 @@ func (h *realScheduleHarness) Complete(_ context.Context, id, _ string) (beads.W
 	return h.setStatus(id, "closed")
 }
 
+func (h *realScheduleHarness) Reopen(_ context.Context, id, _ string) (beads.WorkItem, error) {
+	return h.setStatus(id, "open")
+}
+
 func (h *realScheduleHarness) setStatus(id, status string) (beads.WorkItem, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

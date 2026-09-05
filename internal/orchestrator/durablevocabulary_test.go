@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/landing"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -47,6 +49,40 @@ func TestTheDurableSchemaStoresEveryVerdictTheReviewerCanProduce(t *testing.T) {
 	for _, decision := range review.Decisions() {
 		if !slices.Contains(durableDecisions, string(decision)) {
 			t.Fatalf("the reviewer can decide %q and the durable schema stores only %v", decision, durableDecisions)
+		}
+	}
+}
+
+// The landing vocabulary is kept in two places for the reason the review
+// vocabularies are, and it is held together here for a sharper reason than they
+// are: what a landing outcome decides is whether the work item closes. An
+// outcome a developer can claim and the schema will not store is refused at the
+// save of a run whose change is already integrated, and the closure that then
+// follows is decided from a record that never took the claim.
+func TestTheDurableSchemaStoresEveryLandingADeveloperCanClaim(t *testing.T) {
+	t.Parallel()
+
+	durableOutcomes := runstate.LandingOutcomes()
+	for _, outcome := range landing.Outcomes() {
+		if !slices.Contains(durableOutcomes, string(outcome)) {
+			t.Fatalf("a developer can claim landing %q and the durable schema stores only %v", outcome, durableOutcomes)
+		}
+		// Checked through a state a run actually saves, so the vocabulary is held
+		// where it crosses rather than only where it is listed.
+		state := runstate.State{LandingOutcome: string(outcome), LandingReason: "the record has to be able to carry this"}
+		if err := state.Validate(); err != nil && strings.Contains(err.Error(), "landing_outcome is invalid") {
+			t.Fatalf("a stored %q landing is refused: %v", outcome, err)
+		}
+	}
+	// The two derivations have to agree about which outcome withholds the
+	// closure, because the claim is made in one vocabulary and the closure is
+	// decided in the other.
+	for _, outcome := range landing.Outcomes() {
+		claimed := landing.Claim{Outcome: outcome, Why: "recorded"}
+		stored := runstate.State{LandingOutcome: string(outcome), LandingReason: "recorded"}
+		if claimed.Discharges() != stored.LandingDischarges() {
+			t.Errorf("landing %q discharges=%t as a claim and %t as a record", outcome,
+				claimed.Discharges(), stored.LandingDischarges())
 		}
 	}
 }

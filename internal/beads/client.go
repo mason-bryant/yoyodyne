@@ -699,6 +699,35 @@ func (c Client) Complete(ctx context.Context, id, reason string) (WorkItem, erro
 	return decodeSingleWorkItem(data)
 }
 
+// Reopen returns a claimed item to the backlog, carrying into its notes the
+// reason it was not discharged. It is what a run that landed evidence rather
+// than the work leaves behind: the change integrated, so there is nothing to
+// block on and nobody to hand it to, and the item is simply still open.
+//
+// The status is read back for the reason a blocker's is. An item left claimed by
+// a run that has ended is work nothing can start and nothing is watching, which
+// is the failure this call exists to avoid rather than a milder version of it.
+func (c Client) Reopen(ctx context.Context, id, reason string) (WorkItem, error) {
+	if err := validateIssueID(id); err != nil {
+		return WorkItem{}, err
+	}
+	if strings.TrimSpace(reason) == "" {
+		return WorkItem{}, errors.New("reopen reason is required")
+	}
+	data, err := c.run(ctx, "update", id, "--status=open", "--append-notes="+reason, "--json")
+	if err != nil {
+		return WorkItem{}, err
+	}
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if item.Status != "open" {
+		return WorkItem{}, fmt.Errorf("work item %s status is %q after being reopened, want open", item.ID, item.Status)
+	}
+	return item, nil
+}
+
 func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
 	runner := c.Runner
 	if runner == nil {

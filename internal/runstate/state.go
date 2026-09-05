@@ -117,6 +117,15 @@ const (
 	SeverityMinor   = "minor"
 )
 
+// Landing outcomes are duplicated here for the reason the review vocabularies
+// are: the durable schema stays independent of the package that produces them.
+// What a landing outcome decides is whether the work item closes, so an
+// unrecognized one is refused at the save rather than guessed at by the closure.
+const (
+	LandingDischarged = "discharged"
+	LandingEvidence   = "evidence"
+)
+
 // The two vocabularies above stated as lists, which is what the validation below
 // reads. Neither is repeated in a switch anywhere in this package, so the list
 // and what a record may carry cannot come to disagree.
@@ -139,6 +148,7 @@ const (
 var (
 	reviewDecisions   = []string{ReviewApprove, ReviewRepair}
 	findingSeverities = []string{SeverityBlocker, SeverityMajor, SeverityMinor}
+	landingOutcomes   = []string{LandingDischarged, LandingEvidence}
 )
 
 // ReviewDecisions and FindingSeverities are those vocabularies as a caller
@@ -147,6 +157,10 @@ var (
 func ReviewDecisions() []string { return slices.Clone(reviewDecisions) }
 
 func FindingSeverities() []string { return slices.Clone(findingSeverities) }
+
+// LandingOutcomes is the landing vocabulary the durable schema stores, read the
+// same way and closed for the same reason.
+func LandingOutcomes() []string { return slices.Clone(landingOutcomes) }
 
 // quotedAlternatives names a vocabulary the way a refusal has to: every value
 // quoted, the last joined with "or". It is derived from the list rather than
@@ -967,6 +981,25 @@ type State struct {
 	ReviewDecision      string `json:"review_decision,omitempty"`
 	ReviewSummary       string `json:"review_summary,omitempty"`
 	ReviewFindings      int    `json:"review_findings,omitempty"`
+	// LandingOutcome is what the developer claimed its change does to the work
+	// item, and LandingReason is its own account of the claim. They are durable
+	// because the closure is not always made by the process that read them: a run
+	// whose merge the forge only queued is closed by a later sweep, and a sweep
+	// deciding from integration alone is exactly the closure this record exists
+	// to stop.
+	//
+	// An empty outcome is the ordinary landing, which is what every run recorded
+	// before this channel existed carries and what a reply claiming nothing
+	// leaves.
+	LandingOutcome string `json:"landing_outcome,omitempty"`
+	LandingReason  string `json:"landing_reason,omitempty"`
+	// LandingProblem names a claim that arrived and could not be read. It is
+	// separate from the outcome because the two say different things: no claim is
+	// a developer that made none, and an unreadable one is a developer that tried
+	// to. Only the second can be a claim that the item is not discharged, so it
+	// withholds the closure — an item left open is something a person can settle,
+	// and the false closure it would otherwise be is what nobody can see.
+	LandingProblem string `json:"landing_problem,omitempty"`
 	// ReviewFindingDetails carries the findings themselves. It is a separate key
 	// from the ReviewFindings count, which predates it and still means what it
 	// always did, so a state file written before the repair loop existed keeps
@@ -1335,6 +1368,15 @@ func (s State) Validate() error {
 	}
 	if s.ReviewDecision != "" && !slices.Contains(reviewDecisions, s.ReviewDecision) {
 		problems = append(problems, errors.New("review_decision is invalid"))
+	}
+	if s.LandingOutcome != "" && !slices.Contains(landingOutcomes, s.LandingOutcome) {
+		problems = append(problems, errors.New("landing_outcome is invalid"))
+	}
+	// A claim with no account of itself is the half of the record that would be
+	// read afterwards, so an outcome without one is refused here rather than
+	// leaving an item open for a reason nobody wrote down.
+	if s.LandingOutcome != "" && strings.TrimSpace(s.LandingReason) == "" {
+		problems = append(problems, errors.New("landing_outcome requires the landing_reason it was claimed for"))
 	}
 	if s.ReviewFindings < 0 {
 		problems = append(problems, errors.New("review_findings cannot be negative"))
@@ -1749,6 +1791,19 @@ func (s State) AwaitingForge() bool {
 		return false
 	}
 	return !s.PullRequest.Merged
+}
+
+// LandingDischarges reports whether this run's landing is the kind that closes
+// its work item. It is the one derivation every closure site reads — the run's
+// own completion, the sweep that settles a queued merge, and the sweep that
+// finishes an interrupted run — so a change that integrates cannot be closed by
+// one of them and left open by another.
+//
+// It answers no in exactly two cases: a claim of evidence, and a claim that
+// arrived unreadable. Everything else discharges, which is every run that
+// claimed nothing and every run recorded before this channel existed.
+func (s State) LandingDischarges() bool {
+	return s.LandingOutcome != LandingEvidence && s.LandingProblem == ""
 }
 
 // validateIndependentInvocations enforces what an integrated change claims: two

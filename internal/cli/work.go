@@ -531,6 +531,8 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 	}
 	if outcome.Integration != nil {
 		report.Integrated = true
+		report.Undischarged = !outcome.LandingDischarges()
+		report.UndischargedReason = outcome.UndischargedAccount()
 		report.TargetBranch = outcome.Integration.TargetBranch
 		report.Commit = outcome.Integration.TargetCommit
 	}
