@@ -4012,6 +4012,29 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 // rather than a closed item behind a run nothing finished.
 func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	p := a.pipeline
+	// Where the landing does not discharge the item, where that item goes is
+	// decided before the outcome is recorded rather than as part of the settlement
+	// below. The notes recorded there name the disposition, and it is derived from
+	// the run's own landing fields — which a tracker that refuses the dependency
+	// still moves at this point. Deciding first is what stops the notes, and every
+	// surface that reads the run afterwards, naming a disposition the item did not
+	// get. Only that decision moves: the item's status is still settled below,
+	// after the dependency, so there is no window where it is open and unheld.
+	//
+	// A tracker that could not be read here is not the failure. It is left to the
+	// settlement below, which asks again under the same recovery it always did, so
+	// a run this costs is costed in the same place as before and its outcome still
+	// reaches the item first.
+	undischarged := a.outcome.Integration != nil && !a.mergeQueued() && !a.state.LandingDischarges()
+	var undischargedItem beads.WorkItem
+	decided := false
+	if undischarged {
+		if arranged, item, err := arrangeUndischarged(ctx, p.Tracker, a.state); err == nil {
+			a.applyUndischargedDisposition(arranged)
+			undischargedItem = item
+			decided = true
+		}
+	}
 	// The tracker is updated only once the work is durably where it belongs:
 	// after integration when it is automatic, and after passing checks when a
 	// human still owns the promotion.
@@ -4045,9 +4068,21 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// with the claim on it instead, parked or waiting on the impediment the
 	// landing named, which is the state a person or a later run can still act on.
 	if a.outcome.Integration != nil && !a.mergeQueued() {
-		if !a.state.LandingDischarges() {
+		if undischarged {
 			if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
-				return settleUndischarged(ctx, p.Tracker, a.state)
+				if decided {
+					return reopenUndischarged(ctx, p.Tracker, a.state, undischargedItem)
+				}
+				// The read that would have decided it above failed, so the whole
+				// settlement is made here. What it settles on is still taken back onto
+				// the run, which is all that is left to keep true: the notes are already
+				// written, and they say what the claim asked for.
+				settled, err := settleUndischarged(ctx, p.Tracker, a.state)
+				if err != nil {
+					return err
+				}
+				a.applyUndischargedDisposition(settled)
+				return nil
 			}); err != nil {
 				return a.fail(fmt.Errorf("reopen the work item this run did not discharge: %w", err), runstate.StatusFailed)
 			}

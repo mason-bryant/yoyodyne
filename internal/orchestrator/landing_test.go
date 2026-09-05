@@ -242,6 +242,70 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 	}
 }
 
+// The refusal the resolution above cannot see. The marker names work the tracker
+// has, that is open, and that does not already wait on this item, and the tracker
+// refuses the dependency anyway — a cycle further round the graph than the one
+// read that resolution makes. The item is parked, and the whole record has to say
+// so: the disposition every surface prints is derived from the run's own landing
+// fields, and the outcome notes an operator reads are written from them before the
+// item's status is settled at all.
+func TestADependencyRefusedAtTheSettlementSaysParkedOnEverySurface(t *testing.T) {
+	t.Parallel()
+
+	tracker := newOutcomeTracker().holds("yoyodyne-impediment")
+	tracker.blockerErr = errors.New("bd: adding this dependency would create a cycle")
+	provider := roleBackend(writeFeature, approveVerdict)
+	provider.developerFinalText = "the diagnosis\n\n" +
+		landingBlock(`{"outcome":"evidence","why":"the conversion needs yoyodyne-impediment to land first","blocked_by":"yoyodyne-impediment"}`)
+	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	// The run finishes. A dependency the tracker will not write must not cost a run
+	// whose change has already been promoted.
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("a refused dependency cost the run its integration: %#v", outcome)
+	}
+	// Where the item actually went.
+	if !tracker.item.Parking.Parked() {
+		t.Fatalf("the item went back unparked behind a dependency the tracker refused; calls = %v", tracker.calls)
+	}
+	// And what every surface says about it. `yoyo status` and the conversation both
+	// derive the disposition from these two fields, so a run that kept the marker
+	// tells them the item stays open waiting on work it is not waiting on.
+	if outcome.LandingBlockedBy != "" {
+		t.Errorf("outcome landing marker = %q, want none: the tracker refused the dependency", outcome.LandingBlockedBy)
+	}
+	if !strings.Contains(outcome.LandingImpedimentProblem, "would not make this item wait") {
+		t.Errorf("the outcome does not say why the item was parked instead: %q", outcome.LandingImpedimentProblem)
+	}
+	if got := outcome.UndischargedDisposition(); !strings.Contains(got, "parked") {
+		t.Errorf("UndischargedDisposition() = %q, want the parking the item actually got", got)
+	}
+	// The notes are recorded before the item's status is settled, so this is what
+	// asserts the arrangement happens ahead of them rather than after.
+	if strings.Contains(tracker.notes, "stays open waiting on") {
+		t.Errorf("the recorded outcome names a disposition the item did not get: %q", tracker.notes)
+	}
+	if !strings.Contains(tracker.notes, "the item is parked") {
+		t.Errorf("the recorded outcome does not say the item was parked: %q", tracker.notes)
+	}
+	// And the durable record, because the run that made the claim is not always the
+	// process that describes it afterwards.
+	recorded, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.LandingBlockedBy != "" {
+		t.Errorf("the run's record still carries the marker the tracker refused: %q", recorded.LandingBlockedBy)
+	}
+	if !strings.Contains(recorded.LandingImpedimentProblem, "would not make this item wait") {
+		t.Errorf("the run's record does not say why the item was parked: %q", recorded.LandingImpedimentProblem)
+	}
+}
+
 // The whole point of the marker, replayed through the derivation selection
 // actually reads: an item a run did not discharge is offered by no pull until
 // somebody releases it, or until the impediment it names closes. Before this it
@@ -367,7 +431,7 @@ func TestSettlingAnUndischargedItemTwiceMakesItWaitOnce(t *testing.T) {
 		LandingBlockedBy: "yoyodyne-impediment",
 	}
 	for attempt := 1; attempt <= 2; attempt++ {
-		if err := settleUndischarged(context.Background(), tracker, state); err != nil {
+		if _, err := settleUndischarged(context.Background(), tracker, state); err != nil {
 			t.Fatalf("settleUndischarged() attempt %d error = %v", attempt, err)
 		}
 	}
@@ -398,7 +462,8 @@ func TestADependencyTheTrackerRefusesParksTheItemRatherThanFailingTheSettlement(
 		LandingReason:    "it needs yoyodyne-impediment first",
 		LandingBlockedBy: "yoyodyne-impediment",
 	}
-	if err := settleUndischarged(context.Background(), tracker, state); err != nil {
+	settled, err := settleUndischarged(context.Background(), tracker, state)
+	if err != nil {
 		t.Fatalf("settleUndischarged() error = %v, want the parking fallback rather than a failure", err)
 	}
 	if tracker.item.Status != "open" {
@@ -407,13 +472,58 @@ func TestADependencyTheTrackerRefusesParksTheItemRatherThanFailingTheSettlement(
 	if !tracker.item.Parking.Parked() {
 		t.Fatalf("the item went back unparked behind a dependency that was refused; calls = %v", tracker.calls)
 	}
+	// The settlement answers with the run's landing fields as they now stand. A
+	// caller that recorded the state it went in with would say the item stays open
+	// waiting on work the item was in fact parked for.
+	if settled.LandingBlockedBy != "" {
+		t.Errorf("the settled state still carries the marker the tracker refused: %q", settled.LandingBlockedBy)
+	}
+	if !strings.Contains(settled.LandingImpedimentProblem, "would not make this item wait") {
+		t.Errorf("the settled state does not say why the item was parked instead: %q", settled.LandingImpedimentProblem)
+	}
 	// What the tracker would not do is on the item, because that is where somebody
-	// reads it: the run's own record still carries the marker it resolved.
+	// reads it.
 	if !strings.Contains(tracker.item.Parking.Reason(), "would not make this item wait") {
 		t.Errorf("the parking reason does not say the dependency was refused: %q", tracker.item.Parking)
 	}
 	if !strings.Contains(tracker.notes, "would not make this item wait") {
 		t.Errorf("the item's notes do not say the dependency was refused: %q", tracker.notes)
+	}
+}
+
+// Deciding where an undischarged item goes reads the item, and a tracker that
+// could not be read is not the run's failure: a run whose change is promoted
+// leaves the settlement to ask again under the recovery it always had. So the
+// read is reported rather than swallowed — a decision made from an item nobody
+// saw would write a dependency the item may already carry and lift a parking
+// somebody placed.
+func TestDecidingWhereAnUndischargedItemGoesReportsATrackerItCouldNotRead(t *testing.T) {
+	t.Parallel()
+
+	// A tracker that holds some other work, so the item this run served is one it
+	// cannot answer for.
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-other", Title: "Another", Status: "open"}}
+	state := runstate.State{
+		RunID:            "run-abcdef0123456789abcdef0123456789",
+		WorkItemID:       "yoyodyne-task",
+		TargetBranch:     "main",
+		LandingOutcome:   runstate.LandingEvidence,
+		LandingReason:    "it needs yoyodyne-impediment first",
+		LandingBlockedBy: "yoyodyne-impediment",
+	}
+	if _, _, err := arrangeUndischarged(context.Background(), tracker, state); err == nil {
+		t.Fatal("arrangeUndischarged() returned no error for an item it could not read")
+	}
+	if len(tracker.blockers) > 0 {
+		t.Errorf("a dependency was written for an item that was never read: %v", tracker.blockers)
+	}
+	// The parking needs nothing of the read but the reason it supersedes, so it
+	// settles anyway: a sentence lost there must not cost the settlement of a
+	// change that is already promoted.
+	parked := state
+	parked.LandingBlockedBy = ""
+	if _, err := settleUndischarged(context.Background(), tracker, parked); err != nil {
+		t.Fatalf("settleUndischarged() error = %v, want the parking to settle without the read", err)
 	}
 }
 
@@ -436,7 +546,7 @@ func TestSettlingAnItemLeftWaitingKeepsTheParkingItAlreadyCarried(t *testing.T) 
 		LandingReason:    "it needs yoyodyne-impediment first",
 		LandingBlockedBy: "yoyodyne-impediment",
 	}
-	if err := settleUndischarged(context.Background(), tracker, state); err != nil {
+	if _, err := settleUndischarged(context.Background(), tracker, state); err != nil {
 		t.Fatalf("settleUndischarged() error = %v", err)
 	}
 	if tracker.item.Parking != operatorParked {
@@ -466,7 +576,7 @@ func TestTheParkingDefaultRecordsTheReasonItSuperseded(t *testing.T) {
 		LandingOutcome: runstate.LandingEvidence,
 		LandingReason:  "the design this needs has not landed",
 	}
-	if err := settleUndischarged(context.Background(), tracker, state); err != nil {
+	if _, err := settleUndischarged(context.Background(), tracker, state); err != nil {
 		t.Fatalf("settleUndischarged() error = %v", err)
 	}
 	if !strings.Contains(tracker.item.Parking.Reason(), "the design this needs has not landed") {
@@ -478,7 +588,7 @@ func TestTheParkingDefaultRecordsTheReasonItSuperseded(t *testing.T) {
 	// An item nobody had parked has nothing to supersede, and a note saying so
 	// would be a sentence about a decision nobody took.
 	unparked := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
-	if err := settleUndischarged(context.Background(), unparked, state); err != nil {
+	if _, err := settleUndischarged(context.Background(), unparked, state); err != nil {
 		t.Fatalf("settleUndischarged() error = %v", err)
 	}
 	if strings.Contains(unparked.notes, "replaces the parking reason") {

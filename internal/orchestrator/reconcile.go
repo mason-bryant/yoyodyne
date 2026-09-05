@@ -517,9 +517,15 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	// a reviewed promotion the forge has now merged, not a run somebody
 	// interrupted. completeIntegrated then finds the item closed and adds nothing,
 	// which keeps the item's account of this merge to the one note above.
-	if err := r.closeSettledMerge(ctx, state); err != nil {
+	settled, err := r.closeSettledMerge(ctx, state)
+	if err != nil {
 		return reconciliationOf(state, ActionUnsettled), err
 	}
+	// The settlement can decide the item goes somewhere other than where the run
+	// claimed, and it answers with the run's landing fields as they now stand. They
+	// are carried on rather than dropped, because completeIntegrated is what saves
+	// this run's record and every surface reads the disposition off it.
+	state = settled
 	result, err := r.completeIntegrated(ctx, state, false)
 	result.Detail = detail
 	result.Catchup = catchup
@@ -530,28 +536,29 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 // performed. An item already in the state its run's landing calls for is left
 // alone, so settling the same merge twice settles it once — and so does settling
 // one an older run closed before the closure waited on the forge at all.
-func (r Reconciler) closeSettledMerge(ctx context.Context, state runstate.State) error {
+func (r Reconciler) closeSettledMerge(ctx context.Context, state runstate.State) (runstate.State, error) {
 	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
 	if err != nil {
-		return err
+		return state, err
 	}
 	if landingSettled(state, itemStatus) {
-		return nil
+		return state, nil
 	}
 	// The forge merging the change settles where the work is, and not whether the
 	// work discharges the item. That is the run's own claim, and it is read from
 	// the durable record here for the reason it is durable at all: the run that
 	// made it ended before the forge answered.
 	if !state.LandingDischarges() {
-		if err := settleUndischarged(ctx, r.Tracker, state); err != nil {
-			return fmt.Errorf("reopen the work item run %s did not discharge: %w", state.RunID, err)
+		settled, err := settleUndischarged(ctx, r.Tracker, state)
+		if err != nil {
+			return state, fmt.Errorf("reopen the work item run %s did not discharge: %w", state.RunID, err)
 		}
-		return nil
+		return settled, nil
 	}
 	if _, err := r.Tracker.Complete(ctx, state.WorkItemID, settledMergeCompletionReason(state)); err != nil {
-		return fmt.Errorf("close integrated work item for run %s: %w", state.RunID, err)
+		return state, fmt.Errorf("close integrated work item for run %s: %w", state.RunID, err)
 	}
-	return nil
+	return state, nil
 }
 
 // landingSettled reports an item already in the state its run's landing calls
@@ -705,9 +712,14 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 			return reconciliationOf(state, ActionCompleted), fmt.Errorf("record reconciled outcome for run %s: %w", state.RunID, err)
 		}
 		if !state.LandingDischarges() {
-			if err := settleUndischarged(ctx, r.Tracker, state); err != nil {
-				return reconciliationOf(state, ActionCompleted), fmt.Errorf("reopen the work item run %s did not discharge: %w", state.RunID, err)
+			// The settled state is taken back, because the settlement can decide the
+			// item goes somewhere other than where the run claimed and this is the
+			// record saved below — the one every surface reads the disposition off.
+			settled, settleErr := settleUndischarged(ctx, r.Tracker, state)
+			if settleErr != nil {
+				return reconciliationOf(state, ActionCompleted), fmt.Errorf("reopen the work item run %s did not discharge: %w", state.RunID, settleErr)
 			}
+			state = settled
 		} else if _, err := r.Tracker.Complete(ctx, state.WorkItemID, reconciledCompletionReason(state)); err != nil {
 			return reconciliationOf(state, ActionCompleted), fmt.Errorf("close integrated work item for run %s: %w", state.RunID, err)
 		}

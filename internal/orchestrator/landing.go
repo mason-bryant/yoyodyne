@@ -130,6 +130,20 @@ func (a *activeRun) resolveImpediment(ctx context.Context, impediment string) (s
 	return impediment, ""
 }
 
+// applyUndischargedDisposition takes back onto the run what the settlement
+// decided about where its item goes. The marker is resolved when the claim is
+// read, and the one thing that can still move it afterwards is a tracker that
+// refuses the dependency at the settlement itself. Both halves of the record take
+// the correction, because a run whose fields still named the marker would tell
+// every surface deriving a disposition from them that the item waits on work it
+// was in fact parked for.
+func (a *activeRun) applyUndischargedDisposition(settled runstate.State) {
+	a.state.LandingBlockedBy = settled.LandingBlockedBy
+	a.state.LandingImpedimentProblem = settled.LandingImpedimentProblem
+	a.outcome.LandingBlockedBy = settled.LandingBlockedBy
+	a.outcome.LandingImpedimentProblem = settled.LandingImpedimentProblem
+}
+
 // claimedLanding rebuilds the claim from the durable record, which is what the
 // reviewer is shown and what a work item's notes are written from. It is read
 // back rather than carried alongside so that a repair round, a resumed run, and
@@ -298,8 +312,8 @@ func undischargedParking(state runstate.State) domain.WorkItemParking {
 // already promoted, so the run cannot be retried into a better state, and the
 // item is left claimed with nothing watching it. Parking it holds it back and
 // says on the item what the tracker would not do, which is something a person can
-// act on. The run's own record still carries the marker it resolved; what
-// actually happened is on the item, which is where it is read.
+// act on. The run's own record takes the same correction, so a surface reading
+// the run and a person reading the item are told the same disposition.
 //
 // A parking the item already carried is never lifted, and never lost. The
 // leave-open path adds a dependency, which is not a release, and a settlement
@@ -309,7 +323,30 @@ func undischargedParking(state runstate.State) domain.WorkItemParking {
 // release the item now; the one it superseded goes into the notes, so a decision
 // somebody took is still readable off the item rather than only off whatever the
 // tracker keeps of its own history.
-func settleUndischarged(ctx context.Context, tracker WorkTracker, state runstate.State) error {
+//
+// The settled state is returned because the fallback moves the run's own landing
+// fields, and every surface derives the disposition from those. A caller holding
+// a state it is about to record has to record the one this answers with, or it
+// says the item stays open waiting on work the item was in fact parked for.
+func settleUndischarged(ctx context.Context, tracker WorkTracker, state runstate.State) (runstate.State, error) {
+	settled, item, err := arrangeUndischarged(ctx, tracker, state)
+	if err != nil {
+		return state, err
+	}
+	return settled, reopenUndischarged(ctx, tracker, settled, item)
+}
+
+// arrangeUndischarged is the half of the settlement that decides where the item
+// goes: it makes the item wait on the impediment its landing named, and says why
+// it could not where the tracker refused. It answers with the run's landing
+// fields as they now stand and with the item as it was read.
+//
+// It is separable from the reopen below because the disposition is what a run's
+// outcome notes are written from, and those are recorded before the item's status
+// is settled. A caller that arranges first records a note saying where the item
+// went; one that arranges as part of the settlement has already written the note
+// by the time the tracker's refusal is known.
+func arrangeUndischarged(ctx context.Context, tracker WorkTracker, state runstate.State) (runstate.State, beads.WorkItem, error) {
 	settled := state
 	impediment := state.LandingImpediment()
 	// The item is read for what it already says about itself. The leave-open path
@@ -319,7 +356,7 @@ func settleUndischarged(ctx context.Context, tracker WorkTracker, state runstate
 	// rather than the settlement of an already-promoted change.
 	item, shown := tracker.Show(ctx, state.WorkItemID)
 	if shown != nil && impediment != "" {
-		return fmt.Errorf("read work item %s before making it wait on %s: %w", state.WorkItemID, impediment, shown)
+		return state, beads.WorkItem{}, fmt.Errorf("read work item %s before making it wait on %s: %w", state.WorkItemID, impediment, shown)
 	}
 	if impediment != "" && !waitsOn(item, impediment) {
 		if err := tracker.AddBlocker(ctx, state.WorkItemID, impediment); err != nil {
@@ -328,6 +365,14 @@ func settleUndischarged(ctx context.Context, tracker WorkTracker, state runstate
 				"its landing named %s as the impediment and the tracker would not make this item wait on it (%v)", impediment, err)
 		}
 	}
+	return settled, item, nil
+}
+
+// reopenUndischarged is the other half: the item goes back to the backlog in the
+// disposition the arrangement above settled on. It takes the item that
+// arrangement read rather than reading it again, so the parking it must not lift
+// and the dependency it must not duplicate are decided from one reading.
+func reopenUndischarged(ctx context.Context, tracker WorkTracker, settled runstate.State, item beads.WorkItem) error {
 	reason := undischargedLandingReason(settled)
 	parking := undischargedParking(settled)
 	switch superseded := item.Parking.Reason(); {
@@ -338,7 +383,7 @@ func settleUndischarged(ctx context.Context, tracker WorkTracker, state runstate
 	case superseded != "" && superseded != parking.Reason():
 		reason += " It replaces the parking reason this item already carried, which was: " + superseded
 	}
-	_, err := tracker.Reopen(ctx, state.WorkItemID, reason, parking)
+	_, err := tracker.Reopen(ctx, settled.WorkItemID, reason, parking)
 	return err
 }
 

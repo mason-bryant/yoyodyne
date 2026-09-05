@@ -266,7 +266,9 @@ fourth is the cycle a follow-on item makes ordinary.
 Anything else takes the parking. The item is held back either way, and the
 parking reason and the item's notes say which marker was asked for and why it was
 not used. That is also what happens if the tracker refuses the dependency anyway —
-a cycle further round the graph than the harness looked, say. Nothing about the
+a cycle further round the graph than the harness looked, say. A refusal that late
+moves the run's own record with it, so `yoyo status` and the conversation say the
+item was parked rather than naming a wait it never got. Nothing about the
 marker can cost the run its landing: the change is promoted before any of this is
 decided, so failing here would leave the item claimed with nobody watching it,
 which is the one outcome worse than parking it.
