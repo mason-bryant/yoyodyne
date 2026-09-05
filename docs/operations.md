@@ -820,10 +820,15 @@ Needs a human (1):
   where a directive pauses the work, and otherwise what has stopped the harness
   choosing at all. That last one comes from a closed set of named reasons, each
   of which says whose move it is: the operator's hold, a held intake, every
-  developer slot taken, a live watch session that has found nothing it can
-  start, no watch session running any more, and a product no session has ever
-  watched. An idle session and no session are named apart on purpose — telling
-  you to start a session you are already running sends you to the wrong place.
+  developer slot taken, a session waiting out the provider's usage window, a live
+  watch session that has found nothing it can start, no watch session running any
+  more, and a product no session has ever watched. An idle session and no session
+  are named apart on purpose — telling you to start a session you are already
+  running sends you to the wrong place. A provider window is named apart from
+  both for the same reason and says `waiting on the provider's usage window until
+  13:43Z`: nobody has a move, the window lifts on the provider's clock, and
+  reporting it as a session finding nothing to start sends you to look at a queue
+  that is fine.
   It never comes from a watch session's memory of what it has already tried,
   which is a fact about one process rather than about the product. Work that is
   admitted and would be started next is not listed here at all; the count of
@@ -860,7 +865,8 @@ than parsing the rendering.
 
 Under the four lines, `yoyo status` reads back every stretch in which this
 product went quiet: nothing started at all, while the tracker reported work
-ready, and no hold, no full machine and no still-moving run accounted for it.
+ready, and no hold, no full machine, no still-moving run and no provider usage
+window accounted for it.
 
 ```text
 nothing started on this product for 7h30m0s from 2026-09-01T06:05:00Z, with 3 items ready; it cleared at 2026-09-01T13:35:00Z

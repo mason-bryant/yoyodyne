@@ -564,8 +564,9 @@ a workspace that refuses it costs the board and not one message.
 
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,
-everything held, the watch session idle, or no session running — says so again
-every `--heartbeat`, an hour by default, naming what stopped it, how long that has
+everything held, the watch session waiting out the provider's usage window, the
+watch session idle, or no session running — says so again every `--heartbeat`,
+an hour by default, naming what stopped it, how long that has
 been true, how much ready work is behind it, and how many promotions are waiting
 on the forge to publish them. That count is what a developer
 run could actually be started for rather than everything the tracker calls ready:
@@ -674,9 +675,9 @@ no run, no hold. For seven and a half hours every surface here was correct and
 silent, and the operator found it by noticing.
 
 So the sink also reads the absence. When nothing has started for half an hour,
-the tracker reports work ready, and no hold, no full machine and no still-moving
-run accounts for it, that is a stall: it is recorded durably against the product,
-and
+the tracker reports work ready, and no hold, no full machine, no still-moving run
+and no provider usage window accounts for it, that is a stall: it is recorded
+durably against the product, and
 each one is sent as a direct message to every person the project granted
 direct-work, exactly once. What it says is how long nothing has happened, how
 much was waiting, the four lines, and — the fact that decides what to do about it
@@ -689,6 +690,18 @@ keeps a killed one from silencing it: a run whose process is gone leaves a recor
 saying it is in flight until `yoyo reconcile` settles it, and that is the crash
 this exists to catch. A working run stamps every provider event onto its own
 record, so a record that has not moved for an hour is what separates the two.
+
+The provider's usage window quiets it too, and says so rather than only going
+quiet. A run that comes back parked on an exhausted limit hands the watch session
+the time the provider named, the session records that on every poll it makes
+inside the window, and the sink says one note in the channel — `waiting on the
+provider's usage window until 13:43Z` — instead of the alarm, at note severity
+and to nobody's phone. It was bought the same way the rest of this was: on
+2026-09-05 ninety minutes of a window read as a machine that had quietly stopped,
+and somebody was paged for the provider behaving normally. It quiets the alarm
+only until the time the provider named, for the reason a run's record does: a
+session still choosing nothing after its own window lifted is a session that has
+stopped working.
 
 It is said once per stall rather than repeated while it stands, which is the
 opposite of the waiting line above and deliberate: an hourly repetition is right

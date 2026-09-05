@@ -310,6 +310,14 @@ type SessionState struct {
 	// not answer, so a reader told to admit work would be told to do the one thing
 	// that cannot help.
 	Unreadable bool
+	// ProviderWindow marks the poll made while the provider is refusing the harness
+	// for want of capacity, and ProviderWindowResetsAt is when the provider said
+	// that window lifts. They travel for the same reason again, and they close the
+	// case that had nothing at all saying it: a session waiting out a window looks
+	// from every record like a session finding nothing to start, so ninety minutes
+	// of it on 2026-09-05 was read as a line that had stopped and woke somebody.
+	ProviderWindow         bool
+	ProviderWindowResetsAt *time.Time
 	// Restarting marks the one stop that is not an ending — the session waiting
 	// out its runs to be re-executed into a build deployed over it. It is what
 	// keeps every surface from telling the operator to start a session that is
@@ -693,6 +701,16 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// through the store contention a reconcile or a settling run makes, and what
 	// stops the session once the failures have gone on too long to be contention.
 	var retries readRetries
+	// window is the provider's usage window this session is inside, learned from a
+	// run that came back parked on one. It is held across pulls because that is how
+	// long it lasts: the run that met the limit is one invocation, and every other
+	// one the session would make meets the same refusal until the window rolls.
+	//
+	// It is what the session had no way to say before. The refusal was durable in
+	// the run's own state and nowhere a surface reading the product would look, so
+	// a session waiting out ninety minutes of it on 2026-09-05 was indistinguishable
+	// from one that had died — and the watchdog said exactly that.
+	var window providerWindow
 	running := 0
 
 	// settle takes one finished run into the schedule: what became of it, what it
@@ -700,6 +718,13 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	settle := func(done completed) {
 		started := &schedule.Started[done.index]
 		started.record(done)
+		// What the provider said, taken from the run that was told it. A later
+		// refusal replaces an earlier one rather than being merged with it: the
+		// deadline a run was just given is the provider's current answer, and an
+		// older one is a window that has already been superseded.
+		if met := windowFrom(started.Outcome); met.waiting {
+			window = met
+		}
 		switch {
 		case started.Declined != "":
 			// The work went to another process, which is two schedulers doing
@@ -1136,6 +1161,11 @@ pulling:
 			}(entry.ID)
 		}
 		if started > 0 {
+			// A run the provider accepted is the provider serving again, whatever
+			// deadline it last named. Keeping the window would have the session go on
+			// reporting itself held while it works, which is the false half of the same
+			// misreading this exists to end.
+			window = providerWindow{}
 			session.resume(fmt.Sprintf("%d item(s) pulled from a backlog of %d admitted, %d of them ready", started, len(queue.Entries), queue.Ready()))
 			continue
 		}
@@ -1148,13 +1178,24 @@ pulling:
 			break
 		}
 		// What this poll actually found, rather than the bare fact that it started
-		// nothing: the runs already going, the items passed over and why, and the
-		// conversation that has to act where one does.
-		if !wait(pull, runstate.WatchIdle, account{
+		// nothing: the runs already going, the items passed over and why, the
+		// conversation that has to act where one does, and the provider's usage
+		// window where the answer is that nothing would be served anyway.
+		//
+		// The window is said the moment the session enters it rather than at some
+		// later poll, because that is the whole of what makes it worth recording: an
+		// account that arrived an hour into the wait would arrive after the watchdog
+		// had already woken somebody over the silence.
+		said := account{
 			reason:   poll.reason(queue, len(occupied)),
 			running:  len(occupied),
 			executor: poll.carrier(),
-		}) {
+		}
+		if window.standing(s.now()) {
+			said.window = window
+			said.reason = windowReason(window, said.reason)
+		}
+		if !wait(pull, runstate.WatchIdle, said) {
 			schedule.Stopped = ScheduleCancelled
 			break
 		}
@@ -1728,6 +1769,62 @@ type account struct {
 	// closes on is derived from them.
 	executor   domain.WorkItemExecutor
 	unreadable bool
+	// window is the provider's usage window this poll was made inside, where the
+	// session is inside one. It is a value rather than a pointer because an account
+	// is compared with the one before it to decide whether anything is news, and a
+	// pointer would make two identical accounts two different ones.
+	window providerWindow
+}
+
+// providerWindow is the provider refusing this session for want of capacity: that
+// it is, and when the provider said it lifts.
+//
+// It is what a run brings back rather than anything this package asks for. A run
+// that meets an exhausted limit writes the deadline into its own durable state
+// and hands the session an outcome carrying it, so the session knows the window
+// without making a provider call of its own — and the moment it knows is the
+// moment it can say so.
+type providerWindow struct {
+	waiting  bool
+	resetsAt time.Time
+}
+
+// standing reports a window that has not lifted yet. A window whose deadline has
+// passed accounts for nothing: the session goes back to saying what it actually
+// found, and the watchdog goes back to being able to catch a session that has
+// stopped working.
+func (w providerWindow) standing(now time.Time) bool {
+	return w.waiting && (w.resetsAt.IsZero() || now.Before(w.resetsAt))
+}
+
+// windowFrom is the provider window a finished run came back inside, or none.
+//
+// Only an exhausted usage limit counts. A transient server overload lifts in
+// seconds and is waited out inside the run, so a session that reported itself
+// held by one would be describing a wait that was already over; and a run parked
+// for an operator hold, a directive, or work it depends on is waiting on
+// something the surfaces already say.
+func windowFrom(outcome Outcome) providerWindow {
+	if !outcome.Paused || outcome.PauseCause != runstate.PauseUsageLimit {
+		return providerWindow{}
+	}
+	window := providerWindow{waiting: true}
+	if outcome.UsageLimitResetsAt != nil {
+		window.resetsAt = outcome.UsageLimitResetsAt.UTC()
+	}
+	return window
+}
+
+// windowReason is what the session says about a poll made inside a provider's
+// usage window: the window first, because it is the whole of why nothing
+// started, and what the poll otherwise found behind it, because the queue is
+// still what will be pulled when the window lifts.
+func windowReason(window providerWindow, found string) string {
+	said := readmodel.ProviderWindow{Waiting: true, ResetsAt: window.resetsAt}.Says()
+	if strings.TrimSpace(found) == "" {
+		return said
+	}
+	return said + "; " + found
 }
 
 type watchSession struct {
@@ -1753,13 +1850,21 @@ func (w *watchSession) enter(state runstate.WatchState, said account) {
 		return
 	}
 	w.state, w.said = state, said
-	w.record(SessionState{
+	transition := SessionState{
 		State:      state,
 		Reason:     said.reason,
 		Running:    said.running,
 		Executor:   said.executor,
 		Unreadable: said.unreadable,
-	})
+	}
+	if said.window.waiting {
+		transition.ProviderWindow = true
+		if !said.window.resetsAt.IsZero() {
+			resetsAt := said.window.resetsAt.UTC()
+			transition.ProviderWindowResetsAt = &resetsAt
+		}
+	}
+	w.record(transition)
 }
 
 // stop records the session's last line, and whether the stop is the session

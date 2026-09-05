@@ -67,6 +67,12 @@ const (
 	// ReasonNoCapacity is a machine with every developer slot taken. It is the one
 	// reason here that is the harness working rather than the harness stopped.
 	ReasonNoCapacity Reason = "capacity"
+	// ReasonProviderWindow is a live session waiting out the provider's usage
+	// window. It is distinct from an idle session because an operator does nothing
+	// at all about it: the window lifts on the provider's clock, and a surface that
+	// reported this as a session finding nothing to start would be sending somebody
+	// to look at a queue that is fine.
+	ReasonProviderWindow Reason = "provider"
 	// ReasonSessionIdle is a live session that is choosing nothing. It is distinct
 	// from having no session at all because an operator does an entirely different
 	// thing about it, and because telling them to start a session they are already
@@ -88,6 +94,7 @@ func Reasons() []Reason {
 		ReasonOperatorHold,
 		ReasonIntakeHold,
 		ReasonNoCapacity,
+		ReasonProviderWindow,
 		ReasonSessionIdle,
 		ReasonNoWatchSession,
 		ReasonUnwatched,
@@ -109,6 +116,8 @@ func (r Reason) Whose() string {
 		return "the operator's — nothing new is chosen until `yoyo release` lifts it"
 	case ReasonNoCapacity:
 		return "nobody's — a slot frees as a run in flight finishes"
+	case ReasonProviderWindow:
+		return "nobody's — the harness asks again when the provider's usage window lifts"
 	case ReasonSessionIdle:
 		return "the operator's — a queue with ready work and an idle session is a stall rather than a rest"
 	case ReasonNoWatchSession, ReasonUnwatched:
@@ -138,6 +147,18 @@ type Conditions struct {
 	// spends it only when nothing before it has. A caller with the log in hand
 	// returns it and never fails.
 	Sessions func() ([]runstate.WatchTransition, error)
+	// Now is when the reading was taken, which is what says whether a provider's
+	// usage window a session recorded is still standing or has already lifted. It
+	// defaults to the wall clock, so a caller with no particular moment in mind
+	// passes none.
+	Now time.Time
+}
+
+func (c Conditions) now() time.Time {
+	if c.Now.IsZero() {
+		return time.Now().UTC()
+	}
+	return c.Now.UTC()
 }
 
 // Stall is why nothing is being chosen: the named reason, what it says, when it
@@ -257,7 +278,7 @@ func WhyNothingStarts(conditions Conditions) Stall {
 	if err != nil {
 		return Stall{Problem: fmt.Sprintf("what the harness is choosing work with could not be read: %v", err)}
 	}
-	return whichSession(sessions)
+	return whichSession(sessions, conditions.now())
 }
 
 // whichSession is the stall as the watch log has it. A session choosing work
@@ -265,7 +286,12 @@ func WhyNothingStarts(conditions Conditions) Stall {
 // idle queue is the state, and a log whose every session has ended is nobody
 // choosing at all — which is the state the overnight was in and the one nothing
 // else says.
-func whichSession(sessions []runstate.WatchTransition) Stall {
+//
+// A session that recorded itself waiting out the provider's usage window is
+// answered ahead of the plain idle one, because the two look identical from
+// every other record and mean opposite things: one is a queue nobody is pulling
+// and the other is a queue the provider will not let anybody pull yet.
+func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 	if len(sessions) == 0 {
 		return Stall{
 			Reason: ReasonUnwatched,
@@ -283,6 +309,13 @@ func whichSession(sessions []runstate.WatchTransition) Stall {
 		}
 	}
 	if len(live) > 0 {
+		if window := WaitingOnProvider(sessions); window.Standing(now, 0) {
+			return Stall{
+				Reason: ReasonProviderWindow,
+				Says:   window.Says(),
+				Since:  window.Since,
+			}
+		}
 		return Stall{
 			Reason: ReasonSessionIdle,
 			Says:   "the watch session has found nothing it can start",

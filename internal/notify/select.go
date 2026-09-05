@@ -358,6 +358,11 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 		Running:    transition.Running,
 		Executor:   string(transition.Executor),
 		Unreadable: transition.Unreadable,
+		// The provider refusing to serve any more work is the fourth of these, and
+		// the one that reads worst without it: a poll passed over for a usage window
+		// looks exactly like a poll passed over for an empty queue, so the clause
+		// would send the reader to admit work the harness could not start anyway.
+		ProviderWindow: transition.ProviderWindow,
 	})
 	notification.Event.Severity = severity
 	return notification, nil
@@ -524,6 +529,47 @@ func FromStall(stall Stall, at time.Time) Notification {
 	})
 	notification.Event.Severity = report.SeverityWarning
 	return notification
+}
+
+// ProviderWindow is the harness waiting out the provider's usage window: what
+// the read model says the state is, and when the session recorded entering it.
+//
+// It is the answer to the stall above rather than another kind of it. Both are
+// derived from the same absence — nothing has started, over work that is ready —
+// and this is the one where something accounts for it. On 2026-09-05 the
+// difference was ninety minutes of a provider window reported as a machine that
+// had quietly died, which is a page for a non-incident and the fastest way there
+// is to teach somebody to ignore the real one.
+type ProviderWindow struct {
+	// Says is the state as the read model words it, carried already said for the
+	// reason Line's Stopped is: the same clause is printed by `yoyo status` and
+	// said here, and a second wording is a second thing that can disagree.
+	Says string
+	// Since is when the session recorded itself waiting, which is what the age in
+	// the message is measured from.
+	Since time.Time
+	// Standing is where the harness stands, in the four lines the read model
+	// renders, said for the reason the stall says them: a reader who has been told
+	// nothing is being chosen still wants to see what is.
+	Standing string
+}
+
+// FromProviderWindow says that the harness is waiting out the provider's usage
+// window. It is addressed to the product and spoken by the harness for the
+// reason the line and the stall are: it is about every item rather than any one
+// of them.
+//
+// It is a note, and that is the whole difference between this and the stall. A
+// machine that has silently stopped doing anything is a degraded harness and is
+// taken to somebody directly; a machine waiting out a window the provider named
+// is the provider's ordinary behaviour, and a reader is owed the fact and not
+// the interruption.
+func FromProviderWindow(window ProviderWindow, at time.Time) Notification {
+	return productNotification(KindProviderWindow, at, Detail{
+		Stopped:  strings.TrimSpace(window.Says),
+		Since:    window.Since,
+		Standing: strings.TrimRight(window.Standing, "\n"),
+	})
 }
 
 // Improvement is one value the project's template has improved that this

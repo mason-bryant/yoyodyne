@@ -136,7 +136,8 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 	}
 	streams[heartbeatStream] = struct{}{}
 
-	state := waitingLine(held, sessions, inFlight)
+	now := f.now()
+	state := waitingLine(held, sessions, inFlight, now)
 	if !state.Stopped() {
 		// The state cleared. Nothing is said about that — what cleared it said so
 		// itself, as the release, the resumption, or the run it started — and the
@@ -146,7 +147,6 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		}
 		return nil, nil
 	}
-	now := f.now()
 	mark := state.Mark()
 	armed := Cursor{Standing: mark, Said: now}
 	if cursor.Standing != mark {
@@ -400,7 +400,7 @@ func shortBuild(build string) string {
 // ever watched is not a line that stopped either — nothing was choosing work
 // here, so nothing is failing to, and an hourly message about a queue somebody
 // keeps by choice is the nagging this is written to avoid.
-func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight int) readmodel.Stall {
+func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight int, now time.Time) readmodel.Stall {
 	if inFlight > 0 {
 		return readmodel.Stall{}
 	}
@@ -413,6 +413,9 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 		IntakeHold:   held.intake,
 		IntakeHeld:   held.intakeHeld,
 		Sessions:     func() ([]runstate.WatchTransition, error) { return sessions, nil },
+		// This pass's own moment, so a provider usage window the line reports as
+		// standing is one that had not lifted when the rest of the pass was read.
+		Now: now,
 	})
 	if stall.Reason == readmodel.ReasonUnwatched {
 		return readmodel.Stall{}

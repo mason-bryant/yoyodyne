@@ -73,9 +73,15 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held
 		Running:      readmodel.ActiveRuns(states, now, f.runActivityWindow()),
 		OperatorHeld: held.operatorHeld,
 		IntakeHeld:   held.intakeHeld,
-		Watched:      len(sessions) > 0,
-		Threshold:    f.stallThreshold(),
-		Now:          now,
+		// The provider refusing to serve any more work, as the session that met it
+		// recorded. It is the accounting this reading used to have no way to see: a
+		// session waiting out a usage window starts nothing over a ready queue and
+		// looks from here exactly like one that has died, and on 2026-09-05 ninety
+		// minutes of it was reported as a stall and woke somebody.
+		ProviderWindow: readmodel.WaitingOnProvider(sessions),
+		Watched:        len(sessions) > 0,
+		Threshold:      f.stallThreshold(),
+		Now:            now,
 	}
 	asked := cursor.Said
 	if activity.Unexplained() {
@@ -121,7 +127,28 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held
 	if err != nil {
 		return nil, err
 	}
-	return f.stallSaid(ctx, cursors, reconciled.Standing, now, asked), nil
+	window, _ := activity.StandingWindow()
+	return f.stallSaid(ctx, cursors, reconciled.Standing, window, now, asked), nil
+}
+
+// windowKey names one provider usage window, so a window that is said is said
+// once and a later one is said again.
+//
+// It is the deadline where the provider named one, and the moment the session
+// recorded entering the window where it did not. Both are moments the record
+// holds rather than anything derived here, and a window with neither is not one
+// this says anything about — which is the empty key, matching nothing.
+func windowKey(window readmodel.ProviderWindow) string {
+	switch {
+	case !window.Waiting:
+		return ""
+	case !window.ResetsAt.IsZero():
+		return window.ResetsAt.UTC().Format(time.RFC3339)
+	case !window.Since.IsZero():
+		return "opened " + window.Since.UTC().Format(time.RFC3339)
+	default:
+		return ""
+	}
 }
 
 // cursorAsked records the moment the tracker was last asked what is ready, which
@@ -141,7 +168,14 @@ func cursorAsked(cursor Cursor, at time.Time) Cursor {
 // no longer standing, which keeps the cursor from growing a line for every night
 // something went quiet — and is safe because a stall that has closed is history
 // and is never said again.
-func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, now, asked time.Time) []Delivery {
+//
+// The provider's usage window is the other thing this can say, and it is here
+// rather than beside this because the two are one decision: they are read from
+// one silence, and the window is precisely the case where there is no stall to
+// report. Saying the window is what turns the reading from a warning that no
+// longer fires into an answer — an operator who sees nothing cannot tell a
+// window from a watchdog somebody switched off.
+func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, window readmodel.ProviderWindow, now, asked time.Time) []Delivery {
 	cursor := cursors.Streams[stallStream]
 	advanced := cursorAsked(cursor, asked)
 	if mark, said := advanced.Marked(stallMark); said {
@@ -149,7 +183,32 @@ func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *
 			advanced = advanced.Without(mark)
 		}
 	}
+	// The window is marked by the deadline the provider named, so a second window
+	// is a second thing to say and the same one is not. It is forgotten the moment
+	// that window is no longer the one standing, which is what keeps the cursor
+	// from growing a line for every window a product ever waited out.
+	if mark, said := advanced.Marked(windowMark); said && mark != windowMark+windowKey(window) {
+		advanced = advanced.Without(mark)
+	}
 	switch {
+	case standing == nil && window.Waiting:
+		// Nothing is stalled because the provider is not serving, which is the one
+		// quiet stretch that has an answer nobody has to act on. It is said once per
+		// window and in the channel rather than to somebody directly: the fact is
+		// worth having and the interruption is not, which is the whole difference
+		// between this and the stall below it.
+		if advanced.Has(windowMark + windowKey(window)) {
+			break
+		}
+		return []Delivery{{
+			Stream: stallStream,
+			Cursor: advanced.With(windowMark + windowKey(window)),
+			Notification: notify.FromProviderWindow(notify.ProviderWindow{
+				Says:     window.Says(),
+				Since:    window.Since,
+				Standing: f.standing(ctx),
+			}, now),
+		}}
 	case standing == nil:
 		// Nothing is standing. What cleared it said so itself — the run that
 		// started, the hold that went on — so there is nothing to say here beyond

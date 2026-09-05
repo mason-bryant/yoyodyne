@@ -96,6 +96,15 @@ type Activity struct {
 	// neither is a silence anybody needs waking for.
 	OperatorHeld bool
 	IntakeHeld   bool
+	// ProviderWindow is the provider's usage window the session that chooses work
+	// recorded itself waiting out, where one is standing. It is the accounting this
+	// reading had no way to see: on 2026-09-05 a session waited a window out from
+	// 12:13Z to 13:43Z, and every condition above answered no, so a machine doing
+	// exactly what the provider had told it to was reported as one that had
+	// stopped and the operator was woken for it. See ProviderWindow.Standing for
+	// what bounds it — a window that has lifted accounts for nothing, which is what
+	// keeps this from being a way to silence the watchdog rather than to inform it.
+	ProviderWindow ProviderWindow
 	// Watched says a session has at some point watched this product. A product no
 	// session has ever watched is not a line that stopped — nothing was choosing
 	// work here, so nothing is failing to, and an operator running items by name
@@ -170,8 +179,9 @@ func (a Activity) Unexplained() bool {
 
 // explanation is what accounts for nothing having started, or nothing at all.
 // The order is the order a reader would accept them in: the switches somebody
-// placed, then the work that is visibly moving, then a product nobody ever
-// watched, then a machine too young to have gone quiet.
+// placed, then the work that is visibly moving, then the provider refusing to
+// serve any more of it, then a product nobody ever watched, then a machine too
+// young to have gone quiet.
 func (a Activity) explanation() string {
 	switch {
 	case a.OperatorHeld:
@@ -180,6 +190,8 @@ func (a Activity) explanation() string {
 		return "intake is held"
 	case a.Running > 0:
 		return fmt.Sprintf("%d developer run(s) are in flight and still moving", a.Running)
+	case a.ProviderWindow.Standing(a.Now, a.threshold()):
+		return a.ProviderWindow.Says()
 	case !a.Watched:
 		return "no watch session has ever run on this product"
 	case a.Since.IsZero():
@@ -189,6 +201,18 @@ func (a Activity) explanation() string {
 	default:
 		return ""
 	}
+}
+
+// StandingWindow is the provider's usage window that accounts for this reading's
+// quiet, where one does. It is how a surface says the window rather than only
+// declining to raise an alarm about it: the reading knows both whether a window
+// was recorded and whether it has lifted, and a caller that asked the first
+// question on its own would report a window that ended hours ago.
+func (a Activity) StandingWindow() (ProviderWindow, bool) {
+	if !a.ProviderWindow.Standing(a.Now, a.threshold()) {
+		return ProviderWindow{}, false
+	}
+	return a.ProviderWindow, true
 }
 
 func (a Activity) threshold() time.Duration {

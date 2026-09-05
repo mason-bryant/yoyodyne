@@ -140,6 +140,27 @@ type WatchTransition struct {
 	// release, or a conversation, and it is read again until it answers or the
 	// session gives up on it. Every other transition leaves it false.
 	Unreadable bool `json:"unreadable,omitempty"`
+	// ProviderWindow marks the poll that chose nothing because the provider is
+	// refusing the harness for want of capacity, which is the fourth state whose
+	// next move is nobody's to make. It travels for the reason the three above do:
+	// nothing a person admits, releases, or opens shortens a usage window, so a
+	// reader told to admit work would be told the one thing that cannot help.
+	//
+	// It is the fact that was missing on 2026-09-05. A session waited out a window
+	// from 12:13Z to 13:43Z and recorded nothing about it, so every surface read
+	// the ninety minutes as a queue nobody was pulling and one of them woke the
+	// operator over it — while the pause was the whole of the accounting. Every
+	// other transition leaves it false.
+	//
+	// It is a field beside the idle state rather than a state of its own, for the
+	// reason Restarting below is: a state nothing recognizes fails this log's
+	// validation permanently, and an unknown field is ignored.
+	ProviderWindow bool `json:"provider_window,omitempty"`
+	// ProviderWindowResetsAt is when the provider said that window lifts. It is
+	// absent where the provider named no time, which is a different fact from a
+	// wait of unknown length: the harness asks again rather than being told when.
+	// It is what lets a surface say "until 13:43Z" rather than only "waiting".
+	ProviderWindowResetsAt *time.Time `json:"provider_window_resets_at,omitempty"`
 	// Restarting marks the one stop that is not an ending: the session is being
 	// re-executed into a build deployed over it, having waited out every run it
 	// started, and the process comes straight back watching the same queue. Every
@@ -193,6 +214,25 @@ func (t WatchTransition) Validate() error {
 	// conversation accounts for.
 	if t.Executor != "" && !t.Executor.Valid() {
 		problems = append(problems, fmt.Errorf("watch transition executor %q is not a marker an item is carried by", t.Executor))
+	}
+	// Only an idle poll can be one made inside a provider's window. A session
+	// marked as waiting out a window while it is watching, braked, or stopped
+	// would have every surface accounting for a silence that something else is
+	// causing, which is the alarm this field exists to keep honest rather than to
+	// turn off.
+	if t.ProviderWindow && t.State != WatchIdle {
+		problems = append(problems, fmt.Errorf("a %s transition cannot be a poll made inside the provider's usage window, which is a thing only an idle one is", t.State))
+	}
+	// A reset time on a transition that is not waiting out a window is a moment
+	// nothing is waiting for, and a surface reading it would say the harness is
+	// held until a time nobody is holding it to.
+	if t.ProviderWindowResetsAt != nil {
+		if !t.ProviderWindow {
+			problems = append(problems, errors.New("a watch transition names when the provider's usage window lifts without saying it is waiting out one"))
+		}
+		if t.ProviderWindowResetsAt.IsZero() {
+			problems = append(problems, errors.New("the provider's usage window is present and names no moment; a provider that named none records none"))
+		}
 	}
 	// Only a stop can be a restart. A session marked as coming back while it is
 	// still watching, idle, or braked would have every reader saying a restart is

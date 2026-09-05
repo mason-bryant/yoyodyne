@@ -54,6 +54,9 @@ func TestEveryStateThatAccountsForTheQuietSaysSo(t *testing.T) {
 		"nothing has ever been seen":   with(base, func(a *Activity) { a.Since = time.Time{} }),
 		"something started just now":   with(base, func(a *Activity) { a.Since = moment.Add(-time.Minute) }),
 		"the queue is drained":         with(base, func(a *Activity) { a.Ready = 0 }),
+		"the provider will not serve": with(base, func(a *Activity) {
+			a.ProviderWindow = ProviderWindow{Waiting: true, Since: moment.Add(-90 * time.Minute), ResetsAt: moment.Add(time.Minute)}
+		}),
 	} {
 		silence := ReadSilence(activity)
 		if silence.Stalled {

@@ -554,6 +554,24 @@ that itself — and
 [`yoyo status`](../operations.md#when-nothing-happened-at-all) reads the whole
 history back afterwards, which is the only place it exists.
 
+**The provider's usage window is not a stall, and says so instead.** When a run
+comes back parked on an exhausted usage limit, the watch session records the
+polls it makes inside that window and the time the provider said it lifts, and
+every surface reads that as the accounting it is. The channel gets one note per
+window rather than the alarm above, and nobody is messaged directly:
+
+> Nothing is being chosen on this product for 30m: waiting on the provider's
+> usage window until 13:43Z. Nothing has stopped and nothing is waiting on
+> anybody — the harness asks again when the window lifts.
+
+That distinction was bought: on 2026-09-05 a session waited a window out from
+12:13Z to 13:43Z, the alarm fired at half an hour saying nothing accounted for
+it, and somebody was paged for a machine doing exactly what the provider had
+told it to. The window accounts for the quiet only until the time the provider
+named — a session still choosing nothing after that is a stall again, which is
+what keeps this from being a way to switch the watchdog off. `yoyo status` says
+the same clause against the work it is holding back.
+
 A run in flight is the one thing that quiets it, and only while that run is
 still moving. That distinction is the difference between this working and not:
 a killed run leaves a record saying it is in flight until
