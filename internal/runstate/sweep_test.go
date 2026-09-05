@@ -3,6 +3,7 @@ package runstate
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -152,7 +153,7 @@ func TestSweepsAreAppendedAndReadBack(t *testing.T) {
 	if err := store.Append(recorded); err != nil {
 		t.Fatalf("second Append() error = %v", err)
 	}
-	listed, err := store.List()
+	listed, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -169,7 +170,7 @@ func TestSweepsAreAppendedAndReadBack(t *testing.T) {
 func TestListOfAnUnsweptProductIsEmpty(t *testing.T) {
 	t.Parallel()
 
-	listed, err := newSweepStore(t).List()
+	listed, _, err := newSweepStore(t).List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -245,7 +246,7 @@ func TestAPassSizedAccountIsWrittenAndReadBack(t *testing.T) {
 	if err := store.Append(recorded); err != nil {
 		t.Fatalf("Append() of a pass-sized account error = %v", err)
 	}
-	listed, err := store.List()
+	listed, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -254,5 +255,95 @@ func TestAPassSizedAccountIsWrittenAndReadBack(t *testing.T) {
 	}
 	if len(listed[0].Result.Findings) != sweep.MaxPassFindings {
 		t.Errorf("findings = %d, want the %d that were written", len(listed[0].Result.Findings), sweep.MaxPassFindings)
+	}
+}
+
+// The failure this log is actually exposed to: a write of a whole pass is not
+// atomic, so a process killed partway through one leaves a torn line. Failing the
+// listing on it would make one interrupted write cost every report before it,
+// permanently, on the only surface those reports are read from.
+func TestATornLineDoesNotCostTheReportsAroundIt(t *testing.T) {
+	t.Parallel()
+
+	store := newSweepStore(t)
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	before := Sweep{
+		Task: "a-sweep", Role: "development-manager",
+		StartedAt: at, EndedAt: at.Add(time.Minute),
+		Turns: 1, Result: &sweep.Result{Status: sweep.StatusComplete, Summary: "the pass before"},
+	}
+	after := before
+	after.Result = &sweep.Result{Status: sweep.StatusComplete, Summary: "the pass after"}
+	if err := store.Append(before); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	// A write that stopped mid-record, as a crash leaves it.
+	torn, err := os.OpenFile(store.Path(), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := torn.WriteString(`{"schema_version":1,"product_id":"example","task":"a-sw` + "\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	torn.Close()
+	if err := store.Append(after); err != nil {
+		t.Fatalf("Append() after the torn line error = %v", err)
+	}
+
+	listed, unreadable, err := store.List()
+	if err != nil {
+		t.Fatalf("List() over a torn log error = %v, want the readable reports back", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("listed = %d sweeps, want the two either side of the torn line", len(listed))
+	}
+	if listed[0].Result.Summary != "the pass before" || listed[1].Result.Summary != "the pass after" {
+		t.Errorf("listed = %+v, want both passes in the order they were written", listed)
+	}
+	// Named rather than dropped: a listing short by a record it never mentioned is
+	// a worse answer than the failure it replaced.
+	if len(unreadable) != 1 {
+		t.Fatalf("unreadable = %+v, want the torn line named", unreadable)
+	}
+	if unreadable[0].Line != 2 {
+		t.Errorf("unreadable line = %d, want the second line of the log", unreadable[0].Line)
+	}
+	if unreadable[0].Problem == "" {
+		t.Error("the torn line is named with no reason, so nobody can tell what happened to it")
+	}
+}
+
+// A record from another product in this product's log is the same shape of
+// problem and gets the same answer: named, and not fatal to the rest.
+func TestARecordFromAnotherProductIsNamedRatherThanFatal(t *testing.T) {
+	t.Parallel()
+
+	store := newSweepStore(t)
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	if err := store.Append(Sweep{
+		Task: "a-sweep", Role: "development-manager",
+		StartedAt: at, EndedAt: at, Turns: 1,
+		Result: &sweep.Result{Status: sweep.StatusComplete, Summary: "ours"},
+	}); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	foreign, err := os.OpenFile(store.Path(), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := foreign.WriteString(`{"schema_version":1,"product_id":"elsewhere","task":"a-sweep","role":"development-manager","started_at":"2026-09-05T09:00:00Z","ended_at":"2026-09-05T09:00:00Z","turns":1,"problem":"theirs"}` + "\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	foreign.Close()
+
+	listed, unreadable, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].Result.Summary != "ours" {
+		t.Errorf("listed = %+v, want only this product's pass", listed)
+	}
+	if len(unreadable) != 1 || !strings.Contains(unreadable[0].Problem, "elsewhere") {
+		t.Errorf("unreadable = %+v, want the foreign record named", unreadable)
 	}
 }

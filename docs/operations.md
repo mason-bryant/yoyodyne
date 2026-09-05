@@ -1205,10 +1205,20 @@ look at its own domain. Nobody is watching those turns, so each firing ends in a
 durable report, and `yoyo sweeps` is where they are read:
 
 ```sh
-yoyo sweeps                                  # every recorded pass, most recent first
+yoyo sweeps                                  # the 20 most recent passes, newest first
+yoyo sweeps --limit 200                      # read further back
+yoyo sweeps --limit 0                        # every pass recorded
 yoyo sweeps --task development-manager-sweep # one task's passes
-yoyo sweeps --json                           # the same, machine-readable
+yoyo sweeps --json                           # the whole log, machine-readable
 ```
+
+**The default is twenty passes, which for an hourly task is under a day.** That
+is a bound on what fits a terminal rather than on what the log holds, and it is
+worth knowing which you are looking at: the question these reports exist to
+answer — whether a week of fixes filed root-cause work, or quietly repaired the
+same thing seven times — needs the week. `--limit` widens it, `--limit 0` reads
+all of it, and a listing showing part of the pile says so and says how to see the
+rest. `--json` is never bounded and always carries the whole log.
 
 It is read-only. A sweep is written once and never revised, and nothing here
 fires one, retires one, or decides anything about what a pass found.
@@ -1245,3 +1255,11 @@ The reports live beside the run state, under
 `<state root>/products/<product id>/sweeps/`, with each task's cadence recorded
 in its own file there. Nothing in the repository holds them: like the collected
 reports, a sweep outlives the session that produced it.
+
+The log is appended to once per firing and never rewritten, and a write of a
+whole pass is not atomic, so a process killed partway through one can leave a
+torn line behind. A listing names that line and carries on rather than failing:
+one interrupted write must not cost every report around it, on the only surface
+those reports are read from. What it will not do is drop the line quietly — a
+listing short by a record it never mentioned is a worse answer than the failure
+it replaced.
