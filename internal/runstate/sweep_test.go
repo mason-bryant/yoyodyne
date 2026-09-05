@@ -163,6 +163,17 @@ func TestSweepsAreAppendedAndReadBack(t *testing.T) {
 	if listed[0].Result == nil || listed[0].Result.Summary != recorded.Result.Summary {
 		t.Errorf("sweep = %+v, want the account as it was written", listed[0])
 	}
+	// One line per record and nothing between them. The append puts a newline in
+	// front of a torn fragment, and this is what keeps that from firing on a
+	// healthy log: a blank line every second record would be invisible to the
+	// reader, which skips them, and would double the file for nothing.
+	written, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if lines := strings.Count(string(written), "\n"); lines != 2 {
+		t.Errorf("the log holds %d line(s) for 2 records:\n%s", lines, written)
+	}
 }
 
 // A product nothing has swept has recorded nothing, which is not a failure to
@@ -277,12 +288,16 @@ func TestATornLineDoesNotCostTheReportsAroundIt(t *testing.T) {
 	if err := store.Append(before); err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
-	// A write that stopped mid-record, as a crash leaves it.
+	// A write that stopped mid-record, in the shape a crash actually leaves it:
+	// no trailing newline, because the newline is the last thing the interrupted
+	// write would have put down. That is the whole difficulty — the next append
+	// lands on the same line unless something closes the fragment off first, and
+	// then the crash costs the record after it as well as the one it interrupted.
 	torn, err := os.OpenFile(store.Path(), os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}
-	if _, err := torn.WriteString(`{"schema_version":1,"product_id":"example","task":"a-sw` + "\n"); err != nil {
+	if _, err := torn.WriteString(`{"schema_version":1,"product_id":"example","task":"a-sw`); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
 	torn.Close()

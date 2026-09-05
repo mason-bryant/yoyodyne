@@ -1939,10 +1939,15 @@ either one stops on the bound instead of restarting: you set that number, and
 taking up a build is not you raising it. There is nothing here for a drain, which
 is a command you are waiting on the return of.
 
-**`--budget <usd>`** caps what one session spends: the runs it starts, priced
-from the same recorded run evidence `yoyo cost` prices items from, and the turns
-it takes delivering stopped work. It is checked between pulls, never part way:
-money already spent is spent, and what stopping would lose is the work it bought.
+**`--budget <usd>`** caps what one session spends, and everything it spends
+counts against it: the runs it starts, priced from the same recorded run evidence
+`yoyo cost` prices items from; the turns it takes delivering stopped work; and
+the turns a [recurring task](#recurring-tasks) takes when its cadence comes due.
+The last two are turns the session takes rather than runs it started, and they
+are counted for exactly that reason — a bound that quietly excluded what a quiet
+session spends would be the cap disappearing on the nights it matters most. It is
+checked between pulls, never part way: money already spent is spent, and what
+stopping would lose is the work it bought.
 
 A budget the harness cannot measure is no budget, so it fails closed at both
 ends. A pass given `--budget` with no way to price itself is refused before
@@ -3800,6 +3805,12 @@ spending decision: `every: 1h` is a turn an hour for as long as a `yoyo work
 --watch` session is running. At most one task fires per pull, so a schedule with
 three due tasks reaches them over three pulls rather than holding the queue
 closed for all three at once.
+
+**What bounds that spend is the session's own
+[`--budget`](#watching-instead-of-draining)**, which counts a firing's turns
+exactly as it counts a run it started or a stopped run it delivered — so a
+session given a budget stops on it rather than sweeping past it, and a session
+given none is bounded by the cadence and nothing else.
 
 **`yoyo pause` is the switch that stops firings**, exactly as it stops runs and
 conversation turns; nothing is claimed while it is held, so every task keeps its

@@ -422,9 +422,26 @@ func (s *SweepStore) Append(recorded Sweep) error {
 	if statErr != nil && !created {
 		return fmt.Errorf("inspect the sweep log: %w", statErr)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	// Opened for reading as well as appending, so what is already at the end of
+	// the log can be looked at before adding to it. O_APPEND still decides where
+	// the write lands.
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open the sweep log: %w", err)
+	}
+	// A record is written with one Write, and a Write of this size is not atomic:
+	// a process killed partway through one leaves a fragment with no newline on
+	// it. Appending straight onto that fragment would join it to this record and
+	// make the two of them a single line nothing can decode — so the crash would
+	// cost the report after it as well as the one it interrupted, and the one
+	// after is the report nobody has seen yet.
+	//
+	// A newline first closes the fragment off, which bounds what a crash costs to
+	// the record it actually interrupted. The reader names that line and carries
+	// on, so what is lost is one pass rather than one pass and its successor.
+	if err := closeOffATornFragment(file, &encoded); err != nil {
+		file.Close()
+		return err
 	}
 	written, err := file.Write(encoded)
 	if err != nil {
@@ -463,6 +480,34 @@ type UnreadableSweep struct {
 	// Line is the 1-based line of the log, so somebody can go and look at it.
 	Line    int    `json:"line"`
 	Problem string `json:"problem"`
+}
+
+// closeOffATornFragment puts a newline in front of the record about to be
+// appended where the log does not already end in one, so a fragment a crash left
+// behind is terminated rather than joined to.
+//
+// Reading the last byte is racy against another process appending at the same
+// moment, and benignly so: every complete append ends in a newline, so the only
+// way the last byte is not one is that whoever wrote it died partway through.
+// A concurrent healthy writer therefore cannot make this add a newline that was
+// not wanted, and the blank line an unnecessary one would leave is skipped by
+// the reader anyway.
+func closeOffATornFragment(file *os.File, encoded *[]byte) error {
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect the sweep log: %w", err)
+	}
+	if info.Size() == 0 {
+		return nil
+	}
+	last := make([]byte, 1)
+	if _, err := file.ReadAt(last, info.Size()-1); err != nil {
+		return fmt.Errorf("read the end of the sweep log: %w", err)
+	}
+	if last[0] != '\n' {
+		*encoded = append([]byte{'\n'}, *encoded...)
+	}
+	return nil
 }
 
 // List returns every recorded sweep in the order it was written, and beside them
