@@ -92,10 +92,13 @@ jobs:
       # `go install` of this tool now needs a newer Go than this repo pins, a
       # module path its own tags disagree about, and a C++ ICU toolchain — all
       # of which broke every PR here on 2026-09-05 when @latest moved. A pinned
-      # binary has none of those moving parts; bump the version deliberately.
+      # binary has none of those moving parts. v1.1.2 because that is the
+      # version this project runs and its walkthrough documents - v1.2.2
+      # changed behavior three documented claims depend on; bump deliberately,
+      # with the walkthrough updated in the same change.
       - name: Install the tracker the walkthrough needs
         run: |
-          curl -fsSL -o /tmp/beads.tar.gz https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz
+          curl -fsSL -o /tmp/beads.tar.gz https://github.com/gastownhall/beads/releases/download/v1.1.2/beads_1.1.2_linux_amd64.tar.gz
           tar -xzf /tmp/beads.tar.gz -C /tmp
           BD=$(find /tmp -maxdepth 2 -name bd -type f | head -1)
           install -m 0755 "$BD" /usr/local/bin/bd 2>/dev/null || sudo install -m 0755 "$BD" /usr/local/bin/bd
