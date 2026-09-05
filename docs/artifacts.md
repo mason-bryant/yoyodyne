@@ -52,9 +52,11 @@ what is allowed. The
 and what is refused.
 
 **The approval is written into your checkout and stops there**, and the command
-says so as it writes: the document is now an uncommitted change, a run refuses to
-start while it is, and committing it is yours under your own identity. That is
-the settled shape rather than an unfinished one. The only ways into the target
+says so as it writes: the document is now an uncommitted change, a run against
+that checkout refuses to start while it is, and committing it is yours under your
+own identity. The checkout is named in so many words, because which one the write
+landed in follows the configuration the command read rather than where you are
+standing. That is the settled shape rather than an unfinished one. The only ways into the target
 branch are a reviewed promotion and your own hand, so a harness-made commit would
 be a promotion by another name carrying tree state nothing reviewed — and leaving
 the write in your tree keeps what a document is down to two readings: committed,

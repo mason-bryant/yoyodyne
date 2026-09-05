@@ -286,8 +286,8 @@ func (s Store) Approve(id, reason string, now time.Time) (Artifact, error) {
 }
 
 // PendingCommit is what a surface says, as it records an approval, about where
-// that write landed: in the operator's own checkout, uncommitted, and theirs to
-// commit.
+// that write landed: in the checkout the write was pointed at, uncommitted, and
+// the operator's to commit.
 //
 // It is a function here rather than prose at each call site because every
 // surface that writes an approval owes the operator the same fact, and a second
@@ -301,9 +301,19 @@ func (s Store) Approve(id, reason string, now time.Time) (Artifact, error) {
 // commit would be a promotion by another name, sweeping in tree state nothing
 // reviewed — and because stopping there keeps a document to two readings:
 // committed, or an edit of the operator's that is visibly holding the runs up.
-// The price of that is a dirty checkout, which every run then refuses to start
-// over, and saying so at the moment of the write is what keeps the operator from
-// meeting it as an unexplained refusal from whatever they run next.
-func PendingCommit(path string) string {
-	return fmt.Sprintf("%s is now an uncommitted change in your checkout, and a run refuses to start while it is; committing it is yours, under your own identity", path)
+// The price of that is a dirty checkout, which every run over it then refuses to
+// start over, and saying so at the moment of the write is what keeps the operator
+// from meeting it as an unexplained refusal from whatever they run next.
+//
+// The checkout is named rather than called "yours", because which one it is is
+// the configuration's answer rather than a constant: a `--config` naming another
+// project, a `YOYODYNE_CONFIG` in the environment, and a linked worktree
+// carrying its own `.yoyodyne` each point a write at a different repository. The
+// run that refuses is a run over that repository, so a sentence saying "your
+// checkout" would be right about the ordinary case and quietly wrong wherever
+// the write did not land in the checkout the operator's runs come out of —
+// which is the one case where an operator would go looking for a dirty file that
+// is not there.
+func PendingCommit(repositoryRoot, path string) string {
+	return fmt.Sprintf("%s is now an uncommitted change in %s, and a run against that checkout refuses to start while it is; committing it is yours, under your own identity", path, repositoryRoot)
 }

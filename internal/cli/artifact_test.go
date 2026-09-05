@@ -322,8 +322,10 @@ func TestApprovingSaysTheWriteLandedInTheCheckoutAndIsYoursToCommit(t *testing.T
 		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
 	}
 	// The file is named, because what the operator has to commit is that file and
-	// it is what the run's refusal will name back at them.
-	if !strings.Contains(stdout, artifact.PendingCommit("docs/product/brief.md")) {
+	// it is what the run's refusal will name back at them. So is the checkout it
+	// landed in: which one that is follows the configuration this command was
+	// given, and the run that refuses to start is a run over that one.
+	if !strings.Contains(stdout, artifact.PendingCommit(project, "docs/product/brief.md")) {
 		t.Fatalf("approve stdout = %q, want it to say where the write landed", stdout)
 	}
 
@@ -340,7 +342,7 @@ func TestApprovingSaysTheWriteLandedInTheCheckoutAndIsYoursToCommit(t *testing.T
 	if err := json.Unmarshal([]byte(stdout), &written); err != nil {
 		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
 	}
-	if written.PendingCommit != artifact.PendingCommit("docs/product/goals/v1-goals.md") {
+	if written.PendingCommit != artifact.PendingCommit(project, "docs/product/goals/v1-goals.md") {
 		t.Fatalf("pending_commit = %q", written.PendingCommit)
 	}
 
@@ -355,9 +357,70 @@ func TestApprovingSaysTheWriteLandedInTheCheckoutAndIsYoursToCommit(t *testing.T
 		if code != 0 {
 			t.Fatalf("%v code = %d", read, code)
 		}
-		if strings.Contains(stdout, "uncommitted change in your checkout") {
+		if strings.Contains(stdout, pendingCommitSaid) {
 			t.Fatalf("%v stdout = %q, want nothing about committing", read, stdout)
 		}
+	}
+}
+
+// pendingCommitSaid is the part of that sentence a command saying nothing about
+// committing must not contain. It is the opening rather than the whole, because
+// the rest of the sentence names a path and a checkout that differ per case.
+const pendingCommitSaid = "is now an uncommitted change in"
+
+// Which checkout the write landed in is the configuration's answer rather than a
+// constant: `--config` naming another project, `YOYODYNE_CONFIG` in the
+// environment, and a linked worktree carrying its own `.yoyodyne` each point
+// `approve` at a different repository. The run that refuses to start is a run
+// over that one, so the sentence names it — an operator told "your checkout"
+// about a write that landed somewhere else goes looking for a dirty file that is
+// not there.
+func TestApprovingNamesTheCheckoutTheWriteLandedIn(t *testing.T) {
+	t.Parallel()
+
+	// Two projects, each with its own configuration and its own brief, which is
+	// what pointing one command at two repositories looks like from here.
+	first := writeConfig(t, validConfig)
+	firstProject := filepath.Dir(first)
+	writeArtifact(t, firstProject, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+	second := writeConfig(t, validConfig)
+	secondProject := filepath.Dir(second)
+	writeArtifact(t, secondProject, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+
+	for _, approved := range []struct {
+		configPath string
+		project    string
+		other      string
+	}{
+		{first, firstProject, secondProject},
+		{second, secondProject, firstProject},
+	} {
+		stdout, stderr, code := runCLI(t, "artifact", "approve", "--config", approved.configPath, "brief",
+			"--reason", "approved by the operator in conversation")
+		if code != 0 {
+			t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+		}
+		// Asserted against the checkout's own path rather than against what
+		// PendingCommit returns: comparing the command's output to the function it
+		// calls says the two agree and nothing about what either says, and a
+		// sentence that named no checkout would satisfy it.
+		if !strings.Contains(stdout, approved.project) {
+			t.Fatalf("approve stdout = %q, want it to name the checkout %s", stdout, approved.project)
+		}
+		if !strings.Contains(stdout, artifact.PendingCommit(approved.project, "docs/product/brief.md")) {
+			t.Fatalf("approve stdout = %q, want the sentence the package owns", stdout)
+		}
+		// And names only the one it wrote to: a sentence that could name either is
+		// one an operator cannot act on.
+		if strings.Contains(stdout, approved.other) {
+			t.Fatalf("approve stdout = %q, want nothing about %s", stdout, approved.other)
+		}
+	}
+
+	// The negative assertions elsewhere match on the opening of that sentence, so
+	// it has to still be the opening of it.
+	if !strings.Contains(artifact.PendingCommit(firstProject, "docs/product/brief.md"), pendingCommitSaid) {
+		t.Fatalf("PendingCommit no longer contains %q", pendingCommitSaid)
 	}
 }
 
@@ -411,8 +474,8 @@ func TestARefusedApprovalSaysNothingAboutCommitting(t *testing.T) {
 		if code != 1 || !strings.Contains(stderr, refused.because) {
 			t.Fatalf("%v code = %d, stderr = %q, want %q", refused.args, code, stderr, refused.because)
 		}
-		if strings.Contains(stdout, "uncommitted change in your checkout") ||
-			strings.Contains(stderr, "uncommitted change in your checkout") {
+		if strings.Contains(stdout, pendingCommitSaid) ||
+			strings.Contains(stderr, pendingCommitSaid) {
 			t.Fatalf("%v said something was written: stdout = %q, stderr = %q", refused.args, stdout, stderr)
 		}
 	}
