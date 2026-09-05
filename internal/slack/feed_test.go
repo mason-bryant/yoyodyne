@@ -935,6 +935,25 @@ func (h *testHarness) watchedAs(t *testing.T, sessionID string, state runstate.W
 	}
 }
 
+// waitingOnProvider records the poll a session made inside the provider's usage
+// window, which is the entry the surfaces read to tell that silence from one
+// nothing accounts for.
+func (h *testHarness) waitingOnProvider(t *testing.T, reason string, at time.Time, resetsAt *time.Time) {
+	t.Helper()
+	if err := h.watch.Record(runstate.WatchTransition{
+		SchemaVersion:          runstate.WatchSchemaVersion,
+		ProductID:              "yoyodyne",
+		SessionID:              "watch-0123456789abcdef0123456789abcdef",
+		State:                  runstate.WatchIdle,
+		At:                     at,
+		Reason:                 reason,
+		ProviderWindow:         true,
+		ProviderWindowResetsAt: resetsAt,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+}
+
 func (h *testHarness) refused(t *testing.T, waiting string, resetsAt *time.Time, at time.Time) {
 	t.Helper()
 	if err := h.limits.Record(runstate.UsageLimitExhaustion{

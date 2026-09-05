@@ -538,8 +538,9 @@ is silence that means waiting on you; how often is `--heartbeat`.
 something a process wrote down, which works only while that process is alive to
 write it: a watch session that crashes writes no stop, and one that wedges goes on
 recording that it is watching. So the sink also watches for nothing having
-happened at all — no run started for half an hour, work a run could be started
-for, and no hold, full machine or run in flight to account for it. That is
+happened at all — no run started for ten minutes, work a run could be started
+for, and no hold, full machine, run in flight or provider usage window to account
+for it. That is
 recorded against the product and sent to whoever you grant `direct-work` as a
 direct message, once per stall and never once per check:
 
@@ -554,7 +555,52 @@ that itself — and
 [`yoyo status`](../operations.md#when-nothing-happened-at-all) reads the whole
 history back afterwards, which is the only place it exists.
 
-A run in flight is the one thing that quiets it, and only while that run is
+**Ten minutes is a default, and `--stall-after` is where it is changed.** It is
+one number rather than two: how long a gap has to be to count, *and* how often
+that reading is taken. Those were separate before, and only the first was
+settable — the reading was taken once an hour — so a threshold of half an hour
+meant the harness could be stopped for ninety minutes before anybody heard. Tied
+together, a message arrives within twice the threshold at the very worst and
+within the threshold and one poll in the ordinary case, and the figure you set is
+the whole of how long a stopped harness can be quiet. Set it wider on a machine
+whose gaps between runs are legitimately long; there is no way to set it to
+nothing, because what that buys is silence that means the harness is dead.
+
+**Nothing on this path may ask a model anything.** Every watcher the harness has
+that does — the development manager's sweep, any role turn — pauses with the
+provider's usage window, so a watchdog built on one sleeps through exactly the
+silence it is there to notice. This one is the sink's own loop reading durable
+files, which is what keeps it running through a window; and noticing is all it
+does. Restarting whatever died is the session's own bounded exit and the
+supervisor that starts it, not this.
+
+**The provider's usage window is not a stall, and says so instead.** When a run
+comes back parked on an exhausted usage limit, the watch session records entering
+that window and the time the provider said it lifts, and every surface reads that
+as the accounting it is. The channel gets one note per window rather than the
+alarm above, and nobody is messaged directly:
+
+> Paused on the provider's usage window until 13:43Z. Nothing has been chosen on
+> this product for 30 minutes; nothing has stopped and nothing is waiting on
+> anybody, and the harness asks again when the window lifts.
+
+**The cause is the first words.** That is the acceptance the operator wrote for
+this rather than a house style, and today's page failed exactly it: the alarm led
+and the cause was left to archaeology. It holds for every message this state
+produces — the note above, the refusal `yoyo status` prints against work it is
+holding back, and the banner `yoyo status` opens with while the window stands.
+
+That distinction was bought: on 2026-09-05 a session waited a window out from
+12:13Z to 13:43Z, the alarm fired at half an hour saying nothing accounted for
+it, and somebody was paged for a machine doing exactly what the provider had
+told it to. The window accounts for the quiet only until the time the provider
+named — a session still choosing nothing after that is a stall again, which is
+what keeps this from being a way to switch the watchdog off. It is also why the
+window is not one of the four heartbeat states above: it has this message, and a
+second one saying the same silence with the cause second would be the thing the
+acceptance rules out.
+
+A run in flight quiets it as well, and only while that run is
 still moving. That distinction is the difference between this working and not:
 a killed run leaves a record saying it is in flight until
 [`yoyo reconcile`](../operations.md#recovering-interrupted-runs) settles it, so
@@ -566,21 +612,26 @@ well clear of anything a live run does: an invocation that emits nothing for
 five minutes is stopped as stalled, and the slowest legitimate wait, a provider
 usage limit, probes every half hour.
 
-Reading what is ready costs one local tracker (`bd`) read per heartbeat, and
-never on the path of any run. Two things here want that number — the waiting
-line above and the stall watchdog — and they share one read rather than taking
-one each: it is asked at most once a pass, and each of them asks at most once a
-heartbeat. The watchdog needs its own interval because the state it is looking
+Reading what is ready costs one local tracker (`bd`) read, and never on the path
+of any run. Two things here want that number — the waiting line above and the
+stall watchdog — and they share one read rather than taking one each: it is asked
+at most once a pass, the waiting line asks at most once a `--heartbeat`, and the
+watchdog at most once a `--stall-after`. The watchdog needs its own interval
+because the state it is looking
 for is partly a drained queue, and nothing but the tracker can say the queue is
 drained; without one it would ask on every poll of a perfectly healthy idle
-product, which is the one machine that should cost nothing. A tracker
+product, which is the one machine that should cost nothing. At the ten-minute
+default that is six reads an hour on a quiet product with a drained queue, and
+none at all on one that is starting runs. A tracker
 the sink cannot read — no `bd` on the machine it runs on, say — costs that one
 message: the sink says so in its own log and asks again at the next interval,
 rather than guessing a number in either direction.
 
 What that interval costs the watchdog is promptness rather than the stall: a
 stall is noticed at the first reading after the threshold has passed, and it
-closes at the first reading after it clears. The moment recorded against it is
+closes at the first reading after it clears. That is why the interval is the
+threshold itself — an interval longer than the bar makes the bar mean nothing.
+The moment recorded against it is
 when the harness last started something rather than when anybody noticed, so
 the event says how long nothing happened whatever the noticing cost.
 

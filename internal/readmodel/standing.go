@@ -230,6 +230,19 @@ type Attention struct {
 type Standing struct {
 	ObservedAt time.Time `json:"observed_at"`
 
+	// Paused is the harness waiting out the provider's usage window, said above
+	// the four lines rather than inside them.
+	//
+	// It is the one state that goes there, and it is there because the operator
+	// asked for it in those terms: when the system is paused on a provider usage
+	// window, the cause is the first words of any message that reaches him. A
+	// reading is a message — it is what he runs when he wants to know why nothing
+	// is happening — and the window said only as one item's refusal is the cause
+	// three lines down and possibly tenth in a list. It is not a fifth line: the
+	// four still render exactly as they did, and this is a banner above them, in
+	// the shape `bin/yoyo-status` already puts the operator's own pause in.
+	Paused string `json:"paused,omitempty"`
+
 	Running        []RunningRun `json:"running"`
 	RunningProblem string       `json:"running_problem,omitempty"`
 
@@ -272,10 +285,16 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// a person. Reading them twice would be two chances for the two lines to
 	// disagree about one file.
 	switches := readSwitches(sources)
-	refused, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running)
+	refused, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running, now)
 	standing.NotStartable = refused
 	standing.Admitted = len(queue.Entries)
 	standing.NotStartableProblem = notStartableProblem
+	// The provider's usage window is read out of the same stall the refusals are
+	// worded from, rather than derived a second time here: one reading of one
+	// silence, said in two places, is the rule this whole package holds.
+	if stall.Reason == ReasonProviderWindow {
+		standing.Paused = stall.Says
+	}
 
 	needs, needsProblem := readNeedsHuman(sources, switches)
 	// A stall that is holding admitted work back and is nobody else's line to
@@ -469,7 +488,7 @@ func readSwitches(sources Sources) switches {
 // an empty queue is a state of the machine and not something waiting on
 // anybody, so it is returned as no stall at all rather than as attention nobody
 // asked for.
-func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun) ([]Refused, backlog.Queue, Stall, string) {
+func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun, now time.Time) ([]Refused, backlog.Queue, Stall, string) {
 	if sources.Tracker == nil {
 		return nil, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
 	}
@@ -487,7 +506,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	// other surface reads. It names no reason when the harness would start the next
 	// pullable item, which is what makes a pullable item's absence from this line
 	// mean something.
-	stopped := whyNothingStarts(sources, held, len(running))
+	stopped := whyNothingStarts(sources, held, len(running), now)
 	refusal := stopped.Refusal()
 	// What the stall could not read is said whatever the queue holds. It is a
 	// gap in this reading rather than a fact about the work, so a queue with
@@ -530,7 +549,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 // reading holds. The derivation itself is shared, because a channel and a
 // terminal that worked this out separately would be two answers to the one
 // question an operator asks.
-func whyNothingStarts(sources Sources, held switches, running int) Stall {
+func whyNothingStarts(sources Sources, held switches, running int, now time.Time) Stall {
 	conditions := Conditions{
 		OperatorHold: held.operator,
 		OperatorHeld: held.operatorHeld,
@@ -538,6 +557,10 @@ func whyNothingStarts(sources Sources, held switches, running int) Stall {
 		IntakeHeld:   held.intakeHeld,
 		Running:      running,
 		Capacity:     sources.Capacity,
+		// The reading's own moment, so a provider's usage window this line reports
+		// as standing is one that had not lifted when the rest of these lines were
+		// read.
+		Now: now,
 	}
 	// The watch log costs a read, so it is passed as the question rather than the
 	// answer: the derivation asks for it only where the switches and the capacity
