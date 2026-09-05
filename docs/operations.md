@@ -619,8 +619,16 @@ at warning severity, which is the ending the round cap would otherwise never
 reach on a thread nobody came back to. Nothing is put in front of a role by this:
 recovering from a lost process is never a reason to start a round nobody asked
 for, so a sweep that finds a thread simply waiting its turn leaves it waiting.
-What it did is printed; the threads it merely looked at are in `--json`, as the
-branches and publications it leaves unprinted are.
+
+Those two endings are the whole of what it prints, because they are the whole of
+what it changed. Everything else it comes back with is a description of what it
+found rather than something it did — a thread another process is carrying, one
+waiting its turn, one the [in-flight bound](conversation.md#roles-asking-each-other-things)
+would hold back, one whose references have moved — and those are in `--json`
+under `supervision`, as the branches and publications it leaves unprinted are.
+That division is worth knowing before you go looking: a product with several open
+threads has a line about each of them on every sweep, and printing those would
+bury the one or two that say a record was changed.
 
 Once the runs are settled it converges local state, which is the rest of the
 post-merge hygiene you would otherwise do by hand. Every target branch the

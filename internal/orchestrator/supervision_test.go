@@ -275,6 +275,81 @@ func TestAStaleQuestionIsReportedAndHoldsNothingBack(t *testing.T) {
 	}
 }
 
+// The sweep gives back the lease on every thread it turns out to have nothing to
+// do with, as soon as it knows that, rather than holding the lot until the pass
+// ends.
+//
+// It matters because a conductor meeting a held exchange refuses the ask instead
+// of waiting for it. Holding every lease for the length of a pass would make an
+// operator's question fail because a `yoyo reconcile` happened to be walking
+// past, and the thread it was failing over is one the sweep was never going to
+// touch. This asks the question from inside the pass — while the sweep is
+// reclaiming a dead thread, the idle one beside it has to be free.
+func TestASweepHoldsOnlyTheThreadsItIsActingOn(t *testing.T) {
+	t.Parallel()
+
+	store, reports := supervisionStores(t)
+	crashed := openExchange("exchange-"+strings.Repeat("1", 32), 3)
+	crashed.Rounds = []exchange.Round{askedRound(1, "yoyo pid 4242")}
+	save(t, store, crashed)
+	idle := openExchange("exchange-"+strings.Repeat("2", 32), 3)
+	idle.Rounds = []exchange.Round{answeredRound(1, "one")}
+	save(t, store, idle)
+
+	loop := supervisionLoop(store, reports)
+	// The real conductor does the reclaiming; this only listens in on the moment
+	// it happens, which is the one moment the sweep is holding anything.
+	watching := &watchWhileActing{
+		inner: loop.Conductor,
+		during: func() {
+			lease, taken, err := store.Hold(idle.ID)
+			if taken {
+				lease.Release()
+			}
+			watchedIdleFree(t, taken, err)
+		},
+	}
+	loop.Conductor = watching
+	pass, err := loop.Run()
+	if err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if !recorded(pass, crashed.ID, SupervisionReclaimed) {
+		t.Fatalf("results = %#v, want the dead thread reclaimed", pass.Results)
+	}
+	if !watching.acted {
+		t.Fatal("the reclaim never ran, so nothing was asked while the sweep held anything")
+	}
+}
+
+func watchedIdleFree(t *testing.T, taken bool, err error) {
+	t.Helper()
+	if err != nil {
+		t.Errorf("Hold() on the idle thread = %v, want it askable", err)
+	}
+	if !taken {
+		t.Error("the sweep was still holding a thread it had nothing to do with; a conversation asking on it would have been refused")
+	}
+}
+
+// watchWhileActing runs a callback at the moment the sweep is acting, and
+// otherwise conducts exactly as the real one does.
+type watchWhileActing struct {
+	inner  SupervisionConductor
+	during func()
+	acted  bool
+}
+
+func (w *watchWhileActing) Reclaim(recorded exchange.Exchange, because string) (exchange.Exchange, error) {
+	w.acted = true
+	w.during()
+	return w.inner.Reclaim(recorded, because)
+}
+
+func (w *watchWhileActing) Exhaust(recorded exchange.Exchange) (exchange.Exchange, error) {
+	return w.inner.Exhaust(recorded)
+}
+
 // A product whose roles have never asked each other anything is nothing to
 // sweep, rather than a sweep that failed.
 func TestAProductWithNoExchangesIsNotAFailureToSweep(t *testing.T) {

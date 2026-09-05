@@ -912,24 +912,42 @@ it — and tells you about that one exactly as an exhausted exchange is always
 reported. The sweep asks nobody anything: recovering from a lost process is never
 a reason to start a round nobody asked for.
 
-**Across the product, only so many exchanges have a round open at once.** It is
-four, it is not configurable yet, and it bounds concurrency rather than how many
-questions may be asked: a thread held back by it is waiting its turn and is taken
-by the next pass with room. The bound is there because the case nobody designs is
-a morning on which several roles each decide they need one more judgment before
-they can proceed, each of them a provider invocation beside the runs already
-being paid for.
+**A bound on how many exchanges have a round open at once is derived and not yet
+enforced.** The sweep works out, from the records and the leases, how many
+threads the product could carry — four, not configurable — and which ones are
+past it; that reading is in `yoyo reconcile --json` under `supervision`, marked
+`queued`. **Nothing acts on it today.** The path that actually takes a round is
+the conversation's own ask, and it does not consult the bound, so five roles
+asking at once produce five open rounds and none of them waits. The reading
+arrives ahead of the thing that would use it: the bound becomes real when the
+half of the loop that wakes roles and takes rounds on their behalf lands, and
+until then it is a number to look at rather than a limit you are running under.
+
+It is derived early because the case nobody designs is a morning on which several
+roles each decide they need one more judgment before they can proceed, each of
+them a provider invocation beside the runs already being paid for — and seeing
+that in the record is what tells you whether the bound is set anywhere near
+right before anything is held back by it.
 
 **A question can name what it was asked against.** Where a role's question rests
 on something that can be amended underneath it — a goal, a design, a work item —
-the ask may name it and the revision that was read, and the harness can then say
-afterwards that the thing has moved. That is reported and nothing else: the
-exchange is not stopped, closed, or held back, because a change to a goal's
-wording is frequently not a change to the question. What it produces is a reason
-to tell the role that asked. A reference nothing current is known about is named
-as unjudged rather than counted as unmoved, for the reason
+the ask may name it and the revision that was read. What that buys is that a
+question answered against wording that has since changed can be found afterwards
+instead of being read as though nothing had moved. If it is ever reported, it is
+reported and nothing else: the exchange is not stopped, closed, or held back,
+because a change to a goal's wording is frequently not a change to the question,
+for the reason
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale)
-everywhere else: silence is not evidence that something held still.
+everywhere else. What it produces is a reason to tell the role that asked.
+
+**What is recorded today is what a question rests on; the comparison is not yet
+wired.** `yoyo reconcile` derives staleness from the references and whatever it
+has been told the current revisions are, and it is told none, so every reference
+comes back in `--json` named as unjudged rather than as unmoved — which is the
+honest answer and not a finding about the goal. Silence is not evidence that
+something held still, so a reference nothing current is known about is never
+counted as one that has not moved. Feeding it the revisions is what turns this
+from a record into a report.
 
 **What an exchange cost is reported beside the rounds it took**, wherever one is
 read. Rounds alone say how long a conversation went on and cost alone says what

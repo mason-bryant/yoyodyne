@@ -74,6 +74,20 @@ const (
 	SupervisionUndelivered SupervisionOutcome = "undelivered"
 )
 
+// SupervisionOutcomes are every outcome a pass can come back with. It is here so
+// a surface deciding what to do with one can be held to covering all of them
+// rather than to whichever were in the list the day it was written.
+func SupervisionOutcomes() []SupervisionOutcome {
+	return []SupervisionOutcome{
+		SupervisionReclaimed,
+		SupervisionSettled,
+		SupervisionCarried,
+		SupervisionQueued,
+		SupervisionStale,
+		SupervisionUndelivered,
+	}
+}
+
 // SupervisionResult is one exchange and what became of it.
 type SupervisionResult struct {
 	ExchangeID string             `json:"exchange_id"`
@@ -101,7 +115,8 @@ type SupervisionLoop struct {
 }
 
 // Run takes one pass. It never acts on an exchange it does not hold the lease
-// for, and it releases every lease it took before it returns.
+// for, it gives back every lease the plan leaves it nothing to do with as soon as
+// the plan is made, and it releases the rest before it returns.
 //
 // One exchange it cannot write does not abandon the rest: a pass that stopped at
 // the first bad record would be a loop one unreadable exchange disables. What
@@ -160,6 +175,35 @@ func (l SupervisionLoop) Run() (SupervisionPass, error) {
 		Revisions: l.Revisions,
 		Bounds:    l.Bounds,
 	})}
+
+	// Every lease this pass has nothing to do with goes back now rather than when
+	// the pass returns.
+	//
+	// Finding out who is carrying what means taking each lease, because asking and
+	// then taking would leave a window between the two. But holding them all until
+	// the end would make this sweep collide with every live conversation for as
+	// long as the pass ran — and a conductor meeting a held exchange refuses the
+	// ask rather than waiting, so an operator would see their question fail
+	// because a reconcile happened to be walking past. Nothing is queued behind
+	// that: the refusal is the whole cost.
+	//
+	// What is left held is the exchanges being reclaimed or ended, which are
+	// threads whose process is gone by definition, so no live conversation is on
+	// one.
+	acting := make(map[string]bool, len(pass.Plan.Reclaim)+len(pass.Plan.Exhaust))
+	for _, reclamation := range pass.Plan.Reclaim {
+		acting[reclamation.ExchangeID] = true
+	}
+	for _, exhaustion := range pass.Plan.Exhaust {
+		acting[exhaustion.ExchangeID] = true
+	}
+	for id, lease := range mine {
+		if acting[id] {
+			continue
+		}
+		lease.Release()
+		delete(mine, id)
+	}
 
 	recorded := make(map[string]exchange.Exchange, len(exchanges))
 	for _, one := range exchanges {

@@ -248,25 +248,52 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 }
 
 // printSupervision reports what the sweep actually did to an exchange, and
-// leaves out the ones it merely looked at.
+// leaves out every one it merely looked at.
 //
-// This sweep carries no voice, so every exchange it finds free and deliverable
-// comes back undelivered — which is the ordinary state of a thread waiting its
-// turn, and is most of them. Printing those would say "reconcile did not take a
-// round on this" about an exchange nothing is wrong with, on every sweep, in
-// front of the two or three lines that matter. An exchange another process is
-// carrying is left out for the same reason. `--json` carries them, exactly as it
-// carries the branches and publications this leaves unprinted.
+// The division is between an outcome that changed a record and one that only
+// describes what the sweep found, and it is the same rule the branch and
+// publication sweeps above print by. This sweep carries no voice, so most of what
+// it comes back with is the second kind: a thread waiting its turn, one another
+// process is carrying, one the in-flight bound held back, one whose references
+// have moved. Printing those would put a line about an exchange nothing is wrong
+// with in front of the two or three that matter, on every sweep — and the noise
+// is not hypothetical, since a product with more than a few open threads would
+// print one for each of them every time.
+//
+// `--json` carries the whole pass, which is where to read the staleness and the
+// queue.
 func printSupervision(stdout io.Writer, results []orchestrator.SupervisionResult) {
 	for _, result := range results {
-		switch result.Outcome {
-		case orchestrator.SupervisionUndelivered, orchestrator.SupervisionCarried:
+		if !supervisionActed(result.Outcome) {
 			continue
 		}
 		fmt.Fprintf(stdout, "%s: %s\n", result.ExchangeID, result.Outcome)
 		if result.Detail != "" {
 			fmt.Fprintf(stdout, "  %s\n", result.Detail)
 		}
+	}
+}
+
+// supervisionActed reports an outcome that changed a record, which is what a
+// person reading a sweep is owed. Every other outcome is the sweep saying what it
+// found, and is carried by `--json` rather than printed.
+//
+// It is stated as a closed classification rather than a list of what to skip,
+// because the failure it guards against has already happened once: an outcome
+// added later and left out of a skip list is printed as though the sweep had
+// acted on it. TestEverySupervisionOutcomeIsClassified fails on an outcome
+// neither side names, so adding one means deciding which it is.
+func supervisionActed(outcome orchestrator.SupervisionOutcome) bool {
+	switch outcome {
+	case orchestrator.SupervisionReclaimed, orchestrator.SupervisionSettled:
+		return true
+	case orchestrator.SupervisionCarried, orchestrator.SupervisionQueued,
+		orchestrator.SupervisionStale, orchestrator.SupervisionUndelivered:
+		return false
+	default:
+		// An outcome nothing classifies is printed rather than swallowed: a sweep
+		// that acted and said nothing is the worse of the two failures.
+		return true
 	}
 }
 
