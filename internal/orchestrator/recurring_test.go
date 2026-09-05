@@ -19,12 +19,13 @@ var recurringNow = time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
 // what it was told to answer.
 type wokenRole struct {
 	messages []string
-	answers  []orchestrator2Answer
+	answers  []scriptedTurn
 	failure  error
 }
 
-// orchestrator2Answer is one scripted turn.
-type orchestrator2Answer struct {
+// scriptedTurn is one turn a test hands back: the account the role gave, what it
+// cost, and the failure where the turn is meant to fail.
+type scriptedTurn struct {
 	result *sweep.Result
 	err    error
 	cost   float64
@@ -72,7 +73,7 @@ func TestFiringWakesTheRoleAndRecordsWhatItFound(t *testing.T) {
 	t.Parallel()
 
 	store := sweepStore(t)
-	role := &wokenRole{answers: []orchestrator2Answer{{
+	role := &wokenRole{answers: []scriptedTurn{{
 		result: complete("one dead claim, released", sweep.Finding{
 			Issue:       "a claim on a run nothing is running",
 			Disposition: sweep.DispositionFixed,
@@ -114,7 +115,7 @@ func TestTheWakeMessageCarriesTheStandingConstraints(t *testing.T) {
 	t.Parallel()
 
 	store := sweepStore(t)
-	role := &wokenRole{answers: []orchestrator2Answer{{result: complete("nothing")}}}
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
 	trigger := Trigger{Tasks: hourlyTask("the project's own instruction"), Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
 	if _, err := trigger.Fire(context.Background()); err != nil {
 		t.Fatalf("Fire() error = %v", err)
@@ -140,7 +141,7 @@ func TestAHeavyPassIteratesItsTurns(t *testing.T) {
 	t.Parallel()
 
 	store := sweepStore(t)
-	role := &wokenRole{answers: []orchestrator2Answer{
+	role := &wokenRole{answers: []scriptedTurn{
 		{result: &sweep.Result{Status: sweep.StatusMore, Summary: "started", Findings: []sweep.Finding{{Issue: "one", Disposition: sweep.DispositionFiled}}}},
 		{result: complete("finished", sweep.Finding{Issue: "two", Disposition: sweep.DispositionFiled})},
 	}}
@@ -168,7 +169,7 @@ func TestAPassTruncatedByItsBoundSaysSo(t *testing.T) {
 	more := func() *sweep.Result {
 		return &sweep.Result{Status: sweep.StatusMore, Summary: "still going"}
 	}
-	role := &wokenRole{answers: []orchestrator2Answer{{result: more()}, {result: more()}, {result: more()}, {result: more()}}}
+	role := &wokenRole{answers: []scriptedTurn{{result: more()}, {result: more()}, {result: more()}, {result: more()}}}
 	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
 
 	fired, err := trigger.Fire(context.Background())
@@ -193,7 +194,7 @@ func TestASilentRepairIsCountedOnTheFiring(t *testing.T) {
 	t.Parallel()
 
 	store := sweepStore(t)
-	role := &wokenRole{answers: []orchestrator2Answer{{result: complete("fixed it",
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("fixed it",
 		sweep.Finding{Issue: "a stuck delivery", Disposition: sweep.DispositionFixed})}}}
 	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
 
@@ -215,7 +216,7 @@ func TestATaskFiresOncePerCadence(t *testing.T) {
 	t.Parallel()
 
 	store := sweepStore(t)
-	role := &wokenRole{answers: []orchestrator2Answer{{result: complete("nothing")}, {result: complete("nothing")}}}
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}, {result: complete("nothing")}}}
 	clock := &movingRecurringClock{now: recurringNow}
 	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Clock: clock}
 
@@ -326,7 +327,7 @@ func TestAnAnswerWithoutAnAccountIsSaidOutLoud(t *testing.T) {
 	t.Parallel()
 
 	store := sweepStore(t)
-	role := &wokenRole{answers: []orchestrator2Answer{{}}}
+	role := &wokenRole{answers: []scriptedTurn{{}}}
 	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
 
 	fired, err := trigger.Fire(context.Background())
@@ -353,7 +354,7 @@ func TestOnlyOneTaskFiresPerPass(t *testing.T) {
 	store := sweepStore(t)
 	tasks := hourlyTask("sweep")
 	tasks["b-sweep"] = tasks["a-sweep"]
-	role := &wokenRole{answers: []orchestrator2Answer{{result: complete("nothing")}, {result: complete("nothing")}}}
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}, {result: complete("nothing")}}}
 	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
 
 	fired, err := trigger.Fire(context.Background())
@@ -419,11 +420,11 @@ func TestAFiringAtEveryTurnsMaximumStillLandsItsReport(t *testing.T) {
 		}
 		return result
 	}
-	var answers []orchestrator2Answer
+	var answers []scriptedTurn
 	for turn := 0; turn < task.MaxTurns-1; turn++ {
-		answers = append(answers, orchestrator2Answer{result: crowded(sweep.StatusMore)})
+		answers = append(answers, scriptedTurn{result: crowded(sweep.StatusMore)})
 	}
-	answers = append(answers, orchestrator2Answer{result: crowded(sweep.StatusComplete)})
+	answers = append(answers, scriptedTurn{result: crowded(sweep.StatusComplete)})
 	role := &wokenRole{answers: answers}
 	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
 
@@ -475,7 +476,7 @@ func TestLongFailureMessagesDoNotCostTheRecord(t *testing.T) {
 	task := tasks["a-sweep"]
 	task.MaxTurns = config.MaxRecurringTurns
 	tasks["a-sweep"] = task
-	role := &wokenRole{answers: []orchestrator2Answer{{
+	role := &wokenRole{answers: []scriptedTurn{{
 		result: &sweep.Result{Status: sweep.StatusMore, Summary: "started"},
 	}, {
 		err: errors.New(strings.Repeat("the provider said something very long. ", 400)),
@@ -513,7 +514,7 @@ func TestARefusedRecordStillLeavesTheFiringBehind(t *testing.T) {
 
 	store := sweepStore(t)
 	reports := &refusingReports{store: store}
-	role := &wokenRole{answers: []orchestrator2Answer{{result: complete("found one thing",
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("found one thing",
 		sweep.Finding{Issue: "a dead claim", Disposition: sweep.DispositionFixed})}}}
 	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: reports, Roles: role, Clock: recurringClock{}}
 

@@ -1850,13 +1850,25 @@ preempted by any of it.
 
 An idle session costs one local tracker read per `work_poll` and asks no provider
 anything, so a queue that is empty overnight spends nothing — unless it has a
-stopped run to [deliver](work.md#letting-the-harness-choose-the-work), which is a
-turn and is charged as one.
+stopped run to [deliver](work.md#letting-the-harness-choose-the-work), or a
+[recurring task](#recurring-tasks) that has come due. Each of those is a turn and
+is charged as one, so a project with an hourly task and an empty queue spends a
+turn an hour rather than nothing.
 
 **The intake hold is the remote brake.** It does not stop a watching session; it
 brakes it in place — the session keeps polling, chooses nothing, and resumes
 where it was when you release it. `yoyo pause`, the wider switch, parks the runs
 too, and lifting it resumes them from their own records.
+
+**Holding intake does not stop the spend above, and that is the distinction to
+have in mind.** The hold stops the session *choosing work*, and the two things
+that spend without choosing any are read before it: a stopped run reaches the
+development manager and a due recurring task fires under a held intake exactly as
+they do under a clear one. That is deliberate — a held queue is usually waiting on
+one of those judgements, and withholding them would be the hold answering a
+question nobody asked it — but it means an operator who holds intake to stop
+spending is still charged a turn per cadence. `yoyo pause` is the switch that
+stops those too.
 
 **Three guards, because the loop no longer ends.**
 
@@ -3787,8 +3799,17 @@ written under a task fails the configuration rather than being ignored.
 spending decision: `every: 1h` is a turn an hour for as long as a `yoyo work
 --watch` session is running. At most one task fires per pull, so a schedule with
 three due tasks reaches them over three pulls rather than holding the queue
-closed for all three at once. `yoyo pause` stops firings exactly as it stops runs
-and conversation turns, and nothing is claimed while it is held.
+closed for all three at once.
+
+**`yoyo pause` is the switch that stops firings**, exactly as it stops runs and
+conversation turns; nothing is claimed while it is held, so every task keeps its
+cadence and fires once the pause lifts. **Holding intake does not stop them.**
+The hold stops the harness choosing work, and a firing chooses none: it is read
+before the hold on every pull, so a task fires under a held intake exactly as it
+does under a clear one. That is deliberate — a held queue is often waiting on
+exactly the kind of look a sweep takes — but it is the opposite of what an
+operator reaching for the hold to stop spending expects, so it is worth saying
+plainly: to stop paying for a cadence, pause rather than hold.
 
 **A heavy pass iterates rather than truncating.** A role that has more to do than
 one turn holds says so in its account, and the harness gives it another turn up

@@ -491,7 +491,9 @@ per interval and asks no provider anything, unless it has a stopped run to put t
 the development manager or a recurring task that has come due. Holding intake
 brakes a watching session in place rather
 than stopping it — it keeps polling, chooses nothing, and resumes when you
-release it.
+release it. It does not stop those two, which are read before it and choose no
+work: a held intake still delivers a stoppage and still fires a due task, so
+`yoyo pause` is the switch for stopping what a quiet session spends.
 
 Three things guard a loop that no longer ends. A session does not start the same
 item twice unless the item has changed — what it says, what it is for, its
