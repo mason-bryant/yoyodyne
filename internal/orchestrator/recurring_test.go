@@ -95,7 +95,7 @@ func TestFiringWakesTheRoleAndRecordsWhatItFound(t *testing.T) {
 	if fired.Fired[0].CostUSD != 0.25 {
 		t.Errorf("cost = %v, want what the turn cost", fired.Fired[0].CostUSD)
 	}
-	recorded, err := store.List()
+	recorded, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -310,7 +310,7 @@ func TestAnUnreachableRoleIsRecordedRatherThanLost(t *testing.T) {
 	if !strings.Contains(fired.Fired[0].Problem, "could not be put to the") {
 		t.Errorf("problem = %q, want it to say the role was never asked", fired.Fired[0].Problem)
 	}
-	recorded, err := store.List()
+	recorded, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -336,7 +336,7 @@ func TestAnAnswerWithoutAnAccountIsSaidOutLoud(t *testing.T) {
 	if fired.Fired[0].Turns != 1 {
 		t.Errorf("turns = %d, want the turn that answered", fired.Fired[0].Turns)
 	}
-	recorded, err := store.List()
+	recorded, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -434,7 +434,7 @@ func TestAFiringAtEveryTurnsMaximumStillLandsItsReport(t *testing.T) {
 	if fired.Fired[0].Turns != task.MaxTurns {
 		t.Errorf("turns = %d, want every one of the %d the task allows", fired.Fired[0].Turns, task.MaxTurns)
 	}
-	recorded, err := store.List()
+	recorded, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -489,7 +489,7 @@ func TestLongFailureMessagesDoNotCostTheRecord(t *testing.T) {
 	if strings.Contains(fired.Fired[0].Problem, "reaches nobody") {
 		t.Errorf("problem = %q, want the record kept despite the long failure", fired.Fired[0].Problem)
 	}
-	recorded, err := store.List()
+	recorded, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -524,7 +524,7 @@ func TestARefusedRecordStillLeavesTheFiringBehind(t *testing.T) {
 	if !strings.Contains(fired.Fired[0].Problem, "would not store") {
 		t.Errorf("problem = %q, want it to say the account would not store", fired.Fired[0].Problem)
 	}
-	recorded, err := store.List()
+	recorded, _, err := store.List()
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}

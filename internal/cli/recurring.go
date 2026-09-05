@@ -144,15 +144,27 @@ func (r roleConversation) errors() io.Writer {
 	return r.stderr
 }
 
-// maxRenderedSweeps bounds how many recorded sweeps one listing shows. The most
-// recent are kept rather than the oldest: what an operator needs from a schedule
-// is what it has been doing lately, and the count says how much of it they are
-// not looking at.
-const maxRenderedSweeps = 20
+// defaultRenderedSweeps bounds how many recorded sweeps a listing shows when
+// nobody said. The most recent are kept rather than the oldest: what an operator
+// usually wants from a schedule is what it has been doing lately.
+//
+// It is a default rather than a cap, which is the part worth stating. An hourly
+// task fills twenty passes before the day is out, and the question these reports
+// exist to answer — whether a week of fixes filed root-cause work or quietly
+// repaired the same thing seven times — needs the week rather than the morning.
+// So `--limit` widens it and `--limit 0` reads the whole log, and the listing
+// says which of the two it is showing.
+const defaultRenderedSweeps = 20
 
 type sweepsOutput struct {
 	Sweeps []runstate.Sweep `json:"sweeps"`
-	Error  string           `json:"error,omitempty"`
+	// Unreadable are the lines of the log that would not decode. They are carried
+	// beside the sweeps rather than raised as a failure for the reason the store
+	// sets them aside: one torn write must not cost every report around it. They
+	// are never left out, because a listing that quietly dropped records would be
+	// worse than the failure it replaced.
+	Unreadable []runstate.UnreadableSweep `json:"unreadable,omitempty"`
+	Error      string                     `json:"error,omitempty"`
 }
 
 // readSweeps shows what the recurring tasks have produced. It is read-only: a
@@ -168,6 +180,7 @@ func readSweeps(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	task := flags.String("task", "", "show only this recurring task's sweeps (default: all of them)")
+	limit := flags.Int("limit", defaultRenderedSweeps, "show this many of the most recent sweeps, or 0 for every one recorded")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -177,11 +190,19 @@ func readSweeps(args []string, stdout, stderr io.Writer) int {
 		printSweepsUsage(stderr)
 		return 2
 	}
+	if *limit < 0 {
+		fmt.Fprintln(stderr, "--limit cannot be negative; use 0 to read every recorded sweep")
+		return 2
+	}
 	parts, err := buildComponents(*configPath)
 	if err != nil {
 		return reportSweepFailure(stdout, stderr, *jsonOutput, err)
 	}
-	recorded, err := parts.store.Sweeps().List()
+	// The unreadable lines come back beside the sweeps rather than instead of
+	// them: a log with one torn write still holds every report around it, and
+	// those are what somebody came here to read. What they cannot be is silent,
+	// so they are shown either way.
+	recorded, unreadable, err := parts.store.Sweeps().List()
 	if err != nil {
 		return reportSweepFailure(stdout, stderr, *jsonOutput, err)
 	}
@@ -194,10 +215,13 @@ func readSweeps(args []string, stdout, stderr io.Writer) int {
 		}
 		recorded = filtered
 	}
+	// JSON is unbounded whatever --limit says, and always has been: it is what
+	// something summarizing a week reads, and a bound there would be a bound on
+	// what a script can see rather than on what fits a terminal.
 	if *jsonOutput {
-		return writeJSON(stdout, stderr, sweepsOutput{Sweeps: recorded})
+		return writeJSON(stdout, stderr, sweepsOutput{Sweeps: recorded, Unreadable: unreadable})
 	}
-	fmt.Fprint(stdout, renderSweeps(recorded))
+	fmt.Fprint(stdout, renderSweeps(recorded, unreadable, *limit))
 	return 0
 }
 
@@ -213,16 +237,32 @@ func reportSweepFailure(stdout, stderr io.Writer, jsonOutput bool, err error) in
 }
 
 // renderSweeps writes the pile most recent first, because what a reader wants
-// from a schedule is what it has been doing lately.
-func renderSweeps(recorded []runstate.Sweep) string {
-	if len(recorded) == 0 {
-		return "no recurring task has recorded a sweep yet\n"
-	}
+// from a schedule is usually what it has been doing lately.
+//
+// A limit of zero shows everything, and a listing that is showing part of the
+// pile says so and says how to see the rest — the bound is what fits a terminal
+// rather than what the log holds, and a reader who cannot tell the difference is
+// a reader who thinks the schedule started yesterday.
+func renderSweeps(recorded []runstate.Sweep, unreadable []runstate.UnreadableSweep, limit int) string {
 	var rendered strings.Builder
+	// Said first, and said whether or not there is anything else to show: a log
+	// that has lost a record is the thing a reader most needs to know before they
+	// draw a conclusion from what is left.
+	for _, torn := range unreadable {
+		fmt.Fprintf(&rendered, "line %d of the sweep log could not be read, so one pass is missing from what follows: %s\n", torn.Line, torn.Problem)
+	}
+	if len(unreadable) > 0 {
+		rendered.WriteString("\n")
+	}
+	if len(recorded) == 0 {
+		rendered.WriteString("no recurring task has recorded a sweep yet\n")
+		return rendered.String()
+	}
 	shown := recorded
-	if len(shown) > maxRenderedSweeps {
-		shown = shown[len(shown)-maxRenderedSweeps:]
-		fmt.Fprintf(&rendered, "%d sweep(s) recorded; the most recent %d follow\n\n", len(recorded), len(shown))
+	if limit > 0 && len(shown) > limit {
+		shown = shown[len(shown)-limit:]
+		fmt.Fprintf(&rendered, "%d sweep(s) recorded; the most recent %d follow. --limit reads further back, --limit 0 reads all of them\n\n",
+			len(recorded), len(shown))
 	}
 	for index := len(shown) - 1; index >= 0; index-- {
 		rendered.WriteString(renderSweep(shown[index]))
@@ -300,6 +340,17 @@ summary and no findings, which on a healthy harness is most of them; a pass that
 produced no account says so and names what stopped it; and a pass stopped by its
 turn bound is recorded as partial, so it is never mistaken for a finished one.
 
+The twenty most recent passes are shown by default, which for an hourly task is
+under a day. "--limit 200" reads further back and "--limit 0" reads every pass
+recorded, which is what the question these reports exist for actually needs: a
+week of them, read together, is how filed root-cause work is told from the same
+thing quietly repaired seven times. "--json" is never bounded and always carries
+the whole log.
+
+A line of the log that will not decode -- a write a crash interrupted -- is named
+and set aside rather than failing the listing, so one torn record never costs the
+reports around it.
+
 It is read-only. A sweep is written once and never revised, and nothing here
 fires one, retires one, or decides anything about what a pass found. Which tasks
 run, how often, and what they are told is configuration; see the recurring tasks
@@ -308,5 +359,6 @@ section of docs/configuration.md.
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --task <name>     show only this recurring task's sweeps
+  --limit <n>       show this many of the most recent passes (default 20, 0 for all)
   --json            emit machine-readable JSON`)
 }

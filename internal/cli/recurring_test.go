@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func recordedSweep(task string, at time.Time, result *sweep.Result, problem stri
 func TestSweepListingOfAnUnsweptProjectSaysSo(t *testing.T) {
 	t.Parallel()
 
-	if rendered := renderSweeps(nil); !strings.Contains(rendered, "no recurring task has recorded a sweep") {
+	if rendered := renderSweeps(nil, nil, defaultRenderedSweeps); !strings.Contains(rendered, "no recurring task has recorded a sweep") {
 		t.Errorf("rendered = %q, want it to say nothing has swept yet", rendered)
 	}
 }
@@ -40,7 +41,7 @@ func TestSweepListingPutsQuestionsAboveTheFindings(t *testing.T) {
 	t.Parallel()
 
 	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
-	rendered := renderSweeps([]runstate.Sweep{recordedSweep("a-sweep", at, &sweep.Result{
+	rendered := renderSweepsAtDefault([]runstate.Sweep{recordedSweep("a-sweep", at, &sweep.Result{
 		Status:    sweep.StatusComplete,
 		Summary:   "one thing fixed, one waiting on a ruling",
 		Questions: []string{"should the release wait?"},
@@ -68,7 +69,7 @@ func TestSweepListingNamesASilentRepair(t *testing.T) {
 	t.Parallel()
 
 	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
-	rendered := renderSweeps([]runstate.Sweep{recordedSweep("a-sweep", at, &sweep.Result{
+	rendered := renderSweepsAtDefault([]runstate.Sweep{recordedSweep("a-sweep", at, &sweep.Result{
 		Status:   sweep.StatusComplete,
 		Summary:  "fixed it",
 		Findings: []sweep.Finding{{Issue: "a stuck delivery", Disposition: sweep.DispositionFixed}},
@@ -84,11 +85,11 @@ func TestSweepListingTellsAFailedPassFromAQuietOne(t *testing.T) {
 	t.Parallel()
 
 	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
-	failed := renderSweeps([]runstate.Sweep{recordedSweep("a-sweep", at, nil, "the conversation could not be opened")})
+	failed := renderSweepsAtDefault([]runstate.Sweep{recordedSweep("a-sweep", at, nil, "the conversation could not be opened")})
 	if !strings.Contains(failed, "no account of this pass was recorded") {
 		t.Errorf("rendered = %q, want it to say the pass produced nothing", failed)
 	}
-	quiet := renderSweeps([]runstate.Sweep{recordedSweep("a-sweep", at, &sweep.Result{
+	quiet := renderSweepsAtDefault([]runstate.Sweep{recordedSweep("a-sweep", at, &sweep.Result{
 		Status:  sweep.StatusComplete,
 		Summary: "nothing unresolved",
 	}, "")})
@@ -107,22 +108,92 @@ func TestSweepListingShowsTheMostRecentFirst(t *testing.T) {
 
 	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
 	var recorded []runstate.Sweep
-	for i := 0; i < maxRenderedSweeps+3; i++ {
+	for i := 0; i < defaultRenderedSweeps+3; i++ {
 		recorded = append(recorded, recordedSweep("a-sweep", at.Add(time.Duration(i)*time.Hour), &sweep.Result{
 			Status:  sweep.StatusComplete,
 			Summary: "pass " + string(rune('a'+i)),
 		}, ""))
 	}
-	rendered := renderSweeps(recorded)
+	rendered := renderSweepsAtDefault(recorded)
 	if !strings.Contains(rendered, "sweep(s) recorded; the most recent") {
 		t.Errorf("rendered = %q, want it to say how much of the pile is not shown", rendered)
 	}
-	newest := "pass " + string(rune('a'+maxRenderedSweeps+2))
+	newest := "pass " + string(rune('a'+defaultRenderedSweeps+2))
 	oldest := "pass a"
 	if !strings.Contains(rendered, newest) {
 		t.Errorf("rendered = %q, want the newest pass shown", rendered)
 	}
 	if strings.Contains(rendered, oldest+"\n") {
 		t.Errorf("rendered = %q, want the oldest passes left out", rendered)
+	}
+}
+
+// renderSweepsAtDefault is the listing as an operator gets it with no flags, which
+// is what these tests are about.
+func renderSweepsAtDefault(recorded []runstate.Sweep) string {
+	return renderSweeps(recorded, nil, defaultRenderedSweeps)
+}
+
+// The default bound is what fits a terminal, not what the log holds. At the
+// hourly cadence the recurring task ships with, twenty passes is under a day, and
+// the question these reports exist for needs a week — so a reader has to be able
+// to get past the default and has to be told the default is one.
+func TestSweepListingReadsPastItsDefaultBound(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	week := 24 * 7
+	var recorded []runstate.Sweep
+	for i := 0; i < week; i++ {
+		recorded = append(recorded, recordedSweep("a-sweep", at.Add(time.Duration(i)*time.Hour), &sweep.Result{
+			Status:  sweep.StatusComplete,
+			Summary: fmt.Sprintf("pass %d", i),
+		}, ""))
+	}
+	oldest := "pass 0\n"
+
+	bounded := renderSweeps(recorded, nil, defaultRenderedSweeps)
+	if strings.Contains(bounded, oldest) {
+		t.Errorf("the default listing reaches the whole week, so the bound says nothing:\n%s", bounded)
+	}
+	// A listing showing part of the pile has to say how to see the rest, or the
+	// bound reads as the whole log and the schedule looks a day old.
+	if !strings.Contains(bounded, "--limit 0 reads all of them") {
+		t.Errorf("rendered = %q, want it to name the flag that reads further back", bounded)
+	}
+
+	whole := renderSweeps(recorded, nil, 0)
+	if !strings.Contains(whole, oldest) {
+		t.Errorf("--limit 0 does not reach the oldest pass of the week:\n%s", whole[:200])
+	}
+	if strings.Contains(whole, "the most recent") {
+		t.Errorf("an unbounded listing still says it is showing part of the pile:\n%s", whole[:200])
+	}
+
+	if widened := renderSweeps(recorded, nil, week); !strings.Contains(widened, oldest) {
+		t.Errorf("--limit %d does not reach the oldest pass of the week", week)
+	}
+}
+
+// A torn line must not cost the reports around it, and must not vanish quietly
+// either: a listing short by a record it never mentioned is a worse answer than
+// the failure it replaced.
+func TestSweepListingNamesALineItCouldNotReadAndShowsTheRest(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	rendered := renderSweeps(
+		[]runstate.Sweep{recordedSweep("a-sweep", at, &sweep.Result{
+			Status:  sweep.StatusComplete,
+			Summary: "the pass that survived",
+		}, "")},
+		[]runstate.UnreadableSweep{{Line: 4, Problem: "unexpected end of JSON input"}},
+		defaultRenderedSweeps,
+	)
+	if !strings.Contains(rendered, "line 4 of the sweep log could not be read") {
+		t.Errorf("rendered = %q, want the unreadable line named", rendered)
+	}
+	if !strings.Contains(rendered, "the pass that survived") {
+		t.Errorf("rendered = %q, want the readable reports shown beside it", rendered)
 	}
 }

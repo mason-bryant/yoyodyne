@@ -448,19 +448,43 @@ func (s *SweepStore) Append(recorded Sweep) error {
 	return nil
 }
 
-// List returns every recorded sweep in the order it was written. A log that does
-// not exist yet is a product nothing has swept, which is not a failure to read.
-func (s *SweepStore) List() ([]Sweep, error) {
+// UnreadableSweep is one line of the log that would not decode, and why.
+//
+// It exists because of what this log is: appended to once per firing, never
+// rewritten, and read from one surface. A write of a record this size is not
+// atomic, so a process killed partway through one leaves a torn line — and a
+// reader that failed the whole listing on the first line it could not decode
+// would make one interrupted write cost every report before it, permanently, on
+// the only surface those reports are read from. So a line that will not decode is
+// set aside and named rather than fatal, and the reports around it stay
+// reachable. Named rather than skipped, because a listing that quietly dropped
+// records would be a worse answer than the failure it replaced.
+type UnreadableSweep struct {
+	// Line is the 1-based line of the log, so somebody can go and look at it.
+	Line    int    `json:"line"`
+	Problem string `json:"problem"`
+}
+
+// List returns every recorded sweep in the order it was written, and beside them
+// the lines that would not decode. A log that does not exist yet is a product
+// nothing has swept, which is not a failure to read.
+//
+// The error is for a log that could not be read at all. A line that will not
+// decode is not one: it comes back in the second return value, and the sweeps
+// around it come back with it — see UnreadableSweep for why that is the
+// direction this fails in.
+func (s *SweepStore) List() ([]Sweep, []UnreadableSweep, error) {
 	file, err := os.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open the sweep log: %w", err)
+		return nil, nil, fmt.Errorf("open the sweep log: %w", err)
 	}
 	defer file.Close()
 
 	var recorded []Sweep
+	var unreadable []UnreadableSweep
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxEncodedSweepBytes)
 	line := 0
@@ -474,20 +498,30 @@ func (s *SweepStore) List() ([]Sweep, error) {
 		decoder.DisallowUnknownFields()
 		var entry Sweep
 		if err := decoder.Decode(&entry); err != nil {
-			return nil, fmt.Errorf("decode sweep at line %d of %s: %w", line, s.Path(), err)
+			unreadable = append(unreadable, UnreadableSweep{Line: line, Problem: err.Error()})
+			continue
 		}
 		if err := ensureJSONEOF(decoder); err != nil {
-			return nil, fmt.Errorf("decode sweep at line %d of %s: %w", line, s.Path(), err)
+			unreadable = append(unreadable, UnreadableSweep{Line: line, Problem: err.Error()})
+			continue
 		}
 		if entry.ProductID != s.productID {
-			return nil, fmt.Errorf("sweep at line %d of %s belongs to product %q, not %q", line, s.Path(), entry.ProductID, s.productID)
+			unreadable = append(unreadable, UnreadableSweep{
+				Line:    line,
+				Problem: fmt.Sprintf("this record belongs to product %q, not %q", entry.ProductID, s.productID),
+			})
+			continue
 		}
 		recorded = append(recorded, entry)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read the sweep log: %w", err)
+		// The scan itself failing is different from a line that will not decode:
+		// nothing after the failure was read at all, so what came before it is
+		// returned with the failure rather than instead of it, and the caller says
+		// the listing is partial.
+		return recorded, unreadable, fmt.Errorf("read the sweep log: %w", err)
 	}
-	return recorded, nil
+	return recorded, unreadable, nil
 }
 
 func (s *SweepStore) load(task string) (SweepClaim, bool, error) {
