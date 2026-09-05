@@ -47,10 +47,18 @@ type WorkTracker interface {
 	// something no further attempt of its own can resolve.
 	Block(ctx context.Context, id, reason string) (beads.WorkItem, error)
 	Complete(ctx context.Context, id, reason string) (beads.WorkItem, error)
-	// Reopen returns a claimed item to the backlog. The harness uses it when a
-	// run integrated its change and claimed that change does not discharge the
-	// item, which is a landing worth keeping and not a closure.
-	Reopen(ctx context.Context, id, reason string) (beads.WorkItem, error)
+	// Reopen returns a claimed item to the backlog under the parking it is given.
+	// The harness uses it when a run integrated its change and claimed that change
+	// does not discharge the item, which is a landing worth keeping and not a
+	// closure. The parking is what stops the same item being selected again
+	// immediately, and it is empty only where the landing named the impediment the
+	// item is instead made to wait on.
+	Reopen(ctx context.Context, id, reason string, parking domain.WorkItemParking) (beads.WorkItem, error)
+	// AddBlocker makes one item wait for another. The harness uses it for the
+	// other half of that settlement: a landing that named its impediment leaves
+	// the item open waiting on it, which selection honours and which releases
+	// itself when the impediment closes.
+	AddBlocker(ctx context.Context, id, blockerID string) error
 }
 
 // Pricer records what a work item has cost across every run made for it. The
@@ -584,11 +592,18 @@ type Outcome struct {
 	// this one decides something: an item is closed on a landing that discharges
 	// it and left open on one that does not, so a run that landed evidence reads
 	// afterwards as the evidence it was rather than as work that was done.
+	// LandingBlockedBy is the impediment a landing named to have its item left
+	// open waiting on that work rather than parked, resolved against the tracker,
+	// and is empty for the parking default and for every landing that discharges.
+	// LandingImpedimentProblem is why a marker the landing carried was not one the
+	// item could be made to wait on, which is what put it in the parking instead.
 	// LandingProblem names a claim that could not be read, which withholds the
 	// closure for the reason its durable twin gives.
-	Landing        landing.Outcome `json:"landing,omitempty"`
-	LandingReason  string          `json:"landing_reason,omitempty"`
-	LandingProblem string          `json:"landing_problem,omitempty"`
+	Landing                  landing.Outcome `json:"landing,omitempty"`
+	LandingReason            string          `json:"landing_reason,omitempty"`
+	LandingBlockedBy         string          `json:"landing_blocked_by,omitempty"`
+	LandingImpedimentProblem string          `json:"landing_impediment_problem,omitempty"`
+	LandingProblem           string          `json:"landing_problem,omitempty"`
 	// Cost is what every run made for this work item has cost, as the provider
 	// reported it: this run and every earlier one, the attempts that failed as
 	// well as the one that finished. It is absent when nothing priced the item,
@@ -2775,7 +2790,7 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	// channels that decide nothing, because the contract puts its block ahead of
 	// theirs and an unreadable report block takes everything after its own fence
 	// with it.
-	reply := a.claimLanding(providerResult.FinalText)
+	reply := a.claimLanding(ctx, providerResult.FinalText)
 	// Anything the developer reported is collected out of what it said, so the
 	// summary stays the account of the work and the report reaches the operator
 	// instead of sitting in prose nothing surfaces.
@@ -4027,13 +4042,12 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// succeeded; what the developer claimed is that the change is evidence rather
 	// than the work the item asked for, and closing on it would record as done
 	// exactly what the evidence says was not. The item goes back to the backlog
-	// with the claim on it instead, which is the state a person or a later run can
-	// still act on.
+	// with the claim on it instead, parked or waiting on the impediment the
+	// landing named, which is the state a person or a later run can still act on.
 	if a.outcome.Integration != nil && !a.mergeQueued() {
 		if !a.state.LandingDischarges() {
 			if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
-				_, err := p.Tracker.Reopen(ctx, a.state.WorkItemID, undischargedLandingReason(a.state))
-				return err
+				return settleUndischarged(ctx, p.Tracker, a.state)
 			}); err != nil {
 				return a.fail(fmt.Errorf("reopen the work item this run did not discharge: %w", err), runstate.StatusFailed)
 			}
@@ -5258,6 +5272,12 @@ func validateWorkItem(item beads.WorkItem, requestedID string, expectedStatuses 
 // means that could disagree.
 const blocksDependency = "blocks"
 
+// closedStatus is finished work. It is what makes a dependency stop holding
+// anything back, which is why the reading below and the resolution of a landing's
+// impediment both have to agree about it: work a gate calls closed is work no
+// dependency on it can hold an item for.
+const closedStatus = "closed"
+
 // blockingDependencies names the unfinished work an item waits for, in a stable
 // order. It is the single reading every dependency gate in this package decides
 // on: the run-start check, the gate each attempt passes through, and the refusal
@@ -5269,7 +5289,7 @@ const blocksDependency = "blocks"
 func blockingDependencies(item beads.WorkItem) []string {
 	var blockers []string
 	for _, dependency := range item.Dependencies {
-		if dependency.Type == blocksDependency && dependency.Status != "closed" {
+		if dependency.Type == blocksDependency && dependency.Status != closedStatus {
 			blockers = append(blockers, dependency.ID)
 		}
 	}
@@ -5903,7 +5923,8 @@ func renderOutcomeNotes(outcome Outcome) string {
 		// there. The claim itself is recorded below with the developer's account of
 		// it; this is only what stops the note reading as a completed item.
 		if outcome.Landing == landing.OutcomeEvidence || outcome.LandingProblem != "" {
-			headline = "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically; the developer did not claim it discharges this item, so the item stays open."
+			headline = "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically; the developer did not claim it discharges this item, so the item " +
+				outcome.UndischargedDisposition() + "."
 		}
 	}
 	// These notes are recorded before cleanup, because the promotion is settled

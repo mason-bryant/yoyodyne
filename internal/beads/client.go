@@ -700,21 +700,42 @@ func (c Client) Complete(ctx context.Context, id, reason string) (WorkItem, erro
 }
 
 // Reopen returns a claimed item to the backlog, carrying into its notes the
-// reason it was not discharged. It is what a run that landed evidence rather
-// than the work leaves behind: the change integrated, so there is nothing to
-// block on and nobody to hand it to, and the item is simply still open.
+// reason it was not discharged and into its parking whatever the caller decided
+// it should sit under. It is what a run that landed evidence rather than the work
+// leaves behind: the change integrated, so there is nothing to block on and
+// nobody to hand it to, and what is left to decide is whether the item is to be
+// pulled again.
 //
-// The status is read back for the reason a blocker's is. An item left claimed by
-// a run that has ended is work nothing can start and nothing is watching, which
-// is the failure this call exists to avoid rather than a milder version of it.
-func (c Client) Reopen(ctx context.Context, id, reason string) (WorkItem, error) {
+// The parking is applied in the same invocation as the status rather than in a
+// second call, because the window between the two is exactly when a watch
+// session pulls the item: an item returned to the backlog unparked is pullable
+// the moment the status lands. An empty parking releases the item into the queue
+// and is a decision, not an omission — the caller that gives one is holding the
+// item back some other way.
+//
+// A release here is unconditional: it clears whatever parking the item carried,
+// including one somebody else placed for their own reasons. That is why the
+// parking is the caller's whole answer rather than a change to what is there —
+// this call cannot tell a parking it is superseding from one it is retiring, so a
+// caller that must not retire one reads the item and passes what it finds back.
+//
+// The status and the parking are both read back, for the reason a blocker's
+// status is. An item left claimed by a run that has ended is work nothing can
+// start and nothing is watching; an item returned unparked when the caller asked
+// for a parking is work the next pull selects again for another run of the same
+// diagnosis.
+func (c Client) Reopen(ctx context.Context, id, reason string, parking domain.WorkItemParking) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {
 		return WorkItem{}, err
 	}
 	if strings.TrimSpace(reason) == "" {
 		return WorkItem{}, errors.New("reopen reason is required")
 	}
-	data, err := c.run(ctx, "update", id, "--status=open", "--append-notes="+reason, "--json")
+	if err := errors.Join(parkingProblem(parking)...); err != nil {
+		return WorkItem{}, err
+	}
+	data, err := c.run(ctx, "update", id, "--status=open", "--append-notes="+reason,
+		"--set-metadata="+parkedKey+"="+parking.Reason(), "--json")
 	if err != nil {
 		return WorkItem{}, err
 	}
@@ -724,6 +745,12 @@ func (c Client) Reopen(ctx context.Context, id, reason string) (WorkItem, error)
 	}
 	if item.Status != "open" {
 		return WorkItem{}, fmt.Errorf("work item %s status is %q after being reopened, want open", item.ID, item.Status)
+	}
+	if item.Parking.Reason() != parking.Reason() {
+		if parking.Parked() {
+			return WorkItem{}, fmt.Errorf("work item %s is parked %q after being reopened, want %q", item.ID, item.Parking, parking.Reason())
+		}
+		return WorkItem{}, fmt.Errorf("work item %s is still parked %q after being reopened unparked", item.ID, item.Parking)
 	}
 	return item, nil
 }

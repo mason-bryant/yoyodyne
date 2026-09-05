@@ -146,6 +146,89 @@ func TestTheDescriptionSaysWhichLandingWasClaimed(t *testing.T) {
 	}
 }
 
+// An undischarged landing leaves its item in one of exactly two places, and the
+// default is the parking. There is deliberately no third: an item put back with
+// nothing marking it is one autonomous selection picks again immediately, for
+// another run and another diagnosis of the impediment this run just diagnosed.
+func TestAnUndischargedClaimParksUnlessItNamesTheImpediment(t *testing.T) {
+	t.Parallel()
+
+	parking := "```yoyodyne-landing\n" +
+		`{"outcome":"evidence","why":"the design this needs has not landed"}` + "\n```\n"
+	_, parked, err := landing.Extract(parking)
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if !parked.Parks() || parked.Impediment() != "" {
+		t.Errorf("a claim naming no impediment did not take the parking default: %+v", parked)
+	}
+
+	waiting := "```yoyodyne-landing\n" +
+		`{"outcome":"evidence","why":"the design this needs has not landed","blocked_by":" yoyodyne-ifd.209.25 "}` + "\n```\n"
+	_, open, err := landing.Extract(waiting)
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if open.Parks() {
+		t.Error("a claim that named its impediment was parked anyway")
+	}
+	if open.Impediment() != "yoyodyne-ifd.209.25" {
+		t.Errorf("Impediment() = %q, want the item it named", open.Impediment())
+	}
+	// A discharging landing has nothing to wait for, so a claim carrying both is
+	// two statements that cannot both be true rather than one to pick from.
+	discharging := `{"outcome":"discharged","why":"done","blocked_by":"yoyodyne-ifd.209.25"}`
+	if _, err := landing.Decode(discharging); err == nil ||
+		!strings.Contains(err.Error(), "does not discharge") {
+		t.Fatalf("Decode() accepted a discharging claim that waits on something: %v", err)
+	}
+}
+
+// The marker is refused where the claim is read rather than carried as far as the
+// write that would refuse it. A run whose change is already integrated must not
+// fail its settlement over a marker that was never an identifier.
+func TestAMarkerThatIsNotAWorkItemIdentifierIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, refused := range []struct {
+		name   string
+		marker string
+	}{
+		{name: "prose written where an identifier goes", marker: "the design has not landed yet"},
+		{name: "an argument smuggled into the identifier", marker: "--status=closed"},
+		{name: "an identifier past its bound", marker: strings.Repeat("y", landing.MaxBlockedByBytes+1)},
+	} {
+		t.Run(refused.name, func(t *testing.T) {
+			t.Parallel()
+
+			payload := `{"outcome":"evidence","why":"not doable yet","blocked_by":"` + refused.marker + `"}`
+			if _, err := landing.Decode(payload); err == nil {
+				t.Fatalf("Decode() accepted %q as the item to wait on", refused.marker)
+			}
+		})
+	}
+}
+
+// The description is what the reviewer and the item's notes are shown, and the
+// two dispositions have to be tellable apart there: one waits for a person and
+// the other releases itself.
+func TestTheDescriptionSaysWhereAnUndischargedItemWasLeft(t *testing.T) {
+	t.Parallel()
+
+	parked := landing.Claim{Outcome: landing.OutcomeEvidence, Why: "not doable yet"}.Describe()
+	if !strings.Contains(parked, "parked") {
+		t.Errorf("Describe() of the parking default does not say the item is parked: %q", parked)
+	}
+	waiting := landing.Claim{
+		Outcome:   landing.OutcomeEvidence,
+		Why:       "not doable yet",
+		BlockedBy: "yoyodyne-ifd.209.25",
+	}.Describe()
+	if strings.Contains(waiting, "parked") || !strings.Contains(waiting, "yoyodyne-ifd.209.25") {
+		t.Errorf("Describe() of a leave-open claim does not name what it waits on: %q", waiting)
+	}
+}
+
 // The vocabulary an agent is told about and the vocabulary the decoder accepts
 // are the same one. A contract naming a value the decoder refuses teaches every
 // developer to write a claim that is thrown away.
@@ -159,5 +242,10 @@ func TestTheContractNamesExactlyTheVocabularyTheDecoderAccepts(t *testing.T) {
 	}
 	if !strings.Contains(landing.Contract, landing.Fence) {
 		t.Error("the contract does not show the fence the block has to open with")
+	}
+	// The marker is the only alternative to the parking, so a contract that never
+	// names it leaves every developer taking a default it was not told about.
+	if !strings.Contains(landing.Contract, `"blocked_by"`) {
+		t.Error("the contract never names the marker that leaves an item open")
 	}
 }

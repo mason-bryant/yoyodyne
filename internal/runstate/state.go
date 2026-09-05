@@ -993,6 +993,29 @@ type State struct {
 	// leaves.
 	LandingOutcome string `json:"landing_outcome,omitempty"`
 	LandingReason  string `json:"landing_reason,omitempty"`
+	// LandingBlockedBy is the impediment a landing named to have its item left
+	// open rather than parked, as the work item the item now waits on. It is
+	// durable for the same reason the outcome is — the sweep that settles a queued
+	// merge decides where the item goes, and a sweep that could not read the
+	// marker would park an item whose landing asked for the dependency — and it is
+	// empty for the parking default and for every landing that discharges.
+	//
+	// It holds a marker the harness resolved against the tracker rather than one
+	// the developer wrote: a marker naming work the tracker does not have is one
+	// the dependency write would be refused for, on a run whose change is already
+	// integrated. What became of an unusable one is the field below.
+	LandingBlockedBy string `json:"landing_blocked_by,omitempty"`
+	// LandingImpedimentProblem is why a marker the landing carried was not one the
+	// item could be made to wait on. The two fields are exclusive: a marker that
+	// resolved is above, and one that did not is here with the item parked
+	// instead.
+	//
+	// It is recorded rather than discarded because a developer that named an
+	// impediment asked for something, and an item parked with no trace of the
+	// request reads afterwards as a developer that asked for nothing. It is the
+	// operator's line, not the developer's: the run has ended by the time anybody
+	// reads it.
+	LandingImpedimentProblem string `json:"landing_impediment_problem,omitempty"`
 	// LandingProblem names a claim that arrived and could not be read. It is
 	// separate from the outcome because the two say different things: no claim is
 	// a developer that made none, and an unreadable one is a developer that tried
@@ -1377,6 +1400,29 @@ func (s State) Validate() error {
 	// leaving an item open for a reason nobody wrote down.
 	if s.LandingOutcome != "" && strings.TrimSpace(s.LandingReason) == "" {
 		problems = append(problems, errors.New("landing_outcome requires the landing_reason it was claimed for"))
+	}
+	// The marker only means anything on a landing that leaves the item open, and a
+	// record carrying one anywhere else is a record the settlement would read: an
+	// item closed against a discharge does not wait for anything, and one whose
+	// claim could not be read is not left open on the strength of a marker in the
+	// same unreadable block.
+	if strings.TrimSpace(s.LandingBlockedBy) != "" && (s.LandingOutcome != LandingEvidence || s.LandingProblem != "") {
+		problems = append(problems, errors.New("landing_blocked_by is only for a landing recorded as evidence"))
+	}
+	if strings.TrimSpace(s.LandingImpedimentProblem) != "" && (s.LandingOutcome != LandingEvidence || s.LandingProblem != "") {
+		problems = append(problems, errors.New("landing_impediment_problem is only for a landing recorded as evidence"))
+	}
+	// The two are exclusive by construction: the resolution writes the marker or
+	// the reason it could not, never both. A record carrying both says the item
+	// waits and is parked at once, which is two different settlements.
+	if strings.TrimSpace(s.LandingBlockedBy) != "" && strings.TrimSpace(s.LandingImpedimentProblem) != "" {
+		problems = append(problems, errors.New("landing_blocked_by and landing_impediment_problem cannot both be recorded"))
+	}
+	// Nothing waits on itself. The resolution refuses this before it is stored, so
+	// a record carrying it is one nothing here produced, and the settlement it
+	// would drive is a dependency the tracker refuses as a cycle.
+	if marker := strings.TrimSpace(s.LandingBlockedBy); marker != "" && marker == s.WorkItemID {
+		problems = append(problems, errors.New("landing_blocked_by cannot name the work item it was claimed on"))
 	}
 	if s.ReviewFindings < 0 {
 		problems = append(problems, errors.New("review_findings cannot be negative"))
@@ -1804,6 +1850,36 @@ func (s State) AwaitingForge() bool {
 // claimed nothing and every run recorded before this channel existed.
 func (s State) LandingDischarges() bool {
 	return s.LandingOutcome != LandingEvidence && s.LandingProblem == ""
+}
+
+// LandingImpediment is the work item this run's landing named as what its own
+// item now waits for, and is empty where the landing named nothing the harness
+// could use. Whether a named one is usable was decided against the tracker when
+// the claim was read, so this only reads the answer back.
+//
+// An item naming itself answers empty whatever is stored, which the validation
+// above also refuses. The derivation is total on purpose: it decides where an
+// integrated change's item goes, and a record that reached here malformed must
+// take the parking rather than drive a dependency write the tracker refuses.
+func (s State) LandingImpediment() string {
+	impediment := strings.TrimSpace(s.LandingBlockedBy)
+	if impediment == s.WorkItemID {
+		return ""
+	}
+	return impediment
+}
+
+// LandingParks reports an item this run's landing returns to the backlog parked,
+// which is what an undischarged landing does unless it named the impediment it
+// waits for. It is derived here beside the closure so that both settlement sites
+// — the run's own and the sweep that finishes an interrupted one — put the item
+// in the same place.
+//
+// A claim that could not be read parks too. The marker would have come out of
+// the same block the outcome did, so there is nothing to hold the item back with,
+// and an item returned bare is one selection picks again immediately.
+func (s State) LandingParks() bool {
+	return !s.LandingDischarges() && s.LandingImpediment() == ""
 }
 
 // validateIndependentInvocations enforces what an integrated change claims: two
