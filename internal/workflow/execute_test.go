@@ -698,16 +698,21 @@ func gatedGraph(t *testing.T) Graph[*journal] {
 // recordedActs stands in for the harness's store of what a person has recorded
 // doing. It is a reader and has no writer at all, which is the shape the
 // executor is given: nothing it can reach makes a gate pass.
+//
+// It is keyed by the instance the act was recorded against as well as the gate,
+// because that is what the store is keyed by: every instance of one definition
+// reaches the same gated state, so an act against the name alone would pass that
+// gate for every run the harness ever made afterwards.
 type recordedActs struct {
-	passed map[string]bool
+	passed map[[2]string]bool
 	err    error
 }
 
-func (r recordedActs) HumanActRecorded(gate string) (bool, error) {
+func (r recordedActs) HumanActRecorded(instanceID, gate string) (bool, error) {
 	if r.err != nil {
 		return false, r.err
 	}
-	return r.passed[gate], nil
+	return r.passed[[2]string{instanceID, gate}], nil
 }
 
 // A gated state performs nothing until a person's act is on the record, and the
@@ -718,7 +723,7 @@ func TestAGatedStepWaitsOnAPersonAndThenPerforms(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	acts := recordedActs{passed: map[string]bool{}}
+	acts := recordedActs{passed: map[[2]string]bool{}}
 	executor := checkpointing(t, root)
 	executor.Graph = gatedGraph(t)
 	executor.Gates = acts
@@ -754,7 +759,7 @@ func TestAGatedStepWaitsOnAPersonAndThenPerforms(t *testing.T) {
 
 	// The person records the act, and the same instance steps on from where it
 	// stood.
-	acts.passed["integration-approved"] = true
+	acts.passed[[2]string{"gated-run", "integration-approved"}] = true
 	executor.Gates = acts
 	finished, err := executor.Run(context.Background(), "gated-run", recording)
 	if err != nil {
@@ -835,5 +840,51 @@ func TestADefinitionDeclaresWhichGateAndNothingMore(t *testing.T) {
 	// already in flight running.
 	if gated.Digest() == journalGraph(t).Digest() {
 		t.Fatal("a gated definition and an ungated one digest the same")
+	}
+}
+
+// Every instance of one definition reaches the same gated state, so an act
+// recorded against the name alone would pass that gate for every run the harness
+// ever made afterwards — one integration approval standing in for all of them.
+// An act passes the gate on the instance it was recorded against and no other.
+func TestAnActPassesTheGateOnItsOwnInstanceAndNoOther(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	acts := recordedActs{passed: map[[2]string]bool{{"first-run", "integration-approved"}: true}}
+	executor := checkpointing(t, root)
+	executor.Graph = gatedGraph(t)
+	executor.Gates = acts
+
+	// The run the act was recorded against reaches its terminal.
+	if _, err := executor.Start("first-run"); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	finished, err := executor.Run(context.Background(), "first-run", &journal{path: filepath.Join(root, "first")})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !finished.Terminal {
+		t.Fatalf("instance = %#v", finished)
+	}
+
+	// The next run reaches the same state, and nobody has approved its
+	// integration.
+	if _, err := executor.Start("second-run"); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	_, err = executor.Run(context.Background(), "second-run", &journal{path: filepath.Join(root, "second")})
+	if err == nil {
+		t.Fatal("a second instance integrated on the strength of the first instance's approval")
+	}
+	if !strings.Contains(err.Error(), "--for second-run") {
+		t.Fatalf("refusal = %v, want it to name the instance the act has to be recorded against", err)
+	}
+	standing, err := executor.Resume("second-run")
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if standing.State != "integrate" || standing.Terminal {
+		t.Fatalf("instance = %#v, want it standing at the gated state", standing)
 	}
 }

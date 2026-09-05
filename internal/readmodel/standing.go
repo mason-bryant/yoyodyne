@@ -58,9 +58,9 @@ import (
 )
 
 // backlogStatuses are the tracker slices the admitted work is assembled from.
-// They are the scheduler's own, because the queue this describes has to be the
-// queue that is actually pulled from.
-var backlogStatuses = []string{"open", "blocked"}
+// They are the queue's own, because the queue this describes has to be the queue
+// that is actually pulled from.
+var backlogStatuses = backlog.AdmittedStatuses()
 
 // maxRefusalBytes bounds one refusal as this renders it. A parking reason and a
 // directive are prose somebody wrote at whatever length they wanted, and this is
@@ -151,7 +151,7 @@ type Sessions interface {
 //
 // It is satisfied by *runstate.Store.
 type Gates interface {
-	DischargedGates() ([]string, error)
+	DischargedGates() (map[string][]string, error)
 }
 
 // Sources are the durable records one standing reading is assembled from, and
@@ -646,7 +646,7 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, string, err
 	for _, item := range ready {
 		pullable = append(pullable, item.ID)
 	}
-	var discharged []string
+	var discharged map[string][]string
 	unread := ""
 	switch {
 	case sources.Gates == nil:
@@ -782,7 +782,7 @@ func Gated(queue backlog.Queue) []Attention {
 			attention = append(attention, Attention{
 				What: fmt.Sprintf("%s waits on the gate %q: %s", entry.ID, gate.Name,
 					singleLine(gate.Statement, maxRefusalBytes)),
-				Whose: fmt.Sprintf("a person's — nothing machinery does passes it, closing an item included; `yoyo gate record %s` is the act", gate.Name),
+				Whose: fmt.Sprintf("a person's — nothing machinery does passes it, closing an item included; `yoyo gate record %s --for %s` is the act", gate.Name, entry.ID),
 			})
 		}
 		// A declaration nothing could read holds the item exactly as a gate does,

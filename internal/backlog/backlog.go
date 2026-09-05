@@ -35,6 +35,15 @@ const (
 	statusBlocked = "blocked"
 )
 
+// AdmittedStatuses is the tracker slices the backlog is assembled from, in the
+// order they are read. It is exported because more than one surface asks the
+// tracker for the queue's own work — the status reading and the gate listing
+// among them — and a surface reading a wider or narrower set than the queue is a
+// surface that answers the same question differently. Which is the disagreement
+// only the operator could adjudicate, and the one thing a single derivation is
+// for.
+func AdmittedStatuses() []string { return []string{statusOpen, statusBlocked} }
+
 // blocksDependency is the Beads dependency type that makes one item wait for
 // another. It is the same relation the pipeline refuses to run an item under, so
 // what the backlog calls ready is what the harness will actually accept.
@@ -135,8 +144,14 @@ type Queue struct {
 // knows about dependencies, and not about the harness's roles or the product
 // manager's deferrals, so it reports both as ready forever.
 //
-// discharged is the human gates a person has recorded taking, from the harness's
-// own store. It is asked for rather than read here for the reason readiness is
+// discharged is the human gates a person has recorded taking, by the work item
+// each act was recorded against, from the harness's own store. It is keyed by
+// item rather than a flat set of names because a name is a word somebody chose
+// and the useful words recur — `release-signed` describes a step taken once per
+// release — so a flat set would have one recorded act pass every later
+// declaration of that word, which is this whole mechanism's own failure arriving
+// through the namespace. It is asked for rather than read here for the reason
+// readiness is
 // taken rather than inferred: a gate is passed by a durable record of somebody's
 // act, and a package that both read an item's declared gates and decided they
 // were satisfied would be holding both halves of the thing this separates. A
@@ -145,7 +160,7 @@ type Queue struct {
 // not asked about gates at all and could not answer: the only completion it
 // knows is an item being closed, and an item's closure passing a gate that
 // reserved a person's step is the exact failure that put this here.
-func Order(items []beads.WorkItem, ready []string, discharged []string) Queue {
+func Order(items []beads.WorkItem, ready []string, discharged map[string][]string) Queue {
 	pullable := make(map[string]struct{}, len(ready))
 	for _, id := range ready {
 		pullable[id] = struct{}{}
@@ -168,7 +183,7 @@ func Order(items []beads.WorkItem, ready []string, discharged []string) Queue {
 	queue := Queue{Entries: make([]Entry, 0, len(admitted))}
 	for position, item := range admitted {
 		_, reportedReady := pullable[item.ID]
-		gates := humangate.Of(item).Pending(discharged)
+		gates := humangate.Of(item).Pending(discharged[item.ID])
 		queue.Entries = append(queue.Entries, Entry{
 			Position: position + 1,
 			ID:       item.ID,
@@ -351,7 +366,7 @@ func (e Entry) Hold() string {
 	case e.Parking.Parked():
 		return "parked, so no pull selects it however far the queue drains: " + e.Parking.Reason()
 	case e.HumanGates.Holds():
-		return e.HumanGates.Describe()
+		return e.HumanGates.Describe(e.ID)
 	case len(e.WaitingOn) > 0:
 		return "waiting on " + strings.Join(e.WaitingOn, ", ")
 	case e.Status == statusBlocked:

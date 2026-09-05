@@ -304,19 +304,32 @@ tell you about. Nothing shipped declares one today.
 
 ```sh
 ./bin/yoyo gate list
-./bin/yoyo gate record soak-reviewed --by mason --did "read a week of soak runs; they diverge nowhere"
+./bin/yoyo gate record soak-reviewed --for yoyodyne-ifd.209.7 --by mason --did "read a week of soak runs; they diverge nowhere"
 ```
 
 `yoyo gate record` is the only thing that passes a gate. No run passes one, no
 check passes one, and closing a work item does not pass one — which is the whole
-reason gates exist. Before them, the only way to write down "a person has to
-sign this off first" was an item somebody closes, and on 2026-09-04 machinery
-closed exactly such an item and the work behind it became pullable with the
-reserved step untaken. The record names who took the step and what they say they
-did, because a gate passed by nobody in particular and described by nothing is
-the flag that failed; a gate already passed is refused rather than overwritten,
-so the record keeps saying whose act it was. A gate whose record cannot be read
-is never treated as open.
+reason gates exist. Before them, the only way to write down "a person has to sign
+this off first" was an item somebody closes, and on 2026-09-04 machinery closed
+exactly such an item and the work behind it became pullable with the reserved
+step untaken.
+
+The record names who took the step and what they say they did, because a gate
+passed by nobody in particular and described by nothing is the flag that failed.
+A gate already passed on that subject is refused rather than overwritten, so the
+record keeps saying whose act it was. A gate whose record cannot be read is never
+treated as open.
+
+`--for` is required, and names the work item or workflow instance that declared
+the gate. The act passes it there and nowhere else, which is what makes a name
+reusable: `release-signed` is a step taken once per release, not once ever, so
+declaring it on the next release holds that release until you sign that one off,
+whatever you signed before. Were the name alone the identity, your first
+signature would pass every later declaration of the word, and you could not
+record the new act at all, because the gate would already read as passed. For a
+workflow the reason is sharper still — every instance of one definition reaches
+the same gated state, so an act against the name would approve one run's step and
+every run made after it.
 
 ## When the provider dies mid-run
 

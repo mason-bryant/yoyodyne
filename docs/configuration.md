@@ -1734,8 +1734,11 @@ a surface invented out of prose would hold unrelated work back. And an item that
 declares a step only a person can take — named after `human-gate:` on a line of
 its own, in those same authored fields — is passed over with that step and what
 records it both named, until somebody has recorded taking it with `yoyo gate
-record`. That one is neither a wait nor something any run clears: closing a work
-item does not pass it, which is the whole reason it exists. See
+record <name> --for <item>`. That one is neither a wait nor something any run
+clears: closing a work item does not pass it, which is the whole reason it
+exists. The act is recorded against the item that declared the gate and passes it
+there and nowhere else, so a name a later item declares again is a step somebody
+still has to take. See
 [a step only a person can take](work.md#letting-the-harness-choose-the-work) for
 what it replaced. The tracker not
 reporting an item as ready, a run for it

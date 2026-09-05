@@ -366,17 +366,34 @@ asked to take. Nothing records an act against one of these, because there is no
 name to record against; what clears it is correcting the line on the item.
 `yoyo gate list` names the item and the problem.
 
-What passes it is `yoyo gate record <name> --by <you> --did "<what you did>"`,
-and that is the only thing that does. The record says who took the step and what
+What passes it is
+`yoyo gate record <name> --for <item> --by <you> --did "<what you did>"`, and
+that is the only thing that does. The record says who took the step and what
 they say they did, because a gate passed by nobody in particular and described by
 nothing is the flag this replaced; a gate already passed is refused rather than
 overwritten, so the record keeps saying whose act it was. `yoyo gate list` shows
-what is still waiting and what has been recorded.
+what is still waiting, on which item, and what has been recorded.
+
+**A name is not spent by being recorded once.** The act is recorded against the
+item that declared the gate, and passes it there and nowhere else. That is what
+makes the useful names usable: `release-signed` is a step taken once per release
+and `soak-reviewed` once per soak, not once ever. Declare either on the next
+piece of work and it holds that work until somebody signs that one off, whatever
+was recorded before — which is why `--for` is required and not a nicety. If the
+name alone decided it, the first act would pass every later declaration of the
+word, the next release would be pullable on the strength of the last one's
+signature, and you could not even record the new act, because the gate would
+already read as passed. That is this mechanism's own failure arriving through
+the namespace rather than through the tracker.
 
 A workflow definition declares one the same way, as `gate:` on a state, and the
 executor performs nothing at that state until the act is on the record — the
 instance stands exactly where it was, and steps on when it is next stepped after
 somebody records it. A gate whose record cannot be read is never treated as open.
+There the act is recorded against the instance rather than a work item, and for
+a sharper version of the same reason: every instance of one definition reaches
+that same state, so an act against the name alone would approve one run's step
+and every run the harness made afterwards.
 That half is less visible than this one: an instance held at a gated state says
 so in the refusal raised when something tries to step it, and no status surface
 lists it. Nothing shipped declares a gate on a state today, so there is no such

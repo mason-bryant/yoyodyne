@@ -602,11 +602,11 @@ func TestAConversationThatCannotBeAskedIsSaidBesideTheCount(t *testing.T) {
 
 // fakeGates stands in for the harness's record of what a person has done.
 type fakeGates struct {
-	discharged []string
+	discharged map[string][]string
 	fail       error
 }
 
-func (f fakeGates) DischargedGates() ([]string, error) { return f.discharged, f.fail }
+func (f fakeGates) DischargedGates() (map[string][]string, error) { return f.discharged, f.fail }
 
 // An item held by a step only a person can take is on two lines and says a
 // different thing on each: the queue's line says why nothing pulls it, and the
@@ -638,14 +638,18 @@ func TestWorkHeldByAPersonsStepIsNamedAsWaitingOnThem(t *testing.T) {
 			t.Fatalf("what = %q, want it to mention %q", attention.What, want)
 		}
 	}
-	for _, want := range []string{"closing an item", "yoyo gate record soak-reviewed"} {
+	// The command it names is one the operator can copy. An act is recorded
+	// against the item that declared the gate, so a line naming only the gate
+	// would send them to type a command that passes a different item's step or is
+	// refused as already passed.
+	for _, want := range []string{"closing an item", "yoyo gate record soak-reviewed --for yoyodyne-ifd.209.7"} {
 		if !strings.Contains(attention.Whose, want) {
 			t.Fatalf("whose = %q, want it to mention %q", attention.Whose, want)
 		}
 	}
 
 	// Once the act is on the record the item is startable and nobody is waiting.
-	sources.Gates = fakeGates{discharged: []string{"soak-reviewed"}}
+	sources.Gates = fakeGates{discharged: map[string][]string{"yoyodyne-ifd.209.7": {"soak-reviewed"}}}
 	passed := ReadStanding(context.Background(), sources)
 	if len(passed.NotStartable) != 0 || len(passed.NeedsHuman) != 0 {
 		t.Fatalf("not startable = %+v, needs human = %+v", passed.NotStartable, passed.NeedsHuman)
@@ -694,7 +698,7 @@ func TestADeclarationNothingCouldReadIsNamedAsTheAuthorsMove(t *testing.T) {
 		ready: []beads.WorkItem{{ID: "yoyodyne-ifd.209.7"}},
 	}}
 	// Every act anybody could have recorded is on the record, and it still holds.
-	sources.Gates = fakeGates{discharged: []string{"soak-reviewed", "soak"}}
+	sources.Gates = fakeGates{discharged: map[string][]string{"yoyodyne-ifd.209.7": {"soak-reviewed", "soak"}}}
 	standing := ReadStanding(context.Background(), sources)
 
 	if len(standing.NotStartable) != 1 {

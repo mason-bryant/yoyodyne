@@ -10,9 +10,14 @@ import (
 )
 
 func recordedAct(gate, person string) HumanAct {
+	return actOn("yoyodyne-ifd.209.7", gate, person)
+}
+
+func actOn(subject, gate, person string) HumanAct {
 	return HumanAct{
 		SchemaVersion: HumanActSchemaVersion,
 		ProductID:     "yoyodyne",
+		Subject:       subject,
 		Gate:          gate,
 		Person:        person,
 		Statement:     "read a week of soak runs; the declarative and legacy paths diverge nowhere",
@@ -25,10 +30,10 @@ func TestARecordedActSurvivesTheProcessThatRecordedIt(t *testing.T) {
 
 	root := t.TempDir()
 	store := newStoreAt(t, root)
-	if _, recorded, err := store.HumanAct("soak-reviewed"); err != nil || recorded {
+	if _, recorded, err := store.HumanAct("yoyodyne-ifd.209.7", "soak-reviewed"); err != nil || recorded {
 		t.Fatalf("HumanAct() = %t, %v, want no act recorded", recorded, err)
 	}
-	if passed, err := store.HumanActRecorded("soak-reviewed"); err != nil || passed {
+	if passed, err := store.HumanActRecorded("yoyodyne-ifd.209.7", "soak-reviewed"); err != nil || passed {
 		t.Fatalf("HumanActRecorded() = %t, %v, want the gate still holding", passed, err)
 	}
 
@@ -40,7 +45,7 @@ func TestARecordedActSurvivesTheProcessThatRecordedIt(t *testing.T) {
 	// process is: the gate is passed for everything that reads it, not only for
 	// the process that wrote it.
 	read := newStoreAt(t, root)
-	stored, recorded, err := read.HumanAct("soak-reviewed")
+	stored, recorded, err := read.HumanAct("yoyodyne-ifd.209.7", "soak-reviewed")
 	if err != nil || !recorded {
 		t.Fatalf("HumanAct() = %t, %v", recorded, err)
 	}
@@ -50,8 +55,12 @@ func TestARecordedActSurvivesTheProcessThatRecordedIt(t *testing.T) {
 	if !stored.RecordedAt.Equal(act.RecordedAt) {
 		t.Fatalf("recorded at = %s, want %s", stored.RecordedAt, act.RecordedAt)
 	}
-	if discharged, err := read.DischargedGates(); err != nil || len(discharged) != 1 || discharged[0] != "soak-reviewed" {
-		t.Fatalf("DischargedGates() = %v, %v", discharged, err)
+	discharged, err := read.DischargedGates()
+	if err != nil {
+		t.Fatalf("DischargedGates() error = %v", err)
+	}
+	if gates := discharged["yoyodyne-ifd.209.7"]; len(gates) != 1 || gates[0] != "soak-reviewed" {
+		t.Fatalf("DischargedGates() = %v", discharged)
 	}
 }
 
@@ -72,7 +81,7 @@ func TestAGateAlreadyPassedIsRefusedRatherThanOverwritten(t *testing.T) {
 	if !strings.Contains(err.Error(), "Mason") {
 		t.Fatalf("refusal = %v, want it to name who actually passed the gate", err)
 	}
-	stored, _, readErr := store.HumanAct("soak-reviewed")
+	stored, _, readErr := store.HumanAct("yoyodyne-ifd.209.7", "soak-reviewed")
 	if readErr != nil || stored.Person != "Mason" {
 		t.Fatalf("stored = %#v, %v", stored, readErr)
 	}
@@ -106,6 +115,11 @@ func TestAnActThatSaysNothingOrNamesNobodyIsRefused(t *testing.T) {
 			act:  recordedAct("../elsewhere", "Mason"),
 			want: "not a gate name",
 		},
+		{
+			name: "nothing it was recorded against",
+			act:  actOn("", "soak-reviewed", "Mason"),
+			want: "recorded against",
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			err := store.RecordHumanAct(testCase.act)
@@ -138,7 +152,7 @@ func TestNothingAboutARunEverPassesAGate(t *testing.T) {
 	if err := store.Save(state); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if passed, err := store.HumanActRecorded("soak-reviewed"); err != nil || passed {
+	if passed, err := store.HumanActRecorded("yoyodyne-ifd.209.7", "soak-reviewed"); err != nil || passed {
 		t.Fatalf("HumanActRecorded() = %t, %v, want a finished run to have passed nothing", passed, err)
 	}
 	if discharged, err := store.DischargedGates(); err != nil || len(discharged) != 0 {
@@ -212,5 +226,73 @@ func TestOnlyTheCommandLineWritesARecordedHumanAct(t *testing.T) {
 	}
 	for _, writer := range writers {
 		t.Errorf("%s writes a human act; a gate is passed by a person at the command line and by nothing else", writer)
+	}
+}
+
+// A gate name is a word somebody chose, and the useful words recur. An act
+// passes the gate on the thing that declared it, so the same name declared by
+// later work is a step somebody still has to take.
+//
+// Without this the first `release-signed` ever recorded would pass every release
+// sign-off afterwards, with nobody having signed anything — and the operator
+// could not even record the new act, because the gate would already read as
+// passed. That is this mechanism's own failure arriving through the namespace
+// rather than through the tracker.
+func TestARecordedActPassesItsOwnSubjectAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	store := newStoreAt(t, t.TempDir())
+	if err := store.RecordHumanAct(actOn("yoyodyne-ifd.300", "release-signed", "Mason")); err != nil {
+		t.Fatalf("RecordHumanAct() error = %v", err)
+	}
+
+	// The next release declares the same name. Nobody has signed it off.
+	passed, err := store.HumanActRecorded("yoyodyne-ifd.400", "release-signed")
+	if err != nil {
+		t.Fatalf("HumanActRecorded() error = %v", err)
+	}
+	if passed {
+		t.Fatal("an act recorded against one item passed the same gate name on another, so a step nobody took reads as taken")
+	}
+
+	// And the operator can record that act, rather than being told the gate is
+	// already passed by somebody who passed a different one.
+	if err := store.RecordHumanAct(actOn("yoyodyne-ifd.400", "release-signed", "Mason")); err != nil {
+		t.Fatalf("RecordHumanAct() error = %v, want the later release's own act to be recordable", err)
+	}
+	discharged, err := store.DischargedGates()
+	if err != nil {
+		t.Fatalf("DischargedGates() error = %v", err)
+	}
+	if len(discharged) != 2 {
+		t.Fatalf("DischargedGates() = %v, want each subject's own act", discharged)
+	}
+	for _, subject := range []string{"yoyodyne-ifd.300", "yoyodyne-ifd.400"} {
+		if gates := discharged[subject]; len(gates) != 1 || gates[0] != "release-signed" {
+			t.Fatalf("DischargedGates()[%q] = %v", subject, gates)
+		}
+	}
+}
+
+// Two subjects that render alike still get their own record. The file name is a
+// rendering plus a digest for exactly this reason: a tracker identifier is not a
+// file name, and two acts landing in one file would be one of them passing the
+// other's gate.
+func TestSubjectsThatRenderAlikeKeepTheirOwnAct(t *testing.T) {
+	t.Parallel()
+
+	store := newStoreAt(t, t.TempDir())
+	if err := store.RecordHumanAct(actOn("yoyodyne-ifd.20.9", "soak-reviewed", "Mason")); err != nil {
+		t.Fatalf("RecordHumanAct() error = %v", err)
+	}
+	if err := store.RecordHumanAct(actOn("yoyodyne-ifd/20-9", "soak-reviewed", "Mason")); err != nil {
+		t.Fatalf("RecordHumanAct() error = %v, want a second subject to get its own record", err)
+	}
+	acts, err := store.HumanActs()
+	if err != nil {
+		t.Fatalf("HumanActs() error = %v", err)
+	}
+	if len(acts) != 2 {
+		t.Fatalf("HumanActs() = %#v, want one act per subject", acts)
 	}
 }

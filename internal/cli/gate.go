@@ -12,9 +12,13 @@ package cli
 // 2026-09-04 and what this replaces.
 //
 // So `yoyo gate record` is not a convenience over some other way of doing it.
-// It is the act. A person names the gate, says who they are, and says what they
-// did, and that record is what the queue and the workflow executor read before
-// anything proceeds.
+// It is the act. A person names the gate and the work that declared it, says who
+// they are, and says what they did, and that record is what the queue and the
+// workflow executor read before anything proceeds.
+//
+// Naming the work is not ceremony. An act passes the gate on its subject and
+// nowhere else, which is what lets a name recur: without it, the first
+// `release-signed` ever recorded would pass every release sign-off afterwards.
 
 import (
 	"context"
@@ -26,24 +30,32 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/humangate"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// gateEntry is one declared gate as the listing reports it: what it is, where it
-// was declared, and the act that passed it if there is one.
+// gateEntry is one declared gate as the listing reports it: what declared it,
+// what it is, and the act that passed it if there is one.
+//
+// It is one entry per subject and name rather than one per name, because that is
+// what a gate is: an act passes the gate on the thing that declared it, so the
+// same name declared by two items is two steps and two entries. Collapsing them
+// would show one line for two outstanding acts, which is the reading that would
+// have somebody believe a step was taken.
 type gateEntry struct {
-	Name string `json:"name"`
+	// Subject is the work item that declares this gate.
+	Subject string `json:"subject"`
+	Name    string `json:"name"`
 	// Statement is what the declaration says the person has to do.
 	Statement string `json:"statement"`
-	// DeclaredBy is the work items that declare this gate. A gate declared by no
-	// admitted item and already recorded is still listed, because an operator
-	// asking what they have signed off deserves the answer.
-	DeclaredBy []string `json:"declared_by,omitempty"`
 	// Act is the recorded human act that passed it, if one exists.
 	Act *runstate.HumanAct `json:"act,omitempty"`
 }
+
+// gateKey is how one subject-and-gate pair is held while the listing assembles.
+type gateKey struct{ subject, gate string }
 
 // unreadableGate is one declaration that holds an item and that nobody can
 // record an act against, because nothing could read it. It is listed beside the
@@ -111,20 +123,22 @@ func listGates(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportGateError(stdout, stderr, *jsonOutput, err)
 	}
-	recorded := make(map[string]runstate.HumanAct, len(acts))
-	for _, act := range acts {
-		recorded[act.Gate] = act
-	}
 
-	// The declarations come from the admitted work. A gate on an item that has
-	// already left the backlog is not listed as outstanding, because there is no
-	// longer anything for it to hold — what is listed instead is the act, if one
-	// was recorded, so the operator's own signatures stay readable.
-	declared := make(map[string]gateEntry)
+	// The declarations come from the admitted work, read from exactly the slices
+	// the queue is assembled from. A wider set here would report an item as
+	// waiting on a person that the status's own needs-a-human line says nothing
+	// about, and two operator surfaces disagreeing about who has to move is the
+	// thing one derivation exists to prevent.
+	//
+	// A gate on an item that has left the backlog is not listed as outstanding,
+	// because there is no longer anything for it to hold — what is listed instead
+	// is the act, if one was recorded, so the operator's own signatures stay
+	// readable.
+	declared := make(map[gateKey]gateEntry)
 	var unreadable []unreadableGate
 	tracker := parts.tracker()
 	unread := ""
-	for _, status := range []string{"open", "blocked", "in_progress"} {
+	for _, status := range backlog.AdmittedStatuses() {
 		items, err := listGateItems(tracker, status)
 		if err != nil {
 			// A tracker that will not answer costs the declarations and not the
@@ -136,22 +150,27 @@ func listGates(args []string, stdout, stderr io.Writer) int {
 		}
 		unreadable = collectGates(items, declared, unreadable)
 	}
-	for name, act := range recorded {
-		entry, seen := declared[name]
+	for _, act := range acts {
+		key := gateKey{subject: act.Subject, gate: act.Gate}
+		entry, seen := declared[key]
 		if !seen {
-			entry = gateEntry{Name: name, Statement: act.Statement}
+			entry = gateEntry{Subject: act.Subject, Name: act.Gate, Statement: act.Statement}
 		}
 		stored := act
 		entry.Act = &stored
-		declared[name] = entry
+		declared[key] = entry
 	}
 
 	entries := make([]gateEntry, 0, len(declared))
 	for _, entry := range declared {
-		sort.Strings(entry.DeclaredBy)
 		entries = append(entries, entry)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Subject != entries[j].Subject {
+			return entries[i].Subject < entries[j].Subject
+		}
+		return entries[i].Name < entries[j].Name
+	})
 	sort.Slice(unreadable, func(i, j int) bool {
 		if unreadable[i].WorkItemID != unreadable[j].WorkItemID {
 			return unreadable[i].WorkItemID < unreadable[j].WorkItemID
@@ -172,17 +191,15 @@ func listGates(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, entry := range entries {
 		if entry.Act != nil {
-			fmt.Fprintf(stdout, "%s  passed by %s at %s\n", entry.Name, entry.Act.Person,
+			fmt.Fprintf(stdout, "%s on %s  passed by %s at %s\n", entry.Name, entry.Subject, entry.Act.Person,
 				entry.Act.RecordedAt.Format(time.RFC3339))
 			fmt.Fprintf(stdout, "    they recorded: %s\n", entry.Act.Statement)
-		} else {
-			fmt.Fprintf(stdout, "%s  waiting on a person\n", entry.Name)
-			fmt.Fprintf(stdout, "    what has to happen: %s\n", entry.Statement)
-			fmt.Fprintf(stdout, "    record it with: yoyo gate record %s --by <you> --did \"<what you did>\"\n", entry.Name)
+			continue
 		}
-		if len(entry.DeclaredBy) > 0 {
-			fmt.Fprintf(stdout, "    declared by: %s\n", strings.Join(entry.DeclaredBy, ", "))
-		}
+		fmt.Fprintf(stdout, "%s on %s  waiting on a person\n", entry.Name, entry.Subject)
+		fmt.Fprintf(stdout, "    what has to happen: %s\n", entry.Statement)
+		fmt.Fprintf(stdout, "    record it with: yoyo gate record %s --for %s --by <you> --did \"<what you did>\"\n",
+			entry.Name, entry.Subject)
 	}
 	for _, broken := range unreadable {
 		fmt.Fprintf(stdout, "%s  declares a step nothing could read, and is held by it\n", broken.WorkItemID)
@@ -201,6 +218,7 @@ func recordGate(args []string, stdout, stderr io.Writer) int {
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	by := flags.String("by", "", "who took the step (default: the operating-system user)")
 	did := flags.String("did", "", "what you did, in your own words (required)")
+	subject := flags.String("for", "", "the work item or workflow instance that declared the gate (required)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	positional, err := parseArguments(flags, args)
 	if err != nil {
@@ -212,6 +230,16 @@ func recordGate(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	gate := positional[0]
+	// The subject is required rather than defaulted, and that is the point of it:
+	// an act passes the gate on the thing that declared it and passes nothing
+	// anywhere else. A gate name is a word somebody chose and the useful words
+	// recur, so an act with no subject would pass every later declaration of that
+	// word — the next release's sign-off satisfied by the last one's.
+	if strings.TrimSpace(*subject) == "" {
+		fmt.Fprintln(stderr, "gate record requires --for: an act passes the gate on the work item or workflow instance that declared it, and a name alone would pass every later declaration of that name")
+		printGateUsage(stderr)
+		return 2
+	}
 	if strings.TrimSpace(*did) == "" {
 		fmt.Fprintln(stderr, "gate record requires --did: a gate passed with no account of what was done is a signature on a blank page")
 		printGateUsage(stderr)
@@ -236,6 +264,7 @@ func recordGate(args []string, stdout, stderr io.Writer) int {
 	act := runstate.HumanAct{
 		SchemaVersion: runstate.HumanActSchemaVersion,
 		ProductID:     parts.config.Product.ID,
+		Subject:       strings.TrimSpace(*subject),
 		Gate:          gate,
 		Person:        person,
 		Statement:     strings.TrimSpace(*did),
@@ -247,10 +276,11 @@ func recordGate(args []string, stdout, stderr io.Writer) int {
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, gateOutput{Recorded: &act})
 	}
-	fmt.Fprintf(stdout, "recorded that %s passed the gate %q at %s\n", act.Person, act.Gate,
+	fmt.Fprintf(stdout, "recorded that %s passed the gate %q on %s at %s\n", act.Person, act.Gate, act.Subject,
 		act.RecordedAt.Format(time.RFC3339))
 	fmt.Fprintf(stdout, "what you recorded: %s\n", act.Statement)
 	fmt.Fprintln(stdout, "work that was held by this gate is pullable at the next reading of the queue; a workflow standing at it steps when it is next stepped")
+	fmt.Fprintln(stdout, "it passes this gate on this subject and nowhere else: the same name declared by other work is a step somebody still has to take")
 	fmt.Fprintln(stdout, "the record is not replaceable: it says who passed the gate, and a second write would change whose it was")
 	return 0
 }
@@ -263,16 +293,13 @@ func recordGate(args []string, stdout, stderr io.Writer) int {
 // its item exactly as a gate does, and this listing is where its author finds
 // out why. A listing that showed every gate but the one somebody has to fix
 // would leave them with a held item and no account of it.
-func collectGates(items []beads.WorkItem, into map[string]gateEntry, unreadable []unreadableGate) []unreadableGate {
+func collectGates(items []beads.WorkItem, into map[gateKey]gateEntry, unreadable []unreadableGate) []unreadableGate {
 	for _, item := range items {
 		reading := humangate.Of(item)
 		for _, gate := range reading.Gates {
-			entry, seen := into[gate.Name]
-			if !seen {
-				entry = gateEntry{Name: gate.Name, Statement: gate.Statement}
+			into[gateKey{subject: item.ID, gate: gate.Name}] = gateEntry{
+				Subject: item.ID, Name: gate.Name, Statement: gate.Statement,
 			}
-			entry.DeclaredBy = append(entry.DeclaredBy, item.ID)
-			into[gate.Name] = entry
 		}
 		for _, problem := range reading.Unreadable {
 			unreadable = append(unreadable, unreadableGate{WorkItemID: item.ID, Problem: problem})
@@ -320,19 +347,32 @@ really reads "a person has to sign this off first" used to have only one
 encoding available, an item somebody closes, and machinery closes items. This is
 the encoding that does not have that hole.
 
-gate list shows every gate the admitted work declares, which of them a person
-has passed and when, and what is still waiting.
+An act is recorded against the thing that declared the gate, and passes it there
+and nowhere else. That is what makes a name safe to reuse: the useful names
+recur -- release-signed is a step taken once per release, not once ever -- and
+if the name alone were the identity, the first act would pass every later
+declaration of that word, with nobody having taken the step. So --for is
+required, and naming a different item is a different step to take.
+
+gate list shows every gate the admitted work declares, on which item, which of
+them a person has passed and when, and what is still waiting. It reads exactly
+the work the queue is assembled from, so it and `+"`yoyo status`"+` cannot
+disagree about who has to move.
 
 gate record writes one person's act, and is the only thing that passes a gate.
 It says who took the step and what they did, because a gate passed by nobody in
 particular and described by nothing is the flag this replaced. A gate already
-passed is refused rather than overwritten: the record says whose act it was.
+passed on that subject is refused rather than overwritten: the record says whose
+act it was.
+
+  yoyo gate record soak-clean --for yoyodyne-ifd.209.7 --by you --did "read a week of soak runs"
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --json            emit machine-readable JSON
 
 gate record options:
+  --for <subject>   the work item or workflow instance that declared it (required)
   --by <person>     who took the step (default: $USER)
   --did <text>      what you did, in your own words (required)`)
 }

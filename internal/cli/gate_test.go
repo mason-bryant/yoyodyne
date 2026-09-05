@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/humangate"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -18,7 +20,7 @@ func TestGateRecordIsTheOnlyThingThatPassesAGate(t *testing.T) {
 	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
 	configPath := writeConfig(t, validConfig)
 
-	stdout, stderr, code := runCLI(t, "gate", "record", "soak-reviewed",
+	stdout, stderr, code := runCLI(t, "gate", "record", "soak-reviewed", "--for", "yoyodyne-ifd.209.7",
 		"--by", "Mason", "--did", "read a week of soak runs; they diverge nowhere", "--config", configPath)
 	if code != 0 {
 		t.Fatalf("gate record code = %d, stderr = %q", code, stderr)
@@ -33,7 +35,7 @@ func TestGateRecordIsTheOnlyThingThatPassesAGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	act, recorded, err := store.HumanAct("soak-reviewed")
+	act, recorded, err := store.HumanAct("yoyodyne-ifd.209.7", "soak-reviewed")
 	if err != nil || !recorded {
 		t.Fatalf("HumanAct() = %t, %v", recorded, err)
 	}
@@ -42,7 +44,7 @@ func TestGateRecordIsTheOnlyThingThatPassesAGate(t *testing.T) {
 	}
 
 	// A second act is refused rather than overwriting whose signature it was.
-	_, stderr, code = runCLI(t, "gate", "record", "soak-reviewed",
+	_, stderr, code = runCLI(t, "gate", "record", "soak-reviewed", "--for", "yoyodyne-ifd.209.7",
 		"--by", "Somebody else", "--did", "signed it off too", "--config", configPath)
 	if code == 0 {
 		t.Fatal("a second act was accepted, so the record no longer says whose it was")
@@ -59,7 +61,7 @@ func TestGateRecordRefusesAnActNobodyDescribed(t *testing.T) {
 	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
 	configPath := writeConfig(t, validConfig)
 
-	_, stderr, code := runCLI(t, "gate", "record", "soak-reviewed", "--by", "Mason", "--config", configPath)
+	_, stderr, code := runCLI(t, "gate", "record", "soak-reviewed", "--for", "yoyodyne-ifd.209.7", "--by", "Mason", "--config", configPath)
 	if code == 0 {
 		t.Fatal("an act with no account of what was done was accepted")
 	}
@@ -67,7 +69,7 @@ func TestGateRecordRefusesAnActNobodyDescribed(t *testing.T) {
 		t.Fatalf("stderr = %q", stderr)
 	}
 
-	_, stderr, code = runCLI(t, "gate", "record", "Soak Reviewed", "--by", "Mason", "--did", "judged it", "--config", configPath)
+	_, stderr, code = runCLI(t, "gate", "record", "Soak Reviewed", "--for", "yoyodyne-ifd.209.7", "--by", "Mason", "--did", "judged it", "--config", configPath)
 	if code == 0 {
 		t.Fatal("a gate name nothing could be filed under was accepted")
 	}
@@ -84,7 +86,7 @@ func TestGateListSaysWhatIsWaitingAndWhatWasDone(t *testing.T) {
 	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
 	configPath := writeConfig(t, validConfig)
 
-	if _, stderr, code := runCLI(t, "gate", "record", "soak-reviewed",
+	if _, stderr, code := runCLI(t, "gate", "record", "soak-reviewed", "--for", "yoyodyne-ifd.209.7",
 		"--by", "Mason", "--did", "read a week of soak runs", "--config", configPath); code != 0 {
 		t.Fatalf("gate record code = %d, stderr = %q", code, stderr)
 	}
@@ -111,7 +113,7 @@ func TestGateListSaysWhatIsWaitingAndWhatWasDone(t *testing.T) {
 func TestGateListNamesADeclarationNothingCouldRead(t *testing.T) {
 	t.Parallel()
 
-	declared := map[string]gateEntry{}
+	declared := map[gateKey]gateEntry{}
 	unreadable := collectGates([]beads.WorkItem{
 		{
 			ID:          "yoyodyne-ifd.209.7",
@@ -123,7 +125,10 @@ func TestGateListNamesADeclarationNothingCouldRead(t *testing.T) {
 		},
 	}, declared, nil)
 
-	if len(declared) != 1 || declared["soak-reviewed"].DeclaredBy[0] != "yoyodyne-ifd.209.7" {
+	if len(declared) != 1 {
+		t.Fatalf("declared = %#v", declared)
+	}
+	if entry := declared[gateKey{subject: "yoyodyne-ifd.209.7", gate: "soak-reviewed"}]; entry.Subject != "yoyodyne-ifd.209.7" {
 		t.Fatalf("declared = %#v", declared)
 	}
 	if len(unreadable) != 1 {
@@ -134,5 +139,28 @@ func TestGateListNamesADeclarationNothingCouldRead(t *testing.T) {
 	}
 	if !strings.Contains(unreadable[0].Problem, "not a gate name") {
 		t.Fatalf("problem = %q", unreadable[0].Problem)
+	}
+}
+
+// The listing reads exactly the work the queue is assembled from. It used to
+// read a status wider than the queue, which meant an item could be reported as
+// waiting on a person here and by nothing else — two operator surfaces giving
+// different answers to one question, which is what a single derivation exists to
+// prevent.
+func TestGateListReadsTheSameWorkTheQueueDoes(t *testing.T) {
+	t.Parallel()
+
+	if statuses := backlog.AdmittedStatuses(); len(statuses) == 0 {
+		t.Fatal("the queue is assembled from no statuses at all")
+	}
+	source, err := os.ReadFile("gate.go")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(source), "backlog.AdmittedStatuses()") {
+		t.Fatal("the gate listing names its own statuses rather than the queue's, so the two surfaces can drift apart")
+	}
+	if strings.Contains(string(source), `"in_progress"`) {
+		t.Fatal("the gate listing reads work the queue does not, so it can report a hold no other surface reports")
 	}
 }

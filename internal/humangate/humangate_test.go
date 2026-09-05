@@ -101,8 +101,8 @@ func TestADeclarationNobodyCanReadHoldsTheWork(t *testing.T) {
 			}
 			// And what it says names the author rather than the command, because
 			// typing a command would not fix it.
-			if !strings.Contains(reading.Describe(), "correcting the line") {
-				t.Fatalf("Describe() = %q, want it to say what actually clears this", reading.Describe())
+			if !strings.Contains(reading.Describe("yoyodyne-ifd.209.7"), "correcting the line") {
+				t.Fatalf("Describe() = %q, want it to say what actually clears this", reading.Describe("yoyodyne-ifd.209.7"))
 			}
 		})
 	}
@@ -170,13 +170,17 @@ func TestPendingIsWhatNoRecordedActHasPassed(t *testing.T) {
 func TestWhatASurfaceSaysNamesTheActAndRulesOutMachinery(t *testing.T) {
 	t.Parallel()
 
-	described := Read(DeclareMarker + " soak-reviewed — the operator has judged the soak\n").Describe()
-	for _, want := range []string{"waiting on a person", "soak-reviewed", "closing an item", "yoyo gate record"} {
+	described := Read(DeclareMarker + " soak-reviewed — the operator has judged the soak\n").Describe("yoyodyne-ifd.209.7")
+	// The command it names is one somebody can copy: an act is recorded against
+	// the thing that declared the gate, so a line naming only the gate would be
+	// half a command, and the half left out is the half that keeps one act from
+	// passing every later declaration of the same word.
+	for _, want := range []string{"waiting on a person", "soak-reviewed", "closing an item", "yoyo gate record", "--for yoyodyne-ifd.209.7"} {
 		if !strings.Contains(described, want) {
 			t.Fatalf("Describe() = %q, want it to mention %q", described, want)
 		}
 	}
-	if empty := (Reading{}).Describe(); empty != "" {
+	if empty := (Reading{}).Describe("yoyodyne-ifd.209.7"); empty != "" {
 		t.Fatalf("Describe() = %q, want nothing said where nothing holds", empty)
 	}
 }

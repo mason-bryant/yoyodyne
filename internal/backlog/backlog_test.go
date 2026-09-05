@@ -432,7 +432,7 @@ func TestAnItemClosureNeverPassesAStepReservedForAPerson(t *testing.T) {
 
 	// And once a person has recorded the act, the same item is pullable. The gate
 	// stops work; it does not end it.
-	passed := Order([]beads.WorkItem{flip}, []string{flip.ID}, []string{"soak-reviewed"})
+	passed := Order([]beads.WorkItem{flip}, []string{flip.ID}, map[string][]string{"yoyodyne-ifd.209.7": {"soak-reviewed"}})
 	if !passed.Entries[0].Ready {
 		t.Fatalf("the flip is still held after the act was recorded: %#v", passed.Entries[0])
 	}
@@ -518,7 +518,7 @@ func TestADeclarationNothingCouldReadHoldsTheItemToo(t *testing.T) {
 				t.Fatalf("hold = %q, want it to say the author has to fix the declaration", hold)
 			}
 			// And no recorded act passes it, however many are on the record.
-			recorded := Order([]beads.WorkItem{item}, []string{item.ID}, []string{"soak-reviewed", "soak"})
+			recorded := Order([]beads.WorkItem{item}, []string{item.ID}, map[string][]string{"yoyodyne-ifd.209.7": {"soak-reviewed", "soak"}})
 			if recorded.Entries[0].Ready {
 				t.Fatalf("a recorded act passed a declaration nothing could read: %#v", recorded.Entries[0])
 			}
@@ -526,5 +526,50 @@ func TestADeclarationNothingCouldReadHoldsTheItemToo(t *testing.T) {
 				t.Fatalf("Gated() = %d, want the unreadable declaration counted as waiting on a person", recorded.Gated())
 			}
 		})
+	}
+}
+
+// A gate name recurs, and an act recorded against one item passes that item's
+// step and nobody else's.
+//
+// `release-signed` describes a step taken once per release. If the recorded name
+// alone decided it, the second release would be pullable on the strength of the
+// first release's signature — the same "gate reads satisfied with the step
+// untaken" failure this whole mechanism exists to end, arriving through the
+// namespace instead of through the tracker.
+func TestAnActPassesTheGateOnItsOwnItemAndNoOther(t *testing.T) {
+	t.Parallel()
+
+	items := []beads.WorkItem{
+		{
+			ID: "yoyodyne-ifd.300", Title: "Cut v0.3.0", Status: statusOpen, Priority: 0,
+			Description: humangate.DeclareMarker + " release-signed — the operator has signed this release off\n",
+		},
+		{
+			ID: "yoyodyne-ifd.400", Title: "Cut v0.4.0", Status: statusOpen, Priority: 1,
+			Description: humangate.DeclareMarker + " release-signed — the operator has signed this release off\n",
+		},
+	}
+	// The first release's sign-off is on the record, and nothing else is.
+	queue := Order(items, []string{"yoyodyne-ifd.300", "yoyodyne-ifd.400"},
+		map[string][]string{"yoyodyne-ifd.300": {"release-signed"}})
+
+	if !queue.Entries[0].Ready {
+		t.Fatalf("the signed release is still held: %#v", queue.Entries[0])
+	}
+	later := queue.Entries[1]
+	if later.Ready {
+		t.Fatal("the next release was pullable on the strength of the last release's signature")
+	}
+	if len(later.HumanGates.Gates) != 1 || later.HumanGates.Gates[0].Name != "release-signed" {
+		t.Fatalf("gates = %#v", later.HumanGates)
+	}
+	// And the line it prints names the item to record against, so the operator is
+	// not sent to type a command that would be refused as already passed.
+	if hold := later.Hold(); !strings.Contains(hold, "--for yoyodyne-ifd.400") {
+		t.Fatalf("hold = %q", hold)
+	}
+	if queue.Gated() != 1 {
+		t.Fatalf("Gated() = %d", queue.Gated())
 	}
 }

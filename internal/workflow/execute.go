@@ -91,7 +91,7 @@ type Executor[S any] struct {
 // question is here: whether the act that passes one gate is on the record. There
 // is deliberately no way to answer it from in here.
 type HumanGates interface {
-	HumanActRecorded(gate string) (bool, error)
+	HumanActRecorded(subject, gate string) (bool, error)
 }
 
 // Start creates the durable record of a new instance, standing on the graph's
@@ -180,7 +180,7 @@ func (e Executor[S]) Step(ctx context.Context, id string, subject S) (runstate.W
 	// instance stays exactly where it is, and whoever fixes what was refused steps
 	// this state again. What differs is who can fix it — an authority refusal
 	// waits on a wider grant, and this waits on a person.
-	if err := gateOpen(e.Gates, instance.State, node); err != nil {
+	if err := gateOpen(e.Gates, id, instance.State, node); err != nil {
 		return runstate.WorkflowInstance{}, fmt.Errorf("workflow instance %s: %w", id, err)
 	}
 	// Whether the boundary this step would produce can be recorded is asked here,
@@ -310,7 +310,7 @@ func (e Executor[S]) now() time.Time {
 // could not be read is a gate nobody has shown was passed, and treating an
 // unreadable answer as an open gate is exactly the shape of the failure gates
 // exist to end.
-func gateOpen[S any](gates HumanGates, state string, node Node[S]) error {
+func gateOpen[S any](gates HumanGates, instanceID, state string, node Node[S]) error {
 	gate := node.Gate()
 	if gate == "" {
 		return nil
@@ -318,12 +318,12 @@ func gateOpen[S any](gates HumanGates, state string, node Node[S]) error {
 	if gates == nil {
 		return fmt.Errorf("the state %q waits on the human gate %q and this executor has no way to read whether anybody has passed it; a gate nothing can read is never treated as open", state, gate)
 	}
-	recorded, err := gates.HumanActRecorded(gate)
+	recorded, err := gates.HumanActRecorded(instanceID, gate)
 	if err != nil {
 		return fmt.Errorf("the state %q waits on the human gate %q and whether it was passed could not be read: %w", state, gate, err)
 	}
 	if !recorded {
-		return fmt.Errorf("the state %q waits on the human gate %q, which no recorded act has passed; nothing machinery does passes it, closing a work item included, and `yoyo gate record %s` is what does", state, gate, gate)
+		return fmt.Errorf("the state %q waits on the human gate %q, which no recorded act has passed on this instance; nothing machinery does passes it, closing a work item included, and `yoyo gate record %s --for %s` is what does", state, gate, gate, instanceID)
 	}
 	return nil
 }

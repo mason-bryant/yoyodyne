@@ -252,7 +252,7 @@ type ScheduleRuns interface {
 //
 // It is satisfied by *runstate.Store.
 type ScheduleGates interface {
-	DischargedGates() ([]string, error)
+	DischargedGates() (map[string][]string, error)
 }
 
 // ScheduleStaleness reports the admitted work something upstream of changed

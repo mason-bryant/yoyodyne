@@ -2065,7 +2065,7 @@ type scheduleHarness struct {
 	// discharged is the human gates a person has recorded passing, and gatesErr
 	// is a store that will not answer. Nothing recorded is the default, so an item
 	// declaring a gate is one no pass may pull.
-	discharged []string
+	discharged map[string][]string
 	gatesErr   error
 	// blockedRuns is the brake bound each pull reports, and prices is what each
 	// run this harness ran cost. Both are per pull for the reason capacity is:
@@ -2481,13 +2481,17 @@ func (h *scheduleHarness) Held() (runstate.IntakeHold, bool, error) {
 // DischargedGates is the human gates a person has recorded passing, as this
 // harness is told to report them. Nothing recorded is the ordinary fixture: an
 // item declaring a gate is then an item the scheduler must not pull.
-func (h *scheduleHarness) DischargedGates() ([]string, error) {
+func (h *scheduleHarness) DischargedGates() (map[string][]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.gatesErr != nil {
 		return nil, h.gatesErr
 	}
-	return append([]string(nil), h.discharged...), nil
+	discharged := make(map[string][]string, len(h.discharged))
+	for subject, gates := range h.discharged {
+		discharged[subject] = append([]string(nil), gates...)
+	}
+	return discharged, nil
 }
 
 func (h *scheduleHarness) Pausing(workItemID string) ([]directive.Directive, error) {

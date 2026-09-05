@@ -203,7 +203,14 @@ func (r Reading) Holds() bool { return len(r.Gates) > 0 || len(r.Unreadable) > 0
 // surface prints it as. It is here rather than in each surface because the same
 // hold read in two places has to read the same way, and because the sentence has
 // one job: to say that no machinery clears this and to name what does.
-func (r Reading) Describe() string {
+//
+// It takes the subject — the work item or the workflow instance whose text this
+// was read from — because the command that records an act names one. An act is
+// recorded against the thing that declared the gate and passes it nowhere else,
+// so a line that printed the gate name alone would be telling somebody to type
+// half a command, and the half it left out is the half that keeps one recorded
+// act from passing every later declaration of the same word.
+func (r Reading) Describe(subject string) string {
 	if !r.Holds() {
 		return ""
 	}
@@ -213,7 +220,8 @@ func (r Reading) Describe() string {
 	}
 	described = append(described, r.Unreadable...)
 	sentence := "waiting on a person: " + strings.Join(described, "; ") +
-		". Nothing machinery does passes this, closing an item included; `yoyo gate record` is what records the act"
+		". Nothing machinery does passes this, closing an item included; " +
+		fmt.Sprintf("`yoyo gate record <name> --for %s` is what records the act", subject)
 	if len(r.Unreadable) > 0 {
 		// An unreadable declaration is not waiting for a command, and saying only
 		// the command would send its author to type a name that does not exist.
