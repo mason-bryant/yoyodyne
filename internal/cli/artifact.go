@@ -52,7 +52,12 @@ type artifactOutput struct {
 	Approvals         map[string]artifactApproval `json:"approvals,omitempty"`
 	Problems          []artifact.Problem          `json:"problems,omitempty"`
 	ReferenceProblems []artifact.ReferenceProblem `json:"reference_problems,omitempty"`
-	Error             string                      `json:"error,omitempty"`
+	// PendingCommit is where a write this command performed landed, in the same
+	// words the terminal is told it. It is carried rather than left to the prose
+	// because a machine-readable caller is the operator's own script, and it needs
+	// the commit exactly as much as they do. Only a command that wrote sets it.
+	PendingCommit string `json:"pending_commit,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // artifactApproval is what a machine-readable listing says about one document's
@@ -217,7 +222,11 @@ func approveArtifact(args []string, stdout, stderr io.Writer) int {
 	}
 	listed := []artifact.Artifact{approved}
 	if *flags.jsonOutput {
-		return writeJSON(stdout, stderr, artifactOutput{Artifacts: listed, Approvals: artifactApprovals(listed, policy)})
+		return writeJSON(stdout, stderr, artifactOutput{
+			Artifacts:     listed,
+			Approvals:     artifactApprovals(listed, policy),
+			PendingCommit: artifact.PendingCommit(approved.Path),
+		})
 	}
 	fmt.Fprintf(stdout, "%s [%s, %s] %s\n", approved.ID, approved.Kind, approved.Status, approved.Title)
 	fmt.Fprintf(stdout, "file: %s\n", approved.Path)
@@ -226,6 +235,11 @@ func approveArtifact(args []string, stdout, stderr io.Writer) int {
 	// else is somebody reading an approval as a change to the document or as a
 	// gate that has now opened. It is neither.
 	fmt.Fprintln(stdout, "recorded in the document's frontmatter; nothing the document says changed, and no gate moved")
+	// And where that record now sits, which is the other thing said every time:
+	// this command wrote into the operator's checkout, and the write stops there.
+	// It is printed after the approval rather than before it because what they
+	// asked for is the approval and this is what it cost.
+	fmt.Fprintln(stdout, artifact.PendingCommit(approved.Path))
 	return 0
 }
 
@@ -418,8 +432,11 @@ asks you to approve one.
 
 An unapproved document still loads, still governs what is downstream of it, and
 stops nothing that reads it; approving writes nothing but the approval, and the
-document itself stays the owning role's to change. What your approval of the
-goals decides is what reaches the work queue: under approvals.work_items:
+document itself stays the owning role's to change. That write lands in your
+checkout and stops there -- nothing commits it and nothing opens a pull request
+for it -- so the document is an uncommitted change until you commit it, and a run
+refuses to start while it is. Approving says so as it writes. What your approval
+of the goals decides is what reaches the work queue: under approvals.work_items:
 automatic, work that traces to a goal an approved goals document states is
 admitted without asking you, and anything else is still put to you.
 

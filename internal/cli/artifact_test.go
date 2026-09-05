@@ -303,6 +303,139 @@ func TestApprovingWithoutSayingHowItWasGivenIsRefused(t *testing.T) {
 	}
 }
 
+// The write an approval performs lands in the operator's own checkout and stops
+// there, which costs them a dirty checkout that every run then refuses to start
+// over. The command that performed the write is what says so, at the moment it
+// writes, rather than leaving them to meet it as an unexplained refusal from the
+// next command they run.
+func TestApprovingSaysTheWriteLandedInTheCheckoutAndIsYoursToCommit(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+	writeArtifact(t, project, "docs/product/goals/v1-goals.md", artifactDocument("v1-goals", "goals", "V1 goals", []string{"brief"}))
+
+	stdout, stderr, code := runCLI(t, "artifact", "approve", "--config", configPath, "brief",
+		"--reason", "approved by the operator in conversation on 2026-08-17")
+	if code != 0 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+	// The file is named, because what the operator has to commit is that file and
+	// it is what the run's refusal will name back at them.
+	if !strings.Contains(stdout, artifact.PendingCommit("docs/product/brief.md")) {
+		t.Fatalf("approve stdout = %q, want it to say where the write landed", stdout)
+	}
+
+	// A machine-readable caller is the operator's own script, so it is told the
+	// same thing in the same words rather than left to infer it from the prose.
+	stdout, stderr, code = runCLI(t, "artifact", "approve", "--config", configPath, "--json", "v1-goals",
+		"--reason", "approved with the adoption goal added")
+	if code != 0 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+	var written struct {
+		PendingCommit string `json:"pending_commit"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &written); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	if written.PendingCommit != artifact.PendingCommit("docs/product/goals/v1-goals.md") {
+		t.Fatalf("pending_commit = %q", written.PendingCommit)
+	}
+
+	// Nothing that only reads says it: a listing is not a write, and telling a
+	// reader to commit something nothing changed would be an invented obligation.
+	for _, read := range [][]string{
+		{"artifact", "list", "--config", configPath},
+		{"artifact", "show", "--config", configPath, "brief"},
+		{"artifact", "show", "--config", configPath, "--json", "brief"},
+	} {
+		stdout, _, code = runCLI(t, read...)
+		if code != 0 {
+			t.Fatalf("%v code = %d", read, code)
+		}
+		if strings.Contains(stdout, "uncommitted change in your checkout") {
+			t.Fatalf("%v stdout = %q, want nothing about committing", read, stdout)
+		}
+	}
+}
+
+// A refused approval writes nothing, so it says nothing about committing. The
+// four refusals are the whole of what `approve` turns away: no reason, no such
+// artifact, one already approved as it stands, and one that was retired.
+func TestARefusedApprovalSaysNothingAboutCommitting(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+	writeArtifact(t, project, "docs/product/goals/v1-goals.md",
+		strings.TrimSuffix(artifactDocument("v1-goals", "goals", "V1 goals", []string{"brief"}), "---\n")+
+			"    - action: retired\n      by: product-manager\n      at: 2026-08-18T12:00:00Z\n      reason: the v1 goals were met\n"+
+			"---\n")
+	// Retirement has to agree with the status, which is what makes this document a
+	// retired one rather than a malformed one.
+	retired, err := os.ReadFile(filepath.Join(project, "docs/product/goals/v1-goals.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	writeArtifact(t, project, "docs/product/goals/v1-goals.md",
+		strings.Replace(string(retired), "status: active", "status: retired", 1))
+
+	if _, stderr, code := runCLI(t, "artifact", "approve", "--config", configPath, "brief",
+		"--reason", "approved in conversation"); code != 0 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+
+	for _, refused := range []struct {
+		args []string
+		// because is what the refusal has to say, so a case that stopped for some
+		// other reason is not counted as having covered this one.
+		because string
+	}{
+		// No reason: this record speaks for a person.
+		{[]string{"artifact", "approve", "--config", configPath, "brief"},
+			"needs a reason saying how the approval was given"},
+		// No such artifact.
+		{[]string{"artifact", "approve", "--config", configPath, "nothing-by-this-name", "--reason", "because"},
+			`no artifact "nothing-by-this-name" is recorded`},
+		// Already approved as it stands, so there is nothing to record.
+		{[]string{"artifact", "approve", "--config", configPath, "brief", "--reason", "approving it twice"},
+			"is already approved as it stands"},
+		// Retired, and not approved afterwards.
+		{[]string{"artifact", "approve", "--config", configPath, "v1-goals", "--reason", "approving what was retired"},
+			"was retired on 2026-08-18T12:00:00Z and is not approved afterwards"},
+	} {
+		stdout, stderr, code := runCLI(t, refused.args...)
+		if code != 1 || !strings.Contains(stderr, refused.because) {
+			t.Fatalf("%v code = %d, stderr = %q, want %q", refused.args, code, stderr, refused.because)
+		}
+		if strings.Contains(stdout, "uncommitted change in your checkout") ||
+			strings.Contains(stderr, "uncommitted change in your checkout") {
+			t.Fatalf("%v said something was written: stdout = %q, stderr = %q", refused.args, stdout, stderr)
+		}
+	}
+
+	// And the same in the machine-readable form, where an error is reported in
+	// place of the write rather than beside it.
+	stdout, _, code := runCLI(t, "artifact", "approve", "--config", configPath, "--json",
+		"nothing-by-this-name", "--reason", "because")
+	if code != 1 {
+		t.Fatalf("approve code = %d", code)
+	}
+	var refused struct {
+		PendingCommit string `json:"pending_commit"`
+		Error         string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &refused); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	if refused.PendingCommit != "" || refused.Error == "" {
+		t.Fatalf("refused approval = %#v", refused)
+	}
+}
+
 // artifactDocument renders a well-formed artifact's frontmatter, so a test about
 // the relationships between documents says only what they support. The creating
 // role is the one that owns the kind, because a revision recorded by any other

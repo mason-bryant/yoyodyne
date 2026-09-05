@@ -18,6 +18,11 @@ evidence for it, because two runs before this one reached the same conclusion,
 delivered empty trees, and were refused twice for delivering an absence with no
 account attached to it.
 
+The ruling does ask the harness for one thing, and a later run built it: *the
+surface that performed the write says so at the moment of writing*. See
+[what was built against the ruling](#what-was-built-against-the-ruling) at the
+end.
+
 ## The ruling, and where it lives
 
 yoyodyne-ifd.100.2 — *The architect settles the publish shape for approved
@@ -109,10 +114,12 @@ Nothing a developer run can do. Two decisions, in this order:
 1. **The item needs to be retired or rewritten**, by the product manager, against
    the ruling it was gated on. Its done conditions describe a shape the architect
    declined; there is no version of "commit and publish an approved artifact
-   write" that both satisfies this item and respects `100.2`. If anything survives
-   the rewrite it is the half the ruling does require — *the surface that performed
-   the write says so at the moment of writing* — and that half is already
-   implemented on ifd.100's branch, so it belongs to the parent rather than here.
+   write" that both satisfies this item and respects `100.2`. The half the ruling
+   does require — *the surface that performed the write says so at the moment of
+   writing* — is now built at `yoyo artifact approve`, which is
+   [the one surface in this base that writes an approval](#what-was-built-against-the-ruling);
+   the chat write surface owes the same sentence when ifd.100 lands, and says it
+   through the same function rather than wording it again.
 2. **ifd.100's own delivery needs to land or be retired.** Its branch has been
    unmerged since 2026-08-23 and carries the whole mechanism plus documentation
    that is now stale: `docs/artifacts.md` on that branch tells the reader that
@@ -128,4 +135,38 @@ closed with the ruling stated in the tracker item's notes. The governed designs 
 not carry it — `docs/designs/artifact-contract.md` says nothing about how an
 artifact write reaches disk. The tracker is not readable from a developer run, and
 it is not what a reviewer is shown, which is precisely how two runs came to spend
-six review rounds on a question that had been settled for a week.
+six review rounds on a question that had been settled for a week. That document is
+the architect's, so the correction is filed as an amendment rather than written
+here.
+
+## What was built against the ruling
+
+The ruling is three refusals and one obligation. The refusals are why there is no
+publish step. The obligation is the clause that asks something of the harness:
+
+> until they commit, the document is an uncommitted change and runs refuse to
+> start over it — **and the surface that performed the write says so at the moment
+> of writing**.
+
+That obligation was unmet, and not on ifd.100's unlanded branch: it was unmet
+here. `yoyo artifact approve` is the one surface in this base that writes an
+approval into a governed document, `Store.Approve` rewrites the file in the
+operator's primary checkout, and `Manager.ValidateReady` then refuses every run
+with `primary repository has uncommitted changes: <that file>`. The command said
+nothing about either. An operator approving their goals and then asking for work
+met the ruling's cost as a refusal from an unrelated command — which is the exact
+friction the product manager recorded on ifd.100.2 as the reason the shape
+question mattered operationally, not only for governance.
+
+So `approve` now says it, naming the file, and `--json` carries the same sentence
+as `pending_commit`. The words live in `artifact.PendingCommit` rather than in the
+command, because every surface that writes an approval owes the operator this same
+fact and a second surface wording it differently would be a second account of what
+the harness just did — ifd.100's chat write surface being the next one to need it.
+A refused approval writes nothing and therefore says nothing, which is what the
+refusal-path tests hold.
+
+This does not discharge ifd.100.1. The item asks for a harness commit, a pull
+request, a clean checkout, and a retraction, and the ruling declines all four; what
+is built here is the ruling's one affirmative half, at the surface that was
+missing it. The two decisions above still stand.
