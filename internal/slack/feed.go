@@ -113,10 +113,25 @@ type Delivery struct {
 	// of the directive is the moment that stops being true.
 	Reply string
 	// Direct asks for this delivery to reach the operators where they will see it
-	// at three in the morning, as well as in the channel. It is set on the one
-	// class of message that is about the harness itself being degraded rather than
-	// about any work, because a channel is a place somebody chooses to look and a
-	// degraded harness is exactly what they will not think to look for.
+	// at three in the morning, as well as in the channel. A channel is a place
+	// somebody chooses to look, and both classes this is set on are things they
+	// will not think to look for.
+	//
+	// It is set on exactly the two classes the architect admitted to the tier, and
+	// a state fitting neither does not set it. The gate is named in
+	// docs/designs/slack-reporting-design.md, under "What may arrive as a direct
+	// message", rather than widened here; the revision of 2026-09-03 that admitted
+	// the second class records it as ruling yoyodyne-ifd.241.1 and 241.3, and that
+	// document rather than this comment is the authority:
+	//
+	//   - degraded: the harness itself stopped, stale, or choosing nothing over
+	//     ready work, which is something only a person fixes. Its members are set
+	//     in stall.go.
+	//   - advisory-once: a fact addressed to a person that speaks exactly once per
+	//     fact, deduplicated durably, never repeated and never urgent. Its one
+	//     member today is the bundle-improvement notice, set in
+	//     improvementDeliveries (improvements.go), which is also where the dedup
+	//     that makes "once per fact" true lives.
 	//
 	// It names nobody. Who the operators are is the surface's — the same member
 	// ids a reply is authorized against — and a feed that named them would be a
