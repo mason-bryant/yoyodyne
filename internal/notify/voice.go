@@ -297,7 +297,7 @@ var reviewerVoice = voice{
 		KindBlockerRecorded:     "{item} is blocked and there is no change to judge, though {remains}: {text}",
 		KindRunEnded:            "The run on {item} {ending} before I was given anything to judge, and {remains}: {text}",
 		KindUsageLimitExhausted: "{waiting} was refused for want of provider capacity: {cause}. Nothing arrives for a verdict until it lifts.",
-		KindReportFiled:         "Worth knowing about {item} — what I saw rather than what I judged: {text}",
+		KindReportFiled:         "Worth knowing about {item} — an observation, not a decision: {text}",
 		KindProposalRaised:      "{artifact} is not mine to change, so this is an argument about it: {text}",
 		KindExchangeTurn:        "In {exchange}, at {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}; I judge the change against what that leaves.",
