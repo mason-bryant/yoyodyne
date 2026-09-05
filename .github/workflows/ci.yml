@@ -60,3 +60,43 @@ jobs:
       # covered here because its only other execution is a real publication.
       - name: Check a release's notes and the body they are published as
         run: bash scripts/release-notes-test.sh
+
+  # The README's "Getting started" is a claim a stranger acts on, and until this
+  # job existed the only thing standing behind it was somebody remembering to
+  # run `make adoption` before merging a change to those sections. That is an
+  # assertion rather than a gate, which is what the README split was not allowed
+  # to leave behind: a section that moved out of the README is a step a newcomer
+  # can no longer take, and only executing the section says whether that
+  # happened.
+  #
+  # It is a job of its own rather than a step in `build` because it needs a tool
+  # `make check` does not -- the tracker -- and because it is independent of
+  # everything above it, so it runs beside the build rather than after it.
+  adoption:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The walkthrough runs `bd init` against its own scratch project, so the
+      # tracker has to be here. This is the same install the README, `yoyo
+      # doctor`, and `yoyo setup` all name, so CI gets the tracker the way a
+      # reader is told to.
+      - name: Install the tracker the walkthrough needs
+        run: |
+          go install github.com/gastownhall/beads/cmd/bd@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # `make adoption` builds this checkout's own binary and walks the
+      # documented steps against a throwaway Python project -- its own scratch
+      # repository and state directory, removed when it exits -- so nothing an
+      # operator owns is touched. WALK_PROVIDER is left unset, so no provider is
+      # invoked and no capacity is spent; the walkthrough names that step as
+      # skipped rather than passing over it.
+      - name: Walk the documented adoption path
+        run: make adoption
