@@ -276,7 +276,7 @@ Where you can name the impediment as another work item, say so and the item is l
 {"outcome":"evidence","why":"what you landed instead, and what has to happen before the item can be discharged","blocked_by":"the-work-item-that-has-to-land-first"}
 ` + "```" + `
 
-That is the only alternative to the parking, and it is deliberate: an item put back with nothing marking it is one the harness picks again straight away, for another run and another diagnosis of the same impediment. Name a work item that exists — you cannot open one. The harness checks that the tracker has it, and takes the parking where it does not, so a marker you guessed at costs nothing and buys nothing. If there is no such item, leave the marker out, take the parking, and name the work that has to be admitted in your summary.
+That is the only alternative to the parking, and it is deliberate: an item put back with nothing marking it is one the harness picks again straight away, for another run and another diagnosis of the same impediment. Name a work item that exists and is unfinished — you cannot open one, and finished work holds nothing back. The harness checks the tracker for it and takes the parking where the answer is anything else, so a marker you guessed at costs nothing and buys nothing. If there is no such item, leave the marker out, take the parking, and name the work that has to be admitted in your summary.
 
 The reviewer is shown which landing you claimed, so a diagnosis is judged as a diagnosis rather than as a missing implementation.
 

@@ -713,6 +713,12 @@ func (c Client) Complete(ctx context.Context, id, reason string) (WorkItem, erro
 // and is a decision, not an omission — the caller that gives one is holding the
 // item back some other way.
 //
+// A release here is unconditional: it clears whatever parking the item carried,
+// including one somebody else placed for their own reasons. That is why the
+// parking is the caller's whole answer rather than a change to what is there —
+// this call cannot tell a parking it is superseding from one it is retiring, so a
+// caller that must not retire one reads the item and passes what it finds back.
+//
 // The status and the parking are both read back, for the reason a blocker's
 // status is. An item left claimed by a run that has ended is work nothing can
 // start and nothing is watching; an item returned unparked when the caller asked

@@ -3034,13 +3034,20 @@ func (f *fakeTracker) Show(_ context.Context, id string) (beads.WorkItem, error)
 	return beads.WorkItem{}, fmt.Errorf("no work item %s", id)
 }
 
-// holds puts another work item in this tracker, which is what makes an
+// holds puts another open work item in this tracker, which is what makes an
 // impediment a landing names one the harness can confirm.
 func (f *fakeTracker) holds(id string) *fakeTracker {
+	return f.holdsItem(beads.WorkItem{ID: id, Title: "The impediment", Status: "open"})
+}
+
+// holdsItem is the same for work that has to be more than open — finished, or
+// already waiting on something — because what the impediment says about itself is
+// what decides whether waiting on it would hold anything back.
+func (f *fakeTracker) holdsItem(item beads.WorkItem) *fakeTracker {
 	if f.alsoHolds == nil {
 		f.alsoHolds = make(map[string]beads.WorkItem)
 	}
-	f.alsoHolds[id] = beads.WorkItem{ID: id, Title: "The impediment", Status: "open"}
+	f.alsoHolds[item.ID] = item
 	return f
 }
 
