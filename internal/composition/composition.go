@@ -80,7 +80,7 @@ var Classes = []Class{
 		ID:         "go",
 		Extensions: []string{".go"},
 		Checks:     []string{"make fmtcheck", "make test", "make race", "make vet"},
-		Exercised:  "compiled and run by `go test`, again under the race detector, vetted, and held to gofmt. This is the class the declared checks were written for and the only one they cover on their own.",
+		Exercised:  "compiled and run by `go test`, again under the race detector, vetted, and held to gofmt. This is the class the declared checks were written for and the only one they cover on their own. Read once more by internal/doclink, for the documentation fragments source cites — the anchor `yoyo init` writes into every generated configuration is one of them, and prose is not what carries it.",
 	},
 	{
 		ID:        "go-module",
@@ -98,7 +98,7 @@ var Classes = []Class{
 		ID:         ShellClass,
 		Extensions: []string{".sh"},
 		Checks:     []string{"make test"},
-		Exercised:  "parsed by a shell in composition's own repository test, so no shell file reaches a reviewer unparsed; and executed where it has a suite — the release verb, the notes writer and the release page body, and the status tool — each run from a Go test rather than from a CI step after integration.",
+		Exercised:  "parsed by a shell in composition's own repository test, so no shell file reaches a reviewer unparsed; executed where it has a suite — the release verb, the notes writer and the release page body, and the status tool — each run from a Go test rather than from a CI step after integration; and read by internal/doclink for the documentation fragments it cites.",
 	},
 	{
 		ID:        "makefile",
@@ -110,7 +110,7 @@ var Classes = []Class{
 		ID:         "yaml",
 		Extensions: []string{".yaml", ".yml"},
 		Checks:     []string{"make test"},
-		Exercised:  "decoded in composition's repository test, and the workflows held to the shape a workflow needs — a trigger, jobs, and each job with a runner and steps — because workflow YAML on a tag trigger otherwise first executes during a real publication. The project configuration and the built-in bundle are loaded through internal/config on top of that.",
+		Exercised:  "decoded in composition's repository test, and the workflows held to the shape a workflow needs — a trigger, jobs, and each job with a runner and steps — because workflow YAML on a tag trigger otherwise first executes during a real publication. The project configuration and the built-in bundle are loaded through internal/config on top of that, and internal/doclink reads all of it for the documentation fragments a comment cites.",
 	},
 	{
 		ID:         "json",

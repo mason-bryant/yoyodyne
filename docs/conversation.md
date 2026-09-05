@@ -77,9 +77,12 @@ persona guidance, so a project that wants a different opening
 persona.
 
 One more section sits below those, and it is a different kind of thing: **what
-the product ships today**, which is the README, the documents it links to under
-[Further reading](../README.md#further-reading) — this one among them — the
-configuration guide, and
+the product ships today**, which is the README, the six operator documents the
+README split put beside it — this one, [how work flows](work.md),
+[what comes back to you](reporting.md),
+[artifacts, goals, and invariants](artifacts.md),
+[operations and recovery](operations.md), and
+[working on yoyo itself](developing-yoyo.md) — the configuration guide, and
 the help every command prints. It is labeled as exactly that — a description of
 the implementation as built, never authority about what the product is for — so
 that the role deciding what to build next can say which surfaces already exist
@@ -87,9 +90,13 @@ without you having to tell it. Where that description and a specification
 disagree, the product manager reports the conflict rather than settling it.
 
 Not the source, not the design document, and no way to run a command: those say
-how the product is built rather than what it is for or what it ships. The
-narrowing this partially undoes is described, with what it bought and what it
-cost, in the [configuration guide](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
+how the product is built rather than what it is for or what it ships. Nor
+everything [Further reading](../README.md#further-reading) reaches, which is
+more than these eight — the set is named one document at a time, so adding one
+to that index does not thereby show it to the product manager. The eight are
+named, and the narrowing this partially undoes is described with what it bought
+and what it cost, in the
+[configuration guide](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
 
 It has no tools: no filesystem, no commands, no network. What it has instead are
 capabilities the harness performs on its behalf. The first is the work tracker,

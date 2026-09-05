@@ -523,11 +523,26 @@ any other part of the persona.
 ### What the product manager sees besides them, and what it does not
 
 **The specifications directory, the tracker, and a description of what the
-product ships today.** That last part is `README.md`, each of the documents it
-links to under its further-reading index, this file, and the help
-every command prints — carried in a section of its own, labeled as description
-of the implementation as built and never as authority about intent. No source,
-no design document, and no way to run a command.
+product ships today.** That last part is eight documents and the help every
+command prints: `README.md`; the six operator documents the README split put
+beside it — [the conversation](conversation.md), [how work flows](work.md),
+[what comes back to you](reporting.md),
+[artifacts, goals, and invariants](artifacts.md),
+[operations and recovery](operations.md), and
+[working on yoyo itself](developing-yoyo.md) — and this file. They are carried
+in a section of their own, labeled as description of the implementation as built
+and never as authority about intent. No source, no design document, and no way
+to run a command.
+
+**The eight are named rather than derived**, in `shippedDocumentation` in
+`internal/contextbundle/product.go`, and the set is deliberately narrower than
+the README's [further-reading index](../README.md#further-reading): the
+provider-plugin format, the coined-term register, the Slack setup, the release
+notes, the setup skill, and the design are all reachable from there and none of
+them is carried here. So adding a document to that index does not thereby show
+it to the product manager — the set has to name it, and a test holds the set to
+documents this repository actually has, because a path that stops resolving is a
+surface the product manager silently stops being given.
 
 The label is the whole of the arrangement, so it is worth reading twice. The
 specifications are the only statement of what the product is for; nothing in the
