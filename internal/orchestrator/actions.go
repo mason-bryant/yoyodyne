@@ -195,12 +195,12 @@ func deliverySteps() []deliveryStep {
 		{
 			action: action.Action[*activeRun]{
 				Name:    "run.complete",
-				Summary: "record on the work item what this run produced, close it once its promotion is settled, and price what it spent",
+				Summary: "record on the work item what this run produced, settle it once its promotion is -- closed where the run's landing discharges the item, back in the backlog where it lands evidence instead -- and price what it spent",
 				Wraps:   "(*activeRun).complete",
 				Capabilities: []capability.Capability{
 					// The tracker write is the whole of what makes this a delivery step
 					// rather than bookkeeping: the outcome is recorded on the item and an
-					// integrated item is closed against it. Pricing writes what the run cost
+					// integrated item is settled against it. Pricing writes what the run cost
 					// against the same item, which is why nothing else appears here.
 					capability.WorkItemMutate,
 					capability.RunStateMutate,

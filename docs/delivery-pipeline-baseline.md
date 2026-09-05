@@ -659,9 +659,12 @@ them.
   does to the item is held separately, in `actions_test.go`: the door is
   performed against a tracker and a ledger and the item has to end up closed and
   priced exactly as the hard-coded loop leaves it. The `complete` and `delivered`
-  summaries in both definition files still say only "closed"; a summary is
-  digest-bearing and the copy under `.yoyodyne/workflows/` has to move with the
-  built-in, which a developer run cannot touch without a protected-path grant.
+  summaries in `delivery.yaml` say both outcomes — closed where the run's landing
+  discharges the item, back in the backlog where it lands evidence instead — and
+  the copy under `.yoyodyne/workflows/` says the same words, because a summary is
+  digest-bearing and the two are held to one digest. The human-approval
+  definition's `complete` state closes nothing, so its summary says nothing about
+  closure and did not have to move.
 
   One state is missing from the definitions and is worth knowing about before
   reading one as the pipeline. There is no `publish` state, because
