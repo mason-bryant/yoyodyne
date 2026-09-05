@@ -36,6 +36,12 @@ package slack
 // thing in it they would have to go and resolve. The identifier the record keeps
 // is for the processes that read directives, which is where it stays.
 //
+// Nothing this reads asks for one either. A reply settles what this thread is
+// waiting on by saying how it was settled, and which directive that is comes out
+// of the read model — because a channel that showed nobody an identifier and then
+// required one would send an operator to a terminal to look up the name of
+// something they paused from their phone.
+//
 // An operator who steers from a phone has nothing else to tell them whether they
 // were heard, and a thread they are not looking at is
 // indistinguishable from silence. The reply itself wears where its directive
@@ -53,6 +59,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +68,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
@@ -70,6 +78,13 @@ import (
 // than reaching for the state root itself — and it is deliberately these two
 // methods and no more. Reading directives is the run pipeline's, and a reporting
 // process that could revise one would be a second authority over the record.
+//
+// A reply that settles what this thread is waiting on without naming it needs to
+// know which directive that is, and that read is not here: it is the read model's,
+// through the same source the four lines are assembled from (readmodel.Pausing).
+// The two halves stay apart on purpose — this one writes what the operator said,
+// and the derivation of which directives hold an item is one reading that the run
+// pipeline enforces on and every surface projects.
 type Directives interface {
 	Record(recorded directive.Directive) error
 	Resolve(reference, resolution string, at time.Time) (directive.Directive, error)
@@ -81,10 +96,20 @@ const (
 	// operational, which is the ordinary case and the one that stops nothing.
 	ambiguousOpening = "ambiguous:"
 	artifactOpening  = "artifact:"
-	// resolveVerb settles a directive somebody recorded, by any prefix of its
-	// identifier that names exactly one — the same rule the command line follows,
-	// because it is the same store answering.
+	// resolveVerb settles a directive somebody recorded. A reply that names one
+	// settles it by any prefix of its identifier that names exactly one — the same
+	// rule the command line follows, because it is the same store answering — and a
+	// reply that names none settles whatever single directive is holding this
+	// thread's own item. The second form is the ordinary one here: no message
+	// posted in this channel carries an identifier, so a thread that could only
+	// settle a named directive would send the operator to a terminal to read the
+	// name of the thing they paused from their phone.
 	resolveVerb = "resolve"
+	// maxHeldBytes bounds how much of one directive's unresolved question the
+	// refusal for an ambiguous settlement carries. Several of them go into one
+	// sentence, and what each is waiting on is a paragraph somebody wrote at
+	// whatever length they wanted.
+	maxHeldBytes = 160
 	// socketEventsAPI is the envelope type an event arrives in. Everything else on
 	// the connection — a hello, a disconnect, an interaction this app does not
 	// enable — is not a message and is not read here.
@@ -298,8 +323,21 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 	if err != nil {
 		return refused(topic, at, err.Error())
 	}
-	if parsed.resolves != "" {
-		resolved, err := s.directives.Resolve(parsed.resolves, parsed.resolution, at)
+	if parsed.settles() {
+		// A reply that named no directive is settling what this thread's own item is
+		// waiting on, which is a question about the record rather than about the
+		// reply — so it is asked of the read model, and a thread with nothing or with
+		// several things open is told so in words rather than settling something the
+		// operator did not name.
+		reference := parsed.resolves
+		if reference == "" {
+			held, err := s.holding(topic)
+			if err != nil {
+				return refused(topic, at, err.Error())
+			}
+			reference = held
+		}
+		resolved, err := s.directives.Resolve(reference, parsed.resolution, at)
 		if err != nil {
 			return refused(topic, at, err.Error())
 		}
@@ -315,6 +353,78 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 		return refused(topic, at, err.Error())
 	}
 	return acknowledged(topic, notify.KindDirectiveRecorded, recorded, at)
+}
+
+// holding is the directive this thread's item is waiting on, for a reply that
+// settled one without naming it. It reports the identifier the record answers to,
+// or the sentence saying why nothing was settled.
+//
+// The reading is the read model's rather than this file's, and that is the
+// architect's standing ruling rather than a choice made here: an answer this sink
+// gives in a thread comes from the read model, per the stated exception in
+// decision 5 of docs/designs/slack-reporting-design.md, and the
+// surfaces-project-one-read-model invariant holds every surface to the shared
+// derivation rather than to one of its own. Which directives hold an item is what
+// the run pipeline enforces on, so a channel that worked it out its own way could
+// lift a pause the pipeline still holds. Nothing here revises anything — what
+// settles a directive is still the store's Resolve, given a name this only read.
+//
+// A thread with nothing open and a thread with several open are both refused in
+// words. Settling something the operator did not name would be the channel
+// picking which of their pauses to lift, which is the one thing a bare settlement
+// must not do, so the refusal says what is open by what each is waiting on rather
+// than by an identifier nothing in this channel ever showed them.
+func (s *steering) holding(topic notify.Topic) (string, error) {
+	// A sink with no read model at all and a sink whose read model was given no
+	// directive record are the same thing to whoever is typing: nobody can say what
+	// is holding this item up, and the next step is at a terminal either way.
+	if s.sink.sources == nil || s.sink.sources.Directives == nil {
+		return "", errors.New("what is holding this item up cannot be read from here, because this sink was started without the record it would read; " + namesThem)
+	}
+	held, err := readmodel.Pausing(*s.sink.sources, topic.ID)
+	if err != nil {
+		return "", fmt.Errorf("what is holding this item up could not be read, so nothing was settled: %v; %s", err, namesThem)
+	}
+	switch len(held) {
+	case 0:
+		return "", errors.New("nothing is holding this item up, so there is nothing here to settle; a reply that does not open with `resolve` is recorded as a directive of its own")
+	case 1:
+		return held[0].ID, nil
+	default:
+		return "", fmt.Errorf("%d things are holding this item up and the reply named none of them, so nothing was settled — %s. %s",
+			len(held), waitingOn(held), namesThem)
+	}
+}
+
+// namesThem ends every refusal that could not settle for want of knowing which
+// directive was meant. None of them can name one in the thread — no message
+// posted here carries an identifier — so each says the two places the operator's
+// next step is.
+const namesThem = "`yoyo directive list` at the terminal names what is open, and `resolve <name> <how it was settled>` back here settles the one you name"
+
+// waitingOn says what several open directives are each waiting on, in the words
+// whoever recorded them used, and how far each one reaches. It is what a refusal
+// names them by: the identifier is what the record answers to and is nowhere a
+// person reading this channel could have got it from.
+//
+// How far one reaches is said because they do not all reach the same distance. A
+// directive that named no scope is holding every item in the product, and one
+// that named several is holding those, so a reader choosing between them is
+// choosing between pauses of different sizes and has nothing else here to tell
+// them apart.
+func waitingOn(held []directive.Directive) string {
+	waiting := make([]string, 0, len(held))
+	for _, one := range held {
+		reach := "one is"
+		switch {
+		case len(one.Scope) == 0:
+			reach = "one is holding every item in this product and is"
+		case len(one.Scope) > 1:
+			reach = fmt.Sprintf("one is holding %d items and is", len(one.Scope))
+		}
+		waiting = append(waiting, fmt.Sprintf("%s waiting on %q", reach, singleLine(one.Unresolved, maxHeldBytes)))
+	}
+	return strings.Join(waiting, ", and ")
 }
 
 // record writes one directive where every process that acts on this product's
@@ -540,8 +650,11 @@ func topicOf(threads ThreadMap, channel, threadTS string) (string, bool) {
 
 // steer is what one reply asks for, once it has been read.
 type steer struct {
-	// resolves and resolution are set for exactly the resolve verb: which
-	// directive to settle, and how it was settled.
+	// resolution is set for exactly the resolve verb: how the directive was
+	// settled. resolves is which directive to settle, and it is empty where the
+	// reply named none — which is a reply settling whatever single directive is
+	// holding this thread's item, read at the moment it is acted on rather than
+	// here.
 	resolves   string
 	resolution string
 	// The rest describe a directive to record. The kind is operational unless the
@@ -552,6 +665,12 @@ type steer struct {
 	unresolved string
 	text       string
 }
+
+// settles reports a reply that settles a directive rather than recording one. How
+// it was settled is the whole of the test: it is set for the resolve verb and for
+// nothing else, while the directive it settles is the thread's own wherever the
+// reply named none.
+func (parsed steer) settles() bool { return parsed.resolution != "" }
 
 // parseSteer reads a reply. The grammar is small on purpose: everything it does
 // not recognize is an operational directive said in the operator's own words,
@@ -568,14 +687,22 @@ func parseSteer(raw string) (steer, error) {
 	lowered := strings.ToLower(said)
 	switch {
 	case lowered == resolveVerb || strings.HasPrefix(lowered, resolveVerb+" "):
-		reference, rest := firstWord(said[len(resolveVerb):])
-		if reference == "" {
-			return steer{}, errors.New("`resolve <directive> <how it was settled>` — name the directive to settle; any prefix of its id that names exactly one will do")
+		settlement := strings.TrimSpace(said[len(resolveVerb):])
+		if settlement == "" {
+			return steer{}, errors.New("`resolve <how it was settled>` — say how it was settled; the work resumes on the answer rather than on the act of answering")
 		}
-		if rest == "" {
-			return steer{}, errors.New("`resolve <directive> <how it was settled>` — say how it was settled; the work resumes on the answer rather than on the act of answering")
+		// A reply that opens with something that could name a directive is settling
+		// that one, which is how a thread settles something recorded elsewhere. A
+		// reply that does not is settling what this thread is waiting on, and the
+		// whole of it is how it was settled: nothing posted in this channel carries
+		// an identifier, so the ordinary reply here has none to give.
+		if reference, rest := firstWord(settlement); directive.ValidReference(reference) {
+			if rest == "" {
+				return steer{}, errors.New("`resolve <how it was settled>` — say how it was settled; the work resumes on the answer rather than on the act of answering")
+			}
+			return steer{resolves: reference, resolution: rest}, nil
 		}
-		return steer{resolves: reference, resolution: rest}, nil
+		return steer{resolution: settlement}, nil
 	case strings.HasPrefix(lowered, ambiguousOpening):
 		// What was said is recorded whole, and the part after the opening is what
 		// has to be settled. They are the same words here because a reply that says
@@ -661,8 +788,12 @@ func acknowledged(topic notify.Topic, kind notify.Kind, recorded directive.Direc
 	text := recorded.Text
 	if settlement(kind) {
 		// The directive's own words are already in the thread, said by the person
-		// who typed them; what they are owed now is what became of it.
+		// who typed them; what they are owed now is what became of it — and, where
+		// what was lifted was holding more than this item, that it was.
 		text = recorded.Resolution
+		if reach := reached(recorded); reach != "" {
+			text += " " + reach
+		}
 	} else if recorded.Pauses() {
 		severity = report.SeverityWarning
 	}
@@ -701,6 +832,30 @@ func refused(topic notify.Topic, at time.Time, why string) notify.Notification {
 			Refs:     notify.Refs{WorkItemID: workItemOf(topic)},
 			Detail:   notify.Detail{Reason: why},
 		},
+	}
+}
+
+// reached says what a settled pause was holding beyond the item whose thread it
+// was settled in, and says nothing where it was holding that item alone.
+//
+// It is here because a reply need not name what it settles: the thread settles
+// what is holding its own item, and a directive that named no scope is holding
+// every item in the product. Somebody lifting one from their phone would
+// otherwise have no way to tell a pause on this piece of work from a pause on all
+// of it — the thread they are in says one item, and the record says more. It
+// counts the work rather than naming it, because which items is the record's to
+// hold and an identifier is the one thing this acknowledgment does not carry.
+func reached(recorded directive.Directive) string {
+	if !recorded.Kind.Pauses() {
+		return ""
+	}
+	switch {
+	case len(recorded.Scope) == 0:
+		return "It was holding every item in this product rather than this one alone, so it is lifted for all of them."
+	case len(recorded.Scope) > 1:
+		return fmt.Sprintf("It was holding %d items rather than this one alone, so it is lifted for all of them.", len(recorded.Scope))
+	default:
+		return ""
 	}
 }
 

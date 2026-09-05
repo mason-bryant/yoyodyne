@@ -428,6 +428,309 @@ func TestAResolveReplySettlesTheDirectiveAndLiftsThePause(t *testing.T) {
 	}
 }
 
+// Nothing posted in this channel carries a directive's identifier, so a thread
+// settles the pause it is under by saying how it was settled and nothing else.
+// Requiring the identifier here would send somebody who paused the work from a
+// phone to a terminal to read the name of what they paused.
+func TestAResolveReplyWithNoIdentifierSettlesTheThreadsOwnPause(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	readsDirectives(sink, directives)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which branch", "1750000001.000200"))
+	recorded := onlyDirective(t, directives)
+
+	posts.requests = nil
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "the one already on the target branch", "1750000002.000300"))
+	// A reply that is not settling anything is a directive of its own, which is
+	// what the line above would have been without the verb.
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve the one already on the target branch", "1750000003.000400"))
+
+	settled, err := directives.Load(recorded.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.Resolved() || settled.Resolution != "the one already on the target branch" {
+		t.Fatalf("settled = %+v, want the thread's own pause settled with what the reply said", settled)
+	}
+	pausing, err := directives.Pausing(testItem)
+	if err != nil {
+		t.Fatalf("Pausing() error = %v", err)
+	}
+	if len(pausing) != 0 {
+		t.Fatalf("Pausing(%q) = %v, want the pause lifted", testItem, pausing)
+	}
+	answer := posts.requests[len(posts.requests)-1]
+	if !strings.Contains(answer.Text, "the one already on the target branch") {
+		t.Fatalf("answer = %q, want it to say how the pause was settled", answer.Text)
+	}
+	if strings.Contains(answer.Text, settled.ID) {
+		t.Fatalf("answer = %q, want the directive's identifier kept out of what a person reads", answer.Text)
+	}
+	// A pause on this item alone reached no further, and an answer that said it had
+	// would be the channel reporting a lift nobody made.
+	if strings.Contains(answer.Text, "every item in this product") {
+		t.Fatalf("answer = %q, want nothing said about a wider reach for a pause on this item alone", answer.Text)
+	}
+}
+
+// A directive recorded against no work item is holding every item in the product,
+// so settling it from one item's thread lifts far more than the thread is about.
+// The answer says so: the thread names one item, and nothing else there could
+// tell somebody what they have just lifted.
+func TestAResolveReplySaysWhenWhatItLiftedWasHoldingEveryItem(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	readsDirectives(sink, directives)
+	// Recorded the way a product-wide pause is recorded: at a terminal, naming no
+	// item, which is what an empty scope means.
+	id, err := directive.NewID()
+	if err != nil {
+		t.Fatalf("NewID() error = %v", err)
+	}
+	productWide := directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            id,
+		ProductID:     testProduct,
+		Kind:          directive.KindArtifact,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC),
+		Text:          "the brief is being rewritten",
+		Artifact:      "brief",
+		Unresolved:    "whether the product still reports into one channel",
+	}
+	if err := directives.Record(productWide); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve it reports into one channel, unchanged", "1750000001.000200"))
+
+	settled, err := directives.Load(productWide.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.Resolved() {
+		t.Fatalf("settled = %+v, want the pause holding this item settled from its thread", settled)
+	}
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "every item in this product") {
+		t.Fatalf("answer = %q, want it to say what was lifted was holding more than this item", answer.Text)
+	}
+	if strings.Contains(answer.Text, settled.ID) {
+		t.Fatalf("answer = %q, want the directive's identifier kept out of what a person reads", answer.Text)
+	}
+}
+
+// Which pause to lift is the operator's to say. A thread holding more than one
+// refuses in a sentence that names them by what each is waiting on, because an
+// identifier is the one thing nothing in this channel ever showed them.
+func TestAResolveReplyWithNoIdentifierRefusesWhereSeveralThingsHoldTheItem(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	readsDirectives(sink, directives)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which of the two branches did you mean", "1750000001.000200"))
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "artifact: slack-reporting-design whether product threads may carry directives", "1750000002.000300"))
+	// And one recorded against no item at all, which is holding this one along with
+	// every other. The refusal has to tell the three apart by more than their words.
+	id, err := directive.NewID()
+	if err != nil {
+		t.Fatalf("NewID() error = %v", err)
+	}
+	if err := directives.Record(directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            id,
+		ProductID:     testProduct,
+		Kind:          directive.KindAmbiguous,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC),
+		Text:          "hold everything",
+		Unresolved:    "whether the product still reports into one channel",
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	posts.requests = nil
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve the one already on the target branch", "1750000003.000400"))
+
+	recorded, err := directives.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, one := range recorded {
+		if one.Resolved() {
+			t.Fatalf("settled = %+v, want nothing settled where the reply named none of them", one)
+		}
+		if strings.Contains(posts.requests[len(posts.requests)-1].Text, one.ID) {
+			t.Fatalf("answer = %q, want them named in words rather than by identifier",
+				posts.requests[len(posts.requests)-1].Text)
+		}
+	}
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "Nothing was recorded") {
+		t.Fatalf("answer = %q, want a refusal saying nothing was recorded", answer.Text)
+	}
+	for _, waiting := range []string{
+		"which of the two branches did you mean",
+		"whether product threads may carry directives",
+	} {
+		if !strings.Contains(answer.Text, waiting) {
+			t.Fatalf("answer = %q, want it to name what %q is waiting on", answer.Text, waiting)
+		}
+	}
+	// One of the three is holding the whole product, which is the difference
+	// between them a reader cannot see in what they are each waiting on.
+	if !strings.Contains(answer.Text, "holding every item in this product") {
+		t.Fatalf("answer = %q, want it to say which of them reaches past this item", answer.Text)
+	}
+}
+
+// How far a settled pause reached is said for every pause that reached past the
+// item whose thread it was settled in, and for no other: a settlement that
+// claimed a wider lift than it made would be as wrong as one that hid it, and a
+// directive that held nothing up had no reach to report.
+func TestWhatASettlementSaysAboutHowFarThePauseReached(t *testing.T) {
+	t.Parallel()
+
+	for name, settled := range map[string]struct {
+		recorded directive.Directive
+		want     string
+	}{
+		"a pause on this item alone": {
+			recorded: directive.Directive{Kind: directive.KindAmbiguous, Scope: []string{testItem}},
+		},
+		"a pause on every item": {
+			recorded: directive.Directive{Kind: directive.KindArtifact},
+			want:     "every item in this product",
+		},
+		"a pause on several items": {
+			recorded: directive.Directive{Kind: directive.KindAmbiguous, Scope: []string{testItem, "yoyodyne-ifd.68.5"}},
+			want:     "2 items",
+		},
+		"a directive that held nothing up": {
+			recorded: directive.Directive{Kind: directive.KindOperational},
+		},
+	} {
+		reach := reached(settled.recorded)
+		if settled.want == "" && reach != "" {
+			t.Fatalf("%s: reached() = %q, want nothing said about a reach it did not have", name, reach)
+		}
+		if settled.want != "" && !strings.Contains(reach, settled.want) {
+			t.Fatalf("%s: reached() = %q, want it to say it was holding %s", name, reach, settled.want)
+		}
+	}
+}
+
+// A thread that is waiting on nothing has nothing to settle, and is told so
+// rather than having a settlement written onto whatever else it could find.
+func TestAResolveReplyWithNothingHoldingTheItemIsRefused(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	readsDirectives(sink, directives)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "prefer the smaller change here", "1750000001.000200"))
+	recorded := onlyDirective(t, directives)
+
+	posts.requests = nil
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve done, thanks", "1750000002.000300"))
+
+	settled, err := directives.Load(recorded.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.Resolved() {
+		t.Fatalf("settled = %+v, want a directive that was holding nothing left alone", settled)
+	}
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "nothing is holding this item up") {
+		t.Fatalf("answer = %q, want it to say the thread is waiting on nothing", answer.Text)
+	}
+}
+
+// A sink that cannot read what is holding an item up says so rather than settling
+// something on a guess, and points at where the directive can be named. The two
+// ways it can be unable to are one answer to whoever is typing: no read model at
+// all, and a read model given no directive record.
+func TestAResolveReplyWithoutTheReadModelSaysSoRatherThanGuessing(t *testing.T) {
+	t.Parallel()
+
+	for name, unwire := range map[string]func(*Sink){
+		"no read model at all":            func(sink *Sink) { sink.sources = nil },
+		"a read model with no directives": func(sink *Sink) { sink.sources = &readmodel.Sources{} },
+	} {
+		sink, directives, posts := newSteeringSink(t, testOperator)
+		unwire(sink)
+		sink.steering.handle(context.Background(),
+			reply(testOperator, "ambiguous: which branch", "1750000001.000200"))
+		recorded := onlyDirective(t, directives)
+
+		posts.requests = nil
+		sink.steering.handle(context.Background(),
+			reply(testOperator, "resolve the one already on the target branch", "1750000002.000300"))
+
+		settled, err := directives.Load(recorded.ID)
+		if err != nil {
+			t.Fatalf("%s: Load() error = %v", name, err)
+		}
+		if settled.Resolved() {
+			t.Fatalf("%s: settled = %+v, want nothing settled where what is held could not be read", name, settled)
+		}
+		answer := onlyPost(t, posts)
+		if !strings.Contains(answer.Text, "yoyo directive list") {
+			t.Fatalf("%s: answer = %q, want it to point at where the directive can be named", name, answer.Text)
+		}
+	}
+}
+
+// The two forms of the verb are told apart by the first word alone, so where that
+// boundary sits decides whether a settlement is recorded whole or silently cut
+// short at its first space. It is pinned here rather than inherited from the
+// shape rule it asks: a word that merely begins like an identifier is a word
+// somebody typed, and only a word an identifier could actually be is read as
+// naming one.
+func TestWhatTheFirstWordAfterResolveHasToBeToNameADirective(t *testing.T) {
+	t.Parallel()
+
+	for _, said := range []string{
+		"resolve directive the second one",
+		"resolve directives are the wrong tool here",
+		"resolve direct the developer to the smaller change",
+		"resolve directive- the second one",
+		// An identifier is hexadecimal after the prefix, so a word that carries the
+		// prefix and is not is still the operator's own words.
+		"resolve directive-zebra the second one",
+	} {
+		parsed, err := parseSteer(said)
+		if err != nil {
+			t.Fatalf("parseSteer(%q) error = %v, want a settlement of the thread's own pause", said, err)
+		}
+		if parsed.resolves != "" {
+			t.Fatalf("parseSteer(%q) names %q, want a word an identifier could not be read as the operator's own", said, parsed.resolves)
+		}
+		if want := strings.TrimPrefix(said, resolveVerb+" "); parsed.resolution != want {
+			t.Fatalf("parseSteer(%q) settles with %q, want the whole of what was said after the verb (%q)", said, parsed.resolution, want)
+		}
+	}
+
+	parsed, err := parseSteer("resolve directive-3f2a the second one")
+	if err != nil {
+		t.Fatalf("parseSteer() error = %v, want the named directive settled", err)
+	}
+	if parsed.resolves != "directive-3f2a" || parsed.resolution != "the second one" {
+		t.Fatalf("parseSteer() = %+v, want the identifier read off the front and the rest kept as how it was settled", parsed)
+	}
+}
+
 // The sink's own messages arrive back on the same connection it posts through.
 // Reading one as an instruction would be the harness directing itself, and an
 // acknowledgment answered by an acknowledgment is a loop, so anything that is not
@@ -743,6 +1046,14 @@ func newSteeringSinkWithFeed(t *testing.T, feed Feed, operators ...string) (*Sin
 		t.Fatalf("SaveThreads() error = %v", err)
 	}
 	return sink, directives, posts
+}
+
+// readsDirectives points the sink's read model at the same store the inbound half
+// writes to, which is how a running sink is assembled. It is what a thread
+// settling its own pause reads to find what is holding its item, and the sinks
+// above are given no records at all so that the tests which need one say so.
+func readsDirectives(sink *Sink, directives *runstate.DirectiveStore) {
+	sink.sources = &readmodel.Sources{Directives: directives}
 }
 
 // reply is one person typing in the work item's thread.
