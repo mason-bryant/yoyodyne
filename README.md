@@ -537,6 +537,14 @@ approvals:
   request back and the harness simply merges, so a repository with no protection
   needs no setting changed at all. Merge commits must also be permitted, since
   that is the method the harness asks for.
+- **A merge the forge drops** is never merged past. `yoyo reconcile` records the
+  publication as outstanding and hands the item back to you with a blocker rather
+  than closing it: your change is already on the local target branch, which is the
+  authoritative one, so it is the publication that is unfinished and not the work.
+  Where the cause was transient — a required check that never finished, an
+  auto-merge race lost — triage can repeat the identical request the reviewer's
+  verdict authorized, **once per publication**, and a second drop of the same
+  publication is an escalation rather than another attempt.
 
 [How work flows once you approve it](docs/work.md) has
 the full behavior, and the [configuration guide](docs/configuration.md#publishing-through-pull-requests)

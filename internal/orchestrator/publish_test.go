@@ -1670,6 +1670,74 @@ func TestReconcileLeavesAQueuedMergeThatIsStillWaiting(t *testing.T) {
 	}
 }
 
+// A publication triage has already re-armed, dropped a second time, is not a
+// transient cause to repeat past: the request has been through the forge's
+// requirements twice and been dropped twice. So the sweep records it as an
+// escalation, and it records it on the blocker the item is handed back with —
+// which is the surface the configuration and conversation guides both promise
+// says so in as many words, and the one a development manager reads before
+// deciding anything about it.
+func TestReconcileRecordsASecondDropAsAnEscalationRatherThanAReArm(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	fixture.run(t)
+
+	// The state a carried-out re-arm leaves behind: the identical request
+	// repeated, the forge holding a merge for it again, and the publication's one
+	// re-arm spent on its own durable counter.
+	rearmed, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if rearmed.PullRequest == nil || !rearmed.PullRequest.MergeQueued {
+		t.Fatalf("run = %#v, want a queued merge to have been re-armed", rearmed.PullRequest)
+	}
+	rearmed.PullRequest.MergeRearms = 1
+	if err := fixture.store.Save(rearmed); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	fixture.forge.dropQueuedMerge()
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionBlocked || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the run settled on a blocker", results)
+	}
+	for _, want := range []string{
+		// Still everything a first drop says, because it is still a dropped merge
+		// somebody has to look at.
+		"dropped the queued merge", "needs a person",
+		// And what this one is beyond that.
+		"second drop of this publication", "escalation rather than something to re-arm again",
+	} {
+		if !strings.Contains(results[0].Detail, want) {
+			t.Errorf("detail %q does not name %q", results[0].Detail, want)
+		}
+	}
+	// The blocker on the item is the surface the guides describe, and it is where
+	// the development manager reads this rather than in a sweep's output.
+	if !fixture.tracker.blocked {
+		t.Fatal("a second drop left the item unblocked")
+	}
+	for _, want := range []string{"second drop of this publication", "escalation rather than something to re-arm again"} {
+		if !strings.Contains(fixture.tracker.blockReason, want) {
+			t.Fatalf("the blocker %q does not say %q", fixture.tracker.blockReason, want)
+		}
+	}
+	// Nothing about the second drop closes the item or repeats the merge: the
+	// sweep can only ask the forge, and a second re-arm is not its to make.
+	if fixture.tracker.closed {
+		t.Fatalf("a second drop closed the item as integrated: reason = %q", fixture.tracker.closeReason)
+	}
+	settled, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.PullRequest.MergeRearms != 1 {
+		t.Fatalf("the settled publication records %d re-arm(s), want the one it had spent", settled.PullRequest.MergeRearms)
+	}
+}
+
 // A queued merge the forge dropped is a requirement that went unmet, and the
 // harness does not merge past one — not by asking again and not with
 // administrator privileges. The publication is reported as outstanding, on the
@@ -1701,6 +1769,11 @@ func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 	if !fixture.tracker.blocked || !strings.Contains(fixture.tracker.blockReason, "dropped the queued merge") {
 		t.Fatalf("blocked = %t, reason = %q; want the dropped merge handed to a person",
 			fixture.tracker.blocked, fixture.tracker.blockReason)
+	}
+	// A first drop is work for a person and is also the one drop triage may
+	// re-arm, so it must not read as the escalation a second one is.
+	if strings.Contains(fixture.tracker.blockReason, "escalation rather than something to re-arm again") {
+		t.Fatalf("a first drop was handed over as an escalation: %q", fixture.tracker.blockReason)
 	}
 	// Reconciliation can only ask the forge, so nothing was merged a second time.
 	if len(fixture.forge.merges) != merges {
