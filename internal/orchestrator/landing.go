@@ -84,12 +84,20 @@ func (a *activeRun) claimLanding(ctx context.Context, text string) string {
 // anything to be true of the tracker.
 //
 // The marker arrives having been checked for shape and nothing else, and the
-// shape is not the part that matters here: the tracker refuses a dependency on
-// work it does not have, and that refusal would land on the settlement of a run
-// whose change is already integrated — failing it and leaving the item claimed
-// with nothing watching it, which is the state the settlement exists to avoid.
-// So the question is asked here, where the answer costs one read and the fallback
-// is a disposition that always works.
+// shape is not the part that matters here. Two different things go wrong with a
+// name, and both end in the same place. A marker the tracker refuses a
+// dependency for — work it does not have, work that already waits on this item —
+// fails the settlement of a run whose change is already integrated, leaving the
+// item claimed with nothing watching it. A marker the tracker accepts and that
+// holds nothing back — work that is already closed — is worse than that, because
+// it looks like it worked: the item goes back unparked behind a dependency that
+// is already satisfied, and the next pull selects it for another run of the same
+// diagnosis, which is the loop the parking default exists to close.
+//
+// So the marker is only usable where the tracker has the work, the work is not
+// this item, the work is not finished, and the work does not already wait on this
+// item. Anything else takes the parking, which holds the item back whatever is
+// true of the tracker.
 //
 // A tracker that could not answer is treated as a tracker that has no such item,
 // and the wording says only that: the harness cannot tell an item that is absent
@@ -99,11 +107,25 @@ func (a *activeRun) resolveImpediment(ctx context.Context, impediment string) (s
 	if impediment == "" {
 		return "", ""
 	}
+	named := "its landing named " + impediment + " as the impediment"
 	if impediment == a.state.WorkItemID {
 		return "", "its landing named this item itself as the impediment, and nothing waits on itself"
 	}
-	if _, err := a.pipeline.Tracker.Show(ctx, impediment); err != nil {
-		return "", fmt.Sprintf("its landing named %s as the impediment and the tracker did not confirm that item", impediment)
+	item, err := a.pipeline.Tracker.Show(ctx, impediment)
+	if err != nil {
+		return "", named + " and the tracker did not confirm that item"
+	}
+	// Finished work holds nothing back. Every dependency gate in the harness reads
+	// a closed blocker as no blocker, so a marker naming one is a marker that
+	// leaves the item in the queue — the answer the parking has to take instead.
+	if item.Status == closedStatus {
+		return "", named + " and that work is already closed, so waiting on it would hold this item back for nothing"
+	}
+	// Work that already waits on this item cannot also be waited on by it. The
+	// tracker refuses the second edge as a cycle, and follow-on items that depend
+	// on the item they follow make this shape ordinary rather than exotic.
+	if waitsOn(item, a.state.WorkItemID) {
+		return "", named + " and that work already waits on this item, so the two would wait on each other"
 	}
 	return impediment, ""
 }
@@ -265,23 +287,50 @@ func undischargedParking(state runstate.State) domain.WorkItemParking {
 // Settling twice settles once, which is not a nicety here: the reopen is retried
 // where the tracker was busy, and a sweep re-runs the whole settlement of a run
 // whose reopen never landed. So the dependency is added only where the item does
-// not already carry it, rather than added again and refused as a duplicate. The
-// other two ways that write is refused — a cycle, and work the tracker does not
-// have — were decided when the claim was read, and neither can arrive here: this
-// runs against a marker already resolved.
+// not already carry it, rather than added again and refused as a duplicate.
+//
+// A dependency the tracker refuses for any other reason takes the parking rather
+// than failing the settlement. The reasons that can be seen were decided when the
+// claim was read — work the tracker does not have, work already finished, work
+// that already waits on this item — but a cycle further round the graph than one
+// step is not visible from one read, and neither is whatever the tracker refuses
+// next year. Failing here is the worst of the answers available: the change is
+// already promoted, so the run cannot be retried into a better state, and the
+// item is left claimed with nothing watching it. Parking it holds it back and
+// says on the item what the tracker would not do, which is something a person can
+// act on. The run's own record still carries the marker it resolved; what
+// actually happened is on the item, which is where it is read.
+//
+// A parking the item already carried is never lifted. The leave-open path adds a
+// dependency, which is not a release, and a settlement that cleared an operator's
+// parking would retire their decision on the way past — so what the item already
+// says is passed back through. The parking path is the one that replaces a
+// parking reason, because both are parkings and the run's names what would
+// release the item now.
 func settleUndischarged(ctx context.Context, tracker WorkTracker, state runstate.State) error {
+	settled := state
+	var existing domain.WorkItemParking
 	if impediment := state.LandingImpediment(); impediment != "" {
 		item, err := tracker.Show(ctx, state.WorkItemID)
 		if err != nil {
 			return fmt.Errorf("read work item %s before making it wait on %s: %w", state.WorkItemID, impediment, err)
 		}
+		existing = item.Parking
 		if !waitsOn(item, impediment) {
 			if err := tracker.AddBlocker(ctx, state.WorkItemID, impediment); err != nil {
-				return fmt.Errorf("make work item %s wait on the impediment its landing named: %w", state.WorkItemID, err)
+				settled.LandingBlockedBy = ""
+				settled.LandingImpedimentProblem = fmt.Sprintf(
+					"its landing named %s as the impediment and the tracker would not make this item wait on it (%v)", impediment, err)
 			}
 		}
 	}
-	_, err := tracker.Reopen(ctx, state.WorkItemID, undischargedLandingReason(state), undischargedParking(state))
+	parking := undischargedParking(settled)
+	// An empty parking here is the leave-open disposition rather than a release,
+	// so the item keeps whatever parking it already had.
+	if !parking.Parked() {
+		parking = existing
+	}
+	_, err := tracker.Reopen(ctx, state.WorkItemID, undischargedLandingReason(settled), parking)
 	return err
 }
 
@@ -290,7 +339,7 @@ func settleUndischarged(ctx context.Context, tracker WorkTracker, state runstate
 // this calls settled is one the queue holds back.
 func waitsOn(item beads.WorkItem, blockerID string) bool {
 	for _, dependency := range item.Dependencies {
-		if dependency.Type == "blocks" && dependency.ID == blockerID {
+		if dependency.Type == blocksDependency && dependency.ID == blockerID {
 			return true
 		}
 	}

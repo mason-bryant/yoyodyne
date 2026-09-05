@@ -11,6 +11,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -143,12 +144,14 @@ func TestALandingThatNamesItsImpedimentLeavesTheItemOpenWaitingOnIt(t *testing.T
 }
 
 // The marker is developer-written text, and the shape check it passes proves only
-// that it is identifier-shaped. Every way the dependency write could be refused
-// is decided before it is attempted, because the settlement it would fail is the
-// settlement of a run whose change is already integrated: that failure leaves the
-// item claimed with nothing watching it, which is the state the settlement exists
-// to avoid. Each of them takes the parking, which holds the item back without
-// needing anything to be true of the tracker.
+// that it is identifier-shaped. Two different things go wrong with a name and
+// both end here. A marker the tracker would refuse a dependency for fails the
+// settlement of a run whose change is already integrated, leaving the item
+// claimed with nothing watching it. A marker the tracker would accept and that
+// holds nothing back is worse, because it looks like it worked: the item goes
+// back unparked behind a satisfied dependency and the next pull selects it, which
+// is the loop this whole item exists to close. Each of them takes the parking,
+// which holds the item back without needing anything to be true of the tracker.
 func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 	t.Parallel()
 
@@ -170,6 +173,31 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 			name:    "a marker naming work the tracker does not have",
 			marker:  func(*fakeTracker) string { return "yoyodyne-never-admitted" },
 			saysWhy: "the tracker did not confirm that item",
+		},
+		{
+			// The dependency would be written and would hold nothing: every gate in
+			// the harness reads a closed blocker as no blocker, so the item would sit
+			// in the queue unparked behind it.
+			name: "a marker naming work that is already closed",
+			marker: func(tracker *fakeTracker) string {
+				tracker.holdsItem(beads.WorkItem{ID: "yoyodyne-already-done", Title: "Done", Status: "closed"})
+				return "yoyodyne-already-done"
+			},
+			saysWhy: "already closed",
+		},
+		{
+			// A follow-on item that depends on the item it follows makes this shape
+			// ordinary rather than exotic, and the tracker refuses the second edge as
+			// a cycle.
+			name: "a marker naming work that already waits on this item",
+			marker: func(tracker *fakeTracker) string {
+				tracker.holdsItem(beads.WorkItem{
+					ID: "yoyodyne-follows-this", Title: "Follow-on", Status: "open",
+					Dependencies: []beads.Dependency{{ID: tracker.item.ID, Type: "blocks"}},
+				})
+				return "yoyodyne-follows-this"
+			},
+			saysWhy: "already waits on this item",
 		},
 	} {
 		t.Run(unusable.name, func(t *testing.T) {
@@ -348,6 +376,74 @@ func TestSettlingAnUndischargedItemTwiceMakesItWaitOnce(t *testing.T) {
 	}
 	if tracker.item.Parking.Parked() {
 		t.Errorf("an item waiting on its impediment was parked as well: %q", tracker.item.Parking)
+	}
+}
+
+// Every refusal the harness can see is decided when the claim is read, and one it
+// cannot is a cycle further round the graph than the one read it makes. So a
+// dependency the tracker refuses anyway takes the parking rather than failing the
+// settlement: the change is already promoted, the run cannot be retried into a
+// better state, and failing here leaves the item claimed with nothing watching
+// it — which is the outcome this settlement exists to prevent.
+func TestADependencyTheTrackerRefusesParksTheItemRatherThanFailingTheSettlement(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
+	tracker.blockerErr = errors.New("bd: adding this dependency would create a cycle")
+	state := runstate.State{
+		RunID:            "run-abcdef0123456789abcdef0123456789",
+		WorkItemID:       tracker.item.ID,
+		TargetBranch:     "main",
+		LandingOutcome:   runstate.LandingEvidence,
+		LandingReason:    "it needs yoyodyne-impediment first",
+		LandingBlockedBy: "yoyodyne-impediment",
+	}
+	if err := settleUndischarged(context.Background(), tracker, state); err != nil {
+		t.Fatalf("settleUndischarged() error = %v, want the parking fallback rather than a failure", err)
+	}
+	if tracker.item.Status != "open" {
+		t.Fatalf("the item was left claimed by a run that has ended: status = %q", tracker.item.Status)
+	}
+	if !tracker.item.Parking.Parked() {
+		t.Fatalf("the item went back unparked behind a dependency that was refused; calls = %v", tracker.calls)
+	}
+	// What the tracker would not do is on the item, because that is where somebody
+	// reads it: the run's own record still carries the marker it resolved.
+	if !strings.Contains(tracker.item.Parking.Reason(), "would not make this item wait") {
+		t.Errorf("the parking reason does not say the dependency was refused: %q", tracker.item.Parking)
+	}
+	if !strings.Contains(tracker.notes, "would not make this item wait") {
+		t.Errorf("the item's notes do not say the dependency was refused: %q", tracker.notes)
+	}
+}
+
+// A settlement adds a dependency; it never lifts a parking. An item an operator
+// parked and then named for a run anyway comes back still parked, because the
+// operator's decision is not this run's to retire on the way past — and once the
+// impediment closes, the parking is still what keeps the item out of the queue.
+func TestSettlingAnItemLeftWaitingKeepsTheParkingItAlreadyCarried(t *testing.T) {
+	t.Parallel()
+
+	operatorParked := domain.WorkItemParking("deferred by the scope decision until the quarter turns")
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID: "yoyodyne-task", Title: "Task", Status: "in_progress", Parking: operatorParked,
+	}}
+	state := runstate.State{
+		RunID:            "run-abcdef0123456789abcdef0123456789",
+		WorkItemID:       tracker.item.ID,
+		TargetBranch:     "main",
+		LandingOutcome:   runstate.LandingEvidence,
+		LandingReason:    "it needs yoyodyne-impediment first",
+		LandingBlockedBy: "yoyodyne-impediment",
+	}
+	if err := settleUndischarged(context.Background(), tracker, state); err != nil {
+		t.Fatalf("settleUndischarged() error = %v", err)
+	}
+	if tracker.item.Parking != operatorParked {
+		t.Errorf("the settlement rewrote a parking somebody else placed: %q", tracker.item.Parking)
+	}
+	if len(tracker.blockers) != 1 {
+		t.Errorf("the item was not made to wait on its impediment: %v", tracker.blockers)
 	}
 }
 

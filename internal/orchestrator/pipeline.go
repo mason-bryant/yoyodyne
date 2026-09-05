@@ -5272,6 +5272,12 @@ func validateWorkItem(item beads.WorkItem, requestedID string, expectedStatuses 
 // means that could disagree.
 const blocksDependency = "blocks"
 
+// closedStatus is finished work. It is what makes a dependency stop holding
+// anything back, which is why the reading below and the resolution of a landing's
+// impediment both have to agree about it: work a gate calls closed is work no
+// dependency on it can hold an item for.
+const closedStatus = "closed"
+
 // blockingDependencies names the unfinished work an item waits for, in a stable
 // order. It is the single reading every dependency gate in this package decides
 // on: the run-start check, the gate each attempt passes through, and the refusal
@@ -5283,7 +5289,7 @@ const blocksDependency = "blocks"
 func blockingDependencies(item beads.WorkItem) []string {
 	var blockers []string
 	for _, dependency := range item.Dependencies {
-		if dependency.Type == blocksDependency && dependency.Status != "closed" {
+		if dependency.Type == blocksDependency && dependency.Status != closedStatus {
 			blockers = append(blockers, dependency.ID)
 		}
 	}
