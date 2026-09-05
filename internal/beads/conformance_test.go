@@ -2,8 +2,13 @@ package beads
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -462,6 +467,107 @@ func TestParentFieldConformance(t *testing.T) {
 			t.Fatalf("%s gave the epic's parent field as %q, want nothing: it was broken out of nothing", path.name, whole.Parent)
 		}
 	}
+}
+
+// trackerExportPath is where the harness looks for the tracker's passive JSONL
+// dump, spelled here as the harness spells it — internal/cli/run.go names the
+// same path as the export a worktree is given. Nothing asks bd where it writes,
+// so the path being bd's own default is the half of this the check proves.
+const trackerExportPath = ".beads/issues.jsonl"
+
+// TestTrackerExportConformance pins the bd behaviour every in-run traceability
+// sweep rests on and which nothing here has ever executed: that a project asking
+// bd for the JSONL dump gets a real file, at the path the harness looks for it,
+// carrying the item a run has just claimed.
+//
+// The harness never writes that file. It copies the primary checkout's copy into
+// each new worktree and holds it out of the change — internal/gitworktree/exports.go
+// — so what makes the copy current is bd's own auto-export and nothing else.
+// Every check of the copying drives a file the test wrote itself and is
+// satisfied whatever bd does, and the path is a constant the harness spells
+// rather than one it asks bd for. A bd that stopped writing the dump, or wrote
+// it somewhere else, would leave every run reading whatever the last release cut
+// committed and reporting work admitted since as simply absent — the
+// confidently wrong answer rather than the visibly stale one.
+//
+// The dump is off in a project bd has just initialized, so a check that only
+// created a tracker would find no file and could say nothing either way. It is
+// enabled here the way the project this harness runs on enables it — one key bd
+// itself writes into .beads/config.yaml — and only that key, so the path the
+// file lands at is bd's default rather than one this check chose.
+//
+// What is asserted is that the item is in the dump, not what the dump says about
+// it. bd flushes on an interval of its own, so a claim reaches the store before
+// it reaches the file, and asserting the status there would be asserting bd's
+// schedule rather than the behaviour a run depends on.
+func TestTrackerExportConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	// bd's own spelling of the knob, and the one the project this harness runs on
+	// carries in its .beads/config.yaml.
+	runCommand(t, project, "bd", "config", "set", "export.auto", "true")
+
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	created, err := client.Create(ctx, NewWorkItem{
+		Title:       "Read the work around this run's own",
+		Description: "A run sweeps the export for what cites what.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// Claimed rather than only created, because the item a run most needs to find
+	// in the dump is its own, and the claim is the last write before it looks.
+	claimed, err := client.Claim(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if claimed.Status != "in_progress" {
+		t.Fatalf("Claim() status = %q, want in_progress; the item this check looks for was never claimed", claimed.Status)
+	}
+
+	content, err := os.ReadFile(filepath.Join(project, trackerExportPath))
+	if err != nil {
+		t.Fatalf("read the tracker's dump at %s error = %v; a project that asked bd for the JSONL export must get "+
+			"one written there, or every run reads the copy the last release cut committed", trackerExportPath, err)
+	}
+	named, err := exportedIDs(content)
+	if err != nil {
+		t.Fatalf("the dump at %s is not the JSONL of work items a run reads it as: %v", trackerExportPath, err)
+	}
+	if !slices.Contains(named, claimed.ID) {
+		t.Fatalf("the dump at %s names %v, want the just-claimed item %s among them; a dump that lags the store is a "+
+			"run reading its own work item as absent", trackerExportPath, named, claimed.ID)
+	}
+}
+
+// exportedIDs is what one JSONL dump names, and refuses a dump whose lines are
+// not work items at all. A file that is there but says nothing a run can read is
+// the same failure as a file that is not there.
+func exportedIDs(content []byte) ([]string, error) {
+	var named []string
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var exported struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(line), &exported); err != nil {
+			return nil, fmt.Errorf("decode %q: %w", line, err)
+		}
+		if exported.ID == "" {
+			return nil, fmt.Errorf("line %q names no work item", line)
+		}
+		named = append(named, exported.ID)
+	}
+	if len(named) == 0 {
+		return nil, errors.New("the dump names nothing")
+	}
+	return named, nil
 }
 
 // parentEdgesOf reports what an item's own parent-child edges name. An edge the
