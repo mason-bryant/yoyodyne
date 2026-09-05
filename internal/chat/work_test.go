@@ -24,14 +24,25 @@ func TestTheHeadlineSaysWhenAnIntegratedChangeLeftItsItemOpen(t *testing.T) {
 	undischarged := promoted
 	undischarged.Undischarged = true
 	undischarged.UndischargedReason = "the design this needs has not landed"
+	undischarged.UndischargedDisposition = "is parked until somebody releases it"
 	headline := undischarged.Headline()
-	if !strings.Contains(headline, "the item stays open") {
-		t.Errorf("an undischarged item reads as an ordinary promotion: %q", headline)
+	// Where the item was left is as much of the answer as that it was not closed:
+	// a parking waits for a person and a dependency releases itself, and a reader
+	// told only "still open" goes looking for the item in a queue nothing is going
+	// to offer it from.
+	if !strings.Contains(headline, "the item is parked until somebody releases it") {
+		t.Errorf("an undischarged item does not say where it was left: %q", headline)
 	}
 	if !strings.Contains(headline, "the design this needs has not landed") {
 		t.Errorf("the headline does not say why the item stays open: %q", headline)
 	}
 	if strings.Contains(headline, "the item is closed") {
 		t.Errorf("the headline claims a closure that did not happen: %q", headline)
+	}
+
+	waiting := undischarged
+	waiting.UndischargedDisposition = "stays open waiting on yoyodyne-impediment"
+	if headline := waiting.Headline(); !strings.Contains(headline, "waiting on yoyodyne-impediment") {
+		t.Errorf("an item left waiting on its impediment does not name it: %q", headline)
 	}
 }

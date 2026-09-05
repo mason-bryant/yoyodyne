@@ -2904,9 +2904,13 @@ func TestPipelineKeepsCompletionOrderingWhenPersistenceOrTheTrackerFails(t *test
 }
 
 type fakeTracker struct {
-	item    beads.WorkItem
-	claimed bool
-	notes   string
+	item beads.WorkItem
+	// alsoHolds is the other work this tracker has, by identifier. It is what
+	// makes an impediment a landing named one the harness can confirm; a tracker
+	// that answered for every identifier could not tell the two cases apart.
+	alsoHolds map[string]beads.WorkItem
+	claimed   bool
+	notes     string
 	// noteRecords is each note as it was recorded, kept beside the accumulated
 	// text above so a reader can tell one account from the next one's. A run that
 	// pauses and is resumed writes two, and the concatenation alone cannot say
@@ -2933,6 +2937,11 @@ type fakeTracker struct {
 	reopened     bool
 	reopenReason string
 	reopenErr    error
+	// blockers is each dependency added to the item, in the order they were
+	// added. It is what says the leave-open path actually made the item wait for
+	// something rather than putting it back bare.
+	blockers   []string
+	blockerErr error
 }
 
 type partialWorktreeManager struct {
@@ -3011,8 +3020,35 @@ func (partialWorktreeManager) CatchUpTarget(context.Context, string) (gitworktre
 	return gitworktree.Catchup{}, errors.New("partial worktree has no remote to catch up to")
 }
 
-func (f *fakeTracker) Show(context.Context, string) (beads.WorkItem, error) {
-	return f.item, nil
+// Show answers for the item this tracker holds and for anything else explicitly
+// put in it, and refuses everything else the way the real client does. Answering
+// for every identifier would make "the tracker has no such work item" untestable,
+// which is the case a landing's impediment marker has to be resolved against.
+func (f *fakeTracker) Show(_ context.Context, id string) (beads.WorkItem, error) {
+	if id == f.item.ID {
+		return f.item, nil
+	}
+	if item, held := f.alsoHolds[id]; held {
+		return item, nil
+	}
+	return beads.WorkItem{}, fmt.Errorf("no work item %s", id)
+}
+
+// holds puts another open work item in this tracker, which is what makes an
+// impediment a landing names one the harness can confirm.
+func (f *fakeTracker) holds(id string) *fakeTracker {
+	return f.holdsItem(beads.WorkItem{ID: id, Title: "The impediment", Status: "open"})
+}
+
+// holdsItem is the same for work that has to be more than open — finished, or
+// already waiting on something — because what the impediment says about itself is
+// what decides whether waiting on it would hold anything back.
+func (f *fakeTracker) holdsItem(item beads.WorkItem) *fakeTracker {
+	if f.alsoHolds == nil {
+		f.alsoHolds = make(map[string]beads.WorkItem)
+	}
+	f.alsoHolds[item.ID] = item
+	return f
 }
 
 func (f *fakeTracker) Claim(context.Context, string) (beads.WorkItem, error) {
@@ -3062,7 +3098,7 @@ func (f *fakeTracker) Complete(_ context.Context, _ string, reason string) (bead
 	return f.item, nil
 }
 
-func (f *fakeTracker) Reopen(_ context.Context, _ string, reason string) (beads.WorkItem, error) {
+func (f *fakeTracker) Reopen(_ context.Context, _ string, reason string, parking domain.WorkItemParking) (beads.WorkItem, error) {
 	f.calls = append(f.calls, "reopen")
 	if f.reopenErr != nil {
 		return beads.WorkItem{}, f.reopenErr
@@ -3072,7 +3108,21 @@ func (f *fakeTracker) Reopen(_ context.Context, _ string, reason string) (beads.
 	f.notes += reason
 	f.noteRecords = append(f.noteRecords, reason)
 	f.item.Status = "open"
+	// The parking is applied exactly as the tracker applies it: an empty one is a
+	// release rather than an omission, so an item put back unparked is one the
+	// queue offers again.
+	f.item.Parking = parking
 	return f.item, nil
+}
+
+func (f *fakeTracker) AddBlocker(_ context.Context, _ string, blockerID string) error {
+	f.calls = append(f.calls, "blocker")
+	if f.blockerErr != nil {
+		return f.blockerErr
+	}
+	f.blockers = append(f.blockers, blockerID)
+	f.item.Dependencies = append(f.item.Dependencies, beads.Dependency{ID: blockerID, Type: "blocks"})
+	return nil
 }
 
 // fakePricer stands in for the ledger that prices work items. It records the

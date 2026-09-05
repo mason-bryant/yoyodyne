@@ -269,12 +269,20 @@ type RunReport struct {
 	Commit         string `json:"commit,omitempty"`
 	WorkItemClosed bool   `json:"work_item_closed,omitempty"`
 	// Undischarged reports an integrated change whose developer claimed it does
-	// not discharge the item, with the account it gave. The item stays open, and
-	// a reader told only that the change was integrated would read it as done —
-	// which is the reading this whole distinction exists to stop.
-	Undischarged       bool   `json:"undischarged,omitempty"`
-	UndischargedReason string `json:"undischarged_reason,omitempty"`
-	RepairAttempts     int    `json:"repair_attempts,omitempty"`
+	// not discharge the item, with the account it gave and where the item was
+	// left. A reader told only that the change was integrated would read it as
+	// done — which is the reading this whole distinction exists to stop — and one
+	// told only that the item is open would go looking for it in a queue nothing
+	// is going to offer it from.
+	//
+	// The disposition is the harness's own derivation rather than this surface's
+	// reading of the two fields beside it: a parking waits for a person and a
+	// dependency releases itself, and a surface that worded that difference for
+	// itself is one that could word it differently from the next.
+	Undischarged            bool   `json:"undischarged,omitempty"`
+	UndischargedReason      string `json:"undischarged_reason,omitempty"`
+	UndischargedDisposition string `json:"undischarged_disposition,omitempty"`
+	RepairAttempts          int    `json:"repair_attempts,omitempty"`
 	// TransientRelaunches counts the provider invocations the run reissued after
 	// one died without judging the work. It is reported beside the repair
 	// attempts and means something different: the provider's weather rather than
@@ -917,9 +925,10 @@ func (r RunReport) Headline() string {
 		}
 		// An item the run deliberately left open is said so here rather than left
 		// to be inferred from the closure not being mentioned. The two read
-		// identically otherwise, and only one of them is work still to do.
+		// identically otherwise, and only one of them is work still to do — and
+		// where the item was left decides who has to do something about it next.
 		if r.Undischarged {
-			closed = " and the item stays open: " + r.UndischargedReason
+			closed = " and the item " + r.UndischargedDisposition + ": " + r.UndischargedReason
 		}
 		return fmt.Sprintf("%s was integrated into %s at %s%s", item, r.TargetBranch, r.Commit, closed)
 	case r.Blocked:

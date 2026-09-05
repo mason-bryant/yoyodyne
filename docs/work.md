@@ -170,9 +170,9 @@ reviewer is committed, fast-forwarded into the target branch, settled in Beads,
 and its worktree and branch removed — the JSON reports the integrated commit and
 what was cleaned up. Settled is closed for nearly every run, and the exception is
 a landing the developer claimed does not discharge the item: an honest "not
-doable yet" lands its evidence like any other change and leaves the item open
-with the claim recorded on it, rather than closing an item against the evidence
-that says the work was not done. [What a landing claims](#what-a-landing-claims)
+doable yet" lands its evidence like any other change and puts the item back in
+the backlog parked, with the claim recorded on it, rather than closing an item
+against the evidence that says the work was not done. [What a landing claims](#what-a-landing-claims)
 is the whole of that. A freshly generated configuration says `human` instead, so
 a new project preserves the worktree for external integration until it opts in.
 Either way the harness refuses `automatic` unless deterministic checks and a
@@ -225,6 +225,57 @@ not handed to anybody: its change is reviewed and promoted exactly as any other
 is, and what changes is only what becomes of the item — it goes back to the
 backlog with the run named on it and the developer's own account of why, rather
 than being recorded as done.
+
+### Where an undischarged item is left
+
+Back in the backlog is not back in the queue. An item returned open with nothing
+marking it is the next thing an autonomous pull selects, which buys another run,
+another diagnosis of the impediment the last run just diagnosed, and a full
+integration each cycle — and because the run that landed the evidence succeeded,
+no brake counts it. So a landing that does not discharge **parks** its item, with
+the developer's account as the parking reason. Parking is the machinery the
+product manager already has: the item keeps its place in the order, says why it
+is not to be started, and is offered by no pull however far the queue drains,
+until somebody releases it with `unpark`. That is what the developer's "why" is
+written for — it is the sentence whoever considers releasing the item reads, so
+it names what would release it.
+
+The one alternative is a marker selection honours. Where the impediment is itself
+a work item, the landing names it and the item is left open waiting on that item
+instead of parked:
+
+````
+```yoyodyne-landing
+{"outcome":"evidence","why":"the conversion needs the management-conversion design first","blocked_by":"yoyodyne-ifd.209.25"}
+```
+````
+
+A dependency releases itself — the item is offered again as soon as the
+impediment closes, with nobody having to remember — where a parking waits for a
+person. There is deliberately no third answer: a claim either names what it is
+waiting for or takes the parking, and bare openness is not on offer.
+
+The marker is developer-written text, so the harness resolves it against the
+tracker before it acts on it. It makes the item wait only where the tracker has
+the named work, that work is not the item itself, is not already closed, and does
+not already wait on this item. The first two would be refused as a dependency;
+the third would be written and hold nothing, which is worse, because the item
+would sit in the queue unparked behind a blocker that is already satisfied; the
+fourth is the cycle a follow-on item makes ordinary.
+
+Anything else takes the parking. The item is held back either way, and the
+parking reason and the item's notes say which marker was asked for and why it was
+not used. That is also what happens if the tracker refuses the dependency anyway —
+a cycle further round the graph than the harness looked, say. Nothing about the
+marker can cost the run its landing: the change is promoted before any of this is
+decided, so failing here would leave the item claimed with nobody watching it,
+which is the one outcome worse than parking it.
+
+A settlement never lifts a parking. An item somebody had parked and then named
+for a run anyway comes back still parked, with the dependency added underneath.
+Where the run parks it instead, the run's reason replaces the one that was there
+and the superseded one is written into the item's notes, because a parking holds
+one value and the decision it replaced still has to be readable.
 
 Three things follow from the claim deciding something, which the report and
 amendment channels do not:

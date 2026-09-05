@@ -169,7 +169,7 @@ that spends more before refusing. Measuring that needs its own harness.
 | `checking` | The protected-path gate first, then every configured check in order | `path_refusal` or `check_failure` while one is outstanding, and clears the other two when a gate passes |
 | `reviewing` | One independent review invocation, its own session, no tools | `review_session_id`, `review_model`, `review_resolved_model`, `review_decision`, `review_summary`, `review_findings`, `review_finding_details`, `review_rounds` |
 | `integrating` | Under the target branch's promotion lease: commit, fast-forward the local target, publish and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
-| `completing` | Record the outcome on the item, settle it — closed when the run's landing discharges it, back in the backlog when it does not — price it | the tracker's record and settlement |
+| `completing` | Record the outcome on the item, settle it — closed when the run's landing discharges it, back in the backlog parked or waiting on a named impediment when it does not — price it | the tracker's record and settlement |
 | `cleaning_up` | Remove the worktree and the branch, each recorded separately | `worktree_removed`, `branch_removed` |
 | `complete` | Nothing outstanding | `completed_at` |
 
@@ -305,7 +305,8 @@ that dies mid-attempt resumes against the budget it had.
 | `Tracker.Claim` | Once, before the worktree is cut |
 | `Tracker.RecordOutcome` | On success, on failure, and on every pause of a claimed run |
 | `Tracker.Complete` | Only on a promotion that is where it will stay and a landing that discharges the item; a merge the forge only queued defers the closure to reconciliation |
-| `Tracker.Reopen` | On a promotion whose landing the developer claimed does not discharge the item, and on one whose claim could not be read |
+| `Tracker.Reopen` | On a promotion whose landing the developer claimed does not discharge the item, and on one whose claim could not be read; the item goes back parked unless the landing named the impediment it waits on |
+| `Tracker.AddBlocker` | On the same promotion where the landing named its impediment, before the item is returned to the backlog |
 | `Tracker.Block` | On every stoppage a person has to decide about, on its own deadline rather than the run's context |
 | Git: worktree created, harness commit, local target fast-forwarded, branch and worktree removed | The phases above |
 | Forge: branch pushed, pull request opened or updated, merge requested, remote target observed | Only where the project publishes |
@@ -397,7 +398,7 @@ listing another process has moved on from. **It never starts a developer.**
 | `held` | A live process holds the run; it is left alone |
 | `resumable` | The run's own pipeline can continue it: a repair loop with durable state, a usage-limit or overload pause, a directive pause, a dependency pause, an operator hold, or a provider stopped on time |
 | `queued` | The forge accepted a merge it has not performed; nothing can be decided until it does |
-| `completed` | The work is promoted — recorded, or found in the target branch by containment — so the item is settled by the run's landing claim, closed or reopened, and the artifacts removed |
+| `completed` | The work is promoted — recorded, or found in the target branch by containment — so the item is settled by the run's landing claim, closed or put back parked or waiting, and the artifacts removed |
 | `blocked` | Nothing could finish the run; the item carries a durable blocker and the work is preserved |
 | `failed` | The run left nothing behind for anyone to act on |
 | `unsettled` | Settlement itself could not finish; the run stays outstanding for the next sweep |
@@ -493,9 +494,11 @@ is unmeasured. Most of these are asserted somewhere in
   through their own preconditions.
 - **A landing the developer claimed does not discharge its item.** Every
   recorded scenario here closes or leaves unclosed for some other reason, so the
-  `landing_outcome`, `landing_reason` and `landing_problem` fields are empty in
-  all of them and no trace holds `Tracker.Reopen`. Both directions of the
-  closure — the run's own and reconciliation's — are asserted in
+  `landing_outcome`, `landing_reason`, `landing_blocked_by`,
+  `landing_impediment_problem` and `landing_problem` fields are empty in all of
+  them and no trace holds `Tracker.Reopen` or the `Tracker.AddBlocker` that
+  precedes it. Both directions of the closure — the run's own and
+  reconciliation's — and both places an undischarged item is left are asserted in
   `internal/orchestrator/landing_test.go`.
 - **Seven of the sixteen pre-claim steps, and the order of all sixteen.** The
   refusals in steps 1, 3, 4, 8, 10, 11, 13, and 14 are enumerated where they are

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -46,7 +47,18 @@ const Fence = "```yoyodyne-landing"
 const (
 	MaxBlockBytes = 8 << 10
 	MaxWhyBytes   = 4 << 10
+	// MaxBlockedByBytes bounds the impediment a leave-open claim names. It is one
+	// work item identifier and nothing else, so the bound is generous for an
+	// identifier and far too small for prose written where an identifier goes.
+	MaxBlockedByBytes = 128
 )
+
+// blockedByPattern is the shape of the work item identifier a leave-open claim
+// names. It mirrors the tracker's own, deliberately rather than by import: this
+// package is the door an untrusted reply comes through, and a marker that is not
+// an identifier has to be refused where the claim is read rather than carried as
+// far as the write that would refuse it.
+var blockedByPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // Outcome is what a landing does to the work item it was made for. The
 // vocabulary is deliberately not the run's — a run that lands evidence
@@ -85,6 +97,18 @@ type Claim struct {
 	// leaves whoever reads the item afterwards exactly where the false closure
 	// left them.
 	Why string `json:"why"`
+	// BlockedBy is the impediment, named as the work item this one now waits for.
+	// It is the one way to ask for the item to be left open rather than parked,
+	// and it is optional because the default is the parking: an undischarged item
+	// returned to the backlog bare is one autonomous selection picks again
+	// immediately, for another run and another diagnosis of the same impediment.
+	//
+	// There is deliberately no way to ask for bare openness. The marker is what
+	// selection actually honours — a blocking dependency holds the item back until
+	// the impediment closes, and then releases it without anybody remembering to —
+	// so a claim that leaves the item open either names what it is waiting for or
+	// gets the parking.
+	BlockedBy string `json:"blocked_by,omitempty"`
 }
 
 // Made reports a claim a developer actually made, as opposed to the zero claim a
@@ -101,6 +125,17 @@ func (c Claim) Made() bool { return c.Outcome != "" }
 // ever stored, and this is the derivation every closure site reads.
 func (c Claim) Discharges() bool { return c.Outcome != OutcomeEvidence }
 
+// Impediment is the work item a leave-open claim named, and is empty for every
+// other claim. A claim that does not discharge its item and names none is the
+// default, which parks.
+func (c Claim) Impediment() string { return strings.TrimSpace(c.BlockedBy) }
+
+// Parks reports a claim whose item goes back to the backlog parked. It is the
+// default for a landing that does not discharge, and it is stated as the absence
+// of the marker rather than as a third outcome so that a claim can never ask for
+// an undischarged item to sit in the queue with nothing holding it back.
+func (c Claim) Parks() bool { return !c.Discharges() && c.Impediment() == "" }
+
 // Validate reports every contract violation in the claim at once.
 func (c Claim) Validate() error {
 	var problems []error
@@ -113,6 +148,20 @@ func (c Claim) Validate() error {
 		problems = append(problems, errors.New("why is required"))
 	case len(trimmed) > MaxWhyBytes:
 		problems = append(problems, fmt.Errorf("why is %d bytes, limit is %d", len(trimmed), MaxWhyBytes))
+	}
+	// The marker is refused on a discharging claim rather than ignored there. A
+	// developer that wrote both said two things that cannot both be true — the
+	// item closes, and it waits for something — and guessing which it meant is how
+	// a closed item comes to carry a dependency nobody can account for.
+	if impediment := c.Impediment(); impediment != "" {
+		switch {
+		case c.Outcome.Valid() && c.Discharges():
+			problems = append(problems, errors.New(`blocked_by is only for a landing that does not discharge the item`))
+		case len(impediment) > MaxBlockedByBytes:
+			problems = append(problems, fmt.Errorf("blocked_by is %d bytes, limit is %d", len(impediment), MaxBlockedByBytes))
+		case !blockedByPattern.MatchString(impediment):
+			problems = append(problems, fmt.Errorf("blocked_by %q must be a work item identifier", impediment))
+		}
 	}
 	if err := errors.Join(problems...); err != nil {
 		return fmt.Errorf("invalid landing claim: %w", err)
@@ -131,6 +180,14 @@ func (c Claim) Describe() string {
 	headline := "The developer claims this change discharges the work item."
 	if !c.Discharges() {
 		headline = "The developer claims this change lands evidence and does not discharge the work item."
+		// Which of the two undischarged landings it is, because they leave the item
+		// in different places and the reviewer is the only reader that sees the
+		// claim beside the change that was offered under it.
+		if c.Parks() {
+			headline += " The item is parked with that account as its parking reason."
+		} else {
+			headline += " The item is left open waiting on " + c.Impediment() + "."
+		}
 	}
 	return headline + "\nWhy: " + strings.Join(strings.Fields(c.Why), " ")
 }
@@ -192,6 +249,7 @@ func Decode(payload string) (Claim, error) {
 		return Claim{}, err
 	}
 	claim.Why = strings.TrimSpace(claim.Why)
+	claim.BlockedBy = claim.Impediment()
 	return claim, nil
 }
 
@@ -210,6 +268,16 @@ To claim the second, put exactly one block of this shape in your reply, ahead of
 {"outcome":"evidence","why":"what you landed instead, and what has to happen before the item can be discharged"}
 ` + "```" + `
 
-"discharged" is the ordinary landing. "evidence" is a landing worth keeping that does not discharge the item: your change integrates exactly as it would have, the item stays open with your reason recorded on it, and nothing is written down as done that was not. The reviewer is shown which one you claimed, so a diagnosis is judged as a diagnosis rather than as a missing implementation.
+"discharged" is the ordinary landing. "evidence" is a landing worth keeping that does not discharge the item: your change integrates exactly as it would have, nothing is written down as done that was not, and the item is parked with your account of the claim as its parking reason. Parking keeps the item in the product manager's order and says why it is not to be started, so nothing selects it again until somebody releases it. Write the "why" accordingly: name what would release the item, because that sentence is what whoever considers releasing it reads.
+
+Where you can name the impediment as another work item, say so and the item is left open waiting on that item instead of parked:
+
+` + "```" + `yoyodyne-landing
+{"outcome":"evidence","why":"what you landed instead, and what has to happen before the item can be discharged","blocked_by":"the-work-item-that-has-to-land-first"}
+` + "```" + `
+
+That is the only alternative to the parking, and it is deliberate: an item put back with nothing marking it is one the harness picks again straight away, for another run and another diagnosis of the same impediment. Name a work item that exists and is unfinished — you cannot open one, and finished work holds nothing back. The harness checks the tracker for it and takes the parking where the answer is anything else, so a marker you guessed at costs nothing and buys nothing. If there is no such item, leave the marker out, take the parking, and name the work that has to be admitted in your summary.
+
+The reviewer is shown which landing you claimed, so a diagnosis is judged as a diagnosis rather than as a missing implementation.
 
 Claim "evidence" for work you found is not doable yet and landed the evidence for, not for work you simply did not finish. Something that stopped you is a failure, and you report it the way your role already reports one.`
