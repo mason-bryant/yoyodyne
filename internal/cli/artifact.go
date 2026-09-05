@@ -225,7 +225,7 @@ func approveArtifact(args []string, stdout, stderr io.Writer) int {
 		return writeJSON(stdout, stderr, artifactOutput{
 			Artifacts:     listed,
 			Approvals:     artifactApprovals(listed, policy),
-			PendingCommit: artifact.PendingCommit(approved.Path),
+			PendingCommit: artifact.PendingCommit(store.RepositoryRoot, approved.Path),
 		})
 	}
 	fmt.Fprintf(stdout, "%s [%s, %s] %s\n", approved.ID, approved.Kind, approved.Status, approved.Title)
@@ -236,10 +236,10 @@ func approveArtifact(args []string, stdout, stderr io.Writer) int {
 	// gate that has now opened. It is neither.
 	fmt.Fprintln(stdout, "recorded in the document's frontmatter; nothing the document says changed, and no gate moved")
 	// And where that record now sits, which is the other thing said every time:
-	// this command wrote into the operator's checkout, and the write stops there.
-	// It is printed after the approval rather than before it because what they
-	// asked for is the approval and this is what it cost.
-	fmt.Fprintln(stdout, artifact.PendingCommit(approved.Path))
+	// this command wrote into the checkout the configuration pointed it at, and
+	// the write stops there. It is printed after the approval rather than before
+	// it because what they asked for is the approval and this is what it cost.
+	fmt.Fprintln(stdout, artifact.PendingCommit(store.RepositoryRoot, approved.Path))
 	return 0
 }
 
@@ -435,7 +435,9 @@ stops nothing that reads it; approving writes nothing but the approval, and the
 document itself stays the owning role's to change. That write lands in your
 checkout and stops there -- nothing commits it and nothing opens a pull request
 for it -- so the document is an uncommitted change until you commit it, and a run
-refuses to start while it is. Approving says so as it writes. What your approval
+against that checkout refuses to start while it is. Approving says so as it
+writes, naming the checkout, which is the one this configuration points at rather
+than whichever one you are standing in. What your approval
 of the goals decides is what reaches the work queue: under approvals.work_items:
 automatic, work that traces to a goal an approved goals document states is
 admitted without asking you, and anything else is still put to you.

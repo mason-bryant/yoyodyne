@@ -135,9 +135,31 @@ closed with the ruling stated in the tracker item's notes. The governed designs 
 not carry it — `docs/designs/artifact-contract.md` says nothing about how an
 artifact write reaches disk. The tracker is not readable from a developer run, and
 it is not what a reviewer is shown, which is precisely how two runs came to spend
-six review rounds on a question that had been settled for a week. That document is
-the architect's, so the correction is filed as an amendment rather than written
-here.
+six review rounds on a question that had been settled for a week.
+
+That document is the architect's, so the correction is not written here. It is
+proposed instead, and the proposal is a record somebody can read back rather than
+a claim this document makes about itself:
+
+```sh
+yoyo amendment show amendment-330a8eb3e78dc673758649b5919b0e19
+```
+
+That proposal — *artifact-contract records the settled publish shape for typed
+artifact writes* — was raised on 2026-09-05 and **approved the same day** under
+the architect's authority, for `artifact-contract` to gain a section carrying the
+ifd.100.2 ruling verbatim. A later run raised the same correction again as
+`amendment-958c5395620274ee990f85cdf1c5204f`, which is still undecided and asks
+for nothing the approved one does not.
+
+**The gap is not closed by either of them, and stands as this document is
+written.** An approval records that the owner's authority came down in favour of
+the change; the revision itself is still the architect's to make, and
+`docs/designs/artifact-contract.md` at this base carries one revision, its
+creation on 2026-08-23, and no section about how a write reaches disk. So a
+developer run or a reviewer reading the governed designs today still finds the
+publish shape nowhere, exactly as before. What closes it is that revision being
+recorded.
 
 ## What was built against the ruling
 
@@ -158,8 +180,14 @@ met the ruling's cost as a refusal from an unrelated command — which is the ex
 friction the product manager recorded on ifd.100.2 as the reason the shape
 question mattered operationally, not only for governance.
 
-So `approve` now says it, naming the file, and `--json` carries the same sentence
-as `pending_commit`. The words live in `artifact.PendingCommit` rather than in the
+So `approve` now says it, naming the file and the checkout the write landed in,
+and `--json` carries the same sentence as `pending_commit`. The checkout is named
+because which one it is follows the configuration the command read: `--config`, a
+`YOYODYNE_CONFIG`, and a linked worktree carrying its own `.yoyodyne` each point
+`approve` at a different repository, and the run that refuses is a run over the
+one that was written to rather than over wherever the operator was standing.
+
+The words live in `artifact.PendingCommit` rather than in the
 command, because every surface that writes an approval owes the operator this same
 fact and a second surface wording it differently would be a second account of what
 the harness just did — ifd.100's chat write surface being the next one to need it.
