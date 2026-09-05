@@ -40,17 +40,39 @@ import (
 // confused with JSON a role happens to be discussing.
 const Fence = "```yoyodyne-sweep"
 
-// The bounds one turn's account is held to. A pass that found forty things has
-// found something systemic, and the right answer to that is the summary saying
-// so rather than forty entries nobody reads — so the cap is small enough to
-// force that sentence and large enough that an ordinary busy pass fits inside
-// it. The block bound is the untrusted payload the whole thing is decoded from.
+// The bounds one turn's account is held to. A pass that found forty things in
+// one turn has found something systemic, and the right answer to that is the
+// summary saying so rather than forty entries nobody reads — so the cap is small
+// enough to force that sentence and large enough that an ordinary busy turn fits
+// inside it. The block bound is the untrusted payload the whole thing is decoded
+// from.
 const (
 	MaxFindings     = 20
 	MaxQuestions    = 5
 	MaxSummaryBytes = 4 << 10
 	MaxTextBytes    = 2 << 10
 	MaxBlockBytes   = 32 << 10
+)
+
+// The bounds a whole firing's merged account is held to, which are deliberately
+// not the per-turn ones above.
+//
+// A firing takes several turns and folds their accounts together, so a pass that
+// legitimately reported the per-turn maximum on each of four turns has four times
+// that many findings — and holding the merged account to the per-turn cap would
+// refuse exactly the heavy pass iteration exists for. It refused it at the worst
+// possible moment, too: the record is validated as it is written, so what was
+// discarded was the whole durable report of the busiest passes, which is the one
+// thing the recurring sweep exists to produce.
+//
+// So the pass bounds are what MaxMergedTurns turns at the per-turn caps come to.
+// MaxMergedTurns is stated here rather than read from the configuration because
+// this package is the channel and not the schedule; a test where both are visible
+// keeps it at or above the largest turn bound a task may configure.
+const (
+	MaxMergedTurns   = 10
+	MaxPassFindings  = MaxFindings * MaxMergedTurns
+	MaxPassQuestions = MaxQuestions * MaxMergedTurns
 )
 
 // maxFindingsText and maxQuestionsText are the same bounds as the contract
@@ -183,6 +205,11 @@ type Result struct {
 }
 
 // Validate reports every contract violation in the result at once.
+//
+// It is the contract a whole firing's account is held to, so its volume bounds
+// are the pass ones: this is what the durable record validates against, and a
+// record is written per firing rather than per turn. What one turn may send is a
+// tighter question, asked by validateTurn where a turn's block is decoded.
 func (r Result) Validate() error {
 	var problems []error
 	if !r.Status.Valid() {
@@ -194,16 +221,16 @@ func (r Result) Validate() error {
 	case len(summary) > MaxSummaryBytes:
 		problems = append(problems, fmt.Errorf("summary is %d bytes, limit is %d", len(summary), MaxSummaryBytes))
 	}
-	if len(r.Findings) > MaxFindings {
-		problems = append(problems, fmt.Errorf("%d findings in one pass, limit is %d", len(r.Findings), MaxFindings))
+	if len(r.Findings) > MaxPassFindings {
+		problems = append(problems, fmt.Errorf("%d findings in one pass, limit is %d", len(r.Findings), MaxPassFindings))
 	}
 	for i, finding := range r.Findings {
 		if err := finding.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("findings[%d]: %w", i, err))
 		}
 	}
-	if len(r.Questions) > MaxQuestions {
-		problems = append(problems, fmt.Errorf("%d questions in one pass, limit is %d", len(r.Questions), MaxQuestions))
+	if len(r.Questions) > MaxPassQuestions {
+		problems = append(problems, fmt.Errorf("%d questions in one pass, limit is %d", len(r.Questions), MaxPassQuestions))
 	}
 	for i, question := range r.Questions {
 		switch trimmed := strings.TrimSpace(question); {
@@ -217,6 +244,24 @@ func (r Result) Validate() error {
 		return fmt.Errorf("invalid sweep result: %w", err)
 	}
 	return nil
+}
+
+// validateTurn holds one turn's account to what a turn may send, which is the
+// tighter of the two contracts and the one the role is told about. Everything
+// else about the account is the same question either way, so it defers to
+// Validate for the rest rather than restating it.
+func (r Result) validateTurn() error {
+	var problems []error
+	if len(r.Findings) > MaxFindings {
+		problems = append(problems, fmt.Errorf("%d findings in one turn, limit is %d", len(r.Findings), MaxFindings))
+	}
+	if len(r.Questions) > MaxQuestions {
+		problems = append(problems, fmt.Errorf("%d questions in one turn, limit is %d", len(r.Questions), MaxQuestions))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid sweep result: %w", err)
+	}
+	return r.Validate()
 }
 
 // SilentRepairs counts the fixes this pass filed nothing for. It is what a
@@ -235,17 +280,61 @@ func (r Result) SilentRepairs() int {
 // accumulate and the last turn's status and summary stand, because a pass that
 // took three turns found everything all three of them found and finished the way
 // the last one says it did.
+//
+// It bounds what it accumulates at the pass caps, and that bounding is the point
+// rather than a detail: what it produces is written straight into a durable
+// record that validates as it is written, so an unbounded merge is a merge that
+// can make the record unwritable — and the report it would then lose is the whole
+// account of the busiest pass. Bounding here keeps the earlier findings, which
+// are the ones a later turn was told not to repeat, and says in the summary how
+// many were dropped, because a silently shortened list reads as a pass that found
+// less than it did.
 func (r Result) Merge(next Result) Result {
-	merged := Result{
-		Status:    next.Status,
-		Summary:   next.Summary,
-		Findings:  append(append([]Finding(nil), r.Findings...), next.Findings...),
-		Questions: append(append([]string(nil), r.Questions...), next.Questions...),
-	}
+	merged := Result{Status: next.Status, Summary: next.Summary}
 	if strings.TrimSpace(merged.Summary) == "" {
 		merged.Summary = r.Summary
 	}
+	findings := append(append([]Finding(nil), r.Findings...), next.Findings...)
+	questions := append(append([]string(nil), r.Questions...), next.Questions...)
+	droppedFindings, droppedQuestions := 0, 0
+	if len(findings) > MaxPassFindings {
+		droppedFindings = len(findings) - MaxPassFindings
+		findings = findings[:MaxPassFindings]
+	}
+	if len(questions) > MaxPassQuestions {
+		droppedQuestions = len(questions) - MaxPassQuestions
+		questions = questions[:MaxPassQuestions]
+	}
+	merged.Findings = findings
+	merged.Questions = questions
+	merged.Summary = noteDropped(merged.Summary, droppedFindings, droppedQuestions)
 	return merged
+}
+
+// noteDropped says in the summary what the pass bounds cut, and keeps the summary
+// inside its own bound while doing it. A note that pushed the summary past what
+// the record accepts would lose the report it exists to preserve.
+func noteDropped(summary string, findings, questions int) string {
+	if findings == 0 && questions == 0 {
+		return summary
+	}
+	note := fmt.Sprintf("(This pass reached its bound of %d findings and %d questions; %d finding(s) and %d question(s) from its later turns are not listed.)",
+		MaxPassFindings, MaxPassQuestions, findings, questions)
+	joined := strings.TrimSpace(summary)
+	if joined != "" {
+		joined += " "
+	}
+	joined += note
+	if len(joined) <= MaxSummaryBytes {
+		return joined
+	}
+	// The note is what a reader most needs of the two, so it is the part kept
+	// whole: the summary is cut back far enough to leave room for it.
+	room := MaxSummaryBytes - len(note) - 2
+	if room <= 0 {
+		return note[:min(len(note), MaxSummaryBytes)]
+	}
+	return strings.TrimSpace(summary[:min(len(summary), room)]) + " " + note
 }
 
 // Extract splits a reply into what the role said and the account it gave of its
@@ -292,7 +381,10 @@ func Decode(payload string) (*Result, error) {
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("decode sweep: unexpected trailing content after the sweep result")
 	}
-	if err := decoded.Validate(); err != nil {
+	// Held to the per-turn contract, which is the tighter of the two and the one
+	// the role was told: this is one turn's block, whatever a whole pass may
+	// accumulate across several of them.
+	if err := decoded.validateTurn(); err != nil {
 		return nil, err
 	}
 	return &decoded, nil

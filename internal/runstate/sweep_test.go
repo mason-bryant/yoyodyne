@@ -3,6 +3,7 @@ package runstate
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,5 +199,60 @@ func TestASweepMustSayWhatBecameOfIt(t *testing.T) {
 	}
 	if err := newSweepStore(t).Append(quiet); err != nil {
 		t.Fatalf("Append() of a quiet pass error = %v", err)
+	}
+}
+
+// The record has to hold what a whole firing can actually produce. A firing folds
+// at most sweep.MaxMergedTurns turns together and each turn's block is capped at
+// sweep.MaxBlockBytes, so an encoded bound below that product is a bound that
+// throws the busiest passes' reports away as it writes them.
+func TestTheEncodedBoundHoldsTheLargestFiringAnAccountCanReach(t *testing.T) {
+	t.Parallel()
+
+	reachable := sweep.MaxMergedTurns * sweep.MaxBlockBytes
+	if maxEncodedSweepBytes <= reachable {
+		t.Fatalf("the encoded sweep bound is %d bytes and a firing's account can reach %d (%d turns of %d), so the heaviest passes would not store",
+			maxEncodedSweepBytes, reachable, sweep.MaxMergedTurns, sweep.MaxBlockBytes)
+	}
+}
+
+// And the store actually takes one. The bound above is arithmetic; this writes a
+// pass-sized account and reads it back, which is what the durable report is for.
+func TestAPassSizedAccountIsWrittenAndReadBack(t *testing.T) {
+	t.Parallel()
+
+	store := newSweepStore(t)
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	account := &sweep.Result{Status: sweep.StatusComplete, Summary: "a very heavy pass"}
+	for i := 0; i < sweep.MaxPassFindings; i++ {
+		account.Findings = append(account.Findings, sweep.Finding{
+			Issue:       strings.Repeat("a thing that was found ", 40),
+			Disposition: sweep.DispositionFiled,
+			Filed:       []string{"yoyodyne-ifd.300"},
+		})
+	}
+	for i := 0; i < sweep.MaxPassQuestions; i++ {
+		account.Questions = append(account.Questions, "something only a person can settle")
+	}
+	recorded := Sweep{
+		Task:      "a-sweep",
+		Role:      "development-manager",
+		StartedAt: at,
+		EndedAt:   at.Add(time.Minute),
+		Turns:     sweep.MaxMergedTurns,
+		Result:    account,
+	}
+	if err := store.Append(recorded); err != nil {
+		t.Fatalf("Append() of a pass-sized account error = %v", err)
+	}
+	listed, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].Result == nil {
+		t.Fatalf("listed = %+v, want the pass-sized account read back", listed)
+	}
+	if len(listed[0].Result.Findings) != sweep.MaxPassFindings {
+		t.Errorf("findings = %d, want the %d that were written", len(listed[0].Result.Findings), sweep.MaxPassFindings)
 	}
 }

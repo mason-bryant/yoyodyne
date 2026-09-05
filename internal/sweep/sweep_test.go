@@ -180,3 +180,107 @@ func TestContractExampleDecodes(t *testing.T) {
 		t.Fatalf("the contract's own example does not decode: %v\n%s", err, example)
 	}
 }
+
+// The bound a whole firing is held to is not the bound one turn is held to, and
+// the difference is the heavy pass this whole mechanism exists for: a role that
+// legitimately reported the per-turn maximum on each of several turns produces a
+// merged account several times that size, and holding it to the per-turn cap
+// discarded the durable report of exactly those passes.
+func TestAFullPassWorthOfTurnsStillValidates(t *testing.T) {
+	t.Parallel()
+
+	merged := Result{Status: StatusComplete, Summary: "a heavy pass"}
+	for turn := 0; turn < MaxMergedTurns; turn++ {
+		next := Result{Status: StatusComplete, Summary: "a heavy pass"}
+		for i := 0; i < MaxFindings; i++ {
+			next.Findings = append(next.Findings, Finding{Issue: "a thing", Disposition: DispositionFiled})
+		}
+		for i := 0; i < MaxQuestions; i++ {
+			next.Questions = append(next.Questions, "something only a person can settle")
+		}
+		merged = merged.Merge(next)
+	}
+	if len(merged.Findings) != MaxPassFindings {
+		t.Errorf("findings = %d, want every turn's kept up to %d", len(merged.Findings), MaxPassFindings)
+	}
+	if len(merged.Questions) != MaxPassQuestions {
+		t.Errorf("questions = %d, want every turn's kept up to %d", len(merged.Questions), MaxPassQuestions)
+	}
+	if err := merged.Validate(); err != nil {
+		t.Fatalf("a full pass worth of turns does not validate, so its durable report would be discarded: %v", err)
+	}
+}
+
+// The per-turn cap still binds what one turn may send, which is the number the
+// contract states and the one that keeps a single reply readable.
+func TestOneTurnIsStillHeldToThePerTurnBound(t *testing.T) {
+	t.Parallel()
+
+	overTurn := Result{Status: StatusComplete, Summary: "one very long turn"}
+	for i := 0; i <= MaxFindings; i++ {
+		overTurn.Findings = append(overTurn.Findings, Finding{Issue: "a thing", Disposition: DispositionLeft})
+	}
+	if err := overTurn.validateTurn(); err == nil {
+		t.Fatalf("a turn carrying %d findings passed the per-turn bound of %d", len(overTurn.Findings), MaxFindings)
+	}
+	// The same account is fine as a whole pass's, which is the distinction the two
+	// contracts exist to draw.
+	if err := overTurn.Validate(); err != nil {
+		t.Fatalf("an account within the pass bound does not validate as one: %v", err)
+	}
+}
+
+// Beyond the pass bound the merge drops rather than growing without limit, and
+// says so: a silently shortened list reads as a pass that found less than it did.
+func TestMergeSaysWhatItDropped(t *testing.T) {
+	t.Parallel()
+
+	full := Result{Status: StatusComplete, Summary: "the pass"}
+	for i := 0; i < MaxPassFindings; i++ {
+		full.Findings = append(full.Findings, Finding{Issue: "a thing", Disposition: DispositionLeft})
+	}
+	for i := 0; i < MaxPassQuestions; i++ {
+		full.Questions = append(full.Questions, "a question")
+	}
+	merged := full.Merge(Result{
+		Status:    StatusComplete,
+		Summary:   "one turn too many",
+		Findings:  []Finding{{Issue: "the one over", Disposition: DispositionLeft}},
+		Questions: []string{"the question over"},
+	})
+	if len(merged.Findings) != MaxPassFindings || len(merged.Questions) != MaxPassQuestions {
+		t.Errorf("merged = %d findings and %d questions, want them held at the pass bound",
+			len(merged.Findings), len(merged.Questions))
+	}
+	if !strings.Contains(merged.Summary, "not listed") {
+		t.Errorf("summary = %q, want it to say what was dropped", merged.Summary)
+	}
+	if err := merged.Validate(); err != nil {
+		t.Fatalf("a merge held at its own bound does not validate: %v", err)
+	}
+}
+
+// The note about what was dropped must not itself push the summary past what the
+// record accepts, which would lose the report the note exists to preserve.
+func TestTheDroppedNoteKeepsTheSummaryInsideItsBound(t *testing.T) {
+	t.Parallel()
+
+	full := Result{Status: StatusComplete, Summary: strings.Repeat("x", MaxSummaryBytes)}
+	for i := 0; i < MaxPassFindings; i++ {
+		full.Findings = append(full.Findings, Finding{Issue: "a thing", Disposition: DispositionLeft})
+	}
+	merged := full.Merge(Result{
+		Status:   StatusComplete,
+		Summary:  strings.Repeat("y", MaxSummaryBytes),
+		Findings: []Finding{{Issue: "the one over", Disposition: DispositionLeft}},
+	})
+	if len(merged.Summary) > MaxSummaryBytes {
+		t.Errorf("summary is %d bytes, and the record's bound is %d", len(merged.Summary), MaxSummaryBytes)
+	}
+	if !strings.Contains(merged.Summary, "not listed") {
+		t.Errorf("summary = %q, want the note kept whole when the summary is cut", merged.Summary)
+	}
+	if err := merged.Validate(); err != nil {
+		t.Fatalf("a merge with a full-length summary does not validate: %v", err)
+	}
+}

@@ -291,7 +291,12 @@ func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask
 	}
 	recorded.EndedAt = t.now()
 	recorded.Result = merged
-	recorded.Problem = strings.Join(problems, "; ")
+	// Bounded, because the record's own bound on this prose refuses a record that
+	// carries too much of it — and every one of these sentences ends with a
+	// provider's error message, whose length nothing here controls. Losing a whole
+	// pass's report because the description of a smaller failure ran long is the
+	// exact trade this must not make.
+	recorded.Problem = boundedProblem(problems)
 	fired.Problem = recorded.Problem
 	if merged != nil {
 		fired.Findings = len(merged.Findings)
@@ -313,13 +318,56 @@ func (t Trigger) settle(ctx context.Context, fired *Fired, recorded runstate.Swe
 	write, stopWriting := recordContext(ctx)
 	defer stopWriting()
 	if err := t.Reports.Append(recorded); err != nil {
-		fired.Problem = appendProblem(fired.Problem, fmt.Sprintf(
-			"the pass of the recurring task %s could not be recorded, so what it found reaches nobody: %v", recorded.Task, err))
+		fired.Problem = appendProblem(fired.Problem, t.recordWithoutTheAccount(recorded, err))
 	}
-	if _, err := t.Claims.Settle(write, recorded.Task, fired.Problem); err != nil {
+	if _, err := t.Claims.Settle(write, recorded.Task, boundedProblem([]string{fired.Problem})); err != nil {
 		fired.Problem = appendProblem(fired.Problem, fmt.Sprintf(
 			"what became of the firing of the recurring task %s could not be written against its cadence: %v", recorded.Task, err))
 	}
+}
+
+// recordWithoutTheAccount is the second attempt at recording a firing whose first
+// attempt was refused, and it says what became of both.
+//
+// The bounds above are meant to make the first attempt always succeed, and this
+// is here because "meant to" is not a guarantee an operator can read. A firing
+// that spent turns and left nothing behind is indistinguishable from one that
+// never happened, so what is written instead is the same firing with its account
+// left off: which task, which role, how many turns, what it cost, and the fact
+// that the account itself would not store. That is a much smaller record, built
+// only from what the harness itself knows, so what could refuse it is a store
+// that cannot be written at all — which is a different problem and one every
+// other record on this machine has too.
+func (t Trigger) recordWithoutTheAccount(recorded runstate.Sweep, refused error) string {
+	lost := fmt.Sprintf("the account of the pass of the recurring task %s would not store, so this record carries the firing without it: %v",
+		recorded.Task, refused)
+	reduced := recorded
+	reduced.Result = nil
+	reduced.Problem = boundedProblem([]string{lost, recorded.Problem})
+	if err := t.Reports.Append(reduced); err != nil {
+		return fmt.Sprintf("the pass of the recurring task %s could not be recorded at all, so what it found reaches nobody: %v; and again without its account: %v",
+			recorded.Task, refused, err)
+	}
+	return lost
+}
+
+// boundedProblem joins what went wrong with a firing and holds it to what the
+// durable record accepts. The pieces are kept in the order they happened and the
+// join is cut rather than dropped, so what survives is the earliest failures —
+// which are the ones that caused the rest.
+func boundedProblem(problems []string) string {
+	var kept []string
+	for _, problem := range problems {
+		if strings.TrimSpace(problem) != "" {
+			kept = append(kept, strings.TrimSpace(problem))
+		}
+	}
+	joined := strings.Join(kept, "; ")
+	if len(joined) <= runstate.MaxSweepTextBytes {
+		return joined
+	}
+	const cut = " […]"
+	return strings.TrimSpace(joined[:runstate.MaxSweepTextBytes-len(cut)]) + cut
 }
 
 func appendProblem(existing, addition string) string {

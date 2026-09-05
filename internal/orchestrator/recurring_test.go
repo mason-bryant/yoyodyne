@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -390,3 +391,161 @@ func (recurringClock) Now() time.Time { return recurringNow }
 type movingRecurringClock struct{ now time.Time }
 
 func (c *movingRecurringClock) Now() time.Time { return c.now }
+
+// The case iteration exists for, end to end: a firing that takes every one of its
+// turns and reports the per-turn maximum on each of them still lands a durable
+// report. It is here rather than only in the sweep package because the defect it
+// guards was in the seam — per-turn bounds applied to a merged account — and what
+// it cost was the whole report of the busiest passes.
+func TestAFiringAtEveryTurnsMaximumStillLandsItsReport(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	tasks := hourlyTask("sweep")
+	task := tasks["a-sweep"]
+	task.MaxTurns = config.MaxRecurringTurns
+	tasks["a-sweep"] = task
+
+	crowded := func(status sweep.Status) *sweep.Result {
+		result := &sweep.Result{Status: status, Summary: "a heavy pass"}
+		for i := 0; i < sweep.MaxFindings; i++ {
+			result.Findings = append(result.Findings, sweep.Finding{
+				Issue:       "a thing that was found",
+				Disposition: sweep.DispositionFiled,
+			})
+		}
+		for i := 0; i < sweep.MaxQuestions; i++ {
+			result.Questions = append(result.Questions, "something only a person can settle")
+		}
+		return result
+	}
+	var answers []orchestrator2Answer
+	for turn := 0; turn < task.MaxTurns-1; turn++ {
+		answers = append(answers, orchestrator2Answer{result: crowded(sweep.StatusMore)})
+	}
+	answers = append(answers, orchestrator2Answer{result: crowded(sweep.StatusComplete)})
+	role := &wokenRole{answers: answers}
+	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if fired.Fired[0].Turns != task.MaxTurns {
+		t.Errorf("turns = %d, want every one of the %d the task allows", fired.Fired[0].Turns, task.MaxTurns)
+	}
+	recorded, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("recorded = %+v, want the firing's durable report", recorded)
+	}
+	if recorded[0].Result == nil {
+		t.Fatalf("the heaviest pass recorded no account: %s", recorded[0].Problem)
+	}
+	if got := len(recorded[0].Result.Findings); got != task.MaxTurns*sweep.MaxFindings {
+		t.Errorf("findings = %d, want every turn's %d", got, task.MaxTurns*sweep.MaxFindings)
+	}
+	if fired.Fired[0].Problem != "" {
+		t.Errorf("problem = %q, want a heavy pass recorded without complaint", fired.Fired[0].Problem)
+	}
+}
+
+// The turn bound a task may configure has to fit inside the number of turns one
+// account can fold together, or the configuration permits a firing whose own
+// findings the merge would start dropping.
+func TestTheConfigurableTurnBoundFitsTheMergeBound(t *testing.T) {
+	t.Parallel()
+
+	if config.MaxRecurringTurns > sweep.MaxMergedTurns {
+		t.Fatalf("a task may configure %d turns and an account folds %d together, so the extra turns' findings would be dropped",
+			config.MaxRecurringTurns, sweep.MaxMergedTurns)
+	}
+}
+
+// Every problem sentence ends with a provider's error message, whose length
+// nothing here controls. A record refused because those ran long would lose the
+// pass over the description of a smaller failure.
+func TestLongFailureMessagesDoNotCostTheRecord(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	tasks := hourlyTask("sweep")
+	task := tasks["a-sweep"]
+	task.MaxTurns = config.MaxRecurringTurns
+	tasks["a-sweep"] = task
+	role := &wokenRole{answers: []orchestrator2Answer{{
+		result: &sweep.Result{Status: sweep.StatusMore, Summary: "started"},
+	}, {
+		err: errors.New(strings.Repeat("the provider said something very long. ", 400)),
+	}}}
+	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if strings.Contains(fired.Fired[0].Problem, "reaches nobody") {
+		t.Errorf("problem = %q, want the record kept despite the long failure", fired.Fired[0].Problem)
+	}
+	recorded, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("recorded = %+v, want the firing's durable report", recorded)
+	}
+	if len(recorded[0].Problem) > runstate.MaxSweepTextBytes {
+		t.Errorf("problem is %d bytes, and the record's bound is %d", len(recorded[0].Problem), runstate.MaxSweepTextBytes)
+	}
+	if recorded[0].Result == nil {
+		t.Error("the turn that did answer left no account on the record")
+	}
+}
+
+// The bounds above are meant to make the first write always succeed, and this is
+// what happens when something makes it fail anyway: the firing is recorded
+// without its account rather than not at all, because a pass that spent turns and
+// left nothing behind is indistinguishable from one that never happened.
+func TestARefusedRecordStillLeavesTheFiringBehind(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	reports := &refusingReports{store: store}
+	role := &wokenRole{answers: []orchestrator2Answer{{result: complete("found one thing",
+		sweep.Finding{Issue: "a dead claim", Disposition: sweep.DispositionFixed})}}}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: reports, Roles: role, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if !strings.Contains(fired.Fired[0].Problem, "would not store") {
+		t.Errorf("problem = %q, want it to say the account would not store", fired.Fired[0].Problem)
+	}
+	recorded, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("recorded = %+v, want the firing recorded without its account", recorded)
+	}
+	if recorded[0].Result != nil {
+		t.Errorf("recorded = %+v, want the account left off the second attempt", recorded[0])
+	}
+	if recorded[0].Turns != 1 || recorded[0].Task != "a-sweep" {
+		t.Errorf("recorded = %+v, want what the harness itself knows about the firing", recorded[0])
+	}
+}
+
+// refusingReports refuses any record carrying an account, and takes one without.
+// It stands for whatever would make a full record unwritable.
+type refusingReports struct{ store *runstate.SweepStore }
+
+func (r *refusingReports) Append(recorded runstate.Sweep) error {
+	if recorded.Result != nil {
+		return errors.New("this record carries an account and will not store")
+	}
+	return r.store.Append(recorded)
+}
