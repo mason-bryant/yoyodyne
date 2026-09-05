@@ -593,14 +593,17 @@ type Outcome struct {
 	// it and left open on one that does not, so a run that landed evidence reads
 	// afterwards as the evidence it was rather than as work that was done.
 	// LandingBlockedBy is the impediment a landing named to have its item left
-	// open waiting on that work rather than parked, and is empty for the parking
-	// default and for every landing that discharges.
+	// open waiting on that work rather than parked, resolved against the tracker,
+	// and is empty for the parking default and for every landing that discharges.
+	// LandingImpedimentProblem is why a marker the landing carried was not one the
+	// item could be made to wait on, which is what put it in the parking instead.
 	// LandingProblem names a claim that could not be read, which withholds the
 	// closure for the reason its durable twin gives.
-	Landing          landing.Outcome `json:"landing,omitempty"`
-	LandingReason    string          `json:"landing_reason,omitempty"`
-	LandingBlockedBy string          `json:"landing_blocked_by,omitempty"`
-	LandingProblem   string          `json:"landing_problem,omitempty"`
+	Landing                  landing.Outcome `json:"landing,omitempty"`
+	LandingReason            string          `json:"landing_reason,omitempty"`
+	LandingBlockedBy         string          `json:"landing_blocked_by,omitempty"`
+	LandingImpedimentProblem string          `json:"landing_impediment_problem,omitempty"`
+	LandingProblem           string          `json:"landing_problem,omitempty"`
 	// Cost is what every run made for this work item has cost, as the provider
 	// reported it: this run and every earlier one, the attempts that failed as
 	// well as the one that finished. It is absent when nothing priced the item,
@@ -2787,7 +2790,7 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	// channels that decide nothing, because the contract puts its block ahead of
 	// theirs and an unreadable report block takes everything after its own fence
 	// with it.
-	reply := a.claimLanding(providerResult.FinalText)
+	reply := a.claimLanding(ctx, providerResult.FinalText)
 	// Anything the developer reported is collected out of what it said, so the
 	// summary stays the account of the work and the report reaches the operator
 	// instead of sitting in prose nothing surfaces.
