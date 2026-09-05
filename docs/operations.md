@@ -1236,6 +1236,11 @@ Three outcomes look similar in a listing and are not the same thing:
 - **A pass stopped by its turn bound** is recorded as partial, naming the bound,
   so a truncated pass is never mistaken for a finished one.
 
+One turn may report at most twenty findings and five questions, and a whole
+firing holds what its turns come to. A pass that ran past even that says so in
+its own summary, naming how many entries are not listed — a shortened list that
+said nothing would read as a pass that found less than it did.
+
 The reports live beside the run state, under
 `<state root>/products/<product id>/sweeps/`, with each task's cadence recorded
 in its own file there. Nothing in the repository holds them: like the collected

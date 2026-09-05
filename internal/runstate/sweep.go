@@ -56,12 +56,21 @@ const SweepSchemaVersion = 1
 // maxEncodedSweepBytes bounds one encoded sweep record, including the trailing
 // newline. The writer and the reader share it, so a sweep that was written is
 // always one that can be read back.
-const maxEncodedSweepBytes = 128 << 10
+//
+// It is sized against the largest account a firing can legitimately produce
+// rather than against a round number, because a bound below that is a bound that
+// throws the busiest passes' reports away as it writes them. One turn's block is
+// capped at sweep.MaxBlockBytes and a firing folds at most sweep.MaxMergedTurns
+// of them together, so the account cannot exceed that product; what is here is
+// comfortably above it, and a test in this package keeps the two in step.
+const maxEncodedSweepBytes = 512 << 10
 
-// maxSweepTextBytes bounds the prose a claim carries — what stopped the last
-// firing. It is written by something outside this package, and a claim that
-// could not be saved is a cadence nothing paces.
-const maxSweepTextBytes = 4 << 10
+// MaxSweepTextBytes bounds the prose a record carries — what stopped a firing,
+// and what stopped the last one on its claim. It is exported because what writes
+// that prose is outside this package and has to be able to hold itself to the
+// same number: a record refused for a problem too long to store is a firing whose
+// report is lost over the description of a smaller failure.
+const MaxSweepTextBytes = 4 << 10
 
 // SweepClaim is the durable record of one recurring task's cadence: when it last
 // fired, and what stopped that firing where something did.
@@ -128,8 +137,8 @@ func (c SweepClaim) Validate() error {
 	if c.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("updated at is required"))
 	}
-	if len(c.Problem) > maxSweepTextBytes {
-		problems = append(problems, fmt.Errorf("problem is %d bytes, limit is %d", len(c.Problem), maxSweepTextBytes))
+	if len(c.Problem) > MaxSweepTextBytes {
+		problems = append(problems, fmt.Errorf("problem is %d bytes, limit is %d", len(c.Problem), MaxSweepTextBytes))
 	}
 	if err := errors.Join(problems...); err != nil {
 		return fmt.Errorf("invalid recurring task claim: %w", err)
@@ -216,8 +225,8 @@ func (s Sweep) Validate() error {
 			problems = append(problems, err)
 		}
 	}
-	if len(s.Problem) > maxSweepTextBytes {
-		problems = append(problems, fmt.Errorf("problem is %d bytes, limit is %d", len(s.Problem), maxSweepTextBytes))
+	if len(s.Problem) > MaxSweepTextBytes {
+		problems = append(problems, fmt.Errorf("problem is %d bytes, limit is %d", len(s.Problem), MaxSweepTextBytes))
 	}
 	if err := errors.Join(problems...); err != nil {
 		return fmt.Errorf("invalid sweep: %w", err)
@@ -574,8 +583,8 @@ func (s *SweepStore) path(task string) string {
 
 func boundedSweepText(text string) string {
 	trimmed := strings.TrimSpace(text)
-	if len(trimmed) > maxSweepTextBytes {
-		return trimmed[:maxSweepTextBytes]
+	if len(trimmed) > MaxSweepTextBytes {
+		return trimmed[:MaxSweepTextBytes]
 	}
 	return trimmed
 }
