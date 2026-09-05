@@ -1617,6 +1617,28 @@ Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
 
+### What a check leaves running
+
+Every command the harness runs is the leader of a process group of its own, and
+that group is killed when the command ends — whether it succeeded, failed, timed
+out, or was cancelled. So a check that backgrounds something and exits leaves
+nothing behind: the background work dies with the check that started it, and a
+cleanup step the check only reaches on its happy path is not what the machine
+depends on.
+
+That is the point rather than an inconvenience. A check is a question about the
+change, asked and answered inside the run; anything still running afterwards is
+spending the operator's machine on a run that is over, and every run working
+beside it pays for that. A daemon a check genuinely needs is started by the
+check and stopped by it, inside the one command.
+
+The reap reaches the group and nothing further. Work that puts itself in a
+session of its own — `setsid`, a launchd job, a tool that deliberately detaches
+what it starts — is outside the group by the time the command ends, and nothing
+here kills it. What bounds that work is the bound it carries itself, which is
+why background load a check spawns should stop on its own however the check
+ends.
+
 ### The environment a check runs in
 
 A check inherits the harness's own environment with one thing added: `GOCACHE`

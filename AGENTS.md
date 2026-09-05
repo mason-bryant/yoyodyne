@@ -181,6 +181,40 @@ content in the change, which every reviewer is then shown.
 A session the harness did not make — an interactive one in the checkout — is
 given no such directory and shares `$TMPDIR` with whatever is running beside it.
 
+## Background load a run spawns carries its own bound
+
+**Anything you start in the background stops on its own, whatever became of the
+thing that started it. A cleanup that only runs on the happy path is not a
+bound.**
+
+On 2026-09-05 a load test spawned twenty-four infinite spin loops and died
+before the line that would have killed them. They ran on the operator's machine
+for hours after the run that started them was over, starved the run working
+beside it, and helped trip the intake brake. One run's sloppy test became a
+product-wide stall.
+
+Two things hold that down now, and only the first is the harness's:
+
+- **The group is reaped.** Every command the harness runs — your provider
+  invocation, and every check — leads a process group of its own, and that group
+  is killed when the command ends, success or failure alike
+  (`internal/execution/process.go`). Work you background is in that group unless
+  something deliberately took it out, so it dies when your invocation does.
+- **The load bounds itself.** The reap does not reach work that put itself in a
+  session of its own — `setsid`, a launchd job, a tool that detaches what it
+  starts — so the bound that always holds is the one the load carries. Write it
+  into the load rather than into a cleanup step you have to reach:
+
+```sh
+# a spinner that stops by itself after sixty seconds, however the test ends
+( end=$(( $(date +%s) + 60 )); while [ "$(date +%s)" -lt "$end" ]; do :; done ) &
+```
+
+`timeout(1)` is not on macOS by default, so a deadline the load computes itself
+is the portable form. The same rule covers a server, a watcher, or a poller you
+start for a test: give it an end, and do not depend on reaching the line that
+would have stopped it.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 
