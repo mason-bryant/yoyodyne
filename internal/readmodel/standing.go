@@ -739,11 +739,16 @@ func HandedOff(queue backlog.Queue) []Attention {
 // the run pipeline enforces on: a channel that worked it out its own way could
 // lift a pause the pipeline still holds. Nothing about it revises the record —
 // this says what is in force, and settling one stays with the acts that settle
-// directives.
+// directives. That division is the architect's standing ruling rather than this
+// package's preference; docs/developing-yoyo.md records which ruling and what it
+// said, under "Where a surface reads the work's own state from".
 //
 // A directive that named no scope holds every item, so it is here too. That is
 // the pipeline's own reading and the honest one: it is what stops this item, and
-// settling it from here settles it wherever else it was stopping work.
+// settling it from here settles it wherever else it was stopping work. A surface
+// acting on this says so where it acts — a settlement that reached past the item
+// somebody was looking at is the one thing they could not have known from the
+// thread they were in.
 func Pausing(sources Sources, workItemID string) ([]directive.Directive, error) {
 	if sources.Directives == nil {
 		return nil, errors.New("nothing was wired to read the recorded directives")

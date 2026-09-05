@@ -734,11 +734,20 @@ which is the item the thread is about.
 resolve the second one, and say so in the design
 ```
 
+**What that item is waiting on can be wider than that item.** A directive
+recorded against no work item — `yoyo directive record` without `--scope` — is
+holding every item in the product, so it is holding this one too, and settling it
+from here lifts it everywhere it was stopping work. The answer says so when that
+is what happened: *It was holding every item in this product rather than this one
+alone, so it is lifted for all of them.* One recorded against several items says
+how many it was holding, the same way.
+
 Two cases are refused instead of settled, in a sentence in the same thread: an
 item waiting on nothing, and an item waiting on more than one thing — where the
-refusal names them by what each is waiting on, since picking one for you would be
-the channel deciding which of your pauses to lift. To settle one of several, name
-it. Any prefix of the identifier that names exactly one will do, and
+refusal names them by what each is waiting on and how far each one reaches, since
+picking one for you would be the channel deciding which of your pauses to lift. To
+settle one of several, name it. Any prefix of the identifier that names exactly
+one will do, and
 `yoyo directive list` at the terminal is where you read it, because no message
 posted here carries one:
 
