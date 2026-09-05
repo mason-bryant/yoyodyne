@@ -282,6 +282,11 @@ drain:
 	}
 
 	waitErr := process.Wait()
+	// Nothing this command spawned outlives it, whatever became of the command:
+	// the group goes here on the succeeding path as much as on the failing one.
+	// A command that exits 0 having backgrounded work is the case that costs,
+	// because every other signal in this result reads as a clean finish.
+	reapProcessTree(process)
 	result.FinishedAt = clock.Now()
 	if stdoutTruncated || stderrTruncated {
 		result.OutputTruncation = truncationMarker(maxOutput, command.OutputRecord)
