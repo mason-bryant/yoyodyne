@@ -99,6 +99,12 @@ type Config struct {
 	// Slack configures the reporting sink. It is absent from a project that does
 	// not report to a workspace, which is every project until one opts in.
 	Slack Slack `yaml:"slack,omitempty" json:"slack,omitempty"`
+	// RecurringTasks are the things the harness does on a cadence rather than
+	// because something happened, keyed by the name each one is reported and
+	// recorded under. It is absent from a project that has scheduled nothing,
+	// which is every project until one opts in. See recurring.go for what
+	// configuration decides here and what it deliberately cannot.
+	RecurringTasks map[string]RecurringTask `yaml:"recurring_tasks,omitempty" json:"recurring_tasks,omitempty"`
 }
 
 // ProviderRegistry is every provider this project may name: the backends this
@@ -883,6 +889,7 @@ func (c Config) Validate() error {
 	problems = append(problems, c.accountProblems()...)
 	problems = append(problems, c.operatorProblems()...)
 	problems = append(problems, c.Slack.problems()...)
+	problems = append(problems, validateRecurringTasks(c)...)
 
 	if len(problems) > 0 {
 		return ValidationError{Problems: problems}

@@ -1197,3 +1197,46 @@ against a fabricated state directory holding runs, conversations, branch reviews
 and exchanges, without a provider or a repository and without reading your real
 state. `make test` runs it, so the tool is held to them by the same command as
 everything else in the repository rather than by one somebody remembers.
+
+## Reading what the recurring tasks found
+
+A [recurring task](configuration.md#recurring-tasks) wakes a role on a cadence to
+look at its own domain. Nobody is watching those turns, so each firing ends in a
+durable report, and `yoyo sweeps` is where they are read:
+
+```sh
+yoyo sweeps                                  # every recorded pass, most recent first
+yoyo sweeps --task development-manager-sweep # one task's passes
+yoyo sweeps --json                           # the same, machine-readable
+```
+
+It is read-only. A sweep is written once and never revised, and nothing here
+fires one, retires one, or decides anything about what a pass found.
+
+Each entry leads with **the questions the pass could not settle itself**, because
+that is the one part of a report that asks for anything: a report with no
+questions needs no attention, which is what makes reading these at leisure
+possible. Below them come the pass's summary and what it found, each finding with
+what the role did about it — `fixed`, `filed`, `consulted`, or `left` — and the
+work filed for its root cause.
+
+**A fix that filed nothing is named as one.** That is the whole of what a week of
+these reports is read for: a repair that leaves its cause in place is a repair
+the next pass makes again, and a listing that could not tell the two apart could
+not show it either way.
+
+Three outcomes look similar in a listing and are not the same thing:
+
+- **A pass that found nothing** shows its own summary and no findings. On a
+  healthy harness that is most of them, and a run of passes that keeps finding
+  things is itself a signal about the harness rather than about the sweep.
+- **A pass that produced no account** says so and names what stopped it — a
+  conversation nothing could open, a turn that failed, a role that answered in
+  prose without the block the harness reads. It is never shown as a quiet pass.
+- **A pass stopped by its turn bound** is recorded as partial, naming the bound,
+  so a truncated pass is never mistaken for a finished one.
+
+The reports live beside the run state, under
+`<state root>/products/<product id>/sweeps/`, with each task's cadence recorded
+in its own file there. Nothing in the repository holds them: like the collected
+reports, a sweep outlives the session that produced it.

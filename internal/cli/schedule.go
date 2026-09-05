@@ -415,6 +415,11 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		// reason escalate.go gives: a delivery is a conversation turn, and a run
 		// waiting out one would hold a developer slot open on its way out.
 		Escalations: escalatorFrom(parts, configPath, stderr),
+		// What the configuration schedules on a cadence. It is wired into the pull
+		// for the same reason the delivery above is, and for one more: the harness
+		// is the only thing that invokes a role, so a schedule that lived in a cron
+		// entry or a launchd job would be a second invoker of one.
+		Recurring: recurringTrigger(parts, configPath, stderr),
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record
