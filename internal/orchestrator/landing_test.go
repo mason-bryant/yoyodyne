@@ -447,6 +447,45 @@ func TestSettlingAnItemLeftWaitingKeepsTheParkingItAlreadyCarried(t *testing.T) 
 	}
 }
 
+// The parking default does replace the reason — both are parkings, and the run's
+// names what would release the item now — so the one it superseded goes into the
+// notes. A decision somebody took has to stay readable off the item; the parking
+// field holds one value, and without this the only copy of theirs is whatever the
+// tracker keeps of its own history.
+func TestTheParkingDefaultRecordsTheReasonItSuperseded(t *testing.T) {
+	t.Parallel()
+
+	operatorParked := domain.WorkItemParking("deferred by the scope decision until the quarter turns")
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID: "yoyodyne-task", Title: "Task", Status: "in_progress", Parking: operatorParked,
+	}}
+	state := runstate.State{
+		RunID:          "run-abcdef0123456789abcdef0123456789",
+		WorkItemID:     tracker.item.ID,
+		TargetBranch:   "main",
+		LandingOutcome: runstate.LandingEvidence,
+		LandingReason:  "the design this needs has not landed",
+	}
+	if err := settleUndischarged(context.Background(), tracker, state); err != nil {
+		t.Fatalf("settleUndischarged() error = %v", err)
+	}
+	if !strings.Contains(tracker.item.Parking.Reason(), "the design this needs has not landed") {
+		t.Errorf("the run's account did not become the parking reason: %q", tracker.item.Parking)
+	}
+	if !strings.Contains(tracker.notes, operatorParked.Reason()) {
+		t.Errorf("the superseded parking reason was lost: %q", tracker.notes)
+	}
+	// An item nobody had parked has nothing to supersede, and a note saying so
+	// would be a sentence about a decision nobody took.
+	unparked := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
+	if err := settleUndischarged(context.Background(), unparked, state); err != nil {
+		t.Fatalf("settleUndischarged() error = %v", err)
+	}
+	if strings.Contains(unparked.notes, "replaces the parking reason") {
+		t.Errorf("the notes claim a parking reason that never existed: %q", unparked.notes)
+	}
+}
+
 // A developer's account may run to the whole of what a claim can carry, and the
 // parking reason has to stay one value the tracker will hold on one line. A
 // reason the tracker refuses fails the settlement of a run whose change is

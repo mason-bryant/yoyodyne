@@ -301,36 +301,44 @@ func undischargedParking(state runstate.State) domain.WorkItemParking {
 // act on. The run's own record still carries the marker it resolved; what
 // actually happened is on the item, which is where it is read.
 //
-// A parking the item already carried is never lifted. The leave-open path adds a
-// dependency, which is not a release, and a settlement that cleared an operator's
-// parking would retire their decision on the way past — so what the item already
-// says is passed back through. The parking path is the one that replaces a
-// parking reason, because both are parkings and the run's names what would
-// release the item now.
+// A parking the item already carried is never lifted, and never lost. The
+// leave-open path adds a dependency, which is not a release, and a settlement
+// that cleared an operator's parking would retire their decision on the way past
+// — so what the item already says is passed back through. The parking path does
+// replace the reason, because both are parkings and the run's names what would
+// release the item now; the one it superseded goes into the notes, so a decision
+// somebody took is still readable off the item rather than only off whatever the
+// tracker keeps of its own history.
 func settleUndischarged(ctx context.Context, tracker WorkTracker, state runstate.State) error {
 	settled := state
-	var existing domain.WorkItemParking
-	if impediment := state.LandingImpediment(); impediment != "" {
-		item, err := tracker.Show(ctx, state.WorkItemID)
-		if err != nil {
-			return fmt.Errorf("read work item %s before making it wait on %s: %w", state.WorkItemID, impediment, err)
-		}
-		existing = item.Parking
-		if !waitsOn(item, impediment) {
-			if err := tracker.AddBlocker(ctx, state.WorkItemID, impediment); err != nil {
-				settled.LandingBlockedBy = ""
-				settled.LandingImpedimentProblem = fmt.Sprintf(
-					"its landing named %s as the impediment and the tracker would not make this item wait on it (%v)", impediment, err)
-			}
+	impediment := state.LandingImpediment()
+	// The item is read for what it already says about itself. The leave-open path
+	// cannot proceed without that — both the duplicate check and the parking it
+	// must not lift come from here — while the parking path uses it only to carry
+	// a superseded reason into the notes, so a read that failed costs that sentence
+	// rather than the settlement of an already-promoted change.
+	item, shown := tracker.Show(ctx, state.WorkItemID)
+	if shown != nil && impediment != "" {
+		return fmt.Errorf("read work item %s before making it wait on %s: %w", state.WorkItemID, impediment, shown)
+	}
+	if impediment != "" && !waitsOn(item, impediment) {
+		if err := tracker.AddBlocker(ctx, state.WorkItemID, impediment); err != nil {
+			settled.LandingBlockedBy = ""
+			settled.LandingImpedimentProblem = fmt.Sprintf(
+				"its landing named %s as the impediment and the tracker would not make this item wait on it (%v)", impediment, err)
 		}
 	}
+	reason := undischargedLandingReason(settled)
 	parking := undischargedParking(settled)
-	// An empty parking here is the leave-open disposition rather than a release,
-	// so the item keeps whatever parking it already had.
-	if !parking.Parked() {
-		parking = existing
+	switch superseded := item.Parking.Reason(); {
+	case !parking.Parked():
+		// An empty parking here is the leave-open disposition rather than a release,
+		// so the item keeps whatever parking it already had.
+		parking = item.Parking
+	case superseded != "" && superseded != parking.Reason():
+		reason += " It replaces the parking reason this item already carried, which was: " + superseded
 	}
-	_, err := tracker.Reopen(ctx, state.WorkItemID, undischargedLandingReason(settled), parking)
+	_, err := tracker.Reopen(ctx, state.WorkItemID, reason, parking)
 	return err
 }
 

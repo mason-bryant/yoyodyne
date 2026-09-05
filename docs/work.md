@@ -271,8 +271,11 @@ marker can cost the run its landing: the change is promoted before any of this i
 decided, so failing here would leave the item claimed with nobody watching it,
 which is the one outcome worse than parking it.
 
-A settlement never lifts a parking. An item you had parked and then named for a
-run anyway comes back still parked, with the dependency added underneath.
+A settlement never lifts a parking. An item somebody had parked and then named
+for a run anyway comes back still parked, with the dependency added underneath.
+Where the run parks it instead, the run's reason replaces the one that was there
+and the superseded one is written into the item's notes, because a parking holds
+one value and the decision it replaced still has to be readable.
 
 Three things follow from the claim deciding something, which the report and
 amendment channels do not:

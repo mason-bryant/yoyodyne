@@ -2212,8 +2212,8 @@ With both on, a run works like this:
    on it, because closing it as integrated would record a publication that has
    not happened and may not. `yoyo reconcile` settles both afterwards: it asks
    the forge, and either finishes the publication and settles the item — closed,
-   or put back in the backlog parked where the run's own landing claimed its
-   change does not discharge it (merge
+   or put back in the backlog parked or waiting on a named impediment where the
+   run's own landing claimed its change does not discharge it (merge
    commit recorded, remote branch deleted, your local target branch caught up
    onto the forge's merge commit) — or, if the forge dropped the queued merge
    because something it required went unmet, records an outstanding publication
