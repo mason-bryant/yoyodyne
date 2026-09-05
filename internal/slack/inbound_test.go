@@ -61,8 +61,11 @@ func TestAPlainReplyRecordsAnOperationalDirectiveAgainstTheThreadsItem(t *testin
 	if answer.ThreadTS != testThreadTS {
 		t.Fatalf("answer = %#v, want it in the thread the reply arrived in", answer)
 	}
-	if !strings.Contains(answer.Text, recorded.ID) {
-		t.Fatalf("answer = %q, want it to name the directive it recorded", answer.Text)
+	if !strings.Contains(answer.Text, "Recorded") || !strings.Contains(answer.Text, "prefer the smaller change here") {
+		t.Fatalf("answer = %q, want it to say what was recorded in the operator's own words", answer.Text)
+	}
+	if strings.Contains(answer.Text, recorded.ID) {
+		t.Fatalf("answer = %q, want the directive's identifier kept out of what a person reads", answer.Text)
 	}
 	if answer.ReplyBroadcast {
 		t.Fatalf("answer = %#v, want a directive that stopped nothing to stay in its thread", answer)
@@ -87,7 +90,7 @@ func TestAnAnsweredReplyTagsWhoWroteItAndSaysItsDirectiveIsOpen(t *testing.T) {
 	if !strings.HasPrefix(answer.Text, "<@"+testOperator+"> ") {
 		t.Fatalf("answer = %q, want it to tag the operator who wrote the reply", answer.Text)
 	}
-	if !strings.Contains(answer.Text, recorded.ID) {
+	if !strings.Contains(answer.Text, "prefer the smaller change here") {
 		t.Fatalf("answer = %q, want the tag in front of what was recorded rather than instead of it", answer.Text)
 	}
 
@@ -416,8 +419,12 @@ func TestAResolveReplySettlesTheDirectiveAndLiftsThePause(t *testing.T) {
 	if len(pausing) != 0 {
 		t.Fatalf("Pausing(%q) = %v, want the pause lifted", testItem, pausing)
 	}
-	if answer := onlyPost(t, posts); !strings.Contains(answer.Text, recorded.ID) {
-		t.Fatalf("answer = %q, want it to name what was settled", answer.Text)
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "the one already on the target branch") {
+		t.Fatalf("answer = %q, want it to say how the pause was settled", answer.Text)
+	}
+	if strings.Contains(answer.Text, recorded.ID) {
+		t.Fatalf("answer = %q, want the directive's identifier kept out of what a person reads", answer.Text)
 	}
 }
 

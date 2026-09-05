@@ -30,9 +30,14 @@ package slack
 // which is stranger.go's.
 //
 // Every message this reads is answered in its own thread — the directive as
-// recorded with its identifier, or the refusal with its reason — and the answer
-// tags whoever wrote it. An operator who steers from a phone has nothing else to
-// tell them whether they were heard, and a thread they are not looking at is
+// recorded, or the refusal with its reason — and the answer tags whoever wrote
+// it. The answer names no identifier anywhere: the person being answered typed
+// what is being read back to them, and a slug in an acknowledgment is the one
+// thing in it they would have to go and resolve. The identifier the record keeps
+// is for the processes that read directives, which is where it stays.
+//
+// An operator who steers from a phone has nothing else to tell them whether they
+// were heard, and a thread they are not looking at is
 // indistinguishable from silence. The reply itself wears where its directive
 // stands as well: heard while the directive is open, settled once it is, refused
 // where nothing was recorded at all.
@@ -638,7 +643,7 @@ func firstWord(value string) (string, string) {
 }
 
 // acknowledged is the message that says what a reply did: the directive as
-// recorded or as settled, with its identifier, in the thread it was said in.
+// recorded or as settled, in the thread it was said in.
 //
 // A directive that pauses work is a warning rather than a note, so it is shown in
 // the channel as well as in the thread. Work stopping is the news somebody who
@@ -648,7 +653,9 @@ func firstWord(value string) (string, string) {
 // The operator's own words go back into the channel they came from. Nothing is
 // redacted on this path and nothing needs to be: the text is already in the
 // thread, said by the person it belongs to, and this is the record quoting it
-// back with an identifier attached.
+// back with what became of it. The envelope still carries the directive's
+// identifier in its references, which is where the delivery pass and anything
+// else tracing the record find it — the message rendered from it says none.
 func acknowledged(topic notify.Topic, kind notify.Kind, recorded directive.Directive, at time.Time) notify.Notification {
 	severity := report.SeverityNote
 	text := recorded.Text

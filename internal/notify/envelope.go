@@ -118,14 +118,17 @@ const (
 	KindExchangeTurn   Kind = "exchange.turn"
 	KindExchangeClosed Kind = "exchange.closed"
 	// What a reply in a topic's thread did. They are the acknowledgment the
-	// inbound half owes every message it reads: the directive as recorded with
-	// its identifier, the resolution that lifted one, what came of one that held
-	// nothing up, or the refusal with its reason. Four kinds rather than one,
-	// because they are the four different things an operator has to know — the
-	// work is now steered, the work is moving again, what they asked for was
-	// done, or nothing was recorded at all — and a reader who could not tell them
-	// apart at a glance would have to open the record to find out whether they
-	// had been heard.
+	// inbound half owes every message it reads: the directive as recorded, the
+	// resolution that lifted one, what came of one that held nothing up, or the
+	// refusal with its reason. None of them says an identifier — the person being
+	// answered typed the words being read back to them, and an identifier is the
+	// one thing in an acknowledgment they would have to go and resolve.
+	//
+	// Four kinds rather than one, because they are the four different things an
+	// operator has to know — the work is now steered, the work is moving again,
+	// what they asked for was done, or nothing was recorded at all — and a reader
+	// who could not tell them apart at a glance would have to open the record to
+	// find out whether they had been heard.
 	//
 	// Carried out is separate from resolved because a resolution lifts a pause
 	// and an outcome never held one. Said as a resolution, the commonest kind of

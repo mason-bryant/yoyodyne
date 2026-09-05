@@ -185,9 +185,9 @@ var harnessVoice = voice{
 		KindProposalRaised:      "A change to {artifact} is proposed: {text}",
 		KindExchangeTurn:        "{exchange}, {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}.",
-		KindDirectiveRecorded:   "{directive} was recorded from this thread, received by the {receiver}: {text} — {effect}",
-		KindDirectiveResolved:   "{directive} is resolved: {text}",
-		KindDirectiveCarriedOut: "{directive} was carried out: {text}",
+		KindDirectiveRecorded:   "Recorded, for the {receiver}: {text} — {effect}",
+		KindDirectiveResolved:   "That is settled: {text}",
+		KindDirectiveCarriedOut: "That was carried out: {text}",
 		KindDirectiveRefused:    "Nothing was recorded from that reply: {why}",
 		KindIntakeHeld:          "Intake is held for this product: {why}",
 		KindIntakeReleased:      "Intake is released for this product.",
@@ -242,9 +242,9 @@ var developerVoice = voice{
 		KindProposalRaised:      "{artifact} isn't mine to edit, so I'm proposing the change instead: {text}",
 		KindExchangeTurn:        "On {exchange}, {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}. Back to the change.",
-		KindDirectiveRecorded:   "I've been told something about this item, and it is written down as {directive} rather than left in a thread: {text} — {effect}",
-		KindDirectiveResolved:   "{directive} is settled: {text}. I pick the change up from where it stopped.",
-		KindDirectiveCarriedOut: "What {directive} asked for is done: {text}. Nothing about this item was waiting on it.",
+		KindDirectiveRecorded:   "I've been told something about this item, and it is written down rather than left in a thread: {text} — {effect}",
+		KindDirectiveResolved:   "That is settled: {text}. I pick the change up from where it stopped.",
+		KindDirectiveCarriedOut: "What was asked for is done: {text}. Nothing about this item was waiting on it.",
 		KindDirectiveRefused:    "That reply changed nothing about what I'm building: {why}",
 		KindIntakeHeld:          "Intake is held, so nothing new reaches me: {why}",
 		KindIntakeReleased:      "Intake is open again; I'll take what I'm given.",
@@ -299,9 +299,9 @@ var reviewerVoice = voice{
 		KindProposalRaised:      "{artifact} is not mine to change, so this is an argument about it: {text}",
 		KindExchangeTurn:        "In {exchange}, at {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}; I judge the change against what that leaves.",
-		KindDirectiveRecorded:   "{directive} is recorded against this item, and I judge the change against it exactly as against one typed at a terminal: {text} — {effect}",
-		KindDirectiveResolved:   "{directive} is settled: {text}. What I judge against is settled with it.",
-		KindDirectiveCarriedOut: "{directive} was carried out: {text}. It stood while I judged this and it stands now.",
+		KindDirectiveRecorded:   "This is recorded against the item, and I judge the change against it exactly as against one typed at a terminal: {text} — {effect}",
+		KindDirectiveResolved:   "That is settled: {text}. What I judge against is settled with it.",
+		KindDirectiveCarriedOut: "That was carried out: {text}. It stood while I judged this and it stands now.",
 		KindDirectiveRefused:    "Nothing in that reply reaches what I judge this against: {why}",
 		KindIntakeHeld:          "Intake is held, so nothing new will arrive for review: {why}",
 		KindIntakeReleased:      "Intake is open; work will reach me again.",
@@ -355,9 +355,9 @@ var developmentManagerVoice = voice{
 		KindProposalRaised:      "{artifact} isn't mine to change, so here is the case for changing it: {text}",
 		KindExchangeTurn:        "{exchange} is at {rounds} and the item waits on it: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}, and the item it held moves accordingly.",
-		KindDirectiveRecorded:   "Direction came in on this thread and is recorded against the item as {directive}: {text} — {effect}",
-		KindDirectiveResolved:   "{directive} is settled: {text}. The item it held moves again.",
-		KindDirectiveCarriedOut: "{directive} was carried out: {text}. It held nothing up, so this is what came of it rather than the queue moving.",
+		KindDirectiveRecorded:   "Direction came in on this thread and is recorded against the item: {text} — {effect}",
+		KindDirectiveResolved:   "That is settled: {text}. The item it held moves again.",
+		KindDirectiveCarriedOut: "That was carried out: {text}. It held nothing up, so this is what came of it rather than the queue moving.",
 		KindDirectiveRefused:    "That reply is not direction anything can act on, so nothing about this item moved: {why}",
 		KindIntakeHeld:          "Intake is held, so I pull nothing new until it lifts: {why}",
 		KindIntakeReleased:      "Intake is released; I'm pulling from the top of the backlog again.",
@@ -412,9 +412,9 @@ var productManagerVoice = voice{
 		KindProposalRaised:      "A change to {artifact} is proposed, and I decide it only where the document is mine: {text}",
 		KindExchangeTurn:        "The operator is being asked something, in {exchange} at {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}. What it settles is product intent.",
-		KindDirectiveRecorded:   "The operator has directed this work from the thread, and it is recorded as {directive} for the {receiver}: {text} — {effect}",
-		KindDirectiveResolved:   "The operator settled {directive}: {text}",
-		KindDirectiveCarriedOut: "{directive} was carried out, and this is what came of what the operator asked for: {text}",
+		KindDirectiveRecorded:   "The operator has directed this work from the thread, and it is recorded for the {receiver}: {text} — {effect}",
+		KindDirectiveResolved:   "The operator settled it: {text}",
+		KindDirectiveCarriedOut: "It was carried out, and this is what came of what the operator asked for: {text}",
 		KindDirectiveRefused:    "The operator said something here the harness would not record as a directive rather than guess at it: {why}",
 		KindIntakeHeld:          "The operator holds intake, so nothing new is chosen until they lift it: {why}",
 		KindIntakeReleased:      "The operator released intake; the backlog is being pulled from again.",
@@ -469,9 +469,9 @@ var architectVoice = voice{
 		KindProposalRaised:      "{artifact} should change, and this is the case: {text}",
 		KindExchangeTurn:        "{exchange}, {rounds}, on what the design left open: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}, which is where the design stops being ambiguous.",
-		KindDirectiveRecorded:   "{directive} arrived through a thread rather than a terminal, and is the same record with the same force either way: {text} — {effect}",
-		KindDirectiveResolved:   "{directive} is settled: {text}. The pause it held is lifted where it stood, rather than the work restarting.",
-		KindDirectiveCarriedOut: "{directive} was carried out: {text}. A directive that pauses nothing still has a disposition, and this is it recorded rather than remembered.",
+		KindDirectiveRecorded:   "This arrived through a thread rather than a terminal, and is the same record with the same force either way: {text} — {effect}",
+		KindDirectiveResolved:   "That is settled: {text}. The pause it held is lifted where it stood, rather than the work restarting.",
+		KindDirectiveCarriedOut: "That was carried out: {text}. A directive that pauses nothing still has a disposition, and this is it recorded rather than remembered.",
 		KindDirectiveRefused:    "The channel refused that reply rather than inferring a directive from it: {why}",
 		KindIntakeHeld:          "Intake is held, which stops selection and nothing already running: {why}",
 		KindIntakeReleased:      "Intake is released; selection resumes.",
@@ -646,10 +646,13 @@ var nextMoves = map[Kind]string{
 // would be naming a move nobody has to make, on the ordinary case rather than
 // the rare one.
 //
-// It says the directive applies now rather than that it is in force, which is
-// the operator's rule about every message here: the everyday word, not the term
-// of art, wherever a reader would have to already know the vocabulary.
-const directiveInForceMove = "the harness's — the directive applies from now on, and no work is waiting on it."
+// It says the work carries on rather than that the directive is in force, which
+// is the operator's rule about every message here: the everyday word, not the
+// term of art, wherever a reader would have to already know the vocabulary. That
+// it applies from now on is the account's own to say, and saying it twice in one
+// message — once as what was recorded, once as what follows — is the padding an
+// acknowledgment reads worst as.
+const directiveInForceMove = "the harness's — the work carries on under it."
 
 // nextMove is whose move follows one event, and says whether anything does. A
 // kind nothing answers for is a kind added to the vocabulary without anybody
@@ -847,19 +850,28 @@ func (e Event) fields(topic Topic) map[string]string {
 		"why":       stated(detail.Reason, "no reason given"),
 		"text":      stated(e.Text, "nothing the record could carry"),
 		"artifact":  stated(detail.Artifact, "an unnamed artifact"),
-		"directive": stated(e.Refs.DirectiveID, "a directive the record does not name"),
 		"receiver":  stated(detail.ReceivedBy, "a role the record does not name"),
 		"effect":    effectOf(detail),
 		"outcome":   outcomeOf(detail),
 		"exchange":  stated(exchangeOf(e.Refs, topic), "an unnamed exchange"),
 		"title":     stated(detail.Title, "a title the record does not carry"),
 		"goal":      stated(detail.Goal, "no goal the record names"),
-		// There is deliberately no placeholder for the item a decomposition was
-		// created under. The record holds that item's identifier and nothing that
-		// names it in words, so a line reaching for it could only hand a reader an
-		// identifier to resolve — which is the whole of what these messages stopped
-		// doing. A line that asks for one is refused as it renders, and every line
-		// in every voice is rendered by the tests, so one added later fails there
+		// Two things a voice line could want and deliberately has no placeholder
+		// for, both of them identifiers a reader would have to go and resolve.
+		//
+		// The item a decomposition was created under is the first: the record holds
+		// its identifier and nothing that names it in words, so a line reaching for
+		// it could only hand a reader a slug — which is the whole of what these
+		// messages stopped doing.
+		//
+		// The directive a message is about is the second. The four directive kinds
+		// are the acknowledgment a person gets for something they typed in a
+		// thread, so what they are owed is their own words read back and what
+		// became of them; the identifier stays in the references, where the
+		// delivery pass and anything else tracing the record find it.
+		//
+		// A line that asks for either is refused as it renders, and every line in
+		// every voice is rendered by the tests, so one added later fails there
 		// rather than in somebody's channel.
 		"priority": priorityOf(detail),
 		"executor": stated(carrierOf(detail.Executor), "something the record does not name"),

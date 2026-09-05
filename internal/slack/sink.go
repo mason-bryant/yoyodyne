@@ -1062,19 +1062,20 @@ func renderText(message notify.Message) string {
 
 // renderRefs names the durable records this message was read from.
 //
-// The conversation is not one of them, and it is the one identifier this line
-// deliberately leaves out. Every other reference here is something a reader
-// does something with — a run they follow, an exchange they answer, a directive
-// they resolve by quoting it — and the conversation an event happened to be
-// recorded in is none of those to the person reading the channel. The envelope
-// still carries it and the durable record still holds it, so nothing anybody
-// traces afterwards is lost to leaving it unsaid.
+// The conversation and the directive are not among them, and they are the two
+// identifiers this line deliberately leaves out. What is left is what a reader
+// follows rather than resolves — a run, an exchange they answer. The
+// conversation an event happened to be recorded in was never one of those, and
+// neither is the directive: what a person gets for a reply they typed is the
+// acknowledgment above this line, which says what was recorded and what it does
+// to the work in words. The envelope still carries both and the durable records
+// still hold them, so nothing anybody traces afterwards is lost to leaving them
+// unsaid.
 func renderRefs(refs notify.Refs) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 2)
 	for _, reference := range []struct{ label, value string }{
 		{label: "run", value: refs.RunID},
 		{label: "exchange", value: refs.ExchangeID},
-		{label: "directive", value: refs.DirectiveID},
 	} {
 		if strings.TrimSpace(reference.value) != "" {
 			parts = append(parts, reference.label+" "+reference.value)

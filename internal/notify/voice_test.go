@@ -40,6 +40,11 @@ var requestedChanges = []string{
 	"minor: " + strings.Repeat("a finding nobody could fit on a line ", 12),
 }
 
+// recordedDirective is a directive identifier as the record writes one, and it
+// is the shape of the one an operator was shown twice in a single
+// acknowledgment.
+const recordedDirective = "directive-f007fa2734c8b1ee9d5a6470c1b2e8a3"
+
 // fullyRecorded is an event with every field a voice line could reach for, so a
 // rendering failure is a missing line rather than a missing fact.
 func fullyRecorded(kind Kind) Event {
@@ -48,9 +53,15 @@ func fullyRecorded(kind Kind) Event {
 		At:       moment,
 		Severity: report.SeverityNote,
 		Refs: Refs{
-			RunID:       "run-4d1f",
-			WorkItemID:  "yoyodyne-ifd.68.2",
-			ExchangeID:  "exchange-7f3a",
+			RunID:      "run-4d1f",
+			WorkItemID: "yoyodyne-ifd.68.2",
+			ExchangeID: "exchange-7f3a",
+			// The directive reference is carried here so the sweeps below render
+			// every directive kind with one to leak. Without it the four
+			// acknowledgment kinds rendered their identifier as a stated absence,
+			// which is how the one renderer an operator meets in person went through
+			// the whole of the identifiers sweep looking clean.
+			DirectiveID: recordedDirective,
 			PullRequest: "https://example.test/pull/84",
 		},
 		Detail: Detail{
@@ -64,6 +75,7 @@ func fullyRecorded(kind Kind) Event {
 			Commit:          "0123456789abcdef0123456789abcdef01234567",
 			PullRequest:     "#84 (https://example.test/pull/84)",
 			Cause:           "an exhausted provider usage limit",
+			ReceivedBy:      "Product Manager",
 			Round:           2,
 			Rounds:          5,
 			Unresolved:      "which branch the change belongs on",
@@ -723,7 +735,59 @@ func TestAMessageNamesTheWorkInWordsRatherThanByItsIdentifier(t *testing.T) {
 			if found := trackerIdentifier.FindString(message.Body); found != "" {
 				t.Fatalf("the %s says %s as %q, which names an item by the identifier %q", speaker.Key(), kind, message.Body, found)
 			}
+			// The directive a message is about is the same kind of name, and the
+			// four acknowledgment kinds are where a person meets one: they are the
+			// answer to something somebody typed in a thread, so the identifier in
+			// them is the reader being handed a slug for their own sentence.
+			if strings.Contains(message.Body, recordedDirective) {
+				t.Fatalf("the %s says %s as %q, which names the directive by its identifier", speaker.Key(), kind, message.Body)
+			}
 		}
+	}
+}
+
+// The acknowledgment an operator actually met, replayed: a reply in a thread,
+// recorded as an operational directive, answered by the harness.
+//
+// What he was shown printed the identifier twice and narrated the machinery
+// that recorded it. What it says now is that it was recorded, who it was
+// recorded for, his own words, and that it applies from now on — with the
+// identifier nowhere in it, and each of those facts said once.
+func TestARecordedDirectiveIsAcknowledgedInASentenceAndNamesNoIdentifier(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.26")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	const said = "prefer the smaller change here"
+	message, err := Render(topic.WithTitle("Inbound acknowledgments speak plainly"), Harness(), Event{
+		Kind:     KindDirectiveRecorded,
+		At:       moment,
+		Severity: report.SeverityNote,
+		Refs:     Refs{WorkItemID: "yoyodyne-ifd.68.26", DirectiveID: recordedDirective},
+		Detail:   Detail{ReceivedBy: "Product Manager"},
+		Text:     said,
+	})
+	if err != nil {
+		t.Fatalf("acknowledge a recorded directive: %v", err)
+	}
+	if strings.Contains(message.Body, recordedDirective) {
+		t.Fatalf("the acknowledgment reads as %q, which hands the operator a slug for their own sentence", message.Body)
+	}
+	// The reference is still on the envelope, because the delivery pass and
+	// anything else tracing the record correlate by it. It leaves the words, not
+	// the message.
+	if message.Refs.DirectiveID != recordedDirective {
+		t.Fatalf("refs = %#v, want the identifier kept where the processes that read directives find it", message.Refs)
+	}
+	for _, wanted := range []string{"Recorded", "Product Manager", said, "it applies from now on"} {
+		if !strings.Contains(message.Body, wanted) {
+			t.Fatalf("the acknowledgment reads as %q, which does not say %q", message.Body, wanted)
+		}
+	}
+	// Said once. The whose-move clause used to repeat the effect word for word,
+	// which is the padding an acknowledgment reads worst as.
+	if count := strings.Count(message.Body, "applies from now on"); count != 1 {
+		t.Fatalf("the acknowledgment reads as %q, which says what the directive does %d times", message.Body, count)
 	}
 }
 

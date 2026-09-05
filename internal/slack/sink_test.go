@@ -527,6 +527,33 @@ func TestAMessageNamesTheRecordItWasReadFrom(t *testing.T) {
 	}
 }
 
+// The reference line under a message names what a reader follows, and a
+// directive is not one of them. It is the second half of what an operator was
+// shown twice in one acknowledgment: the voice line said the identifier and this
+// line said it again, italicised, under a message answering a sentence he had
+// just typed himself.
+func TestTheReferenceLineNamesNoDirective(t *testing.T) {
+	t.Parallel()
+
+	const recordedDirective = "directive-f007fa2734c8b1ee9d5a6470c1b2e8a3"
+	reference := renderRefs(notify.Refs{
+		RunID:       "run-a",
+		WorkItemID:  "yoyodyne-ifd.68.26",
+		DirectiveID: recordedDirective,
+	})
+	if strings.Contains(reference, recordedDirective) {
+		t.Fatalf("reference line = %q, want the directive's identifier left to the durable record", reference)
+	}
+	if !strings.Contains(reference, "run run-a") {
+		t.Fatalf("reference line = %q, want the records a reader does follow still named", reference)
+	}
+	// A message whose only reference is the directive has nothing to point at,
+	// and an empty italic line under it would be decoration standing in for one.
+	if trailing := renderRefs(notify.Refs{DirectiveID: recordedDirective}); trailing != "" {
+		t.Fatalf("reference line = %q, want no line at all where nothing is left to name", trailing)
+	}
+}
+
 // The message the operator read, replayed.
 //
 // What he was shown of a priority change was an item said as yoyodyne-ifd.102.7,
