@@ -870,13 +870,14 @@ var notAStep = map[string]string{
 
 	// Recording and derivation. These write down what happened or read back what
 	// the run already knows; none of them does anything to the work.
-	"recordWorktree":      "records the worktree the run was given",
-	"recordHarnessCommit": "records the commit the harness made of a developer's change",
-	"recordCheckFailure":  "records the failing check as the run's outstanding repair input",
-	"recordPathRefusal":   "records the refused paths as the run's outstanding repair input",
-	"recordDevelopment":   "records what a developer invocation produced and cost",
-	"deliveredInvariants": "selects the invariants a developer is given",
-	"repairBudget":        "reads how many repair attempts this run may still make",
-	"recordPrice":         "prices the item against what this run spent, inside run.complete",
-	"mergeQueued":         "reads whether the forge only queued the merge, which is what run.complete waits for before closing the item",
+	"recordWorktree":               "records the worktree the run was given",
+	"recordHarnessCommit":          "records the commit the harness made of a developer's change",
+	"recordCheckFailure":           "records the failing check as the run's outstanding repair input",
+	"recordPathRefusal":            "records the refused paths as the run's outstanding repair input",
+	"recordDevelopment":            "records what a developer invocation produced and cost",
+	"deliveredInvariants":          "selects the invariants a developer is given",
+	"repairBudget":                 "reads how many repair attempts this run may still make",
+	"recordPrice":                  "prices the item against what this run spent, inside run.complete",
+	"mergeQueued":                  "reads whether the forge only queued the merge, which is what run.complete waits for before closing the item",
+	"applyUndischargedDisposition": "records on the run where its item was actually settled, inside run.complete",
 }
