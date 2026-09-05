@@ -478,14 +478,24 @@ conversation** — a run that failed independent review after every permitted
 attempt, rather than it waiting on the docket for somebody to tell her. Only the
 courier changes, and `yoyo work --help` has what bounds it.
 
+**A pass also fires whichever [recurring task](configuration.md#recurring-tasks)
+is due**, where a project has configured any — a role woken on a cadence to look
+at its own domain, rather than because something happened. At most one per pass,
+and every firing ends in a durable report that
+[`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found) reads. A
+project that schedules nothing has none of this and its passes are unchanged.
+
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
 until you stop it. Nothing else about the pass changes, and nothing needed to:
 the re-reading above is per pull. An idle session costs one local tracker read
 per interval and asks no provider anything, unless it has a stopped run to put to
-the development manager. Holding intake brakes a watching session in place rather
+the development manager or a recurring task that has come due. Holding intake
+brakes a watching session in place rather
 than stopping it — it keeps polling, chooses nothing, and resumes when you
-release it.
+release it. It does not stop those two, which are read before it and choose no
+work: a held intake still delivers a stoppage and still fires a due task, so
+`yoyo pause` is the switch for stopping what a quiet session spends.
 
 Three things guard a loop that no longer ends. A session does not start the same
 item twice unless the item has changed — what it says, what it is for, its

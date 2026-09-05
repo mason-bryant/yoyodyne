@@ -1850,13 +1850,25 @@ preempted by any of it.
 
 An idle session costs one local tracker read per `work_poll` and asks no provider
 anything, so a queue that is empty overnight spends nothing — unless it has a
-stopped run to [deliver](work.md#letting-the-harness-choose-the-work), which is a
-turn and is charged as one.
+stopped run to [deliver](work.md#letting-the-harness-choose-the-work), or a
+[recurring task](#recurring-tasks) that has come due. Each of those is a turn and
+is charged as one, so a project with an hourly task and an empty queue spends a
+turn an hour rather than nothing.
 
 **The intake hold is the remote brake.** It does not stop a watching session; it
 brakes it in place — the session keeps polling, chooses nothing, and resumes
 where it was when you release it. `yoyo pause`, the wider switch, parks the runs
 too, and lifting it resumes them from their own records.
+
+**Holding intake does not stop the spend above, and that is the distinction to
+have in mind.** The hold stops the session *choosing work*, and the two things
+that spend without choosing any are read before it: a stopped run reaches the
+development manager and a due recurring task fires under a held intake exactly as
+they do under a clear one. That is deliberate — a held queue is usually waiting on
+one of those judgements, and withholding them would be the hold answering a
+question nobody asked it — but it means an operator who holds intake to stop
+spending is still charged a turn per cadence. `yoyo pause` is the switch that
+stops those too.
 
 **Three guards, because the loop no longer ends.**
 
@@ -1927,10 +1939,15 @@ either one stops on the bound instead of restarting: you set that number, and
 taking up a build is not you raising it. There is nothing here for a drain, which
 is a command you are waiting on the return of.
 
-**`--budget <usd>`** caps what one session spends: the runs it starts, priced
-from the same recorded run evidence `yoyo cost` prices items from, and the turns
-it takes delivering stopped work. It is checked between pulls, never part way:
-money already spent is spent, and what stopping would lose is the work it bought.
+**`--budget <usd>`** caps what one session spends, and everything it spends
+counts against it: the runs it starts, priced from the same recorded run evidence
+`yoyo cost` prices items from; the turns it takes delivering stopped work; and
+the turns a [recurring task](#recurring-tasks) takes when its cadence comes due.
+The last two are turns the session takes rather than runs it started, and they
+are counted for exactly that reason — a bound that quietly excluded what a quiet
+session spends would be the cap disappearing on the nights it matters most. It is
+checked between pulls, never part way: money already spent is spent, and what
+stopping would lose is the work it bought.
 
 A budget the harness cannot measure is no budget, so it fails closed at both
 ends. A pass given `--budget` with no way to price itself is refused before
@@ -3743,6 +3760,83 @@ Reporting is an observation and never a gate: a workspace that is down, slow, or
 misconfigured changes nothing about any run. [`docs/slack/setup.md`](slack/setup.md)
 takes a workspace from nothing to live reporting, and the app manifest it asks
 for is checked in beside it.
+
+## Recurring tasks
+
+Everything else the harness starts is reactive: an item is admitted, a run stops,
+somebody asks. A recurring task is the other shape — a role woken every so often
+to look at its own domain and deal with what it finds — and it is configuration
+because what runs and how often is a project's judgement rather than a release's:
+
+```yaml
+recurring_tasks:
+  development-manager-sweep:
+    role: development-manager
+    every: 1h
+    enabled: true
+    max_turns: 4
+    prompt: |
+      Sweep for unresolved issues: stoppages nobody has decided, claims on work
+      nothing is running, deliveries that have stopped moving. Fix what your
+      authority allows, ask the architect where a ruling is needed, and file
+      root-cause work with the product manager for every fix you make.
+```
+
+**Configuration decides which role is woken and when, and nothing else.** There is
+no key here for a capability, a tool, an account, or an authority of any kind,
+and the absence is deliberate rather than an omission to be filled in later: a
+role woken on a cadence holds exactly what its role already holds, resolved from
+the harness's own registry the same way it is resolved for a conversation you
+open by hand. A scheduled turn also reads the role's own persona, so the
+personality that answers is the one the project configured and not a second
+version of it. The loader is strict about keys, so a `capabilities:` or `tools:`
+written under a task fails the configuration rather than being ignored.
+
+| Key | What it says |
+| --- | --- |
+| `role` | which role is woken. It must be a role this project configures an agent for; a task naming a role nobody fills is refused rather than discovered as silence. |
+| `every` | the cadence, measured from the last firing rather than against a wall-clock grid. The shortest accepted is `5m`, which is what keeps `1m` written where `1h` was meant from becoming sixty times the spend. |
+| `enabled` | the switch. It is explicit so a task can be turned off for a week without deleting its prompt and cadence. |
+| `prompt` | what the role is told. It is the task, not a personality. |
+| `max_turns` | how many turns one firing may take, defaulting to 3 and capped at 10. |
+
+**A firing costs what conversation turns cost.** The cadence is therefore the
+spending decision: `every: 1h` is a turn an hour for as long as a `yoyo work
+--watch` session is running. At most one task fires per pull, so a schedule with
+three due tasks reaches them over three pulls rather than holding the queue
+closed for all three at once.
+
+**What bounds that spend is the session's own
+[`--budget`](#watching-instead-of-draining)**, which counts a firing's turns
+exactly as it counts a run it started or a stopped run it delivered — so a
+session given a budget stops on it rather than sweeping past it, and a session
+given none is bounded by the cadence and nothing else.
+
+**`yoyo pause` is the switch that stops firings**, exactly as it stops runs and
+conversation turns; nothing is claimed while it is held, so every task keeps its
+cadence and fires once the pause lifts. **Holding intake does not stop them.**
+The hold stops the harness choosing work, and a firing chooses none: it is read
+before the hold on every pull, so a task fires under a held intake exactly as it
+does under a clear one. That is deliberate — a held queue is often waiting on
+exactly the kind of look a sweep takes — but it is the opposite of what an
+operator reaching for the hold to stop spending expects, so it is worth saying
+plainly: to stop paying for a cadence, pause rather than hold.
+
+**A heavy pass iterates rather than truncating.** A role that has more to do than
+one turn holds says so in its account, and the harness gives it another turn up
+to `max_turns`. A pass that still had more to do when the bound ran out is
+recorded as partial, so a truncated pass and a finished one are never the same
+short report.
+
+**A firing that failed waits for its next cadence.** It is not retried at once:
+the next pass looks at everything this one would have, and retrying immediately
+would spend turns against whatever was already failing. What stopped it is
+recorded against the task, so a schedule that is running and producing nothing is
+something you can find.
+
+Every firing ends in a durable report, read with
+[`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found). The reports
+outlive the session that produced them and are written once and never revised.
 
 ## Personas
 
