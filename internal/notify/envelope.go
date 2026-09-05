@@ -194,6 +194,19 @@ const (
 	// is either acted on or it is not, and the durable stall record is what makes
 	// once mean once across restarts.
 	KindStallNoticed Kind = "stall.noticed"
+	// The harness waiting out the provider's usage window. It is the same silence
+	// the stall above reports and the opposite fact about it: nothing has started,
+	// nothing is wrong, and the reason is one nobody can do anything about. It is
+	// said because the silence itself is not readable — on 2026-09-05 a session
+	// waited a window out from 12:13Z to 13:43Z, the stall alarm fired over it
+	// saying nothing accounted for it, and the operator was paged for a machine
+	// doing exactly what the provider had told it to.
+	//
+	// It is a note and never a warning, and it is said once per window rather than
+	// again while it stands. Nothing is degraded and nothing is waiting on
+	// anybody, so a second message would be a reason to mute the channel that
+	// carries the alarm this replaces.
+	KindProviderWindow Kind = "provider.window"
 	// One value the project's template has improved that this project has never
 	// edited. It is the third state here rather than a crossing, and it is the
 	// mildest thing this vocabulary carries: nothing is wrong, nothing is waiting,
@@ -267,6 +280,7 @@ func Kinds() []Kind {
 		KindLineWaiting,
 		KindResidentStale,
 		KindStallNoticed,
+		KindProviderWindow,
 		KindBundleImprovement,
 		KindCatchUpDigest,
 	}
@@ -289,7 +303,7 @@ func (k Kind) Valid() bool {
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
-		KindBundleImprovement, KindCatchUpDigest:
+		KindProviderWindow, KindBundleImprovement, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -674,9 +688,14 @@ type Detail struct {
 	// is happening, since when, over how much — and two vocabularies for it would
 	// be two ways to say it differently.
 	//
-	// Since is read a second time by KindCatchUpDigest, where it is the first of
-	// the events the digest stands for: the same subtraction against the event's
-	// own moment says how much of a gap was digested away.
+	// Stopped and Since are read a third time by KindProviderWindow, which is the
+	// same silence again with the one thing that accounts for it: what the harness
+	// is waiting on, and since when. It reads no ready count, because a window is
+	// the provider's answer whatever is in the queue behind it.
+	//
+	// Since is read once more by KindCatchUpDigest, where it is the first of the
+	// events the digest stands for: the same subtraction against the event's own
+	// moment says how much of a gap was digested away.
 	Stopped string    `json:"stopped,omitempty"`
 	Since   time.Time `json:"since,omitempty"`
 	Ready   int       `json:"ready,omitempty"`
@@ -698,8 +717,16 @@ type Detail struct {
 	// read, read by KindWatchIdle. It is the other state whose next move is not an
 	// admission: nothing a person admits reaches a store that will not answer.
 	Unreadable bool `json:"unreadable,omitempty"`
+	// ProviderWindow is a poll that chose nothing because the provider is refusing
+	// the harness for want of capacity, read by KindWatchIdle. It is the third such
+	// state, and the one that most looks like an empty queue from outside: nothing
+	// a person admits is startable until the window lifts, so a clause naming an
+	// admission would be naming the one act that cannot help.
+	ProviderWindow bool `json:"provider_window,omitempty"`
 	// Standing is where the harness stands, already rendered into the four lines
-	// the read model produces, and read by KindLineWaiting. It is carried as the
+	// the read model produces, and read by KindLineWaiting, KindStallNoticed and
+	// KindProviderWindow — every message that says nothing is being chosen, since
+	// a reader told that still wants to see what is. It is carried as the
 	// rendered text rather than as the state it came from, because the format is
 	// the contract: the same four lines are printed at a terminal and said here,
 	// and a second rendering of one standing is the disagreement one derivation

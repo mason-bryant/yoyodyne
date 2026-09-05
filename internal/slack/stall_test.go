@@ -347,6 +347,93 @@ func TestATrackerThatCannotBeReadRecordsNoStall(t *testing.T) {
 	}
 }
 
+// The other window, replayed: 2026-09-05, 12:13Z to 13:43Z. The session was
+// alive and polling, nothing started because the provider would not serve any
+// more, and the alarm fired at half an hour saying nothing accounted for it —
+// when the pause was the whole of the accounting. What this asks for is the
+// opposite of the test above: the same silence, and no stall.
+func TestAProviderWindowIsSaidOnceAsANoteAndNeverAsAStall(t *testing.T) {
+	t.Parallel()
+
+	// The window as the session recorded it: entered at 12:13Z, lifting at 13:43Z.
+	opened := time.Date(2026, 9, 5, 12, 13, 0, 0, time.UTC)
+	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(3)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", opened.Add(-time.Hour))
+	harness.waitingOnProvider(t, "waiting on the provider's usage window until 13:43Z", opened, &lifts)
+
+	// Half an hour in — past the threshold that fired the alarm — and it is a note
+	// in the channel rather than a warning on somebody's phone.
+	harness.now = opened.Add(30 * time.Minute)
+	start := harness.start()
+	delivery := harness.stalled(t, start)
+	if delivery.Notification.Event.Kind != notify.KindProviderWindow {
+		t.Fatalf("kind = %q, want the provider's window rather than a stall", delivery.Notification.Event.Kind)
+	}
+	if delivery.Notification.Event.Severity != report.SeverityNote {
+		t.Fatalf("severity = %q, want a note", delivery.Notification.Event.Severity)
+	}
+	if delivery.Direct {
+		t.Fatal("the provider's window was taken to somebody directly, want it said in the channel")
+	}
+	said, err := notify.Render(delivery.Notification.Topic, delivery.Notification.Speaker, delivery.Notification.Event)
+	if err != nil {
+		t.Fatalf("the provider's window could not be said: %v", err)
+	}
+	if !strings.Contains(said.Body, "waiting on the provider's usage window until 13:43Z") {
+		t.Fatalf("body %q does not say what the harness is waiting on, with the reset time", said.Body)
+	}
+	if !strings.Contains(said.Body, "Next: nobody's") {
+		t.Fatalf("body %q does not say the window is nobody's move", said.Body)
+	}
+	// The session's own account of the poll reaches the channel beside it, which
+	// is where the same words are said as the session's rather than the sink's.
+	cursors := harness.poll(t, start, notify.KindWatchStarted, notify.KindWatchIdle, notify.KindProviderWindow)
+
+	// And then the ninety minutes, at the sink's own fifteen-second poll. Nothing
+	// is recorded as a stall and the note is not said twice.
+	for harness.now.Add(5 * time.Minute).Before(lifts) {
+		harness.now = harness.now.Add(5 * time.Minute)
+		cursors = harness.quietPass(t, cursors)
+	}
+	events, err := stalls.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("List() = %+v, want nothing recorded: the pause was the accounting", events)
+	}
+}
+
+// A window the session recorded and then never came out of is not an account of
+// anything. The record is the last word of a session that has said nothing
+// since, which is exactly the shape of a session that died — so past the
+// deadline it accounts for nothing and the watchdog says what it always said.
+func TestAWindowThatHasLiftedStopsAccountingForTheQuiet(t *testing.T) {
+	t.Parallel()
+
+	opened := time.Date(2026, 9, 5, 12, 13, 0, 0, time.UTC)
+	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(3)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", opened.Add(-time.Hour))
+	harness.waitingOnProvider(t, "waiting on the provider's usage window until 13:43Z", opened, &lifts)
+
+	harness.now = lifts.Add(-time.Minute)
+	cursors := harness.poll(t, harness.start(),
+		notify.KindWatchStarted, notify.KindWatchIdle, notify.KindProviderWindow)
+
+	// The window lifted and the session went on saying nothing. That is a stall.
+	harness.now = lifts.Add(readmodel.DefaultStallThreshold + time.Minute)
+	harness.poll(t, cursors, notify.KindStallNoticed)
+	if _, open, err := stalls.Standing(); err != nil || !open {
+		t.Fatalf("Standing() = %v %v, want a stall once the window it was waiting on has lifted", open, err)
+	}
+}
+
 // watchesForStalls gives the feed the product's own stall record, which is what
 // every sink the harness builds is given, and hands it back so a test can read
 // what was actually written down.

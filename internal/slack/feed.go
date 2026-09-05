@@ -76,6 +76,12 @@ const (
 	// names the stall rather than the state for the reason the build mark names a
 	// build: a second stall is a second thing to say, and the same one is not.
 	stallMark = "stall:"
+	// windowMark names the provider usage window this cursor has already said
+	// something about, by the deadline the provider named for it. It shares the
+	// stall's stream because the two are read from one silence and are never both
+	// standing: a window that accounts for the quiet is precisely a quiet with no
+	// stall in it.
+	windowMark = "window:"
 	// improvementMark names one improvement this cursor has already said. It
 	// names the value the template now supplies as well as the key, because a
 	// template that improves one setting twice has improved it twice: a mark that

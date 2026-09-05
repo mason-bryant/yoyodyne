@@ -365,7 +365,11 @@ func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 		Running:    transition.Running,
 		Executor:   transition.Executor,
 		Unreadable: transition.Unreadable,
-		Build:      w.build,
+		// The provider's usage window, so a wait nobody can shorten is readable as
+		// one rather than as a queue nothing is pulling.
+		ProviderWindow:         transition.ProviderWindow,
+		ProviderWindowResetsAt: transition.ProviderWindowResetsAt,
+		Build:                  w.build,
 		// A stop that is a restart says so, so the reader who is not at this
 		// terminal is told a session is coming back rather than told to start one.
 		Restarting: transition.Restarting,

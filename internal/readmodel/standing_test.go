@@ -451,6 +451,43 @@ func TestARunInFlightBesideWorkAConversationCarriesIsNotAStalledLine(t *testing.
 	}
 }
 
+// The 2026-09-05 window against the four lines. The operator's oldest standing
+// request on this system was a clear message when the harness is suspended
+// pending a token window, and until now `yoyo status` said the same thing about
+// it that it said about an empty afternoon: the session had found nothing it
+// could start, and it was the operator's to look at.
+func TestAProviderWindowIsTheRefusalRatherThanAnIdleSession(t *testing.T) {
+	t.Parallel()
+	lifts := moment.Add(time.Hour)
+	sources := quietSources()
+	waiting := []beads.WorkItem{{ID: "yoyodyne-ifd.290", Status: "open"}}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": waiting},
+		ready:    waiting,
+	}}
+	sources.Sessions = fakeSessions{transitions: []runstate.WatchTransition{
+		{SessionID: "watch-1", State: runstate.WatchWatching, At: moment.Add(-2 * time.Hour)},
+		{
+			SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-30 * time.Minute),
+			ProviderWindow: true, ProviderWindowResetsAt: &lifts,
+		},
+	}}
+
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.NotStartable) != 1 {
+		t.Fatalf("not startable = %+v, want the ready item refused for the window", standing.NotStartable)
+	}
+	if standing.NotStartable[0].Reason != "waiting on the provider's usage window until "+lifts.Format("15:04")+"Z" {
+		t.Fatalf("refusal = %q, want the window said with the reset time", standing.NotStartable[0].Reason)
+	}
+	// Nobody has a move, so it is not on the attention line. Putting it there
+	// would be telling somebody to act on a wait nothing they do can shorten,
+	// which is what the old idle clause did.
+	if len(standing.NeedsHuman) != 0 {
+		t.Fatalf("needs a human = %+v, want a provider window waiting on nobody", standing.NeedsHuman)
+	}
+}
+
 // Every developer slot taken is a different refusal from a held switch, and an
 // operator does an entirely different thing about it.
 func TestAFullMachineIsItsOwnRefusal(t *testing.T) {

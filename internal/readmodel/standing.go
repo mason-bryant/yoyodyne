@@ -271,7 +271,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// a person. Reading them twice would be two chances for the two lines to
 	// disagree about one file.
 	switches := readSwitches(sources)
-	refused, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running)
+	refused, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running, now)
 	standing.NotStartable = refused
 	standing.Admitted = len(queue.Entries)
 	standing.NotStartableProblem = notStartableProblem
@@ -468,7 +468,7 @@ func readSwitches(sources Sources) switches {
 // an empty queue is a state of the machine and not something waiting on
 // anybody, so it is returned as no stall at all rather than as attention nobody
 // asked for.
-func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun) ([]Refused, backlog.Queue, Stall, string) {
+func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun, now time.Time) ([]Refused, backlog.Queue, Stall, string) {
 	if sources.Tracker == nil {
 		return nil, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
 	}
@@ -486,7 +486,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	// other surface reads. It names no reason when the harness would start the next
 	// pullable item, which is what makes a pullable item's absence from this line
 	// mean something.
-	stopped := whyNothingStarts(sources, held, len(running))
+	stopped := whyNothingStarts(sources, held, len(running), now)
 	refusal := stopped.Refusal()
 	// What the stall could not read is said whatever the queue holds. It is a
 	// gap in this reading rather than a fact about the work, so a queue with
@@ -529,7 +529,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 // reading holds. The derivation itself is shared, because a channel and a
 // terminal that worked this out separately would be two answers to the one
 // question an operator asks.
-func whyNothingStarts(sources Sources, held switches, running int) Stall {
+func whyNothingStarts(sources Sources, held switches, running int, now time.Time) Stall {
 	conditions := Conditions{
 		OperatorHold: held.operator,
 		OperatorHeld: held.operatorHeld,
@@ -537,6 +537,10 @@ func whyNothingStarts(sources Sources, held switches, running int) Stall {
 		IntakeHeld:   held.intakeHeld,
 		Running:      running,
 		Capacity:     sources.Capacity,
+		// The reading's own moment, so a provider's usage window this line reports
+		// as standing is one that had not lifted when the rest of these lines were
+		// read.
+		Now: now,
 	}
 	// The watch log costs a read, so it is passed as the question rather than the
 	// answer: the derivation asks for it only where the switches and the capacity

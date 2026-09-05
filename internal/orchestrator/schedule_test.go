@@ -1183,6 +1183,116 @@ func TestAnIdleWatchSaysWhatItPassedOverAndWhichConversationCarriesIt(t *testing
 	}
 }
 
+// The 2026-09-05 window, replayed from the session's side: a run comes back
+// parked on an exhausted usage limit that the provider said lifts at 13:43Z, and
+// every poll after it starts nothing because the provider will not serve.
+//
+// What the session said then was that it had passed some items over, which is
+// the same thing it says over an empty queue — so the ninety minutes read from
+// outside as a line nobody was pulling, the stall watchdog said nothing
+// accounted for it, and the operator was paged for a machine doing exactly what
+// the provider had told it to. So the window is said, from the first poll made
+// inside it, with the time the provider named.
+func TestASessionWaitingOutAProvidersWindowSaysSoWithTheResetTime(t *testing.T) {
+	t.Parallel()
+
+	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.290")...)
+	harness.now = time.Date(2026, 9, 5, 12, 13, 0, 0, time.UTC)
+	sessions := &recordedSessions{}
+	// The run the provider refused. It is parked rather than failed: the deadline
+	// is in its own durable state, and this is the outcome the session is handed.
+	harness.run = func(*scheduleHarness, string) (Outcome, error) {
+		return Outcome{
+			WorkItemID: "yoyodyne-ifd.290", Status: runstate.StatusRunning,
+			Paused: true, PauseCause: runstate.PauseUsageLimit, UsageLimitKind: "five-hour",
+			UsageLimitResetsAt: &lifts,
+		}, nil
+	}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	schedule, err := Scheduler{
+		Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock,
+	}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want the one item started and parked", schedule.Started)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded, so nothing said the session was inside a window")
+	}
+	if !idle.window {
+		t.Fatalf("idle = %+v, want the poll marked as one made inside the provider's window", idle)
+	}
+	if idle.windowResetsAt == nil || !idle.windowResetsAt.Equal(lifts) {
+		t.Fatalf("idle reset time = %v, want %s, the moment the provider named", idle.windowResetsAt, lifts)
+	}
+	// The words a person reads, which lead with the window because it is the whole
+	// of why nothing started — and still say what the poll found behind it, because
+	// that is what gets pulled when the window lifts.
+	if !strings.HasPrefix(idle.reason, "waiting on the provider's usage window until 13:43Z") {
+		t.Fatalf("idle reason = %q, want it to lead with the window and the reset time", idle.reason)
+	}
+	if !strings.Contains(idle.reason, "passed over") {
+		t.Fatalf("idle reason = %q, want what the poll found said behind the window", idle.reason)
+	}
+}
+
+// A window the provider named accounts for the polls made inside it and for
+// nothing after it. Past the deadline the session is choosing nothing for a
+// reason nobody recorded, which is exactly the state the watchdog exists to
+// catch — so the account goes back to saying what the poll actually found.
+func TestAWindowThatHasLiftedStopsBeingWhatTheSessionSays(t *testing.T) {
+	t.Parallel()
+
+	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.290")...)
+	harness.now = time.Date(2026, 9, 5, 13, 40, 0, 0, time.UTC)
+	sessions := &recordedSessions{}
+	harness.run = func(*scheduleHarness, string) (Outcome, error) {
+		return Outcome{
+			WorkItemID: "yoyodyne-ifd.290", Status: runstate.StatusRunning,
+			Paused: true, PauseCause: runstate.PauseUsageLimit, UsageLimitResetsAt: &lifts,
+		}, nil
+	}
+	// The first wait carries the session past the deadline the provider named, and
+	// the poll after it is one the window no longer explains.
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 1 {
+			h.mu.Lock()
+			h.now = lifts.Add(time.Minute)
+			h.mu.Unlock()
+			return true
+		}
+		return false
+	}
+
+	if _, err := (Scheduler{
+		Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock,
+	}).Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	transitions := sessions.recorded()
+	windows := 0
+	for _, transition := range transitions {
+		if transition.window {
+			windows++
+		}
+	}
+	if windows != 1 {
+		t.Fatalf("%d poll(s) were said to be inside the window, want only the one made before it lifted", windows)
+	}
+	// The last line is the stop; the one before it is the poll made after the
+	// window lifted, which is the one under test.
+	last := transitions[len(transitions)-2]
+	if last.window || strings.Contains(last.reason, "usage window") {
+		t.Fatalf("the poll after the window lifted still reports one: %+v", last)
+	}
+}
+
 // The idle line names items and counts runs, and it is said again when either
 // changes — so what it must not do is say itself again when neither has. A
 // session polling an unchanged queue writes one line however many polls it
@@ -2426,6 +2536,11 @@ type recordedTransition struct {
 	// ending, which is what every surface reads to tell the operator whether
 	// anything is waiting on them.
 	restarting bool
+	// window and windowResetsAt are the provider's usage window the poll was made
+	// inside, which is what every surface reads to tell this silence from one
+	// nothing accounts for.
+	window         bool
+	windowResetsAt *time.Time
 }
 
 func (r *recordedSessions) Record(transition SessionState) error {
@@ -2441,6 +2556,9 @@ func (r *recordedSessions) Record(transition SessionState) error {
 		executor:   transition.Executor,
 		unreadable: transition.Unreadable,
 		restarting: transition.Restarting,
+
+		window:         transition.ProviderWindow,
+		windowResetsAt: transition.ProviderWindowResetsAt,
 	})
 	return nil
 }
@@ -2457,6 +2575,15 @@ func (r *recordedSessions) entered(state runstate.WatchState) (recordedTransitio
 		}
 	}
 	return recordedTransition{}, false
+}
+
+// recorded is every transition in the order it was written, which is what a test
+// about a state the session came out of has to read: entered above answers with
+// the first of a state, and a window that lifted is a question about the last.
+func (r *recordedSessions) recorded() []recordedTransition {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]recordedTransition(nil), r.transitions...)
 }
 
 func (r *recordedSessions) states() []runstate.WatchState {
