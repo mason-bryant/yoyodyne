@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,61 @@ func TestEachNewlyAvailableImprovementIsSaidToTheOperatorsOnce(t *testing.T) {
 	}
 	if offers.asked < 2 {
 		t.Fatalf("the comparison was made %d times; the silence should be a reading that found nothing new", offers.asked)
+	}
+}
+
+// The same once-per-improvement rule as the test above, taken end to end through
+// a whole sink rather than through the feed alone: two complete check passes, a
+// heartbeat apart, over one improvement that stays available, and the operator is
+// sent exactly one direct message.
+//
+// It is worth having beside the feed-level test because it is the only thing that
+// proves the two halves meet. The feed decides an improvement is worth saying and
+// sets Direct on it; the sink is what turns Direct into a conversation opened with
+// each operator, and neither test alone shows that a newly-available improvement
+// actually reaches a person. It also proves the dedup from the durable record in
+// the way the record is really used: `pass` reads the cursors off disk at the top
+// and writes them back at the bottom, so what makes the second pass silent is the
+// file rather than anything this process kept in memory between the two.
+func TestTheImprovementIsSentToTheOperatorOnceAcrossTwoCheckPasses(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	offers := harness.offering(improved("agents.reviewer.model", "sonnet", "opus"))
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), harness.feed, posts)
+	sink.operators = []string{"U0OPERATOR"}
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("first pass() error = %v", err)
+	}
+	// A whole heartbeat later, which is when the comparison is made again and when
+	// a surface deduplicating by nothing would say the same improvement twice.
+	harness.now = harness.now.Add(time.Hour)
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("second pass() error = %v", err)
+	}
+
+	if offers.asked < 2 {
+		t.Fatalf("the comparison was made %d times, want it made on both passes so the silence is a reading that found nothing new", offers.asked)
+	}
+	if !slices.Equal(posts.opened, sink.operators) {
+		t.Fatalf("opened %#v, want one direct conversation with the operator across both passes", posts.opened)
+	}
+	var direct []postRequest
+	for _, request := range posts.requests {
+		if request.Channel == "D"+sink.operators[0] {
+			direct = append(direct, request)
+		}
+	}
+	if len(direct) != 1 {
+		t.Fatalf("sent %d direct messages, want the improvement said exactly once ever", len(direct))
+	}
+	// And it is the notify voice that worded it rather than a sentence this sink
+	// made up, which is what carries the setting the template actually moved.
+	if !strings.Contains(direct[0].Text, "agents.reviewer.model") {
+		t.Fatalf("the direct message said %q, want it to name the setting the template improved", direct[0].Text)
 	}
 }
 
