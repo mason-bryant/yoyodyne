@@ -87,6 +87,40 @@ func TestClientBlocksAnItemAndVerifiesTheStatusItApplied(t *testing.T) {
 	}
 }
 
+// An item a run integrated a change for and did not discharge goes back to the
+// backlog carrying why. The status is read back for the reason a blocker's is:
+// an item left claimed by a run that has ended is work nothing can start and
+// nothing is watching.
+func TestClientReopensAnItemAndVerifiesTheStatusItApplied(t *testing.T) {
+	t.Parallel()
+
+	reason := "run-1 landed evidence and did not discharge this item"
+	runner := &fakeRunner{responses: []string{workItemJSON("open", reason)}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	item, err := client.Reopen(context.Background(), "yoyodyne-1", reason)
+	if err != nil {
+		t.Fatalf("Reopen() error = %v", err)
+	}
+	if item.Status != "open" || item.Notes != reason {
+		t.Fatalf("Reopen() = %#v", item)
+	}
+	wantArgs := [][]string{{"update", "yoyodyne-1", "--status=open", "--append-notes=" + reason, "--json"}}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	unapplied := &fakeRunner{responses: []string{workItemJSON("in_progress", reason)}}
+	if _, err := (Client{Runner: unapplied}).Reopen(context.Background(), "yoyodyne-1", reason); err == nil ||
+		!strings.Contains(err.Error(), "want open") {
+		t.Fatalf("Reopen() unapplied error = %v", err)
+	}
+	// An item put back with no reason reads afterwards as work somebody walked
+	// away from, which is the state this call exists to avoid.
+	if _, err := (Client{Runner: &fakeRunner{}}).Reopen(context.Background(), "yoyodyne-1", " "); err == nil {
+		t.Fatal("Reopen() empty reason error = nil")
+	}
+}
+
 func TestClientAppliesOnlyTheEditItWasGiven(t *testing.T) {
 	t.Parallel()
 

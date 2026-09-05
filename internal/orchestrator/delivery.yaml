@@ -23,12 +23,19 @@
 #     developer -- so a definition that also selected `candidate.publish` would
 #     publish every attempt twice.
 #   * The `complete` state between `integrate` and `clean-up` is where the work
-#     item is finished with: the outcome recorded on it, the item closed now its
-#     promotion is settled, and what the run spent priced against it. It is a
-#     state of its own because that is what the pipeline does there --
-#     `(*activeRun).finish` performs it and then the cleanup -- and a definition
-#     that ran the promotion straight into the cleanup would promote a change and
-#     never close its item.
+#     item is finished with: the outcome recorded on it, the item settled now its
+#     promotion is, and what the run spent priced against it. Settled is closed
+#     for a landing the developer claimed discharges the item and back in the
+#     backlog for one it claimed does not, which is why this state is not named
+#     for the closure. It is a state of its own because that is what the pipeline
+#     does there -- `(*activeRun).finish` performs it and then the cleanup -- and
+#     a definition that ran the promotion straight into the cleanup would promote
+#     a change and never settle its item. The `complete` and `delivered`
+#     summaries below still say only "closed", which is the ordinary landing and
+#     no longer the whole of it: a summary is digest-bearing, so moving one means
+#     moving this repository's own copy at `.yoyodyne/workflows/delivery.yaml` in
+#     the same change, and that path is refused to a developer run without a
+#     grant.
 #   * A budget is not something a definition can ask about. The run counts its
 #     own repair attempts, relaunches and integration retries, so what appears
 #     here is the pair of outcomes the run distinguishes: the failure handed back
@@ -112,7 +119,7 @@ states:
     on:
       cleaned: delivered
       # An artifact that survived is reported on a succeeded run rather than
-      # turning it into a failure: the change is integrated and the item closed.
+      # turning it into a failure: the change is integrated and the item settled.
       partial: delivered
 terminals:
   delivered:

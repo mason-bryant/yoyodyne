@@ -25,6 +25,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/invariant"
+	"github.com/mason-bryant/yoyodyne/internal/landing"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -46,6 +47,10 @@ type WorkTracker interface {
 	// something no further attempt of its own can resolve.
 	Block(ctx context.Context, id, reason string) (beads.WorkItem, error)
 	Complete(ctx context.Context, id, reason string) (beads.WorkItem, error)
+	// Reopen returns a claimed item to the backlog. The harness uses it when a
+	// run integrated its change and claimed that change does not discharge the
+	// item, which is a landing worth keeping and not a closure.
+	Reopen(ctx context.Context, id, reason string) (beads.WorkItem, error)
 }
 
 // Pricer records what a work item has cost across every run made for it. The
@@ -574,6 +579,16 @@ type Outcome struct {
 	// kept, because a proposal nobody recorded would otherwise leave no trace.
 	Amendments       []amendment.Proposal `json:"amendments,omitempty"`
 	AmendmentProblem string               `json:"amendment_problem,omitempty"`
+	// Landing is what the developer claimed its change does to the work item, and
+	// LandingReason is its own account of the claim. Unlike the two channels above
+	// this one decides something: an item is closed on a landing that discharges
+	// it and left open on one that does not, so a run that landed evidence reads
+	// afterwards as the evidence it was rather than as work that was done.
+	// LandingProblem names a claim that could not be read, which withholds the
+	// closure for the reason its durable twin gives.
+	Landing        landing.Outcome `json:"landing,omitempty"`
+	LandingReason  string          `json:"landing_reason,omitempty"`
+	LandingProblem string          `json:"landing_problem,omitempty"`
 	// Cost is what every run made for this work item has cost, as the provider
 	// reported it: this run and every earlier one, the attempts that failed as
 	// well as the one that finished. It is absent when nothing priced the item,
@@ -2756,10 +2771,15 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	a.state.UpdatedAt = p.clock().Now()
 	a.outcome.ProviderSessionID = providerResult.SessionID
 	a.outcome.ProviderResolvedModel = providerResult.ResolvedModel
+	// What the developer claimed its change does to the item is read before the
+	// channels that decide nothing, because the contract puts its block ahead of
+	// theirs and an unreadable report block takes everything after its own fence
+	// with it.
+	reply := a.claimLanding(providerResult.FinalText)
 	// Anything the developer reported is collected out of what it said, so the
 	// summary stays the account of the work and the report reaches the operator
 	// instead of sitting in prose nothing surfaces.
-	a.outcome.Summary = a.collectFromReply(domain.RoleDeveloper, providerResult.FinalText)
+	a.outcome.Summary = a.collectFromReply(domain.RoleDeveloper, reply)
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save developer outcome state: %w", err)
 	}
@@ -4002,14 +4022,30 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// is the same step that already settles the queue — and until it arrives the
 	// item stays claimed with the queued merge named on it, rather than closed
 	// against a merge nobody has confirmed.
+	// A landing that does not discharge the item is the other reason the closure
+	// does not follow the promotion. The change is integrated and the run
+	// succeeded; what the developer claimed is that the change is evidence rather
+	// than the work the item asked for, and closing on it would record as done
+	// exactly what the evidence says was not. The item goes back to the backlog
+	// with the claim on it instead, which is the state a person or a later run can
+	// still act on.
 	if a.outcome.Integration != nil && !a.mergeQueued() {
-		if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
-			_, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome))
-			return err
-		}); err != nil {
-			return a.fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
+		if !a.state.LandingDischarges() {
+			if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
+				_, err := p.Tracker.Reopen(ctx, a.state.WorkItemID, undischargedLandingReason(a.state))
+				return err
+			}); err != nil {
+				return a.fail(fmt.Errorf("reopen the work item this run did not discharge: %w", err), runstate.StatusFailed)
+			}
+		} else {
+			if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
+				_, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome))
+				return err
+			}); err != nil {
+				return a.fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
+			}
+			a.outcome.WorkItemClosed = true
 		}
-		a.outcome.WorkItemClosed = true
 	}
 	// The item is priced when the run that spent it ends, whether or not the
 	// closure waits: a queued merge defers the closure to a later sweep, and that
@@ -4886,7 +4922,12 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		// The invariants reach the reviewer's evidence by the same delivery that
 		// reached the developer's context, so a change that violates one is judged
 		// against it whether or not the work item ever mentioned it.
-		Invariants:   a.reviewedInvariants(changes).Text(),
+		Invariants: a.reviewedInvariants(changes).Text(),
+		// What the developer claimed its change does to the item, so the change is
+		// judged against what it was offered as. It comes from the durable record
+		// rather than from what this attempt happened to return, so a repair round
+		// judges the claim the run currently holds.
+		Landing:      describeLanding(a.state),
 		WorktreePath: a.worktree.Path,
 		Changes:      changes,
 		Checks:       a.outcome.Checks,
@@ -5275,6 +5316,8 @@ Your worktree is yours alone, and so is the scratch directory the harness cut fo
 Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, propose the correction it needs.
 
 Any architectural invariant delivered with this work item is a constraint on your change rather than advice. Invariants exist because a change whose own work is correct can still break something the work item never mentioned, so each one holds even where nothing else you were given refers to it. They belong to the architect: do not create, amend, retire, or edit one. If your work cannot satisfy an invariant, or you believe one is wrong, leave it in force and put the amendment you would propose in your summary for the architect to decide.
+
+` + landing.Contract + `
 
 ` + report.Contract + `
 
@@ -5855,6 +5898,13 @@ func renderOutcomeNotes(outcome Outcome) string {
 	headline := "Yoyodyne bootstrap run succeeded."
 	if outcome.Integration != nil {
 		headline = "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically."
+		// The headline of an item that stays open has to say so, because it is the
+		// line somebody scanning the notes reads instead of the closure that is not
+		// there. The claim itself is recorded below with the developer's account of
+		// it; this is only what stops the note reading as a completed item.
+		if outcome.Landing == landing.OutcomeEvidence || outcome.LandingProblem != "" {
+			headline = "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically; the developer did not claim it discharges this item, so the item stays open."
+		}
 	}
 	// These notes are recorded before cleanup, because the promotion is settled
 	// first and only a promoted change's artifacts are removed. Cleanup can still
@@ -5869,6 +5919,13 @@ func renderOutcomeNotes(outcome Outcome) string {
 		"Branch: " + outcome.Branch,
 		worktree,
 		"Base commit: " + outcome.BaseCommit,
+	}
+	// The claim is recorded on the item whichever way it went, so the item says
+	// what this run said about it rather than only what became of the item. An
+	// item that closed on a claimed discharge and one that closed because nobody
+	// claimed anything are different records, and only this tells them apart.
+	if line := renderLandingNote(outcome); line != "" {
+		lines = append(lines, line)
 	}
 	if outcome.RepairAttempts > 0 {
 		lines = append(lines, "Repair attempts: "+strconv.Itoa(outcome.RepairAttempts))

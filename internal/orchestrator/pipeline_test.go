@@ -2926,6 +2926,13 @@ type fakeTracker struct {
 	completeFailures     int
 	transientCompleteErr error
 	blockErr             error
+	// reopened and reopenReason are the item put back in the backlog by a run
+	// that integrated its change and claimed the change does not discharge the
+	// item. They are apart from the closure above because the whole point of the
+	// landing claim is that the two are different acts.
+	reopened     bool
+	reopenReason string
+	reopenErr    error
 }
 
 type partialWorktreeManager struct {
@@ -3052,6 +3059,19 @@ func (f *fakeTracker) Complete(_ context.Context, _ string, reason string) (bead
 	f.closed = true
 	f.closeReason = reason
 	f.item.Status = "closed"
+	return f.item, nil
+}
+
+func (f *fakeTracker) Reopen(_ context.Context, _ string, reason string) (beads.WorkItem, error) {
+	f.calls = append(f.calls, "reopen")
+	if f.reopenErr != nil {
+		return beads.WorkItem{}, f.reopenErr
+	}
+	f.reopened = true
+	f.reopenReason = reason
+	f.notes += reason
+	f.noteRecords = append(f.noteRecords, reason)
+	f.item.Status = "open"
 	return f.item, nil
 }
 

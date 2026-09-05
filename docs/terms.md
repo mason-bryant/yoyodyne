@@ -32,6 +32,7 @@ the prose the check reads, every one of them a term with a row below.
 | Term | In plain words | Where it is used |
 | --- | --- | --- |
 | `brake` | the automatic stop after a set number of blocked runs in a row | the scheduler's own messages about why it stopped choosing work; `internal/orchestrator`; the guides under `docs/` |
+| `discharge` | to be the work an item asked for, so the item closes on it — as against landing evidence, which does not | the developer's contract and the reviewer's; a work item's own notes after a run; `internal/landing` and `internal/orchestrator`; [how work flows](work.md) |
 | `docket` | the list of stopped runs waiting on the development manager | `yoyo reconcile` and `yoyo triage` output, and the product manager's context bundle; `internal/runstate`; [management and supervision](designs/management-and-supervision.md) |
 | `handback` | handing the work back to the developer that made it | `internal/orchestrator` and `internal/runstate` only — it names no command output and no document |
 | `heartbeat` | how often to repeat | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md) |

@@ -166,9 +166,14 @@ from the records alone, which is what those cases could not be.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the
-reviewer is committed, fast-forwarded into the target branch, closed in Beads,
+reviewer is committed, fast-forwarded into the target branch, settled in Beads,
 and its worktree and branch removed — the JSON reports the integrated commit and
-what was cleaned up. A freshly generated configuration says `human` instead, so
+what was cleaned up. Settled is closed for nearly every run, and the exception is
+a landing the developer claimed does not discharge the item: an honest "not
+doable yet" lands its evidence like any other change and leaves the item open
+with the claim recorded on it, rather than closing an item against the evidence
+that says the work was not done. [What a landing claims](#what-a-landing-claims)
+is the whole of that. A freshly generated configuration says `human` instead, so
 a new project preserves the worktree for external integration until it opts in.
 Either way the harness refuses `automatic` unless deterministic checks and a
 reviewer agent both exist.
@@ -193,6 +198,48 @@ approval never carries over, because the diff it approved is not the one that
 would now be promoted. A replay that conflicts is never
 resolved automatically: the run stops, both sides survive untouched, and the
 blocker on the item says so.
+
+## What a landing claims
+
+Whether a change landed and whether it discharged the item it was made for are
+two different facts, and the harness cannot derive one from the other. Closure
+used to follow the promotion alone, which produced exactly the defect you would
+expect: a run that found its item was not doable yet answered with a diagnosis
+saying so in bold, the diagnosis was good evidence and integrated, and the item
+closed against it — retiring a marker the diagnosis existed to keep.
+
+So the developer says which kind of landing it made, and the closure follows the
+claim. Nearly every run claims nothing, which is the ordinary landing and closes
+the item. A run that has evidence to land and no work to discharge says so in one
+fenced block:
+
+````
+```yoyodyne-landing
+{"outcome":"evidence","why":"the design this needs has not landed, so what this run landed is the diagnosis"}
+```
+````
+
+`"discharged"` is the ordinary landing said out loud; `"evidence"` is the one
+that withholds the closure. A run that claims evidence is not a failed run and is
+not handed to anybody: its change is reviewed and promoted exactly as any other
+is, and what changes is only what becomes of the item — it goes back to the
+backlog with the run named on it and the developer's own account of why, rather
+than being recorded as done.
+
+Three things follow from the claim deciding something, which the report and
+amendment channels do not:
+
+- The reviewer is shown it, above the patch and inside the untrusted evidence,
+  so a diagnosis is judged as a diagnosis rather than as a missing
+  implementation. A change that claims evidence and is plainly the
+  implementation is a finding, for the mirror-image reason.
+- A claim the harness cannot read withholds the closure rather than being
+  swallowed the way an unreadable report is. The developer wrote a block, so it
+  was trying to say something about the closure; an item left open is something
+  a person can settle, and a false closure is the thing nobody sees.
+- It is durable, because the closure is not always made by the process that read
+  it. A merge the forge only queued is settled by a later `yoyo reconcile`, and
+  that sweep decides from the recorded claim rather than from the promotion.
 
 ## Letting the harness choose the work
 

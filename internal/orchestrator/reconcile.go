@@ -526,22 +526,49 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	return result, err
 }
 
-// closeSettledMerge closes an item whose queued merge the forge has performed.
-// An item already closed is left alone, so settling the same merge twice closes
-// it once — and so does settling one an older run closed before the closure
-// waited on the forge at all.
+// closeSettledMerge settles the item of a run whose queued merge the forge has
+// performed. An item already in the state its run's landing calls for is left
+// alone, so settling the same merge twice settles it once — and so does settling
+// one an older run closed before the closure waited on the forge at all.
 func (r Reconciler) closeSettledMerge(ctx context.Context, state runstate.State) error {
 	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
 	if err != nil {
 		return err
 	}
-	if itemStatus == "closed" {
+	if landingSettled(state, itemStatus) {
+		return nil
+	}
+	// The forge merging the change settles where the work is, and not whether the
+	// work discharges the item. That is the run's own claim, and it is read from
+	// the durable record here for the reason it is durable at all: the run that
+	// made it ended before the forge answered.
+	if !state.LandingDischarges() {
+		if _, err := r.Tracker.Reopen(ctx, state.WorkItemID, undischargedLandingReason(state)); err != nil {
+			return fmt.Errorf("reopen the work item run %s did not discharge: %w", state.RunID, err)
+		}
 		return nil
 	}
 	if _, err := r.Tracker.Complete(ctx, state.WorkItemID, settledMergeCompletionReason(state)); err != nil {
 		return fmt.Errorf("close integrated work item for run %s: %w", state.RunID, err)
 	}
 	return nil
+}
+
+// landingSettled reports an item already in the state its run's landing calls
+// for. It is what makes settling the same run twice record one settlement, and
+// it has two answers rather than one because the landings do: a landing that
+// discharges its item settles on a closed item, and one that does not settles on
+// an item back in the backlog.
+//
+// A closed item settles either landing. An item an earlier run closed keeps that
+// closure whatever this run claimed, for the reason a dropped merge does not
+// reopen one: rewriting a closure an operator has already read is a worse answer
+// than leaving it and recording what happened beside it.
+func landingSettled(state runstate.State, itemStatus string) bool {
+	if itemStatus == "closed" {
+		return true
+	}
+	return !state.LandingDischarges() && itemStatus == "open"
 }
 
 // settleDroppedMerge settles a run whose queued merge the forge gave up on. The
@@ -668,13 +695,20 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 	if err != nil {
 		return reconciliationOf(state, ActionCompleted), err
 	}
-	// An item the interrupted process already closed is left alone, so
-	// reconciling twice records one outcome and one closure.
-	if itemStatus != "closed" {
+	// An item the interrupted process already settled is left alone, so
+	// reconciling twice records one outcome and one settlement. What settling
+	// means is the run's own landing claim: an integrated change discharges the
+	// item or is evidence that does not, and a sweep that read only the promotion
+	// would close an item its own run said to leave open.
+	if !landingSettled(state, itemStatus) {
 		if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderReconciledIntegrationNotes(state, recovered)); err != nil {
 			return reconciliationOf(state, ActionCompleted), fmt.Errorf("record reconciled outcome for run %s: %w", state.RunID, err)
 		}
-		if _, err := r.Tracker.Complete(ctx, state.WorkItemID, reconciledCompletionReason(state)); err != nil {
+		if !state.LandingDischarges() {
+			if _, err := r.Tracker.Reopen(ctx, state.WorkItemID, undischargedLandingReason(state)); err != nil {
+				return reconciliationOf(state, ActionCompleted), fmt.Errorf("reopen the work item run %s did not discharge: %w", state.RunID, err)
+			}
+		} else if _, err := r.Tracker.Complete(ctx, state.WorkItemID, reconciledCompletionReason(state)); err != nil {
 			return reconciliationOf(state, ActionCompleted), fmt.Errorf("close integrated work item for run %s: %w", state.RunID, err)
 		}
 	}
