@@ -451,6 +451,93 @@ func TestARunInFlightBesideWorkAConversationCarriesIsNotAStalledLine(t *testing.
 	}
 }
 
+// The 2026-09-05 window against the four lines. The operator's oldest standing
+// request on this system was a clear message when the harness is suspended
+// pending a token window, and until now `yoyo status` said the same thing about
+// it that it said about an empty afternoon: the session had found nothing it
+// could start, and it was the operator's to look at.
+func TestAProviderWindowIsTheRefusalRatherThanAnIdleSession(t *testing.T) {
+	t.Parallel()
+	lifts := moment.Add(time.Hour)
+	sources := quietSources()
+	waiting := []beads.WorkItem{{ID: "yoyodyne-ifd.290", Status: "open"}}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": waiting},
+		ready:    waiting,
+	}}
+	sources.Sessions = fakeSessions{transitions: []runstate.WatchTransition{
+		{SessionID: "watch-1", State: runstate.WatchWatching, At: moment.Add(-2 * time.Hour)},
+		{
+			SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-30 * time.Minute),
+			ProviderWindow: true, ProviderWindowResetsAt: &lifts,
+		},
+	}}
+
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.NotStartable) != 1 {
+		t.Fatalf("not startable = %+v, want the ready item refused for the window", standing.NotStartable)
+	}
+	said := "Paused on the provider's usage window until " + lifts.Format("15:04") + "Z"
+	if standing.NotStartable[0].Reason != said {
+		t.Fatalf("refusal = %q, want the window said with the reset time", standing.NotStartable[0].Reason)
+	}
+	// Nobody has a move, so it is not on the attention line. Putting it there
+	// would be telling somebody to act on a wait nothing they do can shorten,
+	// which is what the old idle clause did.
+	if len(standing.NeedsHuman) != 0 {
+		t.Fatalf("needs a human = %+v, want a provider window waiting on nobody", standing.NeedsHuman)
+	}
+	// And the operator's own acceptance, which is about where the cause is rather
+	// than only that it is there: when the system is paused on a provider usage
+	// window, the cause is the first words of any message that reaches him. A
+	// reading is one of those messages, and a refusal three lines down beside one
+	// item is not the first words of it.
+	if standing.Paused != said {
+		t.Fatalf("paused = %q, want the window carried above the four lines", standing.Paused)
+	}
+	if rendered := standing.Render(); !strings.HasPrefix(rendered, said+"\n") {
+		t.Fatalf("the reading opens %q, want it to open with the cause", firstLine(rendered))
+	}
+	// And the four lines alone, for the one message whose own first sentence is
+	// already the banner: saying it twice in one message is repetition rather
+	// than emphasis.
+	if lines := standing.RenderLines(); !strings.HasPrefix(lines, "Running:") {
+		t.Fatalf("the four lines open %q, want the banner left off them", firstLine(lines))
+	}
+}
+
+// And the banner is only ever the window. Every other reason nothing is being
+// chosen renders inside the four lines, which is what keeps this from becoming a
+// second place a state can be reported from.
+func TestAnIdleSessionPutsNothingAboveTheFourLines(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	waiting := []beads.WorkItem{{ID: "yoyodyne-ifd.290", Status: "open"}}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"open": waiting},
+		ready:    waiting,
+	}}
+	sources.Sessions = fakeSessions{transitions: []runstate.WatchTransition{
+		{SessionID: "watch-1", State: runstate.WatchWatching, At: moment.Add(-2 * time.Hour)},
+		{SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-30 * time.Minute)},
+	}}
+
+	standing := ReadStanding(context.Background(), sources)
+	if standing.Paused != "" {
+		t.Fatalf("paused = %q, want nothing above the four lines but a provider window", standing.Paused)
+	}
+	if rendered := standing.Render(); !strings.HasPrefix(rendered, "Running:") {
+		t.Fatalf("the reading opens %q, want the four lines", firstLine(rendered))
+	}
+}
+
+// firstLine is what a reader actually sees first, which is what the acceptance
+// above is about.
+func firstLine(rendered string) string {
+	line, _, _ := strings.Cut(rendered, "\n")
+	return line
+}
+
 // Every developer slot taken is a different refusal from a held switch, and an
 // operator does an entirely different thing about it.
 func TestAFullMachineIsItsOwnRefusal(t *testing.T) {

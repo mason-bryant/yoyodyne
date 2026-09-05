@@ -21,6 +21,28 @@ package slack
 // stall at a time is the durable record's, and what is left here is the two
 // things that were always this surface's — reading what a pass already holds, and
 // deciding that this particular message is worth somebody's phone.
+//
+// # Nothing here may be a model-based watcher
+//
+// This loop is plain Go reading durable files, and it has to stay that way. Every
+// watcher the harness has that asks a model something — the development
+// manager's sweep, any role turn — pauses with the provider's usage window, so a
+// watchdog built on one goes to sleep at exactly the moment the thing it watches
+// goes quiet, and wakes up when there was nothing left to notice. That is the
+// lesson 2026-09-05 taught: the window that produced ninety minutes of silence
+// would also have silenced any watcher that had to ask a provider whether the
+// harness was alive. So detection of nothing-running lives in machinery that
+// keeps running through the window, which means no provider call on this path,
+// directly or transitively, ever.
+//
+// The other half of that boundary is what this must not do. Noticing is a
+// surface's; restarting whatever died is not, and it is not moved here by the
+// fact that this is the loop still awake. A sink that restarted the watch session
+// would be a second thing that invokes and supervises the harness's processes,
+// and the operator's own interim script — thirty minutes of quiet, then force a
+// restart — retires by its detection half landing here and its restart half
+// landing where restarts already live: the session's own bounded exit
+// (yoyodyne-ifd.288) under the supervisor that starts it (yoyodyne-ifd.207).
 
 import (
 	"context"
@@ -37,15 +59,18 @@ import (
 // The order is the cost model the rest of this pass keeps. Everything except how
 // much work is ready is derived from the runs, sessions and switches this pass
 // has already read, so the read is spent only where nothing else already
-// accounts for the quiet — and then at most once per heartbeat, which is the
-// interval the sink's other tracker read keeps.
+// accounts for the quiet — and then at most once per stall threshold, which is
+// the same figure that decides what counts as a stall in the first place.
 //
 // That second gate is the one that matters, because the first is not enough on
 // its own: a drained queue is deliberately not one of the accounted-for states,
 // since nothing but the tracker can say the queue is drained. Without the
 // interval an ordinary idle product — nothing held, nothing running, nothing
 // ready — would spawn `bd` every fifteen seconds forever, which is the cost this
-// surface promises it does not have.
+// surface promises it does not have. What it costs at the ten-minute default is
+// six tracker reads an hour on a product that is quiet with a drained queue, and
+// none at all on one that is starting runs; the sink's other tracker read is
+// still the hourly one the heartbeat keeps.
 //
 // It is said once per stall rather than again while it stands, which is the
 // opposite of the heartbeat and deliberately so. An hourly repetition is right
@@ -73,9 +98,15 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held
 		Running:      readmodel.ActiveRuns(states, now, f.runActivityWindow()),
 		OperatorHeld: held.operatorHeld,
 		IntakeHeld:   held.intakeHeld,
-		Watched:      len(sessions) > 0,
-		Threshold:    f.stallThreshold(),
-		Now:          now,
+		// The provider refusing to serve any more work, as the session that met it
+		// recorded. It is the accounting this reading used to have no way to see: a
+		// session waiting out a usage window starts nothing over a ready queue and
+		// looks from here exactly like one that has died, and on 2026-09-05 ninety
+		// minutes of it was reported as a stall and woke somebody.
+		ProviderWindow: readmodel.WaitingOnProvider(sessions),
+		Watched:        len(sessions) > 0,
+		Threshold:      f.stallThreshold(),
+		Now:            now,
 	}
 	asked := cursor.Said
 	if activity.Unexplained() {
@@ -85,11 +116,22 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held
 			// else, exactly as it does without a heartbeat.
 			return nil, nil
 		}
-		if !cursor.Said.IsZero() && now.Sub(cursor.Said) < f.heartbeat() {
+		if !cursor.Said.IsZero() && now.Sub(cursor.Said) < f.stallThreshold() {
 			// Asked recently enough. Nothing else here can answer whether the queue
 			// is drained, so rather than guess this pass makes no reading at all and
 			// the next due one decides. A stall already standing is unaffected: it is
 			// in the record, it has been said, and nothing re-says it.
+			//
+			// The interval is the threshold rather than the heartbeat, and that is the
+			// operator's bar rather than a tidiness. Gating this read at an hour made a
+			// half-hour threshold mean up to ninety minutes from the harness stopping
+			// to somebody hearing about it, which is what he was actually complaining
+			// about on 2026-09-05 — the threshold he could set was not the number that
+			// decided when he was told. Tied to the threshold, the whole latency is one
+			// figure he can move: a page arrives within twice it at the very worst, and
+			// within the threshold plus one fifteen-second poll in the ordinary case,
+			// because a machine that has been starting runs has not spent a read in
+			// hours and the first pass past the threshold asks immediately.
 			return nil, nil
 		}
 		count, err := ready(ctx)
@@ -121,7 +163,28 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, held
 	if err != nil {
 		return nil, err
 	}
-	return f.stallSaid(ctx, cursors, reconciled.Standing, now, asked), nil
+	window, _ := activity.StandingWindow()
+	return f.stallSaid(ctx, cursors, reconciled.Standing, window, now, asked), nil
+}
+
+// windowKey names one provider usage window, so a window that is said is said
+// once and a later one is said again.
+//
+// It is the deadline where the provider named one, and the moment the session
+// recorded entering the window where it did not. Both are moments the record
+// holds rather than anything derived here, and a window with neither is not one
+// this says anything about — which is the empty key, matching nothing.
+func windowKey(window readmodel.ProviderWindow) string {
+	switch {
+	case !window.Waiting:
+		return ""
+	case !window.ResetsAt.IsZero():
+		return window.ResetsAt.UTC().Format(time.RFC3339)
+	case !window.Since.IsZero():
+		return "opened " + window.Since.UTC().Format(time.RFC3339)
+	default:
+		return ""
+	}
 }
 
 // cursorAsked records the moment the tracker was last asked what is ready, which
@@ -141,7 +204,14 @@ func cursorAsked(cursor Cursor, at time.Time) Cursor {
 // no longer standing, which keeps the cursor from growing a line for every night
 // something went quiet — and is safe because a stall that has closed is history
 // and is never said again.
-func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, now, asked time.Time) []Delivery {
+//
+// The provider's usage window is the other thing this can say, and it is here
+// rather than beside this because the two are one decision: they are read from
+// one silence, and the window is precisely the case where there is no stall to
+// report. Saying the window is what turns the reading from a warning that no
+// longer fires into an answer — an operator who sees nothing cannot tell a
+// window from a watchdog somebody switched off.
+func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, window readmodel.ProviderWindow, now, asked time.Time) []Delivery {
 	cursor := cursors.Streams[stallStream]
 	advanced := cursorAsked(cursor, asked)
 	if mark, said := advanced.Marked(stallMark); said {
@@ -149,7 +219,34 @@ func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *
 			advanced = advanced.Without(mark)
 		}
 	}
+	// The window is marked by the deadline the provider named, so a second window
+	// is a second thing to say and the same one is not. It is forgotten the moment
+	// that window is no longer the one standing, which is what keeps the cursor
+	// from growing a line for every window a product ever waited out.
+	if mark, said := advanced.Marked(windowMark); said && mark != windowMark+windowKey(window) {
+		advanced = advanced.Without(mark)
+	}
 	switch {
+	case standing == nil && window.Waiting:
+		// Nothing is stalled because the provider is not serving, which is the one
+		// quiet stretch that has an answer nobody has to act on. It is said once per
+		// window and in the channel rather than to somebody directly: the fact is
+		// worth having and the interruption is not, which is the whole difference
+		// between this and the stall below it.
+		if advanced.Has(windowMark + windowKey(window)) {
+			break
+		}
+		return []Delivery{{
+			Stream: stallStream,
+			Cursor: advanced.With(windowMark + windowKey(window)),
+			Notification: notify.FromProviderWindow(notify.ProviderWindow{
+				Says:  window.Says(),
+				Since: window.Since,
+				// The four lines without the banner, which this message's own first
+				// sentence already is.
+				Standing: f.standingLines(ctx),
+			}, now),
+		}}
 	case standing == nil:
 		// Nothing is standing. What cleared it said so itself — the run that
 		// started, the hold that went on — so there is nothing to say here beyond

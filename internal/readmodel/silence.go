@@ -33,13 +33,22 @@ import (
 // calls ready and with nothing accounting for it, before that is a stall rather
 // than a gap between runs.
 //
-// Half an hour is chosen against what it costs to be wrong in each direction. A
-// watch session polls a drained queue in seconds and starts what it can
-// immediately, so half an hour of ready work and no start is already far outside
-// anything healthy; and the message this produces is a direct one, said once,
-// which is the kind of thing that has to be right the first time or get muted.
-// The window that was actually paid for was seven and a half hours.
-const DefaultStallThreshold = 30 * time.Minute
+// Ten minutes is the operator's own bar, set on 2026-09-05 after an hour passed
+// between the harness stopping and him hearing about it: minutes, not an hour.
+// It is chosen against what it costs to be wrong in each direction, and the two
+// costs are no longer symmetric. A watch session polls in seconds and starts
+// what it can immediately, and every legitimate reason for a quiet line is now
+// read before this one — the two switches, a run in flight and still moving, a
+// product nobody watches, and, since 2026-09-05, the provider's own usage
+// window. So the states that used to need a wide margin are named rather than
+// waited out, and what is left inside ten minutes of ready work with nothing
+// started is already outside anything healthy.
+//
+// The margin it used to buy was half an hour, and the window that was actually
+// paid for while nobody was told was seven and a half hours. An operator who
+// wants the older margin back sets it: this is the default rather than the rule,
+// and `yoyo slack --stall-after` is where it is changed.
+const DefaultStallThreshold = 10 * time.Minute
 
 // DefaultRunActivityWindow is how long a run's own record may go unmoved before
 // it stops accounting for a quiet line.
@@ -96,6 +105,15 @@ type Activity struct {
 	// neither is a silence anybody needs waking for.
 	OperatorHeld bool
 	IntakeHeld   bool
+	// ProviderWindow is the provider's usage window the session that chooses work
+	// recorded itself waiting out, where one is standing. It is the accounting this
+	// reading had no way to see: on 2026-09-05 a session waited a window out from
+	// 12:13Z to 13:43Z, and every condition above answered no, so a machine doing
+	// exactly what the provider had told it to was reported as one that had
+	// stopped and the operator was woken for it. See ProviderWindow.Standing for
+	// what bounds it — a window that has lifted accounts for nothing, which is what
+	// keeps this from being a way to silence the watchdog rather than to inform it.
+	ProviderWindow ProviderWindow
 	// Watched says a session has at some point watched this product. A product no
 	// session has ever watched is not a line that stopped — nothing was choosing
 	// work here, so nothing is failing to, and an operator running items by name
@@ -163,15 +181,18 @@ func ActiveRuns(runs []runstate.State, now time.Time, within time.Duration) int 
 // here, because nothing but the tracker can say the queue is drained, so a
 // caller that asked on this alone would ask on every poll of an idle product.
 // Gating how often it then asks is the caller's, and the sink does it on the
-// same heartbeat interval the rest of its tracker reads keep.
+// stall threshold itself rather than on the heartbeat the rest of its tracker
+// reads keep: how promptly this is noticed is the whole of what the threshold
+// is for, and gating the read at an hour made a ten-minute bar mean an hour.
 func (a Activity) Unexplained() bool {
 	return a.explanation() == ""
 }
 
 // explanation is what accounts for nothing having started, or nothing at all.
 // The order is the order a reader would accept them in: the switches somebody
-// placed, then the work that is visibly moving, then a product nobody ever
-// watched, then a machine too young to have gone quiet.
+// placed, then the work that is visibly moving, then the provider refusing to
+// serve any more of it, then a product nobody ever watched, then a machine too
+// young to have gone quiet.
 func (a Activity) explanation() string {
 	switch {
 	case a.OperatorHeld:
@@ -180,6 +201,8 @@ func (a Activity) explanation() string {
 		return "intake is held"
 	case a.Running > 0:
 		return fmt.Sprintf("%d developer run(s) are in flight and still moving", a.Running)
+	case a.ProviderWindow.Standing(a.Now):
+		return a.ProviderWindow.Says()
 	case !a.Watched:
 		return "no watch session has ever run on this product"
 	case a.Since.IsZero():
@@ -189,6 +212,18 @@ func (a Activity) explanation() string {
 	default:
 		return ""
 	}
+}
+
+// StandingWindow is the provider's usage window that accounts for this reading's
+// quiet, where one does. It is how a surface says the window rather than only
+// declining to raise an alarm about it: the reading knows both whether a window
+// was recorded and whether it has lifted, and a caller that asked the first
+// question on its own would report a window that ended hours ago.
+func (a Activity) StandingWindow() (ProviderWindow, bool) {
+	if !a.ProviderWindow.Standing(a.Now) {
+		return ProviderWindow{}, false
+	}
+	return a.ProviderWindow, true
 }
 
 func (a Activity) threshold() time.Duration {

@@ -30,7 +30,26 @@ const maxListed = 10
 // Render is the four lines. It is deterministic, so the same standing always
 // prints the same text, and it always returns exactly four labelled lines with
 // whatever they carry indented under them.
+//
+// One thing can come above them, and only one: the harness being paused on the
+// provider's usage window. It is a banner rather than a fifth line — the four
+// are unchanged and are still all printed every time — and it is there because
+// the operator asked that the cause be the first words of any message that
+// reaches him when the system is paused on a window. Nothing else is ever put
+// above them: a state that will not render into the four is a bug in the state.
 func (s Standing) Render() string {
+	if s.Paused == "" {
+		return s.RenderLines()
+	}
+	return s.Paused + "\n" + s.RenderLines()
+}
+
+// RenderLines is the four lines without the banner, for the one caller that has
+// already said what the banner says: the channel's own message about the
+// provider's usage window, which opens with that sentence and then shows where
+// the harness stands underneath it. Saying it twice in one message is repetition
+// rather than emphasis, and every other caller wants Render.
+func (s Standing) RenderLines() string {
 	var rendered strings.Builder
 	rendered.WriteString(s.renderRunning())
 	rendered.WriteString(s.renderWorking())

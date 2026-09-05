@@ -56,6 +56,14 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 	once := flags.Bool("once", false, "make one pass over the records and exit, rather than staying open")
 	poll := flags.Duration("poll", slack.DefaultPollInterval, "how often to read the durable records")
 	heartbeat := flags.Duration("heartbeat", slack.DefaultHeartbeat, "how often to say again that the line is choosing nothing over ready work")
+	// How long nothing may start, over ready work and with nothing accounting for
+	// it, before somebody is told. It is a flag because the right number is the
+	// operator's judgement about their own machine rather than the harness's: the
+	// default is what this operator asked for after being told an hour late, and a
+	// noisier machine wants it wider. It is also how often the tracker is asked
+	// for this reading, so moving it moves the whole latency rather than half of
+	// it.
+	stallAfter := flags.Duration("stall-after", readmodel.DefaultStallThreshold, "how long nothing may start over ready work before the operators are told")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -75,8 +83,16 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 		fmt.Fprintln(stderr, "heartbeat must be positive; it is a cadence rather than a switch, because silence has to mean nothing to do")
 		return 2
 	}
+	// Nor is there a way to ask for no watchdog, and for the same reason twice
+	// over: a threshold of zero would take the default rather than turn anything
+	// off, so a reading of it as a switch would silently do the opposite of what
+	// somebody meant by it.
+	if *stallAfter <= 0 {
+		fmt.Fprintln(stderr, "stall-after must be positive; it is how long nothing may start rather than a switch, and there is no way to ask not to be told")
+		return 2
+	}
 
-	sink, channel, err := buildSlackSink(*configPath, *poll, *heartbeat, version, stdout)
+	sink, channel, err := buildSlackSink(*configPath, *poll, *heartbeat, *stallAfter, version, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "slack failed: %v\n", err)
 		return 1
@@ -251,7 +267,7 @@ func describeSupervision(supervision slack.Supervision) string {
 // that one message and nothing else — it is said in the sink's own log, or in
 // the line that could not be read, and asked again later — so this is still a
 // process that starts wherever the operator runs it.
-func buildSlackSink(configPath string, poll, heartbeat time.Duration, version string, stdout io.Writer) (*slack.Sink, string, error) {
+func buildSlackSink(configPath string, poll, heartbeat, stallAfter time.Duration, version string, stdout io.Writer) (*slack.Sink, string, error) {
 	resolved, err := loadConfiguration(configPath)
 	if err != nil {
 		return nil, "", err
@@ -427,6 +443,12 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// notices that nothing has started while work was ready, records it where
 			// `yoyo status` reads it back, and tells the operators once.
 			Stalls: stalls,
+			// And how long nothing may start before that is one. It is the operator's
+			// number rather than the harness's — what an acceptable gap looks like is a
+			// fact about their machine — and it is also how often this reading is
+			// taken, so the figure they set is the whole of how long the harness can be
+			// stopped before they hear about it.
+			StallThreshold: stallAfter,
 			// What this project's template has improved that this project never
 			// edited. Every other surface that says it is one somebody has to run,
 			// so a harness left running for a fortnight says it nowhere at all —
@@ -749,5 +771,10 @@ Options:
   --once             make one pass over the records and exit
   --poll <d>         how often to read the durable records (default 15s)
   --heartbeat <d>    how often to say again that the line is choosing nothing
-                     over ready work (default 1h)`)
+                     over ready work (default 1h)
+  --stall-after <d>  how long nothing may start over ready work, with nothing
+                     accounting for it, before the operators are told directly
+                     (default 10m). It is also how often that reading is taken,
+                     so it is the whole of how long the harness can be stopped
+                     before somebody hears about it.`)
 }

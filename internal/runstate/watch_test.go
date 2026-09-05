@@ -247,6 +247,66 @@ func TestASessionSaysWhenItsStopIsARestart(t *testing.T) {
 	}
 }
 
+// A session waiting out the provider's usage window says so on the poll it made
+// inside one, and says when the provider named the window lifting. Nothing else
+// in the record distinguishes that poll from a poll over an empty queue, and on
+// 2026-09-05 ninety minutes of it was read as a line that had quietly stopped.
+//
+// The mark is a field rather than a state of its own for the reason the restart
+// above is: a reader from before it existed ignores an unknown field and refuses
+// an unknown state.
+func TestASessionSaysWhenAPollWasMadeInsideTheProvidersWindow(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
+	waiting := testWatchTransition(testWatchSessionID, WatchIdle, "waiting on the provider's usage window until 13:43Z")
+	waiting.ProviderWindow = true
+	waiting.ProviderWindowResetsAt = &lifts
+	if err := store.Record(waiting); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	// A provider that named no reset time records none rather than a moment
+	// nobody said: the harness asks again rather than being told when.
+	untimed := testWatchTransition(testWatchSessionID, WatchIdle, "waiting on the provider's usage window")
+	untimed.ProviderWindow = true
+	if err := store.Record(untimed); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	recorded, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 {
+		t.Fatalf("List() = %#v, want both polls", recorded)
+	}
+	if !recorded[0].ProviderWindow || recorded[0].ProviderWindowResetsAt == nil ||
+		!recorded[0].ProviderWindowResetsAt.Equal(lifts) {
+		t.Fatalf("the timed window reads back as %+v", recorded[0])
+	}
+	if !recorded[1].ProviderWindow || recorded[1].ProviderWindowResetsAt != nil {
+		t.Fatalf("the untimed window reads back as %+v", recorded[1])
+	}
+
+	// Only an idle poll can be one. A session marked as held by the provider while
+	// it is watching would have every surface accounting for a silence something
+	// else is causing, which is the alarm this is supposed to keep honest.
+	watching := testWatchTransition(testWatchSessionID, WatchWatching, "watching the backlog until stopped")
+	watching.ProviderWindow = true
+	if err := store.Record(watching); err == nil {
+		t.Fatal("Record() error = nil, want a window marked on something that is not an idle poll refused")
+	}
+	// A deadline with nothing waiting on it is a moment nobody is held to, and a
+	// surface reading it would say the harness is held until a time it is not.
+	orphaned := testWatchTransition(testWatchSessionID, WatchIdle, "the backlog is empty")
+	orphaned.ProviderWindowResetsAt = &lifts
+	if err := store.Record(orphaned); err == nil {
+		t.Fatal("Record() error = nil, want a reset time with no window to belong to refused")
+	}
+}
+
 // A log that cannot be read is an error rather than an absence, for the reason
 // every other record here is: a session nobody can read must not be reported as
 // a session that never ran.

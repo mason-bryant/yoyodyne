@@ -136,7 +136,8 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 	}
 	streams[heartbeatStream] = struct{}{}
 
-	state := waitingLine(held, sessions, inFlight)
+	now := f.now()
+	state := waitingLine(held, sessions, inFlight, now)
 	if !state.Stopped() {
 		// The state cleared. Nothing is said about that — what cleared it said so
 		// itself, as the release, the resumption, or the run it started — and the
@@ -146,7 +147,6 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		}
 		return nil, nil
 	}
-	now := f.now()
 	mark := state.Mark()
 	armed := Cursor{Standing: mark, Said: now}
 	if cursor.Standing != mark {
@@ -203,6 +203,16 @@ func (f *HarnessFeed) standing(ctx context.Context) string {
 		return ""
 	}
 	return readmodel.ReadStanding(ctx, *f.Standing).Render()
+}
+
+// standingLines is the same reading with the paused banner left off, for the one
+// message whose own first sentence is that banner. Everything else here wants
+// the whole rendering, and takes it from standing above.
+func (f *HarnessFeed) standingLines(ctx context.Context) string {
+	if f.Standing == nil {
+		return ""
+	}
+	return readmodel.ReadStanding(ctx, *f.Standing).RenderLines()
 }
 
 // residentDeliveries says that the session choosing work is running a binary the
@@ -382,7 +392,7 @@ func shortBuild(build string) string {
 }
 
 // waitingLine is what has stopped the line, as the read model derives it and
-// with the two states this surface does not speak about removed.
+// with the three states this surface does not speak about removed.
 //
 // Nothing here works out what stopped the choosing. That derivation is the read
 // model's, because the same question is answered in a terminal by `yoyo status`
@@ -400,7 +410,15 @@ func shortBuild(build string) string {
 // ever watched is not a line that stopped either — nothing was choosing work
 // here, so nothing is failing to, and an hourly message about a queue somebody
 // keeps by choice is the nagging this is written to avoid.
-func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight int) readmodel.Stall {
+//
+// The third is the provider's usage window, and it is left out because this
+// surface already says it in its own message rather than because it is not worth
+// saying. That message is the one shaped to the operator's acceptance — the
+// cause first, in his words, at note severity — and this line's sentence puts
+// what stopped the choosing after the fact that choosing stopped. Two messages
+// about one silence, one of them wording it the way he asked not to be told, is
+// worse than one.
+func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight int, now time.Time) readmodel.Stall {
 	if inFlight > 0 {
 		return readmodel.Stall{}
 	}
@@ -413,8 +431,11 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 		IntakeHold:   held.intake,
 		IntakeHeld:   held.intakeHeld,
 		Sessions:     func() ([]runstate.WatchTransition, error) { return sessions, nil },
+		// This pass's own moment, so a provider usage window the line reports as
+		// standing is one that had not lifted when the rest of the pass was read.
+		Now: now,
 	})
-	if stall.Reason == readmodel.ReasonUnwatched {
+	if stall.Reason == readmodel.ReasonUnwatched || stall.Reason == readmodel.ReasonProviderWindow {
 		return readmodel.Stall{}
 	}
 	return stall

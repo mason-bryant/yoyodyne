@@ -26,14 +26,14 @@ func TestTheDeadWindowIsNoticedRecordedAndSaidOnce(t *testing.T) {
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 
 	// Inside the threshold this is a gap between runs, and it says nothing.
-	harness.now = moment.Add(20 * time.Minute)
+	harness.now = moment.Add(readmodel.DefaultStallThreshold - time.Minute)
 	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
 	if _, open, err := stalls.Standing(); err != nil || open {
 		t.Fatalf("Standing() = %v %v, want nothing recorded inside the threshold", open, err)
 	}
 
 	// Past it, it is a stall: recorded durably, and taken to the operators.
-	harness.now = moment.Add(45 * time.Minute)
+	harness.now = moment.Add(readmodel.DefaultStallThreshold + time.Minute)
 	delivery := harness.stalled(t, cursors)
 	if !delivery.Direct {
 		t.Fatal("the stall was posted to the channel alone, want the operators told directly")
@@ -111,7 +111,7 @@ func TestAStallSaysItsAgeItsQueueAndWhatTheChooserLastSaid(t *testing.T) {
 
 	// The watch transition is read past inside the threshold, so what the next
 	// pass says is the stall and nothing else.
-	harness.now = moment.Add(20 * time.Minute)
+	harness.now = moment.Add(readmodel.DefaultStallThreshold - time.Minute)
 	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
 	harness.now = moment.Add(7*time.Hour + 30*time.Minute)
 	said := harness.say(t, cursors, notify.KindStallNoticed)
@@ -234,14 +234,20 @@ func TestAClearingStallClosesItsEventAndTheNextOneIsSaidAfresh(t *testing.T) {
 	}
 }
 
-// An idle product asks the tracker once a heartbeat and not once a poll.
+// An idle product asks the tracker once a stall threshold and not once a poll.
 //
 // A drained queue is deliberately not one of the states that account for the
 // quiet — nothing but the tracker can say the queue is drained — so the check
 // that spends the read is true on every poll of a perfectly healthy idle
 // product. Without a second gate that is a `bd` process every fifteen seconds
 // forever, on the machine that is behaving best.
-func TestAnIdleProductAsksTheTrackerOnceAHeartbeatRatherThanOnceAPoll(t *testing.T) {
+//
+// The gate is the threshold rather than the heartbeat, which is what the
+// operator's bar cost: how promptly a stopped harness is noticed cannot be
+// shorter than how often this reading is taken, so an hourly read made a
+// ten-minute threshold mean an hour. Six an hour is the price of that, and it is
+// two orders of magnitude away from the unbounded case this guards.
+func TestAnIdleProductAsksTheTrackerOnceAThresholdRatherThanOnceAPoll(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
@@ -257,13 +263,15 @@ func TestAnIdleProductAsksTheTrackerOnceAHeartbeatRatherThanOnceAPoll(t *testing
 		cursors = harness.quietPass(t, cursors)
 	}
 
-	// One read an hour over six hours, rather than one every fifteen seconds.
+	// One read a threshold over six hours, rather than one every fifteen seconds.
 	// The figure is reported either way, because what this guards against is a
 	// regression back towards the unbounded case — 1440 reads over this window —
 	// and the number is the only thing that says how far from it this is.
+	perHour := int(time.Hour / readmodel.DefaultStallThreshold)
 	t.Logf("the tracker was read %d time(s) over six idle hours, against 1440 polls", backlog.asked)
-	if backlog.asked > 7 {
-		t.Fatalf("the tracker was read %d time(s) over six idle hours, want about one an hour", backlog.asked)
+	if backlog.asked > 6*perHour+1 {
+		t.Fatalf("the tracker was read %d time(s) over six idle hours, want about %d an hour",
+			backlog.asked, perHour)
 	}
 	// Never reading it is the opposite failure and is not a pass: a watchdog that
 	// asks nothing notices nothing.
@@ -344,6 +352,168 @@ func TestATrackerThatCannotBeReadRecordsNoStall(t *testing.T) {
 	}
 	if len(said) == 0 {
 		t.Fatal("the sink said nothing about a tracker it could not read")
+	}
+}
+
+// The other window, replayed: 2026-09-05, 12:13Z to 13:43Z. The session was
+// alive and polling, nothing started because the provider would not serve any
+// more, and the alarm fired at half an hour saying nothing accounted for it —
+// when the pause was the whole of the accounting. What this asks for is the
+// opposite of the test above: the same silence, and no stall.
+func TestAProviderWindowIsSaidOnceAsANoteAndNeverAsAStall(t *testing.T) {
+	t.Parallel()
+
+	// The window as the session recorded it: entered at 12:13Z, lifting at 13:43Z.
+	opened := time.Date(2026, 9, 5, 12, 13, 0, 0, time.UTC)
+	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(3)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", opened.Add(-time.Hour))
+	harness.waitingOnProvider(t, "Paused on the provider's usage window until 13:43Z", opened, &lifts)
+
+	// Half an hour in — past the threshold that fired the alarm — and it is a note
+	// in the channel rather than a warning on somebody's phone.
+	harness.now = opened.Add(30 * time.Minute)
+	start := harness.start()
+	delivery := harness.stalled(t, start)
+	if delivery.Notification.Event.Kind != notify.KindProviderWindow {
+		t.Fatalf("kind = %q, want the provider's window rather than a stall", delivery.Notification.Event.Kind)
+	}
+	if delivery.Notification.Event.Severity != report.SeverityNote {
+		t.Fatalf("severity = %q, want a note", delivery.Notification.Event.Severity)
+	}
+	if delivery.Direct {
+		t.Fatal("the provider's window was taken to somebody directly, want it said in the channel")
+	}
+	said, err := notify.Render(delivery.Notification.Topic, delivery.Notification.Speaker, delivery.Notification.Event)
+	if err != nil {
+		t.Fatalf("the provider's window could not be said: %v", err)
+	}
+	// The operator's own acceptance, stated as he stated it: the cause is the
+	// first words of the message, with the time the provider named. Today's page
+	// failed exactly this — the alarm led, and the cause was left to archaeology.
+	if !strings.HasPrefix(said.Body, "Paused on the provider's usage window until 13:43Z") {
+		t.Fatalf("body %q does not open with the cause and the reset time", said.Body)
+	}
+	if !strings.Contains(said.Body, "Next: nobody's") {
+		t.Fatalf("body %q does not say the window is nobody's move", said.Body)
+	}
+	// The session's own account of the poll reaches the channel beside it, which
+	// is where the same words are said as the session's rather than the sink's.
+	cursors := harness.poll(t, start, notify.KindWatchStarted, notify.KindWatchIdle, notify.KindProviderWindow)
+
+	// And then the ninety minutes, at the sink's own fifteen-second poll. Nothing
+	// is recorded as a stall and the note is not said twice.
+	for harness.now.Add(5 * time.Minute).Before(lifts) {
+		harness.now = harness.now.Add(5 * time.Minute)
+		cursors = harness.quietPass(t, cursors)
+	}
+	events, err := stalls.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("List() = %+v, want nothing recorded: the pause was the accounting", events)
+	}
+}
+
+// One silence, one message. The heartbeat's waiting line is derived from the
+// same reading and would otherwise say the window too — hourly, and with the
+// cause after the fact that choosing stopped, which is the shape the operator
+// asked not to be told in. So the line yields to the note above.
+func TestTheHeartbeatLeavesTheProvidersWindowToTheMessageThatLeadsWithIt(t *testing.T) {
+	t.Parallel()
+
+	opened := time.Date(2026, 9, 5, 12, 13, 0, 0, time.UTC)
+	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
+	sessions := []runstate.WatchTransition{
+		{SessionID: "watch-1", State: runstate.WatchWatching, At: opened.Add(-time.Hour)},
+		{
+			SessionID: "watch-1", State: runstate.WatchIdle, At: opened,
+			ProviderWindow: true, ProviderWindowResetsAt: &lifts,
+		},
+	}
+	if line := waitingLine(switches{}, sessions, 0, opened.Add(30*time.Minute)); line.Stopped() {
+		t.Fatalf("the heartbeat line is %+v, want the window left to the note that opens with it", line)
+	}
+	// Once the window has lifted the session is idle for no recorded reason, and
+	// that is a line the heartbeat does say.
+	line := waitingLine(switches{}, sessions, 0, lifts.Add(time.Minute))
+	if line.Reason != readmodel.ReasonSessionIdle {
+		t.Fatalf("the heartbeat line is %+v, want an idle session once the window has lifted", line)
+	}
+}
+
+// A window the session recorded and then never came out of is not an account of
+// anything. The record is the last word of a session that has said nothing
+// since, which is exactly the shape of a session that died — so past the
+// deadline it accounts for nothing and the watchdog says what it always said.
+func TestAWindowThatHasLiftedStopsAccountingForTheQuiet(t *testing.T) {
+	t.Parallel()
+
+	opened := time.Date(2026, 9, 5, 12, 13, 0, 0, time.UTC)
+	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(3)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", opened.Add(-time.Hour))
+	harness.waitingOnProvider(t, "Paused on the provider's usage window until 13:43Z", opened, &lifts)
+
+	harness.now = lifts.Add(-time.Minute)
+	cursors := harness.poll(t, harness.start(),
+		notify.KindWatchStarted, notify.KindWatchIdle, notify.KindProviderWindow)
+
+	// The window lifted and the session went on saying nothing. That is a stall.
+	harness.now = lifts.Add(readmodel.DefaultStallThreshold + time.Minute)
+	harness.poll(t, cursors, notify.KindStallNoticed)
+	if _, open, err := stalls.Standing(); err != nil || !open {
+		t.Fatalf("Standing() = %v %v, want a stall once the window it was waiting on has lifted", open, err)
+	}
+}
+
+// How long the harness may be stopped before somebody is told is one number, and
+// it is the operator's.
+//
+// It was two before this, and only one of them was settable: the threshold said
+// how long a gap had to be to count, and the tracker read that decides it was
+// taken once an hour. So a threshold of half an hour meant up to ninety minutes
+// from the harness stopping to somebody hearing about it, which is what the
+// operator was actually complaining about on 2026-09-05 when he was paged an
+// hour late and said the bar is minutes rather than an hour.
+func TestHowLongTheHarnessMayBeStoppedIsOneSettableNumber(t *testing.T) {
+	t.Parallel()
+
+	// The default is the bar he set: minutes, and well inside an hour.
+	if readmodel.DefaultStallThreshold >= time.Hour {
+		t.Fatalf("the default threshold is %s, want well below an hour", readmodel.DefaultStallThreshold)
+	}
+
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(3)
+	// A machine whose operator wants to hear sooner than the default, which is the
+	// half of this that no flag reached before.
+	harness.feed.StallThreshold = 3 * time.Minute
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+
+	// Two minutes in, this is a gap between runs.
+	harness.now = moment.Add(2 * time.Minute)
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	if _, open, err := stalls.Standing(); err != nil || open {
+		t.Fatalf("Standing() = %v %v, want nothing recorded inside the operator's threshold", open, err)
+	}
+
+	// Four minutes in, it is a stall — at the next fifteen-second poll rather than
+	// at the next hour, because a machine that had been starting runs has spent no
+	// tracker read in hours and the first pass past the threshold asks.
+	harness.now = moment.Add(3*time.Minute + 15*time.Second)
+	delivery := harness.stalled(t, cursors)
+	if delivery.Notification.Event.Kind != notify.KindStallNoticed {
+		t.Fatalf("kind = %q, want the stall said at the operator's threshold", delivery.Notification.Event.Kind)
+	}
+	if !delivery.Direct {
+		t.Fatal("the stall was posted to the channel alone, want the operators told directly")
 	}
 }
 

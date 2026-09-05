@@ -820,10 +820,15 @@ Needs a human (1):
   where a directive pauses the work, and otherwise what has stopped the harness
   choosing at all. That last one comes from a closed set of named reasons, each
   of which says whose move it is: the operator's hold, a held intake, every
-  developer slot taken, a live watch session that has found nothing it can
-  start, no watch session running any more, and a product no session has ever
-  watched. An idle session and no session are named apart on purpose — telling
-  you to start a session you are already running sends you to the wrong place.
+  developer slot taken, a session waiting out the provider's usage window, a live
+  watch session that has found nothing it can start, no watch session running any
+  more, and a product no session has ever watched. An idle session and no session
+  are named apart on purpose — telling you to start a session you are already
+  running sends you to the wrong place. A provider window is named apart from
+  both for the same reason and says `Paused on the provider's usage window until
+  13:43Z`: nobody has a move, the window lifts on the provider's clock, and
+  reporting it as a session finding nothing to start sends you to look at a queue
+  that is fine.
   It never comes from a watch session's memory of what it has already tried,
   which is a fact about one process rather than about the product. Work that is
   admitted and would be started next is not listed here at all; the count of
@@ -851,6 +856,26 @@ emptiness assembled from a file nobody could open. There is no fifth line and no
 residual bucket: a state that will not render into these four is a bug in the
 state.
 
+**One thing is printed above them, and only one.** While the harness is waiting
+out the provider's usage window, the reading opens with that and nothing else:
+
+```text
+Paused on the provider's usage window until 13:43Z
+Running: nothing
+Working: nothing
+Not startable (3 of 7 admitted items):
+  ...
+```
+
+It is a banner rather than a fifth line — the four are unchanged and are all
+still printed — and it is there because a reading is one of the messages that
+reaches you when you want to know why nothing is happening, and the reason for it
+should be the first thing you read rather than the third line down beside one
+item. It is the same sentence the channel says and the same one the refusals
+carry, from the one derivation, and it is off the moment the window lifts.
+Nothing else is ever put there: every other reason the harness is choosing
+nothing is inside the four lines.
+
 Naming an item leaves the four lines out. They are about the product, and a
 question about one piece of work is a different question. `--json` carries the
 same derivation under `standing`, so a second surface reads the answer rather
@@ -860,7 +885,8 @@ than parsing the rendering.
 
 Under the four lines, `yoyo status` reads back every stretch in which this
 product went quiet: nothing started at all, while the tracker reported work
-ready, and no hold, no full machine and no still-moving run accounted for it.
+ready, and no hold, no full machine, no still-moving run and no provider usage
+window accounted for it.
 
 ```text
 nothing started on this product for 7h30m0s from 2026-09-01T06:05:00Z, with 3 items ready; it cleared at 2026-09-01T13:35:00Z
