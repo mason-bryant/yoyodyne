@@ -717,6 +717,24 @@ approvals:
 — an approval given in conversation is written down afterwards — so say when and
 how you gave it in `--reason`, which is the half only you can attest to.
 
+**The write lands in your checkout and stops there, and the command says so.**
+
+```
+docs/product/brief.md is now an uncommitted change in your checkout, and a run
+refuses to start while it is; committing it is yours, under your own identity
+```
+
+Nothing commits it and nothing opens a pull request for it. The only ways into
+the target branch are a reviewed promotion and your own hand, so a harness-made
+commit would be a promotion by another name, carrying tree state nothing
+reviewed; and stopping at your tree keeps a document to two readings — committed,
+or an edit of yours that is visibly holding the runs up — rather than adding a
+third that is on the branch and that nobody touched. The price is the dirty
+checkout, which is why it is said as the write happens rather than left to arrive
+as `primary repository has uncommitted changes` from the next command you run.
+`--json` carries the same sentence as `pending_commit`. A refused approval writes
+nothing, so it says nothing.
+
 **The approval names the revision it was given for**, which is the index into the
 revision log above it. The log is append-only, so that index means one change
 forever, and the arithmetic that follows is the point: an approval of the last

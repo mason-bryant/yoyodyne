@@ -284,3 +284,26 @@ func (s Store) Approve(id, reason string, now time.Time) (Artifact, error) {
 	}
 	return approved, nil
 }
+
+// PendingCommit is what a surface says, as it records an approval, about where
+// that write landed: in the operator's own checkout, uncommitted, and theirs to
+// commit.
+//
+// It is a function here rather than prose at each call site because every
+// surface that writes an approval owes the operator the same fact, and a second
+// one wording it differently would be a second account of what the harness just
+// did. Today the only caller is `yoyo artifact approve`; the typed artifact
+// write drafted from a conversation is the next.
+//
+// What it says is the settled shape rather than an apology for an unfinished
+// one. The write stops at the working tree because the only ways into the target
+// branch are a reviewed promotion and the operator's own hand — a harness-made
+// commit would be a promotion by another name, sweeping in tree state nothing
+// reviewed — and because stopping there keeps a document to two readings:
+// committed, or an edit of the operator's that is visibly holding the runs up.
+// The price of that is a dirty checkout, which every run then refuses to start
+// over, and saying so at the moment of the write is what keeps the operator from
+// meeting it as an unexplained refusal from whatever they run next.
+func PendingCommit(path string) string {
+	return fmt.Sprintf("%s is now an uncommitted change in your checkout, and a run refuses to start while it is; committing it is yours, under your own identity", path)
+}

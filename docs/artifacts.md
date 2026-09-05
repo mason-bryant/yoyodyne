@@ -51,6 +51,17 @@ what is allowed. The
 [configuration guide](configuration.md#approving-a-document) has the schema
 and what is refused.
 
+**The approval is written into your checkout and stops there**, and the command
+says so as it writes: the document is now an uncommitted change, a run refuses to
+start while it is, and committing it is yours under your own identity. That is
+the settled shape rather than an unfinished one. The only ways into the target
+branch are a reviewed promotion and your own hand, so a harness-made commit would
+be a promotion by another name carrying tree state nothing reviewed — and leaving
+the write in your tree keeps what a document is down to two readings: committed,
+or an edit of yours that is visibly holding the runs up. It is said at the moment
+of the write because the alternative is meeting it as a refusal from whatever you
+run next.
+
 A document in one of those directories with no usable identity is named on
 stderr rather than governed under a guessed id, so a home you have not given
 identity to yet says so. Nothing else changes for it: a specification with no
