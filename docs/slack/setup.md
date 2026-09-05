@@ -726,16 +726,27 @@ document — the brief, a goal, a design — so work derived from it waits until
 change is decided. Either one stops the item at its next gate without cancelling
 anything: the run keeps its claim, its branch, and its worktree.
 
-Lift it the same way you would anywhere else, by naming the directive and how it
-was settled. Any prefix of the identifier that names exactly one will do:
+Lift it by saying how it was settled, in the thread it was said in. **Nothing
+here needs an identifier**: the reply settles whatever that item is waiting on,
+which is the item the thread is about.
+
+```text
+resolve the second one, and say so in the design
+```
+
+Two cases are refused instead of settled, in a sentence in the same thread: an
+item waiting on nothing, and an item waiting on more than one thing — where the
+refusal names them by what each is waiting on, since picking one for you would be
+the channel deciding which of your pauses to lift. To settle one of several, name
+it. Any prefix of the identifier that names exactly one will do, and
+`yoyo directive list` at the terminal is where you read it, because no message
+posted here carries one:
 
 ```text
 resolve directive-3f2a the second one, and say so in the design
 ```
 
-The identifier is not in the channel — no message posted here carries one — so
-`yoyo directive list` at the terminal is where you read it, or
-`yoyo directive resolve` settles it there without a reply at all.
+`yoyo directive resolve` settles it at the terminal without a reply at all.
 
 Open the reply with `@developer`, `@reviewer`, `@architect`,
 `@development-manager`, or `@product-manager` to record who you told. That is
@@ -795,7 +806,7 @@ force without deleting it. There is no way to do that from a thread: the reply t
 directive keeps its check mark, and the listing is where a withdrawn one reads as
 withdrawn.
 
-Four things are refused, visibly:
+Five things are refused, visibly:
 
 - **a reply from somebody without `direct-work`**, or with the grant but no
   `slack_member_id` bound. The list defaults to empty, so a workspace steers
@@ -811,6 +822,9 @@ Four things are refused, visibly:
   scoped to the item the thread is about, and one recorded against no item would
   pause the whole product. `yoyo directive record --scope` is how a wider one is
   recorded.
+- **a `resolve` reply naming nothing, where the item is waiting on nothing or on
+  more than one thing.** Nothing is settled either way, and the thread says which
+  of the two it was.
 
 Everything else in a channel is left entirely alone: a message that is not in one
 of these threads, a thread this sink never opened, and anything the app itself

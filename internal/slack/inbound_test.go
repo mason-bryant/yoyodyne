@@ -428,6 +428,151 @@ func TestAResolveReplySettlesTheDirectiveAndLiftsThePause(t *testing.T) {
 	}
 }
 
+// Nothing posted in this channel carries a directive's identifier, so a thread
+// settles the pause it is under by saying how it was settled and nothing else.
+// Requiring the identifier here would send somebody who paused the work from a
+// phone to a terminal to read the name of what they paused.
+func TestAResolveReplyWithNoIdentifierSettlesTheThreadsOwnPause(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	readsDirectives(sink, directives)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which branch", "1750000001.000200"))
+	recorded := onlyDirective(t, directives)
+
+	posts.requests = nil
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "the one already on the target branch", "1750000002.000300"))
+	// A reply that is not settling anything is a directive of its own, which is
+	// what the line above would have been without the verb.
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve the one already on the target branch", "1750000003.000400"))
+
+	settled, err := directives.Load(recorded.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.Resolved() || settled.Resolution != "the one already on the target branch" {
+		t.Fatalf("settled = %+v, want the thread's own pause settled with what the reply said", settled)
+	}
+	pausing, err := directives.Pausing(testItem)
+	if err != nil {
+		t.Fatalf("Pausing() error = %v", err)
+	}
+	if len(pausing) != 0 {
+		t.Fatalf("Pausing(%q) = %v, want the pause lifted", testItem, pausing)
+	}
+	answer := posts.requests[len(posts.requests)-1]
+	if !strings.Contains(answer.Text, "the one already on the target branch") {
+		t.Fatalf("answer = %q, want it to say how the pause was settled", answer.Text)
+	}
+	if strings.Contains(answer.Text, settled.ID) {
+		t.Fatalf("answer = %q, want the directive's identifier kept out of what a person reads", answer.Text)
+	}
+}
+
+// Which pause to lift is the operator's to say. A thread holding more than one
+// refuses in a sentence that names them by what each is waiting on, because an
+// identifier is the one thing nothing in this channel ever showed them.
+func TestAResolveReplyWithNoIdentifierRefusesWhereSeveralThingsHoldTheItem(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	readsDirectives(sink, directives)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which of the two branches did you mean", "1750000001.000200"))
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "artifact: slack-reporting-design whether product threads may carry directives", "1750000002.000300"))
+
+	posts.requests = nil
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve the one already on the target branch", "1750000003.000400"))
+
+	recorded, err := directives.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, one := range recorded {
+		if one.Resolved() {
+			t.Fatalf("settled = %+v, want nothing settled where the reply named none of them", one)
+		}
+		if strings.Contains(posts.requests[len(posts.requests)-1].Text, one.ID) {
+			t.Fatalf("answer = %q, want them named in words rather than by identifier",
+				posts.requests[len(posts.requests)-1].Text)
+		}
+	}
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "Nothing was recorded") {
+		t.Fatalf("answer = %q, want a refusal saying nothing was recorded", answer.Text)
+	}
+	for _, waiting := range []string{
+		"which of the two branches did you mean",
+		"whether product threads may carry directives",
+	} {
+		if !strings.Contains(answer.Text, waiting) {
+			t.Fatalf("answer = %q, want it to name what %q is waiting on", answer.Text, waiting)
+		}
+	}
+}
+
+// A thread that is waiting on nothing has nothing to settle, and is told so
+// rather than having a settlement written onto whatever else it could find.
+func TestAResolveReplyWithNothingHoldingTheItemIsRefused(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	readsDirectives(sink, directives)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "prefer the smaller change here", "1750000001.000200"))
+	recorded := onlyDirective(t, directives)
+
+	posts.requests = nil
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve done, thanks", "1750000002.000300"))
+
+	settled, err := directives.Load(recorded.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.Resolved() {
+		t.Fatalf("settled = %+v, want a directive that was holding nothing left alone", settled)
+	}
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "nothing is holding this item up") {
+		t.Fatalf("answer = %q, want it to say the thread is waiting on nothing", answer.Text)
+	}
+}
+
+// A sink started without the read model cannot say what is holding an item up, so
+// it says that rather than settling something on a guess. The named directive
+// still works, which is what the sentence points at.
+func TestAResolveReplyWithoutTheReadModelSaysSoRatherThanGuessing(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	sink.sources = nil
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which branch", "1750000001.000200"))
+	recorded := onlyDirective(t, directives)
+
+	posts.requests = nil
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve the one already on the target branch", "1750000002.000300"))
+
+	settled, err := directives.Load(recorded.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.Resolved() {
+		t.Fatalf("settled = %+v, want nothing settled where what is held could not be read", settled)
+	}
+	answer := onlyPost(t, posts)
+	if !strings.Contains(answer.Text, "yoyo directive list") {
+		t.Fatalf("answer = %q, want it to point at where the directive can be named", answer.Text)
+	}
+}
+
 // The sink's own messages arrive back on the same connection it posts through.
 // Reading one as an instruction would be the harness directing itself, and an
 // acknowledgment answered by an acknowledgment is a loop, so anything that is not
@@ -743,6 +888,14 @@ func newSteeringSinkWithFeed(t *testing.T, feed Feed, operators ...string) (*Sin
 		t.Fatalf("SaveThreads() error = %v", err)
 	}
 	return sink, directives, posts
+}
+
+// readsDirectives points the sink's read model at the same store the inbound half
+// writes to, which is how a running sink is assembled. It is what a thread
+// settling its own pause reads to find what is holding its item, and the sinks
+// above are given no records at all so that the tests which need one say so.
+func readsDirectives(sink *Sink, directives *runstate.DirectiveStore) {
+	sink.sources = &readmodel.Sources{Directives: directives}
 }
 
 // reply is one person typing in the work item's thread.
