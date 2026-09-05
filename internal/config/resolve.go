@@ -409,6 +409,18 @@ func (r *resolution) apply(applied layer) error {
 		r.config.Providers = providers
 		r.origins["providers"] = applied.origin
 	}
+	// A supplied recurring-task mapping replaces the inherited one entirely, for
+	// the reason the providers mapping above does, and for one of its own: a task
+	// is a role, a cadence, and a prompt read together, so a layer that overrode
+	// only the prompt would leave a role woken on a cadence nobody chose for it.
+	if document.RecurringTasks != nil {
+		tasks := make(map[string]RecurringTask, len(*document.RecurringTasks))
+		for name, task := range *document.RecurringTasks {
+			tasks[name] = task
+		}
+		r.config.RecurringTasks = tasks
+		r.origins["recurring_tasks"] = applied.origin
+	}
 	// A supplied check list replaces the inherited one entirely: checks are the
 	// gate on integration, and a silently concatenated list is not the gate
 	// either layer described.

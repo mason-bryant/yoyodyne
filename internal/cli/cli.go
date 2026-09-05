@@ -70,6 +70,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runExchange(ctx, args[1:], stdout, stderr)
 	case "reports":
 		return readReports(args[1:], stdout, stderr)
+	case "sweeps":
+		return readSweeps(args[1:], stdout, stderr)
 	case "run":
 		return runWorkItem(ctx, args[1:], stdout, stderr)
 	case "work":
@@ -619,6 +621,7 @@ Commands:
   directive         record, resolve, and read durable user directives
   exchange          read what the roles have asked each other, and what it cost
   reports           read what agents reported without it stopping their work
+  sweeps            read what the recurring tasks found on their own cadence
   run               run one Beads work item in an isolated worktree
   work              schedule the ready work the harness chooses for itself
   triage            carry out what the development manager decided about a stoppage

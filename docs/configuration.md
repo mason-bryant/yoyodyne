@@ -3692,6 +3692,68 @@ misconfigured changes nothing about any run. [`docs/slack/setup.md`](slack/setup
 takes a workspace from nothing to live reporting, and the app manifest it asks
 for is checked in beside it.
 
+## Recurring tasks
+
+Everything else the harness starts is reactive: an item is admitted, a run stops,
+somebody asks. A recurring task is the other shape — a role woken every so often
+to look at its own domain and deal with what it finds — and it is configuration
+because what runs and how often is a project's judgement rather than a release's:
+
+```yaml
+recurring_tasks:
+  development-manager-sweep:
+    role: development-manager
+    every: 1h
+    enabled: true
+    max_turns: 4
+    prompt: |
+      Sweep for unresolved issues: stoppages nobody has decided, claims on work
+      nothing is running, deliveries that have stopped moving. Fix what your
+      authority allows, ask the architect where a ruling is needed, and file
+      root-cause work with the product manager for every fix you make.
+```
+
+**Configuration decides which role is woken and when, and nothing else.** There is
+no key here for a capability, a tool, an account, or an authority of any kind,
+and the absence is deliberate rather than an omission to be filled in later: a
+role woken on a cadence holds exactly what its role already holds, resolved from
+the harness's own registry the same way it is resolved for a conversation you
+open by hand. A scheduled turn also reads the role's own persona, so the
+personality that answers is the one the project configured and not a second
+version of it. The loader is strict about keys, so a `capabilities:` or `tools:`
+written under a task fails the configuration rather than being ignored.
+
+| Key | What it says |
+| --- | --- |
+| `role` | which role is woken. It must be a role this project configures an agent for; a task naming a role nobody fills is refused rather than discovered as silence. |
+| `every` | the cadence, measured from the last firing rather than against a wall-clock grid. The shortest accepted is `5m`, which is what keeps `1m` written where `1h` was meant from becoming sixty times the spend. |
+| `enabled` | the switch. It is explicit so a task can be turned off for a week without deleting its prompt and cadence. |
+| `prompt` | what the role is told. It is the task, not a personality. |
+| `max_turns` | how many turns one firing may take, defaulting to 3 and capped at 10. |
+
+**A firing costs what conversation turns cost.** The cadence is therefore the
+spending decision: `every: 1h` is a turn an hour for as long as a `yoyo work
+--watch` session is running. At most one task fires per pull, so a schedule with
+three due tasks reaches them over three pulls rather than holding the queue
+closed for all three at once. `yoyo pause` stops firings exactly as it stops runs
+and conversation turns, and nothing is claimed while it is held.
+
+**A heavy pass iterates rather than truncating.** A role that has more to do than
+one turn holds says so in its account, and the harness gives it another turn up
+to `max_turns`. A pass that still had more to do when the bound ran out is
+recorded as partial, so a truncated pass and a finished one are never the same
+short report.
+
+**A firing that failed waits for its next cadence.** It is not retried at once:
+the next pass looks at everything this one would have, and retrying immediately
+would spend turns against whatever was already failing. What stopped it is
+recorded against the task, so a schedule that is running and producing nothing is
+something you can find.
+
+Every firing ends in a durable report, read with
+[`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found). The reports
+outlive the session that produced them and are written once and never revised.
+
 ## Personas
 
 A persona is a Markdown file describing how an agent works. Personas specialize
