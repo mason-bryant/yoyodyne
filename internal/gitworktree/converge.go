@@ -386,11 +386,23 @@ func exportWritePrefix(declared string) string {
 // path is ever asked: a tracked file by that name is committed content, and
 // nothing about how it got its name makes it transient.
 //
-// The root .gitignore carries the same pattern, so in this repository these
-// files usually never reach Git's status at all. This is the half of it that
-// travels: a checkout whose ignore rules were rewritten by the exporter's own
-// setup, or a project that never added the line, gets the same tolerance from
-// the check itself.
+// This repository also ignores them, so in this checkout they usually never
+// reach Git's status at all: the root .gitignore's last entry is `.beads/.~*`,
+// added by hand in 11ee8f0 after the two rounds. That entry is checkable in one
+// command and this comment is not, so read it rather than this sentence —
+// `git show HEAD:.gitignore | tail -3`. The two are not redundant. The entry is
+// one line in one project's tracked content, which the exporter's own `bd setup`
+// rewrites for the file beneath `.beads/` and which a second project managed by
+// this harness has no reason to have; the check is the half that travels, and it
+// is the only half a repository without that line has.
+//
+// The tolerance has no staleness bound. An exporter killed mid-write leaves a
+// temp file that nothing renames away, and from here it is indistinguishable
+// from one being written right now, so it is ignored for as long as it sits
+// there rather than surfacing later as unexpected state. That is the deliberate
+// trade: the alternative reading is the one that discarded two reviewed rounds,
+// and a leftover temp file is Git-ignored here anyway, so refusing on it would
+// buy visibility this check was never the place to give.
 func isExportWriteInProgress(declared map[string]struct{}, path string) bool {
 	for export := range declared {
 		prefix := exportWritePrefix(export)
