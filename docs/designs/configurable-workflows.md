@@ -18,6 +18,14 @@ revisions:
       by: architect
       at: 2026-09-01T19:15:00Z
       reason: approved amendment 2268eabc from yoyodyne-ifd.209.15 - settled question 19 now distinguishes agent-judged gate evidence, which needs an assessor contract, from deterministic action outputs, which do not; the release-readiness gate is complete under this reading
+    - action: amended
+      by: architect
+      at: 2026-09-05T17:40:00Z
+      reason: yoyodyne-ifd.209.21 - recurring tasks recorded in the reserved trigger seat, yaml selects what and when and never authority, shim behavior (skip-in-flight, dated reports, carry-outs through existing typed actions) adopted as the contract; also carries approved amendment 0b6465dc, the human gate recorded as runtime envelope
+    - action: amended
+      by: architect
+      at: 2026-09-05T17:40:00Z
+      reason: yoyodyne-ifd.282 - agent memory recorded as the existing agent-context mechanism with the deltas decided, no fourth store, db-backed with bolt as an option at implementation, agent-authored writes budgeted, redacted, and audited through owned typed actions
 ---
 
 # Configurable workflows: a declarative runtime over trusted actions
@@ -56,11 +64,23 @@ Role definitions may live in the repository under `.yoyodyne/roles/` with two ha
 
 Every agent eventually shares one chassis — identity, role contract, backend, model, persona, context policy, triggers, typed outputs, budgets — without authorities becoming interchangeable. Context continuity is `invocation`, `subject`, or `agent`; agent continuity is durable-state reconstruction, never a provider session (`durable-state-is-provider-independent` already binds this), each invocation recording the context revision it read and produced, with compaction keeping provenance. Triggers — workflow, request, event, schedule — decide *when* an agent gets an opportunity to judge, never what it must conclude; a trigger class must be permitted by the validated role contract.
 
+### Recurring tasks
+
+A recurring task is a schedule-triggered instance of a named agent's bounded task workflow. Configuration selects **what and when, never authority**: the task definition — which workflow, which prompt or guidance reference — is project configuration; how often it runs and per-task enablement are operator-local policy, per settled question 16; and everything the task can do is bounded by the agent's validated role contract, per `configuration-never-grants-authority` — a task is a reason to invoke an agent, never a wider agent.
+
+Runtime behavior, from the proven interim shim: an instance **skips when a turn is in flight** on the agent's conversation — the conversation lease is the test — rather than queueing behind it; each run produces a **durable dated report**; and anything the task decides to do is a **carry-out listed for execution through the agent's existing typed action paths** — the tracker actions, proposals, and requests that role already has — never a new mutation path. One instance per task per window, deduplicated durably; every instance passes the standing gates — intake hold where it applies, the spending pause always, budgets committed before spend.
+
+First consumers: the development manager's hourly sweep (find, fix, file, report, under its item's constraints) and the product manager's twice-daily coherence scan.
+
+### Agent memory
+
+Memory **is** the agent-context mechanism — continuity modes, typed stores, append-only revisions, compaction with provenance — not a new concept beside it. **No fourth store:** durable conversations remain the interaction record, tracker notes remain the work record, and memory is the derived, revisioned store under the state root that may *reference* both and copies neither; a memory blob inside a conversation record is refused. The store is db-backed as an implementation choice — bolt is an acceptable option, decided at implementation like the other runtime-state formats. Agent-authored memory is written only through typed context actions the role contract owns, **budgeted** by per-store size caps, **redacted** before persistence like every durable record, and **audited** — each revision records the invocation that produced it, which the design already requires. Personality is persona plus memory: the persona is fixed guidance, memory tunes judgment across invocations, and neither ever overrides a canonical artifact or becomes private workflow truth, per the standing invariant.
+
 The Sentinel is the first specialist: an observer bundle — read canonical evidence, read-write its own context, publish operator alerts — with no project-state mutation, no gate evidence, no verdicts. Its alerting is model-judged by design: no configured severity, keyword, or corroboration rule gates an alert, and the compiler refuses a definition that routes the `alert` outcome anywhere but the trusted publisher. An alert is a distinct record projected into the report stream; operator feedback is append-only, linked to the alert, and derives a versioned, inspectable, reversible preference profile — a negative example, never a suppression rule. A continuous observer and a gate-holding assessor are different agents even when they share a domain, because accumulation and independence are incompatible in one identity.
 
 ## Conversion order and the recorded trade
 
-Delivery first — it is bounded, tested, safety-critical, and durable — behind the brief's parity discipline: freeze the behavioral baseline, wrap existing code as actions unchanged, run the compiled definition against the baseline, keep an opt-in trial alongside the old path, then default for new runs with legacy resume preserved; existing incomplete runs stay resumable throughout. Triage second, preserving the docket's caps and authority. Management requests third: **ifd.142 proceeds bespoke, per the operator's recorded trade, and converts here — its durable records must therefore map onto instances and interrupts without loss, which constrains 142's persistence now.** The specialist substrate and Sentinel fourth. Parallel branches, fan-out, visual authoring, and new gate types wait for demonstrated need.
+Delivery first — it is bounded, tested, safety-critical, and durable — behind the brief's parity discipline: freeze the behavioral baseline, wrap existing code as actions unchanged, run the compiled definition against the baseline, keep an opt-in trial alongside the old path, then default for new runs with legacy resume preserved; existing incomplete runs stay resumable throughout. Triage second, preserving the docket's caps and authority. Management requests third: **ifd.142 proceeds bespoke, per the operator's recorded trade, and converts here — its durable records must therefore map onto instances and interrupts without loss, which constrains 142's persistence now.** The specialist substrate and Sentinel fourth. Parallel branches, fan-out, visual authoring, and new evidence-producing gate types wait for demonstrated need. The human gate — a step satisfiable only by a person's durable recorded act — is part of the runtime envelope and available to definitions now, not a deferred gate type.
 
 ## The twenty questions, settled
 
