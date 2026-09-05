@@ -181,6 +181,115 @@ func TestReconcileRefusesArgumentsAndReportsConfigurationFailureAsJSON(t *testin
 	}
 }
 
+// The sweep carries no voice, so every exchange it finds free and deliverable
+// comes back undelivered — which for a thread simply waiting its turn is not
+// something the sweep did. Those stay out of what a person reads and stay in
+// `--json`, exactly as the branches and publications this leaves unprinted do.
+func TestReconcileReportsWhatItRecoveredRatherThanWhatItDeclinedToDeliver(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	// One of every outcome, so what is printed is decided by the classification
+	// rather than by which of them this test happened to list.
+	sweep := reconcileSweep{Supervision: []orchestrator.SupervisionResult{
+		{
+			ExchangeID: "exchange-00000000000000000000000000000001",
+			Outcome:    orchestrator.SupervisionUndelivered,
+			Detail:     "no voice is wired to this pass",
+		},
+		{
+			ExchangeID: "exchange-00000000000000000000000000000002",
+			Outcome:    orchestrator.SupervisionCarried,
+			Detail:     "a live process is holding this one",
+		},
+		{
+			ExchangeID: "exchange-00000000000000000000000000000003",
+			Outcome:    orchestrator.SupervisionReclaimed,
+			Detail:     "round 2 yoyo pid 7 was carrying it and is gone",
+		},
+		{
+			ExchangeID: "exchange-00000000000000000000000000000004",
+			Outcome:    orchestrator.SupervisionQueued,
+			Detail:     "4 exchange(s) already have a round open",
+		},
+		{
+			ExchangeID: "exchange-00000000000000000000000000000005",
+			Outcome:    orchestrator.SupervisionStale,
+			Detail:     "nothing current is known about goal/autonomy, so they were not judged",
+		},
+		{
+			ExchangeID: "exchange-00000000000000000000000000000006",
+			Outcome:    orchestrator.SupervisionSettled,
+			Detail:     "all 2 of its permitted rounds are spent",
+		},
+	}}
+	if code := reportReconcileResult(&stdout, &stderr, false, sweep, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d; stderr = %q", code, stderr.String())
+	}
+	// Every outcome that describes what the sweep found rather than what it did.
+	// A queued thread and a stale one are the two that matter here: a product with
+	// several open exchanges has one of each on every sweep, and printing them
+	// would bury the lines that say a record changed.
+	for _, quiet := range []string{
+		"exchange-00000000000000000000000000000001",
+		"exchange-00000000000000000000000000000002",
+		"exchange-00000000000000000000000000000004",
+		"exchange-00000000000000000000000000000005",
+	} {
+		if strings.Contains(stdout.String(), quiet) {
+			t.Errorf("stdout = %q, want %s left out: nothing was done to it", stdout.String(), quiet)
+		}
+	}
+	for _, said := range []string{
+		"exchange-00000000000000000000000000000003",
+		"exchange-00000000000000000000000000000006",
+	} {
+		if !strings.Contains(stdout.String(), said) {
+			t.Errorf("stdout = %q, want %s reported: a record was changed", stdout.String(), said)
+		}
+	}
+
+	var jsonOut bytes.Buffer
+	if code := reportReconcileResult(&jsonOut, &stderr, true, sweep, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d; stderr = %q", code, stderr.String())
+	}
+	var result reconcileOutput
+	if err := json.Unmarshal(jsonOut.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Supervision) != len(sweep.Supervision) {
+		t.Fatalf("Supervision = %#v, want the whole pass carried", result.Supervision)
+	}
+}
+
+// The printing is decided by a closed classification, so an outcome added later
+// and named on neither side fails here rather than being printed as though the
+// sweep had acted on it. That is the mistake this replaces: a skip list that did
+// not keep up with the outcomes beside it.
+func TestEverySupervisionOutcomeIsClassified(t *testing.T) {
+	t.Parallel()
+
+	acted := map[orchestrator.SupervisionOutcome]bool{
+		orchestrator.SupervisionReclaimed: true,
+		orchestrator.SupervisionSettled:   true,
+	}
+	observed := map[orchestrator.SupervisionOutcome]bool{
+		orchestrator.SupervisionCarried:     true,
+		orchestrator.SupervisionQueued:      true,
+		orchestrator.SupervisionStale:       true,
+		orchestrator.SupervisionUndelivered: true,
+	}
+	for _, outcome := range orchestrator.SupervisionOutcomes() {
+		if acted[outcome] == observed[outcome] {
+			t.Fatalf("%q is on neither side of the division, or on both; decide whether a sweep reporting it changed a record", outcome)
+		}
+		if supervisionActed(outcome) != acted[outcome] {
+			t.Errorf("supervisionActed(%q) = %t, want %t", outcome, supervisionActed(outcome), acted[outcome])
+		}
+	}
+}
+
 // A settle catches its target branch up itself, so the report says so on the
 // run that did it. A catch-up it held is the fact somebody has to read, which
 // is why it goes to stderr — and why it is still not a failure: the branch is
@@ -204,7 +313,7 @@ func TestReconcileReportsTheCatchUpASettleMadeAndTheOneItHeld(t *testing.T) {
 			Catchup:    &gitworktree.Catchup{TargetBranch: "main", Held: "the primary checkout has unsaved changes"},
 		},
 	}
-	code := reportReconcileResult(&stdout, &stderr, false, results, nil, orchestrator.Convergence{}, 0, nil)
+	code := reportReconcileResult(&stdout, &stderr, false, reconcileSweep{Runs: results}, nil)
 	if code != 0 {
 		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
 	}
@@ -258,7 +367,7 @@ func TestReconcileSaysWhatBecameOfEachRunAndWhatRemainsOfIt(t *testing.T) {
 			Outcome:    runstate.RunOutcome(runstate.StatusRunning),
 		},
 	}
-	if code := reportReconcileResult(&stdout, &stderr, false, results, nil, orchestrator.Convergence{}, 0, nil); code != 0 {
+	if code := reportReconcileResult(&stdout, &stderr, false, reconcileSweep{Runs: results}, nil); code != 0 {
 		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
 	}
 	printed := stdout.String()

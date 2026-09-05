@@ -896,6 +896,59 @@ naming what the two roles did not settle. That is the one way this fails — two
 judgement models deferring to each other politely for ever — and a limit that
 ended the conversation quietly would hide exactly the case worth seeing.
 
+**A thread one process died in the middle of is picked up by the next sweep
+rather than left dangling.** A round is written down before the answering role is
+invoked, so a harness killed between the two leaves a round asked and never
+answered — which looks identical, in the record, to a round somebody is taking
+right now. What tells them apart is a lease: one exchange takes its rounds one at
+a time, held by the process taking them, and the operating system drops it when
+that process exits. So [`yoyo reconcile`](operations.md#recovering-interrupted-runs)
+finds the exchange free, closes the dead round saying which process was carrying
+it, and leaves the thread open with its remaining rounds. The round stays spent,
+because it was: a cap a crash could reset is not a cap. The same sweep closes a
+thread that spent every round it was given and was never asked again — which is
+where the cap would otherwise never fire, since it fires when somebody asks past
+it — and tells you about that one exactly as an exhausted exchange is always
+reported. The sweep asks nobody anything: recovering from a lost process is never
+a reason to start a round nobody asked for.
+
+**A bound on how many exchanges have a round open at once is derived and not yet
+enforced.** The sweep works out, from the records and the leases, how many
+threads the product could carry — four, not configurable — and which ones are
+past it; that reading is in `yoyo reconcile --json` under `supervision`, marked
+`queued`. **Nothing acts on it today.** The path that actually takes a round is
+the conversation's own ask, and it does not consult the bound, so five roles
+asking at once produce five open rounds and none of them waits. The reading
+arrives ahead of the thing that would use it: the bound becomes real when the
+half of the loop that wakes roles and takes rounds on their behalf lands, and
+until then it is a number to look at rather than a limit you are running under.
+
+It is derived early because the case nobody designs is a morning on which several
+roles each decide they need one more judgment before they can proceed, each of
+them a provider invocation beside the runs already being paid for — and seeing
+that in the record is what tells you whether the bound is set anywhere near
+right before anything is held back by it.
+
+**A question can name what it was asked against.** Where a role's question rests
+on something that can be amended underneath it — a goal, a design, a work item —
+the ask may name it and the revision that was read. What that buys is that a
+question answered against wording that has since changed can be found afterwards
+instead of being read as though nothing had moved. If it is ever reported, it is
+reported and nothing else: the exchange is not stopped, closed, or held back,
+because a change to a goal's wording is frequently not a change to the question,
+for the reason
+[staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale)
+everywhere else. What it produces is a reason to tell the role that asked.
+
+**What is recorded today is what a question rests on; the comparison is not yet
+wired.** `yoyo reconcile` derives staleness from the references and whatever it
+has been told the current revisions are, and it is told none, so every reference
+comes back in `--json` named as unjudged rather than as unmoved — which is the
+honest answer and not a finding about the goal. Silence is not evidence that
+something held still, so a reference nothing current is known about is never
+counted as one that has not moved. Feeding it the revisions is what turns this
+from a record into a report.
+
 **What an exchange cost is reported beside the rounds it took**, wherever one is
 read. Rounds alone say how long a conversation went on and cost alone says what
 it came to; the question you actually have — was that worth it — is answerable
