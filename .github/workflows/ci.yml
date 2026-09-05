@@ -78,9 +78,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # This job gets a current Go rather than the repository's own version:
+      # it installs the tracker, whose releases (v1.1.2 onward) require a newer
+      # Go than this project pins for itself. The build job keeps go.mod's
+      # version; only the walkthrough's toolchain floats.
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
           cache: true
 
       # The walkthrough runs `bd init` against its own scratch project, so the
