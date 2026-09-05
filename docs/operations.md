@@ -1042,10 +1042,14 @@ one, so a promotion that [loses its race](configuration.md#losing-a-race-for-the
 and gets a fresh verdict on the replayed change is not charged for it, whichever
 way that verdict goes. Neither is a verdict that approved the change: the cap
 stops an item buying the same argument another round, and an approval ends the
-argument. An approval is still recorded rather than passed over, because the two
-exclusions are one mechanism — an attempt already answered about is charged at
-most once — and a promotion only ever follows an approval. Rounds are what runs
-actually spend, and every run records them.
+argument. Neither is a repair whose whole residue is one minor finding — the
+reviewer said the work is right and named one small thing beside it, which is the
+same ending with a note attached; the work still goes back to the developer and
+still spends one of the run's own repair attempts. An uncharged verdict is still
+recorded rather than passed over, because the exclusions are one mechanism — an
+attempt already answered about is charged at most once — and a promotion only
+ever follows an approval. Rounds are what runs actually spend, and every run
+records them.
 
 The lines under it are the budget for what triage can decide about work that did
 not land — another go at the change, a re-run, a re-armed merge — and they move

@@ -351,25 +351,45 @@ func refusedPastCap(err error) error {
 	if !errors.Is(err, runstate.ErrTriageCapReached) {
 		return err
 	}
-	return fmt.Errorf("%w. Nothing in this conversation crosses that cap, and nothing written into the item's notes crosses it either — no guard reads prose. Escalate, and the operator crosses it themselves with `%s`; once that record exists, asking for this same decision again records it",
-		err, overrideCommand(err))
+	return fmt.Errorf("%w. Nothing in this conversation crosses that cap, and nothing written into the item's notes crosses it either — no guard reads prose. Escalate, and the operator crosses it themselves with %s; once that is recorded, asking for this same decision again records it",
+		err, overrideCommands(err))
 }
 
-// overrideCommand is the command that crosses the cap one refusal came from,
-// with the budget and the work item already filled in, so what reaches the
-// operator is something to run rather than something to reconstruct.
+// overrideCommands are the commands that cross the caps one refusal came from,
+// with the budget, the work item, and the ceiling already filled in, so what
+// reaches the operator is something to run rather than something to reconstruct.
+//
+// One per budget that refused, because an action can stand behind two of them and
+// crossing one leaves the same decision refused by the other. Both in one message
+// is one sitting rather than two: the alternative is what actually happened on
+// 2026-09-05, when two items each took two override ceremonies minutes apart
+// because the first refusal named only the first budget.
+//
+// The ceiling is filled in rather than left as a placeholder for the same reason
+// the budget is. An operator handed `--cap <n>` has to go and find what the item
+// has spent before they can type a number, and the refusal beside this sentence
+// is the only place that figure appears.
 //
 // A refusal carrying no budget to name falls back to the shape of the command
 // rather than to a description of it. Nothing produces one today — every cap
 // refusal here is a TriageCapError — but a refusal that lost the detail must
 // still leave the operator holding a verb.
-func overrideCommand(err error) string {
+func overrideCommands(err error) string {
 	var capped runstate.TriageCapError
-	if !errors.As(err, &capped) {
-		return `yoyo triage override --budget "<budget>" --cap <n> --by "<operator>" --reason "<why>" <work item>`
+	if !errors.As(err, &capped) || len(capped.Refusals) == 0 {
+		return "`yoyo triage override --budget \"<budget>\" --cap <n> --by \"<operator>\" --reason \"<why>\" <work item>`"
 	}
-	return fmt.Sprintf(`yoyo triage override --budget %q --cap <n> --by "<operator>" --reason "<why>" %s`,
-		capped.Budget, capped.WorkItemID)
+	commands := make([]string, 0, len(capped.Refusals))
+	for _, refusal := range capped.Refusals {
+		commands = append(commands, fmt.Sprintf("`yoyo triage override --budget %q --cap %d --by \"<operator>\" --reason \"<why>\" %s`",
+			refusal.Budget, refusal.Permits(), capped.WorkItemID))
+	}
+	if len(commands) == 1 {
+		return commands[0]
+	}
+	// Both are required rather than either, and the sentence says so: a decision
+	// two budgets refuse is permitted by neither override alone.
+	return strings.Join(commands[:len(commands)-1], ", ") + " and " + commands[len(commands)-1] + " — both are needed, since either budget alone still refuses it"
 }
 
 // spendTriageBudget spends what the decision costs and says what it came to, or

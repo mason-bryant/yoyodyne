@@ -140,9 +140,11 @@ type TriageCounters struct {
 	//
 	// Neither is a verdict that approved the change, and for a version of the same
 	// reason: the cap this feeds stops an item buying the same argument another
-	// round, and an approval ends that argument. What is counted is decided by
-	// whoever calls RecordReviewRound, which is the run that obtained the verdict;
-	// this record counts what it is handed.
+	// round, and an approval ends that argument. Neither is a repair whose whole
+	// residue is one trivial finding, which is that same ending with a note
+	// attached rather than another turn of the argument. What is counted is decided
+	// by whoever calls RecordReviewRound, which is the run that obtained the
+	// verdict; this record counts what it is handed.
 	ReviewRounds int `json:"review_rounds,omitempty"`
 	// LastJudged identifies the developer attempt a reviewer has most recently
 	// answered about, whichever way the verdict went, and it is what makes the
@@ -398,27 +400,104 @@ func (c TriageCaps) Validate() error {
 // without matching on the words of either.
 var ErrTriageCapReached = errors.New("triage cap reached")
 
-// TriageCapError names the action that was refused, the budget that refused it,
-// and what was already spent against that budget. The action and the budget are
+// TriageCapRefusal is one budget refusing one action: what it bounds, what the
+// item has spent against it, and what it stands at.
+//
+// It carries the spend because an operator answering the refusal has to state a
+// new ceiling, and a refusal that named only the budget left them reconstructing
+// the figure from the item's record before they could type a number. What they
+// need is arithmetic they can read off the sentence.
+type TriageCapRefusal struct {
+	Budget string
+	Spent  int
+	Cap    int
+}
+
+// Permits is the smallest cap that would let the refused action through: one
+// more than what is already spent. It is what an operator's override states, so
+// it is computed here rather than left to whoever renders the refusal — two
+// places deriving it is two places to get it wrong by one.
+func (r TriageCapRefusal) Permits() int { return r.Spent + 1 }
+
+// Describe says what one budget refused, in the words an operator reads.
+func (r TriageCapRefusal) Describe() string {
+	if r.Cap == 0 {
+		return fmt.Sprintf("the %s cap is 0, so none is permitted", r.Budget)
+	}
+	return fmt.Sprintf("%d of %d permitted %s(s) are spent", r.Spent, r.Cap, r.Budget)
+}
+
+// TriageCapError names the action that was refused and every budget that refused
+// it, each with what was already spent against it. The action and the budgets are
 // separate because they are frequently not the same thing: a re-run is refused
 // by the review round budget, and an operator told only "re-run refused" would
 // go looking for a re-run cap that does not exist.
+//
+// Every budget rather than the first, because two of the three actions stand
+// behind two budgets and an item can be at the end of both. Refusing on the
+// first and staying silent about the second is a refusal that is true and
+// incomplete: the operator crosses the cap it named, the same decision is asked
+// for again, and the second budget refuses it in turn. That is not hypothetical
+// — on 2026-09-05 it cost two override ceremonies two minutes apart on each of
+// yoyodyne-ifd.272 and yoyodyne-ifd.209.20, four recorded overrides for two
+// decisions. One refusal naming both is one sitting.
 type TriageCapError struct {
 	Action     string
-	Budget     string
 	WorkItemID string
-	Spent      int
-	Cap        int
+	// Refusals are the budgets that refused, in the order the action asks them:
+	// the action's own budget first, then the rounds it would buy. There is always
+	// at least one, and a refusal carrying none could not have been built by the
+	// only thing that builds them.
+	Refusals []TriageCapRefusal
 }
 
 func (e TriageCapError) Error() string {
-	if e.Cap == 0 {
-		return fmt.Sprintf("no %s is permitted for %s: the %s cap is 0", e.Action, e.WorkItemID, e.Budget)
+	spends := make([]string, 0, len(e.Refusals))
+	permits := make([]string, 0, len(e.Refusals))
+	for _, refusal := range e.Refusals {
+		spends = append(spends, refusal.Describe())
+		permits = append(permits, fmt.Sprintf("a %s cap of %d", refusal.Budget, refusal.Permits()))
 	}
-	return fmt.Sprintf("%s is refused for %s: %d of %d permitted %s(s) are spent", e.Action, e.WorkItemID, e.Spent, e.Cap, e.Budget)
+	return fmt.Sprintf("%s is refused for %s: %s. What permits it is %s",
+		e.Action, e.WorkItemID, strings.Join(spends, ", and "), joinWithAnd(permits))
 }
 
 func (e TriageCapError) Unwrap() error { return ErrTriageCapReached }
+
+// Budgets are the budgets that refused, in the order the refusal names them.
+// It is what a caller turning a refusal into commands for the operator walks.
+func (e TriageCapError) Budgets() []string {
+	budgets := make([]string, 0, len(e.Refusals))
+	for _, refusal := range e.Refusals {
+		budgets = append(budgets, refusal.Budget)
+	}
+	return budgets
+}
+
+// RefusedBy is what one named budget refused, and whether it was one of the
+// budgets that refused at all.
+func (e TriageCapError) RefusedBy(budget string) (TriageCapRefusal, bool) {
+	for _, refusal := range e.Refusals {
+		if refusal.Budget == budget {
+			return refusal, true
+		}
+	}
+	return TriageCapRefusal{}, false
+}
+
+// joinWithAnd reads a list out the way a sentence does, because this one is read
+// by an operator rather than parsed: two budgets joined by a comma read as a list
+// that might continue.
+func joinWithAnd(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	default:
+		return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+	}
+}
 
 // RepairGrant is what a granted repair actually came to. Rounds is what may be
 // spent, which is what the caller acts on; Requested and Truncated are what was
@@ -486,11 +565,12 @@ func (s *TriageStore) Counters(workItemID string) (TriageCounters, error) {
 // written down would only make the record disagree with the world.
 //
 // Which verdicts are rounds is the caller's, not this record's — an approval is
-// not one, and the run that obtained the verdict is what knows. What an approval
-// is instead is RecordApprovedAttempt below, which every caller obtaining a
-// verdict has to reach for, because the deduplication here is what keeps a
-// re-review of a judged attempt free and a verdict that reached neither of these
-// is an attempt the record has never heard of.
+// not one, nor is a repair whose whole residue is one trivial finding, and the
+// run that obtained the verdict is what knows. What those are instead is
+// RecordUnchargedVerdict below, which every caller obtaining a verdict has to
+// reach for, because the deduplication here is what keeps a re-review of a judged
+// attempt free and a verdict that reached neither of these is an attempt the
+// record has never heard of.
 //
 // attemptID identifies the developer attempt whose change was judged, and an
 // attempt this item has already been answered about is recorded once. That is
@@ -526,26 +606,35 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 	})
 }
 
-// RecordApprovedAttempt records that a reviewer answered about one developer
-// attempt and approved it, which costs the item nothing and is still something
-// the record has to hold.
+// RecordUnchargedVerdict records that a reviewer answered about one developer
+// attempt and the answer costs the item nothing, which is still something the
+// record has to hold.
+//
+// Two verdicts reach it, and which ones is the caller's judgement rather than
+// this record's. An approval is one: the cap this feeds exists to stop an item
+// buying the same argument another round, and an approval ends that argument.
+// The other is a repair whose whole residue is one trivial finding — the
+// reviewer said the work is right and named one small thing beside it, which is
+// the same end of the same argument with a note attached. Charging either walks
+// an item toward its cap on its own success, which is what four escalations and
+// two override ceremonies in a week were.
 //
 // It exists because the exclusion and the deduplication are the same mechanism.
-// An approval that went unrecorded would leave the attempt looking unjudged, and
-// the one thing that re-reviews an approved attempt is the integration replay: a
-// promotion that lost its race replays the change onto where the target went and
-// asks for a fresh verdict on it. That verdict can be a repair — the ground
-// moved — and with nothing saying the attempt had already been answered about,
-// the item would be charged a round for losing a race it did not cause. That is
-// the round the replay exclusion has always promised to keep off the bill, and
-// this is what keeps the promise now that an approval is not a round.
+// A verdict that went unrecorded would leave the attempt looking unjudged, and
+// the one thing that re-reviews an already-judged attempt is the integration
+// replay: a promotion that lost its race replays the change onto where the target
+// went and asks for a fresh verdict on it. That verdict can be a repair — the
+// ground moved — and with nothing saying the attempt had already been answered
+// about, the item would be charged a round for losing a race it did not cause.
+// That is the round the replay exclusion has always promised to keep off the
+// bill, and this is what keeps the promise now that not every verdict is a round.
 //
-// No charging process is asked for, because nothing is charged. An approval
-// leaves the round at the head, and whatever process holds it, exactly as it
-// found them: a later round given back is still that process's to give.
-func (s *TriageStore) RecordApprovedAttempt(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, error) {
+// No charging process is asked for, because nothing is charged. An uncharged
+// verdict leaves the round at the head, and whatever process holds it, exactly as
+// it found them: a later round given back is still that process's to give.
+func (s *TriageStore) RecordUnchargedVerdict(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, error) {
 	if strings.TrimSpace(attemptID) == "" {
-		return TriageCounters{}, errors.New("a developer attempt is required to record the verdict that approved it")
+		return TriageCounters{}, errors.New("a developer attempt is required to record the verdict that cost it nothing")
 	}
 	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
 		if counters.alreadyJudged(attemptID) {
@@ -709,18 +798,19 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 		// operator crosses the cap once, in a record, and the guard that refused
 		// their decision permits it without anybody going round it.
 		permitted := caps.Overridden(counters.Overrides)
-		// The grant's own budget is asked first, because it is the bound that
-		// answers on an item the rounds say nothing about: a run that stopped
-		// before it was ever reviewed spent no round, and the round budget would
-		// hand that item back for ever.
+		// Both budgets are asked before either refuses, so an item at the end of
+		// both is told so once. The grant's own budget is asked first because it is
+		// the bound that answers on an item the rounds say nothing about — a run
+		// that stopped before it was ever reviewed spent no round, and the round
+		// budget would hand that item back for ever — and because it is the order
+		// an operator reads the refusal in.
+		var refusals []TriageCapRefusal
 		if counters.RepairGrants >= permitted.RepairGrants {
-			return TriageCapError{
-				Action:     TriageRepairGrant,
-				Budget:     TriageRepairGrantBudget,
-				WorkItemID: counters.WorkItemID,
-				Spent:      counters.RepairGrants,
-				Cap:        permitted.RepairGrants,
-			}
+			refusals = append(refusals, TriageCapRefusal{
+				Budget: TriageRepairGrantBudget,
+				Spent:  counters.RepairGrants,
+				Cap:    permitted.RepairGrants,
+			})
 		}
 		// The room is what the cap has beyond what the item stands committed to,
 		// rather than beyond what it has cost. A grant recorded and not yet carried
@@ -729,15 +819,20 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 		// single grant doing so.
 		remaining := counters.RoundsUncommitted(permitted.ReviewRounds)
 		if remaining == 0 {
-			return TriageCapError{
-				Action:     TriageRepairGrant,
-				Budget:     TriageReviewRoundBudget,
-				WorkItemID: counters.WorkItemID,
+			refusals = append(refusals, TriageCapRefusal{
+				Budget: TriageReviewRoundBudget,
 				// What refused it is what it is committed to, so that is the figure
 				// reported: naming the rounds counted would leave a reader looking for
 				// room the cap does not have.
 				Spent: counters.committed(),
 				Cap:   permitted.ReviewRounds,
+			})
+		}
+		if len(refusals) > 0 {
+			return TriageCapError{
+				Action:     TriageRepairGrant,
+				WorkItemID: counters.WorkItemID,
+				Refusals:   refusals,
 			}
 		}
 		granted.Rounds = rounds
@@ -784,28 +879,34 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at tim
 		// reason a grant's are: this refusal is the one that deadlocked the
 		// escalation protocol, and an override is what crosses it.
 		permitted := caps.Overridden(counters.Overrides)
-		// Its own budget first, and for the same reason a grant's is: a re-run
-		// buys a whole fresh run and spends no round itself, so on an item whose
-		// runs keep stopping before review the round budget refuses nothing.
+		// Both budgets are asked before either refuses, exactly as a grant's are, so
+		// an item at the end of both hears it once. Its own budget is named first,
+		// and for the same reason a grant's is: a re-run buys a whole fresh run and
+		// spends no round itself, so on an item whose runs keep stopping before
+		// review the round budget refuses nothing.
+		var refusals []TriageCapRefusal
 		if counters.Reruns >= permitted.Reruns {
-			return TriageCapError{
-				Action:     TriageRerun,
-				Budget:     TriageRerunBudget,
-				WorkItemID: counters.WorkItemID,
-				Spent:      counters.Reruns,
-				Cap:        permitted.Reruns,
-			}
+			refusals = append(refusals, TriageCapRefusal{
+				Budget: TriageRerunBudget,
+				Spent:  counters.Reruns,
+				Cap:    permitted.Reruns,
+			})
 		}
 		// Against what the item is committed to, for the reason a grant is: a re-run
 		// whose only remaining round is one an outstanding grant has already
 		// promised overshoots the cap exactly as a second grant would.
 		if counters.RoundsUncommitted(permitted.ReviewRounds) == 0 {
+			refusals = append(refusals, TriageCapRefusal{
+				Budget: TriageReviewRoundBudget,
+				Spent:  counters.committed(),
+				Cap:    permitted.ReviewRounds,
+			})
+		}
+		if len(refusals) > 0 {
 			return TriageCapError{
 				Action:     TriageRerun,
-				Budget:     TriageReviewRoundBudget,
 				WorkItemID: counters.WorkItemID,
-				Spent:      counters.committed(),
-				Cap:        permitted.ReviewRounds,
+				Refusals:   refusals,
 			}
 		}
 		counters.Reruns++
@@ -833,13 +934,17 @@ func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, a
 	}
 	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
 		permitted := caps.Overridden(counters.Overrides)
+		// One budget, because a re-arm buys no round: there is no second bound for it
+		// to stand behind and nothing else to say in the same breath.
 		if counters.MergeRearms >= permitted.MergeRearms {
 			return TriageCapError{
 				Action:     TriageMergeRearm,
-				Budget:     TriageMergeRearmBudget,
 				WorkItemID: counters.WorkItemID,
-				Spent:      counters.MergeRearms,
-				Cap:        permitted.MergeRearms,
+				Refusals: []TriageCapRefusal{{
+					Budget: TriageMergeRearmBudget,
+					Spent:  counters.MergeRearms,
+					Cap:    permitted.MergeRearms,
+				}},
 			}
 		}
 		counters.MergeRearms++

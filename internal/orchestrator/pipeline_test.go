@@ -30,6 +30,9 @@ const (
 	pipelineRunID  = "run-0123456789abcdef0123456789abcdef"
 	approveVerdict = `{"decision":"approve","summary":"the change matches the acceptance criteria"}`
 	repairVerdict  = `{"decision":"repair","summary":"the change misses the acceptance criteria","findings":[{"severity":"blocker","message":"add the missing file","location":{"file":"feature.txt","line":1}}]}`
+	// A repair whose whole residue is one minor finding: the work goes back to
+	// the developer, and the item is charged no round for it.
+	minorVerdict = `{"decision":"repair","summary":"the change is right; one small note","findings":[{"severity":"minor","message":"rename this variable","location":{"file":"feature.txt","line":1}}]}`
 	// Every configured agent declares a selector, and the run records both it
 	// and the model the provider reported serving.
 	testDeveloperModel = "opus"
@@ -5556,6 +5559,82 @@ func TestPipelineChargesNoRoundForAReplayedChangeSentBack(t *testing.T) {
 	// a review that never happened.
 	if state.ReviewRounds != 3 {
 		t.Fatalf("run review rounds = %d, want the three verdicts this run reached", state.ReviewRounds)
+	}
+}
+
+// A repair verdict whose whole residue is one minor finding costs the item
+// nothing either, by the operator's direction of 2026-09-05. The reviewer said
+// the work is right and named one small thing beside it, which is the end of the
+// argument the cap bounds rather than another turn of it — and four items in a
+// week reached their caps on rounds of exactly that shape.
+//
+// The work still goes back to the developer and the run still spends an attempt
+// on it: what changes is the item's bill, not what happens to the change.
+func TestPipelineChargesNoRoundForARepairWithOneTrivialFinding(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, minorVerdict, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("Run() outcome = %#v, want the repaired change integrated", outcome)
+	}
+	// The note was acted on: the verdict sent the work back exactly as any repair
+	// does, and the run spent one of its own attempts doing it.
+	if outcome.RepairAttempts != 1 {
+		t.Fatalf("repair attempts = %d, want the one the minor finding asked for", outcome.RepairAttempts)
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds = %d, want none: one minor finding is a trivial residue, and the approval after it is not a round either", counters.ReviewRounds)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The run's own count is what says the zero above is an exclusion rather than
+	// two reviews that never happened.
+	if state.ReviewRounds != 2 {
+		t.Fatalf("run review rounds = %d, want the two verdicts this run reached", state.ReviewRounds)
+	}
+}
+
+// And the line holds on the other side of itself: a repair carrying a blocker is
+// the reviewer arguing with the change, and the item is charged for it.
+func TestPipelineChargesARoundForARepairThatIsNotTrivial(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, repairVerdict, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.RepairAttempts != 1 {
+		t.Fatalf("Run() outcome = %#v, want the repaired change integrated after one attempt", outcome)
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 1 {
+		t.Fatalf("review rounds = %d, want the one the blocker cost", counters.ReviewRounds)
 	}
 }
 

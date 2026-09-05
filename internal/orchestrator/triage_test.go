@@ -821,7 +821,11 @@ func TestARecordedDecisionTheGuardWouldRefuseAgainShowsOnTheDocket(t *testing.T)
 	// the refusal is the proof the decision is really recorded.
 	var refused runstate.TriageCapError
 	_, err = decisions.RecordRerun(context.Background(), docketedItem, docketedNow, docketedCaps)
-	if !errors.As(err, &refused) || refused.Spent != 1 || refused.Cap != 1 {
+	if !errors.As(err, &refused) {
+		t.Fatalf("second RecordRerun() error = %v, want a cap refusal", err)
+	}
+	reruns, refusedByReruns := refused.RefusedBy(runstate.TriageRerunBudget)
+	if !refusedByReruns || reruns.Spent != 1 || reruns.Cap != 1 {
 		t.Fatalf("second RecordRerun() error = %v, want the re-run budget refusing it", err)
 	}
 
@@ -833,8 +837,8 @@ func TestARecordedDecisionTheGuardWouldRefuseAgainShowsOnTheDocket(t *testing.T)
 		t.Fatalf("build = %#v, want the same one entry", rebuilt)
 	}
 	entry := rebuilt.Entries[0]
-	if entry.Counters.Reruns != refused.Spent || entry.Counters.RerunsCap != refused.Cap {
-		t.Fatalf("counters = %#v, want the %d of %d the guard refused against", entry.Counters, refused.Spent, refused.Cap)
+	if entry.Counters.Reruns != reruns.Spent || entry.Counters.RerunsCap != reruns.Cap {
+		t.Fatalf("counters = %#v, want the %d of %d the guard refused against", entry.Counters, reruns.Spent, reruns.Cap)
 	}
 	if entry.Counters.RerunsCarriedOut != 0 || !entry.Counters.Decided() {
 		t.Fatalf("counters = %#v, want a decision recorded and not carried out", entry.Counters)
@@ -897,8 +901,17 @@ func TestAGrantTheRoundCapCutShowsOnTheDocketWithWhatARepeatWouldMeet(t *testing
 	var refused runstate.TriageCapError
 	_, err = decisions.GrantRepair(context.Background(), docketedItem,
 		TriageRepairGrantRounds(docketedTriage), docketedNow, docketedCaps)
-	if !errors.As(err, &refused) || refused.Spent != 1 || refused.Cap != 1 {
+	if !errors.As(err, &refused) {
+		t.Fatalf("second GrantRepair() error = %v, want a cap refusal", err)
+	}
+	grants, refusedByGrants := refused.RefusedBy(runstate.TriageRepairGrantBudget)
+	if !refusedByGrants || grants.Spent != 1 || grants.Cap != 1 {
 		t.Fatalf("second GrantRepair() error = %v, want the repair grant budget refusing it", err)
+	}
+	// This item is at the end of both budgets, and the refusal says both at once
+	// rather than sending the operator back for a second override ceremony.
+	if _, refusedByRounds := refused.RefusedBy(runstate.TriageReviewRoundBudget); !refusedByRounds {
+		t.Fatalf("second GrantRepair() error = %v, want the round budget named in the same refusal", err)
 	}
 
 	built, err := docketer.Build()
@@ -909,8 +922,8 @@ func TestAGrantTheRoundCapCutShowsOnTheDocketWithWhatARepeatWouldMeet(t *testing
 		t.Fatalf("build = %#v, want the one stoppage docketed", built)
 	}
 	entry := built.Entries[0]
-	if entry.Counters.RepairGrants != refused.Spent || entry.Counters.RepairGrantsCap != refused.Cap {
-		t.Fatalf("counters = %#v, want the %d of %d the guard refused against", entry.Counters, refused.Spent, refused.Cap)
+	if entry.Counters.RepairGrants != grants.Spent || entry.Counters.RepairGrantsCap != grants.Cap {
+		t.Fatalf("counters = %#v, want the %d of %d the guard refused against", entry.Counters, grants.Spent, grants.Cap)
 	}
 	if entry.Counters.GrantedRounds != 1 || entry.Counters.TruncatedGrants != 1 {
 		t.Fatalf("counters = %#v, want the one round the cap cut the grant down to", entry.Counters)
@@ -922,7 +935,10 @@ func TestAGrantTheRoundCapCutShowsOnTheDocketWithWhatARepeatWouldMeet(t *testing
 	for _, want := range []string{
 		"1 of 1 repair grant(s) worth 1 review round(s), 1 of them cut down to the room the cap still had",
 		"4 of 4 are committed by a grant not yet spent",
-		"A further repair grant for " + docketedItem + " is refused: 1 of 1 permitted grant(s) are already recorded",
+		// Both budgets are spent here, and the entry says both: crossing one and
+		// meeting the other is the round-trip the docket exists to save.
+		"A further repair grant for " + docketedItem + " is refused by both of its budgets: 1 of 1 permitted grant(s) are already recorded, and 4 of 4 round(s) are spent or committed",
+		"Crossing either one alone leaves the other refusing it",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("the entry does not say %q:\n%s", want, rendered)

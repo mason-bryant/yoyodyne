@@ -3,8 +3,10 @@ package runstate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -122,9 +124,9 @@ func TestAnApprovedAttemptIsRememberedAndTheReplayOfItIsFree(t *testing.T) {
 	t.Parallel()
 
 	store := newTriageStore(t)
-	approved, err := store.RecordApprovedAttempt(context.Background(), "yoyodyne-ifd.224", "run-a#0", time.Now())
+	approved, err := store.RecordUnchargedVerdict(context.Background(), "yoyodyne-ifd.224", "run-a#0", time.Now())
 	if err != nil {
-		t.Fatalf("RecordApprovedAttempt() error = %v", err)
+		t.Fatalf("RecordUnchargedVerdict() error = %v", err)
 	}
 	if approved.ReviewRounds != 0 || approved.LastRound != "" || approved.LastRoundCharger != "" {
 		t.Fatalf("counters after an approval = %#v, want nothing charged", approved)
@@ -285,7 +287,11 @@ func TestASecondGrantIsTruncatedAgainstWhatTheFirstAlreadyPromised(t *testing.T)
 		t.Fatalf("GrantRepair() with the cap's room promised = %v, want a refusal", err)
 	}
 	var refusal TriageCapError
-	if !errors.As(err, &refusal) || refusal.Budget != TriageReviewRoundBudget || refusal.Spent != 4 {
+	rounds, refusedByRounds := TriageCapRefusal{}, false
+	if errors.As(err, &refusal) {
+		rounds, refusedByRounds = refusal.RefusedBy(TriageReviewRoundBudget)
+	}
+	if !refusedByRounds || rounds.Spent != 4 {
 		t.Fatalf("refusal = %+v, want the round budget refusing it with the item's four committed rounds", refusal)
 	}
 	// A re-run is refused by the same room, because it too would produce a verdict
@@ -451,8 +457,15 @@ func TestTriageActionsAreRefusedPastTheirCaps(t *testing.T) {
 			if !errors.As(err, &refusal) {
 				t.Fatalf("%s past its cap error = %v, want it to name the budget", action.action, err)
 			}
-			if refusal.Action != action.action || refusal.Budget != action.budget || refusal.Cap != 1 || refusal.Spent != 1 {
+			refused, byThisBudget := refusal.RefusedBy(action.budget)
+			if refusal.Action != action.action || !byThisBudget || refused.Cap != 1 || refused.Spent != 1 {
 				t.Fatalf("refusal = %+v, want %s refused by the %s budget with 1 of 1 spent", refusal, action.action, action.budget)
+			}
+			// The refusal states the ceiling that would permit it, so the operator's
+			// override is arithmetic they can read off the sentence rather than a
+			// figure they have to go and dig out of the item's record.
+			if refused.Permits() != 2 || !strings.Contains(err.Error(), fmt.Sprintf("a %s cap of 2", action.budget)) {
+				t.Fatalf("refusal text = %q, want it to name the %s cap of 2 that permits the action", err, action.budget)
 			}
 			// A refused action must not have been counted, or a cap of one would
 			// silently become a cap of however many times somebody asked.
@@ -801,5 +814,246 @@ func TestNegativeTriageCapsAreRefused(t *testing.T) {
 	}
 	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), TriageCaps{ReviewRounds: 0}); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("GrantRepair() under a zero round cap = %v, want a cap refusal", err)
+	}
+}
+
+// An uncharged verdict leaves every one of the item's budgets exactly where it
+// stood, which is the whole of what the operator directed on 2026-09-05: a round
+// that approved the work, or left one trivial note beside it, must not walk the
+// item toward a cap on its own success.
+//
+// Every field is compared rather than the rounds alone. The rounds are what the
+// verdict obviously touches, and the failure this guards against is a later
+// change spending something else in passing — a commitment, a grant, the head of
+// the record — on a verdict that was supposed to cost nothing.
+func TestAnUnchargedVerdictLeavesEveryBudgetWhereItStood(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	ctx := context.Background()
+	const item = "yoyodyne-ifd.279"
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	// An item mid-flight rather than a fresh one: a grant recorded, a round spent
+	// against it, so every counter the record keeps carries something an uncharged
+	// verdict could disturb.
+	if _, err := store.GrantRepair(ctx, item, 2, time.Now(), caps); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if _, err := store.RecordReviewRound(ctx, item, "run-a#1", countingProcess, time.Now()); err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	before, err := store.Counters(item)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+
+	after, err := store.RecordUnchargedVerdict(ctx, item, "run-a#2", time.Now())
+	if err != nil {
+		t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+	}
+	// The judged attempt is the one thing that moves, and it is not a budget: it
+	// is what keeps the replay of this attempt free.
+	if after.LastJudged != "run-a#2" {
+		t.Fatalf("LastJudged = %q, want the attempt the reviewer answered about", after.LastJudged)
+	}
+	stripped := after
+	stripped.LastJudged = before.LastJudged
+	stripped.UpdatedAt = before.UpdatedAt
+	if !reflect.DeepEqual(stripped, before) {
+		t.Fatalf("counters after an uncharged verdict = %+v, want them left at %+v", after, before)
+	}
+	// And the room the guards read is the room they read before it, which is the
+	// figure the escalations were about.
+	if after.RoundsRemaining(caps.ReviewRounds) != before.RoundsRemaining(caps.ReviewRounds) ||
+		after.RoundsUncommitted(caps.ReviewRounds) != before.RoundsUncommitted(caps.ReviewRounds) {
+		t.Fatalf("room after an uncharged verdict = %d remaining / %d uncommitted, want %d / %d",
+			after.RoundsRemaining(caps.ReviewRounds), after.RoundsUncommitted(caps.ReviewRounds),
+			before.RoundsRemaining(caps.ReviewRounds), before.RoundsUncommitted(caps.ReviewRounds))
+	}
+}
+
+// The escalation shapes this change was directed at, replayed against the new
+// semantics. Each is an item one verdict from its cap, and under the old
+// accounting each of these verdicts took the last round the item had — which is
+// how four items in a week reached their caps on the round that said their work
+// was right, and needed a person to unstick them.
+//
+// The shapes are the documented ones rather than the items' verdict-by-verdict
+// histories, which the durable record cannot supply: the counters hold totals,
+// not the sequence of what each verdict was. The evidence that the shapes
+// happened is those four items' own counter files, and it is cited here rather
+// than reconstructed.
+//
+// Each case asserts both directions on one store: the decision the development
+// manager was refused is permitted now, and charging the same verdict as a round
+// still refuses it. The second half is what says the semantics moved this rather
+// than the caps being loose.
+func TestTheDocumentedCapEscalationsNoLongerEscalate(t *testing.T) {
+	t.Parallel()
+
+	// The harness defaults every one of these was met at.
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	for _, escalation := range []struct {
+		name string
+		// evidence names the items whose records document this shape.
+		evidence string
+		// verdict is the uncharged verdict the item's last round produced.
+		verdict func(*testing.T, *TriageStore, string)
+		// decision is what the development manager asked for afterwards and was
+		// refused; it must be permitted now.
+		decision func(*TriageStore, string) error
+	}{
+		{
+			name:     "the last permitted round approved the change, and a re-run was refused",
+			evidence: "yoyodyne-ifd.143, yoyodyne-ifd.68.22",
+			verdict: func(t *testing.T, store *TriageStore, item string) {
+				t.Helper()
+				if _, err := store.RecordUnchargedVerdict(context.Background(), item, "run-a#3", time.Now()); err != nil {
+					t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+				}
+			},
+			decision: func(store *TriageStore, item string) error {
+				_, err := store.RecordRerun(context.Background(), item, time.Now(), caps)
+				return err
+			},
+		},
+		{
+			name:     "the last permitted round approved the change, and a repair grant was refused",
+			evidence: "yoyodyne-ifd.209.16, yoyodyne-ifd.241",
+			verdict: func(t *testing.T, store *TriageStore, item string) {
+				t.Helper()
+				if _, err := store.RecordUnchargedVerdict(context.Background(), item, "run-a#3", time.Now()); err != nil {
+					t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+				}
+			},
+			decision: func(store *TriageStore, item string) error {
+				_, err := store.GrantRepair(context.Background(), item, 1, time.Now(), caps)
+				return err
+			},
+		},
+		{
+			// The operator's extension of the same rule: the reviewer said the work
+			// is right and named one small thing beside it. The record cannot tell
+			// this verdict from the approval above, which is the point — both cost
+			// the item nothing, and whoever obtained the verdict is what decides
+			// which it was.
+			name:     "the last permitted round left one trivial finding, and a repair grant was refused",
+			evidence: "yoyodyne-ifd.241, whose remaining round was to take the review's minors",
+			verdict: func(t *testing.T, store *TriageStore, item string) {
+				t.Helper()
+				if _, err := store.RecordUnchargedVerdict(context.Background(), item, "run-a#3", time.Now()); err != nil {
+					t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+				}
+			},
+			decision: func(store *TriageStore, item string) error {
+				_, err := store.GrantRepair(context.Background(), item, 1, time.Now(), caps)
+				return err
+			},
+		},
+	} {
+		t.Run(escalation.name, func(t *testing.T) {
+			t.Parallel()
+			const item = "yoyodyne-ifd.replayed"
+
+			// The item as it stood one verdict from its cap.
+			permitted := newTriageStore(t)
+			spendTriageRounds(t, permitted, item, 3)
+			escalation.verdict(t, permitted, item)
+			if err := escalation.decision(permitted, item); err != nil {
+				t.Fatalf("the decision the escalation was about (%s) error = %v, want it permitted now", escalation.evidence, err)
+			}
+
+			// And the same item whose last verdict was charged as a round, which is
+			// the accounting that escalated.
+			refused := newTriageStore(t)
+			spendTriageRounds(t, refused, item, 3)
+			if _, err := refused.RecordReviewRound(context.Background(), item, "run-a#3", countingProcess, time.Now()); err != nil {
+				t.Fatalf("RecordReviewRound() error = %v", err)
+			}
+			if err := escalation.decision(refused, item); !errors.Is(err, ErrTriageCapReached) {
+				t.Fatalf("the same decision with the last verdict charged = %v, want the refusal that escalated", err)
+			}
+		})
+	}
+}
+
+// Two spent budgets guarding one decision refuse together. Serially is what
+// actually happened on 2026-09-05: yoyodyne-ifd.272 and yoyodyne-ifd.209.20 each
+// took two operator override ceremonies two minutes apart, because the first
+// refusal named the grant budget, the override crossed it, and the round budget
+// then refused the same decision in turn.
+func TestTwoSpentBudgetsRefuseOneDecisionTogether(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	ctx := context.Background()
+	const item = "yoyodyne-ifd.272"
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	// One grant given and its rounds spent, which puts the item at the end of both
+	// budgets at once: the grant budget by the grant, the round budget by what it
+	// committed.
+	if _, err := store.GrantRepair(ctx, item, 2, time.Now(), caps); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	spendTriageRounds(t, store, item, 4)
+
+	_, err := store.GrantRepair(ctx, item, 1, time.Now(), caps)
+	var refusal TriageCapError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("second GrantRepair() error = %v, want a cap refusal", err)
+	}
+	grants, refusedByGrants := refusal.RefusedBy(TriageRepairGrantBudget)
+	rounds, refusedByRounds := refusal.RefusedBy(TriageReviewRoundBudget)
+	if !refusedByGrants || !refusedByRounds {
+		t.Fatalf("refused by %v, want both budgets named in one refusal", refusal.Budgets())
+	}
+	// Each names what it stands at and what would permit the decision, so the
+	// operator's override is arithmetic off the sentence rather than a dig through
+	// the item's record.
+	if grants.Spent != 1 || grants.Cap != 1 || grants.Permits() != 2 {
+		t.Fatalf("the grant budget refused with %+v, want 1 of 1 spent and a cap of 2 permitting it", grants)
+	}
+	if rounds.Spent != 4 || rounds.Cap != 4 || rounds.Permits() != 5 {
+		t.Fatalf("the round budget refused with %+v, want 4 of 4 spent and a cap of 5 permitting it", rounds)
+	}
+	for _, want := range []string{
+		"1 of 1 permitted repair grant(s) are spent",
+		"4 of 4 permitted review round(s) are spent",
+		"a repair grant cap of 2 and a review round cap of 5",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal = %q, want it to say %q", err, want)
+		}
+	}
+
+	// Crossing one of them leaves the other refusing, which is what made the
+	// second ceremony necessary — and is now said before the first one happens.
+	if _, err := store.Override(ctx, item, TriageOverride{
+		Budget:    TriageRepairGrantBudget,
+		Cap:       grants.Permits(),
+		DecidedBy: "mason",
+		Reason:    "one more findings-scoped grant",
+	}, time.Now(), caps); err != nil {
+		t.Fatalf("Override() error = %v", err)
+	}
+	_, err = store.GrantRepair(ctx, item, 1, time.Now(), caps)
+	var crossed TriageCapError
+	if !errors.As(err, &crossed) || len(crossed.Refusals) != 1 {
+		t.Fatalf("GrantRepair() past the first override = %v, want the round budget alone still refusing it", err)
+	}
+	if crossed.Refusals[0].Budget != TriageReviewRoundBudget {
+		t.Fatalf("GrantRepair() past the first override was refused by %q, want the review round budget", crossed.Refusals[0].Budget)
+	}
+}
+
+// spendTriageRounds charges one item the given number of review rounds, each
+// under its own developer attempt so none of them deduplicates against the last.
+func spendTriageRounds(t *testing.T, store *TriageStore, workItemID string, rounds int) {
+	t.Helper()
+	for round := 0; round < rounds; round++ {
+		if _, err := store.RecordReviewRound(context.Background(), workItemID,
+			fmt.Sprintf("run-a#%d", round), countingProcess, time.Now()); err != nil {
+			t.Fatalf("RecordReviewRound() error = %v", err)
+		}
 	}
 }

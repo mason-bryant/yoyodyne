@@ -536,17 +536,43 @@ func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
 			name: "the refusal a cap produces",
 			err: runstate.TriageCapError{
 				Action:     runstate.TriageRerun,
-				Budget:     runstate.TriageReviewRoundBudget,
 				WorkItemID: "yoyodyne-ifd.224",
-				Spent:      4,
-				Cap:        4,
+				Refusals: []runstate.TriageCapRefusal{{
+					Budget: runstate.TriageReviewRoundBudget,
+					Spent:  4,
+					Cap:    4,
+				}},
 			},
 			want: []string{
 				"re-run is refused for yoyodyne-ifd.224",
 				`yoyo triage override --budget "review round"`,
-				"--cap <n>",
+				// The ceiling is filled in rather than left as a placeholder: the
+				// operator types the command rather than reconstructing the figure.
+				"--cap 5",
 				"yoyodyne-ifd.224",
 				"nothing written into the item's notes crosses it either",
+			},
+		},
+		{
+			// The shape that cost two override ceremonies minutes apart on each of
+			// yoyodyne-ifd.272 and yoyodyne-ifd.209.20: both budgets behind one
+			// decision are spent, so both commands reach the operator at once.
+			name: "the refusal two spent budgets produce",
+			err: runstate.TriageCapError{
+				Action:     runstate.TriageRepairGrant,
+				WorkItemID: "yoyodyne-ifd.272",
+				Refusals: []runstate.TriageCapRefusal{
+					{Budget: runstate.TriageRepairGrantBudget, Spent: 1, Cap: 1},
+					{Budget: runstate.TriageReviewRoundBudget, Spent: 4, Cap: 4},
+				},
+			},
+			want: []string{
+				"repair grant is refused for yoyodyne-ifd.272",
+				"1 of 1 permitted repair grant(s) are spent",
+				"4 of 4 permitted review round(s) are spent",
+				`yoyo triage override --budget "repair grant" --cap 2`,
+				`yoyo triage override --budget "review round" --cap 5`,
+				"both are needed",
 			},
 		},
 		{

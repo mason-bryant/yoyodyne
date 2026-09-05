@@ -304,6 +304,17 @@ func TestARenderedEntrySaysWhatARepeatedDecisionWouldMeet(t *testing.T) {
 		t.Fatalf("rendered entry does not say a further grant is refused:\n%s", rendered)
 	}
 
+	// Both spent is said as both. Naming one of them sends the operator to cross
+	// it and the same decision back to be refused by the other, which is the two
+	// override ceremonies minutes apart that this line exists to prevent.
+	both := stoppedRunEntry()
+	both.Counters.RepairGrants, both.Counters.RepairGrantsCap = 1, 1
+	both.Counters.GrantedRounds, both.Counters.CommittedRounds = 1, 4
+	if rendered := both.Render(); !strings.Contains(rendered,
+		"refused by both of its budgets: 1 of 1 permitted grant(s) are already recorded, and 4 of 4 round(s) are spent or committed") {
+		t.Fatalf("rendered entry does not say both budgets refuse a further grant:\n%s", rendered)
+	}
+
 	// With its own budget to spare, the round budget is what refuses, and the
 	// figure it refuses against is what the item is committed to.
 	committed := stoppedRunEntry()

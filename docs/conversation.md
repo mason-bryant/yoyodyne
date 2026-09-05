@@ -989,8 +989,10 @@ stoppage at all.
 
 Four of the six the harness holds to more than a note. **A repair, a re-run, and
 a re-arm each spend the item's durable budget as they are recorded**, and are
-refused once it is gone — the refusal names the budget, which is the evidence for
-escalating instead, and says that nothing in the conversation crosses that cap.
+refused once it is gone — the refusal names every budget that refused, what each
+has spent, and the ceiling that would permit the decision, which is the evidence
+for escalating instead, and says that nothing in the conversation crosses that
+cap.
 A repair and a re-run are each once per item — a second of
 either is an escalation rather than a larger budget — and past the
 [review-round cap](configuration.md#what-one-work-item-has-been-given) even
@@ -998,10 +1000,13 @@ the first is refused. What you can do about that is
 [`yoyo triage override`](configuration.md#crossing-a-cap-the-operator-decides-to-cross),
 in your name and with your reason, after which asking for the same decision again
 records it: the caps refuse the machine and not your ruling on it. **The command
-is the only thing that crosses a cap**, and the refusal prints it with the budget
-and the item already filled in, because naming the remedy without naming the verb
-sent two of these overrides into the item's notes instead — where no guard reads
-them, and where the resubmitted decision met the identical refusal. A merge re-arm is bounded per item by the
+is the only thing that crosses a cap**, and the refusal prints it with the budget,
+the item, and the ceiling already filled in, because naming the remedy without
+naming the verb sent two of these overrides into the item's notes instead — where
+no guard reads them, and where the resubmitted decision met the identical refusal.
+Where both of a decision's budgets are spent it prints one command for each and
+says both are needed, because crossing one and meeting the other is what cost two
+override sittings minutes apart on each of two items. A merge re-arm is bounded per item by the
 integration-retry budget rather than the rounds, because it buys no round at
 all; the design's stricter rule — once per publication — arrives with the
 re-arm action itself, whose counter will be keyed to the publication it

@@ -416,7 +416,10 @@ func TestARepairIsRefusedOnceTheRoundCapHasNoRoomLeft(t *testing.T) {
 	// refuses it by the round budget rather than by the grant's own.
 	_, grantErr := harness.runs.Triage().GrantRepair(context.Background(), docketedItem, continueGrantRounds, docketedNow, continueCaps)
 	var capped runstate.TriageCapError
-	if !errors.As(grantErr, &capped) || capped.Budget != runstate.TriageReviewRoundBudget {
+	if !errors.As(grantErr, &capped) {
+		t.Fatalf("GrantRepair() error = %v, want a cap refusal", grantErr)
+	}
+	if _, refusedByRounds := capped.RefusedBy(runstate.TriageReviewRoundBudget); !refusedByRounds {
 		t.Fatalf("GrantRepair() error = %v, want the review round budget to refuse it", grantErr)
 	}
 
