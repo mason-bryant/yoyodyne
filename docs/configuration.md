@@ -2211,9 +2211,11 @@ With both on, a run works like this:
    thing the run does **not** settle — it stays open, with the queued merge named
    on it, because closing it as integrated would record a publication that has
    not happened and may not. `yoyo reconcile` settles both afterwards: it asks
-   the forge, and either finishes the publication and closes the item (merge
+   the forge, and either finishes the publication and settles the item — closed,
+   or put back in the backlog parked where the run's own landing claimed its
+   change does not discharge it (merge
    commit recorded, remote branch deleted, your local target branch caught up
-   onto the forge's merge commit) or, if the forge dropped the queued merge
+   onto the forge's merge commit) — or, if the forge dropped the queued merge
    because something it required went unmet, records an outstanding publication
    and hands the item back to you with a blocker rather than closing it. It never
    merges anything itself: a requirement that stopped the forge is yours to

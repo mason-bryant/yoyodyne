@@ -88,37 +88,78 @@ func TestClientBlocksAnItemAndVerifiesTheStatusItApplied(t *testing.T) {
 }
 
 // An item a run integrated a change for and did not discharge goes back to the
-// backlog carrying why. The status is read back for the reason a blocker's is:
-// an item left claimed by a run that has ended is work nothing can start and
-// nothing is watching.
-func TestClientReopensAnItemAndVerifiesTheStatusItApplied(t *testing.T) {
+// backlog carrying why, and under whatever parking the caller decided. The status
+// is read back for the reason a blocker's is: an item left claimed by a run that
+// has ended is work nothing can start and nothing is watching. The parking is
+// read back because an item returned unparked when a parking was asked for is one
+// the next pull selects again for another run of the same diagnosis.
+func TestClientReopensAnItemAndVerifiesTheStatusAndParkingItApplied(t *testing.T) {
 	t.Parallel()
 
 	reason := "run-1 landed evidence and did not discharge this item"
-	runner := &fakeRunner{responses: []string{workItemJSON("open", reason)}}
+	parking := domain.WorkItemParking("parked by run-1, which found the design it needs has not landed")
+	runner := &fakeRunner{responses: []string{reopenedItemJSON("open", reason, string(parking))}}
 	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
-	item, err := client.Reopen(context.Background(), "yoyodyne-1", reason)
+	item, err := client.Reopen(context.Background(), "yoyodyne-1", reason, parking)
 	if err != nil {
 		t.Fatalf("Reopen() error = %v", err)
 	}
-	if item.Status != "open" || item.Notes != reason {
+	if item.Status != "open" || item.Notes != reason || item.Parking != parking {
 		t.Fatalf("Reopen() = %#v", item)
 	}
-	wantArgs := [][]string{{"update", "yoyodyne-1", "--status=open", "--append-notes=" + reason, "--json"}}
+	// The parking travels in the same invocation as the status. Between two of
+	// them the item is open and unparked, which is exactly when a watch session
+	// polling the queue pulls it.
+	wantArgs := [][]string{{"update", "yoyodyne-1", "--status=open", "--append-notes=" + reason,
+		"--set-metadata=yoyodyne_parked=" + string(parking), "--json"}}
 	if !reflect.DeepEqual(runner.args, wantArgs) {
 		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
 	}
 
-	unapplied := &fakeRunner{responses: []string{workItemJSON("in_progress", reason)}}
-	if _, err := (Client{Runner: unapplied}).Reopen(context.Background(), "yoyodyne-1", reason); err == nil ||
+	unapplied := &fakeRunner{responses: []string{reopenedItemJSON("in_progress", reason, string(parking))}}
+	if _, err := (Client{Runner: unapplied}).Reopen(context.Background(), "yoyodyne-1", reason, parking); err == nil ||
 		!strings.Contains(err.Error(), "want open") {
 		t.Fatalf("Reopen() unapplied error = %v", err)
 	}
+	// A parking that did not take is the failure this call exists to catch, and
+	// the item looks perfectly ordinary afterwards.
+	unparked := &fakeRunner{responses: []string{reopenedItemJSON("open", reason, "")}}
+	if _, err := (Client{Runner: unparked}).Reopen(context.Background(), "yoyodyne-1", reason, parking); err == nil ||
+		!strings.Contains(err.Error(), "after being reopened") {
+		t.Fatalf("Reopen() unparked error = %v", err)
+	}
+	// And so is a parking left behind by a caller that asked for none, because the
+	// item is then held back by a decision that is over.
+	stillParked := &fakeRunner{responses: []string{reopenedItemJSON("open", reason, string(parking))}}
+	if _, err := (Client{Runner: stillParked}).Reopen(context.Background(), "yoyodyne-1", reason, ""); err == nil ||
+		!strings.Contains(err.Error(), "still parked") {
+		t.Fatalf("Reopen() still-parked error = %v", err)
+	}
 	// An item put back with no reason reads afterwards as work somebody walked
 	// away from, which is the state this call exists to avoid.
-	if _, err := (Client{Runner: &fakeRunner{}}).Reopen(context.Background(), "yoyodyne-1", " "); err == nil {
+	if _, err := (Client{Runner: &fakeRunner{}}).Reopen(context.Background(), "yoyodyne-1", " ", parking); err == nil {
 		t.Fatal("Reopen() empty reason error = nil")
 	}
+	// A parking reason the tracker could not hold as one value on one line is
+	// refused before the write, the same way an update's is.
+	if _, err := (Client{Runner: &fakeRunner{}}).Reopen(context.Background(), "yoyodyne-1", reason,
+		domain.WorkItemParking("first line\nsecond line")); err == nil {
+		t.Fatal("Reopen() multi-line parking error = nil")
+	}
+}
+
+// reopenedItemJSON is one work item as bd reports it after a reopen: the status
+// and the parking metadata the call reads back.
+func reopenedItemJSON(status, notes, parking string) string {
+	return fmt.Sprintf(`[{
+  "id":"yoyodyne-1",
+  "title":"Implement feature",
+  "notes":%q,
+  "status":%q,
+  "priority":1,
+  "issue_type":"task",
+  "metadata":{"yoyodyne_parked":%q}
+}]`, notes, status, parking)
 }
 
 func TestClientAppliesOnlyTheEditItWasGiven(t *testing.T) {
