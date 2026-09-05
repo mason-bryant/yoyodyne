@@ -107,7 +107,7 @@ func TestAnHonestNotDoableYetLandingIntegratesAndReParksItsItem(t *testing.T) {
 func TestALandingThatNamesItsImpedimentLeavesTheItemOpenWaitingOnIt(t *testing.T) {
 	t.Parallel()
 
-	tracker := newOutcomeTracker()
+	tracker := newOutcomeTracker().holds("yoyodyne-impediment")
 	provider := roleBackend(writeFeature, approveVerdict)
 	provider.developerFinalText = "the diagnosis\n\n" +
 		landingBlock(`{"outcome":"evidence","why":"the conversion needs yoyodyne-impediment to land first","blocked_by":"yoyodyne-impediment"}`)
@@ -142,31 +142,75 @@ func TestALandingThatNamesItsImpedimentLeavesTheItemOpenWaitingOnIt(t *testing.T
 	}
 }
 
-// A marker naming the item it was claimed on is no marker. The tracker refuses
-// the dependency as a cycle, and the settlement it would fail is the settlement
-// of a run whose change is already integrated — so it takes the parking instead,
-// which is the answer that holds the item back either way.
-func TestALandingThatNamesItsOwnItemTakesTheParkingInstead(t *testing.T) {
+// The marker is developer-written text, and the shape check it passes proves only
+// that it is identifier-shaped. Every way the dependency write could be refused
+// is decided before it is attempted, because the settlement it would fail is the
+// settlement of a run whose change is already integrated: that failure leaves the
+// item claimed with nothing watching it, which is the state the settlement exists
+// to avoid. Each of them takes the parking, which holds the item back without
+// needing anything to be true of the tracker.
+func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 	t.Parallel()
 
-	tracker := newOutcomeTracker()
-	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "the diagnosis\n\n" +
-		landingBlock(`{"outcome":"evidence","why":"not doable yet","blocked_by":"`+tracker.item.ID+`"}`)
-	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+	for _, unusable := range []struct {
+		name    string
+		marker  func(tracker *fakeTracker) string
+		saysWhy string
+	}{
+		{
+			// Nothing waits on itself, and the tracker refuses the dependency as a
+			// cycle.
+			name:    "a marker naming the item it was claimed on",
+			marker:  func(tracker *fakeTracker) string { return tracker.item.ID },
+			saysWhy: "nothing waits on itself",
+		},
+		{
+			// The developer cannot open a work item, so a marker naming one that was
+			// never admitted is the ordinary way this goes wrong.
+			name:    "a marker naming work the tracker does not have",
+			marker:  func(*fakeTracker) string { return "yoyodyne-never-admitted" },
+			saysWhy: "the tracker did not confirm that item",
+		},
+	} {
+		t.Run(unusable.name, func(t *testing.T) {
+			t.Parallel()
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if len(tracker.blockers) > 0 {
-		t.Fatalf("the item was made to wait on itself: %v", tracker.blockers)
-	}
-	if !tracker.item.Parking.Parked() {
-		t.Errorf("a marker that named nothing usable left the item unparked; calls = %v", tracker.calls)
-	}
-	if outcome.LandingBlockedBy != "" {
-		t.Errorf("outcome landing marker = %q, want none: the item cannot wait on itself", outcome.LandingBlockedBy)
+			tracker := newOutcomeTracker()
+			provider := roleBackend(writeFeature, approveVerdict)
+			provider.developerFinalText = "the diagnosis\n\n" +
+				landingBlock(`{"outcome":"evidence","why":"not doable yet","blocked_by":"`+unusable.marker(tracker)+`"}`)
+			pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+
+			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			// The run finishes. A marker the harness cannot use must not cost a run
+			// whose change has already been promoted.
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+				t.Fatalf("an unusable marker cost the run its integration: %#v", outcome)
+			}
+			if len(tracker.blockers) > 0 {
+				t.Fatalf("the item was made to wait on a marker nothing could use: %v", tracker.blockers)
+			}
+			if !tracker.item.Parking.Parked() {
+				t.Fatalf("a marker that named nothing usable left the item unparked; calls = %v", tracker.calls)
+			}
+			if outcome.LandingBlockedBy != "" {
+				t.Errorf("outcome landing marker = %q, want none", outcome.LandingBlockedBy)
+			}
+			// The request is recorded rather than dropped: an item parked with no
+			// trace of it reads afterwards as a developer that asked for nothing.
+			if !strings.Contains(outcome.LandingImpedimentProblem, unusable.saysWhy) {
+				t.Errorf("the outcome does not say why the marker was not used: %q", outcome.LandingImpedimentProblem)
+			}
+			if !strings.Contains(tracker.item.Parking.Reason(), unusable.saysWhy) {
+				t.Errorf("the parking reason does not say why the item is parked rather than waiting: %q", tracker.item.Parking)
+			}
+			if !strings.Contains(tracker.notes, unusable.saysWhy) {
+				t.Errorf("the item's notes do not say why the marker was not used: %q", tracker.notes)
+			}
+		})
 	}
 }
 
@@ -221,7 +265,7 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 	t.Run("the impediment a landing named", func(t *testing.T) {
 		t.Parallel()
 
-		tracker := newOutcomeTracker()
+		tracker := newOutcomeTracker().holds("yoyodyne-impediment")
 		provider := roleBackend(writeFeature, approveVerdict)
 		provider.developerFinalText = "the diagnosis\n\n" +
 			landingBlock(`{"outcome":"evidence","why":"it needs yoyodyne-impediment first","blocked_by":"yoyodyne-impediment"}`)
@@ -230,25 +274,49 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 			t.Fatalf("Run() error = %v", err)
 		}
 
-		settled := tracker.item
-		impediment := beads.WorkItem{ID: "yoyodyne-impediment", Title: "The impediment", Status: "open", Priority: 1}
+		// This branch is asked of the harness's own dependency gate rather than of
+		// the queue. An open item's readiness is the tracker's answer and the queue
+		// only relays it, so a test that assembled that answer itself would be
+		// asserting its own bookkeeping; the gate every run passes through on the way
+		// in is this repository's code and reads the same relation.
+		calls := len(tracker.calls)
 		for pull := 1; pull <= pulls; pull++ {
-			items := []beads.WorkItem{settled, impediment}
-			queue := backlog.Order(items, trackerReady(items), backlog.ReadHolds(nil))
-			next, ok := queue.Next()
-			if !ok || next.ID != impediment.ID {
-				t.Fatalf("pull %d did not pull the impediment ahead of the item waiting on it: %+v", pull, queue.Entries)
+			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			if err != nil {
+				t.Fatalf("pull %d error = %v", pull, err)
+			}
+			if !outcome.Paused || outcome.PausedByDependency == nil {
+				t.Fatalf("pull %d started work on an item waiting for its impediment: %#v", pull, outcome)
+			}
+			if !slices.Contains(outcome.PausedByDependency.Blockers, "yoyodyne-impediment") {
+				t.Errorf("pull %d does not name what the item waits for: %v", pull, outcome.PausedByDependency.Blockers)
 			}
 		}
+		// Nothing was claimed and no developer ran, which is what picking it zero
+		// times has to mean: a refusal that still spent a run is the cost this exists
+		// to avoid.
+		if extra := tracker.calls[calls:]; len(extra) > 0 {
+			t.Errorf("the refused pulls still wrote to the tracker: %v", extra)
+		}
 		// The release nobody has to remember to make: the impediment closes and the
-		// item is offered again, which is what the marker buys over the parking.
-		closed := impediment
-		closed.Status = "closed"
-		settled.Dependencies = []beads.Dependency{{IssueID: settled.ID, ID: closed.ID, Type: "blocks", Status: "closed"}}
-		items := []beads.WorkItem{settled, closed}
-		queue := backlog.Order(items, trackerReady(items), backlog.ReadHolds(nil))
-		if next, ok := queue.Next(); !ok || next.ID != settled.ID {
-			t.Fatalf("the item was not pulled once its impediment closed: %+v", queue.Entries)
+		// same gate lets the work through, which is what the marker buys over the
+		// parking.
+		for index := range tracker.item.Dependencies {
+			tracker.item.Dependencies[index].Status = "closed"
+		}
+		// A fresh pipeline over the same tracker, because a run identifier is spent
+		// once and this fixture's is fixed. What is being asked is the gate, and the
+		// gate decides from the item rather than from the run store.
+		released, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+		outcome, err := released.Run(context.Background(), tracker.item.ID)
+		if err != nil {
+			t.Fatalf("Run() after the impediment closed error = %v", err)
+		}
+		if outcome.Paused {
+			t.Fatalf("the item was still held back after its impediment closed: %#v", outcome)
+		}
+		if !tracker.claimed {
+			t.Error("the released item was never claimed, so nothing actually picked it up")
 		}
 	})
 }
@@ -318,38 +386,6 @@ func TestTheParkingReasonStaysInsideWhatTheTrackerHolds(t *testing.T) {
 	if got := undischargedParking(waiting); got.Parked() {
 		t.Errorf("a landing that named its impediment was parked as well: %q", got)
 	}
-}
-
-// trackerReady is the ready list the tracker itself would report for these items:
-// the open ones with no unfinished blocking dependency. The queue takes readiness
-// from the tracker rather than inferring it, so a test that handed it a list of
-// its own choosing would be asserting its own bookkeeping.
-func trackerReady(items []beads.WorkItem) []string {
-	unfinished := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		if item.Status != "closed" {
-			unfinished[item.ID] = struct{}{}
-		}
-	}
-	var ready []string
-	for _, item := range items {
-		if item.Status != "open" {
-			continue
-		}
-		blocked := false
-		for _, dependency := range item.Dependencies {
-			if dependency.Type != "blocks" {
-				continue
-			}
-			if _, waiting := unfinished[dependency.ID]; waiting || dependency.Status == "open" {
-				blocked = true
-			}
-		}
-		if !blocked {
-			ready = append(ready, item.ID)
-		}
-	}
-	return ready
 }
 
 // The other kind, and the one nearly every run is. A developer that says nothing
@@ -534,7 +570,8 @@ func TestReconciliationSettlesAnInterruptedRunByTheLandingItClaimed(t *testing.T
 			t.Parallel()
 
 			repository, worktreeRoot, store := restartableFixture(t)
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			tracker := (&fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}).
+				holds("yoyodyne-impediment")
 			provider := roleBackend(writeFeature, approveVerdict)
 			provider.developerFinalText = settled.reply
 			// Killed after the promotion and before the item was settled, which is
@@ -694,5 +731,23 @@ func TestTheDurableSchemaRefusesALandingClaimWithNoReason(t *testing.T) {
 	state.LandingOutcome = runstate.LandingDischarged
 	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "landing_blocked_by") {
 		t.Fatalf("Validate() error = %v, want a refusal naming the marker on a discharge", err)
+	}
+	// The marker the schema stores is one the harness resolved, so the two ways it
+	// could be unresolvable are refused rather than stored and acted on: nothing
+	// waits on itself, and a marker and the reason a marker could not be used are
+	// two different settlements to record at once.
+	state.LandingOutcome = runstate.LandingEvidence
+	state.LandingBlockedBy = state.WorkItemID
+	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "cannot name the work item it was claimed on") {
+		t.Fatalf("Validate() error = %v, want a refusal of a marker naming its own item", err)
+	}
+	state.LandingBlockedBy = "yoyodyne-impediment"
+	state.LandingImpedimentProblem = "the tracker did not confirm that item"
+	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "cannot both be recorded") {
+		t.Fatalf("Validate() error = %v, want a refusal of a marker recorded beside its own problem", err)
+	}
+	state.LandingBlockedBy = ""
+	if err := state.Validate(); err != nil {
+		t.Fatalf("Validate() refused a landing parked because its marker was unusable: %v", err)
 	}
 }

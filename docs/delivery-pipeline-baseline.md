@@ -494,11 +494,11 @@ is unmeasured. Most of these are asserted somewhere in
   through their own preconditions.
 - **A landing the developer claimed does not discharge its item.** Every
   recorded scenario here closes or leaves unclosed for some other reason, so the
-  `landing_outcome`, `landing_reason`, `landing_blocked_by` and
-  `landing_problem` fields are empty in all of them and no trace holds
-  `Tracker.Reopen` or the `Tracker.AddBlocker` that precedes it. Both directions
-  of the closure — the run's own and reconciliation's — and both places an
-  undischarged item is left are asserted in
+  `landing_outcome`, `landing_reason`, `landing_blocked_by`,
+  `landing_impediment_problem` and `landing_problem` fields are empty in all of
+  them and no trace holds `Tracker.Reopen` or the `Tracker.AddBlocker` that
+  precedes it. Both directions of the closure — the run's own and
+  reconciliation's — and both places an undischarged item is left are asserted in
   `internal/orchestrator/landing_test.go`.
 - **Seven of the sixteen pre-claim steps, and the order of all sixteen.** The
   refusals in steps 1, 3, 4, 8, 10, 11, 13, and 14 are enumerated where they are

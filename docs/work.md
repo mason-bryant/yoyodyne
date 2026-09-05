@@ -253,10 +253,16 @@ instead of parked:
 A dependency releases itself — the item is offered again as soon as the
 impediment closes, with nobody having to remember — where a parking waits for a
 person. There is deliberately no third answer: a claim either names what it is
-waiting for or takes the parking, and bare openness is not on offer. A marker
-naming an item that does not exist holds the item back forever, and one naming
-the item it was claimed on holds nothing back at all, so that one takes the
-parking instead.
+waiting for or takes the parking, and bare openness is not on offer.
+
+The marker is developer-written text, so the harness resolves it against the
+tracker before it acts on it, and only a marker that names work the tracker
+confirms — and that is not the item itself — makes the item wait. Anything else
+takes the parking: the item is held back either way, and the parking reason and
+the item's notes say which marker was asked for and why it was not used. Nothing
+about the marker can cost the run its landing; the change is promoted before any
+of this is decided, and a dependency the tracker would refuse is what would fail
+a settlement that has nothing left to fall back on.
 
 Three things follow from the claim deciding something, which the report and
 amendment channels do not:
