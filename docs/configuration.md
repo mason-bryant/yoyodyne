@@ -3076,24 +3076,37 @@ change disputing with its reviewer. Charging it walked items toward the cap on
 their own success, and one such item reached triage with every recorded decision
 about it refused.
 
-**It loosens no bound**, and what holds that is two budgets rather than the
+**Neither is a repair whose whole residue is one minor finding.** The reviewer
+said the work is right and named one small thing beside it, which is the same
+ending with a note attached rather than another turn of the argument. One finding
+and minor is the whole of the rule: two notes is a list and a list is the
+reviewer still arguing, and a blocker or a major among them is work the change
+actually needs. The work still goes back to the developer and the run still
+spends an attempt on it — what changes is the item's bill, not what happens to
+the change. This is the operator's direction of 2026-09-05, after four items in a
+week reached their caps on rounds of exactly these two shapes and each took a
+person to unstick.
+
+**It loosens no bound**, and what holds that is other budgets rather than the
 rounds. An approval sends the change to promotion rather than back to the
 developer, so the only thing that asks for another verdict inside the same run is
 a promotion that lost its race and replayed — and
 `execution.integration_retries_before_reconciliation` bounds those, so a run's
-uncharged approvals are one plus that budget rather than one. How many runs an
-item gets is bounded in turn by the repair grant and the re-run, each once per
-item.
-Neither of those budgets is the round cap and neither can be spent through it,
-which is what stops the exclusion turning into a budget nothing bounds.
+uncharged approvals are one plus that budget rather than one. A trivial residue
+does send the change back, and `execution.repair_attempts_before_replan` bounds
+that: an attempt is spent by the attempt, whether or not the verdict that asked
+for it cost a round. How many runs an item gets is bounded in turn by the repair
+grant and the re-run, each once per item.
+None of those budgets is the round cap and none can be spent through it,
+which is what stops the exclusions turning into a budget nothing bounds.
 
-**It is recorded without being counted**, and that is what keeps the replay
-exclusion above true rather than nearly true. Both exclusions are one mechanism:
-an attempt a reviewer has already answered about is charged at most once,
-whichever way either answer went. A promotion only follows an approval, so an
-approval nothing recorded would leave the replayed attempt looking unjudged — and
-the replay's fresh verdict can be a repair, because the ground moved — which is
-the race charged to the item after all.
+**An uncharged verdict is recorded without being counted**, and that is what
+keeps the replay exclusion above true rather than nearly true. Both exclusions are
+one mechanism: an attempt a reviewer has already answered about is charged at
+most once, whichever way either answer went. A promotion only follows an
+approval, so an approval nothing recorded would leave the replayed attempt
+looking unjudged — and the replay's fresh verdict can be a repair, because the
+ground moved — which is the race charged to the item after all.
 
 **Each counter is written before the action it counts takes effect**, so a
 process that dies between the two has recorded a grant it did not give rather
@@ -3197,7 +3210,23 @@ prose. That is not a hypothetical misreading: a refusal that said only "the
 operator can record an override against the item" was twice answered in the
 item's notes, exactly as those words directed, and the resubmitted decision came
 back with the identical message. The development manager's refusal now prints the
-command above with the budget that refused and the item already in it.
+command above with the budget that refused, the item, and the ceiling that would
+permit the decision already in it.
+
+**A decision two spent budgets refuse is refused by both at once.** A repair
+grant and a re-run each stand behind two budgets — their own and the rounds — and
+a refusal that named only the first was true and incomplete: the operator crossed
+the budget it named, the same decision was asked for again, and the second budget
+refused it in turn. On 2026-09-05 that cost two override ceremonies two minutes
+apart on each of two items, four recorded overrides for two decisions. The
+refusal now names every budget that refused, what each has spent, and the
+override command for each, and says that both are needed:
+
+```text
+repair grant is refused for yoyodyne-ifd.272: 1 of 1 permitted repair grant(s)
+are spent, and 4 of 4 permitted review round(s) are spent. What permits it is a
+repair grant cap of 2 and a review round cap of 5
+```
 
 **It carries nothing out.** Recording an override changes what the guards will
 permit and nothing else. The development manager then records the decision the

@@ -4750,37 +4750,46 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // against: a run's own repair budget starts again at zero each time, so nothing
 // inside a run says what the item has already cost.
 //
-// A verdict that approved the change is recorded and charges nothing. The cap
-// this feeds exists to stop an item buying the same argument another round, and
-// an approval is the end of that argument rather than another turn of it: what
-// happens to an approved change afterwards — a promotion that lost its race, a
-// merge the forge dropped — is not the change disputing with its reviewer, and
-// charging the item for it walks the item toward its cap on its own success.
-// That is not hypothetical. An item whose last permitted round was an approval,
-// and whose promotion then conflicted, arrived at triage with a decision every
-// recorded path refused; it took an operator override and a fresh work item to
-// move.
+// Two verdicts are recorded and charge nothing. A verdict that approved the
+// change is one: the cap this feeds exists to stop an item buying the same
+// argument another round, and an approval is the end of that argument rather than
+// another turn of it — what happens to an approved change afterwards, a promotion
+// that lost its race or a merge the forge dropped, is not the change disputing
+// with its reviewer, and charging the item for it walks the item toward its cap
+// on its own success. That is not hypothetical. An item whose last permitted
+// round was an approval, and whose promotion then conflicted, arrived at triage
+// with a decision every recorded path refused; it took an operator override and a
+// fresh work item to move.
 //
-// It unbounds nothing, which is what makes the exclusion safe rather than
-// generous, and what holds that is two budgets rather than the rounds. An
+// A repair whose whole residue is one trivial finding is the other, by the
+// operator's own direction of 2026-09-05 after four such escalations in a week.
+// It is the same ending with a note attached: the reviewer said the work is right
+// and named one small thing beside it, and an item that reaches its cap on that
+// is an item the semantics stuck rather than the work. What counts as trivial is
+// the reviewer's vocabulary rather than this pipeline's — review.TrivialResidue
+// is where the line is drawn.
+//
+// It unbounds nothing, which is what makes both exclusions safe rather than
+// generous, and what holds that is other budgets rather than the rounds. An
 // approval sends the change to promotion rather than back to the developer, so
 // the only thing that asks for another verdict inside one run is a promotion
 // that lost its race and replayed — which spends an integration retry, and
-// execution.integration_retries_before_reconciliation bounds those. A run's
-// uncharged approvals are therefore one plus that budget, not one: the replay
-// obtains a fresh verdict on the same change, and it can approve again. How many
-// runs an item gets is bounded in turn by budgets of its own — one repair grant
-// and one re-run per item — each refused by a counter this one cannot stand in
-// for.
+// execution.integration_retries_before_reconciliation bounds those. A trivial
+// residue does send the change back, and what bounds that is the run's own repair
+// budget, which is spent by the attempt whether or not the verdict that asked for
+// it cost a round: a run gets execution.repair_attempts_before_replan and no
+// more, however small the findings. How many runs an item gets is bounded in
+// turn by budgets of its own — one repair grant and one re-run per item — each
+// refused by a counter neither of these can stand in for.
 //
-// An approval is recorded rather than passed over, and that is load-bearing. The
-// verdict is recorded under the developer attempt that produced the change, so
-// an attempt answered about twice is charged at most once, and that is what
-// keeps two cases off the item's bill. A review re-asked for after an
-// interrupted process re-judges an attempt already answered about. And a
+// An uncharged verdict is recorded rather than passed over, and that is
+// load-bearing. The verdict is recorded under the developer attempt that produced
+// the change, so an attempt answered about twice is charged at most once, and
+// that is what keeps two cases off the item's bill. A review re-asked for after
+// an interrupted process re-judges an attempt already answered about. And a
 // promotion that loses its race replays the same work onto where the target went
 // and obtains a fresh verdict on it — which is the reviewer judging the same
-// developer attempt on moved ground, and can come back as a repair. An approval
+// developer attempt on moved ground, and can come back as a repair. A verdict
 // nothing recorded would leave that attempt looking unjudged and charge the item
 // for losing a race it did not cause.
 //
@@ -4793,9 +4802,13 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 func (a *activeRun) recordReviewVerdict(ctx context.Context, decision review.Decision) error {
 	attempt := runstate.RoundKey(a.state.RunID, a.state.RepairAttempts)
 	counters := a.pipeline.Store.Triage()
-	if decision == review.DecisionApprove {
-		if _, err := counters.RecordApprovedAttempt(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
-			return fmt.Errorf("record the verdict that approved attempt %s: %w", attempt, err)
+	// The findings are the ones this verdict arrived with: the evidence is cleared
+	// before every review and written from the reply that produced this decision,
+	// so what is asked about is what the reviewer just said rather than anything an
+	// earlier attempt left behind.
+	if decision == review.DecisionApprove || review.TrivialResidue(a.outcome.ReviewFindings) {
+		if _, err := counters.RecordUnchargedVerdict(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
+			return fmt.Errorf("record the verdict that cost attempt %s nothing: %w", attempt, err)
 		}
 		return nil
 	}

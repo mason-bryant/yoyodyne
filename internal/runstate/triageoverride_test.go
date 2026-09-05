@@ -48,8 +48,8 @@ func TestAnOperatorOverrideCrossesTheRoundCapThatDeadlockedTheEscalation(t *test
 	if _, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps); !errors.As(err, &refusal) {
 		t.Fatalf("RecordRerun() at 5 of 4 rounds error = %v, want a cap refusal", err)
 	}
-	if refusal.Budget != TriageReviewRoundBudget {
-		t.Fatalf("RecordRerun() was refused by the %q budget, want the review round budget", refusal.Budget)
+	if _, refusedByRounds := refusal.RefusedBy(TriageReviewRoundBudget); !refusedByRounds {
+		t.Fatalf("RecordRerun() was refused by %v, want the review round budget", refusal.Budgets())
 	}
 
 	decided := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -108,8 +108,12 @@ func TestAnOverrideRaisesOneBudgetAndLeavesTheRestRefusing(t *testing.T) {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	var refusal TriageCapError
-	if _, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps); !errors.As(err, &refusal) || refusal.Budget != TriageRerunBudget {
-		t.Fatalf("second RecordRerun() error = %v, want the re-run budget refusing it", err)
+	_, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps)
+	if !errors.As(err, &refusal) {
+		t.Fatalf("second RecordRerun() error = %v, want a cap refusal", err)
+	}
+	if _, refusedByReruns := refusal.RefusedBy(TriageRerunBudget); !refusedByReruns {
+		t.Fatalf("second RecordRerun() was refused by %v, want the re-run budget", refusal.Budgets())
 	}
 
 	// And the room the override gave runs out: six rounds spent is six of six.

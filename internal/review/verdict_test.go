@@ -483,3 +483,51 @@ func assertVerdictEqual(t *testing.T, got, want Verdict) {
 		}
 	}
 }
+
+// Where the trivial line sits, said in one table because the rule is one
+// sentence and every neighbouring case is a judgement somebody will want to
+// check. What it decides is whether the item is charged a review round for the
+// verdict, so a case that drifts across this line moves a budget.
+func TestOnlyOneMinorFindingIsATrivialResidue(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		findings []Finding
+		want     bool
+	}{
+		{
+			name:     "one minor finding",
+			findings: []Finding{{Severity: SeverityMinor, Message: "rename this variable"}},
+			want:     true,
+		},
+		{
+			// Two notes is a list, and a list is the reviewer still arguing.
+			name: "two minor findings",
+			findings: []Finding{
+				{Severity: SeverityMinor, Message: "rename this variable"},
+				{Severity: SeverityMinor, Message: "and this one"},
+			},
+		},
+		{
+			name:     "one major finding",
+			findings: []Finding{{Severity: SeverityMajor, Message: "no test covers the new branch"}},
+		},
+		{
+			name:     "one blocker finding",
+			findings: []Finding{{Severity: SeverityBlocker, Message: "this drops the error"}},
+		},
+		{
+			// An approval carries no findings and is uncharged for its own reason,
+			// which this must not quietly become a second route to.
+			name: "no findings at all",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := TrivialResidue(test.findings); got != test.want {
+				t.Fatalf("TrivialResidue(%#v) = %t, want %t", test.findings, got, test.want)
+			}
+		})
+	}
+}

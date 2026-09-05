@@ -705,11 +705,21 @@ func (e Entry) renderGrantStanding() string {
 	if counters.RepairGrants == 0 {
 		return ""
 	}
-	if counters.RepairGrants >= counters.RepairGrantsCap {
+	spentGrants := counters.RepairGrants >= counters.RepairGrantsCap
+	spentRounds := counters.RoundsUncommitted() == 0
+	// Both at once is said as both, rather than as the first of them. A grant
+	// stands behind two budgets, and an entry that named one sent an operator to
+	// cross it and the same decision back to be refused by the other — which cost
+	// two override ceremonies minutes apart on each of two items on 2026-09-05.
+	if spentGrants && spentRounds {
+		return fmt.Sprintf("      A further repair grant for %s is refused by both of its budgets: %d of %d permitted grant(s) are already recorded, and %d of %d round(s) are spent or committed. Crossing either one alone leaves the other refusing it.\n",
+			e.WorkItemID, counters.RepairGrants, counters.RepairGrantsCap, counters.Committed(), counters.ReviewRoundsCap)
+	}
+	if spentGrants {
 		return fmt.Sprintf("      A further repair grant for %s is refused: %d of %d permitted grant(s) are already recorded, so deciding another spends nothing and is an escalation rather than a larger budget.\n",
 			e.WorkItemID, counters.RepairGrants, counters.RepairGrantsCap)
 	}
-	if counters.RoundsUncommitted() == 0 {
+	if spentRounds {
 		return fmt.Sprintf("      A further repair grant for %s is refused by the review round budget: %d of %d round(s) are spent or committed, so there is nothing left to grant.\n",
 			e.WorkItemID, counters.Committed(), counters.ReviewRoundsCap)
 	}

@@ -211,6 +211,24 @@ func (v Verdict) Validate() error {
 	return nil
 }
 
+// TrivialResidue reports findings whose whole content is one minor observation.
+//
+// It is the reviewer's vocabulary answering a question about budgets, which is
+// why it lives here rather than where the budgets are: minor is a severity this
+// package defines, and a caller comparing severity strings of its own would be
+// keeping a private copy of this contract.
+//
+// One and minor, rather than any number of them. A repair whose residue is a
+// single small note is the reviewer saying the work is right and naming one thing
+// beside it — the end of the argument with a note attached, which is why the item
+// is not charged a round for it. Two notes is a list, and a list is the reviewer
+// still arguing; a blocker or a major among them is work the change actually
+// needs, whatever else is beside it. Where the line sits is a judgement rather
+// than a law, and this is where it is written down.
+func TrivialResidue(findings []Finding) bool {
+	return len(findings) == 1 && findings[0].Severity == SeverityMinor
+}
+
 // Resolve returns the decision a valid verdict actually supports, rejecting one
 // that contradicts its own findings. Approval cannot carry a blocker or major
 // finding, because a change that still needs that work is not approved
