@@ -162,6 +162,37 @@ report looks like](reporting.md#what-agents-report-and-where-it-reaches-you), an
 one surface does; this section is the rule they are each an instance of, and it
 is the one a new surface has to satisfy.
 
+## Where a surface reads the work's own state from
+
+A surface that answers a question about the work reads the answer from the shared
+read model in [`internal/readmodel`](../internal/readmodel/standing.go), and never
+from a second reading of its own. That is the architect's standing ruling rather than a
+per-surface preference, and it has two halves worth naming where somebody will
+meet them:
+
+- **Decision 5 of the Slack reporting design.** A question asked in a thread is
+  answered by the harness from the read model, under the exception that design
+  states; anything that needs a role's judgement instead routes as a turn into
+  that role's durable conversation once the conversational client lands. So a
+  surface may read to answer, and may not decide.
+- **The `surfaces-project-one-read-model` invariant.** Every operator surface
+  projects the one derivation, reimplements none of it, and keeps no state of its
+  own. Two surfaces computing one answer differently is a disagreement only the
+  operator can settle.
+
+What that decided most recently: a Slack reply settling the pause on its own item
+without naming it has to know which directives are holding that item, and it asks
+`readmodel.Pausing` — the same reading the run pipeline enforces on. The sink's
+own `Directives` interface stays the two write methods it was drawn as, because
+widening the half that records directives into one that also reads them would put
+a second authority over the record in the reporting process.
+
+A surface acting on a reading says how far the thing it acted on reaches. A
+directive recorded against no work item holds every item in the product, so a
+thread that settles one has lifted a pause on far more than the item it is about,
+and the acknowledgment says so — a reader has nothing else to tell them, because
+the thread they are in is about one item.
+
 ## What `test` checks besides the code
 
 Some of what `make test` runs is not about the Go code at all: it reads this
