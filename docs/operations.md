@@ -606,6 +606,22 @@ back. A record left alone for a reason, such as a branch the forge answers
 about with some other request, is reported and is not a failure; a forge that
 could not be reached is, and the next sweep asks the same question again.
 
+The same sweep recovers the [exchanges the roles have put to each
+other](conversation.md#roles-asking-each-other-things), for the reason it settles
+the runs: a process died holding something, and this is what finds out. Each
+exchange is taken under its own lease, so one a live process is carrying is left
+to that process — the lease is also what says the carrier is gone, since the
+operating system drops it when a process exits. A round a dead process asked and
+never got an answer to is closed saying which process was carrying it, with the
+round still spent and the thread still open; a thread that spent every round it
+was given and was never asked again is closed as unresolved and reported to you
+at warning severity, which is the ending the round cap would otherwise never
+reach on a thread nobody came back to. Nothing is put in front of a role by this:
+recovering from a lost process is never a reason to start a round nobody asked
+for, so a sweep that finds a thread simply waiting its turn leaves it waiting.
+What it did is printed; the threads it merely looked at are in `--json`, as the
+branches and publications it leaves unprinted are.
+
 Once the runs are settled it converges local state, which is the rest of the
 post-merge hygiene you would otherwise do by hand. Every target branch the
 harness knows about is caught up onto its remote counterpart — the same

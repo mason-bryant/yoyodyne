@@ -357,6 +357,10 @@ func conversationExchanges(parts components, role domain.AgentRole, provider cha
 	}
 	return exchange.Conductor{
 		Store: store,
+		// The lease is what holds one exchange to one round at a time. Two
+		// conversations open at once are two processes, and without it the second
+		// would write over the first one's round.
+		Leases: store,
 		Voice: exchangeVoice{
 			config:       parts.config,
 			provider:     provider,
@@ -371,6 +375,10 @@ func conversationExchanges(parts components, role domain.AgentRole, provider cha
 		MaxRounds:    parts.config.Exchange.MaxRounds,
 		ProductID:    parts.config.Product.ID,
 		RepositoryID: string(parts.config.Product.RepositoryID),
+		// Every round this conductor takes says which process took it, so a round
+		// this process dies in the middle of leaves a record naming what to go and
+		// look for rather than only that somebody was carrying it.
+		Holder: supervisionHolder(),
 	}
 }
 

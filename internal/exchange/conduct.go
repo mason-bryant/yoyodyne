@@ -28,6 +28,21 @@ type Store interface {
 	Load(id string) (Exchange, error)
 }
 
+// Leases is who may carry an exchange right now. It is satisfied by
+// runstate.ExchangeStore, and it is a second interface rather than two more
+// methods on Store because holding an exchange and recording one are different
+// questions: a listing reads the records and takes nothing.
+type Leases interface {
+	// Hold takes the exclusive lease on one exchange without waiting, reporting
+	// whether it got it. A lease it could not take belongs to a live process.
+	Hold(id string) (Release, bool, error)
+}
+
+// Release gives a lease back. It is what runstate.Lease already is, named here
+// so the durable package can satisfy this one rather than this one depending on
+// it.
+type Release interface{ Release() error }
+
 // Reports is the collected pile an exchange escalates into when it runs out of
 // rounds. It is the same pile every role's reports land in, because an operator
 // reading what the harness noticed should not have to know that this one came
@@ -125,7 +140,12 @@ var ErrNoExchange = errors.New("no exchange is recorded under that identifier")
 // Conductor carries questions between two roles and keeps the record of what
 // they said.
 type Conductor struct {
-	Store   Store
+	Store Store
+	// Leases is what makes one exchange take its rounds one at a time. A
+	// conductor wired without one still works and is what a test conducting a
+	// thread on its own gets; wired, a round on a thread another process is
+	// carrying is refused rather than written over that process's round.
+	Leases  Leases
 	Voice   Voice
 	Reports Reports
 	// MaxRounds is the cap a newly opened exchange is given. An exchange already
@@ -135,8 +155,13 @@ type Conductor struct {
 	MaxRounds    int
 	ProductID    domain.ProductID
 	RepositoryID string
-	Now          func() time.Time
-	NewID        func() (string, error)
+	// Holder names this process on every round it takes. A conductor wired
+	// without one still takes rounds; what is lost is that a pass reclaiming an
+	// interrupted round can say who was carrying it rather than only that
+	// somebody was.
+	Holder string
+	Now    func() time.Time
+	NewID  func() (string, error)
 }
 
 func (c Conductor) now() time.Time {
@@ -173,6 +198,18 @@ func (c Conductor) Put(ctx context.Context, ask Ask, asker Party) (Exchange, err
 	if err := asker.validate("asker"); err != nil {
 		return Exchange{}, err
 	}
+	// A thread already open is held for the whole of what happens to it here,
+	// whether that is another round or the close. Two processes acting on one
+	// thread at once would each load the record and the second write would take
+	// the first away — a round somebody paid for and nothing recorded, against a
+	// cap counting one where two were spent.
+	if reference := strings.TrimSpace(ask.Exchange); reference != "" {
+		release, err := c.hold(reference)
+		if err != nil {
+			return Exchange{}, err
+		}
+		defer release()
+	}
 	if ask.Closing() {
 		return c.settle(ask.Exchange, ask.Settled, asker)
 	}
@@ -186,6 +223,17 @@ func (c Conductor) Put(ctx context.Context, ask Ask, asker Party) (Exchange, err
 	recorded, err := c.begin(ask, asker)
 	if err != nil {
 		return Exchange{}, err
+	}
+	// An exchange this ask is opening has an identifier nothing else can have yet,
+	// so the lease cannot be contended. It is taken anyway, so that every round
+	// written here is written under one and there is no second rule for the first
+	// round of a thread.
+	if strings.TrimSpace(ask.Exchange) == "" {
+		release, err := c.hold(recorded.ID)
+		if err != nil {
+			return Exchange{}, err
+		}
+		defer release()
 	}
 	// The cap is asked before anything is spent, and reaching it is not a silent
 	// cutoff: the exchange closes, the operator is told, and the asker is
@@ -208,7 +256,12 @@ func (c Conductor) Put(ctx context.Context, ask Ask, asker Party) (Exchange, err
 		Number:   recorded.Spent() + 1,
 		Question: strings.TrimSpace(ask.Question),
 		Context:  strings.TrimSpace(ask.Context),
-		AskedAt:  asked,
+		// The process taking the round is named on it before the provider is
+		// reached, for the same reason the round itself is written first: what a
+		// later pass needs to know about a round nobody answered is who was
+		// carrying it, and the answer that never came back cannot carry that.
+		Holder:  strings.TrimSpace(c.Holder),
+		AskedAt: asked,
 	})
 	recorded.UpdatedAt = asked
 	if err := c.save(recorded); err != nil {
@@ -292,6 +345,7 @@ func (c Conductor) begin(ask Ask, asker Party) (Exchange, error) {
 			Asker:         asker,
 			Answerer:      Party{Role: ask.Role},
 			Question:      strings.TrimSpace(ask.Question),
+			Refers:        ask.Refers,
 			MaxRounds:     c.cap(),
 			OpenedAt:      opened,
 			UpdatedAt:     opened,
@@ -347,6 +401,83 @@ func (c Conductor) settle(reference, settled string, asker Party) (Exchange, err
 		return Exchange{}, err
 	}
 	return recorded, nil
+}
+
+// hold takes the lease on one exchange for the duration of what is about to be
+// done to it, and returns how to give it back.
+//
+// A conductor with no leases wired takes nothing and returns a release that does
+// nothing, which is what a test conducting a thread on its own gets. A lease a
+// live process holds is a refusal rather than a wait: what is owned here is one
+// thread's turn, and queueing for it would mean two processes taking turns
+// writing the same round rather than one process having it.
+func (c Conductor) hold(id string) (func(), error) {
+	if c.Leases == nil {
+		return func() {}, nil
+	}
+	lease, taken, err := c.Leases.Hold(id)
+	if err != nil {
+		return nil, err
+	}
+	if !taken {
+		return nil, fmt.Errorf("%s is being carried by another process; it takes its rounds one at a time", id)
+	}
+	// A lease that will not come back is the operating system's to sort out when
+	// this process exits, which is what an advisory lock is for. Nothing here can
+	// act on it, and failing the round over it would throw away an answer already
+	// paid for.
+	return func() { _ = lease.Release() }, nil
+}
+
+// Reclaim closes a round that was asked and never came back, saying why.
+//
+// It is recovery and not delivery. The round was spent the moment it was
+// written, so nothing here gives it back; what it does is stop the record
+// reading as a question somebody is still working on, and put the reason where
+// the answer would have been. The exchange stays open, and whether it is asked
+// again is the next pass's decision.
+//
+// The caller holds the exchange's lease. Without it this cannot tell a round
+// whose process died from one a process is taking right now, and reclaiming the
+// second would overwrite an answer that was on its way.
+func (c Conductor) Reclaim(recorded Exchange, because string) (Exchange, error) {
+	round, interrupted := recorded.Interrupted()
+	if !interrupted {
+		return recorded, fmt.Errorf("%s has no round waiting to be reclaimed", recorded.ID)
+	}
+	if !recorded.Open() {
+		return recorded, fmt.Errorf("%s closed %s, so there is nothing to reclaim", recorded.ID, recorded.Outcome)
+	}
+	reclaimed := c.now()
+	at := len(recorded.Rounds) - 1
+	recorded.Rounds[at].AnsweredAt = &reclaimed
+	recorded.Rounds[at].Problem = singleLine(strings.TrimSpace(because))
+	recorded.UpdatedAt = reclaimed
+	if err := c.save(recorded); err != nil {
+		return Exchange{}, fmt.Errorf("reclaim round %d of %s: %w", round.Number, recorded.ID, err)
+	}
+	return recorded, nil
+}
+
+// Exhaust closes an exchange that has spent every round it was opened with and
+// tells the operator, for a thread nobody asked anything further.
+//
+// The conductor already does this the moment somebody asks past the cap, and
+// that covers the exchange whose asker came back. This covers the one that did
+// not: a thread whose last round died, or whose asker moved on, would otherwise
+// sit open for ever with its rounds spent and nobody told — which is the same
+// silence the cap exists to break.
+//
+// The caller holds the exchange's lease, for the reason Reclaim's does.
+func (c Conductor) Exhaust(recorded Exchange) (Exchange, error) {
+	if !recorded.Open() {
+		return recorded, fmt.Errorf("%s already closed %s", recorded.ID, recorded.Outcome)
+	}
+	if recorded.Spent() < recorded.MaxRounds {
+		return recorded, fmt.Errorf("%s has %d of its %d rounds left, so it has not run out",
+			recorded.ID, recorded.RoundsRemaining(), recorded.MaxRounds)
+	}
+	return c.exhaust(recorded)
 }
 
 // exhaust closes an exchange that reached its cap and escalates it. The two
