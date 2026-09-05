@@ -696,6 +696,64 @@ func TestManagerAllowsOnlyConfiguredPrimaryControlPlaneChanges(t *testing.T) {
 	}
 }
 
+// The race this holds: the work tracker rewrites its export atomically, leaving
+// a temp file beside the target for as long as the write takes, and a readiness
+// check landing inside that window used to read it as untracked state nobody
+// declared and refuse. It cost two completed, reviewed rounds in one afternoon —
+// one of them discarding an approved pull request — and it recurs for any run,
+// because nothing about it depends on what the run was doing.
+func TestManagerReadiesThroughAnExportBeingRewritten(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager, err := New(Options{
+		Runner:                execution.OSProcessRunner{},
+		RepositoryRoot:        repository,
+		WorktreeRoot:          filepath.Join(t.TempDir(), "worktrees"),
+		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repository, ".beads"), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	// Both declared exports mid-write at once, which is what a tracker flushing
+	// everything it holds leaves behind.
+	inFlight := []string{".beads/.~issues.jsonl.2847119036", ".beads/.~interactions.jsonl.417"}
+	for _, name := range inFlight {
+		if err := os.WriteFile(filepath.Join(repository, filepath.FromSlash(name)), []byte("half an export\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	if err := manager.ValidateReady(context.Background()); err != nil {
+		t.Fatalf("ValidateReady() mid-export error = %v", err)
+	}
+	// Tolerated, not swept: the file belongs to the write still in flight, and
+	// removing it out from under the writer would corrupt the export this check
+	// was only ever meant to read past.
+	for _, name := range inFlight {
+		if _, err := os.Stat(filepath.Join(repository, filepath.FromSlash(name))); err != nil {
+			t.Errorf("Stat(%s) error = %v, want the in-flight write left alone", name, err)
+		}
+	}
+
+	// The tolerance is for the exporter's own temp names and nothing wider. A
+	// file that merely looks like one, or that sits beside no declared export,
+	// is still somebody's to resolve.
+	for _, name := range []string{".beads/.~ledger.jsonl.417", ".~issues.jsonl.417", ".beads/.~issues.jsonl"} {
+		if err := os.WriteFile(filepath.Join(repository, filepath.FromSlash(name)), []byte("not an export write\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+		if err := manager.ValidateReady(context.Background()); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("ValidateReady() with %s error = %v, want it named as unexpected", name, err)
+		}
+		if err := os.Remove(filepath.Join(repository, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("Remove(%s) error = %v", name, err)
+		}
+	}
+}
+
 func TestManagerSummarizeChangesIncludesTrackedAndUntrackedFiles(t *testing.T) {
 	t.Parallel()
 
