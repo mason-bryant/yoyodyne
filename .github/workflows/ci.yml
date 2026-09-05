@@ -88,13 +88,15 @@ jobs:
           cache: true
 
       # The walkthrough runs `bd init` against its own scratch project, so the
-      # tracker has to be here. Pinned rather than @latest: beads v1.2.2
-      # (2026-09-05) began requiring a newer Go than this runner carries, and
-      # @latest let an upstream release fail every PR here on its own schedule.
-      # v1.1.2 is what this project's own machines run; bump it deliberately.
+      # tracker has to be here. Pinned rather than @latest, so an upstream
+      # release cannot fail every PR here on its own schedule (v1.2.2 did
+      # exactly that on 2026-09-05, raising the Go requirement past this
+      # repo's pin — hence this job's floating toolchain above). Older tags
+      # carry the module's previous path and cannot be installed under this
+      # one; bump deliberately.
       - name: Install the tracker the walkthrough needs
         run: |
-          go install github.com/gastownhall/beads/cmd/bd@v1.1.2
+          go install github.com/gastownhall/beads/cmd/bd@v1.2.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       # `make adoption` builds this checkout's own binary and walks the
