@@ -25,8 +25,26 @@ type reconcileOutput struct {
 	// It is a count rather than the entries because the docket is read where it
 	// is acted on, which is the development manager's conversation; what this
 	// command reports is that the sweep found something, not what it found.
-	Docketed int    `json:"docketed"`
-	Error    string `json:"error,omitempty"`
+	Docketed int `json:"docketed"`
+	// Supervision is the whole of what this sweep made of the exchanges the roles
+	// have put to each other. Most of it is what was recovered: a round a dead
+	// process asked and never answered, a thread that ran out of rounds. The rest
+	// is every exchange the sweep found free and did not take a round on, since it
+	// carries no voice — which is the ordinary state of an exchange waiting its
+	// turn, and is carried here rather than printed for the same reason `--json`
+	// carries the whole of every other sweep.
+	Supervision []orchestrator.SupervisionResult `json:"supervision"`
+	Error       string                           `json:"error,omitempty"`
+}
+
+// reconcileSweep is everything one sweep found, gathered so the reporting takes
+// the sweep rather than a growing list of positional arguments.
+type reconcileSweep struct {
+	Runs         []orchestrator.Reconciliation
+	Publications []orchestrator.PublicationRefresh
+	Convergence  orchestrator.Convergence
+	Docketed     int
+	Supervision  []orchestrator.SupervisionResult
 }
 
 // reconcileRuns settles every run an interrupted process left outstanding and
@@ -50,7 +68,7 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 
 	parts, err := buildComponents(*configPath)
 	if err != nil {
-		return reportReconcileResult(stdout, stderr, *jsonOutput, nil, nil, orchestrator.Convergence{}, 0, err)
+		return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{}, err)
 	}
 	reconciler := reconcilerFrom(parts)
 	results, err := reconciler.Reconcile(ctx)
@@ -75,10 +93,35 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if docketErr != nil {
 		err = errors.Join(err, docketErr)
 	}
-	return reportReconcileResult(stdout, stderr, *jsonOutput, results, publications, convergence, docketed.Added, err)
+	// The exchanges the roles have put to each other are recovered here for the
+	// same reason the runs are: a process died holding something, and this is the
+	// sweep that finds out. It takes each exchange's own lease, so one a live
+	// process is carrying is left to that process, and it invokes nothing.
+	supervision, supervisionErr := sweepSupervision(parts)
+	err = errors.Join(err, supervisionErr)
+	return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{
+		Runs:         results,
+		Publications: publications,
+		Convergence:  convergence,
+		Docketed:     docketed.Added,
+		Supervision:  supervision,
+	}, err)
 }
 
-func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []orchestrator.Reconciliation, publications []orchestrator.PublicationRefresh, convergence orchestrator.Convergence, docketed int, err error) int {
+// sweepSupervision takes one voice-less pass of the management loop. A product
+// whose roles have never asked each other anything has nothing here, which is
+// not a failure to sweep.
+func sweepSupervision(parts components) ([]orchestrator.SupervisionResult, error) {
+	loop, err := supervisionLoopFrom(parts)
+	if err != nil {
+		return nil, err
+	}
+	pass, err := loop.Run()
+	return pass.Results, err
+}
+
+func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reconcileSweep, err error) int {
+	results, publications, convergence, docketed := sweep.Runs, sweep.Publications, sweep.Convergence, sweep.Docketed
 	// A run reconciliation could not settle stays outstanding, so the command
 	// reports failure rather than folding it into the settled results. A branch
 	// the sweep could not remove is the same kind of fact.
@@ -113,9 +156,18 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 	}
 	if jsonOutput {
-		output := reconcileOutput{Runs: results, Publications: publications, Convergence: convergence, Docketed: docketed}
+		output := reconcileOutput{
+			Runs:         results,
+			Publications: publications,
+			Convergence:  convergence,
+			Docketed:     docketed,
+			Supervision:  sweep.Supervision,
+		}
 		if results == nil {
 			output.Runs = []orchestrator.Reconciliation{}
+		}
+		if output.Supervision == nil {
+			output.Supervision = []orchestrator.SupervisionResult{}
 		}
 		if output.Publications == nil {
 			output.Publications = []orchestrator.PublicationRefresh{}
@@ -187,11 +239,62 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 		printPublications(stdout, stderr, publications)
 		printConvergence(stdout, stderr, convergence)
+		printSupervision(stdout, sweep.Supervision)
 	}
 	if failed {
 		return 1
 	}
 	return 0
+}
+
+// printSupervision reports what the sweep actually did to an exchange, and
+// leaves out every one it merely looked at.
+//
+// The division is between an outcome that changed a record and one that only
+// describes what the sweep found, and it is the same rule the branch and
+// publication sweeps above print by. This sweep carries no voice, so most of what
+// it comes back with is the second kind: a thread waiting its turn, one another
+// process is carrying, one the in-flight bound held back, one whose references
+// have moved. Printing those would put a line about an exchange nothing is wrong
+// with in front of the two or three that matter, on every sweep — and the noise
+// is not hypothetical, since a product with more than a few open threads would
+// print one for each of them every time.
+//
+// `--json` carries the whole pass, which is where to read the staleness and the
+// queue.
+func printSupervision(stdout io.Writer, results []orchestrator.SupervisionResult) {
+	for _, result := range results {
+		if !supervisionActed(result.Outcome) {
+			continue
+		}
+		fmt.Fprintf(stdout, "%s: %s\n", result.ExchangeID, result.Outcome)
+		if result.Detail != "" {
+			fmt.Fprintf(stdout, "  %s\n", result.Detail)
+		}
+	}
+}
+
+// supervisionActed reports an outcome that changed a record, which is what a
+// person reading a sweep is owed. Every other outcome is the sweep saying what it
+// found, and is carried by `--json` rather than printed.
+//
+// It is stated as a closed classification rather than a list of what to skip,
+// because the failure it guards against has already happened once: an outcome
+// added later and left out of a skip list is printed as though the sweep had
+// acted on it. TestEverySupervisionOutcomeIsClassified fails on an outcome
+// neither side names, so adding one means deciding which it is.
+func supervisionActed(outcome orchestrator.SupervisionOutcome) bool {
+	switch outcome {
+	case orchestrator.SupervisionReclaimed, orchestrator.SupervisionSettled:
+		return true
+	case orchestrator.SupervisionCarried, orchestrator.SupervisionQueued,
+		orchestrator.SupervisionStale, orchestrator.SupervisionUndelivered:
+		return false
+	default:
+		// An outcome nothing classifies is printed rather than swallowed: a sweep
+		// that acted and said nothing is the worse of the two failures.
+		return true
+	}
 }
 
 // printPublications reports only the records this sweep corrected and the ones
@@ -322,6 +425,13 @@ It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development
 manager reads them. Docketing is keyed to what stopped, so sweeping twice
 dockets nothing twice.
+
+It also recovers the exchanges the roles have put to each other. Each one is
+taken under its own lease, so one a live process is carrying is left alone: a
+round a dead process asked and never got an answer to is closed saying so, and a
+thread that has spent every round it was given is closed as unresolved and the
+operator told. Nothing is put in front of a role here — recovering from a lost
+process is never a reason to ask a question nobody asked for.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

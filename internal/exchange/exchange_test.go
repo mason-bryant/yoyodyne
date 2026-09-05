@@ -246,8 +246,8 @@ func TestEveryExampleTheAskingContractShowsIsAccepted(t *testing.T) {
 	t.Parallel()
 
 	examples := blocksIn(AskingContract)
-	if len(examples) != 3 {
-		t.Fatalf("found %d example blocks in the asking contract, want the open, the continue, and the close", len(examples))
+	if len(examples) != 4 {
+		t.Fatalf("found %d example blocks in the asking contract, want the open, the one naming what it rests on, the continue, and the close", len(examples))
 	}
 	for _, example := range examples {
 		// The contract writes the identifier as a placeholder, because thirty-two

@@ -19,6 +19,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/cost"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
@@ -463,6 +464,43 @@ func reconcilerFrom(parts components) orchestrator.Reconciler {
 		// manager.
 		Docket: docketerFrom(parts),
 	}
+}
+
+// supervisionLoopFrom wires one pass of the management loop over parts that are
+// already built.
+//
+// It is given no voice, for the same reason reconciliation is given no backend:
+// recovering from a lost process is a question about recorded evidence, and
+// never a reason to put a question in front of a role that nobody asked. So this
+// pass reclaims the rounds whose carrier is gone, closes the threads that ran
+// out of rounds, and asks nothing. Asking is the wakeup half of the loop and
+// arrives with the thing that wakes roles.
+func supervisionLoopFrom(parts components) (orchestrator.SupervisionLoop, error) {
+	store, err := runstate.NewExchangeStore(parts.stateRoot, parts.config.Product.ID)
+	if err != nil {
+		return orchestrator.SupervisionLoop{}, err
+	}
+	return orchestrator.SupervisionLoop{
+		Store: store,
+		Conductor: exchange.Conductor{
+			Store: store,
+			// A thread that ran out of rounds reaches the operator through the same
+			// pile every role's reports land in.
+			Reports:      parts.reports,
+			MaxRounds:    parts.config.Exchange.MaxRounds,
+			ProductID:    parts.config.Product.ID,
+			RepositoryID: string(parts.config.Product.RepositoryID),
+			Holder:       supervisionHolder(),
+		},
+	}, nil
+}
+
+// supervisionHolder names this process on every round it takes. The process
+// identifier is what makes it useful: a later pass reading a round nobody
+// answered says which process was carrying it, and an operator can tell a
+// harness that is still running from one that is not.
+func supervisionHolder() string {
+	return fmt.Sprintf("yoyo pid %d", os.Getpid())
 }
 
 // agentModel returns the configured selector for a role. Configuration
