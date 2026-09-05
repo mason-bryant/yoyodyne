@@ -62,6 +62,10 @@ revisions:
       by: architect
       at: 2026-09-01T19:35:00Z
       reason: approved amendment e0bff82e from yoyodyne-ifd.36, transcribed at ratification of the portable-agent-configuration design - the Configuration section defers to it on ownership, conversion, and bundle improvements
+    - action: amended
+      by: architect
+      at: 2026-09-05T17:40:00Z
+      reason: backfill of approved amendment edbbd603 (yoyodyne-ifd.100.1, decided 2026-08-23) which never reached this document - the publishing section now states the typed artifact write's publish shape a reviewer can verify from the repository; published under yoyodyne-ifd.280 after three reviewer reports and three spent runs measured the cost of its absence
 approvals:
     - revision: 0
       by: operator
@@ -243,6 +247,8 @@ A directive record contains at least:
 - reconciliation status and links to superseding directives.
 
 Operational directives take effect immediately. A directive that changes the brief, a goal, or a design pauses affected downstream work, routes reconciliation to the owning role, and resumes only after the canonical chain is consistent. If the directive is ambiguous, the product manager asks the user and work remains paused.
+
+**How a document written from a conversation reaches the repository.** A typed artifact write — a document created or revised from a conversation and approved by the operator — stops at the operator's working tree. Authorize records the approval in the document's frontmatter against the revision it produced; publication is the operator's own commit, under their own identity; and until they commit, the changed document is an uncommitted change the runs refuse to start over, deliberately — the artifact homes are what runs read as context, and a run based on half-landed intent is worse than a run that waits. The surface that performed the write says so at the moment of writing. The harness never commits to the primary checkout, never branches it, and never opens a pull request from a conversation: there is no path into the target branch except a run's reviewed promotion or the operator's own hand, and a conversation-opened pull request would be a second, unreviewed one.
 
 Staleness is derived rather than marked. What a change upstream leaves unanswered downstream is computed from the artifacts' own revision logs and the tracker's admission times and reported by `yoyo stale`; it stops, closes, blocks and reorders nothing, and it reads a hand edit exactly as it reads an amendment made through the harness. There is no stored flag: an artifact stops being reported when its owner records a later revision, and a work item stops when it closes. Anything that would clear staleness by other means is building a second account of it that can disagree with the documents.
 
