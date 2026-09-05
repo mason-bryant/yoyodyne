@@ -21,9 +21,22 @@ documented install to a working first run on their own repository using the
 readme alone* — is failed by a document nobody reads to the end, and the
 configuration guide costs more than a whole context budget to include.
 
-**The README half of that is done.** yoyodyne-ifd.160 trimmed it to 752 lines on
-2026-08-24, deleting the bodies the six documents below already carried. The
-configuration guide is untouched and still stands at 2,989.
+**The README split is complete.** yoyodyne-ifd.160 trimmed the README to 752
+lines on 2026-08-24 by deleting the bodies the six documents below already
+carried; tranches yoyodyne-ifd.121.4 and yoyodyne-ifd.121.5 reduced what was
+left against those documents; and yoyodyne-ifd.121.6 closed the sequence on
+2026-09-05 with the repository-wide citation sweep this document's tables now
+record, and with the adoption walkthrough made a merge gate rather than a
+habit — the `adoption` job in `.github/workflows/ci.yml` installs `bd` and runs
+`make adoption` on every pull request, so the claim the README makes about its
+own getting-started section is executed on every change.
+
+The README stands at 844 lines: 600 of them the README the split was aiming at,
+and 244 the `## Configuring a project` block held back for the configuration
+split — see [the disposition
+table](#disposition-of-every-current-readme-section). The configuration guide is
+untouched and has grown to 3,848 lines, so its own tables below are re-measured
+against a file half again the size they were reconciled against.
 
 ## What each document is for
 
@@ -63,13 +76,16 @@ it is an estimate for prose the split writes rather than content carried across,
 so it is left where drafting put it.
 
 **The six README-split documents have landed**, and their budgets are spent
-rather than pending: `conversation.md` at 1,189 lines against 816,
-`operations.md` at 754 against 454, `work.md` at 445 against 270,
-`reporting.md` at 444 against 244, `artifacts.md` at 306 against 246, and
-`developing-yoyo.md` at 162 against 30. Every one overran, mostly because the
-README itself grew by roughly 1,200 lines between drafting and execution. They
-are recorded here as landed facts; nothing should be trimmed to reach the
-figure in the table.
+rather than pending. Re-measured on 2026-09-05, at the end of the split:
+`conversation.md` at 1,363 lines against 816, `operations.md` at 1,169 against
+454, `reporting.md` at 816 against 244, `work.md` at 651 against 270,
+`developing-yoyo.md` at 377 against 30, and `artifacts.md` at 363 against 246.
+Every one overran, mostly because the README itself grew by roughly 1,200 lines
+between drafting and execution, and each grew again across tranches 121.3 to
+121.5 as content the README's reduction surfaced was written up properly rather
+than dropped. They are recorded here as landed facts; nothing should be trimmed
+to reach the figure in the table. `provider-plugins.md`, which the split
+neither wrote nor moved content into, is at 308 lines against 288.
 
 One document is reachable from the index below and is deliberately not a row
 here: [`docs/releases/README.md`](releases/README.md), which explains the notes
@@ -88,11 +104,23 @@ link to the canonical home. Never renamed, never deleted, even when the content
 under it has moved. An anchor is Tier 1 when it is cited by something this
 repository cannot rewrite:
 
+**The list below was re-derived on 2026-09-05** by yoyodyne-ifd.121.6's sweep,
+and it is materially longer than the three anchors drafting found. The method is
+three searches, and it is stated so a later run re-derives rather than trusts:
+`configuration.md#` and `README.md#` across the whole tree; the same two across
+`.beads/issues.jsonl`, the tracker's export; and every citation of any `.md#`
+anchor made from inside `docs/product/`, `docs/designs/`, `docs/decisions/`, or
+`.yoyodyne/`.
+
 - **Shipped artifacts**, which are on disks we do not control or in text already
-  published. Two today:
-  - `docs/configuration.md#checks` — `internal/config/scaffold.go:360`, asserted
-    by `internal/cli/init_test.go:214`. Every `.yoyodyne/config.yaml` that
+  published. Three anchors, from two sources:
+  - `docs/configuration.md#checks` — `internal/config/scaffold.go:414`, asserted
+    by `internal/cli/init_test.go:302`. Every `.yoyodyne/config.yaml` that
     `yoyo init` has ever generated points at it, in a file its owner edits.
+    `internal/config/scaffold.go:660` now cites
+    `docs/configuration.md#provider-accounts` the same way, from the accounts
+    block the same generated file carries, so that anchor is Tier 1 on the same
+    argument.
   - `README.md#getting-started` — `.github/release-notes-preamble.md:28`, as the
     repo-root URL `https://github.com/mason-bryant/yoyodyne#getting-started`.
     `scripts/release-body.sh` appends that preamble to the tag's own
@@ -101,18 +129,43 @@ repository cannot rewrite:
     release already published, and published release notes cannot be corrected
     by a change to this repository.
 - **Tracked work items.** The backlog is upstream: the product manager owns it,
-  and no developer rewrites an item to chase a link. Today that is
-  `docs/configuration.md#product-specifications`, cited by yoyodyne-ifd.20.2 and
-  yoyodyne-ifd.21 — both closed, so the cost of dangling would be archaeological
-  rather than live, but the rule holds on who may rewrite the citation rather
-  than on how much it would hurt.
+  and no developer rewrites an item to chase a link. Four anchors today, and
+  unlike at drafting one of the citing items is open rather than closed:
+  `docs/configuration.md#merge-and-removal-semantics`, `#what-fails-closed`,
+  `#what-init-proposes-for-checks`, and `#what-reaches-the-queue` are all cited
+  by yoyodyne-ifd.117.1, which is open and is the configuration split's own
+  first tranche. `#product-specifications` is cited by yoyodyne-ifd.20.2 and
+  yoyodyne-ifd.21 and `#checks` by yoyodyne-ifd.159, all closed, so the cost of
+  dangling those would be archaeological rather than live — but the rule holds
+  on who may rewrite the citation rather than on how much it would hurt.
 - **Protected artifact homes** — `docs/product/`, `docs/designs/`,
   `docs/decisions/`, and `.yoyodyne/`. A developer on this effort may not edit a
   file in one, so an anchor cited from inside one is Tier 1 by construction: the
   only alternative is a proposal to an owner who may decline it, which would
-  leave the link dangling in the meantime. Today that is
-  `docs/configuration.md#product-specifications` again, cited by
-  `docs/designs/v1-harness-design.md:243` and `docs/product/goals/README.md:11`.
+  leave the link dangling in the meantime. Six anchors today, all of them
+  `docs/configuration.md`'s:
+  - `#product-specifications`, from `docs/designs/v1-harness-design.md:283`.
+    Drafting also named `docs/product/goals/README.md:11`; that file now cites
+    `v1-harness-design.md#artifact-ownership` instead and no longer cites the
+    configuration guide at all.
+  - `#precedence`, `#merge-and-removal-semantics`, `#what-fails-closed`, and
+    `#converting-an-inheriting-configuration-to-an-explicit-one`, all from
+    `docs/designs/portable-agent-configuration.md` — `:33`, `:34`, `:35`, and
+    `:45` and `:145`. That design did not exist when this policy was drafted,
+    and it alone quadruples the protected-home set.
+  - `#running-a-work-item-against-the-workflow-definition`, from
+    `.yoyodyne/workflows/delivery.yaml:8`. This is the one citation in the whole
+    sweep that is neither Markdown nor Go, so nothing mechanical checks it: the
+    link checker described [below](#what-the-split-breaks-that-neither-item-mentions)
+    reads Markdown files, and a fragment in a YAML comment is invisible to it.
+    The section it names — `## Running a work item against the workflow
+    definition`, `docs/configuration.md:1935` — also has no row in the
+    disposition table further down, so the configuration split has to place it
+    as well as freeze it.
+
+  Note the overlap, because it changes what the configuration split has to
+  build: `#merge-and-removal-semantics` and `#what-fails-closed` are Tier 1
+  twice over, from the design and from an open work item.
 
 **Tier 2 — updated in the same change.** The anchor is cited only by files in
 this repository, so the run that moves the section rewrites every citation in
@@ -146,69 +199,100 @@ trust, because anything landed between drafting and execution adds rows.
 
 ### Citations of `docs/configuration.md` anchors
 
-With the document each moves to and its tier. **Re-derived on 2026-08-24** for
-yoyodyne-ifd.166 — every line number in the drafting-time version of this table
-was stale, because the README grew and the six README-split documents landed
-between drafting and now, and three cited anchors had no row. Re-derive it with
-a search for `configuration.md#` across the tree; every row below except the two
-Tier 1 ones is Tier 2, cited only by files this repository may rewrite.
+With the document each moves to and its tier. **Re-derived on 2026-09-05** by
+yoyodyne-ifd.121.6, the README split's last tranche, and this is the third time
+the table has been re-derived and the third time every line number in it had
+moved. Re-derive it the same way: search `configuration.md#` across the whole
+tree, then across `.beads/issues.jsonl`, and read the two protected homes
+separately, because a citation from one of those is Tier 1 whatever the anchor
+says.
 
-**Re-derived again on 2026-08-24** after yoyodyne-ifd.160 trimmed the README,
-by searching the trimmed README for `configuration.md#`. That search returns six
-citations, and the table's README column is exactly those six:
+The README's own citations are now these seven, across six anchors:
 
 | README line | Anchor |
 |---|---|
-| `:328` | `#where-the-tracker-syncs` |
-| `:370` | `#checks` |
-| `:382` | `#how-long-a-check-may-take` |
-| `:406` | `#when-the-repository-ignores-the-configuration` |
-| `:526` | `#publishing-through-pull-requests` |
-| `:551` | `#where-the-tracker-syncs` |
+| `:344` | `#where-the-tracker-syncs` |
+| `:386` | `#checks` |
+| `:398` | `#how-long-a-check-may-take` |
+| `:423` | `#when-the-repository-ignores-the-configuration` |
+| `:549` | `#publishing-through-pull-requests` |
+| `:574` | `#where-the-tracker-syncs` |
+| `:707` | `#provider-accounts` |
 
-So six citations across **five** anchors, on five of the nineteen rows —
-`#where-the-tracker-syncs` is cited twice, from step 2 and from
-`## Configuring a project`. **Twelve rows lost their README citation entirely**,
-the section that made it now being in one of the six documents, and two rows
-never had one. Four of the six citations did not move line, because the trim
-deleted nothing above `README.md:526`; the two that did move are
-`#publishing-through-pull-requests` at `:524` → `:526` and the second
-`#where-the-tracker-syncs` at `:2446` → `:551`, the latter because
-`## Configuring a project` was held back rather than merged and travelled up the
-file with everything deleted ahead of it.
+One more than the last pass found, and the new one matters: `#provider-accounts`
+is cited from `### Running several Claude accounts`, a README section that has
+never had a row in the disposition table at all. It is inside the held-back
+`## Configuring a project` block, so the configuration split inherits it along
+with the rest — but it had to be found rather than assumed, and finding it is
+what added its row below.
 
-The `docs/operations.md` line numbers on
-`#losing-a-race-for-the-target-branch` and `#what-one-work-item-has-been-given`
-were each wrong and were swapped between the two rows; they are corrected here.
-Line numbers in the other cited documents were not re-verified in that pass.
+**Twenty-five of the thirty-one rows have no README citation at all**, the
+section that made it having moved into one of the six landed documents. That is
+expected and is not a defect: the citation moved with the prose rather than
+disappearing, and each row's `Cited by` column names where it went.
 
-| Anchor | Cited by | New home |
-|---|---|---|
-| `#checks` | `README.md:370`, `internal/config/scaffold.go:378`, `internal/cli/init_test.go:301` | **Tier 1 stub stays**; canonical `configuration/runs.md#checks` |
-| `#product-specifications` | `docs/designs/v1-harness-design.md:261`, `docs/product/goals/README.md:31`, and yoyodyne-ifd.20.2 and yoyodyne-ifd.21 in the tracker (`.beads/issues.jsonl:119`, `:121`) | **Tier 1 stub stays**; canonical `configuration/artifacts.md#product-specifications` |
-| `#what-reaches-the-queue` | `docs/conversation.md:155`, `:203`, `:245`, `:308`, `:685`, `docs/artifacts.md:44` | `configuration/goals.md` |
-| `#where-the-tracker-syncs` | `README.md:328`, `:551` | `configuration/setup.md` |
-| `#what-one-work-item-has-been-given` | `docs/conversation.md:863`, `docs/operations.md:680` | `configuration/recovery.md` |
-| `#publishing-through-pull-requests` | `README.md:526`, `docs/work.md:445` | `configuration/publishing.md` |
-| `#what-the-product-manager-sees-besides-them-and-what-it-does-not` | `docs/conversation.md:88` | `configuration/artifacts.md` |
-| `#traceability-references-and-orphans` | `docs/artifacts.md:85` | `configuration/goals.md` |
-| `#scheduling-ready-work` | `docs/work.md:228` | `configuration/runs.md` |
-| `#protected-paths-in-a-developers-change` | `docs/conversation.md:939`, `docs/work.md:46` | `configuration/artifacts.md` |
-| `#personas` | `docs/conversation.md:74` | `configuration/agents.md` |
-| `#operators` | `docs/slack/setup.md:191` | `configuration/agents.md` |
-| `#losing-a-race-for-the-target-branch` | `docs/operations.md:665` | `configuration/publishing.md` |
-| `#how-long-a-check-may-take` | `README.md:382` | `configuration/runs.md` |
-| `#avatars` | `docs/slack/setup.md:170` | `configuration/agents.md` |
-| `#approving-a-document` | `docs/artifacts.md:51` | `configuration/artifacts.md` |
-| `#research-sources` | `docs/conversation.md:125` | `configuration/agents.md` |
-| `#how-long-one-role-may-ask-another` | `docs/conversation.md:777` | `configuration/agents.md` |
-| `#when-the-repository-ignores-the-configuration` | `README.md:406` | `configuration/setup.md` |
+**Twelve anchors below had no row before this pass**, which is the largest single
+correction this table has taken. Four come from
+`docs/designs/portable-agent-configuration.md`, a design that did not exist when
+the policy was drafted, and one from `.yoyodyne/workflows/delivery.yaml` — so
+five of the twelve are Tier 1 by protected home alone. Four more name sections
+`docs/configuration.md` has grown since the last pass —
+`#the-release-readiness-workflow`,
+`#crossing-a-cap-the-operator-decides-to-cross`,
+`#pooling-work-across-several-accounts`, and
+`#running-a-work-item-against-the-workflow-definition` — and none of those four
+has a destination row in [the disposition
+table](#what-the-configuration-guide-becomes) either.
 
-The last three rows are the ones the drafting-time sweep missed, and they are
-the citations of three of the four sections that had no disposition row at all.
-Two of the three are cited from `docs/conversation.md`, which did not exist when
-this map was drafted — which is the standing argument for re-deriving this table
-at the top of each execution run rather than trusting it.
+| Anchor | Cited by | Tier | New home |
+|---|---|---|---|
+| `#checks` | `README.md:386`, `docs/developing-yoyo.md:179`, `internal/config/scaffold.go:414`, `internal/cli/init_test.go:302`, `internal/doclink/doclink.go:30`, `:308`, and yoyodyne-ifd.159 | **1** | stub stays; canonical `configuration/runs.md#checks` |
+| `#product-specifications` | `docs/designs/v1-harness-design.md:283`, and yoyodyne-ifd.20.2 and yoyodyne-ifd.21 | **1** | stub stays; canonical `configuration/artifacts.md#product-specifications` |
+| `#provider-accounts` | `README.md:707`, `docs/multi-account-quickstart.md:6`, `internal/config/scaffold.go:660` | **1** | stub stays; canonical `configuration/agents.md#provider-accounts` |
+| `#precedence` | `docs/designs/portable-agent-configuration.md:33` | **1** | stub stays; canonical `configuration/setup.md#precedence` |
+| `#merge-and-removal-semantics` | `docs/designs/portable-agent-configuration.md:34`, and yoyodyne-ifd.117.1 (open) | **1** | stub stays; canonical `configuration/setup.md#merge-and-removal-semantics` |
+| `#what-fails-closed` | `docs/designs/portable-agent-configuration.md:35`, and yoyodyne-ifd.117.1 (open) | **1** | stub stays; canonical `configuration/setup.md#what-fails-closed` |
+| `#converting-an-inheriting-configuration-to-an-explicit-one` | `docs/designs/portable-agent-configuration.md:45`, `:145` | **1** | stub stays; canonical `configuration/setup.md` |
+| `#running-a-work-item-against-the-workflow-definition` | `.yoyodyne/workflows/delivery.yaml:8` | **1** | stub stays; **no destination row yet** |
+| `#what-reaches-the-queue` | `docs/artifacts.md:44`, `docs/conversation.md:167`, `:215`, `:257`, `:320`, `:770`, and yoyodyne-ifd.117.1 (open) | **1** | stub stays; canonical `configuration/goals.md` |
+| `#what-init-proposes-for-checks` | yoyodyne-ifd.117.1 (open), and one intra-document link | **1** | stub stays; canonical `configuration/runs.md` |
+| `#where-the-tracker-syncs` | `README.md:344`, `:574` | 2 | `configuration/setup.md` |
+| `#when-the-repository-ignores-the-configuration` | `README.md:423` | 2 | `configuration/setup.md` |
+| `#extending-a-built-in-bundle` | `docs/reporting.md:727`, `docs/slack/setup.md:585` | 2 | `configuration/setup.md` |
+| `#how-long-a-check-may-take` | `README.md:398` | 2 | `configuration/runs.md` |
+| `#scheduling-ready-work` | `docs/work.md:374` | 2 | `configuration/runs.md` |
+| `#publishing-through-pull-requests` | `README.md:549`, `docs/work.md:651` | 2 | `configuration/publishing.md` |
+| `#losing-a-race-for-the-target-branch` | `docs/operations.md:1041` | 2 | `configuration/publishing.md` |
+| `#approving-a-document` | `docs/artifacts.md:51` | 2 | `configuration/artifacts.md` |
+| `#protected-paths-in-a-developers-change` | `docs/conversation.md:1098`, `docs/work.md:69` | 2 | `configuration/artifacts.md` |
+| `#what-the-product-manager-sees-besides-them-and-what-it-does-not` | `docs/conversation.md:99` | 2 | `configuration/artifacts.md` |
+| `#traceability-references-and-orphans` | `docs/artifacts.md:85` | 2 | `configuration/goals.md` |
+| `#what-a-change-upstream-leaves-stale` | `docs/artifacts.md:170` | 2 | `configuration/goals.md` |
+| `#the-release-readiness-workflow` | `docs/artifacts.md:355`, `docs/developing-yoyo.md:300` | 2 | **no destination row yet** |
+| `#what-one-work-item-has-been-given` | `docs/conversation.md:996`, `docs/operations.md:1061` | 2 | `configuration/recovery.md` |
+| `#crossing-a-cap-the-operator-decides-to-cross` | `docs/conversation.md:998` | 2 | **no destination row yet**; its parent lands in `configuration/recovery.md` |
+| `#personas` | `docs/conversation.md:76` | 2 | `configuration/agents.md` |
+| `#operators` | `docs/slack/setup.md:212`, `:862` | 2 | `configuration/agents.md` |
+| `#avatars` | `docs/slack/setup.md:184` | 2 | `configuration/agents.md` |
+| `#research-sources` | `docs/conversation.md:137` | 2 | `configuration/agents.md` |
+| `#how-long-one-role-may-ask-another` | `docs/conversation.md:879` | 2 | `configuration/agents.md` |
+| `#pooling-work-across-several-accounts` | `docs/multi-account-quickstart.md:7` | 2 | **no destination row yet**; its parent lands in `configuration/agents.md` |
+
+Three rows say **no destination row yet**, and those three are the sharpest
+result of this pass: the section exists, something outside the guide links to
+it, and the table that says where every section goes has never named it. A
+fourth, `#running-a-work-item-against-the-workflow-definition`, is in the same
+state and is Tier 1 besides. Each is the standing argument for re-deriving this
+table at the top of each execution run rather than trusting it — the third
+consecutive pass at which trusting it would have dropped content other documents
+point at.
+
+The forge-URL spelling of a citation was swept too, since a link written as
+`https://github.com/mason-bryant/yoyodyne/blob/main/docs/…#anchor` matches
+neither of the searches above. It finds only what is already here:
+`.github/release-notes-preamble.md:28` for `README.md#getting-started` and
+`internal/config/scaffold.go:414` for `docs/configuration.md#checks`, both
+already Tier 1.
 
 ### Citations of `README.md` anchors
 
@@ -221,42 +305,52 @@ literally as `#slug` across the working tree and the tracker's current export.
 
 The result is small, and worth stating flatly because the map's later claim that
 the README keeps four things and needs no stub of its own depends on it. **The
-sweep was re-run on 2026-08-24** for yoyodyne-ifd.166 and this table is its
-result; every line number in the drafting-time version had moved, and it had two
-rows where it now has five.
+sweep was re-run on 2026-09-05** by yoyodyne-ifd.121.6 and this table is its
+result. It has six rows where the last pass had five, and every line number in
+it had moved again.
 
 | Anchor | Cited by | Tier | New home |
 |---|---|---|---|
-| `#talking-to-the-other-agents` | `docs/configuration.md:225` | 2 | `conversation.md#talking-to-the-other-agents` — **repointed by ifd.160** |
-| `#keeping-the-configuration-out-of-the-repository` | `docs/configuration.md:145` | 2 | merges into the `docs/configuration.md` index with the rest of `## Configuring a project` |
-| `#getting-started` | `.github/release-notes-preamble.md:28` | **1** | stays in the README — see below |
-| `#further-reading` | `skills/yoyo-setup/SKILL.md:21`, and the back-link each of `docs/conversation.md:4`, `work.md:4`, `artifacts.md:4`, `reporting.md:4`, `operations.md:4`, `developing-yoyo.md:4`, and `releases/README.md:4` opens with | — | section stays; no move to service |
-| `#3-yoyo-chat--establish-the-brief-and-the-goals` | `skills/yoyo-setup/SKILL.md:217` | — | section stays; no move to service |
+| `#further-reading` | `skills/yoyo-setup/SKILL.md:21`, `internal/doclink/doclink.go:354`, and the back-link each of `docs/conversation.md:4` (and `:94`), `work.md:4`, `artifacts.md:4`, `reporting.md:4`, `operations.md:4`, `developing-yoyo.md:4` (and `:179`), `delivery-pipeline-baseline.md:4`, `releases/README.md:4`, and `configuration.md:539` opens with | — | section stays; no move to service |
+| `#getting-started` | `.github/release-notes-preamble.md:28`, and yoyodyne-ifd.156 and yoyodyne-ifd.159 in the tracker | **1** | stays in the README — see below |
+| `#3-yoyo-chat--establish-the-brief-and-the-goals` | `skills/yoyo-setup/SKILL.md:220`, and yoyodyne-ifd.125.4 | — | section stays; no move to service |
+| `#keeping-the-configuration-out-of-the-repository` | `docs/configuration.md:153`, and yoyodyne-ifd.76 | 2 | merges into the `docs/configuration.md` index with the rest of `## Configuring a project` |
+| `#running-several-claude-accounts` | `docs/configuration.md:3460` | 2 | merges with the same block — **new to this pass** |
+| `#talking-to-the-other-agents` | nothing in the working tree; yoyodyne-ifd.117.1 (open) and yoyodyne-ifd.121.2 (closed) quote it in recorded prose | — | **spent** — repointed by ifd.160 to `conversation.md#talking-to-the-other-agents` |
 
-**Two of those five name a section that moves, and both are cited from
-`docs/configuration.md`** — so both are Tier 2. Drafting expected both to be
-rewritten by the configuration split rather than by the README one; in the event
-yoyodyne-ifd.160 rewrote one of them, because deleting the README's copy of
-`## Talking to the other agents` is what made that citation dangle, and the run
-that breaks a link is the run that repairs it. `configuration.md:225` now points
-at `conversation.md#talking-to-the-other-agents`.
-`#keeping-the-configuration-out-of-the-repository` is the one still owed to the
-configuration split, and it does not dangle meanwhile: ifd.160 held that section
-back in the README precisely because its destination does not exist yet. The
-other three name sections that stay. No work item, design,
-`docs/product/`, `docs/slack/`, or Go source file cites a README anchor at all;
-`skills/yoyo-setup/SKILL.md` does, twice, and both of its targets stay.
+**Only the fourth and fifth rows name a section that still has to move**, and
+both are cited from `docs/configuration.md` alone, so both are the configuration
+split's to rewrite. Neither dangles meanwhile: ifd.160 held
+`## Configuring a project` and its two children back in the README precisely
+because their destination does not exist yet.
+`#running-several-claude-accounts` is the one this pass added, and it is the same
+case — a child of the held-back block, cited once, from the guide that will
+absorb it.
+
 `#getting-started` is still the sole Tier 1 README anchor, and the section it
-names stays — so the README acquires no stub.
+names stays, so **the README acquires no stub** and the split lands without one.
+One Go file cites a README anchor, twice: `internal/doclink/doclink.go:354` and
+`:363`, both comments using `../README.md#further-reading` as the worked example
+of how a relative fragment resolves, so neither is a claim about structure. No
+design, `docs/product/`, `docs/decisions/`, or `.yoyodyne/` file cites a README
+anchor at all.
+
+One citation in the tracker resolves to nothing, and it is named here rather
+than repaired because the backlog is upstream: **yoyodyne-ifd.117.1 is open and
+its notes cite `README.md#talking-to-the-other-agents`**, an anchor ifd.160
+deleted. It is quoted prose inside a recorded review finding rather than a link
+anything follows, and the same finding names the live target, so nothing a
+reader clicks is broken — but it is a live item pointing at a dead anchor, and
+only the product manager can correct it.
 
 Two near-misses the sweep turned up, recorded so a re-derivation does not
-re-litigate them. Five intra-file links in `docs/configuration.md` match README
-slugs as prefixes — `#artifact-identity-and-metadata` (:379, :385, :413),
-`#architectural-invariants` (:490), `#what-a-change-upstream-leaves-stale`
-(:1551) — but each resolves against `configuration.md`'s own headings at :469,
-:1270 and :1215, so they belong to the set below rather than to this one. And
-yoyodyne-ifd.54 and yoyodyne-ifd.1.2 mention README anchors in the recorded
-prose of closed review findings, not as links anything resolves.
+re-litigate them. Several intra-file links in `docs/configuration.md` match
+README slugs as prefixes — `#artifact-identity-and-metadata`,
+`#architectural-invariants`, `#what-a-change-upstream-leaves-stale`,
+`#provider-accounts`, `#personas` — but each resolves against
+`configuration.md`'s own headings, so they belong to the set below rather than to
+this one. And yoyodyne-ifd.54 and yoyodyne-ifd.1.2 mention README anchors in the
+recorded prose of closed review findings, not as links anything resolves.
 
 That ifd.54 note is worth reading, because it is this policy's precedent: it
 records that a link "to `#releasing-a-usage-limit-wait-early` or
@@ -269,44 +363,61 @@ check.
 
 An intra-file `](#slug)` link survives a split only if its target lands in the
 same new document. Both sources have many, and they are the largest category by
-count in this effort — 91 links, re-counted on 2026-08-24 and up from the 67 at
-drafting — so they are the likeliest thing for an execution run to miss.
+count in this effort — 62 links as of 2026-09-05, down from the 91 counted on
+2026-08-24 only because the README's share of them left with the sections that
+carried them — so they are the likeliest thing for an execution run to miss.
 
-**The README linked into itself 54 times across 32 anchors**, and after
-yoyodyne-ifd.160's trim it links into itself 10 times across 9 anchors. Six of
-those stay put for the reason drafted — `#install`, `#getting-started`, the
-three numbered step headings, and `#optional-publishing-and-auto-merge`. Two
-more survive because the section they name was held back rather than moved:
-`#configuring-a-project` and `#keeping-the-configuration-out-of-the-repository`,
-which become links into the configuration index when that split merges them. The
-ninth is `#further-reading`, which the new index answers to. Every other anchor
-became a relative link into one of the six documents, or went with the section
-that carried it.
+**The README's share of that is settled.** It linked into itself 54 times across
+32 anchors at drafting, 10 times across 9 anchors after yoyodyne-ifd.160's trim,
+and 10 times across 9 anchors now: `#install` twice, and once each
+`#getting-started`, the three numbered step headings,
+`#optional-publishing-and-auto-merge`, `#further-reading`,
+`#configuring-a-project`, and `#keeping-the-configuration-out-of-the-repository`.
+Seven of the nine name sections that stay. The last two name the held-back block
+and become links into the configuration index when that split merges it. Every
+other anchor became a relative link into one of the six documents, or went with
+the section that carried it, and
+`TestThisRepositoryOwnDocumentationLinksResolve` passes over the result — so
+this line is now checked on every run rather than asserted here.
 
-**`docs/configuration.md` links into itself 37 times across 24 anchors**, and
-after the split most cross a document boundary. Resolve each against the
+**`docs/configuration.md` links into itself 52 times across 29 anchors**, up from
+37 across 24, and after the split most cross a document boundary. Resolve each
+against the
 configuration disposition table: a link whose target lands in the same new
 document stays a bare `#slug`; one whose target lands elsewhere becomes a
-relative link. The anchors are `#artifact-identity-and-metadata` (×3),
-`#who-may-change-an-artifact` (×3),
+relative link. Re-counted on 2026-09-05, the anchors are
+`#waiting-out-a-network-that-dropped` (×5),
+`#keeping-the-configuration-outside-the-repository` (×4),
+`#who-may-change-an-artifact` (×3), `#what-one-work-item-has-been-given` (×3),
+`#watching-instead-of-draining` (×3),
 `#proposing-a-change-to-a-document-you-do-not-own` (×3),
-`#what-one-work-item-has-been-given` (×3), `#what-reaches-the-queue` (×2),
-`#approving-a-document` (×2), `#goals-and-the-work-attributed-to-them` (×2),
-`#traceability-references-and-orphans` (×2), `#operators` (×2), and one each of
-`#extending-a-built-in-bundle`, `#what-init-proposes-for-checks`,
-`#what-fails-closed`, `#protected-paths-in-a-developers-change`, `#personas`,
-`#architectural-invariants`, `#product-specifications`,
-`#watching-instead-of-draining`, `#what-a-change-upstream-leaves-stale`,
-`#how-long-a-check-may-take`, `#relaunching-a-run-the-provider-killed`,
-`#losing-a-race-for-the-target-branch`, `#provider-accounts`,
-`#reporting-to-slack`, and `#layout`.
+`#artifact-identity-and-metadata` (×3), `#what-reaches-the-queue` (×2),
+`#traceability-references-and-orphans` (×2), `#operators` (×2), `#layout` (×2),
+`#goals-and-the-work-attributed-to-them` (×2), `#approving-a-document` (×2), and
+one each of `#what-init-proposes-for-checks`, `#what-fails-closed`,
+`#what-a-change-upstream-leaves-stale`, `#the-definition-is-the-projects-to-own`,
+`#reporting-to-slack`, `#relaunching-a-run-the-provider-killed`,
+`#publishing-from-a-fork`, `#provider-accounts`,
+`#protected-paths-in-a-developers-change`, `#product-specifications`,
+`#personas`, `#losing-a-race-for-the-target-branch`,
+`#how-long-a-check-may-take`, `#extending-a-built-in-bundle`,
+`#crossing-a-cap-the-operator-decides-to-cross`, and
+`#architectural-invariants`.
 
-Three of those anchors — `#provider-accounts`, `#reporting-to-slack`, and
-`#layout` — are new to this list, and `#provider-accounts` is the one that would
-have broken silently: it is linked from `## Layout`, which lands in
-`configuration/setup.md`, while its target lands in `configuration/agents.md`,
-so it has to become a relative link and the drafting-time list did not name it
-at all.
+Nothing dropped off this list since the last pass — all 24 anchors it named are
+still linked — and five are new to it: `#waiting-out-a-network-that-dropped`,
+`#keeping-the-configuration-outside-the-repository`,
+`#the-definition-is-the-projects-to-own`, `#publishing-from-a-fork`, and
+`#crossing-a-cap-the-operator-decides-to-cross`. Three of the five name sections
+the disposition table has no row for at all — the first, the second, and the
+third, whose parent `## Running a work item against the workflow definition` has
+none either. `#waiting-out-a-network-that-dropped` is the guide's most-linked
+anchor of all at five links, and it names a section the table below has never
+heard of, which is the clearest single measure of how far the file has moved.
+
+`#provider-accounts` remains the case worth naming: it is linked from
+`## Layout`, which lands in `configuration/setup.md`, while its target lands in
+`configuration/agents.md`, so it has to become a relative link.
 
 ## What the README becomes
 
@@ -328,6 +439,16 @@ it without leaving a stub.
 This is the one place the map spends its size budget deliberately: the README
 lands at roughly 500 lines rather than the 150 a pure landing page would be, and
 the sections below the quick start are what carry the weight of the reduction.
+
+**What it actually landed at, on 2026-09-05: 600 lines**, counting the whole file
+and then deducting the 244 lines of `## Configuring a project` and its two
+children, which are held back for the configuration split. That is a 20% overrun
+on a 500-line budget the map itself says is a size budget for review rather than
+a target to write to, and the reason is the one the budget was set against: the
+README the split started from was 3,792 lines rather than the 2,602 the budget
+was drawn from. Nothing here should be trimmed to reach 500. The 844 lines the
+file physically holds fall to 600 when the configuration split takes the block
+it is owed.
 
 Target order. **The line ranges below are the README as it stood before
 yoyodyne-ifd.160 executed this section; they are the plan's own citations rather
@@ -403,12 +524,25 @@ stood at 2,602 lines rather than the 3,792 it reached before the trim, and they
 are left as drafted because what they were for has happened.
 
 **One row was not executed, deliberately.** `## Configuring a project` and its
-child `### Keeping the configuration out of the repository` are still in the
-README, because their destination is the `docs/configuration.md` index that the
-configuration split has not yet built: merging them is that split's work, and
-dropping them ahead of it would have lost content to no home. They are the whole
-of the README's overrun — 752 lines against the 500 budget, 573 without them —
-so the tranche that merges them is also the one that closes the gap.
+two children — `### Running several Claude accounts` and `### Keeping the
+configuration out of the repository` — are still in the README, because their
+destination is the `docs/configuration.md` index that the configuration split has
+not yet built: merging them is that split's work, and dropping them ahead of it
+would have lost content to no home. They are the whole of the README's overrun —
+844 lines against the 500 budget, 600 without them — so the tranche that merges
+them is also the one that closes the gap.
+
+**`### Running several Claude accounts` had no row at all**, and
+yoyodyne-ifd.121.6's sweep is what found it: it is `README.md:644–710`, 67 lines,
+and it is what makes the README's citation of
+`docs/configuration.md#provider-accounts` at `:707`. Its row is added below,
+with the same destination as its parent, because it is the README's narrative of
+the account pool and the configuration guide's `## Provider accounts` and
+`### Pooling work across several accounts` are the reference for the same
+settings — the same merge-rather-than-move argument the parent row makes. The
+run that merges it should also decide what becomes of
+[`docs/multi-account-quickstart.md`](multi-account-quickstart.md), which is a
+third telling of it and cites both guide anchors.
 
 Six sections the README acquired after drafting had no row when it was executed —
 `### Bringing it an idea rather than a work item`,
@@ -418,8 +552,14 @@ Six sections the README acquired after drafting had no row when it was executed 
 `### Keeping the configuration out of the repository`. The first five were
 already extracted and landed in `conversation.md`, `reporting.md`, and
 `work.md`, so what was missing was the record rather than the content, and the
-trim deleted them with the sections around them; the sixth is the one held back
-above.
+trim deleted them with the sections around them; the sixth is one of the three
+held back above.
+
+**The table below now has a row for every heading the README carries**, which it
+did not before yoyodyne-ifd.121.6: the two rows that tranche added are the second
+and third of the held-back block. The counts in the older rows are still the
+2,602-line README's and are left as drafted, because what they were for has
+happened; the two new rows count the README as it stands.
 
 | Current section | Lines | Destination |
 |---|---|---|
@@ -442,6 +582,8 @@ above.
 | `### Reviewing what a branch adds up to` | 43 | `work.md` |
 | `### Publishing, and the merge that follows it` | 58 | `work.md` |
 | `## Configuring a project` | 90 | **merged** into `docs/configuration.md`'s index — see below |
+| `### Running several Claude accounts` | 67 | **merged** with its parent — row added by yoyodyne-ifd.121.6 |
+| `### Keeping the configuration out of the repository` | 85 | **merged** with its parent — row added by yoyodyne-ifd.121.6 |
 | `## Artifact identity` | 82 | `artifacts.md` |
 | `## Goals, and what work serves them` | 64 | `artifacts.md` |
 | `## What a change upstream leaves stale` | 40 | `artifacts.md` |
@@ -463,19 +605,44 @@ a project configuration is, what owning it costs, and the map of the seven
 documents — plus the Tier 1 redirect stubs. Keeping the path is not a
 convenience: it is what makes the frozen anchors above possible at all.
 
-**This table was reconciled against `docs/configuration.md` on 2026-08-24** for
-yoyodyne-ifd.166, and it was not the exhaustive enumeration it presents itself
-as before that: four sections had no row, one was misassigned, and sixteen of
-its thirty-one rows undercounted — `## Triage thresholds` by 181 lines. It now
-has a row for each of the 48 headings the file carries outside its fenced
-examples — grouped as 35 rows, since a parent and its children move together —
-and the counts sum to the file's 2,989 lines exactly, which is the arithmetic
-that makes "nothing is dropped" checkable rather than asserted. The bracketed
-span beside each count is that section's line range in `configuration.md` as it
-stood at reconciliation. Re-derive the whole table by listing the file's `##`
-and `###` headings, ignoring the ones inside fenced examples, and partitioning
-the file between them; a heading with no row here means the file has moved on
-and the run that found it should say so rather than choose a home.
+**This table is stale, and by how much was measured on 2026-09-05.** It was
+reconciled against `docs/configuration.md` on 2026-08-24 for yoyodyne-ifd.166,
+when the file was 2,989 lines across 48 headings. It is now **3,848 lines across
+57 headings** — 859 lines and nine headings the table has never seen, none of
+which has a row:
+
+- `## Keeping the configuration outside the repository` (`:317–365`)
+- `### The release-readiness workflow` (`:1406–1478`)
+- `### The environment a check runs in` (`:1592–1605`)
+- `## Running a work item against the workflow definition` (`:1935–1959`) and
+  its child `### The definition is the project's to own` (`:1960–2102`)
+- `### Publishing from a fork` (`:2210–2244`) — a fourth child of
+  `## Publishing through pull requests`, whose row names three
+- `## Waiting out a network that dropped` (`:2535–2584`)
+- `#### Crossing a cap the operator decides to cross` (`:3150–3215`)
+- `### Pooling work across several accounts` (`:3370–3464`)
+
+Four of the nine are cited from outside the guide —
+`#the-release-readiness-workflow`,
+`#running-a-work-item-against-the-workflow-definition`,
+`#crossing-a-cap-the-operator-decides-to-cross`, and
+`#pooling-work-across-several-accounts` — and the second of those is Tier 1,
+frozen by `.yoyodyne/workflows/delivery.yaml`. So the configuration split cannot
+treat this list as tidying: a tranche executing the table as it stands would drop
+four sections other documents point at. **The whole table must be re-derived
+before the next tranche executes against it**, and the counts and spans in it
+below are the 2,989-line file's rather than the file as it now reads. The
+destinations are still the right destinations; it is the enumeration that has
+stopped being exhaustive, which is the third time in this document's life that
+has been true and the reason every table here now carries the method that
+produced it.
+
+The bracketed span beside each count is that section's line range in
+`configuration.md` as it stood at the 2026-08-24 reconciliation. Re-derive the
+whole table by listing the file's `##` and `###` headings, ignoring the ones
+inside fenced examples, and partitioning the file between them; a heading with no
+row here means the file has moved on and the run that found it should say so
+rather than choose a home.
 
 | Current section | Lines | Destination |
 |---|---|---|
@@ -588,6 +755,17 @@ explicit — this map is the enumeration it needs, which is the argument for the
 map existing as a checked-in document rather than as a decision recorded in a
 conversation.
 
+**One document in the table above is still not in the set, and it is not one of
+the seven.** [`docs/provider-plugins.md`](provider-plugins.md) has a row in
+[what each document is for](#what-each-document-is-for), is linked from the
+README's index, and describes a surface the product ships — declaring a provider
+of your own — but `shippedDocumentation` does not name it, and did not before the
+split either. Read strictly, "grows to name every document in this map's table"
+says it should. yoyodyne-ifd.121.6 found this and did not act on it: what the
+product manager is shown is a change to the product's behaviour rather than to
+the split's structure, and it is the product manager's own view that would
+change. It is recorded here so the decision is taken rather than inherited.
+
 **Nothing mechanically enforces that a fragment resolves.** yoyodyne-ifd.121.2
 makes "every link resolves" its definition of done, and the only thing standing
 behind that today is a reviewer reading a diff — which is exactly the check that
@@ -609,6 +787,35 @@ anchor that resolves to nothing fails a gate on every run and every repair,
 rather than costing a reviewer a paragraph saying they could not verify it. The
 policy above is enforced rather than asked for, and the remaining manual part is
 only the tables' *line numbers*, which the checker has no opinion about.
+
+**Two kinds of citation the checker cannot see**, established by
+yoyodyne-ifd.121.6's sweep and named here so no later run mistakes a green
+`make test` for a clean sweep:
+
+- **Anchors cited from files that are not Markdown.**
+  `.yoyodyne/workflows/delivery.yaml:8` cites
+  `docs/configuration.md#running-a-work-item-against-the-workflow-definition`,
+  and Go comments and struct literals cite `docs/configuration.md#checks` and
+  `#provider-accounts`. Breaking any of them fails nothing. The Go ones are at
+  least asserted by `internal/cli/init_test.go`; the YAML one is asserted by
+  nothing at all.
+- **Anchors cited from the tracker.** `.beads/issues.jsonl` carries citations in
+  item descriptions and recorded review findings, and the export is not the
+  store, so nothing a change to this repository does can repair one. Today
+  yoyodyne-ifd.117.1 — open — cites `README.md#talking-to-the-other-agents`,
+  which ifd.160 deleted.
+
+Both are why the sweep is still stated as a method rather than replaced by the
+test. Re-derive with `README.md#` and `configuration.md#` over the whole tree
+including `.beads/issues.jsonl`, and separately over the protected homes; the
+test covers the Markdown middle and neither end.
+
+**And the walkthrough is a gate now too.** `.github/workflows/ci.yml` runs
+`make adoption` on every pull request, which executes the README's
+"Getting started" against a throwaway project rather than reading it. The link
+checker says a fragment resolves; the walkthrough says the steps still work. The
+README split needed both, and until yoyodyne-ifd.121.6 the second one ran only
+when somebody remembered.
 
 ## What the architect is being asked
 

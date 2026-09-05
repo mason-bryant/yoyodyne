@@ -27,15 +27,17 @@ to reach one of the four, and for content that is not Go that means `make test`.
 README's "Getting started" against a throwaway Python project — its own scratch
 repository and state directory, removed when it exits — and asserts what each
 step is documented to do. It is the gate on a change to the README's install or
-getting-started sections, and it is out of `check` because it needs `bd` and a
-scratch clone that CI has not got, so folding it in would fail every CI run
-rather than gate anything. It needs no provider unless you pass
-`WALK_PROVIDER=1`, and it names any claim it could not exercise rather than
-passing over it.
+getting-started sections, and it is a merge gate rather than a habit: the
+`adoption` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+installs `bd` and runs this target on every pull request. It stays out of
+`check` because `check` is what a run applies to a developer's worktree, and
+that worktree is given neither the tracker nor a reason to cut a scratch clone.
+It needs no provider unless you pass `WALK_PROVIDER=1`, and it names any claim
+it could not exercise rather than passing over it.
 [`scripts/walk-adoption-output.md`](../scripts/walk-adoption-output.md) is the
-last recorded walk, kept because the README split made this the merge gate on
-the reduction; it is a record rather than a check, and it goes stale as soon as
-those sections move.
+last recorded walk, kept from the README split as a readable record of what the
+walkthrough actually prints; CI is what re-runs it now, so the file is a
+snapshot rather than the evidence anything rests on.
 
 ## Before you change how a run works
 

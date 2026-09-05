@@ -66,9 +66,14 @@ check: fmtcheck test race vet
 # The README's "Getting started" executed against a throwaway project that is
 # neither this one nor written in Go, so that section is verified rather than
 # asserted. It is the gate on a change to the README's install or
-# getting-started sections, and it is deliberately not part of `check`: it needs
-# `bd` and a scratch clone, and CI has neither, so folding it in would fail every
-# CI run rather than gate anything.
+# getting-started sections, and CI runs it on every change: the `adoption` job
+# in .github/workflows/ci.yml installs `bd` and calls this target, so the gate
+# is enforced rather than left to somebody remembering it.
+#
+# It stays out of `check` all the same. `check` is what a run applies to a
+# developer's worktree before review, and this needs a tool that worktree is not
+# given and a scratch clone it has no reason to cut; the merge gate belongs in
+# CI, where the tracker can be installed once.
 #
 #   make adoption                    every step that needs no provider
 #   WALK_PROVIDER=1 make adoption    also hand an item to a developer agent

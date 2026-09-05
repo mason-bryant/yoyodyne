@@ -271,10 +271,11 @@ pushed.
 Every step below is executed by [`scripts/walk-adoption.sh`](scripts/walk-adoption.sh),
 which walks this section against a throwaway Python project — its own scratch
 repository, its own temporary state directory, removed when it exits — and
-asserts what each step is documented to do. Run it if you would rather watch the
-path work than take this section's word for it. It needs no provider unless you
-pass `WALK_PROVIDER=1`, and it names any claim it could not exercise rather than
-passing over it.
+asserts what each step is documented to do. It runs on every change to this
+repository, as a job in CI, so this section is checked rather than believed. Run
+it yourself with `make adoption` if you would rather watch the path work than
+take its word for it. It needs no provider unless you pass `WALK_PROVIDER=1`, and
+it names any claim it could not exercise rather than passing over it.
 
 ### 1. Install `yoyo`
 

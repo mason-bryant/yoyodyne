@@ -7,9 +7,31 @@ reduced README to review alone: a section that moved out of the README is a
 step somebody following it can no longer take, and only executing the section
 says whether that happened.*
 
-**This is a record and not a check.** Nothing re-runs it, and it goes stale the
-moment the README's install or getting-started sections move. Re-run
-`make adoption` and replace this file rather than citing it if they have.
+**This is a record and not a check.** It goes stale the moment the README's
+install or getting-started sections move. Re-run `make adoption` and replace
+this file rather than citing it if they have — and note that since
+yoyodyne-ifd.121.6 the walkthrough is a merge gate in its own right: the
+`adoption` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+runs it on every pull request. So this file is a readable snapshot of what the
+walkthrough prints, and CI rather than this file is what stands behind the
+claim that the documented path works.
+
+**Re-run by yoyodyne-ifd.121.6**, which edited the paragraph above `### 1.
+Install yoyo` to say that CI runs the walkthrough. That edit changes
+`README.md`'s digest, so the one recorded below no longer matches the file:
+`README.md` now hashes to
+`7530ef387bd517468f922e5de87e0c6bfd1fa616c96e8abb0dff624890f5261e`, and
+`make adoption` was run against that README on 2026-09-05 with the same result —
+57 assertions passed, none failed, and the same one claim named as unexercisable.
+The transcript below is ifd.121.5's and is kept as the readable record; it is
+unchanged because the walk's own output did not change.
+
+**The digest ceremony below is spent.** It existed because this file was the only
+evidence the reduced README still worked, and pinning it to a hash is what made
+that evidence checkable. CI now runs the walkthrough on every pull request, so a
+README that breaks the documented path fails a gate rather than falsifying a
+digest nobody re-hashes. Read the rows below as ifd.121.5's record of what it
+walked, not as a claim about the file as it now stands.
 
 ## What it was run against
 
@@ -21,25 +43,23 @@ moment the README's install or getting-started sections move. Re-run
 | Branch base | `64a3cfb` |
 | `README.md` sha256 at the walk | `9db4bdab2b1a33c945145bb4201f351572ed495033185f8f82f9730246203771` |
 
-**This change does edit `README.md`**, and inside the section this walk
-executes: it rewrites the "What the product manager can see" paragraph under
+**yoyodyne-ifd.121.5 did edit `README.md`**, and inside the section this walk
+executes: it rewrote the "What the product manager can see" paragraph under
 `### 3. yoyo chat` to name the eight documents the product manager is shown
 rather than to say "the documents it links to under Further reading". That
-rewrite is in the tip above, so the digest recorded here is the digest of the
-rewritten README — the one being merged — rather than of the README it replaced.
-Against the base this change also touches `Makefile`, `docs/configuration.md`,
-`docs/conversation.md`, `docs/developing-yoyo.md`,
-`internal/composition/composition.go`, `internal/config/scaffold.go`,
-`internal/doclink/doclink.go`, `internal/doclink/doclink_test.go`, and this
-file.
+rewrite was in the tip above, so the digest recorded here is the digest of the
+rewritten README that tranche merged. Against its base that change also touched
+`Makefile`, `docs/configuration.md`, `docs/conversation.md`,
+`docs/developing-yoyo.md`, `internal/composition/composition.go`,
+`internal/config/scaffold.go`, `internal/doclink/doclink.go`,
+`internal/doclink/doclink_test.go`, and this file.
 
-**The digest is what binds this record, and the commit is context.** A developer
-run makes no commits: this file is written after the walk and the harness commits
-it afterwards, in a commit later than the `HEAD` named above. That commit carries
-this file and does not touch `README.md`, so the digest stays exact across it.
-Anyone can hash `README.md` at the merge commit and compare; a README that does
-not hash to the value above is not the one these steps were taken against,
-whatever any commit says.
+**Why the digest was recorded at all, and why nothing needs to record one now.**
+A developer run makes no commits, so this file is written after the walk and the
+harness commits it afterwards, in a commit later than the `HEAD` named above —
+which is why the record was bound to a hash rather than to a revision. That
+reasoning was sound and is no longer needed: with the walkthrough running in CI,
+what binds the claim to a revision is the job that executed it on that revision.
 
 ## Result
 
