@@ -404,10 +404,14 @@ cut out of a larger one rather than naming that larger item's slug, because the
 record keeps its identifier and nothing that says what it is called. Which item
 that was is in the tracker and in the durable record. **No conversation identifier is posted at all**: the
 record still carries it and `yoyo status` still reads it, but it is not something
-anybody reading a channel does anything with. What a message does carry — in
-words where the sentence needs it, and in italics under it — is what you would
-follow rather than look up: the run, an exchange, a directive you can quote back
-to resolve it, the pull request. And **the reasoning a role wrote into the
+anybody reading a channel does anything with. **No directive identifier is posted
+either**: what you get for a reply you typed is the reply read back to you and
+what it does to the work, and a slug in an acknowledgment is the one thing in it
+you would have to go and resolve. The record still carries it, and
+`yoyo directive list` is where you read it. What a message does carry — in words
+where the sentence needs it, and in italics under it — is what you would follow
+rather than look up: the run, an exchange, the pull request. And **the reasoning
+a role wrote into the
 tracker is one sentence here**, with the message saying that the rest of it is in
 the item's record: the argument is written for somebody weighing the decision in
 the tracker, and a paragraph of it under a one-line fact is what makes a channel
@@ -729,6 +733,10 @@ was settled. Any prefix of the identifier that names exactly one will do:
 resolve directive-3f2a the second one, and say so in the design
 ```
 
+The identifier is not in the channel — no message posted here carries one — so
+`yoyo directive list` at the terminal is where you read it, or
+`yoyo directive resolve` settles it there without a reply at all.
+
 Open the reply with `@developer`, `@reviewer`, `@architect`,
 `@development-manager`, or `@product-manager` to record who you told. That is
 attribution rather than routing — the record reaches every run of the item
@@ -736,8 +744,10 @@ whichever role it names — and a reply that mentions nobody is the product
 manager's.
 
 Every reply is answered in its own thread, **tagging you**, with the directive as
-recorded and its identifier, or with why nothing was recorded. What that answer
-says is the whole of what happened at that moment: there is no other
+recorded and what it does to the work — *Recorded, for the Product Manager:
+prefer the smaller change here — it applies from now on, and nothing waits on
+it.* — or with why nothing was recorded. What that answer says is the whole of
+what happened at that moment: there is no other
 confirmation, and a reply that stopped work is shown at the top of the channel as
 well, because work stopping is what somebody who has opened no threads most needs
 to see.
