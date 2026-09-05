@@ -129,15 +129,37 @@ anchor made from inside `docs/product/`, `docs/designs/`, `docs/decisions/`, or
     release already published, and published release notes cannot be corrected
     by a change to this repository.
 - **Tracked work items.** The backlog is upstream: the product manager owns it,
-  and no developer rewrites an item to chase a link. Four anchors today, and
-  unlike at drafting one of the citing items is open rather than closed:
-  `docs/configuration.md#merge-and-removal-semantics`, `#what-fails-closed`,
-  `#what-init-proposes-for-checks`, and `#what-reaches-the-queue` are all cited
-  by yoyodyne-ifd.117.1, which is open and is the configuration split's own
-  first tranche. `#product-specifications` is cited by yoyodyne-ifd.20.2 and
-  yoyodyne-ifd.21 and `#checks` by yoyodyne-ifd.159, all closed, so the cost of
-  dangling those would be archaeological rather than live — but the rule holds
-  on who may rewrite the citation rather than on how much it would hurt.
+  and no developer rewrites an item to chase a link. **The tracker mentions six
+  configuration-guide anchors, and four of them are Tier 1 because of it** —
+  unlike at drafting, one of the citing items is open rather than closed:
+
+  - **The four.** `docs/configuration.md#merge-and-removal-semantics`,
+    `#what-fails-closed`, `#what-init-proposes-for-checks`, and
+    `#what-reaches-the-queue`, all from yoyodyne-ifd.117.1, which is open and is
+    the configuration split's own first tranche.
+  - **The other two are mentioned and not frozen by it.**
+    `#product-specifications` in yoyodyne-ifd.20.2 and yoyodyne-ifd.21, and
+    `#checks` in yoyodyne-ifd.159, all closed. Both anchors are Tier 1 anyway on
+    other grounds — a design cites the first and generated configuration cites
+    the second — so nothing turns on which way the tracker is read for either.
+    The next paragraph is why they are listed apart.
+
+  **What counts as a citation here, since the tracker holds two different
+  things.** An item's own text — its description, its design guidance, its
+  acceptance criteria — is a citation: a run that has not happened yet will
+  follow it, and a renamed anchor makes it unfollowable by somebody who cannot
+  repair it. A closed item's recorded review findings and review summaries are
+  not: they are an account of what was true when the review ran, and they stay
+  true as an account whatever later becomes of the anchor. So the tier turns on
+  whether the item is still work somebody will act on, and the four above are
+  frozen because ifd.117.1 is open and names those anchors as the ones its next
+  tranche must handle. Applying it the other way — freezing on a closed item's
+  transcript — would freeze an anchor for the sake of a sentence nobody will ever
+  follow, which is the stub graveyard [the architect was asked
+  about](#what-the-architect-is-being-asked) and told this policy to avoid.
+  This distinction is yoyodyne-ifd.121.6's, drawn because the README sweep
+  below turns on it; the architect should confirm or overturn it when they take
+  up the questions at the end of this document.
 - **Protected artifact homes** — `docs/product/`, `docs/designs/`,
   `docs/decisions/`, and `.yoyodyne/`. A developer on this effort may not edit a
   file in one, so an anchor cited from inside one is Tier 1 by construction: the
@@ -312,23 +334,62 @@ it had moved again.
 | Anchor | Cited by | Tier | New home |
 |---|---|---|---|
 | `#further-reading` | `skills/yoyo-setup/SKILL.md:21`, `internal/doclink/doclink.go:354`, and the back-link each of `docs/conversation.md:4` (and `:94`), `work.md:4`, `artifacts.md:4`, `reporting.md:4`, `operations.md:4`, `developing-yoyo.md:4` (and `:179`), `delivery-pipeline-baseline.md:4`, `releases/README.md:4`, and `configuration.md:539` opens with | — | section stays; no move to service |
-| `#getting-started` | `.github/release-notes-preamble.md:28`, and yoyodyne-ifd.156 and yoyodyne-ifd.159 in the tracker | **1** | stays in the README — see below |
-| `#3-yoyo-chat--establish-the-brief-and-the-goals` | `skills/yoyo-setup/SKILL.md:220`, and yoyodyne-ifd.125.4 | — | section stays; no move to service |
-| `#keeping-the-configuration-out-of-the-repository` | `docs/configuration.md:153`, and yoyodyne-ifd.76 | 2 | merges into the `docs/configuration.md` index with the rest of `## Configuring a project` |
+| `#getting-started` | `.github/release-notes-preamble.md:28`; **recorded prose** in closed yoyodyne-ifd.156 and yoyodyne-ifd.159 | **1** | stays in the README — Tier 1 on the preamble alone |
+| `#3-yoyo-chat--establish-the-brief-and-the-goals` | `skills/yoyo-setup/SKILL.md:220`; **recorded prose** in closed yoyodyne-ifd.125.4 | — | section stays; no move to service |
+| `#keeping-the-configuration-out-of-the-repository` | `docs/configuration.md:153`; **recorded prose** in closed yoyodyne-ifd.76 | 2 | merges into the `docs/configuration.md` index with the rest of `## Configuring a project` |
 | `#running-several-claude-accounts` | `docs/configuration.md:3460` | 2 | merges with the same block — **new to this pass** |
-| `#talking-to-the-other-agents` | nothing in the working tree; yoyodyne-ifd.117.1 (open) and yoyodyne-ifd.121.2 (closed) quote it in recorded prose | — | **spent** — repointed by ifd.160 to `conversation.md#talking-to-the-other-agents` |
+| `#talking-to-the-other-agents` | nothing in the working tree; **recorded prose** in open yoyodyne-ifd.117.1 and closed yoyodyne-ifd.121.2 | — | **spent** — repointed by ifd.160 to `conversation.md#talking-to-the-other-agents` |
+
+**Six items mention a README anchor, and none of the six freezes one.** Every
+one of the six mentions it inside recorded review findings or a review summary
+rather than in the item's own description, guidance, or criteria, and five of the
+six are closed:
+
+- **ifd.156, ifd.159** (`#getting-started`), **ifd.125.4**
+  (`#3-yoyo-chat--establish-the-brief-and-the-goals`), **ifd.76**
+  (`#keeping-the-configuration-out-of-the-repository`), **ifd.121.2**
+  (`#talking-to-the-other-agents`) — all closed. ifd.76's is worth spelling out
+  because it is the one whose section moves: it is a review summary observing
+  that `docs/configuration.md`'s link "matches the new heading's slug", which is
+  a statement *about* a citation the same table row already carries, from the
+  file that will rewrite it. Freezing the anchor on it would freeze the README
+  for the sake of a closed reviewer's sentence describing a link this repository
+  can fix.
+- **ifd.117.1** (`#talking-to-the-other-agents`) — open, and the only open one.
+  It quotes the anchor inside a recorded review finding about
+  `docs/configuration/agents.md`, and the anchor is already gone, which a
+  paragraph below names rather than repairs.
+
+Under the rule as [applied above](#the-moved-anchor-policy), none of the six is
+an item's own text that a later run follows, so **no README anchor is Tier 1 by
+tracker citation.** The precedent for reading them this way is already at the
+foot of this section: yoyodyne-ifd.54 and yoyodyne-ifd.1.2 have been treated as
+recorded prose rather than as citations since drafting. The reading itself is
+[question 2 for the architect](#what-the-architect-is-being-asked), because the
+README's no-stub conclusion is what rests on it.
 
 **Only the fourth and fifth rows name a section that still has to move**, and
-both are cited from `docs/configuration.md` alone, so both are the configuration
-split's to rewrite. Neither dangles meanwhile: ifd.160 held
-`## Configuring a project` and its two children back in the README precisely
+both are cited by exactly one live citer, `docs/configuration.md` — the document
+those sections merge into. So the run that breaks each link is the run that
+repairs it, which is Tier 2 by definition. Neither dangles meanwhile: ifd.160
+held `## Configuring a project` and its two children back in the README precisely
 because their destination does not exist yet.
 `#running-several-claude-accounts` is the one this pass added, and it is the same
 case — a child of the held-back block, cited once, from the guide that will
 absorb it.
 
-`#getting-started` is still the sole Tier 1 README anchor, and the section it
-names stays, so **the README acquires no stub** and the split lands without one.
+So `#getting-started` is still the sole Tier 1 README anchor, frozen by the
+release preamble rather than by anything in the backlog, and the section it names
+stays — so **the README acquires no stub** and the split lands without one. That
+conclusion now rests on a judgement rather than on an absence, so it is stated as
+one: were a backlog *item's own text* to cite
+`#keeping-the-configuration-out-of-the-repository` or
+`#running-several-claude-accounts`, that anchor would be Tier 1 and the
+configuration split would owe the README a redirect stub. Nothing does today. The
+tranche that merges the block should re-run this sweep before it deletes the
+sections, because the backlog is the one input to it that can change without a
+commit here.
+
 One Go file cites a README anchor, twice: `internal/doclink/doclink.go:354` and
 `:363`, both comments using `../README.md#further-reading` as the worked example
 of how a relative fragment resolves, so neither is a claim about structure. No
@@ -425,7 +486,13 @@ The README keeps four things and links out for everything else: the value
 proposition, the testimonials, everything a newcomer needs to reach a working
 first run, and the index. It keeps **nothing extra to service a link** — no
 Tier 1 stub of its own — and that is a result of the sweep above rather than an
-assumption: nothing outside the README cites a README anchor whose section moves.
+assumption. Precisely: the two README anchors whose sections still move are each
+cited by exactly one file, `docs/configuration.md`, which is the document those
+sections merge into, so the run that breaks each link repairs it. Nothing this
+repository cannot rewrite cites either of them, and the tracker's mentions of
+them are [recorded prose rather than
+citations](#citations-of-readmemd-anchors). Change any of that and the README
+owes a stub.
 
 Install and Getting started **stay in the README**, for two independent reasons.
 The first is the goal: a newcomer reaches a working first run *using the readme
@@ -824,16 +891,30 @@ when somebody remembered.
    The alternative considered and rejected was freezing every currently-cited
    anchor, which buys a stub graveyard in exchange for never re-deriving a
    citation list.
-2. **Should the frozen anchors live in `docs/configuration.md` as stubs, or
+2. **Does a mention in a closed item's review transcript freeze an anchor?**
+   yoyodyne-ifd.121.6's sweep says no, and [says why](#the-moved-anchor-policy):
+   almost every tracker mention this document records lives in an item's recorded
+   review findings rather than in its description, so the axis that decides
+   anything is whether the item is still work somebody will act on. An item
+   nobody will act on again cannot be made unfollowable, so freezing on its
+   transcript buys the stub graveyard question 1 rejected, by another door.
+   It is not academic: read the other way, all six of the items mentioning a
+   README anchor in [the README table](#citations-of-readmemd-anchors) freeze
+   one, and the configuration split then owes the README a redirect stub for
+   `#keeping-the-configuration-out-of-the-repository`, which everything in
+   [what the README becomes](#what-the-readme-becomes) is written against. The
+   distinction is a developer's, drawn to resolve a review finding, and it is the
+   kind of thing the tier policy's owner should settle rather than inherit.
+3. **Should the frozen anchors live in `docs/configuration.md` as stubs, or
    should `docs/configuration.md` keep the real `## Checks` content** and the
    split take everything else? The stub is proposed because a document that
    keeps one arbitrary section for URL reasons is harder to explain than a
    document that keeps none.
-3. **Is `docs/configuration/` as a directory beside a surviving
+4. **Is `docs/configuration/` as a directory beside a surviving
    `docs/configuration.md` acceptable**, or should the split targets be flat
    `docs/configuration-runs.md` and so on? The directory is proposed; the
    coexistence is admittedly odd to look at.
-4. **Does `shippedDocumentation` growing to fifteen entries change what the
+5. **Does `shippedDocumentation` growing to fifteen entries change what the
    product manager should be given at all**, or is the enumeration the right
    answer to keep?
 
