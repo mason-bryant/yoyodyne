@@ -136,6 +136,13 @@ type Round struct {
 	Question string `json:"question"`
 	Context  string `json:"context,omitempty"`
 	Answer   string `json:"answer,omitempty"`
+	// Holder names the process that was taking this round, so a later pass
+	// reading a round nobody answered can say who was carrying it. It is what
+	// turns "this round was interrupted" into something an operator can act on:
+	// a harness that is still running and a harness that died look identical
+	// from the record otherwise. It is absent on a round recorded before holders
+	// were written down, and on one no process claimed.
+	Holder string `json:"holder,omitempty"`
 	// Problem is why this round has no answer, where it has none. A round the
 	// answering provider failed is still a round the exchange spent, and saying
 	// what happened is what stops it reading as a question nobody asked.
@@ -191,6 +198,13 @@ type Exchange struct {
 	// every question including this one; this is here so a listing can say what an
 	// exchange is about without reading the thread.
 	Question string `json:"question"`
+	// Refers are the durable things this question was asked against, each at the
+	// revision the asking role read. They are what makes staleness derivable: a
+	// question put against a goal that has since been amended may no longer be
+	// the question, and without the revision nothing can tell that from a goal
+	// nobody has touched. They are optional, because most questions rest on
+	// nothing anybody versions.
+	Refers []Reference `json:"refers,omitempty"`
 	// MaxRounds is the hard limit this exchange is held to. It is copied onto the
 	// exchange when it opens rather than read from the configuration each time,
 	// so a process death, a configuration edit, or a second process cannot reset
@@ -254,6 +268,29 @@ func (e Exchange) RoundsRemaining() int {
 	return 0
 }
 
+// Interrupted is the round that was asked and never came back, where there is
+// one: no answer, and no account of why there is none.
+//
+// It is the crash window made readable. A round is on disk before the answering
+// provider is invoked and revised the moment anything comes back, so a round in
+// this state is one whose process died between the two — and a round that failed
+// is not one, because a failure records the problem. Only the last round can be
+// in it, which Validate holds the record to.
+//
+// Whether the process is actually gone is not a question the record answers: a
+// round being taken right now looks exactly like this. The lease is what settles
+// it, which is why nothing here is acted on without one.
+func (e Exchange) Interrupted() (Round, bool) {
+	if len(e.Rounds) == 0 {
+		return Round{}, false
+	}
+	last := e.Rounds[len(e.Rounds)-1]
+	if last.AnsweredAt == nil && strings.TrimSpace(last.Answer) == "" && strings.TrimSpace(last.Problem) == "" {
+		return last, true
+	}
+	return Round{}, false
+}
+
 // CostUSD is what conducting this exchange has cost, summed from what the
 // provider reported for each round. It is reported beside the rounds wherever an
 // exchange is read, because what a conversation between two roles spent is
@@ -283,6 +320,7 @@ func (e Exchange) Validate() error {
 		problems = append(problems, errors.New("an exchange is between two roles; a role does not ask itself"))
 	}
 	problems = append(problems, boundedText("question", e.Question, MaxQuestionBytes, true))
+	problems = append(problems, validateReferences("refers", e.Refers))
 	if e.MaxRounds < 1 {
 		problems = append(problems, fmt.Errorf("max rounds is %d; an exchange is allowed at least one round", e.MaxRounds))
 	}
@@ -296,8 +334,16 @@ func (e Exchange) Validate() error {
 		problems = append(problems, boundedText(fmt.Sprintf("rounds[%d] question", i), round.Question, MaxQuestionBytes, true))
 		problems = append(problems, boundedText(fmt.Sprintf("rounds[%d] context", i), round.Context, MaxContextBytes, false))
 		problems = append(problems, boundedText(fmt.Sprintf("rounds[%d] answer", i), round.Answer, MaxAnswerBytes, false))
+		problems = append(problems, boundedText(fmt.Sprintf("rounds[%d] holder", i), round.Holder, MaxReferenceBytes, false))
 		if round.AskedAt.IsZero() {
 			problems = append(problems, fmt.Errorf("rounds[%d] records no moment it was asked", i))
+		}
+		// Only the last round can be the one still being taken. An earlier one left
+		// unanswered behind a later one is a record two processes wrote over each
+		// other, and reclaiming against it would be exactly the double delivery the
+		// lease exists to prevent.
+		if round.AnsweredAt == nil && i != len(e.Rounds)-1 {
+			problems = append(problems, fmt.Errorf("rounds[%d] was never answered and a later round was taken behind it", i))
 		}
 		if round.CostUSD < 0 {
 			problems = append(problems, fmt.Errorf("rounds[%d] cost cannot be negative", i))
@@ -365,6 +411,13 @@ type Ask struct {
 	// is about to decide with the answer. It is optional and it is never
 	// evidence: the role being asked reads it as what the asker thinks.
 	Context string `json:"context,omitempty"`
+	// Refers are the durable things the asker read before it asked, each at the
+	// revision it read. They are optional and they are not evidence either: what
+	// they buy is that a question asked against something that has since moved can
+	// be found afterwards, instead of being answered as though nothing had
+	// changed. They are recorded when the exchange opens; a follow-up in the same
+	// thread is asked against what the thread already names.
+	Refers []Reference `json:"refers,omitempty"`
 	// Exchange continues a thread already open, named by its identifier. An ask
 	// naming none opens a new exchange.
 	Exchange string `json:"exchange,omitempty"`
@@ -396,6 +449,14 @@ func (a Ask) Validate() error {
 	}
 	problems = append(problems, boundedText("context", a.Context, MaxContextBytes, false))
 	problems = append(problems, boundedText("settled", a.Settled, MaxSettledBytes, false))
+	problems = append(problems, validateReferences("refers", a.Refers))
+	// What an exchange was asked against is fixed when it opens, for the reason
+	// who is in it is: a thread whose references changed half way through would be
+	// two questions wearing one identifier, and staleness derived over it could no
+	// longer say which of them had gone stale.
+	if continuing && len(a.Refers) > 0 {
+		problems = append(problems, errors.New(`"refers" is recorded when an exchange opens; a follow-up is asked against what the thread already names`))
+	}
 	if a.Closing() {
 		// Closing is about a thread, so there has to be a thread to close, and
 		// there is nothing further to ask in the same breath.

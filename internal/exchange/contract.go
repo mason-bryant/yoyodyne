@@ -36,6 +36,12 @@ To ask, end your reply with exactly one block, after the prose:
 
 "role" is the role you are asking, "question" has to ask something and end with a question mark, and "context" is optional and is your own framing rather than a re-briefing of them. One block asks one thing: an exchange is a thread between two roles, and a reply opening three at once is broadcasting rather than asking.
 
+Where your question rests on something that can be amended underneath it — a goal, a design, a work item — name it and the revision you read, so that an answer given against the old wording can be found later rather than acted on as though nothing had moved. It is optional, it is recorded when the exchange opens, and it changes nothing about the answer you get:
+
+` + "```" + `yoyodyne-ask
+{"ask":{"role":"architect","question":"does this design still serve the goal?","refers":[{"what":"goal","id":"run-development-nearly-autonomously","revision":"2026-08-30T11:04:00Z"}]}}
+` + "```" + `
+
 The answer comes back to you in this same reply, with the exchange's identifier and where it has got to against its round limit. Then you either ask again in the same thread, or close it. A block that names "exchange" needs no "role", because the thread already says who is in it — and naming a different one is refused rather than redirecting it:
 
 ` + "```" + `yoyodyne-ask

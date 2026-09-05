@@ -61,7 +61,10 @@ func (s *ExchangeStore) Root() string { return s.root }
 // round, or closed. It is a replacement rather than an append because the record
 // is one thread rather than a stream of events about one: what a reader wants is
 // the exchange as it now stands, and what makes that safe is that only the
-// conductor writes it and only one round of one exchange is ever in flight.
+// conductor writes it and only one round of one exchange is ever in flight —
+// which is Hold's guarantee below rather than a convention, so a second process
+// putting a round on the same thread is refused the lease instead of writing
+// over the first one's round.
 func (s *ExchangeStore) Save(recorded exchange.Exchange) error {
 	if err := s.validate(recorded); err != nil {
 		return err
@@ -219,6 +222,41 @@ func (s *ExchangeStore) Find(reference string) (exchange.Exchange, error) {
 		}
 		return exchange.Exchange{}, fmt.Errorf("%q names %d exchanges: %s", wanted, len(matched), strings.Join(names, ", "))
 	}
+}
+
+// Hold takes the exclusive lease on one exchange without waiting, reporting
+// whether it got it.
+//
+// It is what makes an exchange take its rounds one at a time. Two processes
+// putting a round on the same thread would each load the record, each append a
+// round numbered the same, and the second write would take the first away —
+// one round the operator paid for and nothing recorded, and a cap counting one
+// where two were spent.
+//
+// It is also how a restart tells an interrupted round from one being taken. A
+// round on disk with no answer looks identical either way; the lease is the
+// difference, because the operating system drops it when its holder exits. So a
+// killed harness leaves nothing for anybody to clear and the next pass simply
+// finds the exchange free. Asking whether somebody holds it and taking it
+// afterwards would leave a window between the two, so taking it is the question.
+//
+// The lease lives in a directory beside the records rather than among them,
+// which the enumeration skips: a lease is about who is working on an exchange
+// and not part of what the exchange says.
+// It answers the lease as the interface the exchange package states, because
+// that package cannot import this one: the durable home depends on the contract
+// and never the other way round.
+func (s *ExchangeStore) Hold(id string) (exchange.Release, bool, error) {
+	if !exchange.ValidID(id) {
+		return nil, false, fmt.Errorf("exchange id %q is invalid", id)
+	}
+	lease, taken, err := TryLeasePath(filepath.Join(s.root, "leases", id+".lease"), "exchange "+id)
+	if err != nil || !taken {
+		// A typed nil handed back as an interface is not nil, and a caller checking
+		// what it got would find a lease it does not have.
+		return nil, taken, err
+	}
+	return lease, true, nil
 }
 
 func (s *ExchangeStore) validate(recorded exchange.Exchange) error {
