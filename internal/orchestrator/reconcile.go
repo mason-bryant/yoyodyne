@@ -543,7 +543,7 @@ func (r Reconciler) closeSettledMerge(ctx context.Context, state runstate.State)
 	// the durable record here for the reason it is durable at all: the run that
 	// made it ended before the forge answered.
 	if !state.LandingDischarges() {
-		if _, err := r.Tracker.Reopen(ctx, state.WorkItemID, undischargedLandingReason(state)); err != nil {
+		if err := settleUndischarged(ctx, r.Tracker, state); err != nil {
 			return fmt.Errorf("reopen the work item run %s did not discharge: %w", state.RunID, err)
 		}
 		return nil
@@ -705,7 +705,7 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 			return reconciliationOf(state, ActionCompleted), fmt.Errorf("record reconciled outcome for run %s: %w", state.RunID, err)
 		}
 		if !state.LandingDischarges() {
-			if _, err := r.Tracker.Reopen(ctx, state.WorkItemID, undischargedLandingReason(state)); err != nil {
+			if err := settleUndischarged(ctx, r.Tracker, state); err != nil {
 				return reconciliationOf(state, ActionCompleted), fmt.Errorf("reopen the work item run %s did not discharge: %w", state.RunID, err)
 			}
 		} else if _, err := r.Tracker.Complete(ctx, state.WorkItemID, reconciledCompletionReason(state)); err != nil {

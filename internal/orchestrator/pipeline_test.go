@@ -2933,6 +2933,11 @@ type fakeTracker struct {
 	reopened     bool
 	reopenReason string
 	reopenErr    error
+	// blockers is each dependency added to the item, in the order they were
+	// added. It is what says the leave-open path actually made the item wait for
+	// something rather than putting it back bare.
+	blockers   []string
+	blockerErr error
 }
 
 type partialWorktreeManager struct {
@@ -3062,7 +3067,7 @@ func (f *fakeTracker) Complete(_ context.Context, _ string, reason string) (bead
 	return f.item, nil
 }
 
-func (f *fakeTracker) Reopen(_ context.Context, _ string, reason string) (beads.WorkItem, error) {
+func (f *fakeTracker) Reopen(_ context.Context, _ string, reason string, parking domain.WorkItemParking) (beads.WorkItem, error) {
 	f.calls = append(f.calls, "reopen")
 	if f.reopenErr != nil {
 		return beads.WorkItem{}, f.reopenErr
@@ -3072,7 +3077,21 @@ func (f *fakeTracker) Reopen(_ context.Context, _ string, reason string) (beads.
 	f.notes += reason
 	f.noteRecords = append(f.noteRecords, reason)
 	f.item.Status = "open"
+	// The parking is applied exactly as the tracker applies it: an empty one is a
+	// release rather than an omission, so an item put back unparked is one the
+	// queue offers again.
+	f.item.Parking = parking
 	return f.item, nil
+}
+
+func (f *fakeTracker) AddBlocker(_ context.Context, _ string, blockerID string) error {
+	f.calls = append(f.calls, "blocker")
+	if f.blockerErr != nil {
+		return f.blockerErr
+	}
+	f.blockers = append(f.blockers, blockerID)
+	f.item.Dependencies = append(f.item.Dependencies, beads.Dependency{ID: blockerID, Type: "blocks"})
+	return nil
 }
 
 // fakePricer stands in for the ledger that prices work items. It records the

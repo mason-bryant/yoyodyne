@@ -2758,8 +2758,31 @@ func (h *realScheduleHarness) Complete(_ context.Context, id, _ string) (beads.W
 	return h.setStatus(id, "closed")
 }
 
-func (h *realScheduleHarness) Reopen(_ context.Context, id, _ string) (beads.WorkItem, error) {
+// Reopen puts the item back in the backlog under the parking it was given, which
+// is the whole of what a later pull reads: an item returned open and unparked is
+// one the very next poll offers again.
+func (h *realScheduleHarness) Reopen(_ context.Context, id, _ string, parking domain.WorkItemParking) (beads.WorkItem, error) {
+	h.mu.Lock()
+	for index := range h.items {
+		if h.items[index].ID == id {
+			h.items[index].Parking = parking
+		}
+	}
+	h.mu.Unlock()
 	return h.setStatus(id, "open")
+}
+
+func (h *realScheduleHarness) AddBlocker(_ context.Context, id, blockerID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for index := range h.items {
+		if h.items[index].ID == id {
+			h.items[index].Dependencies = append(h.items[index].Dependencies,
+				beads.Dependency{IssueID: id, ID: blockerID, Type: "blocks"})
+			return nil
+		}
+	}
+	return fmt.Errorf("no work item %s", id)
 }
 
 func (h *realScheduleHarness) setStatus(id, status string) (beads.WorkItem, error) {
