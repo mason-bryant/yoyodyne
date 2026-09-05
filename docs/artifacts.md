@@ -56,13 +56,13 @@ says so as it writes: the document is now an uncommitted change, a run against
 that checkout refuses to start while it is, and committing it is yours under your
 own identity. The checkout is named in so many words, because which one the write
 landed in follows the configuration the command read rather than where you are
-standing. That is the settled shape rather than an unfinished one. The only ways into the target
-branch are a reviewed promotion and your own hand, so a harness-made commit would
-be a promotion by another name carrying tree state nothing reviewed — and leaving
-the write in your tree keeps what a document is down to two readings: committed,
-or an edit of yours that is visibly holding the runs up. It is said at the moment
-of the write because the alternative is meeting it as a refusal from whatever you
-run next.
+standing. That is the settled shape rather than an unfinished one. The only
+ways into the target branch are a reviewed promotion and your own hand, so a
+harness-made commit would be a promotion by another name carrying tree state
+nothing reviewed — and leaving the write in your tree keeps what a document is
+down to two readings: committed, or an edit of yours that is visibly holding
+the runs up. It is said at the moment of the write because the alternative is
+meeting it as a refusal from whatever you run next.
 
 A document in one of those directories with no usable identity is named on
 stderr rather than governed under a guessed id, so a home you have not given

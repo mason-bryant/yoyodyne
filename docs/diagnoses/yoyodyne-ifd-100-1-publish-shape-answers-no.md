@@ -129,15 +129,15 @@ Nothing a developer run can do. Two decisions, in this order:
    state the settled boundary instead — but it is on a branch this base does not
    contain, so it is named here rather than edited.
 
-One gap is worth recording separately. ifd.100.2's own done condition was that the
-shape be *"recorded in an architect-owned design or decision record"*; it was
-closed with the ruling stated in the tracker item's notes. The governed designs do
-not carry it — `docs/designs/artifact-contract.md` says nothing about how an
-artifact write reaches disk. The tracker is not readable from a developer run, and
-it is not what a reviewer is shown, which is precisely how two runs came to spend
-six review rounds on a question that had been settled for a week.
+One gap is worth recording separately, and it has since been closed.
+ifd.100.2's own done condition was that the shape be *"recorded in an
+architect-owned design or decision record"*; it was closed with the ruling stated
+in the tracker item's notes alone, and the tracker is neither readable from a
+developer run nor part of what a reviewer is shown — which is precisely how two
+runs came to spend six review rounds on a question that had been settled for a
+week.
 
-That document is the architect's, so the correction is not written here. It is
+That document is the architect's, so the correction was not written here. It was
 proposed instead, and the proposal is a record somebody can read back rather than
 a claim this document makes about itself:
 
@@ -149,17 +149,20 @@ That proposal — *artifact-contract records the settled publish shape for typed
 artifact writes* — was raised on 2026-09-05 and **approved the same day** under
 the architect's authority, for `artifact-contract` to gain a section carrying the
 ifd.100.2 ruling verbatim. A later run raised the same correction again as
-`amendment-958c5395620274ee990f85cdf1c5204f`, which is still undecided and asks
-for nothing the approved one does not.
+`amendment-958c5395620274ee990f85cdf1c5204f`, which asks for nothing the approved
+one does not.
 
-**The gap is not closed by either of them, and stands as this document is
-written.** An approval records that the owner's authority came down in favour of
-the change; the revision itself is still the architect's to make, and
-`docs/designs/artifact-contract.md` at this base carries one revision, its
-creation on 2026-08-23, and no section about how a write reaches disk. So a
-developer run or a reviewer reading the governed designs today still finds the
-publish shape nowhere, exactly as before. What closes it is that revision being
-recorded.
+**The architect has since recorded the revision, which is what closes the gap.**
+An approval only records that the owner's authority came down in favour of the
+change; the revision itself was the architect's to make, and at this base it is
+made. `docs/designs/artifact-contract.md` carries a second revision — `amended`,
+by the architect, at 2026-09-05T20:10:00Z, naming amendment 330a8eb3 from
+yoyodyne-ifd.280 — and a *How a write reaches disk* section stating the
+working-tree stop, the operator's own commit under their own identity, the
+uncommitted change runs deliberately refuse to start over, and the obligation on
+the surface that performed the write. So a developer run or a reviewer reading
+the governed designs now finds the publish shape there, rather than in a tracker
+neither of them can read.
 
 ## What was built against the ruling
 
