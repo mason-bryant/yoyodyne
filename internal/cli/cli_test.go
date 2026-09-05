@@ -181,6 +181,50 @@ func TestReconcileRefusesArgumentsAndReportsConfigurationFailureAsJSON(t *testin
 	}
 }
 
+// The sweep carries no voice, so every request it finds free comes back
+// undelivered — which for a request simply waiting its turn is not something
+// the sweep did. Those stay out of what a person reads and stay in `--json`,
+// exactly as the branches and publications this leaves unprinted do.
+func TestReconcileReportsWhatItRecoveredRatherThanWhatItDeclinedToDeliver(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	sweep := reconcileSweep{Supervision: []orchestrator.SupervisionResult{
+		{
+			RequestID: "request-00000000000000000000000000000001",
+			Outcome:   orchestrator.SupervisionUndelivered,
+			Detail:    "no voice is wired to this pass",
+		},
+		{
+			RequestID: "request-00000000000000000000000000000002",
+			Outcome:   orchestrator.SupervisionSettled,
+			Detail:    "the architect's answer to attempt 1 is on the record",
+		},
+	}}
+	if code := reportReconcileResult(&stdout, &stderr, false, sweep, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d; stderr = %q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "request-00000000000000000000000000000001") {
+		t.Errorf("stdout = %q, want the undelivered request left out", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "request-00000000000000000000000000000002") {
+		t.Errorf("stdout = %q, want the settled request reported", stdout.String())
+	}
+
+	var jsonOut bytes.Buffer
+	if code := reportReconcileResult(&jsonOut, &stderr, true, sweep, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d; stderr = %q", code, stderr.String())
+	}
+	var result reconcileOutput
+	if err := json.Unmarshal(jsonOut.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Supervision) != 2 {
+		t.Fatalf("Supervision = %#v, want the whole pass carried", result.Supervision)
+	}
+}
+
 // A settle catches its target branch up itself, so the report says so on the
 // run that did it. A catch-up it held is the fact somebody has to read, which
 // is why it goes to stderr — and why it is still not a failure: the branch is
@@ -204,7 +248,7 @@ func TestReconcileReportsTheCatchUpASettleMadeAndTheOneItHeld(t *testing.T) {
 			Catchup:    &gitworktree.Catchup{TargetBranch: "main", Held: "the primary checkout has unsaved changes"},
 		},
 	}
-	code := reportReconcileResult(&stdout, &stderr, false, results, nil, orchestrator.Convergence{}, 0, nil)
+	code := reportReconcileResult(&stdout, &stderr, false, reconcileSweep{Runs: results}, nil)
 	if code != 0 {
 		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
 	}
