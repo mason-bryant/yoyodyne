@@ -135,6 +135,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -316,6 +317,12 @@ type SessionState struct {
 	// nonetheless working, and who has to act before the answer changes.
 	Running  int
 	Executor domain.WorkItemExecutor
+	// PassedOver is what the poll left where it was, in the classes the read model
+	// groups them into. The reason says the same account in prose for whoever is
+	// reading the log; this is the same account for whatever has to answer a
+	// question about it, and it is what keeps the stall alarm from deriving its own
+	// answer beside a session that had already worked one out.
+	PassedOver runstate.PassedOver
 	// Unreadable marks the poll that chose nothing because the harness could not
 	// be read at all. It travels for the same reason the two above do: nothing a
 	// person admits, releases, or opens changes the answer while the store will
@@ -1197,11 +1204,11 @@ pulling:
 				continue
 			}
 			if s.cooling(tried, read.items[entry.ID]) {
-				poll.pass(entry.ID, idleAlreadyTried, "")
+				poll.pass(entry.ID, runstate.PassedOverAlreadyTried, "")
 				continue
 			}
 			if _, busy := occupied[entry.ID]; busy {
-				poll.pass(entry.ID, idleAlreadyInFlight, "")
+				poll.pass(entry.ID, runstate.PassedOverAlreadyInFlight, "")
 				continue
 			}
 			// A decomposed item is not itself a run. Its children are where the work
@@ -1224,7 +1231,7 @@ pulling:
 						Reason:     coveredReason(covering),
 					})
 				}
-				poll.pass(entry.ID, idleCoveredByChildren, "")
+				poll.pass(entry.ID, runstate.PassedOverCoveredByChildren, "")
 				continue
 			}
 			// An unresolved directive stops the work whether it is read here or in
@@ -1254,7 +1261,7 @@ pulling:
 						Reason:     "an unresolved directive pauses it: " + pausing[0].Summary(),
 					})
 				}
-				poll.pass(entry.ID, idlePausedByDirective, "")
+				poll.pass(entry.ID, runstate.PassedOverPausedByDirective, "")
 				continue
 			}
 			// Work that would race something already going is sequenced behind it
@@ -1274,7 +1281,7 @@ pulling:
 				}
 				sequencedEarlier[entry.ID] = racing
 				sequenced = append(sequenced, entry.ID)
-				poll.pass(entry.ID, idleSequencedBehindWork, "")
+				poll.pass(entry.ID, runstate.PassedOverSequencedBehindWork, "")
 				continue
 			}
 			// The last question asked before a slot is spent, and the only one that
@@ -1308,7 +1315,7 @@ pulling:
 						Reason:     unreadyReason(unmet),
 					})
 				}
-				poll.pass(entry.ID, idlePrerequisiteUnmet, "")
+				poll.pass(entry.ID, runstate.PassedOverPrerequisiteUnmet, "")
 				continue
 			}
 			delete(deferred, entry.ID)
@@ -1360,10 +1367,12 @@ pulling:
 		// later poll, because that is the whole of what makes it worth recording: an
 		// account that arrived an hour into the wait would arrive after the watchdog
 		// had already woken somebody over the silence.
+		passed := poll.passedOver(queue)
 		said := account{
-			reason:   poll.reason(queue, len(occupied)),
-			running:  len(occupied),
-			executor: poll.carrier(),
+			reason:     readmodel.IdleLine(passed, len(occupied)),
+			running:    len(occupied),
+			executor:   readmodel.Carrier(passed),
+			passedOver: passed,
 		}
 		if window.standing(s.now()) {
 			said.window = window
@@ -1698,147 +1707,36 @@ func (s Started) blockedRun() bool {
 	return s.Failure != "" || s.Outcome.Blocked
 }
 
-// maxIdleItemsNamed bounds how many items one class of an idle account names
-// before it falls back to counting the rest. The count stays exact either way,
-// for the reason every listing here is bounded: a backlog of forty deferred
-// items would otherwise put forty identifiers into a line whose whole job is to
-// be read at a glance.
-const maxIdleItemsNamed = 5
-
-// idleClass is one reason a poll left an item where it was, in the words the
-// idle line names it by. The set is closed, and every place the pull loop passes
-// an item over names one of them: a class nobody named is an item that
-// disappears into a count saying something else about it, which is the
-// misreading this whole account exists to end.
-type idleClass string
-
-const (
-	idleCarriedInConversation idleClass = "carried in conversation"
-	idleParked                idleClass = "parked"
-	idleHeldForAPerson        idleClass = "held for a person"
-	idleWaitingOnOtherWork    idleClass = "waiting on other work"
-	idleAlreadyTried          idleClass = "already tried this session"
-	idleAlreadyInFlight       idleClass = "already in flight"
-	idleCoveredByChildren     idleClass = "covered by its children"
-	idlePausedByDirective     idleClass = "paused by a directive"
-	idleSequencedBehindWork   idleClass = "sequenced behind work in flight"
-	idlePrerequisiteUnmet     idleClass = "the tree does not meet what it asks for"
-)
-
-// idlePassedOver is one item a poll did not start: which item, why, and the
-// conversation that carries it where the class names one.
-type idlePassedOver struct {
-	id    string
-	class idleClass
-	role  domain.AgentRole
-}
-
 // idlePoll is what one pull found while it started nothing, in the product
 // manager's own order: every item it met, and the class it met it in.
 //
 // It is this pull's reading rather than the session's memory, and that is the
-// whole of what makes it worth printing. The line it renders is read at the
-// moment somebody is deciding whether the harness is working at all, so a count
-// carried over from an earlier poll would be an account of a queue that has
-// since changed.
+// whole of what makes it worth recording. What it produces is read at the moment
+// somebody is deciding whether the harness is working at all, so a count carried
+// over from an earlier poll would be an account of a queue that has since
+// changed.
+//
+// The classes, the grouping, and the words are the read model's rather than this
+// package's. Two surfaces answering "why is nothing happening" from their own
+// readings is the disagreement one derivation exists to prevent, and it cost a
+// page on 2026-09-06: see internal/readmodel/passedover.go.
 type idlePoll struct {
-	passed []idlePassedOver
+	passed []readmodel.PassedOverItem
 }
 
 // pass records one item this poll left where it was. The role is empty for every
 // class but the conversation-carried one, which is the only class whose answer
 // is a person rather than a wait.
-func (p *idlePoll) pass(id string, class idleClass, role domain.AgentRole) {
-	p.passed = append(p.passed, idlePassedOver{id: id, class: class, role: role})
+func (p *idlePoll) pass(id string, class runstate.PassedOverClass, role domain.AgentRole) {
+	p.passed = append(p.passed, readmodel.PassedOverItem{ID: id, Class: class, Role: role})
 }
 
-// reason is the idle line: what is already running, and what this poll passed
-// over and why.
-//
-// Both halves are said because either alone misleads, and both misled. The line
-// said only that nothing was startable, which reads as a stopped machine while a
-// run works on the other slot; and it named a count without naming the items or
-// the reason, which reads as a queue that will move on its own while the only
-// unstarted work is somebody's to carry in conversation. An operator acted on
-// that reading three times.
-func (p idlePoll) reason(queue backlog.Queue, inFlight int) string {
-	if len(queue.Entries) == 0 {
-		return "the backlog is empty"
-	}
-	var said []string
-	if inFlight > 0 {
-		said = append(said, fmt.Sprintf("%s in flight", plural(inFlight, "run", "runs")))
-	}
-	if groups := p.groups(); len(groups) > 0 {
-		said = append(said, fmt.Sprintf("%s passed over, of %d admitted: %s",
-			plural(len(p.passed), "item", "items"), len(queue.Entries), strings.Join(groups, "; ")))
-	}
-	if len(said) == 0 {
-		// The pull stopped before it read the queue through, which is what a session
-		// at its own item limit does. Saying what it did not reach is the honest
-		// answer; saying nothing was startable would be a claim about items nothing
-		// looked at.
-		return fmt.Sprintf("none of the %s admitted was reached at this poll", plural(len(queue.Entries), "item", "items"))
-	}
-	return strings.Join(said, "; ")
-}
-
-// groups gathers what was passed over into one entry per class, in the order the
-// pull met them, naming the conversation where the class names one. Grouping is
-// what gives the line something to act on: an operator reads a class and knows
-// what to do about all of it, where a list of items one per line is a list they
-// have to classify themselves.
-func (p idlePoll) groups() []string {
-	type class struct {
-		class idleClass
-		role  domain.AgentRole
-	}
-	var order []class
-	items := make(map[class][]string, len(p.passed))
-	for _, passed := range p.passed {
-		at := class{class: passed.class, role: passed.role}
-		if _, met := items[at]; !met {
-			order = append(order, at)
-		}
-		items[at] = append(items[at], passed.id)
-	}
-	groups := make([]string, 0, len(order))
-	for _, at := range order {
-		named := items[at]
-		further := 0
-		if len(named) > maxIdleItemsNamed {
-			further = len(named) - maxIdleItemsNamed
-			named = named[:maxIdleItemsNamed]
-		}
-		listed := strings.Join(named, ", ")
-		if further > 0 {
-			listed += fmt.Sprintf(", and %d further", further)
-		}
-		if at.role != "" {
-			groups = append(groups, fmt.Sprintf("%s (%s: %s)", at.class, at.role.Title(), listed))
-			continue
-		}
-		groups = append(groups, fmt.Sprintf("%s (%s)", at.class, listed))
-	}
-	return groups
-}
-
-// carrier is the conversation an idle poll is waiting on, which is the marker on
-// the highest-priority item it passed over for one. It is empty where no such
-// item was passed over, which is every idle poll whose answer is a wait rather
-// than a person.
-//
-// The highest-priority one is named because that is the item an operator would
-// open first, and because the reason above names every one of them by role
-// anyway: this decides whose move the message closes on, and the prose is where
-// the rest of them are.
-func (p idlePoll) carrier() domain.WorkItemExecutor {
-	for _, passed := range p.passed {
-		if passed.class == idleCarriedInConversation && passed.role != "" {
-			return domain.ConversationWith(passed.role)
-		}
-	}
-	return ""
+// passedOver is what this poll left where it was, grouped as every reader of it
+// reads it and counted against the queue it was read from. It is what the
+// session records, and what the idle line and the stall alarm are both rendered
+// from.
+func (p idlePoll) passedOver(queue backlog.Queue) runstate.PassedOver {
+	return readmodel.GroupPassedOver(p.passed, len(queue.Entries))
 }
 
 // plural counts something in words, so a line an operator reads says "1 run"
@@ -1906,16 +1804,16 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 // can carry, then work somebody parked, then everything that is genuinely
 // waiting for something. An item that is both is told the thing that would still
 // hold once the other was lifted.
-func unreadyClass(entry backlog.Entry) idleClass {
+func unreadyClass(entry backlog.Entry) runstate.PassedOverClass {
 	switch {
 	case !entry.Executor.DeveloperRun():
-		return idleCarriedInConversation
+		return runstate.PassedOverCarriedInConversation
 	case entry.Parking.Parked():
-		return idleParked
+		return runstate.PassedOverParked
 	case entry.Awaiting != "":
-		return idleHeldForAPerson
+		return runstate.PassedOverHeldForAPerson
 	default:
-		return idleWaitingOnOtherWork
+		return runstate.PassedOverWaitingOnOtherWork
 	}
 }
 
@@ -2051,6 +1949,35 @@ type account struct {
 	// is compared with the one before it to decide whether anything is news, and a
 	// pointer would make two identical accounts two different ones.
 	window providerWindow
+	// passedOver is the same account the reason states, in the classes every
+	// reader of it reads rather than in prose. It travels so that a surface which
+	// has to answer a question about the queue reads the answer this poll already
+	// came to, rather than deriving a second one from the silence around it.
+	passedOver runstate.PassedOver
+}
+
+// same reports two accounts as the same account, which is what makes a poll that
+// found what the poll before it found no news. It is a method rather than the
+// comparison the caller used to make because the classes carry a slice, and a
+// slice is not something Go will compare for us.
+func (a account) same(other account) bool {
+	if a.reason != other.reason || a.running != other.running ||
+		a.executor != other.executor || a.unreadable != other.unreadable ||
+		a.window != other.window {
+		return false
+	}
+	if a.passedOver.Admitted != other.passedOver.Admitted ||
+		len(a.passedOver.Groups) != len(other.passedOver.Groups) {
+		return false
+	}
+	for index, group := range a.passedOver.Groups {
+		against := other.passedOver.Groups[index]
+		if group.Class != against.Class || group.Role != against.Role ||
+			group.Count != against.Count || !slices.Equal(group.Items, against.Items) {
+			return false
+		}
+	}
+	return true
 }
 
 // providerWindow is the provider refusing this session for want of capacity: that
@@ -2123,7 +2050,7 @@ type watchSession struct {
 // somebody reading an idle line, and both are bounded by the poll interval,
 // because a pass records at most one transition per poll.
 func (w *watchSession) enter(state runstate.WatchState, said account) {
-	if w.to == nil || (w.state == state && w.said == said) {
+	if w.to == nil || (w.state == state && w.said.same(said)) {
 		return
 	}
 	w.state, w.said = state, said
@@ -2133,6 +2060,7 @@ func (w *watchSession) enter(state runstate.WatchState, said account) {
 		Running:    said.running,
 		Executor:   said.executor,
 		Unreadable: said.unreadable,
+		PassedOver: said.passedOver,
 	}
 	if said.window.waiting {
 		transition.ProviderWindow = true

@@ -629,7 +629,25 @@ type Detail struct {
 	// rather than a code because what an operator needs is the answer to "waiting
 	// on what", and the causes do not share a shape: a deadline, an overloaded
 	// server, the operator themselves, an unresolved directive.
+	//
+	// It is read a third time by KindStallNoticed, where it is the dominant thing
+	// accounting for a queue nothing is being pulled from — "33 of the 47 admitted
+	// items are held for a person, waiting on triage decisions". It is carried
+	// already worded, for the reason Standing is: the accounting is derived once
+	// from what the last poll recorded, and a surface that worded it again could
+	// come to say a different thing about one queue than the session's own idle
+	// line does. That is not hypothetical — an alarm deriving its own answer beside
+	// a session that had already found the accounting is what woke the operator on
+	// 2026-09-06 with "nothing accounting for it".
+	//
+	// Mover is whose move follows that cause, worded by the same derivation and
+	// carried for the same reason. It is the one whose-move clause that is not in
+	// the table below, because the table answers per kind and this answers per
+	// cause: a queue held for triage decisions and a queue carried in conversation
+	// are one kind of message and two different people to go to. A stall with no
+	// poll to read a cause from carries neither, and the table answers.
 	Cause string `json:"cause,omitempty"`
+	Mover string `json:"mover,omitempty"`
 	// Waiting is what a provider's refusal stopped, read by
 	// KindUsageLimitExhausted. A run names itself, so this is for everything that
 	// is not one: which conversation, which review. It is what turns "the

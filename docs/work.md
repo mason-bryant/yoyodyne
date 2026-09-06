@@ -747,7 +747,10 @@ with nothing landing between them hold intake at
 whole backlog through a failed run overnight. And it records what it is doing —
 watching, idle, braked, resumed, stopped — where `yoyo status` and the Slack sink
 read it, because an idle session and a dead one are otherwise the same silence. A
-poll that starts nothing names the runs going and what it passed over.
+poll that starts nothing names the runs going and what it passed over. It records
+that account in classes as well as in words — how many items were held for a
+person, parked, carried in a conversation, sequenced behind a run — so that the
+stall alarm below states the same cause rather than deriving a second one.
 
 **A watching session also notices that the harness has stopped doing anything.**
 Everything above is what the session says about itself, which works exactly as

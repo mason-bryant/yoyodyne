@@ -504,6 +504,24 @@ type Stall struct {
 	Ready int
 	// Chooser is what the record last said about the thing that chooses work.
 	Chooser string
+	// Cause is the dominant thing accounting for the queue not moving, as the last
+	// poll that started nothing recorded it, and Mover is whose move follows it.
+	// Both are worded by the read model rather than here.
+	//
+	// They are the whole of what yoyodyne-ifd.324 changed, and the reason is one
+	// page: on 2026-09-06 this message said nothing accounted for an hour of
+	// silence while the session's own idle line, one surface over, held the
+	// accounting — a third of the queue waiting on triage decisions. The
+	// accounting was never missing. It was missing from the message that woke
+	// somebody, because this surface derived its own answer from an absence
+	// instead of reading the one the poll had written down.
+	//
+	// Both are empty where no poll left an account to read — a session that
+	// stopped cleanly, or one that never idled — and the message then says what it
+	// said before: that nothing the record holds accounts for the silence, which
+	// in that case is true.
+	Cause string
+	Mover string
 	// Standing is where the harness stands, in the four lines the read model
 	// renders, said for the reason the waiting line says them: somebody reading
 	// this was woken by it, and reconstructing the machine's state from one
@@ -525,6 +543,8 @@ func FromStall(stall Stall, at time.Time) Notification {
 		Stopped:  strings.TrimSpace(stall.Chooser),
 		Since:    stall.Since,
 		Ready:    stall.Ready,
+		Cause:    strings.TrimSpace(stall.Cause),
+		Mover:    strings.TrimSpace(stall.Mover),
 		Standing: strings.TrimRight(stall.Standing, "\n"),
 	})
 	notification.Event.Severity = report.SeverityWarning

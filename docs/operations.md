@@ -974,6 +974,24 @@ scheduler that died from one that is wedged: a session whose last word was
 `stopped` wants starting, and one still claiming to be `watching` wants killing
 first.
 
+What the message that wakes somebody says beside that is the last poll's own
+account of the queue — "33 of the 47 admitted items are held for a person,
+waiting on triage decisions" — which it reads from the watch log rather than from
+the stall, and only where that poll was made after the silence began.
+
+What that bound refuses is an account a start overtook: something ran after the
+poll and the line then went quiet, so the queue has not been read since it moved.
+A session that died carrying a run is the usual way that happens, and there the
+message names no cause and points at the chooser. It does not refuse the account
+of a session that died while idle, which polled after the last start — that
+message names the cause, because the items really are held, and a named cause is
+therefore no evidence that the session is alive. The chooser's last word is what
+says that, in the message exactly as in this listing: a session that last recorded
+something and has said nothing since wants looking at whatever the queue is
+holding. This listing keeps that last word and no cause, because the stall record
+is the absence and the account of what was in the way of the queue belongs to the
+session that read it.
+
 This is the one history in the harness that nothing else keeps, and the reason it
 exists is that the process which would have recorded a stall is the process a
 stall means has died. A session that crashes writes no stop, so every other
