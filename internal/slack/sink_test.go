@@ -919,6 +919,50 @@ func TestStoppingTheSinkStopsIt(t *testing.T) {
 	}
 }
 
+// countingFeed records how many passes actually read the records.
+type countingFeed struct {
+	mutex sync.Mutex
+	polls int
+}
+
+func (f *countingFeed) Poll(_ context.Context, _ Cursors) (Batch, error) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	f.polls++
+	return Batch{Streams: map[string]struct{}{}}, nil
+}
+
+func (f *countingFeed) count() int {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	return f.polls
+}
+
+// A sink stopped before it started does no pass at all, which is what makes the
+// stop above prompt rather than merely eventual.
+//
+// A pass reads every record and posts what is due, so a sink that ran one on its
+// way out would return only after that pass had finished — on a loaded machine,
+// seconds during which the operator who pressed Ctrl-C has had no sign that
+// anything heard them. The connection's own loop beside this one already reads
+// the context before its first iteration; this is the delivery loop agreeing
+// with it.
+func TestASinkStoppedBeforeItStartedDoesNoPass(t *testing.T) {
+	t.Parallel()
+
+	feed := &countingFeed{}
+	sink := newTestSink(t, t.TempDir(), feed, &recordedPosts{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := sink.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v, want a stopped sink to be a clean exit", err)
+	}
+	if polls := feed.count(); polls != 0 {
+		t.Errorf("the records were read %d time(s), want a sink stopped before it started to read nothing", polls)
+	}
+}
+
 // The channel's top level is a status board. The message a thread hangs from
 // carries what its item is doing now, and the mark that has stopped being true
 // comes off as the record moves — so a scan of the channel answers what is
