@@ -208,6 +208,14 @@ var expresses = map[string]expression{
 		question: "does the retiring role hold the invariants?",
 		asks:     []capability.Capability{capability.InvariantMutate},
 	},
+	"agent-context.authorize": {
+		question: "does the remembering role's bundle hold its own context?",
+		asks:     []capability.Capability{capability.AgentContextMutate},
+	},
+	"agent-context.unauthorized-error": {
+		question: "the same question, asked once and returned by every refusal of it",
+		asks:     []capability.Capability{capability.AgentContextMutate},
+	},
 	"amendment.decide-under-owner": {
 		question: "does the deciding role hold the capability the proposed-against document belongs to?",
 		asks:     []capability.Capability{capability.ArtifactProductMutate, capability.ArtifactDesignMutate, capability.InvariantMutate},

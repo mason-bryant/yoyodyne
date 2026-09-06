@@ -53,6 +53,15 @@ func bundles() []Bundle {
 				capability.ProposalRaise,
 				capability.ConcernRaise,
 				capability.ExchangeAsk,
+				// The three roles that hold a standing conversation carry a memory of
+				// their own, and the two that are gated inside a run do not. That split is
+				// the agent-memory design's rather than a preference: memory is what tunes
+				// judgment across invocations, and it says in as many words that
+				// accumulation and independence are incompatible in one identity. So the
+				// roles whose work a reviewer gates — the developer and the reviewer
+				// itself — remember nothing between invocations, and what a run learned
+				// stays in that run's own record where the review can see it.
+				capability.AgentContextMutate,
 			},
 		},
 		{
@@ -68,6 +77,7 @@ func bundles() []Bundle {
 				capability.ArtifactDesignMutate,
 				capability.InvariantMutate,
 				capability.ExchangeAsk,
+				capability.AgentContextMutate,
 			},
 		},
 		{
@@ -81,6 +91,7 @@ func bundles() []Bundle {
 				capability.WorkDecompose,
 				capability.WorkTriage,
 				capability.ExchangeAsk,
+				capability.AgentContextMutate,
 			},
 		},
 		{
