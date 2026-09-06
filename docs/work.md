@@ -305,6 +305,34 @@ amendment channels do not:
   it. A merge the forge only queued is settled by a later `yoyo reconcile`, and
   that sweep decides from the recorded claim rather than from the promotion.
 
+### A reply that accounts for nothing
+
+All four channels out of a developer — this claim, the summary, the reports, the
+proposals — are read off one reply, so a reply that says nothing about the work
+empties all four at once and does it quietly: the invocation exited cleanly, and
+what the run recorded as its account of itself was whatever the developer
+happened to type last. On run-9ad1799e both attempts ended with "the check is
+running; I'll report when it lands", and the harness filed that as the account of
+the work.
+
+So a reply is checked for being an account before it is recorded as one. Two
+shapes are not: a reply that said nothing at all, and one whose every sentence is
+the work still in flight or a promise to say what became of it later. Anything
+else is taken as an account however thin it is, and a landing claim answers the
+question by itself — a developer that claimed evidence or an escalation wrote the
+reason the claim carries, and a claim nobody could read has already withheld the
+closure for the reason above.
+
+A reply that accounts for nothing is asked for once more, in the same session,
+exactly as a verdict the review contract could not read is. Nothing is wrong with
+the change and the re-ask says so: the worktree still holds the work, and what is
+missing is the developer saying what it was. It spends no repair attempt, because
+no check failed and no reviewer found anything. A second reply that accounts for
+nothing ends the run naming that, and the interim line is never recorded as the
+summary — a run that promises a report and then vanishes is unaccounted work
+wearing a completed status, which is what review, closure, and every report read
+off afterwards.
+
 ## What an approval approves
 
 The claim above decides the closure by default, and the default is the claim

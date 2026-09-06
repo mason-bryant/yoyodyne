@@ -57,10 +57,11 @@ states:
       produced: check
       # The same attempt made again: an exhausted usage limit waited out, a
       # transiently overloaded server, an invocation the harness stopped on time,
-      # or a provider that died without judging the work. All four reissue the
-      # attempt in the session the refused one established, which is one
-      # transition rather than four because the developer state is where the run
-      # goes back to in every one of them.
+      # a provider that died without judging the work, or an invocation that
+      # ended without accounting for the work and is asked for the account once
+      # more. All five reissue the attempt in the session the refused one
+      # established, which is one transition rather than five because the
+      # developer state is where the run goes back to in every one of them.
       reissued: develop
       # The relaunch budget spent. What stopped the run is the provider rather
       # than the change, so the work is preserved and a person decides.
