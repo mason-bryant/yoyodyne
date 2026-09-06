@@ -691,11 +691,16 @@ project that schedules nothing has none of this and its passes are unchanged.
 A block it cannot read is refused whole, so nothing in it happens, and the
 refusal in the harness's own words has always opened that role's next turn — but
 nothing started that turn, so the correction waited on somebody opening the
-conversation. Now the pass starts it: one wakeup per refusal, at most one per
-pass, and the role re-issues the actions itself. A block refused again on that
-woken turn goes to you rather than earning another wakeup, because a second copy
-of the same message is not going to help. Nothing about it is configured, and a
-pass with no refusal to wake for asks no provider anything.
+conversation. Now the pass starts it: one turn per refusal, at most one per pass,
+and the role re-issues the actions itself. A second block refused with the first
+still unanswered goes to you rather than earning another wakeup — whether the
+harness woke that turn or somebody else did — because a second copy of the same
+message is not going to help. A turn the provider refused for want of capacity
+put nothing in front of the role, so it is given back and made again a quarter of
+an hour later, three times in all; a conversation nothing can open keeps its
+attempt, because what that waits on is somebody changing something rather than a
+window ending. Nothing about it is configured, and a pass with no refusal to wake
+for asks no provider anything.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,

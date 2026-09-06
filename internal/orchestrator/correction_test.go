@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -222,7 +223,7 @@ func TestAPausedHarnessWakesNobodyToCorrectARefusedBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if !recorded.RefusedBlock.AwaitingWakeup() {
+	if !recorded.RefusedBlock.AwaitingWakeup(correctionNow) {
 		t.Fatalf("refused block = %#v, want the pause to have cost it nothing", *recorded.RefusedBlock)
 	}
 }
@@ -263,6 +264,110 @@ func TestAWakeupThatFailedAndOneRefusedAgainAreBothSaidOutLoud(t *testing.T) {
 		t.Fatalf("problem = %q, want a second refusal reported as the operator's", again.Corrected[0].Problem)
 	}
 }
+
+// A wakeup the provider had no capacity for is given back, so the refusal keeps
+// the turn it is owed and a later pass makes it once the window has had time to
+// clear.
+//
+// This is the difference the criterion asks for. The trigger runs on the
+// non-model side so a provider window cannot stop the wakeup being scheduled, and
+// that is worth nothing if the window silently spends it: no model saw the
+// message, so nothing was asked of the role and the turn is still owed.
+func TestAWakeupTheProviderHadNoCapacityForKeepsItsTurn(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := conversationStore(t, root)
+	refusedConversation(t, store, "product-manager", 3, correctionNow, "the refusal a window got in the way of")
+	windowed := &correctedRole{errs: []error{fmt.Errorf("%w: the provider declined this turn for want of capacity", ErrProviderWindow)}}
+
+	sweep, err := Corrector{Conversations: store, Claims: store, Roles: windowed, Clock: correctionClock{}}.Correct(context.Background())
+	if err != nil {
+		t.Fatalf("Correct() error = %v", err)
+	}
+	if len(sweep.Corrected) != 1 || sweep.Corrected[0].Woken {
+		t.Fatalf("corrected = %#v, want a wakeup reported as one that reached nobody", sweep.Corrected)
+	}
+	if !strings.Contains(sweep.Corrected[0].Problem, "had no capacity") ||
+		!strings.Contains(sweep.Corrected[0].Problem, "woken again") {
+		t.Fatalf("problem = %q, want it to say the window took the turn and one is still owed", sweep.Corrected[0].Problem)
+	}
+	identity := runstate.ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	recorded, err := store.Load(identity)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.RefusedBlock.Attempts != 0 || !recorded.RefusedBlock.WokenAt.IsZero() {
+		t.Fatalf("refused block = %#v, want the attempt given back", *recorded.RefusedBlock)
+	}
+	// Not on the very next pull, though: the give-back is paced, so a window that
+	// lasts an hour does not become a refused provider call a minute.
+	soon, err := Corrector{Conversations: store, Claims: store, Roles: windowed, Clock: correctionClock{}}.Correct(context.Background())
+	if err != nil {
+		t.Fatalf("second Correct() error = %v", err)
+	}
+	if len(soon.Corrected) != 0 || len(windowed.woken) != 1 {
+		t.Fatalf("the pass straight after a windowed wakeup made another: %#v", soon.Corrected)
+	}
+	// And once the delay has passed it is made again, which is the wakeup
+	// surviving the window rather than being spent by it.
+	later := &correctedRole{turns: []CorrectionTurn{{Actions: 3}}}
+	after := Corrector{
+		Conversations: store,
+		Claims:        store,
+		Roles:         later,
+		Clock:         movingCorrectionClock{now: correctionNow.Add(runstate.RefusalWakeupRetryDelay)},
+	}
+	made, err := after.Correct(context.Background())
+	if err != nil {
+		t.Fatalf("Correct() after the delay error = %v", err)
+	}
+	if len(made.Corrected) != 1 || !made.Corrected[0].Woken || made.Corrected[0].Actions != 3 {
+		t.Fatalf("corrected = %#v, want the wakeup made once the window had time to clear", made.Corrected)
+	}
+}
+
+// A conversation nothing can open keeps the attempt, because what it waits on is
+// somebody changing something rather than a window ending — and a wakeup retried
+// every pull for that would take this pass's one turn from every refusal behind
+// it.
+func TestAWakeupNothingCanOpenSpendsItsAttempt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := conversationStore(t, root)
+	refusedConversation(t, store, "product-manager", 3, correctionNow, "the refusal nothing could be opened for")
+	role := &correctedRole{errs: []error{ErrRoleUnreachable}}
+
+	if _, err := (Corrector{Conversations: store, Claims: store, Roles: role, Clock: correctionClock{}}).Correct(context.Background()); err != nil {
+		t.Fatalf("Correct() error = %v", err)
+	}
+	recorded, err := store.Load(runstate.ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.RefusedBlock.WokenAt.IsZero() || recorded.RefusedBlock.Attempts != 1 {
+		t.Fatalf("refused block = %#v, want the attempt kept", *recorded.RefusedBlock)
+	}
+	// So no later pass makes it again, however long it waits.
+	late := Corrector{
+		Conversations: store,
+		Claims:        store,
+		Roles:         role,
+		Clock:         movingCorrectionClock{now: correctionNow.Add(24 * time.Hour)},
+	}
+	sweep, err := late.Correct(context.Background())
+	if err != nil {
+		t.Fatalf("later Correct() error = %v", err)
+	}
+	if len(sweep.Corrected) != 0 || len(role.woken) != 1 {
+		t.Fatalf("a later pass woke it again: %#v", sweep.Corrected)
+	}
+}
+
+type movingCorrectionClock struct{ now time.Time }
+
+func (c movingCorrectionClock) Now() time.Time { return c.now }
 
 // A corrector wired without what it needs refuses rather than silently waking
 // nobody, because a self-correction that quietly stopped existing is exactly the

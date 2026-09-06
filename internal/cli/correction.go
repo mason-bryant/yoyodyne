@@ -108,9 +108,29 @@ func (r roleCorrection) Wake(ctx context.Context, identity runstate.Conversation
 			turn.Refused = refused.Error()
 			return turn, nil
 		}
-		return turn, notWoken(err)
+		return turn, notCorrected(err)
 	}
 	return turn, nil
+}
+
+// notCorrected marks the failures where the turn put nothing in front of the
+// role, so what is recorded about the wakeup says so rather than claiming a turn
+// the role could have answered.
+//
+// It is the recurring trigger's mapping with one ending pulled out of it. A
+// provider with no capacity is the one failure worth making again on a timer:
+// no model saw the message, and the window ends by itself, so the wakeup is given
+// back rather than spent — which is what keeps a refusal recorded during a window
+// from falling back to waiting on a person. The operator's pause and a
+// cancellation are the harness's own doing and clear the same way, but the
+// corrector reads the pause at the top of every pass and a cancellation is the
+// harness stopping, so neither is worth a timer of its own; they are unreachable
+// like the rest.
+func notCorrected(err error) error {
+	if errors.Is(err, chat.ErrProviderCapacity) {
+		return fmt.Errorf("%w: %w", orchestrator.ErrProviderWindow, err)
+	}
+	return notWoken(err)
 }
 
 func (r roleCorrection) errors() io.Writer {

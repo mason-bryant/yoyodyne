@@ -1075,3 +1075,137 @@ func TestARefusedTrackerBlockIsClaimedForAWakeupOnce(t *testing.T) {
 		t.Fatalf("ClaimRefusalWakeup() on an escalated refusal error = %v, want ErrNoRefusalAwaitingWakeup", err)
 	}
 }
+
+// A wakeup the provider refused for want of capacity is given back, and the
+// pacing is what keeps the give-back from being a burst.
+//
+// The wakeup runs on the non-model side so that a provider window cannot stop it
+// being scheduled; that is worth nothing if a window silently spends the one turn
+// a refusal is owed. So the attempt comes back and the moment of it does not: the
+// refusal is claimable again once the delay has passed, and not before.
+func TestAWakeupTheProviderRefusedIsGivenBackAndPaced(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	conversation := testConversation(t)
+	refused := conversation.StartedAt.Add(time.Minute)
+	conversation.Turns = 1
+	conversation.ProviderModel = "opus"
+	conversation.UpdatedAt = refused
+	conversation.RefusedBlock = &TrackerRefusal{
+		Turn:      1,
+		Actions:   2,
+		Problem:   "decode tracker actions: unexpected trailing content after the actions",
+		RefusedAt: refused,
+	}
+	if err := store.Save(conversation); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	identity := conversation.Identity()
+	windowed := refused.Add(time.Minute)
+	if _, err := store.ClaimRefusalWakeup(identity, windowed); err != nil {
+		t.Fatalf("ClaimRefusalWakeup() error = %v", err)
+	}
+	if err := store.WithdrawRefusalWakeup(context.Background(), identity, 1); err != nil {
+		t.Fatalf("WithdrawRefusalWakeup() error = %v", err)
+	}
+	given := loadRefusal(t, store, identity)
+	// The attempt is back, so the window has cost the refusal nothing it cannot
+	// recover; the moment of it stands, so the retry is paced rather than made on
+	// the very next pull.
+	if given.Attempts != 0 || !given.WokenAt.IsZero() {
+		t.Fatalf("refusal = %#v, want the attempt given back", given)
+	}
+	if given.AwaitingWakeup(windowed.Add(time.Second)) {
+		t.Fatalf("refusal = %#v, want it left alone until %s has passed", given, RefusalWakeupRetryDelay)
+	}
+	if !given.AwaitingWakeup(windowed.Add(RefusalWakeupRetryDelay)) {
+		t.Fatalf("refusal = %#v, want it claimable once the delay has passed", given)
+	}
+	// And a pass that comes back after the delay claims it, which is the wakeup
+	// surviving the window rather than being spent by it.
+	if _, err := store.ClaimRefusalWakeup(identity, windowed.Add(RefusalWakeupRetryDelay)); err != nil {
+		t.Fatalf("ClaimRefusalWakeup() after the delay error = %v", err)
+	}
+}
+
+// The give-back is bounded: a wakeup that keeps failing stops rather than costing
+// a pass its one turn forever, and what the refusal falls back to is the role's
+// own next turn.
+func TestWakeupsForOneRefusalAreBounded(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	conversation := testConversation(t)
+	refused := conversation.StartedAt.Add(time.Minute)
+	conversation.Turns = 1
+	conversation.ProviderModel = "opus"
+	conversation.UpdatedAt = refused
+	conversation.RefusedBlock = &TrackerRefusal{
+		Turn:      1,
+		Problem:   "decode tracker actions: the tracker block is empty",
+		RefusedAt: refused,
+		// The attempts are spent, and none of them reached the role — which is the
+		// state a run of provider windows leaves behind.
+		Attempts:      MaxRefusalWakeups,
+		LastAttemptAt: refused,
+	}
+	if err := store.Save(conversation); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	spent := loadRefusal(t, store, conversation.Identity())
+	if spent.AwaitingWakeup(refused.Add(24 * time.Hour)) {
+		t.Fatalf("refusal = %#v, want the harness to have stopped trying after %d attempts", spent, MaxRefusalWakeups)
+	}
+	if _, err := store.ClaimRefusalWakeup(conversation.Identity(), refused.Add(24*time.Hour)); !errors.Is(err, ErrNoRefusalAwaitingWakeup) {
+		t.Fatalf("ClaimRefusalWakeup() error = %v, want ErrNoRefusalAwaitingWakeup", err)
+	}
+}
+
+// A give-back for a refusal that has since been answered and replaced must not
+// re-open the one that took its place.
+func TestAGiveBackNamingAnAnsweredRefusalChangesNothing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	conversation := testConversation(t)
+	refused := conversation.StartedAt.Add(time.Minute)
+	conversation.Turns = 4
+	conversation.ProviderModel = "opus"
+	conversation.UpdatedAt = refused
+	conversation.RefusedBlock = &TrackerRefusal{
+		Turn:          4,
+		Problem:       "decode tracker actions: the tracker block is empty",
+		RefusedAt:     refused,
+		Attempts:      1,
+		LastAttemptAt: refused,
+		WokenAt:       refused,
+	}
+	if err := store.Save(conversation); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := store.WithdrawRefusalWakeup(context.Background(), conversation.Identity(), 1); err != nil {
+		t.Fatalf("WithdrawRefusalWakeup() error = %v", err)
+	}
+	standing := loadRefusal(t, store, conversation.Identity())
+	if standing.WokenAt.IsZero() || standing.Attempts != 1 {
+		t.Fatalf("refusal = %#v, want a give-back naming another turn to have changed nothing", standing)
+	}
+}
+
+func loadRefusal(t *testing.T, store *ConversationStore, identity ConversationIdentity) TrackerRefusal {
+	t.Helper()
+
+	recorded, err := store.Load(identity)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.RefusedBlock == nil {
+		t.Fatalf("the conversation records no refused block")
+	}
+	return *recorded.RefusedBlock
+}

@@ -161,7 +161,7 @@ var harnessVoice = voice{
 		KindItemAttributed:           "{item} was attributed to a goal: {goal}",
 		KindItemReprioritized:        "{item} was set to {priority}.",
 		KindTrackerBlockRefused:      "The {asking} asked for {refused} in one reply and the harness refused the block whole, so none of them happened: {why}",
-		KindTrackerRefusalUnresolved: "The harness gave the {asking} the refusal back and the block it sent instead was refused too, so {refused} are still lost and nothing further will be tried: {why}",
+		KindTrackerRefusalUnresolved: "A second block from the {asking} was refused with the one before it still unanswered — {cause} — so {refused} are still lost and nothing further will be tried: {why}",
 		KindWorkApproved:             "The operator approved proposed work, and it was admitted: {title}. It serves: {goal}",
 		KindWorkDeclined:             "The operator declined proposed work — {title} — because: {why}",
 		KindWorkHandedOff:            "{item} was handed to {executor} rather than to a developer run: {why}",
@@ -220,7 +220,7 @@ var developerVoice = voice{
 		KindItemAttributed:           "{item} now says what it is for: {goal}. That is the intent I'd be building against.",
 		KindItemReprioritized:        "{item} sits at {priority} now. What I build doesn't change with the order it is queued in.",
 		KindTrackerBlockRefused:      "A block the {asking} sent was refused together — {refused} — and nothing in the queue moved for any of it: {why}",
-		KindTrackerRefusalUnresolved: "The {asking} was handed its refusal back and what came next was refused too — {refused} still lost — so this one needs a person: {why}",
+		KindTrackerRefusalUnresolved: "The {asking} lost a second block with the first still unanswered — {refused} still lost, and {cause} — so this one needs a person: {why}",
 		KindWorkApproved:             "The operator approved that one, so it is work somebody will be given: {title}, for {goal}.",
 		KindWorkDeclined:             "Proposed work was turned down before it reached anybody — {title} — because: {why}",
 		KindWorkHandedOff:            "{item} will never reach me: it is carried by {executor} rather than by a run, because {why}",
@@ -279,7 +279,7 @@ var reviewerVoice = voice{
 		KindItemAttributed:           "{item} records the goal it serves: {goal}. Intent I can read beats intent I have to infer.",
 		KindItemReprioritized:        "{item} moved to {priority}. The order work arrives in changes nothing about the standard it meets.",
 		KindTrackerBlockRefused:      "The {asking} asked for {refused} and the harness read none of them, so what the queue says now is what it said before: {why}",
-		KindTrackerRefusalUnresolved: "The {asking} was given a second go at its refused block and the harness could not read that one either, so {refused} are lost and the retry is spent: {why}",
+		KindTrackerRefusalUnresolved: "The {asking} had a block refused and the next one refused as well — {cause} — so {refused} are lost and what the queue says now is what it said before: {why}",
 		KindWorkApproved:             "Approved and admitted: {title}, serving {goal}. I'll see it when a change comes back from it.",
 		KindWorkDeclined:             "{title} was declined, so there is no change coming and nothing for me to judge: {why}",
 		KindWorkHandedOff:            "{item} left the run queue for {executor}, so no change on it will come to me: {why}",
@@ -337,7 +337,7 @@ var developmentManagerVoice = voice{
 		KindItemAttributed:           "{item} now carries the goal it serves: {goal}. Work I cannot say the purpose of is work I cannot order honestly.",
 		KindItemReprioritized:        "{item} is at {priority} now, so that is where it gets pulled from.",
 		KindTrackerBlockRefused:      "A block from the {asking} never reached the queue I pull from — {refused} — so its order and its contents are unchanged: {why}",
-		KindTrackerRefusalUnresolved: "The {asking} tried its block again and it was refused again, so {refused} never reached the queue I pull from and nothing else is going to put them there: {why}",
+		KindTrackerRefusalUnresolved: "Two blocks from the {asking} in a row never reached the queue I pull from — {refused} still lost, and {cause} — and nothing else is going to put them there: {why}",
 		KindWorkApproved:             "Approved and in my queue: {title}, for {goal}.",
 		KindWorkDeclined:             "{title} was declined, so nothing about it ever reaches my queue: {why}",
 		KindWorkHandedOff:            "{item} is out of what I pull: it is carried by {executor}, so a run would only spend itself on it — {why}",
@@ -396,7 +396,7 @@ var productManagerVoice = voice{
 		KindItemAttributed:           "I've recorded what {item} is for: {goal}. Work that says nothing about intent is work nobody can decide to stop doing.",
 		KindItemReprioritized:        "I've put {item} at {priority}: {why}",
 		KindTrackerBlockRefused:      "A block I sent was refused whole — {refused} — so nothing I meant to change about the backlog changed: {why}",
-		KindTrackerRefusalUnresolved: "I was given my refusal back, sent another block, and had that refused too — {refused} — so I cannot put this right myself: {why}",
+		KindTrackerRefusalUnresolved: "A block I sent was refused with the one before it still unanswered — {refused} — and {cause}, so I cannot put this right myself: {why}",
 		KindWorkApproved:             "The operator approved the work I proposed, and it is admitted: {title}, serving {goal}.",
 		KindWorkDeclined:             "The operator turned down work I proposed — {title}, which would have served {goal} — because: {why}. Nothing was created.",
 		KindWorkHandedOff:            "{item} is work {executor} carries rather than a run, and it is marked as such so nothing spends a run on it: {why}",
@@ -455,7 +455,7 @@ var architectVoice = voice{
 		KindItemAttributed:           "{item} was traced back to {goal}. A queue nobody can trace is a system nobody can reason about.",
 		KindItemReprioritized:        "{item} moved to {priority}, which changes the order and nothing about the design it derives from.",
 		KindTrackerBlockRefused:      "A block of {refused} from the {asking} was refused whole rather than partly applied, which is the contract holding: {why}",
-		KindTrackerRefusalUnresolved: "The correction the {asking} was woken for was refused as well, so {refused} stand lost and the self-healing path is exhausted: {why}",
+		KindTrackerRefusalUnresolved: "A second refused block from the {asking} with the first unanswered — {cause} — leaves {refused} lost and the self-correcting path exhausted: {why}",
 		KindWorkApproved:             "Approved and admitted: {title}, under {goal}. What it may become is bounded by the design it derives from.",
 		KindWorkDeclined:             "{title} was declined, and the shape of the system is unchanged by work nobody started: {why}",
 		KindWorkHandedOff:            "{item} is executed by {executor} rather than by a run, and saying so is what keeps a run from discovering it by refusing an empty diff: {why}",
@@ -544,16 +544,20 @@ var nextMoves = map[Kind]string{
 	KindItemDecomposed:    "the harness's, when this reaches the top of the queue and a run is free.",
 	KindItemAttributed:    "the harness's, when this reaches the top of the queue and a run is free.",
 	KindItemReprioritized: "the harness's, and this is where it now gets pulled from.",
-	// A refused block is the one item here whose move belongs to the role that
-	// asked. The refusal reaches it verbatim at the start of its next turn, so the
-	// actions come back if that role issues them again — and nothing at all
-	// happens if nobody says anything to that conversation, which is the half a
-	// reader has to know.
-	KindTrackerBlockRefused: "the role that asked — the refusal opens its next turn, and the actions happen only if it issues them again.",
-	// And once the harness has woken that role and been refused again, the move
-	// stops being anybody's inside the harness. The actions are still lost, the
-	// role has had its go at re-issuing them, and nothing further is scheduled.
-	KindTrackerRefusalUnresolved: "the operator's — the harness has had its one attempt at getting these re-issued and will not try again.",
+	// A refused block is the one item here whose move belongs to the harness and
+	// then to the role that asked. The harness wakes that role's own conversation
+	// with the refusal in it, once, and the actions come back only if the role
+	// issues them again — so what a reader has to know is that a turn is coming
+	// without anybody starting it, and that it is the role rather than the wakeup
+	// that puts the queue back.
+	KindTrackerBlockRefused: "the harness's, then the role that asked — a turn is started for it with the refusal in it, and the actions happen only if the role issues them again.",
+	// And once a second block has been refused with the first still unanswered,
+	// the move stops being anybody's inside the harness. The actions are still
+	// lost, the role has had a turn to re-issue them, and nothing further is
+	// scheduled. The clause deliberately says nothing about whether the harness
+	// woke that turn: the two paths into this reach the same place, and which one
+	// it was is the message's own to say.
+	KindTrackerRefusalUnresolved: "the operator's — the harness has stopped trying to have these re-issued and will not start another turn for them.",
 	KindWorkApproved:             "the harness's, when this reaches the top of the queue and a run is free.",
 	KindWorkDeclined:             "nobody's — nothing was created, and nothing follows.",
 	// Work a conversation carries. The handoff is the one state where the thread

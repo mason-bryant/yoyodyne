@@ -1120,7 +1120,7 @@ func TestARefusedTrackerBlockRecordsTheWakeupItIsOwed(t *testing.T) {
 	if recorded.RefusedBlock == nil {
 		t.Fatalf("the conversation records no refused block, so nothing can wake the role for it")
 	}
-	if !recorded.RefusedBlock.AwaitingWakeup() {
+	if !recorded.RefusedBlock.AwaitingWakeup(fixedClock{}.Now()) {
 		t.Fatalf("refused block = %#v, want one still owed a wakeup", *recorded.RefusedBlock)
 	}
 	// The record carries the refusal in the harness's own words, so a wakeup made
@@ -1193,7 +1193,7 @@ func TestASecondRefusedTrackerBlockGoesToTheOperatorRatherThanLooping(t *testing
 	if after.RefusedBlock == nil {
 		t.Fatalf("the conversation records no refused block after the second refusal")
 	}
-	if after.RefusedBlock.AwaitingWakeup() {
+	if after.RefusedBlock.AwaitingWakeup(fixedClock{}.Now()) {
 		t.Fatalf("refused block = %#v, want one the harness will not wake for again", *after.RefusedBlock)
 	}
 	if !strings.Contains(after.RefusedBlock.Escalated, "woke this conversation") {

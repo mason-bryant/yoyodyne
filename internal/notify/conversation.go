@@ -324,18 +324,35 @@ func fromUnresolvedTrackerRefusal(conversation runstate.Conversation, event exec
 }
 
 // unansweredRefusalCause says what the harness had already done when this
-// refusal arrived. It states the absence rather than guessing: a record written
-// without the earlier refusal says the correction failed and nothing about what
-// it was correcting.
+// refusal arrived, and whether the block came back with the same defect.
+//
+// Both halves are load-bearing, because there are two ways into this record and
+// they are not the same news. One is the turn the harness itself started being
+// refused, which is the self-correction spent. The other is a second block
+// refused with the first still unanswered and no wakeup ever made — two
+// unreadable blocks in a conversation somebody was driving by hand, before any
+// pass looked. A message that claimed the harness had woken the role would be
+// wrong on that path, and it is the path the record is most likely to take on a
+// busy morning.
+//
+// It compares the two refusals rather than quoting the earlier one. The earlier
+// refusal's words are on the durable event, and a channel line carrying two
+// error messages is one nobody reads to the end; what a reader needs from it is
+// whether the same thing went wrong twice, which is the difference between a
+// role that cannot get one action right and one making a fresh mistake.
 func unansweredRefusalCause(recorded unresolvedTrackerRefusal) string {
 	previous := strings.TrimSpace(recorded.Previous)
-	if previous == "" {
-		previous = "a refusal the record does not carry"
+	repeated := previous != "" && previous == strings.TrimSpace(recorded.Problem)
+	switch {
+	case recorded.Woken && repeated:
+		return "the harness woke this conversation to correct the refusal before it and got the same refusal back"
+	case recorded.Woken:
+		return "the harness woke this conversation to correct the refusal before it, and the block it sent back was refused too"
+	case repeated:
+		return "the refusal before this one was never answered, and this block earned exactly the same one"
+	default:
+		return "the refusal before this one was never answered by any turn"
 	}
-	if recorded.Woken {
-		return "the harness woke the conversation to correct " + previous
-	}
-	return "nothing had answered " + previous
 }
 
 // trackerAction is the part of a recorded tracker outcome this reads. It is a

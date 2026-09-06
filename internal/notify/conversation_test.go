@@ -906,6 +906,72 @@ func TestARefusedTrackerBlockIsSaidAgainstTheProductWithWhatItCost(t *testing.T)
 	}
 }
 
+// A refused block the harness woke a role for and got another refused block from
+// is the loss with the repair spent, so it is said at critical rather than as a
+// second warning about an unrelated block.
+func TestARefusalTheHarnessWokeAndLostAgainIsSaidAsTheOperatorsToLookAt(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerRefusalUnresolved, map[string]any{
+		"turn":     6,
+		"role":     string(domain.RoleProductManager),
+		"actions":  4,
+		"problem":  "the product manager asked for tracker actions the harness cannot read: decode tracker actions: unexpected trailing content after the actions",
+		"previous": "the product manager asked for tracker actions the harness cannot read: decode tracker actions: actions[0]: reason is the parking reason at 512 bytes, limit is 480",
+		"woken":    true,
+	})}
+
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Kind != KindTrackerRefusalUnresolved {
+		t.Fatalf("kind = %q, want %q", notification.Event.Kind, KindTrackerRefusalUnresolved)
+	}
+	if notification.Event.Severity != report.SeverityCritical {
+		t.Fatalf("severity = %q, want a critical: the harness has spent its attempt and the actions are still lost", notification.Event.Severity)
+	}
+	if notification.Topic.Kind != TopicProduct || !notification.Speaker.IsHarness() {
+		t.Fatalf("topic = %+v, speaker = %+v, want the harness speaking to the product", notification.Topic, notification.Speaker)
+	}
+	// What the harness did about it is in the message, because a reader deciding
+	// whether to step in needs to know the automatic path has already been tried.
+	for _, wanted := range []string{"woke this conversation", "4 tracker actions", "trailing content"} {
+		if !strings.Contains(message.Body, wanted) {
+			t.Fatalf("message %q does not say %q", message.Body, wanted)
+		}
+	}
+	if !strings.Contains(message.Body, "the operator's") {
+		t.Fatalf("message %q does not say whose move follows it", message.Body)
+	}
+}
+
+// The other path into the same record: two unreadable blocks in a row in a
+// conversation somebody was driving by hand, with no wakeup ever made. The
+// message must not claim the harness had woken anybody, because it had not.
+func TestARefusalNothingAnsweredDoesNotClaimTheHarnessWokeTheRole(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	refusal := "the product manager asked for tracker actions the harness cannot read: decode tracker actions: actions[0]: handle report \"the-third-one\" is not a report identifier; a report is named exactly as it was listed to you"
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerRefusalUnresolved, map[string]any{
+		"turn":     3,
+		"role":     string(domain.RoleProductManager),
+		"actions":  2,
+		"problem":  refusal,
+		"previous": refusal,
+		"woken":    false,
+	})}
+
+	_, message := said(t, conversation, events, 0)
+	if strings.Contains(message.Body, "woke") || strings.Contains(message.Body, "woken") {
+		t.Fatalf("message %q claims a wakeup the harness never made", message.Body)
+	}
+	// And the same defect twice is said as that, because it is the difference
+	// between a role that cannot get one action right and one making a fresh
+	// mistake.
+	if !strings.Contains(message.Body, "exactly the same one") {
+		t.Fatalf("message %q does not say the same defect came back", message.Body)
+	}
+	if !strings.Contains(message.Body, "never answered") {
+		t.Fatalf("message %q does not say the earlier refusal went unanswered", message.Body)
+	}
+}
+
 // A block nobody could count is not a block that asked for nothing, and the
 // message must not read as one.
 func TestARefusedTrackerBlockNobodyCouldCountSaysSo(t *testing.T) {

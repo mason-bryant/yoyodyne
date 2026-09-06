@@ -212,12 +212,12 @@ type Conversation struct {
 // both of this week's refused batches came to need the operator's assistant to
 // prompt the re-issue.
 //
-// The two endings are deliberate. A refusal is woken for once, because a wakeup
-// that fired again on each pass would be the harness asking a role that cannot
-// answer, over and over, at a turn a time. A refusal that arrives while one is
-// still outstanding — the woken turn refused again, or the same defect back —
-// carries the reason it will not be woken for instead, and that is what the
-// operator is told.
+// The two endings are deliberate. A refusal is put to the role once, because a
+// turn that was taken again on each pass would be the harness asking a role that
+// cannot answer, over and over, at a turn a time. A refusal that arrives while
+// one is still outstanding — the woken turn refused again, or the same defect
+// back — carries the reason it will not be woken for instead, and that is what
+// the operator is told.
 type TrackerRefusal struct {
 	// Turn is the conversation turn whose block was refused, and Actions how many
 	// it asked for. Actions is zero where the harness could not count them, which
@@ -229,17 +229,67 @@ type TrackerRefusal struct {
 	Problem   string    `json:"problem"`
 	RefusedAt time.Time `json:"refused_at"`
 	// WokenAt is when the harness started a turn for this refusal. Zero is a
-	// refusal whose wakeup has not fired.
+	// refusal no turn has been put to yet.
 	WokenAt time.Time `json:"woken_at,omitempty"`
+	// Attempts is how many wakeups may have reached the role, and LastAttemptAt
+	// when the most recent was claimed. They are the pair that makes the retry
+	// below both bounded and paced; see MaxRefusalWakeups.
+	Attempts      int       `json:"attempts,omitempty"`
+	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
 	// Escalated is why the harness will not wake for this refusal and has put it
 	// in front of the operator instead. Empty is the ordinary refusal.
 	Escalated string `json:"escalated,omitempty"`
 }
 
-// AwaitingWakeup reports a refusal the harness still owes a turn: nobody has
-// been woken for it, and it is not one the operator has been handed instead.
-func (r TrackerRefusal) AwaitingWakeup() bool {
-	return r.Escalated == "" && r.WokenAt.IsZero()
+// MaxRefusalWakeups bounds how many turns the harness starts for one refusal
+// before it stops trying.
+//
+// It bounds turns that may have been taken, and only those, exactly as the
+// escalation's own bound does. A wakeup that provably reached the role with
+// nothing — the provider refused it for want of capacity, so no model ever saw
+// the message — gives its attempt back, so a refusal waiting out a provider
+// window is retried at the pace below rather than counting down to abandonment
+// while nothing is being asked of anybody. That is what makes the wakeup survive
+// a window: the trigger runs on the non-model side and keeps its turn owed.
+//
+// The bound is small because every attempt past the first is a turn spent on a
+// conversation that already has the refusal at the top of it, and a refusal that
+// exhausts it still has that — what it loses is the harness starting the turn,
+// which is stated where the attempts run out rather than left to be inferred.
+const MaxRefusalWakeups = 3
+
+// RefusalWakeupRetryDelay is how long a wakeup that reached nobody is left alone
+// before it is made again.
+//
+// The give-back above is worth nothing without it. Whatever drives the wakeup
+// decides how often it looks, and the loop that does today looks once per pull —
+// which on a watching session is once a minute — so a refusal that gave its
+// attempt back and was claimable again at once would be a provider refusal every
+// minute for as long as the window lasts, and would take this pass's one wakeup
+// from every other refusal behind it while it did. Paced, it costs one refused
+// call a quarter of an hour and leaves the passes between it for the queue.
+//
+// It is measured from the last attempt rather than the first, for the reason the
+// escalation's is: a wakeup that failed, waited, and failed again waits again
+// rather than being abandoned on a clock that started before anybody knew there
+// was a problem.
+const RefusalWakeupRetryDelay = 15 * time.Minute
+
+// AwaitingWakeup reports a refusal the harness still owes a turn: no turn has
+// been put to the role, it is not one the operator has been handed instead, its
+// attempts are not spent, and the last one that reached nobody is old enough to
+// be worth making again.
+func (r TrackerRefusal) AwaitingWakeup(now time.Time) bool {
+	switch {
+	case r.Escalated != "" || !r.WokenAt.IsZero():
+		return false
+	case r.Attempts >= MaxRefusalWakeups:
+		return false
+	case r.Attempts == 0 && r.LastAttemptAt.IsZero():
+		return true
+	default:
+		return !now.Before(r.LastAttemptAt.Add(RefusalWakeupRetryDelay))
+	}
 }
 
 // MaxTrackerRefusalProblemBytes bounds the refusal a conversation record carries.
@@ -890,11 +940,13 @@ func (s *ConversationStore) ClaimRefusalWakeup(identity ConversationIdentity, at
 	if err != nil {
 		return TrackerRefusal{}, err
 	}
-	if conversation.RefusedBlock == nil || !conversation.RefusedBlock.AwaitingWakeup() {
+	if conversation.RefusedBlock == nil || !conversation.RefusedBlock.AwaitingWakeup(at) {
 		return TrackerRefusal{}, fmt.Errorf("%w: %s", ErrNoRefusalAwaitingWakeup, identity)
 	}
 	claimed := *conversation.RefusedBlock
 	claimed.WokenAt = at.UTC()
+	claimed.LastAttemptAt = at.UTC()
+	claimed.Attempts++
 	conversation.RefusedBlock = &claimed
 	// The record moved, so it says when — but only forward. A claim taken against
 	// a clock behind the conversation's own last turn must not rewrite the record
@@ -906,6 +958,47 @@ func (s *ConversationStore) ClaimRefusalWakeup(identity ConversationIdentity, at
 		return TrackerRefusal{}, err
 	}
 	return claimed, nil
+}
+
+// WithdrawRefusalWakeup gives back a wakeup that reached the role with nothing,
+// so the refusal keeps the turn it is owed and a later pass makes it.
+//
+// It is the narrow counterpart of the claim above, and it is spent on one
+// ending: a wakeup the provider refused for want of capacity, where no model
+// ever saw the message. The attempt is given back and the moment of it is not,
+// which is what makes the retry paced rather than a burst — see
+// RefusalWakeupRetryDelay, and see the escalation store, whose give-back this is
+// modelled on and for the same reason.
+//
+// The turn it names is checked against the record, because the refusal it was
+// claimed for may have been answered and replaced while the failed wakeup was
+// being reported: giving back a wakeup for a refusal that no longer exists would
+// re-open one somebody has already dealt with. A conversation with nothing to
+// give back is not a failure — the refusal moved on under it, which is the record
+// saying the wakeup is no longer owed.
+func (s *ConversationStore) WithdrawRefusalWakeup(ctx context.Context, identity ConversationIdentity, turn int) error {
+	hold, err := s.Claim(ctx, identity)
+	if err != nil {
+		return err
+	}
+	defer hold.Release()
+	conversation, err := s.Load(identity)
+	if err != nil {
+		return err
+	}
+	if conversation.RefusedBlock == nil ||
+		conversation.RefusedBlock.Turn != turn ||
+		conversation.RefusedBlock.WokenAt.IsZero() ||
+		conversation.RefusedBlock.Escalated != "" {
+		return nil
+	}
+	given := *conversation.RefusedBlock
+	given.WokenAt = time.Time{}
+	if given.Attempts > 0 {
+		given.Attempts--
+	}
+	conversation.RefusedBlock = &given
+	return s.Save(conversation)
 }
 
 // Save replaces a role's conversation record atomically. Unlike a run, a
