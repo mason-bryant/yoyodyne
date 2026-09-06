@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 func stoppedRunEntry() Entry {
@@ -680,6 +682,98 @@ func TestAnUnreadyItemRendersAsWorkThatNeverStarted(t *testing.T) {
 		"Blocked until the architect's answer exists",
 		"Who releases it",
 		"the development manager who records the dependency",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, required)
+		}
+	}
+}
+
+// escalationEntry is a role's judgement that the item cannot be met as it
+// stands: no blocker, no findings, no publication, and the account the
+// development manager decides from.
+func escalationEntry() Entry {
+	return Entry{
+		SchemaVersion: SchemaVersion,
+		Key:           Key(ClassEscalation, "run-0123456789abcdef0123456789abcdef"),
+		Class:         ClassEscalation,
+		ProductID:     "yoyodyne",
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:    "yoyodyne-ifd.100.1",
+		WorkItemTitle: "Convert the management anchors",
+		RecordedAt:    time.Date(2026, 9, 6, 9, 0, 0, 0, time.UTC),
+		Escalation: &Escalation{
+			RaisedBy: domain.RoleReviewer,
+			Reason:   "the acceptance criteria ask for the conversion the entanglement ruling forbade, so no change here can meet them",
+		},
+		Counters: Counters{ReviewRounds: 1, ReviewRoundsCap: 4},
+	}
+}
+
+// The judgement is the whole of the entry, so an entry that cannot carry it is
+// one she can read and not decide from.
+func TestAnEscalationEntryCarriesTheJudgementItIsAbout(t *testing.T) {
+	t.Parallel()
+
+	if err := escalationEntry().Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	for _, refused := range []struct {
+		name  string
+		entry func(Entry) Entry
+		says  string
+	}{
+		{
+			name:  "no judgement at all",
+			entry: func(e Entry) Entry { e.Escalation = nil; return e },
+			says:  "carries the judgement",
+		},
+		{
+			name:  "no account of it",
+			entry: func(e Entry) Entry { e.Escalation.Reason = "  "; return e },
+			says:  "the reason is required",
+		},
+		{
+			// Every other role decides about work rather than doing it, so an entry
+			// naming one describes an escalation nothing in a run could have raised.
+			name:  "raised by a role that is not in a run",
+			entry: func(e Entry) Entry { e.Escalation.RaisedBy = domain.RoleProductManager; return e },
+			says:  "is not one of the roles that raises one",
+		},
+		{
+			name:  "carrying a publication",
+			entry: func(e Entry) Entry { e.Publication = &Publication{Number: 4}; return e },
+			says:  "rather than a publication",
+		},
+	} {
+		t.Run(refused.name, func(t *testing.T) {
+			t.Parallel()
+			entry := escalationEntry()
+			entry.Escalation = &Escalation{RaisedBy: entry.Escalation.RaisedBy, Reason: entry.Escalation.Reason}
+			err := refused.entry(entry).Validate()
+			if err == nil || !strings.Contains(err.Error(), refused.says) {
+				t.Fatalf("Validate() error = %v, want it to say %q", err, refused.says)
+			}
+		})
+	}
+}
+
+// What a development manager reads. It has to say what she is being asked for —
+// a decision about the item rather than about a change — and what the escalation
+// cost, because every other entry on this docket is work that spent its budget
+// before anybody heard about it.
+func TestAnEscalationRendersAsADecisionAboutTheItem(t *testing.T) {
+	t.Parallel()
+
+	rendered := escalationEntry().Render()
+
+	for _, required := range []string{
+		"item raised as unmeetable",
+		"Nothing was integrated",
+		"the reviewer judged this item cannot be met as it stands",
+		"in the round it reached",
+		"replan, park, resequence, or redirect",
+		"the entanglement ruling forbade",
 	} {
 		if !strings.Contains(rendered, required) {
 			t.Fatalf("rendered = %q, want it to contain %q", rendered, required)

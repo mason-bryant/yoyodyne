@@ -472,19 +472,34 @@ func parksTheRun(err error) bool {
 		errors.As(err, &directed) || errors.As(err, &waiting) || errors.As(err, &held)
 }
 
+// raisesAnEscalation reports an ending the definition has no outcome for at all:
+// a developer or a reviewer having said the work item cannot be met as it stands.
+//
+// It is not a park and not a failure. The run ends, successfully, having produced
+// a decision for the development manager rather than a change — and no state in
+// either built-in definition has an outcome that means that, so nothing is
+// observed for it and the instance is left standing where the run left it. The
+// gap is recorded as a divergence at the ending, which is what observeUnfinished
+// is for.
+func raisesAnEscalation(err error) bool {
+	var raised escalationRaised
+	return errors.As(err, &raised)
+}
+
 // observeDevelopEnded records what the developer's state produced when an
 // attempt stopped being made.
 //
-// A park is not an outcome. Everything else that ends a developer state is
-// `stopped`, which is what the definition says it is: the operator stopped the
-// run, or the invocation failed in a way no relaunch answers. The one ending
-// that is neither is the spent relaunch budget, which is observed where it is
-// decided because that is the only place that knows the budget is what ran out.
+// A park is not an outcome, and neither is an escalation. Everything else that
+// ends a developer state is `stopped`, which is what the definition says it is:
+// the operator stopped the run, or the invocation failed in a way no relaunch
+// answers. The one ending that is neither is the spent relaunch budget, which is
+// observed where it is decided because that is the only place that knows the
+// budget is what ran out.
 func (a *activeRun) observeDevelopEnded(ctx context.Context, err error) {
 	switch {
 	case err == nil:
 		a.observe(ctx, deliveryDevelop, "produced")
-	case parksTheRun(err):
+	case parksTheRun(err), raisesAnEscalation(err):
 	default:
 		a.observe(ctx, deliveryDevelop, "stopped")
 	}
@@ -532,13 +547,14 @@ func (a *activeRun) observeCheckEnded(ctx context.Context, err error, unrepaired
 
 // observeReviewEnded records what the reviewer's state produced.
 //
-// A verdict that was reached is one of the three the run distinguishes. An
-// ending without one is `stopped` only where the definition says it is — the
-// boundary before a verdict is bought, which is where a run the operator stopped
-// ends. Anything else that ends a review is deliberately not observed: the
-// definition has no outcome for it, and leaving the instance standing in the
-// state it never left says that truthfully, where naming the nearest outcome
-// would record a run that ended somewhere it did not.
+// A verdict that was reached is one of the three the definition distinguishes,
+// or the escalation it does not. An ending without a verdict is `stopped` only
+// where the definition says it is — the boundary before a verdict is bought,
+// which is where a run the operator stopped ends. Anything else that ends a
+// review is deliberately not observed: the definition has no outcome for it, and
+// leaving the instance standing in the state it never left says that truthfully,
+// where naming the nearest outcome would record a run that ended somewhere it did
+// not.
 func (a *activeRun) observeReviewEnded(ctx context.Context, decision review.Decision, err error, unrepaired bool) {
 	if err != nil {
 		var stopped operatorStop
@@ -550,6 +566,13 @@ func (a *activeRun) observeReviewEnded(ctx context.Context, decision review.Deci
 	switch {
 	case decision == review.DecisionApprove:
 		a.observe(ctx, deliveryReview, "approved")
+	case decision == review.DecisionEscalate:
+		// The definition has no outcome for it, so nothing is observed and the
+		// instance is left standing in the review state it never left. That is the
+		// rule this function already holds to, and it is the truthful answer here
+		// too: naming the nearest outcome would record the run ending somewhere it
+		// did not. The gap is recorded as a divergence where the run ends, exactly
+		// as every other ending the definition cannot express is.
 	case unrepaired:
 		a.observe(ctx, deliveryReview, "unresolved")
 	default:

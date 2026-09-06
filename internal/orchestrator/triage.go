@@ -33,6 +33,15 @@ package orchestrator
 // on it — four times in a fortnight. RecordUnreadyItem is that finding made
 // where it costs a read, and it is the one entry on this docket with no run
 // behind it.
+//
+// A fourth is not a thing that stopped but somebody saying it should. A developer
+// or a reviewer that finds the work item unmeetable as written escalates in the
+// round it reached, and RecordEscalation dockets that judgement the moment the
+// run ends on it. It is docketed rather than only recorded because what it needs
+// is the same thing the other three need — the development manager deciding — and
+// because the alternative it replaces is the expensive one: a role with no cheap
+// way to say "this cannot work" spends repair rounds against a wall, or spends
+// the item's whole budget, before the stoppage reaches her at all.
 
 import (
 	"errors"
@@ -305,6 +314,33 @@ func (d Docketer) RecordStoppedRun(state runstate.State) (bool, error) {
 	return d.Docket.RecordOnce(entry)
 }
 
+// RecordEscalation dockets one run that ended with a role saying the work item
+// cannot be met as it stands, at the moment it ended. It reports whether this
+// call is what created the entry, so a caller can tell docketing an escalation
+// from finding it already docketed.
+//
+// It is separate from RecordStoppedRun because the two are separate facts and
+// only one of them is a stoppage. A stopped run spent its budget failing and
+// carries a durable blocker; an escalated run spent the round it was raised in,
+// integrated nothing, carries no blocker, and left its item parked. A single
+// entry that had to describe both would say neither.
+//
+// A run nobody escalated dockets nothing and is not an error, which is nearly
+// every run.
+func (d Docketer) RecordEscalation(state runstate.State) (bool, error) {
+	if err := d.validate(); err != nil {
+		return false, err
+	}
+	if !state.Escalated() {
+		return false, nil
+	}
+	entry, err := d.escalationEntry(state, d.now())
+	if err != nil {
+		return false, err
+	}
+	return d.Docket.RecordOnce(entry)
+}
+
 // RecordUnreadyItem dockets one item dispatch declined to start because the tree
 // does not meet a prerequisite it states. It reports whether this call is what
 // created the entry, so a caller can tell docketing a finding from finding it
@@ -373,14 +409,29 @@ func (d Docketer) unreadyEntry(item beads.WorkItem, unmet []readiness.Unmet, now
 }
 
 // entriesFor is what one run record contributes to the docket, leaving out
-// what is already on it. A run can contribute both: a stoppage is about the run
-// and a stuck publication is about what the forge did with its work, and one
-// run can have done both.
+// what is already on it. A run can contribute more than one: a stoppage is about
+// the run, an escalation is about the item, and a stuck publication is about what
+// the forge did with its work.
+//
+// The escalation is re-derived by this scan where a preserved death is not, and
+// the difference is what each is read from. An escalation is a word a role wrote
+// into the run's own record, so it stands on that record forever and re-deriving
+// it costs nothing: a run that carried one always did, and no record written
+// before the verb existed can carry it. So an escalation whose docket write
+// failed as the run ended is picked up by the next scan, exactly as a blocker is.
 func (d Docketer) entriesFor(state runstate.State, now time.Time, already map[string]bool) ([]triage.Entry, error) {
 	var entries []triage.Entry
 	var problems []error
 	if stoppedRun(state) && !already[triage.Key(triage.ClassStoppedRun, state.RunID)] {
 		entry, err := d.stoppedRunEntry(state, now)
+		if err != nil {
+			problems = append(problems, err)
+		} else {
+			entries = append(entries, entry)
+		}
+	}
+	if state.Escalated() && !already[triage.Key(triage.ClassEscalation, state.RunID)] {
+		entry, err := d.escalationEntry(state, now)
 		if err != nil {
 			problems = append(problems, err)
 		} else {
@@ -574,6 +625,47 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 	}
 	if err := entry.Validate(); err != nil {
 		return triage.Entry{}, fmt.Errorf("docket the stoppage of run %s: %w", state.RunID, err)
+	}
+	return entry, nil
+}
+
+// escalationEntry is one role's judgement that the item cannot be met, as the
+// development manager reads it.
+//
+// It carries none of the change evidence the stopped-run entry carries, and that
+// is the entry rather than an omission: an escalated run integrated nothing,
+// failed no check, and touched no protected path, so a findings list or a check
+// block on it would be evidence about a change nobody is deciding about. What it
+// does carry is what was preserved — the worktree and the branch are still there,
+// and whatever the developer had written is in them — and the counters, which are
+// what says the item can still afford whatever she decides.
+func (d Docketer) escalationEntry(state runstate.State, now time.Time) (triage.Entry, error) {
+	counters, err := d.recordedCounters(state)
+	if err != nil {
+		return triage.Entry{}, err
+	}
+	entry := triage.Entry{
+		SchemaVersion: triage.SchemaVersion,
+		Key:           triage.Key(triage.ClassEscalation, state.RunID),
+		Class:         triage.ClassEscalation,
+		ProductID:     state.ProductID,
+		RunID:         state.RunID,
+		WorkItemID:    state.WorkItemID,
+		WorkItemTitle: state.WorkItemTitle,
+		RecordedAt:    now.UTC(),
+		Escalation: &triage.Escalation{
+			RaisedBy: state.EscalatedBy(),
+			// Bounded to what an entry may carry, for the reason a preserved death's
+			// failure is: an entry refused for its length is one she never hears about,
+			// which is the silence the whole verb exists to end.
+			Reason: runstate.RecordEscalationReason(state.EscalationReason()),
+		},
+		Artifacts:     docketArtifacts(state),
+		Environmental: docketEnvironmental(state.Environmental),
+		Counters:      counters,
+	}
+	if err := entry.Validate(); err != nil {
+		return triage.Entry{}, fmt.Errorf("docket the escalation raised by run %s: %w", state.RunID, err)
 	}
 	return entry, nil
 }

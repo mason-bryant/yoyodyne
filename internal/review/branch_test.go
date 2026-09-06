@@ -106,8 +106,9 @@ func TestBranchReviewJudgesTheAccumulatedChange(t *testing.T) {
 
 // The contract must not tell a branch review to judge against a work item it
 // does not have. Everything that decides anything stays one string for both
-// scopes; what varies is only what the evidence is called and what completeness
-// is measured against.
+// scopes; what varies is only what the evidence is called, what completeness is
+// measured against, and the two decisions a branch review has no item to make —
+// which of the two approvals it is, and the escalation.
 func TestTheBranchContractDoesNotJudgeAgainstAWorkItem(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +121,10 @@ func TestTheBranchContractDoesNotJudgeAgainstAWorkItem(t *testing.T) {
 		"work-item context",
 		"complete against the acceptance criteria",
 		"whatever the work item or the change says about them",
+		// An escalation is a decision about one work item, so a branch review is
+		// never offered the word: it has nothing to escalate and nowhere to send it.
+		`"decision":"escalate"`,
+		"Decide approve, repair, or escalate",
 	} {
 		if strings.Contains(branch, unwanted) {
 			t.Errorf("the branch contract still says %q", unwanted)
@@ -128,10 +133,20 @@ func TestTheBranchContractDoesNotJudgeAgainstAWorkItem(t *testing.T) {
 			t.Errorf("the work-item contract lost %q, which is what it is supposed to say", unwanted)
 		}
 	}
-	for _, want := range []string{"branch context", "complete as one accumulated change"} {
+	for _, want := range []string{
+		"branch context",
+		"complete as one accumulated change",
+		// The schema a branch review is given offers the two decisions it can make
+		// and no third, so a reviewer never answers in a word the scope would refuse.
+		`{"decision":"approve|repair","summary"`,
+		"Decide approve or repair.",
+	} {
 		if !strings.Contains(branch, want) {
 			t.Errorf("the branch contract is missing %q", want)
 		}
+	}
+	if !strings.Contains(workItem, `{"decision":"approve|repair|escalate","approves"`) {
+		t.Error("the work-item schema does not offer the escalation, which is one of the three decisions it can make")
 	}
 	// The rendered evidence and the contract agree on what the context is called,
 	// so the reviewer is not sent looking for a section under another name.
@@ -141,7 +156,6 @@ func TestTheBranchContractDoesNotJudgeAgainstAWorkItem(t *testing.T) {
 	// Everything that decides anything is still the same review.
 	for _, protocol := range []string{
 		"single JSON object",
-		`{"decision":"approve|repair"`,
 		"The schema is closed",
 		"never report the invariants as a whole as satisfied",
 		"A change that creates, amends, retires, or edits an invariant is a finding",

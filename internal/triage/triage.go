@@ -24,6 +24,13 @@
 // much budget the item has already spent. A development manager deciding a
 // repair grant without the last of those writes reasoning the configured cap
 // then contradicts.
+//
+// One entry is not an observation but a judgement, and it is here rather than in
+// a channel of its own because its destination is the same. A developer or a
+// reviewer that finds the work item unmeetable as written says so in the round it
+// reached, and what that produces is a decision only the development manager can
+// take — so it is docketed like everything else that has stopped moving, and
+// reaches her the same way.
 package triage
 
 import (
@@ -50,16 +57,29 @@ const CapCleared = math.MaxInt
 // written once and never revised.
 const SchemaVersion = 1
 
-// Class is what stopped. The three are kept apart because they are found
+// Class is what stopped. The four are kept apart because they are found
 // differently and read differently: a stopped run is an event the harness was
 // present for, a stuck publication is a thing that has not happened, which
-// nothing can be present for and only a scan can notice, and an unready item is
-// work that never started because the tree does not meet what it asks for.
+// nothing can be present for and only a scan can notice, an unready item is
+// work that never started because the tree does not meet what it asks for, and
+// an escalation is a role saying out loud that the item cannot be met at all.
 type Class string
 
 const (
 	// ClassStoppedRun is a run that ended on a durable blocker.
 	ClassStoppedRun Class = "stopped_run"
+	// ClassEscalation is a developer or a reviewer having said, in the round it
+	// reached, that the work item cannot be met as it stands. It is the one class
+	// that is a judgement rather than an observation, and it is here because the
+	// judgement has the same destination as the other three: the development
+	// manager decides, and the docket is how work reaches her without anybody
+	// carrying it.
+	//
+	// What separates it from a stopped run is what it cost. A stoppage is what is
+	// left after a run spent its budget failing; an escalation is raised in the
+	// round the role saw the problem, before any of that, which is the whole point
+	// of the verb.
+	ClassEscalation Class = "escalation"
 	// ClassPublication is an approved publication that did not finish: one the
 	// forge has not merged past the configured stuck-merge age, or one the
 	// harness already recorded as outstanding — a merge the forge dropped, or one
@@ -74,7 +94,7 @@ const (
 
 func (c Class) Valid() bool {
 	switch c {
-	case ClassStoppedRun, ClassPublication, ClassUnreadyItem:
+	case ClassStoppedRun, ClassEscalation, ClassPublication, ClassUnreadyItem:
 		return true
 	default:
 		return false
@@ -86,6 +106,8 @@ func (c Class) Title() string {
 	switch c {
 	case ClassStoppedRun:
 		return "stopped run"
+	case ClassEscalation:
+		return "item raised as unmeetable"
 	case ClassPublication:
 		return "unfinished publication"
 	case ClassUnreadyItem:
@@ -265,6 +287,22 @@ func (u Unready) Kinds() []string {
 		kinds = append(kinds, strings.TrimSpace(prerequisite.Kind))
 	}
 	return kinds
+}
+
+// Escalation is a role's judgement that the work item cannot be met as it
+// stands, as the run recorded it. It is the whole content of the one class that
+// carries a judgement: what it asks the development manager for is a decision
+// about the item — replan, park, resequence, or redirect — rather than anything
+// about the change, of which there is none to speak of.
+type Escalation struct {
+	// RaisedBy is the role that said it. It is on the entry because the two are
+	// read differently: a developer saw the item from inside the work, and a
+	// reviewer saw a change made for it and judged that no change would do.
+	RaisedBy domain.AgentRole `json:"raised_by"`
+	// Reason is that role's own account, in its own words. It is the whole of what
+	// the decision is made from, so it is carried verbatim rather than summarized
+	// for the reason a reviewer's findings are.
+	Reason string `json:"reason"`
 }
 
 // Counters are what the item has already spent, beside what the project
@@ -447,6 +485,12 @@ type Entry struct {
 	// manager has to decide about: what the item asks for, what the read found,
 	// and who releases it.
 	Unready *Unready `json:"unready,omitempty"`
+	// Escalation is a role's judgement that the item cannot be met as it stands,
+	// on the one class that carries one. It is written into the entry rather than
+	// joined where the docket is read, for the reason the environmental refusal
+	// beside it is: it is settled as the run ends, which is before the entry
+	// exists.
+	Escalation *Escalation `json:"escalation,omitempty"`
 	// Environmental is the environment having refused this stoppage's last round,
 	// when it did. It is written into the entry rather than joined where the docket
 	// is read, unlike the re-run and the overrides beside it, because it is not a
@@ -548,7 +592,8 @@ func (e Entry) Validate() error {
 		problems = append(problems, fmt.Errorf("schema_version must be %d", SchemaVersion))
 	}
 	if !e.Class.Valid() {
-		problems = append(problems, fmt.Errorf("class %q must be %q, %q or %q", e.Class, ClassStoppedRun, ClassPublication, ClassUnreadyItem))
+		problems = append(problems, fmt.Errorf("class %q must be %q, %q, %q or %q",
+			e.Class, ClassStoppedRun, ClassEscalation, ClassPublication, ClassUnreadyItem))
 	}
 	switch key := strings.TrimSpace(e.Key); {
 	case key == "":
@@ -640,6 +685,30 @@ func (e Entry) Validate() error {
 		if e.Publication != nil {
 			problems = append(problems, errors.New("a stopped run entry describes a run rather than a publication"))
 		}
+	case ClassEscalation:
+		// The judgement is the whole of the entry, so an entry that cannot carry it
+		// is one the development manager can read and not decide from.
+		switch {
+		case e.Escalation == nil:
+			problems = append(problems, errors.New("an escalation entry carries the judgement that was raised"))
+		default:
+			// The two roles inside a run and no others. Every other role decides about
+			// work rather than doing it, and an entry naming one would describe an
+			// escalation nothing in a run could have raised.
+			if raised := e.Escalation.RaisedBy; raised != domain.RoleDeveloper && raised != domain.RoleReviewer {
+				problems = append(problems, fmt.Errorf("escalation: %q is not one of the roles that raises one, which are %q and %q",
+					raised, domain.RoleDeveloper, domain.RoleReviewer))
+			}
+			switch reason := strings.TrimSpace(e.Escalation.Reason); {
+			case reason == "":
+				problems = append(problems, errors.New("escalation: the reason is required, because it is the whole of what the decision is made from"))
+			case len(reason) > MaxBlockerBytes:
+				problems = append(problems, fmt.Errorf("escalation: the reason is %d bytes, limit is %d", len(reason), MaxBlockerBytes))
+			}
+		}
+		if e.Publication != nil {
+			problems = append(problems, errors.New("an escalation entry describes a judgement about the item rather than a publication"))
+		}
 	case ClassUnreadyItem:
 		switch {
 		case e.Unready == nil:
@@ -715,6 +784,7 @@ func (e Entry) Render() string {
 			e.Class.Title(), e.RecordedAt.UTC().Format(time.RFC3339), e.item(), e.RunID)
 	}
 	rendered.WriteString(e.renderUnready())
+	rendered.WriteString(e.renderEscalation())
 	if e.Blocker != "" {
 		rendered.WriteString(indented("Blocker", e.Blocker))
 	}
@@ -779,6 +849,29 @@ func (e Entry) renderUnready() string {
 			rendered.WriteString(indented("Who releases it", decides))
 		}
 	}
+	return rendered.String()
+}
+
+// renderEscalation says which role judged the item unmeetable and what it said,
+// and it says what the entry is asking for: a decision about the item rather
+// than about a change, because there is no change to decide about.
+//
+// It names what the escalation cost as well, and that is the half a reader would
+// otherwise supply wrongly. Every other entry on this docket is work that spent
+// its budget before anybody heard about it, so the counters below read as a
+// nearly-spent item by default; an escalation is raised in the round it was
+// reached, which is what makes replanning it still affordable.
+//
+// It is silent on every entry that is not one, which is nearly all of them.
+func (e Entry) renderEscalation() string {
+	raised := e.Escalation
+	if raised == nil {
+		return ""
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      Nothing was integrated: the %s judged this item cannot be met as it stands, in the round it reached, and raised it for your decision — replan, park, resequence, or redirect.\n",
+		raised.RaisedBy.Title())
+	rendered.WriteString(indented("Why the "+raised.RaisedBy.Title()+" says it cannot be met", raised.Reason))
 	return rendered.String()
 }
 

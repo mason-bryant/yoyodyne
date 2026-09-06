@@ -222,14 +222,49 @@ func describeLanding(state runstate.State) string {
 // surface describing a run from what it returned and one describing it from its
 // record cannot disagree about whether the item was discharged.
 func (o Outcome) Discharges() bool {
-	return o.LandingDischarges() && o.ApprovalDischarges()
+	return o.LandingDischarges() && o.ApprovalDischarges() && !o.Escalated()
+}
+
+// Escalated is the outcome's half of runstate.State.Escalated, answered over the
+// same two facts: either role having said the work item cannot be met as it
+// stands. A surface describing a run from what it returned and one describing it
+// from its record must not disagree about that, because what an escalated run
+// left behind is a decision somebody has to take.
+func (o Outcome) Escalated() bool {
+	return o.Landing == landing.OutcomeEscalate || o.ReviewDecision == review.DecisionEscalate
+}
+
+// EscalatedBy names the role that raised it, and EscalationReason is that role's
+// own account. Both answer as the record does, and for the reason the record
+// answers that way: the reviewer is the later of the two readers, so a run
+// carrying its verb is one the reviewer raised.
+func (o Outcome) EscalatedBy() domain.AgentRole {
+	switch {
+	case o.ReviewDecision == review.DecisionEscalate:
+		return domain.RoleReviewer
+	case o.Landing == landing.OutcomeEscalate:
+		return domain.RoleDeveloper
+	default:
+		return ""
+	}
+}
+
+func (o Outcome) EscalationReason() string {
+	switch {
+	case o.ReviewDecision == review.DecisionEscalate:
+		return o.ReviewSummary
+	case o.Landing == landing.OutcomeEscalate:
+		return o.LandingReason
+	default:
+		return ""
+	}
 }
 
 // LandingDischarges is the developer's half of that question, and
 // ApprovalDischarges the reviewer's. They are separate because what a surface
 // says about an item left open depends on which of the two readers said so.
 func (o Outcome) LandingDischarges() bool {
-	return o.Landing != landing.OutcomeEvidence && o.LandingProblem == ""
+	return o.Landing != landing.OutcomeEvidence && o.Landing != landing.OutcomeEscalate && o.LandingProblem == ""
 }
 
 func (o Outcome) ApprovalDischarges() bool {
@@ -248,6 +283,13 @@ func (o Outcome) UndischargedAccount() string {
 	if o.LandingProblem != "" {
 		return "the landing outcome it claimed could not be read (" + o.LandingProblem + ")"
 	}
+	// An escalation is answered for first, because it is a different statement
+	// from the two below it: they say this change is not the work, and it says no
+	// change would be until somebody decides about the item.
+	if o.Escalated() {
+		return "its " + o.EscalatedBy().Title() + " raised this item as one that cannot be met as it stands, for the development manager to decide: " +
+			strings.Join(strings.Fields(o.EscalationReason()), " ")
+	}
 	if o.LandingDischarges() && !o.ApprovalDischarges() {
 		return "its reviewer approved the change as evidence rather than as the work this item asked for: " +
 			strings.Join(strings.Fields(o.ReviewSummary), " ")
@@ -260,6 +302,9 @@ func (o Outcome) UndischargedAccount() string {
 // surface because the two dispositions are what an operator acts on differently:
 // a parking waits for a person, and a dependency releases itself.
 func (o Outcome) UndischargedDisposition() string {
+	if o.Escalated() {
+		return "is parked until the development manager decides what happens to it"
+	}
 	if impediment := strings.TrimSpace(o.LandingBlockedBy); impediment != "" {
 		return "stays open waiting on " + impediment
 	}
@@ -275,6 +320,10 @@ func renderLandingNote(outcome Outcome) string {
 	}
 	if outcome.Landing == "" {
 		return ""
+	}
+	if outcome.Landing == landing.OutcomeEscalate {
+		return "Landing claim: escalate — " + strings.Join(strings.Fields(outcome.LandingReason), " ") +
+			" (raised to the development manager to decide; nothing was integrated)"
 	}
 	line := fmt.Sprintf("Landing claim: %s — %s", outcome.Landing,
 		strings.Join(strings.Fields(outcome.LandingReason), " "))
@@ -304,6 +353,14 @@ func renderLandingNote(outcome Outcome) string {
 // is a developer's landing that the review agreed with rather than a second
 // decision.
 func undischargedLandingReason(state runstate.State) string {
+	// The escalation is answered for before either of the two below, because it is
+	// the only one of the three where nothing was integrated and where what the
+	// item is waiting for is a person rather than a release. A reader told this in
+	// the words of a landing would go looking for a change on the target branch.
+	if state.Escalated() {
+		return fmt.Sprintf("Yoyodyne run %s raised this item as one that cannot be met as it stands, so nothing was integrated and the item is parked with the escalation in front of the development manager to decide — replan, park, resequence, or redirect. The %s's account: %s",
+			state.RunID, state.EscalatedBy().Title(), state.EscalationReason())
+	}
 	if state.LandingDischarges() && !state.ApprovalDischarges() {
 		return fmt.Sprintf("Yoyodyne run %s integrated a change its independent reviewer approved as evidence rather than as the work this item asked for, so the item stays open with its change integrated and parked. The reviewer's account: %s",
 			state.RunID, state.ReviewSummary)
@@ -346,6 +403,15 @@ func undischargedParking(state runstate.State) domain.WorkItemParking {
 	}
 	reason := fmt.Sprintf("yoyodyne run %s landed evidence for this item rather than the work, and did not discharge it: %s",
 		state.RunID, state.LandingReason)
+	// An escalated item is parked in the words of whichever role raised it, and
+	// says who releases it. That last part is what makes this parking different
+	// from the others: every other one waits for anybody who reads it to decide,
+	// and this one is already in front of somebody.
+	if state.Escalated() {
+		return domain.WorkItemParking(singleLine(fmt.Sprintf(
+			"yoyodyne run %s raised this item as one that cannot be met as it stands; it is with the development manager to decide and is not to be started again until she has: %s",
+			state.RunID, state.EscalationReason()), domain.MaxWorkItemParkingBytes))
+	}
 	// An item its reviewer left open is parked in the reviewer's words, because
 	// they are the only account of that decision: the developer claimed the
 	// ordinary landing, and the sentence a person deciding whether to pick this item

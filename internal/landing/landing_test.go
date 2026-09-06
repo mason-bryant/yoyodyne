@@ -201,8 +201,16 @@ func TestAnUndischargedClaimParksUnlessItNamesTheImpediment(t *testing.T) {
 	// two statements that cannot both be true rather than one to pick from.
 	discharging := `{"outcome":"discharged","why":"done","blocked_by":"yoyodyne-ifd.209.25"}`
 	if _, err := landing.Decode(discharging); err == nil ||
-		!strings.Contains(err.Error(), "does not discharge") {
+		!strings.Contains(err.Error(), "only for a landing of evidence") {
 		t.Fatalf("Decode() accepted a discharging claim that waits on something: %v", err)
+	}
+	// An escalation has nothing to wait for either, and for a sharper reason: what
+	// it is waiting on is the development manager deciding, and a developer that
+	// could name the impediment as a work item had the evidence landing for it.
+	escalating := `{"outcome":"escalate","why":"the criteria contradict a ruling","blocked_by":"yoyodyne-ifd.209.25"}`
+	if _, err := landing.Decode(escalating); err == nil ||
+		!strings.Contains(err.Error(), "only for a landing of evidence") {
+		t.Fatalf("Decode() accepted an escalation that waits on something: %v", err)
 	}
 }
 
@@ -269,5 +277,42 @@ func TestTheContractNamesExactlyTheVocabularyTheDecoderAccepts(t *testing.T) {
 	// names it leaves every developer taking a default it was not told about.
 	if !strings.Contains(landing.Contract, `"blocked_by"`) {
 		t.Error("the contract never names the marker that leaves an item open")
+	}
+}
+
+// The verb for the item nothing can meet. It withholds the closure like a
+// landing of evidence, and unlike one it says the item is going to somebody:
+// there is nothing to integrate and nothing in the backlog to wait for, so the
+// parking is what holds the item while the decision is pending.
+func TestAnEscalationParksItsItemAndSaysWhoDecides(t *testing.T) {
+	t.Parallel()
+
+	raised := "```yoyodyne-landing\n" +
+		`{"outcome":"escalate","why":"the acceptance criteria ask for what the ruling forbids"}` + "\n```\n"
+	_, claim, err := landing.Extract(raised)
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if !claim.Escalates() {
+		t.Fatalf("the claim did not read as an escalation: %+v", claim)
+	}
+	if claim.Discharges() {
+		t.Error("an escalation closed the item it was raised about")
+	}
+	if !claim.Parks() || claim.Impediment() != "" {
+		t.Errorf("an escalation did not take the parking: %+v", claim)
+	}
+	// What the reviewer and the item's notes are both written from. It has to say
+	// the decision is somebody's, because an escalation described as a landing
+	// would send a reader looking for a change on the target branch.
+	described := claim.Describe()
+	for _, required := range []string{"cannot be met as it stands", "development manager", "Nothing was integrated", "parked"} {
+		if !strings.Contains(described, required) {
+			t.Errorf("Describe() = %q, want it to contain %q", described, required)
+		}
+	}
+	// And it must never read as its own opposite.
+	if strings.Contains(described, "discharges the work item") {
+		t.Errorf("Describe() reads as a discharge: %q", described)
 	}
 }

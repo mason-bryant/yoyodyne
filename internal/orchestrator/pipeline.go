@@ -2165,6 +2165,14 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			a.observeReviewEnded(ctx, decision, nil, stillRepairable)
 			return nil
 		}
+		// An escalation ends the loop where it was raised. There is nothing to hand
+		// back — the reviewer's whole verdict is that no change to this change would
+		// help — so spending another attempt on it would be the repair round against
+		// a wall this verb exists to stop.
+		if decision == review.DecisionEscalate {
+			a.observeReviewEnded(ctx, decision, nil, stillRepairable)
+			return escalationRaised{}
+		}
 		if a.state.RepairAttempts >= limit {
 			a.observeReviewEnded(ctx, decision, nil, budgetSpent)
 			return a.blockOnUnresolvedFindings(limit)
@@ -2830,6 +2838,20 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	// somebody able to say what the run had changed.
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save the account of what the developer changed: %w", err)
+	}
+	// An escalation ends the run in the round it was raised in, which is the whole
+	// of what the verb buys: nothing is published, nothing is checked, nothing is
+	// reviewed, and the item goes to the development manager with the developer's
+	// account on it.
+	//
+	// It is read before the invocation's own exit status because it is a claim
+	// about the work item rather than about the attempt. The block arrived whole —
+	// an unreadable one is recorded as a problem above and is not this — so a
+	// developer that said the item cannot be met said so whichever way its process
+	// then ended, and asking it to be said again by a resumed run would be spending
+	// the run this verb exists to save.
+	if a.state.LandingOutcome == runstate.LandingEscalate {
+		return escalationRaised{}
 	}
 	if !providerResult.IsError {
 		return nil
@@ -4232,6 +4254,14 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	if errors.As(cause, &operatorHeld) {
 		return a.pauseForOperatorHold(operatorHeld)
 	}
+	// An escalation is the one ending here that is neither a pause nor a failure
+	// of anything. The role that raised it did its job and the run did too: what
+	// it produced is a decision for the development manager rather than a change,
+	// so it ends successfully with nothing integrated and its item parked.
+	var raised escalationRaised
+	if errors.As(cause, &raised) {
+		return a.escalate(ctx)
+	}
 	// A stop the operator asked for is the one ending here that is not a pause and
 	// not a failure of the work. It is recorded as cancelled, which is exactly
 	// what a run this process cancelled itself is recorded as, so what it leaves
@@ -4241,6 +4271,105 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 		return a.fail(cause, runstate.StatusCancelled)
 	}
 	return a.fail(cause, failureStatus(ctx, cause))
+}
+
+// escalationRaised is a developer or a reviewer having said the work item cannot
+// be met as it stands. It is an error only in the sense that it unwinds the run —
+// it carries no message of its own, because what was said is on the run's record
+// in the raiser's own words and every reader of it goes there.
+//
+// It is a type rather than a sentinel value for the reason every other ending
+// here is: what a run does about it is decided by matching the type, and a
+// sentinel wrapped in a formatted error is one a later `fmt.Errorf` can hide.
+type escalationRaised struct{}
+
+func (escalationRaised) Error() string {
+	return "a role raised this work item as one that cannot be met as it stands"
+}
+
+// escalate ends a run either role escalated: the item goes back to the backlog
+// parked, the escalation is docketed for the development manager, and the run is
+// recorded as having succeeded at what it was for.
+//
+// It is a separate ending from `complete` rather than a branch inside it, and the
+// difference is what each is for. Completing settles an item whose promotion is
+// where it is going to stay; this settles an item nothing was promoted for. Every
+// step `complete` takes that still applies is taken here in the same order — the
+// outcome onto the item, the item's disposition, the price — and the two it does
+// not are the closure and the cleanup, because there is nothing to close the item
+// against and nothing integrated to clean up after.
+//
+// The run succeeds. It cost the round it was raised in and produced exactly what
+// the verb is for, and recording it as a failure would put honesty about an
+// unmeetable item into the same count as a broken toolchain — which is the
+// failure-storm brake counting the one thing it must not.
+//
+// What it leaves standing is the worktree and the branch. Whatever the developer
+// had written is in them, and the development manager deciding to replan or
+// redirect is the reader most likely to want it; the sweep that retires an
+// unintegrated run's artifacts is what settles them afterwards, exactly as it
+// does for a stopped run.
+func (a *activeRun) escalate(ctx context.Context) (Outcome, error) {
+	p := a.pipeline
+	// The disposition is decided before the outcome is recorded, for the reason
+	// `complete` decides it there: the notes name where the item went, and they are
+	// written first. An escalation carries no impediment by contract, so this only
+	// ever reads the item — which is what the parking it must not lose comes from.
+	arranged, item, err := arrangeUndischarged(ctx, p.Tracker, a.state)
+	if err == nil {
+		a.applyUndischargedDisposition(arranged)
+	}
+	if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
+		_, err := p.Tracker.RecordOutcome(ctx, a.state.WorkItemID, renderOutcomeNotes(a.outcome))
+		return err
+	}); err != nil {
+		return a.fail(fmt.Errorf("record the escalated run's outcome: %w", err), runstate.StatusFailed)
+	}
+	// The item goes back parked. It is never closed and never left bare: the
+	// decision is the development manager's and is not made yet, so an item back in
+	// the queue unheld is one the next pull selects for another run of the work a
+	// role has just said cannot be done.
+	if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
+		return reopenUndischarged(ctx, p.Tracker, a.state, item)
+	}); err != nil {
+		return a.fail(fmt.Errorf("park the work item this run escalated: %w", err), runstate.StatusFailed)
+	}
+	a.recordPrice()
+	completedAt := p.clock().Now()
+	// A recorded stop or park is an instruction to continue later, and this run has
+	// finished, exactly as it has when `complete` clears the same two.
+	a.state.ProviderStop = ""
+	a.state.OperatorHeldSince = nil
+	a.state.Status = runstate.StatusSucceeded
+	a.state.Phase = runstate.PhaseComplete
+	a.state.UpdatedAt = completedAt
+	a.state.CompletedAt = &completedAt
+	// The definition has no outcome for an escalation, so the instance is standing
+	// in whichever state the run left, and this says so on the record the terminal
+	// write is about to carry. Without it the soak would count an escalated run as
+	// one that walked the definition to the end.
+	a.observeUnfinished()
+	if err := p.Store.Save(a.state); err != nil {
+		return a.fail(fmt.Errorf("save the escalated run state: %w", err), runstate.StatusFailed)
+	}
+	a.outcome.Status = a.state.Status
+	a.outcome.Phase = a.state.Phase
+	a.outcome.Branch = a.state.Branch
+	a.outcome.WorktreePath = a.state.WorktreePath
+	a.outcome.BaseCommit = a.state.BaseCommit
+	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	// Docketed after the terminal write, exactly as a stoppage is, so the entry a
+	// development manager reads describes a run whose record already says how it
+	// ended. A write that failed fails the run: an escalation nobody was told is
+	// the silence the whole verb exists to end, and a failed run at least says so
+	// where somebody is looking — and dockets itself as a preserved death, since
+	// the worktree and the branch are still standing.
+	if p.Docket != nil {
+		if _, err := p.Docket.RecordEscalation(a.state); err != nil {
+			return a.fail(fmt.Errorf("docket the escalation this run raised: %w", err), runstate.StatusFailed)
+		}
+	}
+	return a.outcome, nil
 }
 
 // pause reports a run left waiting. Nothing is cleaned up and nothing is made
@@ -4921,7 +5050,15 @@ func (a *activeRun) recordReviewVerdict(ctx context.Context, decision review.Dec
 	// before every review and written from the reply that produced this decision,
 	// so what is asked about is what the reviewer just said rather than anything an
 	// earlier attempt left behind.
-	if decision == review.DecisionApprove || review.TrivialResidue(a.outcome.ReviewFindings) {
+	// An escalation charges the round it was raised in and never falls into the
+	// uncharged case below, whatever findings it happened to carry. The trivial
+	// residue is an exemption for a repair — one small note is not the reviewer
+	// still arguing, so the item is not charged for another turn of an argument
+	// that ended — and an escalation is not a turn of an argument at all. A review
+	// happened and it is the round the verb costs, which is the whole of what
+	// "spends at most the round it is raised in" promises.
+	if decision == review.DecisionApprove ||
+		(decision == review.DecisionRepair && review.TrivialResidue(a.outcome.ReviewFindings)) {
 		if _, err := counters.RecordUnchargedVerdict(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
 			return fmt.Errorf("record the verdict that cost attempt %s nothing: %w", attempt, err)
 		}
@@ -5045,7 +5182,7 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		a.outcome.ReviewSummary = result.Verdict.Summary
 		a.outcome.ReviewFindings = result.Verdict.Findings
 	}
-	if result.Decision == review.DecisionApprove || result.Decision == review.DecisionRepair {
+	if result.Decision.Valid() {
 		a.state.ReviewDecision = string(result.Decision)
 		a.outcome.ReviewDecision = result.Decision
 		// What the approval approves is recorded beside the decision, because it is
@@ -6007,6 +6144,14 @@ func renderOutcomeNotes(outcome Outcome) string {
 			headline = "Yoyodyne run passed checks and was integrated automatically; the independent reviewer approved the change as evidence rather than as the work this item asked for, so the item " +
 				outcome.UndischargedDisposition() + "."
 		}
+	}
+	// An escalated run integrated nothing, so it takes neither headline above. It
+	// is said in the words the item is actually left in: nothing landed, and what
+	// the run produced is a decision somebody named has to take.
+	if outcome.Escalated() {
+		headline = "Yoyodyne run raised this item as one that cannot be met as it stands, in the round the " +
+			outcome.EscalatedBy().Title() + " reached. Nothing was integrated; the escalation is on the triage docket for the development manager and the item " +
+			outcome.UndischargedDisposition() + "."
 	}
 	// These notes are recorded before cleanup, because the promotion is settled
 	// first and only a promoted change's artifacts are removed. Cleanup can still

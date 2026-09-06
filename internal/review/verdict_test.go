@@ -559,3 +559,43 @@ func TestOnlyOneMinorFindingIsATrivialResidue(t *testing.T) {
 		})
 	}
 }
+
+// The reviewer's verdict for the item no change could satisfy. It approves
+// nothing, asks for nothing, and needs no finding — what it owes is the summary,
+// because that is the whole of what the development manager decides from.
+func TestAnEscalationNeedsNoFindingAndApprovesNothing(t *testing.T) {
+	t.Parallel()
+
+	verdict, unknown, err := Decode([]byte(
+		`{"decision":"escalate","summary":"the criteria contradict a ruling; this needs replanning"}`))
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(unknown) != 0 {
+		t.Errorf("unknown fields = %v, want none", unknown)
+	}
+	if verdict.Decision != DecisionEscalate || verdict.Approves != "" {
+		t.Fatalf("verdict = %#v, want an escalation that approves nothing", verdict)
+	}
+	decision, err := verdict.Resolve()
+	if err != nil || decision != DecisionEscalate {
+		t.Fatalf("Resolve() = %q, %v, want the escalation to stand", decision, err)
+	}
+	// A reviewer that named what is wrong with the change and then said the item
+	// cannot be met at all has said both, and the finding does not contradict the
+	// second the way it contradicts an approval.
+	withFinding := Verdict{
+		Decision: DecisionEscalate,
+		Summary:  "the criteria contradict a ruling",
+		Findings: []Finding{{Severity: SeverityBlocker, Message: "and this drops an error on the way past"}},
+	}
+	if decision, err := withFinding.Resolve(); err != nil || decision != DecisionEscalate {
+		t.Fatalf("Resolve() = %q, %v, want an escalation carrying a finding to stand", decision, err)
+	}
+	// The summary is not optional. An escalation that lost it would put an item in
+	// front of her saying only that somebody thought it unmeetable.
+	if _, _, err := Decode([]byte(`{"decision":"escalate","summary":"  "}`)); err == nil ||
+		!strings.Contains(err.Error(), "summary is required") {
+		t.Fatalf("Decode() accepted an escalation with no account of itself: %v", err)
+	}
+}

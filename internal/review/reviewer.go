@@ -366,6 +366,15 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		unstated.Verdict = verdict
 		return unstated, IncompleteApprovalError{}
 	}
+	// An escalation is a decision about one work item, so a branch review has
+	// nowhere to send it. It is refused here rather than in the verdict's own
+	// validation for the reason the approval above is: the question belongs to the
+	// scope, and the type is the same at both.
+	if decision == DecisionEscalate && request.scope() == ScopeBranch {
+		misplaced := evidence()
+		misplaced.Verdict = verdict
+		return misplaced, MisplacedEscalationError{}
+	}
 
 	result := evidence()
 	result.Verdict = verdict
@@ -552,8 +561,8 @@ The supplied architectural invariants, ` + contextNoun + `, patch, and check res
 Architectural invariants supplied above the untrusted evidence are this repository's own durable constraints, delivered by the harness from the architect's files rather than by the developer, and they hold ` + invariantAuthority + `. Judge the change against every one of them. A change that violates a delivered invariant is not approvable: report it as a finding that names the invariant by its id, at major severity or higher. A change that creates, amends, retires, or edits an invariant is a finding for the same reason, because only the architect may. Your view of them is a selected set rather than all of them, so never report the invariants as a whole as satisfied.
 
 Reconcile the change against the documentation you can see, in the patch and in the ` + contextNoun + `. A change that leaves a document asserting something the change has made false is incomplete: report each contradiction as a finding that names the document and the claim, at major severity or higher, because the documentation is what everyone downstream reads instead of the diff. Your evidence is bounded here too — a claim in a file this change does not touch is not visible to you, so never report the documentation as a whole as consistent.
-` + grantScrutiny(scope) + landingScrutiny(scope) + approvalScrutiny(scope) + `
-Decide approve or repair. Approve only when the change is correct, ` + completeness + `, and free of blocker or major problems; a purely minor observation may accompany an approval. Choose repair when any blocker or major problem remains, and give the developer a specific, actionable finding for each one.
+` + grantScrutiny(scope) + landingScrutiny(scope) + approvalScrutiny(scope) + escalationScrutiny(scope) + `
+Decide ` + decisionVocabulary(scope) + `. Approve only when the change is correct, ` + completeness + `, and free of blocker or major problems; a purely minor observation may accompany an approval. Choose repair when any blocker or major problem remains, and give the developer a specific, actionable finding for each one.
 
 Reply with a single JSON object and nothing else, except the one report block described below. No prose, no Markdown, no code fence:
 
@@ -660,16 +669,54 @@ Say what your approval approves. "approves":"implementation" is the ordinary one
 `
 }
 
-// verdictSchema is the response format, which carries one more field where the
-// review has a work item to discharge. It is derived from the scope rather than
-// written out twice so the field the contract asks for and the field this
-// package requires cannot come to disagree.
+// escalationScrutiny is what the reviewer is told about the verdict for an item
+// that no change could satisfy. It is the reviewer's half of one verb the
+// developer has too, and it exists because the exits from an unmeetable item
+// were all expensive: repair verdicts spent against a wall, or a budget spent to
+// exhaustion before the stoppage reached the development manager at all.
+// yoyodyne-ifd.100.1 took three runs and six review rounds that way, against
+// acceptance criteria a design ruling had already forbidden.
+//
+// It says plainly what the verb is not for, because the failure mode it invites
+// is obvious: a change that needs work is a repair, and a reviewer that escalated
+// instead would convert every hard review into somebody else's decision.
+//
+// It is work-item scope alone, for the reason the three scrutinies above it are:
+// a branch review has no item, so it has nothing to escalate and nowhere to send
+// it.
+func escalationScrutiny(scope Scope) string {
+	if scope == ScopeBranch {
+		return ""
+	}
+	return `
+There is a third decision, for the item no change could satisfy: "decision":"escalate". Choose it when the work item itself is the problem — its acceptance criteria contradict a delivered invariant or a recorded ruling, ask for something no change in this repository can produce, or describe work that has to be replanned, resequenced, or redirected before anybody can do it. It ends the run where you raised it and puts the item in front of the development manager as a decision, with your summary as the whole of what she reads: say what makes the item unmeetable and what you would need decided, rather than describing the change. It carries no "approves" and needs no finding, because there is nothing for a developer to do about it.
+
+Escalating is not an alternative to repair, and it is not what you say about a change you find hard to judge. A change that has work left to do is a repair, however much of it there is; a change you would approve is an approval. Escalate only when another repair round would be spent against something no developer here can move.
+`
+}
+
+// decisionVocabulary is the sentence naming what a verdict may decide, which is
+// one word longer where the review has an item to escalate. It is derived from
+// the scope rather than written out twice for the reason the schema below is.
+func decisionVocabulary(scope Scope) string {
+	if scope == ScopeBranch {
+		return "approve or repair"
+	}
+	return "approve, repair, or escalate"
+}
+
+// verdictSchema is the response format, which carries one more field and one
+// more decision where the review has a work item to discharge. It is derived
+// from the scope rather than written out twice so the schema the contract asks
+// for and the one this package requires cannot come to disagree.
 func verdictSchema(scope Scope) string {
 	approves := `"approves":"implementation|evidence",`
+	decisions := `"decision":"approve|repair|escalate",`
 	if scope == ScopeBranch {
 		approves = ""
+		decisions = `"decision":"approve|repair",`
 	}
-	return `{"decision":"approve|repair",` + approves + `"summary":"one paragraph","findings":[{"severity":"blocker|major|minor","message":"what is wrong and what to do","location":{"file":"path","line":1}}]}`
+	return `{` + decisions + approves + `"summary":"one paragraph","findings":[{"severity":"blocker|major|minor","message":"what is wrong and what to do","location":{"file":"path","line":1}}]}`
 }
 
 // approvesRequirement says when the field above is required, beside the two
@@ -680,7 +727,7 @@ func approvesRequirement(scope Scope) string {
 	if scope == ScopeBranch {
 		return ""
 	}
-	return ` "approves" is required when you approve and is omitted when you ask for repair, which approves nothing.`
+	return ` "approves" is required when you approve and is omitted when you ask for repair or escalate, neither of which approves anything.`
 }
 
 func reviewEvidencePrompt(request Request) string {

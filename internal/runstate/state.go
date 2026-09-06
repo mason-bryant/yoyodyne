@@ -109,6 +109,11 @@ const (
 const (
 	ReviewApprove = "approve"
 	ReviewRepair  = "repair"
+	// ReviewEscalate is the reviewer having said the work item cannot be met as it
+	// stands. It approves nothing and asks for nothing, so it neither integrates
+	// nor sends the change back: what it produces is a decision for the
+	// development manager, and this is the record that says one was raised.
+	ReviewEscalate = "escalate"
 )
 
 // What an approval approves is duplicated here for the same reason, and it is
@@ -133,6 +138,10 @@ const (
 const (
 	LandingDischarged = "discharged"
 	LandingEvidence   = "evidence"
+	// LandingEscalate is the developer's half of the same verb the reviewer has
+	// above: the item cannot be met as it stands, and what the run produced is a
+	// decision for the development manager rather than a change.
+	LandingEscalate = "escalate"
 )
 
 // The vocabularies above stated as lists, which is what the validation below
@@ -155,10 +164,10 @@ const (
 // package's vocabularies to being subsets of these, so an addition there fails a
 // check rather than somebody's run.
 var (
-	reviewDecisions   = []string{ReviewApprove, ReviewRepair}
+	reviewDecisions   = []string{ReviewApprove, ReviewRepair, ReviewEscalate}
 	reviewApprovals   = []string{ApprovesImplementation, ApprovesEvidence}
 	findingSeverities = []string{SeverityBlocker, SeverityMajor, SeverityMinor}
-	landingOutcomes   = []string{LandingDischarged, LandingEvidence}
+	landingOutcomes   = []string{LandingDischarged, LandingEvidence, LandingEscalate}
 )
 
 // ReviewDecisions and FindingSeverities are those vocabularies as a caller
@@ -546,6 +555,21 @@ func RecordFailure(failure string) string {
 }
 
 const failureCutNote = "\n[cut; the run's own record carries the whole of this failure]"
+
+// RecordEscalationReason makes a bounded record of what a role said when it
+// raised the item as unmeetable, for the docket entry that carries it to the
+// development manager. The reason is the whole of what she decides from and it is
+// cut rather than refused for the reason a blocker is: an entry refused for its
+// length reaches nobody, which is worse than one whose tail is somewhere else.
+//
+// Where the whole of it is depends on who raised it — the developer's claim is in
+// the run's landing reason and the reviewer's is in its review summary — so the
+// note names the run rather than one of the two.
+func RecordEscalationReason(reason string) string {
+	return boundRecordedText(reason, MaxBlockerBytes, escalationCutNote)
+}
+
+const escalationCutNote = "\n[cut; the run's own record carries the whole of this reason]"
 
 // boundRecordedText cuts one recorded reason to its bound and says that it was
 // cut, so nobody reads a clamped account as a complete one. The cut lands on a
@@ -1421,6 +1445,13 @@ func (s State) Validate() error {
 	if s.ReviewApproves != "" && s.ReviewDecision != ReviewApprove {
 		problems = append(problems, errors.New("review_approves is only for a verdict recorded as approve"))
 	}
+	// An escalation with no account of itself is the half of the record that would
+	// be read afterwards. It is the whole of what the development manager decides
+	// from, so a record that lost it would put an item in front of her saying only
+	// that somebody thought it unmeetable.
+	if s.ReviewDecision == ReviewEscalate && strings.TrimSpace(s.ReviewSummary) == "" {
+		problems = append(problems, errors.New("review_decision escalate requires the review_summary it was raised with"))
+	}
 	if s.LandingOutcome != "" && !slices.Contains(landingOutcomes, s.LandingOutcome) {
 		problems = append(problems, errors.New("landing_outcome is invalid"))
 	}
@@ -1882,17 +1913,60 @@ func (s State) AwaitingForge() bool {
 // get. yoyodyne-ifd.284 is what that costs when the second reader has nowhere to
 // say it.
 func (s State) Discharges() bool {
-	return s.LandingDischarges() && s.ApprovalDischarges()
+	return s.LandingDischarges() && s.ApprovalDischarges() && !s.Escalated()
+}
+
+// Escalated reports a run either role ended by saying the work item cannot be
+// met as it stands. Nothing is integrated on such a run, the item is parked, and
+// what the run produced is a decision for the development manager.
+//
+// It is asked of the record rather than carried as a field of its own, because
+// each role already writes the verb where its own vocabulary lives: the
+// developer's is a landing outcome and the reviewer's is a review decision, and a
+// third field would be a second answer either of them could contradict.
+func (s State) Escalated() bool {
+	return s.LandingOutcome == LandingEscalate || s.ReviewDecision == ReviewEscalate
+}
+
+// EscalatedBy names the role that raised it, and is empty on every run nobody
+// escalated. The reviewer is answered for first because it is the later of the
+// two readers: a developer that escalates ends the run before any review, so a
+// record carrying the reviewer's verb is one the reviewer raised.
+func (s State) EscalatedBy() domain.AgentRole {
+	switch {
+	case s.ReviewDecision == ReviewEscalate:
+		return domain.RoleReviewer
+	case s.LandingOutcome == LandingEscalate:
+		return domain.RoleDeveloper
+	default:
+		return ""
+	}
+}
+
+// EscalationReason is the account the role that raised it gave, in its own
+// words. It is the whole of what the development manager decides from, so it is
+// read from whichever channel the raiser wrote it in rather than summarized
+// anywhere.
+func (s State) EscalationReason() string {
+	switch {
+	case s.ReviewDecision == ReviewEscalate:
+		return s.ReviewSummary
+	case s.LandingOutcome == LandingEscalate:
+		return s.LandingReason
+	default:
+		return ""
+	}
 }
 
 // LandingDischarges is the developer's half of the question above: whether what
 // this run claimed about its own change closes the item.
 //
-// It answers no in exactly two cases: a claim of evidence, and a claim that
-// arrived unreadable. Everything else discharges, which is every run that
-// claimed nothing and every run recorded before this channel existed.
+// It answers no in exactly three cases: a claim of evidence, a claim that the
+// item cannot be met as it stands, and a claim that arrived unreadable.
+// Everything else discharges, which is every run that claimed nothing and every
+// run recorded before this channel existed.
 func (s State) LandingDischarges() bool {
-	return s.LandingOutcome != LandingEvidence && s.LandingProblem == ""
+	return s.LandingOutcome != LandingEvidence && s.LandingOutcome != LandingEscalate && s.LandingProblem == ""
 }
 
 // ApprovalDischarges is the reviewer's half: whether the approval this change
@@ -1934,7 +2008,9 @@ func (s State) LandingImpediment() string {
 // and an item returned bare is one selection picks again immediately. So does an
 // item the reviewer approved evidence for: the marker is the developer's channel
 // and a reviewer has none, which leaves the parking as the only disposition that
-// holds such an item back.
+// holds such an item back. And so does an escalated item, which carries no marker
+// by contract: the parking is what holds it while the development manager
+// decides, and her decision is what releases it.
 func (s State) Parks() bool {
 	return !s.Discharges() && s.LandingImpediment() == ""
 }

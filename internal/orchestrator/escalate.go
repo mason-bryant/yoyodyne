@@ -22,18 +22,26 @@ package orchestrator
 //
 // # What is delivered, and what is not
 //
-// Only the 2-of-2 review stoppage: a run that ended on a durable blocker with
-// its reviewer still requiring repair. It is the stoppage this was asked for and
-// the one whose next step is a judgment rather than a fix — a failing check, a
-// refused path, and a replay conflict are all stoppages too, and each is a
-// different question. They stay on the docket for her to read, exactly as
-// before, rather than being delivered by a rule nobody has argued for yet.
+// Two entries, and both for the same reason: the next step is a judgment rather
+// than a fix.
 //
-// Which stoppage a docket entry describes is read from the run's own record
-// rather than from the entry's prose, for the reason every other triage action
-// reads it there: the entry says what was true when it was written, and a
-// classification made by matching words is one that changes when somebody
-// rewrites a sentence.
+// The first is the 2-of-2 review stoppage — a run that ended on a durable blocker
+// with its reviewer still requiring repair. A failing check, a refused path, and
+// a replay conflict are all stoppages too, and each is a different question. They
+// stay on the docket for her to read, exactly as before, rather than being
+// delivered by a rule nobody has argued for yet.
+//
+// The second is an escalation: a developer or a reviewer having said, in the
+// round it reached, that the work item cannot be met as it stands. It is the one
+// entry that asks for a decision in so many words, so a rule that delivered the
+// stoppage and left this to be noticed would be delivering the expensive half of
+// the same question and holding back the cheap one — which is the whole of what
+// yoyodyne-ifd.303 was for.
+//
+// Which of them a docket entry describes is read from the run's own record rather
+// than from the entry's prose, for the reason every other triage action reads it
+// there: the entry says what was true when it was written, and a classification
+// made by matching words is one that changes when somebody rewrites a sentence.
 //
 // # One at a time, and only what nobody has judged
 //
@@ -217,21 +225,34 @@ func notTaken(err error) bool {
 // a cancelled turn is not a stoppage that was never put to her — the provider
 // had the prompt from the moment the invocation started — it is a turn that
 // ended before she answered.
-func undelivered(runID string, judgeErr error) string {
+func undelivered(entry triage.Entry, judgeErr error) string {
 	if errors.Is(judgeErr, ErrDeliveryCancelled) {
-		return fmt.Sprintf("the turn putting the stoppage of run %s to the development manager ended before she answered", runID)
+		return fmt.Sprintf("the turn putting %s to the development manager ended before she answered", putToHer(entry))
 	}
-	return fmt.Sprintf("the stoppage of run %s was not put to the development manager", runID)
+	return fmt.Sprintf("%s was not put to the development manager", putToHer(entry))
 }
 
 // undeliveredAndWaiting is that sentence with what happens next on it, which is
-// the same promise either way: the attempt came back, and the stoppage is put to
+// the same promise either way: the attempt came back, and the entry is put to
 // her once the delay the record keeps has passed.
-func undeliveredAndWaiting(runID string, judgeErr error, delay time.Duration) string {
+func undeliveredAndWaiting(entry triage.Entry, judgeErr error, delay time.Duration) string {
 	if errors.Is(judgeErr, ErrDeliveryCancelled) {
-		return fmt.Sprintf("%s, and it will be put to her again once %s has passed", undelivered(runID, judgeErr), delay)
+		return fmt.Sprintf("%s, and it will be put to her again once %s has passed", undelivered(entry, judgeErr), delay)
 	}
-	return fmt.Sprintf("%s and will be once %s has passed", undelivered(runID, judgeErr), delay)
+	return fmt.Sprintf("%s and will be once %s has passed", undelivered(entry, judgeErr), delay)
+}
+
+// putToHer names what one entry puts in front of the development manager, in the
+// words its class earns. The two are not the same thing and must not be reported
+// as one: a stoppage is a run that spent its budget and failed, and an escalation
+// is a role saying in the round it reached that the item cannot be met — an
+// operator told the second in the words of the first would go looking for a
+// failure nobody had.
+func putToHer(entry triage.Entry) string {
+	if entry.Class == triage.ClassEscalation {
+		return "the escalation raised by run " + entry.RunID
+	}
+	return "the stoppage of run " + entry.RunID
 }
 
 // recordGrace bounds a record write that is deliberately outliving the delivery
@@ -299,7 +320,13 @@ type Escalated struct {
 	WorkItemID string `json:"work_item_id"`
 	RunID      string `json:"run_id"`
 	DocketKey  string `json:"docket_key"`
-	Delivered  bool   `json:"delivered"`
+	// Class is which kind of entry was put to her, so what a pass reports says
+	// what she was actually shown. A run that spent its budget and failed and a
+	// role saying the item cannot be met are opposite facts about the same item,
+	// and an operator told one in the words of the other goes looking for
+	// something nobody recorded.
+	Class     triage.Class `json:"class,omitempty"`
+	Delivered bool         `json:"delivered"`
 	// Decision is what she recorded about the stoppage, and is empty where she
 	// recorded nothing.
 	Decision string `json:"decision,omitempty"`
@@ -428,6 +455,7 @@ func abandoned(entry triage.Entry, recorded runstate.Escalation) Escalated {
 		WorkItemID: entry.WorkItemID,
 		RunID:      entry.RunID,
 		DocketKey:  entry.Key,
+		Class:      entry.Class,
 		Problem:    runstate.EscalationSpentError{Existing: recorded}.Error(),
 	}
 }
@@ -440,7 +468,7 @@ func abandoned(entry triage.Entry, recorded runstate.Escalation) Escalated {
 // decides whether this is the 2-of-2 stoppage is what the run recorded about how
 // it ended.
 func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, runstate.Escalation, error) {
-	if entry.Class != triage.ClassStoppedRun {
+	if entry.Class != triage.ClassStoppedRun && entry.Class != triage.ClassEscalation {
 		return standingSettled, runstate.Escalation{}, nil
 	}
 	recorded, found, err := e.Records.Find(entry.Key)
@@ -454,7 +482,7 @@ func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, runstate.
 	if err != nil {
 		return standingSettled, recorded, fmt.Errorf("read the run the docket entry is about: %w", err)
 	}
-	if !reviewRepairStoppage(state) {
+	if !deliveredToTheManager(entry.Class, state) {
 		return standingSettled, recorded, nil
 	}
 	// Asked before the record's own state, so a stoppage she has since judged
@@ -515,6 +543,22 @@ func (e Escalator) alreadyJudged(entry triage.Entry) (bool, error) {
 	return counters.Reruns > len(claimed), nil
 }
 
+// deliveredToTheManager reports one docket entry being one this pass puts in
+// front of the development manager, asked of the run's own record rather than of
+// the entry.
+//
+// The two classes ask different questions of it and neither answers for the
+// other. A stoppage has to be the 2-of-2 review one, because the docket carries
+// several kinds of stoppage and only that one's next step is a judgment. An
+// escalation needs no such narrowing: a role said in so many words that the item
+// cannot be met, so what is asked is only that the record still says so.
+func deliveredToTheManager(class triage.Class, state runstate.State) bool {
+	if class == triage.ClassEscalation {
+		return state.Escalated()
+	}
+	return reviewRepairStoppage(state)
+}
+
 // reviewRepairStoppage reports the stoppage this delivers: a run that ended on a
 // durable blocker with its independent reviewer still requiring repair after
 // every permitted attempt.
@@ -532,20 +576,20 @@ func reviewRepairStoppage(state runstate.State) bool {
 		state.PathRefusal == nil
 }
 
-// deliver puts one stoppage in front of the development manager and records what
-// came back.
+// deliver puts one docketed entry in front of the development manager and
+// records what came back.
 //
 // A delivery that produced no answer of hers gives the attempt back — her
 // conversation could not be opened, or a cancellation killed the turn before a
-// reply existed — so the stoppage keeps the delivery it is owed and the next
+// reply existed — so the entry keeps the delivery it is owed and the next
 // pass makes it. Every other failure keeps the attempt, because a turn that
 // answered is one this cannot claim did not — and the record is bounded, so a
 // delivery that goes on failing stops rather than spending every pass on it.
-// It reports whether an attempt was made at all, so a stoppage another process
+// It reports whether an attempt was made at all, so an entry another process
 // claimed between the reading and the claim leaves this pass looking at the next
 // one rather than reporting a delivery nobody made.
 func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, bool, error) {
-	escalated := Escalated{WorkItemID: entry.WorkItemID, RunID: entry.RunID, DocketKey: entry.Key}
+	escalated := Escalated{WorkItemID: entry.WorkItemID, RunID: entry.RunID, DocketKey: entry.Key, Class: entry.Class}
 	attempted, err := e.Records.Attempt(ctx, runstate.Escalation{
 		DocketKey:        entry.Key,
 		RunID:            entry.RunID,
@@ -553,14 +597,14 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 		FirstAttemptedAt: e.now(),
 	})
 	if err != nil {
-		// A stoppage another process claimed between the reading above and this one
+		// An entry another process claimed between the reading above and this one
 		// is not a failure of either: the record refused the second, which is what
 		// it is for. Both refusals mean the same thing here — one of them delivered
 		// it, or one of them is about to — and neither is this pass's to report.
 		if errors.Is(err, runstate.ErrEscalationSpent) || errors.Is(err, runstate.ErrEscalationCooling) {
 			return Escalated{}, false, nil
 		}
-		return Escalated{}, false, fmt.Errorf("record that the stoppage of run %s is being put to the development manager: %w", entry.RunID, err)
+		return Escalated{}, false, fmt.Errorf("record that %s is being put to the development manager: %w", putToHer(entry), err)
 	}
 	judgment, judgeErr := e.Manager.Judge(ctx, entry)
 	// What the turn cost is carried whichever way it went, because the provider
@@ -568,7 +612,7 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 	escalated.CostUSD = judgment.CostUSD
 	if notTaken(judgeErr) {
 		escalated.Problem = fmt.Sprintf("%s: %v",
-			undeliveredAndWaiting(entry.RunID, judgeErr, runstate.EscalationRetryDelay), judgeErr)
+			undeliveredAndWaiting(entry, judgeErr, runstate.EscalationRetryDelay), judgeErr)
 		// Under a context detached from this delivery's, because a shutdown
 		// cancels the very context the delivery ran under: giving the attempt back
 		// under it would fail in the case the give-back is most for.
@@ -576,7 +620,7 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 		defer stopGivingBack()
 		if err := e.Records.Withdraw(giveBack, entry.Key, judgeErr.Error()); err != nil {
 			escalated.Problem = fmt.Sprintf("%s, and the attempt taken for it could not be given back, so it has spent one of %d on a turn that decided nothing: %v",
-				undelivered(entry.RunID, judgeErr), runstate.MaxEscalationAttempts, err)
+				undelivered(entry, judgeErr), runstate.MaxEscalationAttempts, err)
 		}
 		return escalated, true, nil
 	}
@@ -588,8 +632,8 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 		// somebody has to be able to find, and the bounded retry is what stops that
 		// honesty from becoming a loop.
 		delivery = runstate.Delivery{Problem: judgeErr.Error()}
-		escalated.Problem = fmt.Sprintf("putting the stoppage of run %s to the development manager failed on attempt %d of %d: %v",
-			entry.RunID, attempted.Attempts, runstate.MaxEscalationAttempts, judgeErr)
+		escalated.Problem = fmt.Sprintf("putting %s to the development manager failed on attempt %d of %d: %v",
+			putToHer(entry), attempted.Attempts, runstate.MaxEscalationAttempts, judgeErr)
 	} else {
 		escalated.Delivered = true
 		escalated.Decision = judgment.Decision
@@ -598,7 +642,7 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 	// above is: a shutdown cancels the very context the delivery ran under, and it
 	// can land between her answer arriving and this write. A settle that failed
 	// there would leave the attempt standing with no delivery recorded against it,
-	// so a later pass puts a stoppage she has already answered to her a second time
+	// so a later pass puts an entry she has already answered to her a second time
 	// — and nothing else would catch it, because a decision that spends no counter
 	// is one alreadyJudged cannot see.
 	settle, stopSettling := recordContext(ctx)
@@ -664,12 +708,13 @@ func (s EscalationSweep) Render() string {
 	}
 	for _, escalated := range s.Escalated {
 		if escalated.Delivered {
+			put := putToHer(triage.Entry{Class: escalated.Class, RunID: escalated.RunID})
 			if decision := strings.TrimSpace(escalated.Decision); decision != "" {
-				fmt.Fprintf(&rendered, "escalated the stoppage of run %s to the development manager, who triaged %s as %q\n",
-					escalated.RunID, escalated.WorkItemID, decision)
+				fmt.Fprintf(&rendered, "put %s to the development manager, who triaged %s as %q\n",
+					put, escalated.WorkItemID, decision)
 			} else {
-				fmt.Fprintf(&rendered, "escalated the stoppage of run %s to the development manager, who recorded no decision about %s\n",
-					escalated.RunID, escalated.WorkItemID)
+				fmt.Fprintf(&rendered, "put %s to the development manager, who recorded no decision about %s\n",
+					put, escalated.WorkItemID)
 			}
 		}
 		if escalated.Problem != "" {

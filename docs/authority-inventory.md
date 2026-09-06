@@ -219,3 +219,4 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/runstate/watch.go` | `watchLeaseFile` | Names the file that lease is taken on. |
 | `internal/separation/separation.go` | `PromotionIsNeverUnleased` | The name one of the separation policies refuses under. The check is `separation.operation`, and the lease it defends is `promotion.lease`. |
 | `internal/slack/state.go` | `(*Store).Lease` | Serializes the Slack process against a second copy of itself. |
+| `internal/triage/triage.go` | `(Entry).Validate` | Holds a docket entry to its own shape, which for an escalation includes naming one of the two roles that work inside a run. It refuses a record rather than an act: what a role may decide about a docketed entry is `conversation.authority-table`. |
