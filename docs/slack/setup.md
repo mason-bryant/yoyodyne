@@ -460,9 +460,10 @@ the role that asked for them believed they had. That one is a `warning` rather
 than a `critical` because the harness is about to try to repair it: it wakes that
 role's own conversation once, and the role re-issues the actions itself. The
 second line is what you get when that did not work — a second block refused with
-the first still unanswered, whether the harness woke that turn or somebody else
-did, and the message says which. It is a `critical`, because the actions are
-still lost, the harness has stopped trying, and nothing further is scheduled.
+the first still unanswered, or the woken turn answering without asking for any
+tracker action at all — and the message says which of those it was. It is a
+`critical`, because the actions are still lost, the harness has stopped trying,
+and nothing further is scheduled.
 Burying those in one item's thread would misfile them. A channel catching up on a backlog too deep to replay posts
 its digest here too, for the same reason: it stands for messages that were going
 to appear at this level, and one line saying how many is what both you and the

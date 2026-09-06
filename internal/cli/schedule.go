@@ -767,13 +767,16 @@ waiting on somebody opening the conversation. One wakeup per refusal and at most
 one per pull, oldest refusal first, and what the role does with it is re-issue
 the actions itself. A block refused again on the woken turn goes to you rather
 than earning a second wakeup, because another copy of the same message is not
-going to help, and the same holds for a second block refused with the first still
-unanswered whether or not a wakeup was ever made. A turn the provider refused for
-want of capacity put nothing in front of the role, so it is given back and made
-again a quarter of an hour later, three times in all -- a window cannot silently
-spend the one turn a refusal is owed. A conversation nothing can open keeps its
-attempt, since what it waits on is somebody changing something, and the refusal
-falls back to what it had before: the role's own next turn, whenever one happens.
+going to help; so does a second block refused with the first still unanswered
+whether or not a wakeup was ever made, and so does a woken turn that answers
+without asking for any tracker action at all. A turn the provider refused for
+want of capacity put nothing in front of the role, so the turn is given back and
+made again a quarter of an hour later, three times in all before the harness
+stops -- a window cannot silently spend the one turn a refusal is owed, and the
+attempt is kept each time so that bound is one it actually reaches. A
+conversation nothing can open keeps its turn spent, since what it waits on is
+somebody changing something, and the refusal falls back to what it had before:
+the role's own next turn, whenever one happens.
 A pause covers it like any other provider call and --budget
 counts what it spent; holding intake does not stop it, because it chooses no work
 and starts no run.

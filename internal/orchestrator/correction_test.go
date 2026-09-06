@@ -297,8 +297,11 @@ func TestAWakeupTheProviderHadNoCapacityForKeepsItsTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if recorded.RefusedBlock.Attempts != 0 || !recorded.RefusedBlock.WokenAt.IsZero() {
-		t.Fatalf("refused block = %#v, want the attempt given back", *recorded.RefusedBlock)
+	if !recorded.RefusedBlock.WokenAt.IsZero() {
+		t.Fatalf("refused block = %#v, want the turn it never took given back", *recorded.RefusedBlock)
+	}
+	if recorded.RefusedBlock.Attempts != 1 {
+		t.Fatalf("refused block = %#v, want the attempt kept so the retry is bounded", *recorded.RefusedBlock)
 	}
 	// Not on the very next pull, though: the give-back is paced, so a window that
 	// lasts an hour does not become a refused provider call a minute.
@@ -324,6 +327,65 @@ func TestAWakeupTheProviderHadNoCapacityForKeepsItsTurn(t *testing.T) {
 	}
 	if len(made.Corrected) != 1 || !made.Corrected[0].Woken || made.Corrected[0].Actions != 3 {
 		t.Fatalf("corrected = %#v, want the wakeup made once the window had time to clear", made.Corrected)
+	}
+}
+
+// A provider that goes on refusing runs the refusal out of wakeups rather than
+// earning one every quarter of an hour for ever.
+//
+// The give-back returns the turn a wakeup never took and not its place in the
+// count, so a window that never clears ends in the harness having stopped trying
+// — which is what the schedule reports and what the documents promise.
+func TestAProviderThatKeepsRefusingRunsTheWakeupsOut(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := conversationStore(t, root)
+	refusedConversation(t, store, "product-manager", 3, correctionNow, "the refusal a window never let go of")
+	identity := runstate.ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	role := &correctedRole{}
+	at := correctionNow
+	for attempt := 1; attempt <= runstate.MaxRefusalWakeups; attempt++ {
+		role.errs = append(role.errs, fmt.Errorf("%w: the provider declined this turn for want of capacity", ErrProviderWindow))
+		sweep, err := Corrector{
+			Conversations: store,
+			Claims:        store,
+			Roles:         role,
+			Clock:         movingCorrectionClock{now: at},
+		}.Correct(context.Background())
+		if err != nil {
+			t.Fatalf("Correct() attempt %d error = %v", attempt, err)
+		}
+		if len(sweep.Corrected) != 1 || sweep.Corrected[0].Woken {
+			t.Fatalf("attempt %d corrected = %#v, want a wakeup that reached nobody", attempt, sweep.Corrected)
+		}
+		at = at.Add(runstate.RefusalWakeupRetryDelay)
+	}
+	if len(role.woken) != runstate.MaxRefusalWakeups {
+		t.Fatalf("the provider was asked %d time(s), want %d", len(role.woken), runstate.MaxRefusalWakeups)
+	}
+
+	// And then it stops, however long the window lasts.
+	after, err := Corrector{
+		Conversations: store,
+		Claims:        store,
+		Roles:         role,
+		Clock:         movingCorrectionClock{now: at.Add(24 * time.Hour)},
+	}.Correct(context.Background())
+	if err != nil {
+		t.Fatalf("Correct() after the attempts ran out error = %v", err)
+	}
+	if len(after.Corrected) != 0 || len(role.woken) != runstate.MaxRefusalWakeups {
+		t.Fatalf("a pass made a %dth wakeup: %#v", len(role.woken), after.Corrected)
+	}
+	recorded, err := store.Load(identity)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The refusal is still on the record and still unanswered: what it has lost is
+	// the harness starting the turn, not the words at the top of its conversation.
+	if recorded.RefusedBlock == nil || recorded.RefusedBlock.Attempts != runstate.MaxRefusalWakeups {
+		t.Fatalf("refused block = %#v, want every attempt counted against the bound", recorded.RefusedBlock)
 	}
 }
 

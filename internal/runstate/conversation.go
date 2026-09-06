@@ -231,9 +231,12 @@ type TrackerRefusal struct {
 	// WokenAt is when the harness started a turn for this refusal. Zero is a
 	// refusal no turn has been put to yet.
 	WokenAt time.Time `json:"woken_at,omitempty"`
-	// Attempts is how many wakeups may have reached the role, and LastAttemptAt
-	// when the most recent was claimed. They are the pair that makes the retry
-	// below both bounded and paced; see MaxRefusalWakeups.
+	// Attempts is how many wakeups have been claimed for this refusal, and
+	// LastAttemptAt when the most recent was. They are the pair that makes the
+	// retry below both bounded and paced, and neither is ever given back: a
+	// wakeup the provider refused returns the turn it never took and keeps its
+	// place in the count, which is what stops a window that never clears from
+	// being retried forever. See MaxRefusalWakeups.
 	Attempts      int       `json:"attempts,omitempty"`
 	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
 	// Escalated is why the harness will not wake for this refusal and has put it
@@ -244,30 +247,30 @@ type TrackerRefusal struct {
 // MaxRefusalWakeups bounds how many turns the harness starts for one refusal
 // before it stops trying.
 //
-// It bounds turns that may have been taken, and only those, exactly as the
-// escalation's own bound does. A wakeup that provably reached the role with
-// nothing — the provider refused it for want of capacity, so no model ever saw
-// the message — gives its attempt back, so a refusal waiting out a provider
-// window is retried at the pace below rather than counting down to abandonment
-// while nothing is being asked of anybody. That is what makes the wakeup survive
-// a window: the trigger runs on the non-model side and keeps its turn owed.
+// It counts wakeups claimed rather than turns taken, so it bounds the retry a
+// provider window earns as well as the turns a role actually answered. A wakeup
+// the provider refused for want of capacity gives back the turn it never took —
+// so the refusal is still owed one, and the window has not silently spent the
+// only one it had — but not its place in this count, which is what makes a window
+// that never clears end in abandonment rather than in a wakeup every quarter of
+// an hour for ever.
 //
-// The bound is small because every attempt past the first is a turn spent on a
-// conversation that already has the refusal at the top of it, and a refusal that
-// exhausts it still has that — what it loses is the harness starting the turn,
-// which is stated where the attempts run out rather than left to be inferred.
+// Three is what "briefly out of capacity" is worth riding out: paced by the delay
+// below, it spans half an hour from the first attempt. A refusal that exhausts it
+// still has the harness's own words at the top of its conversation, so what it
+// loses is the harness starting the turn — which is stated where the attempts run
+// out rather than left to be inferred from the quiet.
 const MaxRefusalWakeups = 3
 
 // RefusalWakeupRetryDelay is how long a wakeup that reached nobody is left alone
 // before it is made again.
 //
-// The give-back above is worth nothing without it. Whatever drives the wakeup
-// decides how often it looks, and the loop that does today looks once per pull —
-// which on a watching session is once a minute — so a refusal that gave its
-// attempt back and was claimable again at once would be a provider refusal every
-// minute for as long as the window lasts, and would take this pass's one wakeup
-// from every other refusal behind it while it did. Paced, it costs one refused
-// call a quarter of an hour and leaves the passes between it for the queue.
+// The bound above is worth nothing without it. Whatever drives the wakeup decides
+// how often it looks, and the loop that does today looks once per pull — which on
+// a watching session is once a minute — so three attempts counted and not paced
+// would be three attempts inside three minutes, and a refusal abandoned in the
+// time a provider took to come back. Paced, it costs one refused call a quarter
+// of an hour and leaves the passes between it for the queue.
 //
 // It is measured from the last attempt rather than the first, for the reason the
 // escalation's is: a wakeup that failed, waited, and failed again waits again
@@ -960,15 +963,20 @@ func (s *ConversationStore) ClaimRefusalWakeup(identity ConversationIdentity, at
 	return claimed, nil
 }
 
-// WithdrawRefusalWakeup gives back a wakeup that reached the role with nothing,
-// so the refusal keeps the turn it is owed and a later pass makes it.
+// WithdrawRefusalWakeup gives back the turn a wakeup never took, so the refusal
+// is owed one again and a later pass makes it.
 //
-// It is the narrow counterpart of the claim above, and it is spent on one
-// ending: a wakeup the provider refused for want of capacity, where no model
-// ever saw the message. The attempt is given back and the moment of it is not,
-// which is what makes the retry paced rather than a burst — see
-// RefusalWakeupRetryDelay, and see the escalation store, whose give-back this is
-// modelled on and for the same reason.
+// What comes back is the turn and not the attempt. That distinction is the whole
+// of the bound: the attempt stands and counts against MaxRefusalWakeups, and the
+// moment of it stands and paces the next one, so a provider that goes on refusing
+// is tried a fixed number of times over a known span and then left. Giving the
+// attempt back as well would make the bound unreachable — the count would never
+// pass one — and turn "retried while the window lasts" into "retried forever",
+// which is the loop this whole record exists to avoid.
+//
+// It is spent on one ending: a wakeup the provider refused for want of capacity,
+// where no model ever saw the message. Every other failure keeps its turn spent,
+// because a turn that may have reached the role is one this cannot claim did not.
 //
 // The turn it names is checked against the record, because the refusal it was
 // claimed for may have been answered and replaced while the failed wakeup was
@@ -994,9 +1002,6 @@ func (s *ConversationStore) WithdrawRefusalWakeup(ctx context.Context, identity 
 	}
 	given := *conversation.RefusedBlock
 	given.WokenAt = time.Time{}
-	if given.Attempts > 0 {
-		given.Attempts--
-	}
 	conversation.RefusedBlock = &given
 	return s.Save(conversation)
 }

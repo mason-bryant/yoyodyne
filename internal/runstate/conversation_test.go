@@ -1112,11 +1112,14 @@ func TestAWakeupTheProviderRefusedIsGivenBackAndPaced(t *testing.T) {
 		t.Fatalf("WithdrawRefusalWakeup() error = %v", err)
 	}
 	given := loadRefusal(t, store, identity)
-	// The attempt is back, so the window has cost the refusal nothing it cannot
-	// recover; the moment of it stands, so the retry is paced rather than made on
-	// the very next pull.
-	if given.Attempts != 0 || !given.WokenAt.IsZero() {
-		t.Fatalf("refusal = %#v, want the attempt given back", given)
+	// The turn is back, so the window has not spent the only one the refusal had;
+	// the attempt and the moment of it stand, so the retry is both bounded and
+	// paced rather than made on the very next pull and made for ever.
+	if !given.WokenAt.IsZero() {
+		t.Fatalf("refusal = %#v, want the turn it never took given back", given)
+	}
+	if given.Attempts != 1 || !given.LastAttemptAt.Equal(windowed) {
+		t.Fatalf("refusal = %#v, want the attempt kept so the bound can be reached", given)
 	}
 	if given.AwaitingWakeup(windowed.Add(time.Second)) {
 		t.Fatalf("refusal = %#v, want it left alone until %s has passed", given, RefusalWakeupRetryDelay)
@@ -1131,9 +1134,14 @@ func TestAWakeupTheProviderRefusedIsGivenBackAndPaced(t *testing.T) {
 	}
 }
 
-// The give-back is bounded: a wakeup that keeps failing stops rather than costing
-// a pass its one turn forever, and what the refusal falls back to is the role's
-// own next turn.
+// The give-back is bounded: a provider that goes on refusing stops earning
+// wakeups rather than earning one every quarter of an hour for ever, and what the
+// refusal falls back to is the role's own next turn.
+//
+// The exhausted state is reached through the store's own calls rather than
+// written by hand, because a bound only holds if the code can actually walk into
+// it: the first version of this gave the attempt back along with the turn, so the
+// count never passed one and the arm that stops the trying was unreachable.
 func TestWakeupsForOneRefusalAreBounded(t *testing.T) {
 	t.Parallel()
 
@@ -1148,19 +1156,38 @@ func TestWakeupsForOneRefusalAreBounded(t *testing.T) {
 		Turn:      1,
 		Problem:   "decode tracker actions: the tracker block is empty",
 		RefusedAt: refused,
-		// The attempts are spent, and none of them reached the role — which is the
-		// state a run of provider windows leaves behind.
-		Attempts:      MaxRefusalWakeups,
-		LastAttemptAt: refused,
 	}
 	if err := store.Save(conversation); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	spent := loadRefusal(t, store, conversation.Identity())
-	if spent.AwaitingWakeup(refused.Add(24 * time.Hour)) {
+
+	// A provider that refuses every wakeup for want of capacity: each one claims,
+	// puts nothing in front of the role, and gives the turn back.
+	identity := conversation.Identity()
+	at := refused
+	for attempt := 1; attempt <= MaxRefusalWakeups; attempt++ {
+		claimed, err := store.ClaimRefusalWakeup(identity, at)
+		if err != nil {
+			t.Fatalf("ClaimRefusalWakeup() attempt %d error = %v", attempt, err)
+		}
+		if claimed.Attempts != attempt {
+			t.Fatalf("attempt %d recorded %d attempt(s), want the count to accumulate", attempt, claimed.Attempts)
+		}
+		if err := store.WithdrawRefusalWakeup(context.Background(), identity, 1); err != nil {
+			t.Fatalf("WithdrawRefusalWakeup() attempt %d error = %v", attempt, err)
+		}
+		at = at.Add(RefusalWakeupRetryDelay)
+	}
+
+	// The attempts are gone, so no later pass makes another however long it waits.
+	spent := loadRefusal(t, store, identity)
+	if spent.Attempts != MaxRefusalWakeups {
+		t.Fatalf("refusal = %#v, want every attempt counted", spent)
+	}
+	if spent.AwaitingWakeup(at.Add(24 * time.Hour)) {
 		t.Fatalf("refusal = %#v, want the harness to have stopped trying after %d attempts", spent, MaxRefusalWakeups)
 	}
-	if _, err := store.ClaimRefusalWakeup(conversation.Identity(), refused.Add(24*time.Hour)); !errors.Is(err, ErrNoRefusalAwaitingWakeup) {
+	if _, err := store.ClaimRefusalWakeup(identity, at.Add(24*time.Hour)); !errors.Is(err, ErrNoRefusalAwaitingWakeup) {
 		t.Fatalf("ClaimRefusalWakeup() error = %v, want ErrNoRefusalAwaitingWakeup", err)
 	}
 }

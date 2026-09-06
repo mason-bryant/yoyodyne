@@ -828,7 +828,11 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// It is settled here rather than after the rest of the parse is judged:
 		// what a recorded refusal is owed is a block the harness can read, and a
 		// reply whose proposals or research would not decode still sent one.
-		if settled := s.settleRefusedTrackerBlock(); settled != nil {
+		//
+		// Whether it asked for anything is the other half. A turn the harness woke
+		// that came back with no tracker action at all has ended the correction with
+		// the actions still lost, and the settling is what says so.
+		if settled := s.settleRefusedTrackerBlock(len(parsed.Actions) > 0); settled != nil {
 			return reply, errors.Join(err, settled)
 		}
 		if err != nil {

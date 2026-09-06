@@ -20,17 +20,20 @@ package orchestrator
 // A refusal is put to the role once. The claim is durable and is taken before the
 // turn, so a pass that dies between the two has recorded a wakeup nobody made
 // rather than made one nobody recorded — the second is what would fire again on
-// the next pass, and on every pass after it. The one wakeup that does not count
-// is the one the provider refused for want of capacity: no model saw the message,
-// so the attempt is given back and the refusal keeps its turn, bounded and paced
-// by the record.
+// the next pass, and on every pass after it. The one wakeup that puts nothing in
+// front of the role is the one the provider refused for want of capacity: no
+// model saw the message, so the turn it never took comes back and is made again.
+// The attempt does not come back with it — that is what keeps the retry bounded
+// rather than a wakeup every quarter of an hour for ever.
 //
-// What the second refusal earns is the operator rather than another turn. A role
-// handed its refusal back that sends a block refused again has shown that another
-// copy of the same message will not fix it, and a harness that kept waking it
-// would spend a turn a pass on a conversation that cannot answer. That ending is
-// recorded where the refusal is, by the conversation itself, and it is what the
-// operator is told; see chat.Session.recordRefusedTrackerBlock.
+// What a turn that fails to put the actions back earns is the operator rather
+// than another wakeup. A role that sends a block refused again has shown that
+// another copy of the same message will not fix it, and one that answers without
+// asking for any tracker action has ended the correction with the actions exactly
+// as lost; a harness that kept waking either would spend a turn a pass on a
+// conversation that is not going to answer. Both endings are recorded where the
+// refusal is, by the conversation itself, and both are what the operator is told;
+// see chat.Session.recordRefusedTrackerBlock and settleRefusedTrackerBlock.
 //
 // # The same trigger class as the schedule
 //
@@ -41,8 +44,8 @@ package orchestrator
 // do next, so a refusal recorded at any hour is woken for at the next interval
 // rather than at the next time somebody looks. And it runs on the non-model side,
 // so a provider window that stops turns does not stop the wakeup being scheduled
-// or spend it: a turn the window refused is given back and made again once the
-// window has had time to clear.
+// or silently spend it: a turn the window refused is given back and made again
+// once the window has had time to clear, a fixed number of times.
 //
 // # The pause and not the intake hold
 //
@@ -305,7 +308,10 @@ func (c Corrector) wake(ctx context.Context, conversation runstate.Conversation)
 		// A turn that answered and asked for nothing is not a failure and is not a
 		// correction either. It is said out loud because the two look identical from
 		// outside: a pass that woke a role and reported only that would read as a
-		// refusal put right.
+		// refusal put right. The operator hears it from the conversation's own
+		// record rather than from here — this line is what a session prints, and a
+		// loss that reached only the terminal that ran the pass is the silence this
+		// whole mechanism is against.
 		corrected.Problem = fmt.Sprintf(
 			"the %s was woken to re-issue the tracker block refused on turn %d and answered without asking for any tracker action, so nothing it lost has been put back",
 			identity, claimed.Turn)

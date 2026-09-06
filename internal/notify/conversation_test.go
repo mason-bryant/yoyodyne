@@ -912,12 +912,13 @@ func TestARefusedTrackerBlockIsSaidAgainstTheProductWithWhatItCost(t *testing.T)
 func TestARefusalTheHarnessWokeAndLostAgainIsSaidAsTheOperatorsToLookAt(t *testing.T) {
 	conversation := conversationWith(domain.RoleProductManager)
 	events := []execution.Event{recorded(t, 1, execution.EventTrackerRefusalUnresolved, map[string]any{
-		"turn":     6,
-		"role":     string(domain.RoleProductManager),
-		"actions":  4,
-		"problem":  "the product manager asked for tracker actions the harness cannot read: decode tracker actions: unexpected trailing content after the actions",
-		"previous": "the product manager asked for tracker actions the harness cannot read: decode tracker actions: actions[0]: reason is the parking reason at 512 bytes, limit is 480",
-		"woken":    true,
+		"turn":          6,
+		"role":          string(domain.RoleProductManager),
+		"actions":       4,
+		"problem":       "the product manager asked for tracker actions the harness cannot read: decode tracker actions: unexpected trailing content after the actions",
+		"previous":      "the product manager asked for tracker actions the harness cannot read: decode tracker actions: actions[0]: reason is the parking reason at 512 bytes, limit is 480",
+		"woken":         true,
+		"refused_again": true,
 	})}
 
 	notification, message := said(t, conversation, events, 0)
@@ -949,12 +950,13 @@ func TestARefusalNothingAnsweredDoesNotClaimTheHarnessWokeTheRole(t *testing.T) 
 	conversation := conversationWith(domain.RoleProductManager)
 	refusal := "the product manager asked for tracker actions the harness cannot read: decode tracker actions: actions[0]: handle report \"the-third-one\" is not a report identifier; a report is named exactly as it was listed to you"
 	events := []execution.Event{recorded(t, 1, execution.EventTrackerRefusalUnresolved, map[string]any{
-		"turn":     3,
-		"role":     string(domain.RoleProductManager),
-		"actions":  2,
-		"problem":  refusal,
-		"previous": refusal,
-		"woken":    false,
+		"turn":          3,
+		"role":          string(domain.RoleProductManager),
+		"actions":       2,
+		"problem":       refusal,
+		"previous":      refusal,
+		"woken":         false,
+		"refused_again": true,
 	})}
 
 	_, message := said(t, conversation, events, 0)
@@ -969,6 +971,42 @@ func TestARefusalNothingAnsweredDoesNotClaimTheHarnessWokeTheRole(t *testing.T) 
 	}
 	if !strings.Contains(message.Body, "never answered") {
 		t.Fatalf("message %q does not say the earlier refusal went unanswered", message.Body)
+	}
+}
+
+// The third way a refusal goes unanswered, and the quietest: the turn the harness
+// woke came back in prose with no tracker action at all. Nothing was refused on
+// it, so a message written around a second refusal would describe something that
+// did not happen — and this ending would otherwise reach nobody, because the
+// wakeup is spent and no second refusal is coming.
+func TestAWokenTurnThatReIssuedNothingIsSaidWithoutInventingASecondRefusal(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerRefusalUnresolved, map[string]any{
+		"turn":          7,
+		"role":          string(domain.RoleProductManager),
+		"actions":       5,
+		"problem":       "the product manager asked for tracker actions the harness cannot read: decode tracker actions: 12 actions in one reply, limit is 10",
+		"woken":         true,
+		"refused_again": false,
+	})}
+
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Severity != report.SeverityCritical {
+		t.Fatalf("severity = %q, want a critical: the wakeup is spent and the actions are still lost", notification.Event.Severity)
+	}
+	if !strings.Contains(message.Body, "asked for no tracker action at all") {
+		t.Fatalf("message %q does not say the woken turn put nothing back", message.Body)
+	}
+	// It must not read as a second refused block: nothing was refused on this turn.
+	for _, invented := range []string{"refused too", "the same refusal back", "second block"} {
+		if strings.Contains(message.Body, invented) {
+			t.Fatalf("message %q invents a second refusal: %q", message.Body, invented)
+		}
+	}
+	// What is still lost is the block the wakeup was for, counted from that record
+	// rather than from a turn that refused nothing.
+	if !strings.Contains(message.Body, "5 tracker actions") {
+		t.Fatalf("message %q does not say how much is still lost", message.Body)
 	}
 }
 

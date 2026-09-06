@@ -692,15 +692,18 @@ A block it cannot read is refused whole, so nothing in it happens, and the
 refusal in the harness's own words has always opened that role's next turn — but
 nothing started that turn, so the correction waited on somebody opening the
 conversation. Now the pass starts it: one turn per refusal, at most one per pass,
-and the role re-issues the actions itself. A second block refused with the first
-still unanswered goes to you rather than earning another wakeup — whether the
-harness woke that turn or somebody else did — because a second copy of the same
-message is not going to help. A turn the provider refused for want of capacity
-put nothing in front of the role, so it is given back and made again a quarter of
-an hour later, three times in all; a conversation nothing can open keeps its
-attempt, because what that waits on is somebody changing something rather than a
-window ending. Nothing about it is configured, and a pass with no refusal to wake
-for asks no provider anything.
+and the role re-issues the actions itself. A turn that does not put the actions
+back goes to you rather than earning another wakeup — a second block refused with
+the first still unanswered, whether the harness woke that turn or somebody else
+did, or the woken turn answering without asking for any tracker action at all.
+Both leave the actions exactly as lost, and a second copy of the same message is
+not going to change that. A turn the provider refused for want of capacity put
+nothing in front of the role, so the turn is given back and made again a quarter
+of an hour later, three times in all before the harness stops; the attempt is
+kept either way, which is what makes that bound reachable. A conversation nothing
+can open keeps its turn spent, because what that waits on is somebody changing
+something rather than a window ending. Nothing about it is configured, and a pass
+with no refusal to wake for asks no provider anything.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,

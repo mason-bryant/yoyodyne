@@ -1209,3 +1209,87 @@ func TestASecondRefusedTrackerBlockGoesToTheOperatorRatherThanLooping(t *testing
 		}
 	}
 }
+
+// A woken turn that answers in prose and re-issues nothing says so, because that
+// is the same loss as a block refused twice and nothing else would mention it.
+//
+// The wakeup is spent, no second refusal is coming, and the record clears — so
+// without this the actions vanish exactly as silently as they did before any of
+// this existed, which is the failure the whole item is against.
+func TestAWokenTurnThatReIssuedNothingReachesTheOperator(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	losing := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Closing them out.",
+			`{"action":"close","id":"yoyodyne-ifd.9","reason":"done"}`,
+			`{"action":"handle","report":"not-a-report-id","reason":"already fixed"}`)},
+	}})
+	losing.Store = newTestStore(t, root)
+	losing.Tracker = &fakeTracker{}
+	if _, err := openTestSession(t, losing).Send(context.Background(), "clear the pile"); err == nil {
+		t.Fatalf("Send() error = nil, want the malformed handle id refused")
+	}
+
+	// The harness wakes the conversation, which is what the claim on the record
+	// says, and the woken turn answers without asking for anything.
+	store := newTestStore(t, root)
+	if _, err := store.ClaimRefusalWakeup(losing.identity(), fixedClock{}.Now()); err != nil {
+		t.Fatalf("ClaimRefusalWakeup() error = %v", err)
+	}
+	woken := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "Understood — I'll leave those for now."},
+	}})
+	woken.Store = newTestStore(t, root)
+	woken.Tracker = losing.Tracker
+	session := openTestSession(t, woken)
+	if _, err := session.Send(context.Background(), "re-issue what was refused"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// The record clears, because a record that never clears is a conversation
+	// whose every later refusal is escalated without ever being woken for.
+	if after := loadTestConversation(t, root, woken); after.RefusedBlock != nil {
+		t.Fatalf("refused block = %#v, want it cleared by the turn that answered", *after.RefusedBlock)
+	}
+	// And the loss is said out loud, as what it is rather than as a second refusal.
+	payload := onlyEventPayload(t, root, session, execution.EventTrackerRefusalUnresolved)
+	for _, wanted := range []string{`"woken":true`, `"refused_again":false`, `"actions":2`, "not a report identifier"} {
+		if !strings.Contains(payload, wanted) {
+			t.Fatalf("the recorded loss does not carry %q: %s", wanted, payload)
+		}
+	}
+}
+
+// A turn somebody else drove that answers in prose is left alone: the refusal
+// opened it in the harness's own words with a person reading, and the wakeup it
+// is owed has not been spent.
+func TestATurnNobodyWokeThatReIssuedNothingIsNotEscalated(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	losing := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Settling it.",
+			`{"action":"handle","report":"not-a-report-id","reason":"already fixed"}`)},
+	}})
+	losing.Store = newTestStore(t, root)
+	losing.Tracker = &fakeTracker{}
+	if _, err := openTestSession(t, losing).Send(context.Background(), "settle the reports"); err == nil {
+		t.Fatalf("Send() error = nil, want the block refused")
+	}
+
+	answering := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "It was the identifier — I read it off the wrong column."},
+	}})
+	answering.Store = newTestStore(t, root)
+	answering.Tracker = losing.Tracker
+	session := openTestSession(t, answering)
+	if _, err := session.Send(context.Background(), "what happened there?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	for _, event := range loadTestEvents(t, root, session) {
+		if event.Type == execution.EventTrackerRefusalUnresolved {
+			t.Fatalf("a turn nobody woke was escalated to the operator: %s", event.Payload)
+		}
+	}
+}

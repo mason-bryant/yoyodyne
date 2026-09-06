@@ -275,10 +275,17 @@ type unresolvedTrackerRefusal struct {
 	// attempted, by the harness, and it did not take.
 	Previous string `json:"previous"`
 	Woken    bool   `json:"woken"`
+	// RefusedAgain says the role sent a block back and that block was refused too,
+	// as against a turn that sent none at all. Both leave the actions exactly as
+	// lost and both end the trying, which is why they are one record; they are told
+	// apart because one is a role getting an action wrong twice and the other is a
+	// role that stopped issuing it, and only the second means nothing was refused
+	// on the turn this record is about.
+	RefusedAgain bool `json:"refused_again"`
 }
 
-// fromUnresolvedTrackerRefusal says that a role lost a block, was given the
-// refusal back, and lost the block it sent instead.
+// fromUnresolvedTrackerRefusal says that a role lost a block of tracker actions
+// and the turn after it did not put them back.
 //
 // It is critical where the refusal it follows is a warning, and the step between
 // them is what earns it: a refusal on its own is a loss the harness is about to
@@ -335,12 +342,24 @@ func fromUnresolvedTrackerRefusal(conversation runstate.Conversation, event exec
 // wrong on that path, and it is the path the record is most likely to take on a
 // busy morning.
 //
+// There is a third way in, and it is the quietest: a turn the harness woke that
+// answered in prose and asked for no tracker action at all. Nothing was refused
+// on it, so a message written around a second refusal would describe something
+// that did not happen — and this is exactly the ending that would otherwise reach
+// nobody, since the wakeup is spent and no second refusal is coming.
+//
 // It compares the two refusals rather than quoting the earlier one. The earlier
 // refusal's words are on the durable event, and a channel line carrying two
 // error messages is one nobody reads to the end; what a reader needs from it is
 // whether the same thing went wrong twice, which is the difference between a
 // role that cannot get one action right and one making a fresh mistake.
 func unansweredRefusalCause(recorded unresolvedTrackerRefusal) string {
+	if !recorded.RefusedAgain {
+		if recorded.Woken {
+			return "the harness woke this conversation to re-issue them and the turn it took asked for no tracker action at all"
+		}
+		return "the turn after the refusal asked for no tracker action at all"
+	}
 	previous := strings.TrimSpace(recorded.Previous)
 	repeated := previous != "" && previous == strings.TrimSpace(recorded.Problem)
 	switch {
