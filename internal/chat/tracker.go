@@ -84,8 +84,12 @@ const (
 // state everything the product manager was told about was in when it was told;
 // closed is work that has left the backlog, whether it was finished or retired.
 const (
-	openWorkItemStatus   = "open"
-	closedWorkItemStatus = "closed"
+	openWorkItemStatus = "open"
+	// blockedWorkItemStatus is what an escalation leaves the item in, and the mark
+	// a blocker that landed leaves behind whatever became of the command that made
+	// it. See settleTrackerBlock.
+	blockedWorkItemStatus = "blocked"
+	closedWorkItemStatus  = "closed"
 )
 
 const (

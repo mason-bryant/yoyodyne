@@ -1449,6 +1449,12 @@ type fakeTracker struct {
 	// re-reading of the item settles, and the shape `err` cannot produce — that
 	// one is a write the tracker refused outright.
 	durableErr error
+	// blockLosesNote takes a durable block without leaving the reason legible in
+	// the item's notes, which is what a tracker that renders notes back
+	// differently from how they were written looks like. It is the shape that
+	// separates the two marks a blocker leaves: the item comes back blocked, and
+	// searching its notes for the write finds nothing.
+	blockLosesNote bool
 }
 
 // trackerUpdate is one edit the fake was asked to apply.
@@ -1507,7 +1513,15 @@ func (f *fakeTracker) Block(_ context.Context, id, reason string) (beads.WorkIte
 	}
 	f.blocked = append(f.blocked, [2]string{id, reason})
 	if f.durableErr != nil {
-		f.append(id, reason)
+		// Blocking is one bd invocation that sets the status and appends the
+		// reason, so a block the store kept leaves both — unless this fake was
+		// asked for the case where only the status is legible afterwards.
+		item := f.items[id]
+		item.Status = "blocked"
+		f.items[id] = item
+		if !f.blockLosesNote {
+			f.append(id, reason)
+		}
 		return beads.WorkItem{}, f.durableErr
 	}
 	return beads.WorkItem{ID: id, Status: "blocked"}, nil

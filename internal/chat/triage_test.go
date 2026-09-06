@@ -714,6 +714,100 @@ func TestATriageWriteThatLandedNothingSaysSoBesideTheSpendThatStands(t *testing.
 	}
 }
 
+// An escalation is not a note, so what settles a failed one is not a note
+// either. Blocking is one bd invocation that sets the status and appends the
+// reason, and a block the store kept leaves both marks — so a reading that finds
+// either says the write landed, and the escalation is not to be made a second
+// time. The second case is the one that separates them: an item that comes back
+// blocked with nothing legible in its notes is still an item somebody is waiting
+// on.
+func TestADurableEscalationIsReportedAsLandedHoweverItsBlockWasReported(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		losesNote bool
+	}{
+		{name: "the block leaves both marks"},
+		{name: "only the status is legible afterwards", losesNote: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			answer := reportReply(
+				trackerReply("This one is upstream of the change.",
+					`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"escalate","reason":"the findings dispute the acceptance criteria, and another attempt loses the same argument"}`),
+				`{"severity":"warning","message":"yoyodyne-ifd.142 has been round triage twice; its criteria are disputed rather than its change."}`,
+			)
+			tracker := &fakeTracker{
+				items: map[string]beads.WorkItem{
+					"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that keeps coming back", Status: "open"},
+				},
+				durableErr:     errors.New("bd update failed with status timed_out and exit code -1"),
+				blockLosesNote: testCase.losesNote,
+			}
+			reply := triageReplyWithReports(t, tracker, nil, &fakeReports{}, answer)
+
+			if len(reply.Actions) != 1 {
+				t.Fatalf("actions = %#v", reply.Actions)
+			}
+			outcome := reply.Actions[0]
+			if outcome.Applied || !outcome.PartlyLanded() {
+				t.Fatalf("outcome = %#v, want a failure with the blocker standing behind it", outcome)
+			}
+			rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+			if strings.Contains(rendered, "changed nothing") {
+				t.Fatalf("a durable blocker was reported as having changed nothing:\n%s", rendered)
+			}
+			for _, want := range []string{
+				"did not finish, and part of it stands",
+				"landed, and is not to be done again: the blocker naming the operator",
+				"escalating again would block it twice over",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("the account is missing %q:\n%s", want, rendered)
+				}
+			}
+		})
+	}
+}
+
+// The status is only this escalation's evidence where the item was not already
+// blocked when the action started. An item somebody blocked earlier is blocked
+// now for a reason that is not this decision, so a failed block on one of those
+// settles nothing — reading it as landed would report an escalation nobody made
+// and leave a person nobody told.
+func TestABlockedItemsPriorStateIsNotReadAsThisEscalationLanding(t *testing.T) {
+	t.Parallel()
+
+	answer := reportReply(
+		trackerReply("This one is upstream of the change.",
+			`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"escalate","reason":"the findings dispute the acceptance criteria, and another attempt loses the same argument"}`),
+		`{"severity":"warning","message":"yoyodyne-ifd.142 has been round triage twice; its criteria are disputed rather than its change."}`,
+	)
+	tracker := &fakeTracker{
+		items: map[string]beads.WorkItem{
+			// Already blocked before this decision was asked for, and the write that
+			// would have blocked it again was refused outright.
+			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that keeps coming back", Status: "blocked"},
+		},
+		err: errors.New("bd update failed with status timed_out and exit code -1"),
+	}
+	reply := triageReplyWithReports(t, tracker, nil, &fakeReports{}, answer)
+
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	if outcome.Applied || outcome.PartlyLanded() || len(outcome.Unknown) != 1 {
+		t.Fatalf("outcome = %#v, want a failure that settled nothing from a blocker it did not place", outcome)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	if !strings.Contains(rendered, "not known to have landed: the blocker naming the operator") {
+		t.Fatalf("the account does not leave the blocker unsettled:\n%s", rendered)
+	}
+}
+
 // A decision that spends nothing can still have its one write fail, and then
 // there is no spend to name and nothing that says the write landed. That is not
 // "changed nothing": the harness not knowing and nothing having happened are

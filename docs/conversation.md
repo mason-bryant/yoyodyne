@@ -1139,13 +1139,17 @@ note, and a wait asks for nothing at all.
 saying it changed nothing.** The spend is durable the moment it is recorded and
 the note onto the item comes after it, so a tracker that times out in between
 leaves an action that half happened — and the result reports it as one: it names
-the spend as landed and not to be made again, and says whether the note reached
-the item, which it settles by re-reading the item and saying what it found or
-saying plainly that it could not. A decision that spends nothing — an escalation,
-a re-scope, a wait — has no spend to name, and a write of one that cannot be
-confirmed is reported the same way rather than as a failure: it says it did not
-finish and that what it may have changed is not settled, because the harness not
-knowing is not the same claim as nothing having happened. That distinction is not cosmetic: on
+the spend as landed and not to be made again, and says whether the write reached
+the item, which it settles by reading the item back and saying what it found or
+saying plainly that it could not. What it looks for is what that decision would
+have left: the note for the five decisions that write one, and for an escalation
+the blocker itself, since blocking sets the item's status as well as recording
+the reason — and an item that was already blocked when the decision was asked for
+settles nothing, because that blocker is somebody else's. A decision that spends
+nothing — an escalation, a re-scope, a wait — has no spend to name, and a write of
+one that cannot be confirmed is reported the same way rather than as a failure:
+it says it did not finish and that what it may have changed is not settled,
+because the harness not knowing is not the same claim as nothing having happened. That distinction is not cosmetic: on
 2026-09-06 a re-run of yoyodyne-ifd.142 was reported as having changed nothing
 while its spend had already landed, and what stopped the same decision being
 asked for a second time was the cap refusing it rather than anything anybody was
