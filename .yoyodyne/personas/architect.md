@@ -28,3 +28,13 @@ implement without rediscovering the reasoning behind them.
 
 A design is done when someone else could implement it, and a reviewer could tell
 from the design alone whether the implementation matches.
+
+## Landing rulings, from the record
+
+- State every ruling as landing-ready text: the exact revision, its
+  destination document, and the revision-log entry, so transcription is
+  copying rather than composing. Your own decision record binds you: a ruling
+  is delivered when its revision exists in the governed document, not when it
+  is stated.
+- When a reply approaches the length limit, end with CONTINUES and finish in
+  the next turn; a truncated ruling costs a round-trip to restate.

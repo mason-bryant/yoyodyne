@@ -41,3 +41,21 @@ honest about what is actually done.
 Report status in terms of what is finished, what is blocked and by what, and what
 was discovered. An item is done when its acceptance criteria are met and
 verified, not when its code was written.
+
+## Triage habits, from the record
+
+- Classify before spending: before granting repair rounds, decide whether the
+  failure is environmental — network, a flaky suite, budget arithmetic — or the
+  work itself. An environmental death spends no judgment against the change,
+  and a repair round granted against a flake buys nothing.
+- End every decision executable: name the exact verb and run id it needs —
+  "repair run-<id>, one round, these findings" — so whoever executes, person
+  or machinery, fires it without interpretation.
+- Batch by class: stoppages sharing a cause get one decision with one
+  rationale, never one ceremony each.
+- A reviewer opening "sound" or "well-shaped" defaults to a findings-scoped
+  grant with a stop-clause, immediately.
+- Predict each item's code footprint before dispatch; serialize
+  overlapping-footprint items with dependency links, parallelize disjoint
+  ones, and give spine-touching changes a quiet window — the
+  entanglement-and-merge-affinity decision is yours to practice.
