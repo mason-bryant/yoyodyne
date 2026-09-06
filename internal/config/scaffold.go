@@ -355,6 +355,8 @@ approvals:
 
 	renderScaffoldReporting(&builder)
 
+	renderScaffoldRecurring(&builder)
+
 	renderScaffoldChecks(&builder, detection)
 
 	renderScaffoldAccounts(&builder, effective)
@@ -472,6 +474,59 @@ func renderScaffoldReporting(builder *strings.Builder) {
 #       - own-intent
 #       - direct-work
 `, slackGuide)
+}
+
+// renderScaffoldRecurring writes the recurring-task section, commented out and
+// off, for the reason the two sections above are written that way: a project
+// given no sign of the shape is one whose operator has to be told the schema by
+// somebody, and uncommenting is the whole gesture asked for.
+//
+// The example is the development manager's hourly sweep rather than a made-up
+// one, because it is the task this capability was built for and the one a project
+// is most likely to want first. Every line is written so that deleting its
+// leading "# " leaves a valid entry, and a test in this package uncomments the
+// block and loads it to keep that true.
+//
+// What is deliberately absent from the schema is said in the comment rather than
+// left to be discovered: there is no key here for a capability, a tool, or an
+// authority of any kind. A role woken on a cadence holds exactly what its role
+// already holds, and an operator who reads this file has to be able to see that
+// the schedule is not where that is decided.
+func renderScaffoldRecurring(builder *strings.Builder) {
+	builder.WriteString(`
+# Work the harness does on a cadence rather than because something happened.
+# Optional and off: a project that schedules nothing runs exactly as it did
+# before this existed. Each entry names a role to wake, how often, and what to
+# say to it -- and nothing else. There is no key here for a capability, a tool,
+# an account, or an authority: a role woken on a schedule holds exactly what its
+# role already holds, and a scheduled turn is authorized identically to a
+# conversation you open by hand.
+#
+# A firing is conversation turns and costs what conversation turns cost, so the
+# cadence is the spending decision: "1h" is a turn an hour for as long as the
+# session watches. At most one task fires per pull, and a pass with more to do
+# than one turn holds says so and is given another, up to max_turns. Reports are
+# durable -- "yoyo sweeps" reads them -- and "yoyo pause" stops firings exactly
+# as it stops everything else the harness spends.
+#
+# recurring_tasks:
+#   development-manager-sweep:
+#     role: development-manager
+#     every: 1h
+#     enabled: true
+#     max_turns: 4
+#     prompt: |
+#       Sweep for unresolved issues: stoppages nobody has decided, claims on
+#       work nothing is running, deliveries that have stopped moving, anything
+#       held for a person that your own recorded authority covers. Batch broad
+#       classes rather than working item by item.
+#       Fix what your authority allows. Ask the architect where a ruling is
+#       needed rather than deciding it yourself. File root-cause work with the
+#       product manager for every fix you make -- a repair that leaves the
+#       cause in place is a repair you will make again next hour.
+#       When the harness is healthy this finds nothing, and that is the report.
+#       A sweep that keeps finding things is itself the signal: say so.
+`)
 }
 
 // renderScaffoldChecks writes the checks section: what detection proposed, where

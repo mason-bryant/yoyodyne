@@ -344,6 +344,16 @@ type ScheduleEscalations interface {
 	Escalate(ctx context.Context) (EscalationSweep, error)
 }
 
+// ScheduleRecurring fires the configured recurring tasks, at most one per pass.
+// It is satisfied by Trigger.
+//
+// It is optional, and a pull wired without one pulls exactly the same work: what
+// is lost is the schedule, so standing work waits on a person remembering to
+// start it, which is what it waited on before this existed.
+type ScheduleRecurring interface {
+	Fire(ctx context.Context) (RecurringSweep, error)
+}
+
 // Starter runs one chosen item to its end. It is a function rather than the
 // pipeline itself because a pull hands each run the configuration that pull
 // read, and because what the scheduler needs from a run is only its outcome.
@@ -393,7 +403,10 @@ type Pull struct {
 	// Escalations delivers stopped work to the development manager. Optional; see
 	// ScheduleEscalations.
 	Escalations ScheduleEscalations
-	Start       Starter
+	// Recurring fires what the configuration schedules on a cadence. Optional;
+	// see ScheduleRecurring.
+	Recurring ScheduleRecurring
+	Start     Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -592,6 +605,15 @@ type Schedule struct {
 	// stopping it — but never left unsaid, because stopped work nobody was told
 	// about is exactly what the delivery exists to prevent.
 	EscalationProblem string `json:"escalation_problem,omitempty"`
+	// Fired is the recurring tasks this pass woke a role for, and what came back.
+	// It is on the schedule for the reason the escalations are: a pass that woke a
+	// role and spent turns doing it is a pass that did something, and an operator
+	// reading what the session did must not have to infer it from a conversation.
+	Fired []Fired `json:"fired,omitempty"`
+	// RecurringProblem names a firing that failed or a schedule that could not be
+	// read. Like the escalation's, it costs the pass nothing it was doing and is
+	// reported beside the pull rather than stopping it.
+	RecurringProblem string `json:"recurring_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -951,6 +973,13 @@ pulling:
 		// held or braked queue is usually waiting on. What it delivers is bounded to
 		// one stoppage per pass; see Escalator.
 		s.escalate(ctx, &schedule, pull)
+		// The schedule is fired here for the same reasons, and it is placed after
+		// the escalation deliberately: both spend a turn and both are bounded to one
+		// per pass, and a pass that did both did as much waking as it is going to.
+		// Stopped work goes first because it is a specific thing that has already
+		// gone wrong and is waiting on a judgment, where a recurring pass is the
+		// standing look that runs whether or not anything happened.
+		s.fire(ctx, &schedule, pull)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -1427,6 +1456,51 @@ func (s Scheduler) escalate(ctx context.Context, schedule *Schedule, pull Pull) 
 		schedule.EscalationProblem = strings.Join(problems, "; ")
 	case delivered:
 		schedule.EscalationProblem = ""
+	}
+}
+
+// fire wakes whichever recurring task is due, and records what came back on the
+// schedule.
+//
+// Nothing here stops the pass, for the reason the escalation beside it does not:
+// a firing that failed costs the pass nothing it was doing, so it is reported
+// beside the pull rather than in place of it. What it costs is the pull's own
+// thread while the turns are taken, bounded by the task's turn bound and by one
+// firing per pass — the same trade the delivery above was placed for, and made
+// once for both.
+func (s Scheduler) fire(ctx context.Context, schedule *Schedule, pull Pull) {
+	if pull.Recurring == nil {
+		return
+	}
+	sweep, err := pull.Recurring.Fire(ctx)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("the recurring schedule could not be fired, so standing work is waiting on somebody starting it: %v", err))
+	}
+	fired := false
+	for _, task := range sweep.Fired {
+		// What the firing cost is the session's spend, exactly as a delivery's is
+		// and for the same reason: the provider charged for the turns either way,
+		// and a session bounded by a budget must not spend past it on turns nothing
+		// counted.
+		schedule.SpentUSD += task.CostUSD
+		if task.Turns > 0 {
+			schedule.Fired = append(schedule.Fired, task)
+			fired = true
+		}
+		if task.Problem != "" {
+			problems = append(problems, task.Problem)
+		}
+	}
+	// What the pass says is replaced by what this firing found, and cleared only
+	// by a firing that actually took a turn — for the reason the escalation's
+	// problem is kept the same way: a pass that fired nothing is not evidence that
+	// the failure before it is resolved, since the task may simply not be due.
+	switch {
+	case len(problems) > 0:
+		schedule.RecurringProblem = strings.Join(problems, "; ")
+	case fired:
+		schedule.RecurringProblem = ""
 	}
 }
 
@@ -2159,6 +2233,13 @@ func (s Schedule) Render() string {
 	rendered.WriteString(EscalationSweep{Escalated: s.Escalated}.Render())
 	if s.EscalationProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.EscalationProblem)
+	}
+	// And what the pass woke on a cadence, said beside both: a session that spent
+	// turns on a sweep is a session that did something, and the whole account of
+	// it is in the durable report `yoyo sweeps` reads.
+	rendered.WriteString(RecurringSweep{Fired: s.Fired}.Render())
+	if s.RecurringProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.RecurringProblem)
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))
