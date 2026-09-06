@@ -124,6 +124,47 @@ func TestGoalsThatCouldNotBeReadRefuseTheTag(t *testing.T) {
 	}
 }
 
+// A goal hard-wrapped across lines and a goal naming a brief claim the brief
+// does not state are the two conditions no build reddens over, on the strength
+// of this check carrying them. So it is exercised rather than assumed: both are
+// graded here, both as notes, and neither refuses the cut — the goal is still
+// stated and the work naming it still resolves, and what is wrong is the chain
+// above it or the way the document is written.
+func TestAWrappedGoalAndADanglingBriefLinkAreNotedRatherThanRefusingTheTag(t *testing.T) {
+	t.Parallel()
+	repository := fixture(t)
+	// The item's own goal stays on one line and links upward, so what the check
+	// reports is the two conditions beside it rather than an attribution.
+	write(t, repository, "docs/product/goals/v1-goals.md", frontmatter("v1-goals", "goals", []string{"brief"},
+		revision("created", "2026-08-10T00:00:00Z", "recorded when identity arrived"))+`
+# Goals
+
+## Goals
+
+- serving the chain
+  *Supports: intent goes in and merged software comes out.*
+- keeping every decision written down where the person who owns it can read it
+  back afterwards.
+  *Supports: intent goes in and merged software comes out.*
+- publishing work as pull requests the harness opens
+  *Supports: a claim the brief does not state.*
+`)
+
+	finding := findingFor(t, assess(t, gather(repository, admitted("serving the chain")...)).Findings(), CheckGoals)
+	if finding.Diverges() {
+		t.Fatalf("a wrapped goal or a broken link upstream refused the tag: %v", finding.Mismatches)
+	}
+	// Reported with a place to open: a note nobody can turn to is this
+	// repository's defect rather than the product manager's.
+	if !mentions(finding.Notes, "goal not written on one line: docs/product/goals/v1-goals.md:") {
+		t.Fatalf("the wrapped goal was not graded: %v", finding.Notes)
+	}
+	if !mentions(finding.Notes, "goal not linked to the brief:") ||
+		!mentions(finding.Notes, "a claim the brief does not state") {
+		t.Fatalf("the goal naming a claim the brief does not state was not graded: %v", finding.Notes)
+	}
+}
+
 func TestStalenessIsReportedAndNeverRefusesTheTag(t *testing.T) {
 	t.Parallel()
 	repository := fixture(t)
