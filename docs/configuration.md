@@ -3371,7 +3371,7 @@ delegation without the condition it was granted under.
 overrides, and says how many of the item's five are spent:
 
 ```text
-  cap crossed on delegated authority: raised the review round cap to 5, crossed by the Development Manager on delegated authority at 2026-09-06T09:00:00Z: the change was right and the ground moved under it
+  cap crossed on delegated authority: raised the review round cap to 5, crossed by the development manager on delegated authority at 2026-09-06T09:00:00Z: the change was right and the ground moved under it
   1 of 5 cap crossing(s) the development manager may take himself are recorded; past that the caps are yours again
 ```
 

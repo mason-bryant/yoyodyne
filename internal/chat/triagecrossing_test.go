@@ -304,3 +304,44 @@ func TestAnOverrideCeremonyBecomesARecordingOnTheItemAndALineInTheChannel(t *tes
 		}
 	}
 }
+
+// spelledNumbers is the small table this contract's bound is read through. It is
+// a table rather than a general spelling of numbers because the contract says one
+// number and the point is only that the word and the guard agree: a bound raised
+// to a figure nothing here spells fails loudly, which is the right way for it to
+// fail — somebody has to write the new word into the contract either way.
+var spelledNumbers = map[string]int{
+	"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+	"six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+// The bound the development manager is told is the bound the store enforces.
+// They are two statements of one number — the word in the contract and the
+// constant the guard refuses against — and a contract promising a budget the
+// guard does not give is a role planning around crossings it will be refused.
+func TestTheContractStatesTheCrossingBoundTheStoreEnforces(t *testing.T) {
+	t.Parallel()
+
+	spelled, known := spelledNumbers[maxDelegatedCapCrossingsText]
+	if !known {
+		t.Fatalf("the contract spells the crossing bound %q, which this test cannot read as a number; spell the store's bound of %d",
+			maxDelegatedCapCrossingsText, runstate.MaxDelegatedCapCrossings)
+	}
+	if spelled != runstate.MaxDelegatedCapCrossings {
+		t.Fatalf("the contract states %s (%d) crossings and the store enforces %d",
+			maxDelegatedCapCrossingsText, spelled, runstate.MaxDelegatedCapCrossings)
+	}
+	// And it is actually in the contract, rather than a constant nothing reaches:
+	// the number agreeing with the guard buys nothing if the role never sees it.
+	prompt := SystemPrompt(domain.RoleDevelopmentManager, Admission{}, hostilePersona)
+	for _, required := range []string{
+		`"decision":"repair|rerun|rescope|rearm|wait|escalate|cross"`,
+		maxDelegatedCapCrossingsText + " times per item",
+		"a crossing without one is refused outright",
+		"yoyo triage override",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("the development manager's contract does not state %q", required)
+		}
+	}
+}
