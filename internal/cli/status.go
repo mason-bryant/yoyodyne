@@ -526,7 +526,7 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 		// an operator who reads a cap at its limit is entitled to know the item may
 		// move without them. An override recorded anywhere else — the item's own
 		// notes included, which is where two of them went — reaches no guard.
-		fmt.Fprintf(writer, "    `yoyo triage override --budget %q --cap <n> --by \"<you>\" --reason \"<why>\" %s` crosses it to any ceiling; the development manager may also cross it by one, %d times per item, and each of those reaches you in the channel as it happens\n",
+		fmt.Fprintf(writer, "    `yoyo triage override --budget %q --cap <n> --by \"<you>\" --reason \"<why>\" %s` crosses it to any ceiling; the development manager may also cross it far enough for one more decision, %d times per item, and each of those reaches you in the channel as it happens\n",
 			runstate.TriageReviewRoundBudget, counters.WorkItemID, runstate.MaxDelegatedCapCrossings)
 	default:
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item, under the cap of %d\n",

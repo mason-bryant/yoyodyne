@@ -1096,9 +1096,10 @@ either is an escalation rather than a larger budget — and past the
 the first is refused.
 
 **The seventh decision is `cross`, and it is what she does about that refusal
-without waking you.** It raises the budget the refusal named by one step, it
+without waking you.** It raises the budget the refusal named to exactly the
+ceiling that refusal quoted — one more than the item has spent against it — it
 takes the reason it is being crossed for, and it is bounded to five per item;
-past those five, or for anything larger than a step, the cap is yours again and
+past those five, or for any ceiling beyond that, the cap is yours again and
 the refusal says so. Each crossing is recorded on the item beside the cap and the
 crossing number, and reported to you in the channel at `warning` severity as it
 happens — a veto by reading rather than a request, because every override

@@ -224,3 +224,71 @@ func TestOnlyTheDevelopmentManagerCrossesACapAndOnlyByOneStep(t *testing.T) {
 		t.Fatalf("a delegated crossing that clears a budget validated as %v", err)
 	}
 }
+
+// The item the crossing has to work on is not the one level with its cap. Rounds
+// are counted whatever a cap says, so an item that ran and was re-run is past its
+// ceiling rather than at it — six of four is the state `yoyo status` documents —
+// and a crossing that stepped from the ceiling would move it to five, meet the
+// same refusal, and cost another of the five crossings and another message to the
+// operator for every round of the gap.
+//
+// So the crossing lands on the figure the refusal itself quoted: one more than
+// the item has spent. One crossing answers one refusal, whatever the arithmetic
+// behind it.
+func TestACrossingLandsOnTheCeilingTheRefusalSaidWouldPermitTheDecision(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	ctx := context.Background()
+	const item = "yoyodyne-ifd.272"
+	// Two past the cap of four, which is one run and a re-run of an item that keeps
+	// coming back rather than anything unusual.
+	spendRounds(t, store, item, 0, 6)
+
+	var refusal TriageCapError
+	if _, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps); !errors.As(err, &refusal) {
+		t.Fatalf("RecordRerun() at 6 of 4 rounds error = %v, want a cap refusal", err)
+	}
+	rounds, refused := refusal.RefusedBy(TriageReviewRoundBudget)
+	if !refused || rounds.Spent != 6 || rounds.Permits() != 7 {
+		t.Fatalf("the refusal reports %+v, want 6 spent and 7 permitting it", rounds)
+	}
+
+	at := time.Date(2026, 9, 6, 9, 0, 0, 0, time.UTC)
+	crossing, err := store.CrossCap(ctx, item, domain.RoleDevelopmentManager, TriageReviewRoundBudget,
+		"the rounds went on a base that had moved, and the work is worth running again", at, overrideCaps)
+	if err != nil {
+		t.Fatalf("CrossCap() error = %v", err)
+	}
+	if crossing.Cap != rounds.Permits() {
+		t.Fatalf("CrossCap() raised the cap to %d, want the %d the refusal said would permit the decision",
+			crossing.Cap, rounds.Permits())
+	}
+
+	// And the promise the refusal makes holds: asking for the same decision again
+	// records it, on one crossing rather than on three.
+	if _, err := store.RecordRerun(ctx, item, at, overrideCaps); err != nil {
+		t.Fatalf("RecordRerun() past the crossing error = %v, want the decision the crossing permits", err)
+	}
+	counters, err := store.Counters(item)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.DelegatedCrossings() != 1 {
+		t.Fatalf("one refusal cost %d crossings", counters.DelegatedCrossings())
+	}
+
+	// It is still a raise and never a reach backwards: a budget whose configured
+	// ceiling is already well past what the item has spent steps from the ceiling,
+	// so a crossing can never lower one.
+	generous := TriageCaps{ReviewRounds: 40, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	roomy, err := store.CrossCap(ctx, item, domain.RoleDevelopmentManager, TriageReviewRoundBudget,
+		"driving it by hand for one more round", at, generous)
+	if err != nil {
+		t.Fatalf("CrossCap() under a generous configured cap error = %v", err)
+	}
+	if roomy.Cap != generous.ReviewRounds+1 {
+		t.Fatalf("CrossCap() under a configured cap of %d raised it to %d, want one past the ceiling",
+			generous.ReviewRounds, roomy.Cap)
+	}
+}

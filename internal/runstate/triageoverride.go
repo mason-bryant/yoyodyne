@@ -25,17 +25,17 @@ package runstate
 // of them within minutes of the escalation that asked for it, under the
 // operator's own standing direction: the operator step was latency rather than
 // judgement. So the development manager may cross a cap on his own recorded
-// authority, by one, up to MaxDelegatedCapCrossings times per item, and only with
-// a justification recorded on the item and reported to the operator as it
-// happens. That is a veto by reading rather than a permission to ask for: the
+// authority, far enough for the one decision it refused, up to
+// MaxDelegatedCapCrossings times per item, and only with a justification recorded
+// on the item and reported to the operator as it happens. That is a veto by reading rather than a permission to ask for: the
 // crossing is in force the moment it is recorded, and what keeps it answerable is
 // that the operator sees it at once and can undo the work it bought.
 //
 // The bound is the whole of the delegation. A sixth crossing of one item is
 // refused naming the operator's command as the path, a crossing carrying no
-// reason is refused outright, and neither clearing a budget nor raising one by
-// more than a single step is his at all. CrossedBy is what tells the two apart on
-// the record, so an item's overrides say who gave it each piece of room.
+// reason is refused outright, and neither clearing a budget nor raising one past
+// the ceiling that refusal named is his at all. CrossedBy is what tells the two
+// apart on the record, so an item's overrides say who gave it each piece of room.
 //
 // It clears or raises, and never lowers. An override that would leave a budget no
 // larger than it already stands is refused, so an item's overrides are a
@@ -204,7 +204,7 @@ func (o TriageOverride) Validate() error {
 				domain.RoleDevelopmentManager.Title(), o.CrossedBy))
 		}
 		if o.Cleared {
-			problems = append(problems, errors.New("a delegated crossing raises a cap by one and never clears one; clearing a budget is the operator's"))
+			problems = append(problems, errors.New("a delegated crossing raises a cap to a number and never clears one; clearing a budget is the operator's"))
 		}
 	}
 	return errors.Join(problems...)
@@ -354,8 +354,9 @@ func (e TriageCrossingUnjustifiedError) Error() string {
 
 func (e TriageCrossingUnjustifiedError) Unwrap() error { return ErrTriageCrossingUnjustified }
 
-// CrossCap raises one of a work item's caps by a single step on the development
-// manager's own delegated authority, and reports what the crossing came to.
+// CrossCap raises one of a work item's caps to one more than the item has spent
+// against it, on the development manager's own delegated authority, and reports
+// what the crossing came to.
 //
 // It is deliberately not Override with a different name on it. What the operator
 // records is any ceiling they like, or none at all; what is delegated is one more
@@ -413,9 +414,9 @@ func (s *TriageStore) CrossCap(ctx context.Context, workItemID string, by domain
 		if err != nil {
 			return err
 		}
-		// A budget already cleared has no step left to take, and one step past the
-		// cleared ceiling is not a number. Both are the same refusal a raise to what
-		// already stands gets, which is what the caller already handles.
+		// A budget already cleared has no room left to give, and one past the cleared
+		// ceiling is not a number. Both are the same refusal a raise to what already
+		// stands gets, which is what the caller already handles.
 		if standing >= TriageCapCleared {
 			return TriageOverrideError{
 				Budget:     budget,
@@ -424,7 +425,20 @@ func (s *TriageStore) CrossCap(ctx context.Context, workItemID string, by domain
 				Asked:      standing,
 			}
 		}
-		crossing.Cap = standing + 1
+		// One more than the item has spent, which is exactly the ceiling the refusal
+		// says would permit the decision — and never less, because that is the whole
+		// of what the crossing is for.
+		//
+		// It is measured from the spend rather than from the ceiling, and the two
+		// differ on every item that is past its cap rather than level with it. Rounds
+		// are counted whatever a cap says, so six rounds against a cap of four is an
+		// ordinary state and a documented one; a crossing that stepped from the
+		// ceiling would move that cap to five, meet the same refusal, and cost the
+		// role another of his five crossings and the operator another message for
+		// each step of the gap. What bounds the delegation is the five crossings and
+		// the justification each one carries, not how far behind the item the cap had
+		// fallen before he reached for one.
+		crossing.Cap = larger(standing, triageBudgetSpend(*counters, budget)) + 1
 		crossing.Number = crossed + 1
 		counters.Overrides = append(append([]TriageOverride{}, counters.Overrides...), TriageOverride{
 			Budget: budget,

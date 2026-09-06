@@ -21,11 +21,12 @@ package chat
 // the week to 2026-09-06 was a cap refusing this role, an escalation, and an
 // operator granting it within minutes under their own standing direction — so
 // the operator step was latency rather than judgement, and the crossing is this
-// role's now. It is narrow on purpose: one step, five times per item, and only
-// with the argument for it, which lands on the item and reaches the operator in
-// the channel as the crossing happens. That is a veto by reading rather than a
-// permission to ask for. Past the five, and for anything larger than a step, the
-// caps are the operator's again and the refusal says so.
+// role's now. It is narrow on purpose: far enough for the one decision that was
+// refused, five times per item, and only with the argument for it, which lands on
+// the item and reaches the operator in the channel as the crossing happens. That
+// is a veto by reading rather than a permission to ask for. Past the five, and
+// for any ceiling beyond the one that permits the decision, the caps are the
+// operator's again and the refusal says so.
 //
 // Escalation is the one decision that asks the operator for something, and it is
 // deliberately more than prose: a durable blocker on the item, so the item
@@ -82,11 +83,12 @@ const (
 	// decisionEscalate hands the entry to the operator, which is the only
 	// decision that asks a person for anything.
 	decisionEscalate = "escalate"
-	// decisionCross raises one of the item's caps by a single step on this role's
-	// own delegated authority, so a decision the cap refused becomes one that can
-	// be recorded. It buys no attempt and spends no budget of its own; what it
-	// spends is one of the five crossings the item gets, and the reason it carries
-	// is reported to the operator as it is recorded.
+	// decisionCross raises one of the item's caps to just past what the item has
+	// spent against it, on this role's own delegated authority, so a decision the
+	// cap refused becomes one that can be recorded. It buys no attempt and spends
+	// no budget of its own; what it spends is one of the five crossings the item
+	// gets, and the reason it carries is reported to the operator as it is
+	// recorded.
 	decisionCross = "cross"
 )
 
@@ -131,8 +133,9 @@ type TriageBudgets interface {
 	RecordRerun(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
 	// RecordMergeRearm records that triage re-armed a merge the forge dropped.
 	RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
-	// CrossCap raises one of this item's caps by a single step on the development
-	// manager's own delegated authority, and reports what the crossing came to.
+	// CrossCap raises one of this item's caps to just past what the item has spent
+	// against it, on the development manager's own delegated authority, and reports
+	// what the crossing came to.
 	// Whose authority it is recorded under is the caller's rather than this
 	// conversation's, exactly as the sizes and the clock are: a conversation that
 	// could name the role could name any of them.
@@ -497,7 +500,7 @@ func refusedPastCap(err error) error {
 	if !errors.Is(err, runstate.ErrTriageCapReached) {
 		return err
 	}
-	return fmt.Errorf("%w. Nothing written into the item's notes crosses that cap — no guard reads prose. What crosses it from here is %s, up to %d times per item and only with the reason it is being crossed for, which is recorded on the item and reported to the operator as you record it; once the crossing is recorded, asking for this same decision again records it. Past those %d, or for a raise larger than one, escalate and the operator crosses it themselves with %s",
+	return fmt.Errorf("%w. Nothing written into the item's notes crosses that cap — no guard reads prose. What crosses it from here is %s, up to %d times per item and only with the reason it is being crossed for, which is recorded on the item and reported to the operator as you record it; once the crossing is recorded, asking for this same decision again records it. Past those %d, or for a ceiling beyond the one that permits it, escalate and the operator crosses it themselves with %s",
 		err, crossingDecisions(err), runstate.MaxDelegatedCapCrossings, runstate.MaxDelegatedCapCrossings, overrideCommands(err))
 }
 

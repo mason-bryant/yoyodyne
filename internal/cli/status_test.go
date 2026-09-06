@@ -1087,7 +1087,7 @@ func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
 	// And that the item may move without them, which is what the delegation
 	// traded for the wait it removed: an operator reading a cap at its limit is
 	// entitled to know the development manager can cross it by one himself.
-	if !strings.Contains(rendered, "the development manager may also cross it by one, 5 times per item") {
+	if !strings.Contains(rendered, "the development manager may also cross it far enough for one more decision, 5 times per item") {
 		t.Fatalf("rendered = %q, want the delegated crossing said beside the operator's command", rendered)
 	}
 	// It is said where it applies and nowhere else: an item with rounds to spare

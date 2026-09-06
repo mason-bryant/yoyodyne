@@ -3071,8 +3071,9 @@ actions: escalate the item, or re-scope it. `0` is a choice somebody can mean an
 is accepted as one: an item that reaches triage at all is never repaired again.
 What crosses it for a single item is
 [a recorded crossing](#crossing-a-cap-the-operator-decides-to-cross): the operator's
-own override, to any ceiling, or the development manager's, by one step and five
-times per item — which is what makes an escalation answerable rather than only
+own override, to any ceiling, or the development manager's, far enough for the
+one decision that was refused and five times per item — which is what makes an
+escalation answerable rather than only
 sayable, and what stops most of them being needed.
 
 `repair_grant_attempts` is how many repair attempts triage hands an item when it
@@ -3110,7 +3111,7 @@ and the line under it names the one thing that changes that, so the dead end and
 the way out are read in the same breath:
 
 ```text
-    `yoyo triage override --budget "review round" --cap <n> --by "<you>" --reason "<why>" yoyodyne-ifd.90` crosses it to any ceiling; the development manager may also cross it by one, 5 times per item, and each of those reaches you in the channel as it happens
+    `yoyo triage override --budget "review round" --cap <n> --by "<you>" --reason "<why>" yoyodyne-ifd.90` crosses it to any ceiling; the development manager may also cross it far enough for one more decision, 5 times per item, and each of those reaches you in the channel as it happens
 ```
 
 What may still happen without crossing anything is what the budget lines beside
@@ -3283,8 +3284,8 @@ item 10 like every other, rather than pinning it to the 8 somebody once gave it.
 override only ever adds room.
 
 **An unbounded raise is yours and nobody else's.** No role can produce one: a
-crossing recorded by the development manager raises one budget by a single step
-and can never clear one, and the actions that carry decisions out read overrides
+crossing recorded by the development manager raises one budget just far enough
+for the decision it was refused and can never clear one, and the actions that carry decisions out read overrides
 rather than write them. It is a terminal command for the reason `yoyo release` is
 one — the switch that answers an escalation has to work with no conversation
 open.
@@ -3331,8 +3332,9 @@ states it where the team-mode design will need it.
 
 #### A crossing the development manager takes himself
 
-**The development manager may cross a cap that refused him, by one step, five
-times per item, and only with the reason recorded.** Every override recorded in
+**The development manager may cross a cap that refused him, far enough for the
+one decision it refused, five times per item, and only with the reason
+recorded.** Every override recorded in
 the week to 2026-09-06 was granted, most of them within minutes of the escalation
 that asked for it, under the operator's own standing direction — so the operator
 step was latency rather than judgement. What replaced it keeps the judgement and
@@ -3347,10 +3349,16 @@ named:
 
 **Three things bound it, and they are what the operator delegated it on.**
 
-- **One step.** The crossing raises that one budget to exactly one more than it
-  stands at — the figure the refusal already says would permit the decision. An
-  unbounded raise, a cleared budget, and a re-run budget beyond this are operator
-  acts and are refused to him.
+- **Exactly the ceiling the refusal named.** The crossing raises that one budget
+  to one more than the item has spent against it, which is the figure the refusal
+  already quotes as permitting the decision. It is measured from the spend rather
+  than from the ceiling, and the two differ on every item that is past its cap
+  rather than level with it — rounds are counted whatever a cap says, so the "6
+  spent … at or past the cap of 4" above is an ordinary state, and a crossing that
+  stepped from the ceiling would move it to 5, meet the same refusal, and cost him
+  another crossing and you another message for every round of the gap. An
+  unbounded raise, a cleared budget, and any ceiling beyond the one that permits
+  the decision are operator acts and are refused to him.
 - **Five per item.** A sixth crossing of the same item is refused, naming
   `yoyo triage override` as the path, because an item that has been given more
   room five times is one where something other than the budget is wrong. The
