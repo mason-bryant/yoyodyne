@@ -788,7 +788,7 @@ it was rather than counting it as free and carrying on inside a bound it can no
 longer hold.
 
 A watching session also notices that the harness has stopped doing anything. On
-every poll, at most once per --stall-after, it reads whether anything has started
+every pull, at most once per --stall-after, it reads whether anything has started
 at all: nothing for that long, work the tracker calls ready, and no hold, full
 machine, still-moving run or provider usage window to account for it is recorded
 against the product as a stall, which "yoyo status" reads back and the Slack sink,

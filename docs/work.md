@@ -513,7 +513,7 @@ poll that starts nothing names the runs going and what it passed over.
 
 **A watching session also notices that the harness has stopped doing anything.**
 Everything above is what the session says about itself, which works exactly as
-long as it is choosing at all. So on every poll — at most once per
+long as it is choosing at all. So on every pull — at most once per
 `--stall-after`, ten minutes by default — it reads the durable records instead:
 nothing started for that long, work the tracker calls ready, and no hold, full
 machine, still-moving run or provider usage window to account for it is
