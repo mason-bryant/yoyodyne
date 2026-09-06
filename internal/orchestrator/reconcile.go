@@ -946,7 +946,7 @@ func (r Reconciler) recordTerminalFailure(state runstate.State, reason string) (
 // reaching disk is what that rule depends on, which is why this path writes even
 // where recordTerminalFailure would skip.
 func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (runstate.State, error) {
-	reconciled := "reconciled after an interrupted run: " + reason
+	reconciled := runstate.RecordFailure("reconciled after an interrupted run: " + reason)
 	if !state.Status.Terminal() {
 		completedAt := r.clock().Now()
 		state.Status = runstate.StatusFailed

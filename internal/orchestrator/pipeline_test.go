@@ -411,6 +411,68 @@ func TestPipelineCapturesChangesWhenBackendReturnsInfrastructureError(t *testing
 	}
 }
 
+// The reason a run ended is cut to the record's own bound as it is written, so a
+// provider that folded its whole output into the error that killed the run still
+// leaves a record the store takes and every reader can carry. It used to be the
+// one recorded reason nothing bounded: the record validated, and then each reader
+// with a bound of its own discovered by refusing it.
+func TestAnOversizedFailureIsCutSoTheRecordStoresAndCarries(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Fail", Status: "open"}}
+	verbose := strings.Repeat("the provider said this and then said it again. ", 1000)
+	provider := &fakeBackend{run: func(request backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{}, errors.New(verbose)
+	}}
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	docket := &memoryDocket{}
+	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "developer backend failed") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The store validated this record on the way in, so a bound it broke would
+	// have cost the run its ending rather than the tail of one message. Asked
+	// again here, because that is the claim the bound is here to make.
+	if err := state.Validate(); err != nil {
+		t.Fatalf("the record of a verbose failure does not validate: %v", err)
+	}
+	if len(state.Failure) > runstate.MaxBlockerBytes {
+		t.Fatalf("failure is %d bytes, which the record's own bound refuses", len(state.Failure))
+	}
+	if !strings.Contains(state.Failure, "developer backend failed") ||
+		!strings.Contains(state.Failure, "the rest of this failure was not recorded") {
+		t.Fatalf("a cut failure lost what stopped the run or did not say it was cut: %q", state.Failure)
+	}
+	// What the run reported and what it recorded are the same words, so the note
+	// on the work item does not say something the record cannot.
+	if outcome.Failure != state.Failure {
+		t.Fatalf("the reported failure and the recorded one differ:\n%q\n%q", outcome.Failure, state.Failure)
+	}
+	// The docket is the reader that found this: an entry refused for its length is
+	// a stoppage the development manager never hears about.
+	if len(docket.entries) != 1 {
+		t.Fatalf("the stoppage of a verbose run reached nobody: %#v", docket.entries)
+	}
+	if entry := docket.entries[0]; strings.TrimSpace(entry.Failure) == "" {
+		t.Fatalf("the entry carries no reason for the death: %#v", entry)
+	}
+	// And the read model every surface prints from carries it too.
+	history, err := store.History(runstate.RunQuery{WorkItemID: tracker.item.ID})
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	if len(history.Runs) != 1 || history.Runs[0].Failure != state.Failure {
+		t.Fatalf("the run history does not carry the recorded reason: %#v", history.Runs)
+	}
+}
+
 // A failure note never says work is preserved on the strength of the record
 // alone. The record of a run that made a branch and a worktree carries a removal
 // flag for each, and both are false for every run nothing cleaned up — including

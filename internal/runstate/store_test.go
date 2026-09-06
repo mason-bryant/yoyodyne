@@ -136,12 +136,16 @@ func TestStoreReserveEnforcesCapacityAtomicallyAcrossInstances(t *testing.T) {
 	}
 }
 
+// The size guard is asked with the review summary rather than the failure, which
+// the schema now bounds itself: a field the schema refuses never reaches the
+// encoder, and what is being measured here is the encoder rather than the
+// schema.
 func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	state := testState(t, StatusRunning)
-	state.Failure = strings.Repeat("x", maxEncodedStateBytes)
+	state.ReviewSummary = strings.Repeat("x", maxEncodedStateBytes)
 	if err := store.Create(state); err == nil || !strings.Contains(err.Error(), "encoded run state is") {
 		t.Fatalf("Create() oversized state error = %v", err)
 	}
@@ -153,11 +157,11 @@ func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 		t.Fatalf("oversized create left a state file: %v", err)
 	}
 
-	state.Failure = ""
+	state.ReviewSummary = ""
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() valid state error = %v", err)
 	}
-	state.Failure = strings.Repeat("x", maxEncodedStateBytes)
+	state.ReviewSummary = strings.Repeat("x", maxEncodedStateBytes)
 	if err := store.Save(state); err == nil || !strings.Contains(err.Error(), "encoded run state is") {
 		t.Fatalf("Save() oversized state error = %v", err)
 	}
@@ -165,8 +169,33 @@ func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() original state error = %v", err)
 	}
-	if loaded.Failure != "" {
-		t.Fatalf("oversized save replaced original state: failure bytes = %d", len(loaded.Failure))
+	if loaded.ReviewSummary != "" {
+		t.Fatalf("oversized save replaced original state: review summary bytes = %d", len(loaded.ReviewSummary))
+	}
+}
+
+// The bound on the recorded failure is the schema's, not a downstream reader's:
+// a reason too long to carry is cut where it is written, and a record that
+// somehow reaches the store uncut is refused by name rather than silently kept
+// for every reader after it to discover.
+func TestAnOversizedFailureIsRefusedBySchemaAndCutAtTheWrite(t *testing.T) {
+	t.Parallel()
+
+	state := testState(t, StatusFailed)
+	state.Failure = strings.Repeat("x", MaxBlockerBytes+1)
+	err := state.Validate()
+	if err == nil || !strings.Contains(err.Error(), "failure is") {
+		t.Fatalf("Validate() oversized failure error = %v, want the failure named", err)
+	}
+	// Written the way the harness writes it, the same reason validates and still
+	// says what stopped the run.
+	state.Failure = RecordFailure("the provider failed: " + strings.Repeat("x", MaxBlockerBytes))
+	if err := state.Validate(); err != nil {
+		t.Fatalf("a recorded failure does not validate: %v", err)
+	}
+	if !strings.HasPrefix(state.Failure, "the provider failed: ") ||
+		!strings.HasSuffix(state.Failure, "the rest of this failure was not recorded]") {
+		t.Fatalf("a cut failure lost its head or did not say it was cut: %q", state.Failure)
 	}
 }
 

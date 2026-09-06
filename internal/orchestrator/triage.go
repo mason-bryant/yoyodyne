@@ -859,11 +859,11 @@ func docketEnvironmental(refused *runstate.EnvironmentalRefusal) *triage.Environ
 }
 
 // docketFailure is the reason a preserved death gives for having died, bounded to
-// what an entry may carry. A run's own record keeps whatever the failing step
-// gave it and nothing bounds that, so an entry built from it unbounded would be
-// refused for its length — and a stoppage refused at the docket is one the
-// development manager never hears about, which is the silence this whole path
-// exists to end.
+// what an entry may carry. The run record is bounded to the same size at the
+// write that makes it, so this is a no-op over anything the harness records
+// today; it stays because the entry must not depend on that having happened, and
+// a stoppage refused at the docket is one the development manager never hears
+// about, which is the silence this whole path exists to end.
 func docketFailure(state runstate.State) string {
 	if state.Blocker != "" || !preservedDeath(state) {
 		return ""

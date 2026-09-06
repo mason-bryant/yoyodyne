@@ -544,17 +544,26 @@ func RecordBlocker(notes string) string {
 
 const blockerCutNote = "\n[cut; the work item carries the whole of this blocker]"
 
-// RecordFailure makes a bounded record of the reason a run ended, for a reader
-// carrying it somewhere with a bound of its own. The record itself keeps whatever
-// the failing step gave, which can be an error with a provider's output folded
-// into it; the docket entry a stoppage produces cannot, and an entry refused for
-// its length is a stoppage that reaches nobody. So it is cut here, against the
-// bound the entry is held to, rather than refused there.
+// RecordFailure makes a bounded record of the reason a run ended. It is how
+// State.Failure is written, because what ends a run is often an error with a
+// provider's whole output folded into it, and the record is held to the same
+// bound as every other recorded reason: a reason cut here still says why the run
+// stopped, while one the store refuses is a terminal record that never lands.
+//
+// It is applied again by whoever carries the reason somewhere with a bound of its
+// own — the docket entry a stoppage produces is the case that found this — and
+// that second cut is a no-op over an already-bounded reason rather than a bound
+// the record is trusted to have honoured.
 func RecordFailure(failure string) string {
 	return boundRecordedText(failure, MaxBlockerBytes, failureCutNote)
 }
 
-const failureCutNote = "\n[cut; the run's own record carries the whole of this failure]"
+// The note promises nothing about where the rest went, unlike the blocker's,
+// because there is nowhere it reliably is: the record is the run's own account of
+// why it stopped and this is now the first cut rather than a second one, so a
+// note sending a reader to the record would send them to the copy they are
+// already reading.
+const failureCutNote = "\n[cut; the rest of this failure was not recorded]"
 
 // RecordEscalationReason makes a bounded record of what a role said when it
 // raised the item as unmeetable, for the docket entry that carries it to the
@@ -1267,6 +1276,11 @@ type State struct {
 	// non-empty Failure is a second classification that will disagree with the
 	// read model's, which is exactly what the fixed outcome vocabulary exists to
 	// prevent.
+	//
+	// It is bounded like every other recorded reason, and RecordFailure is how it
+	// is written: what ends a run is often an error with a provider's whole output
+	// folded into it, and a reason nothing downstream can carry is a stoppage that
+	// validates here and then reaches nobody.
 	Failure string `json:"failure,omitempty"`
 	// Blocker is the durable blocker exactly as it was recorded on the work item
 	// when this run stopped on something no further attempt of the harness could
@@ -1537,6 +1551,9 @@ func (s State) Validate() error {
 	}
 	if s.ReviewRounds < 0 {
 		problems = append(problems, errors.New("review_rounds cannot be negative"))
+	}
+	if len(s.Failure) > MaxBlockerBytes {
+		problems = append(problems, fmt.Errorf("failure is %d bytes, which exceeds the %d byte bound", len(s.Failure), MaxBlockerBytes))
 	}
 	if len(s.Blocker) > MaxBlockerBytes {
 		problems = append(problems, fmt.Errorf("blocker is %d bytes, which exceeds the %d byte bound", len(s.Blocker), MaxBlockerBytes))
