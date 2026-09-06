@@ -24,10 +24,12 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // scheduleRendezvous is how long a test will wait for the developers it expects
@@ -2283,6 +2285,15 @@ type scheduleHarness struct {
 	// a test asks for it, so every other test's pass is what it always was.
 	escalations int
 	escalate    func(*scheduleHarness, int) (EscalationSweep, error)
+	// tree stands in for the repository an item's stated prerequisites are read
+	// against, and docketed is every unready item this harness was asked to route
+	// to triage, by the key the docket would hold it under. A pull is wired with a
+	// tree only where a test asks for one, so every other test's pass reads no
+	// repository at all — which is what every pass did before this existed.
+	tree       ScheduleTree
+	routeErr   error
+	docketed   []string
+	unroutable bool
 
 	pulls      int
 	order      []string
@@ -2383,9 +2394,17 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		escalations = h
 	}
 	h.mu.Unlock()
+	h.mu.Lock()
+	tree := h.tree
+	var docket ScheduleTriage
+	if tree != nil && !h.unroutable {
+		docket = h
+	}
+	h.mu.Unlock()
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h, Stoppages: stoppages,
 		Capacity: capacity, Start: h.start, Escalations: escalations,
+		Tree: tree, Triage: docket,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.
@@ -3419,5 +3438,246 @@ func TestAWatchingSessionTakesTheStallReadingOncePerPull(t *testing.T) {
 	// It decides nothing: the pass ends exactly as a pass wired without one does.
 	if schedule.Stopped != ScheduleCancelled {
 		t.Fatalf("stopped = %q, want the session ended by its operator", schedule.Stopped)
+	}
+}
+
+// RecordUnreadyItem stands in for routing an item the tree is not ready for to
+// the development manager's docket, and records the key the durable docket would
+// hold it under so a test can say that repeated pulls are one entry.
+func (h *scheduleHarness) RecordUnreadyItem(item beads.WorkItem, unmet []readiness.Unmet) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.routeErr != nil {
+		return false, h.routeErr
+	}
+	key := triage.UnreadyKey(item.ID, readiness.Kinds(unmet))
+	for _, already := range h.docketed {
+		if already == key {
+			return false, nil
+		}
+	}
+	h.docketed = append(h.docketed, key)
+	return true, nil
+}
+
+// citingTree is the tree as a test says it stands: the symbols it declares and
+// the files it has, and nothing else. It is a stand-in rather than a checkout
+// because what these tests are about is what the scheduler does with the answer;
+// the answers themselves are the readiness package's own tests, which read real
+// files.
+type citingTree struct {
+	declares map[string]bool
+	files    map[string]int
+	failure  error
+}
+
+func (t citingTree) File(path string) (int, bool, error) {
+	if t.failure != nil {
+		return 0, false, t.failure
+	}
+	lines, present := t.files[path]
+	return lines, present, nil
+}
+
+func (t citingTree) Declares(symbol string) (bool, error) {
+	if t.failure != nil {
+		return false, t.failure
+	}
+	return t.declares[symbol], nil
+}
+
+// The four shapes that cost a run each in a fortnight, replayed against a
+// scheduler that reads the tree: a pinpoint naming code the tree no longer has,
+// an item that says it inherits machinery nothing has landed, one that states its
+// own activation conditions, and one written blocked on a decision. Every one of
+// them is reported by the tracker as ready to pull, because the tracker knows
+// about dependency links and not about a sentence.
+//
+// None is dispatched, each is named with what is missing and who releases it,
+// and each reaches the development manager's docket rather than a run.
+func TestSchedulerDoesNotDispatchAnItemTheTreeIsNotReadyFor(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		item     beads.WorkItem
+		required []string
+	}{
+		{
+			name: "stale pinpoint",
+			item: beads.WorkItem{
+				ID: "yoyodyne-ifd.291", Title: "Configuration fails closed on an unrecognized role", Status: "open",
+				Description: "The implementation pinpoint: domain.Backend.SupportsRole returns true for every role.",
+			},
+			required: []string{"stale-pinpoint", "domain.Backend.SupportsRole", "the product manager"},
+		},
+		{
+			name: "machinery on a branch",
+			item: beads.WorkItem{
+				ID: "yoyodyne-ifd.284", Title: "The product manager's coherence scan", Status: "open",
+				Description: "The second recurring-task consumer, shipping after the DM hourly sweep and inheriting its machinery.",
+			},
+			required: []string{"machinery-on-a-branch", "inheriting its machinery", "development manager"},
+		},
+		{
+			name: "subject not in the repository",
+			item: beads.WorkItem{
+				ID: "yoyodyne-ifd.209.14", Title: "Convert the coordination slice to the workflow runtime", Status: "open",
+				Description: "Not decomposable further until the runtime exists and the management-conversion design lands.",
+			},
+			required: []string{"subject-not-in-repository", "Not decomposable further until the runtime exists"},
+		},
+		{
+			name: "forbidden by a ruling",
+			item: beads.WorkItem{
+				ID: "yoyodyne-ifd.100.1", Title: "Commit and publish an approved artifact write", Status: "open",
+				Description: "Blocked until the architect's answer exists; the answer is recorded by the operator.",
+			},
+			required: []string{"forbidden-by-ruling", "Blocked until the architect's answer exists"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			harness := newScheduleHarness(test.item)
+			harness.tree = citingTree{}
+
+			schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+			if err != nil {
+				t.Fatalf("Schedule() error = %v", err)
+			}
+			if len(schedule.Started) != 0 {
+				t.Fatalf("started = %#v, want an item the tree is not ready for never dispatched: %s", schedule.Started, schedule.Render())
+			}
+			if schedule.ReadinessProblem != "" {
+				t.Fatalf("readiness problem = %q, want the reading to have been made", schedule.ReadinessProblem)
+			}
+			if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != test.item.ID {
+				t.Fatalf("deferred = %#v, want the item named rather than counted among the unready", schedule.Deferred)
+			}
+			reason := schedule.Deferred[0].Reason
+			for _, required := range test.required {
+				if !strings.Contains(reason, required) {
+					t.Fatalf("deferred reason = %q, want it to contain %q", reason, required)
+				}
+			}
+			// The other half of the criterion: it goes to triage rather than only
+			// into one pass's output, so it is still there when this session is over.
+			if len(harness.docketed) != 1 {
+				t.Fatalf("docketed = %#v, want the unmet prerequisite routed to the development manager", harness.docketed)
+			}
+			if !strings.Contains(harness.docketed[0], test.item.ID) {
+				t.Fatalf("docket key = %q, want it to name the item", harness.docketed[0])
+			}
+		})
+	}
+}
+
+// The half that has to hold for the guard to be worth having: an item whose
+// citation the tree meets is dispatched exactly as it was, and nothing is
+// docketed about it.
+func TestSchedulerDispatchesAnItemTheTreeIsReadyFor(t *testing.T) {
+	t.Parallel()
+
+	item := beads.WorkItem{
+		ID: "yoyodyne-ifd.304", Title: "Readiness checks prerequisites against the tree", Status: "open",
+		Description: "The check is readiness.Check, read at dispatch.",
+	}
+	harness := newScheduleHarness(item)
+	harness.tree = citingTree{declares: map[string]bool{"readiness.Check": true}}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != item.ID {
+		t.Fatalf("started = %#v, want the item dispatched: %s", schedule.Started, schedule.Render())
+	}
+	if len(harness.docketed) != 0 || len(schedule.Deferred) != 0 {
+		t.Fatalf("docketed = %#v, deferred = %#v, want nothing said about a ready item", harness.docketed, schedule.Deferred)
+	}
+}
+
+// A watching session re-reads the queue every interval, so an item that stays
+// unready is met again on every poll. It reaches the development manager once:
+// the docket is keyed to the item and what was found, not to the reading.
+func TestAnUnreadyItemReachesTriageOncePerFinding(t *testing.T) {
+	t.Parallel()
+
+	item := beads.WorkItem{
+		ID: "yoyodyne-ifd.100.1", Title: "Commit and publish an approved artifact write", Status: "open",
+		Description: "Blocked until the architect's answer exists.",
+	}
+	harness := newScheduleHarness(item)
+	harness.tree = citingTree{}
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 3 }
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if harness.sleeps < 3 {
+		t.Fatalf("sleeps = %d, want the session to have polled more than once", harness.sleeps)
+	}
+	if len(harness.docketed) != 1 {
+		t.Fatalf("docketed = %#v, want one entry however many polls met the item", harness.docketed)
+	}
+	if len(schedule.Deferred) != 1 {
+		t.Fatalf("deferred = %#v, want the item named once rather than once per poll", schedule.Deferred)
+	}
+}
+
+// A tree that cannot be read says nothing about the item. Holding work back for
+// a reading that failed would convert an unreadable repository into a stopped
+// line, which is a worse failure than the one this guards against — so the item
+// is dispatched exactly as it would have been, and the failed reading is said.
+func TestATreeThatCannotBeReadDoesNotHoldWorkBack(t *testing.T) {
+	t.Parallel()
+
+	item := beads.WorkItem{
+		ID: "yoyodyne-ifd.304", Status: "open",
+		Title: "Readiness checks prerequisites against the tree", Description: "The check is readiness.Check.",
+	}
+	harness := newScheduleHarness(item)
+	harness.tree = citingTree{failure: errors.New("the repository could not be walked")}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want an unreadable tree to hold nothing back: %s", schedule.Started, schedule.Render())
+	}
+	if !strings.Contains(schedule.ReadinessProblem, "could not be read in full") {
+		t.Fatalf("readiness problem = %q, want the failed reading reported", schedule.ReadinessProblem)
+	}
+	if !strings.Contains(schedule.Render(), "could not be read in full") {
+		t.Fatalf("rendered = %q, want the failed reading readable by an operator", schedule.Render())
+	}
+}
+
+// Where the finding cannot be made durable, the refusal still stands. Dispatching
+// an item the tree cannot serve in order to avoid losing a line of the record
+// would spend a run to save a sentence.
+func TestAnUnreadyItemWithNowhereToRouteIsStillNotDispatched(t *testing.T) {
+	t.Parallel()
+
+	item := beads.WorkItem{
+		ID: "yoyodyne-ifd.100.1", Status: "open", Title: "Commit and publish an approved artifact write",
+		Description: "Blocked until the architect's answer exists.",
+	}
+	harness := newScheduleHarness(item)
+	harness.tree = citingTree{}
+	harness.unroutable = true
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want the refusal to stand without the record: %s", schedule.Started, schedule.Render())
+	}
+	if !strings.Contains(schedule.ReadinessProblem, "nowhere durable") {
+		t.Fatalf("readiness problem = %q, want the missing record reported", schedule.ReadinessProblem)
 	}
 }

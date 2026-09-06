@@ -37,6 +37,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/redeploy"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -613,6 +614,13 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		// reason escalate.go gives: a delivery is a conversation turn, and a run
 		// waiting out one would hold a developer slot open on its way out.
 		Escalations: escalatorFrom(parts, configPath, stderr),
+		// The tree an item's stated prerequisites are read against, and where an
+		// item that does not meet them is routed. The tree is the primary checkout
+		// rather than a worktree, because what the check is about is what a run cut
+		// from here would find; and it is built per pull, which is what bounds the
+		// source it caches to one reading of a queue that is re-read every interval.
+		Tree:   &readiness.Repository{Root: parts.repository},
+		Triage: docketerFrom(parts),
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record

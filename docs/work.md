@@ -347,8 +347,8 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Nine things keep an item out of a pass, and the pass accounts for them at two
-different grains. Six are named against the item, because nothing else would
+Ten things keep an item out of a pass, and the pass accounts for them at two
+different grains. Seven are named against the item, because nothing else would
 report that this particular item was passed over. An **unresolved directive** is
 named with the directive's own words, because it needs a person. An item
 whose **unfinished children already carry its execution** is skipped with those
@@ -367,7 +367,11 @@ over with the parking reason named, which the paragraph after that is about. And
 an item **held for a person** — a stoppage whose change is still on a branch or
 one nobody has decided about, in the sense the hold paragraph above gives it — is
 passed over with the hold named, because like the parking it is not a wait for
-anything and will not clear on its own. The other
+anything and will not clear on its own. And an item **the tree is not ready
+for** — one that pinpoints code the repository no longer has, or that says in its
+own words that something has to land first — is passed over with the unmet
+prerequisite named and routed to the development manager's docket, which the last
+of the paragraphs below is about. The other
 three — nothing reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them
@@ -459,7 +463,59 @@ rather than what you may ask for. Parking is not retroactive either: it covers
 exactly the items that carry it, so a queue parked by convention stays selectable
 until each is parked in fact, one `park` each.
 
-A ninth thing deliberately keeps nothing out: an item whose goal was amended
+**An item the tree cannot serve is not dispatched, and the read that says so is
+free.** Four items in a fortnight were handed to a developer that could not do
+them, and each cost a full run to establish why: one asked for machinery that was
+whole and approved on a branch nothing had merged, one for a conversion whose
+subject is on a branch too, one was written blocked on a design answer that came
+back negating every condition it stated, and one cited a symbol a commit weeks
+earlier had deleted. Every one of them was reported by the tracker as ready to
+pull, and correctly: the tracker knows about dependency links, and none of those
+four was expressed as one.
+
+So before a slot is spent, the pass reads what the item asks of the repository.
+Two readings, both cheap, and neither of them a judgement about the work:
+
+- **What the item pinpoints.** A `file:line` or a package-qualified symbol in the
+  item's title, description, design guidance, or acceptance criteria is read
+  against the tree. A citation naming a file the tree does not have, a line past
+  the end of one it does, or a symbol nothing declares is the cheapest possible
+  already-satisfied signal. A bare path is deliberately not read as a citation:
+  an item that names `docs/configuration/agents.md` is as likely to be asking for
+  the file as citing it. Neither are the notes, which are where the harness
+  appends each run's record and where an implementation plan names the files the
+  work will create.
+- **What the item says about itself.** A sentence in which the item states that
+  something has to happen first — *blocked until*, *gated on*, *not decomposable
+  further until*, *shipping after … and inheriting its machinery* — is sequencing
+  that lives where nothing which pulls can read it. The phrasings are a closed
+  list, calibrated against this backlog rather than chosen for how they read: over
+  the 435 items the tracker held when it was written, the whole check fires on 15
+  of them and on 6 of the unfinished ones, and each of those six states a real
+  gate.
+
+An item that fails either reading is passed over with the unmet prerequisite
+named, and it is put on the development manager's docket as an *item the tree is
+not ready for* — the one docket entry with no run behind it, carrying what the
+item asks for, the read that says the tree does not have it, and who releases it.
+The two halves clear differently and the refusal says which: a pinpoint clears
+itself, so the item is pulled at the first pull after the code lands, while a
+sentence never clears on its own — the product manager amends the item, or the
+development manager records the dependency the sentence names.
+
+Naming the item yourself is unaffected here too. `yoyo run <id>` is you deciding,
+exactly as it is with parking and the executor.
+
+Two failures are possible and both are reported rather than hidden. A repository
+that cannot be read says nothing about any item, so the item is dispatched
+exactly as it would have been and the failed reading is printed beside the pass —
+turning an unreadable checkout into a stopped line would be a worse failure than
+the one this guards against. And where the finding cannot be written to the
+docket, the refusal still stands and says so: dispatching an item the tree cannot
+serve in order to avoid losing a line of the record would spend a run to save a
+sentence.
+
+A tenth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.

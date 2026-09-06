@@ -178,7 +178,9 @@ type ProductRequest struct {
 	// rather than a description of it.
 	CommandHelp string
 	// TriageDocket is the work that has stopped moving: a run that ended on a
-	// durable blocker, and an approved publication the forge has not merged. It
+	// durable blocker, an approved publication the forge has not merged, and an
+	// item dispatch would not start because the tree does not meet a prerequisite
+	// it states. It
 	// is supplied for the development manager alone, because deciding what
 	// becomes of stopped work is that role's, and it reaches the conversation the
 	// way the backlog reaches the product manager's — carried by the harness
@@ -1214,7 +1216,7 @@ func renderTriageDocket(entries []triage.Entry, unavailable string) string {
 		return rendered.String()
 	}
 	if len(entries) == 0 {
-		rendered.WriteString("Nothing has stopped: no run ended on a blocker and no publication is unmerged.\n")
+		rendered.WriteString("Nothing has stopped: no run ended on a blocker, no publication is unmerged, and no item was found unready to dispatch.\n")
 		return rendered.String()
 	}
 	ordered := make([]triage.Entry, len(entries))
@@ -1247,16 +1249,21 @@ const triageDocketHeader = `
 
 The work that has stopped moving, newest first. A run that ended on a durable
 blocker is here, and so is an approved publication the forge has not merged.
+So is an item dispatch would not start, because the tree does not meet a
+prerequisite the item states — that one has no run behind it, which is the point
+of it: it was caught by a read rather than by a run spending itself.
 Each entry carries the evidence as it was recorded rather than a summary of it:
 the blocker in the words it was recorded in, the reviewer's own findings, the
 check that was failing, the branch and worktree that were preserved, what the
-forge says about the merge, and what the work item has already spent against
-what it is allowed to spend.
+forge says about the merge, the unmet prerequisite and who releases it, and what
+the work item has already spent against what it is allowed to spend.
 
-An entry states that something stopped. It does not decide what becomes of it,
-and nothing has: an entry stands until somebody decides. Read the counters
-before deciding one — an item that has reached its review-round cap is one no
-further repair may be granted to, whatever else the evidence argues for.
+An entry states that something stopped or never started. It does not decide what
+becomes of it, and nothing has: an entry stands until somebody decides. Read the
+counters before deciding one — an item that has reached its review-round cap is
+one no further repair may be granted to, whatever else the evidence argues for.
+An unready item is the one entry whose subject can go out of date on its own: it
+says when the tree was read, and a citation it names may have landed since.
 `
 
 func renderSpecificationProblems(problems []SpecificationProblem) string {

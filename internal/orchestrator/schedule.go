@@ -18,7 +18,7 @@ package orchestrator
 // adds is the choosing: which items, in what order, how many at a time, and, for
 // every one of them, the recorded reason it was chosen.
 //
-// Three things it does decide about an item itself, and all three are choosing
+// Four things it does decide about an item itself, and all four are choosing
 // rather than enforcing, which is why they are here. The first is whether the
 // item is work at all: a container whose unfinished children carry its execution
 // is a heading over the queue rather than an entry in it, and nothing downstream
@@ -50,6 +50,17 @@ package orchestrator
 // of deferred work that failed. Nothing about that selection was wrong. What was
 // wrong was that the decision lived somewhere selection could not look, and a
 // watch session drains a queue every day it is quiet.
+//
+// The fourth is whether the tree holds what the item says it needs. An item that
+// pinpoints code the tree no longer has, or that states in its own words that
+// something must land first, is passed over and put on the development manager's
+// docket rather than started. It is here for the reason the other three are —
+// nothing downstream can tell, because the tracker knows about dependency links
+// and not about a sentence or a citation — and it is the only one that costs a
+// read of the repository, which is why it is asked last, of an item everything
+// else would have started. Four items in a fortnight were dispatched with an
+// unmeetable prerequisite and cost a full run each to establish it; see the
+// readiness package for which four and what the two readings are.
 //
 // # A pull re-reads the configuration
 //
@@ -130,6 +141,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
@@ -334,6 +346,30 @@ type WatchSessions interface {
 	Record(SessionState) error
 }
 
+// ScheduleTree is the repository as it stands, which is what an item's stated
+// prerequisites are checked against before a slot is spent on it. It is
+// satisfied by *readiness.Repository.
+//
+// It is optional, and a pull wired without one chooses exactly what it chose
+// before this existed: no item is held back for a prerequisite nobody read, and
+// what is lost is the catching rather than the choosing.
+type ScheduleTree interface {
+	readiness.Tree
+}
+
+// ScheduleTriage routes an item the tree is not ready for to the development
+// manager's docket, naming what is unmet. It is satisfied by Docketer.
+//
+// It is optional and separate from the reading, deliberately. A pull that can
+// read the tree and cannot write the docket still passes the item over rather
+// than dispatching it — the refusal is the useful half, and it is on the pass's
+// own report either way — and what it loses is the durable record. Withholding
+// the refusal because the record could not be made would spend a run to avoid
+// losing a line.
+type ScheduleTriage interface {
+	RecordUnreadyItem(item beads.WorkItem, unmet []readiness.Unmet) (bool, error)
+}
+
 // ScheduleEscalations puts stopped work in front of the development manager,
 // once per docketed stoppage. It is satisfied by Escalator.
 //
@@ -393,7 +429,14 @@ type Pull struct {
 	// Escalations delivers stopped work to the development manager. Optional; see
 	// ScheduleEscalations.
 	Escalations ScheduleEscalations
-	Start       Starter
+	// Tree is the repository an item's stated prerequisites are read against, and
+	// Triage is where an item that does not meet them is routed. Both optional;
+	// see ScheduleTree and ScheduleTriage. They are re-read at every pull like
+	// everything else here, so an item held back for a pinpoint the tree does not
+	// have is pulled at the first pull after the code lands.
+	Tree   ScheduleTree
+	Triage ScheduleTriage
+	Start  Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -575,6 +618,13 @@ type Schedule struct {
 	// recorded reasons a sentence and costs the schedule nothing else, so it is
 	// reported beside the pass rather than failing it.
 	StalenessProblem string `json:"staleness_problem,omitempty"`
+	// ReadinessProblem names a reading of the tree that failed, or an unready item
+	// that could not be routed to the development manager. Neither stops the pass:
+	// the first leaves the item chosen exactly as it would have been, and the
+	// second leaves the refusal on this report rather than on the docket. Both are
+	// said out loud, because a guard that silently stopped guarding is the failure
+	// the guard was written against, one level up.
+	ReadinessProblem string `json:"readiness_problem,omitempty"`
 	// Watched reports a pass that stayed open rather than draining, and Polls
 	// counts the intervals it waited out. A session that started nothing and
 	// polled four hundred times is a session that was alive, which is the fact a
@@ -1167,6 +1217,40 @@ pulling:
 				poll.pass(entry.ID, idleSequencedBehindWork, "")
 				continue
 			}
+			// The last question asked before a slot is spent, and the only one that
+			// reads the repository: does the tree hold what this item says it needs?
+			// It is asked last because everything above it is cheaper and because
+			// everything above it clears on its own, where this needs a person; and
+			// it is asked at all because the four times it was not, the answer cost
+			// a full run each to discover. See readiness for the incidents and for
+			// what the two readings are.
+			//
+			// A reading that failed is not a refusal. The tree is unreadable, which
+			// says nothing about the item, so the item is dispatched exactly as it
+			// would have been and the failed reading is reported beside the pass.
+			unmet, problem := pull.unready(read.items[entry.ID])
+			if problem != "" && schedule.ReadinessProblem == "" {
+				schedule.ReadinessProblem = problem
+			}
+			if len(unmet) > 0 {
+				// Routed to the development manager rather than only reported, because
+				// a refusal that lives in one pass's output is one nobody reads: the
+				// docket is where work nothing will pick up already goes. The write is
+				// keyed to the item and what was found, so a session polling every
+				// fifteen seconds dockets this once rather than once a poll.
+				if err := pull.route(read.items[entry.ID], unmet); err != nil && schedule.ReadinessProblem == "" {
+					schedule.ReadinessProblem = err.Error()
+				}
+				if !deferred[entry.ID] {
+					deferred[entry.ID] = true
+					schedule.Deferred = append(schedule.Deferred, Deferred{
+						WorkItemID: entry.ID,
+						Reason:     unreadyReason(unmet),
+					})
+				}
+				poll.pass(entry.ID, idlePrerequisiteUnmet, "")
+				continue
+			}
 			delete(deferred, entry.ID)
 			tried[entry.ID] = fingerprint(read.items[entry.ID])
 
@@ -1491,6 +1575,7 @@ const (
 	idleCoveredByChildren     idleClass = "covered by its children"
 	idlePausedByDirective     idleClass = "paused by a directive"
 	idleSequencedBehindWork   idleClass = "sequenced behind work in flight"
+	idlePrerequisiteUnmet     idleClass = "the tree does not meet what it asks for"
 )
 
 // idlePassedOver is one item a poll did not start: which item, why, and the
@@ -1715,6 +1800,21 @@ func heldReason(awaiting string) string {
 func parkedReason(parking domain.WorkItemParking) string {
 	return fmt.Sprintf("it is parked, so no pull selects it however far the queue drains and this is not a wait for anything: %s. Releasing it is the product manager's, and until they do it is passed over at every pull",
 		singleLine(parking.Reason(), maxScheduleReasonBytes))
+}
+
+// unreadyReason says that the item asks for something the tree does not have,
+// and names each unmet prerequisite with the read that found it and who releases
+// it. Like the parking and the hold above it is not a wait: the pinpoint half
+// clears when the code lands, and the stated half never clears until somebody
+// acts, so the reason says who.
+//
+// It is named against the item rather than counted, for the reason those two are:
+// the count it would otherwise disappear into is work that becomes pullable on
+// its own, and an item nothing in the tracker holds back and nothing in the tree
+// serves is exactly the item a reader would otherwise expect to see start.
+func unreadyReason(unmet []readiness.Unmet) string {
+	return fmt.Sprintf("the tree does not meet what it asks for, so it is passed over at every pull rather than dispatched: %s",
+		singleLine(readiness.Describe(unmet), maxScheduleReasonBytes))
 }
 
 // brakedReason says which brake stopped the line, because what an operator does
@@ -2067,6 +2167,36 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	return pulled{queue: queue, items: items, children: children}, nil
 }
 
+// unready is the prerequisites this item states that the tree does not meet, and
+// the reading that failed where one did. A pull with no tree wired reads nothing
+// and refuses nothing, which is what every pass did before this existed.
+func (p Pull) unready(item beads.WorkItem) ([]readiness.Unmet, string) {
+	if p.Tree == nil || strings.TrimSpace(item.ID) == "" {
+		return nil, ""
+	}
+	unmet, err := readiness.Check(item, p.Tree)
+	if err == nil {
+		return unmet, ""
+	}
+	// Whatever could be read is still acted on. A tree that answered two of an
+	// item's three citations answered two of them, and the one it could not is
+	// reported rather than turned into either a refusal or a clean bill.
+	return unmet, fmt.Sprintf("what %s asks of the tree could not be read in full, so it was judged on what could: %v", item.ID, err)
+}
+
+// route puts an item the tree is not ready for on the development manager's
+// docket. A pull with nowhere to route it says so and passes the item over
+// anyway; see ScheduleTriage for why that is the direction.
+func (p Pull) route(item beads.WorkItem, unmet []readiness.Unmet) error {
+	if p.Triage == nil {
+		return fmt.Errorf("%s states prerequisites the tree does not meet and nothing was wired to docket that, so the finding is on this pass and nowhere durable", item.ID)
+	}
+	if _, err := p.Triage.RecordUnreadyItem(item, unmet); err != nil {
+		return fmt.Errorf("route %s to triage for an unmet prerequisite: %w", item.ID, err)
+	}
+	return nil
+}
+
 // stale reads what changed upstream of the admitted work after it was admitted,
 // keyed by work item. It withholds nothing and reorders nothing; what it
 // produces goes into the recorded reason a run was chosen. A reading that failed
@@ -2211,6 +2341,9 @@ func (s Schedule) Render() string {
 	}
 	if s.StalenessProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.StalenessProblem)
+	}
+	if s.ReadinessProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.ReadinessProblem)
 	}
 	if len(s.Started) > 0 {
 		fmt.Fprintf(&rendered, "stopped pulling: %s\n", s.Stopped)

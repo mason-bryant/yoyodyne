@@ -50,10 +50,11 @@ const CapCleared = math.MaxInt
 // written once and never revised.
 const SchemaVersion = 1
 
-// Class is what stopped. The two are kept apart because they are found
+// Class is what stopped. The three are kept apart because they are found
 // differently and read differently: a stopped run is an event the harness was
-// present for, and a stuck publication is a thing that has not happened, which
-// nothing can be present for and only a scan can notice.
+// present for, a stuck publication is a thing that has not happened, which
+// nothing can be present for and only a scan can notice, and an unready item is
+// work that never started because the tree does not meet what it asks for.
 type Class string
 
 const (
@@ -64,11 +65,16 @@ const (
 	// harness already recorded as outstanding — a merge the forge dropped, or one
 	// it performed that could not be confirmed.
 	ClassPublication Class = "publication"
+	// ClassUnreadyItem is an item dispatch declined to start because a
+	// prerequisite it states is not met by the tree. It is the one class with no
+	// run behind it, and that is the point of it: the whole value of catching this
+	// is that it costs a read instead of a run.
+	ClassUnreadyItem Class = "unready_item"
 )
 
 func (c Class) Valid() bool {
 	switch c {
-	case ClassStoppedRun, ClassPublication:
+	case ClassStoppedRun, ClassPublication, ClassUnreadyItem:
 		return true
 	default:
 		return false
@@ -82,6 +88,8 @@ func (c Class) Title() string {
 		return "stopped run"
 	case ClassPublication:
 		return "unfinished publication"
+	case ClassUnreadyItem:
+		return "item the tree is not ready for"
 	default:
 		return string(c)
 	}
@@ -97,6 +105,11 @@ const (
 	MaxCheckOutputBytes = 8 << 10
 	MaxFindings         = 50
 	MaxKeyBytes         = 256
+	// MaxPrerequisites bounds what one unready entry names. The readiness check
+	// bounds its own reading well below this; the entry states the ceiling anyway,
+	// because a durable record must not be able to take an unbounded list from a
+	// caller that stopped bounding it.
+	MaxPrerequisites = 10
 )
 
 // Finding is one reviewer finding as the reviewer wrote it. It is declared here
@@ -205,6 +218,53 @@ type Environmental struct {
 	// one case where the counters above are higher than what the item actually
 	// cost and nothing has corrected them.
 	Problem string `json:"problem,omitempty"`
+}
+
+// Prerequisite is one thing an item's own statement asks of the tree that the
+// tree does not have. It is declared here rather than imported from the package
+// that reads it for the reason Finding is: what reaches a development manager
+// must not change shape because the reading was refactored.
+type Prerequisite struct {
+	// Kind is the shape of the prerequisite, in the closed vocabulary the
+	// readiness check names them by.
+	Kind string `json:"kind"`
+	// Missing is what the item needs and the tree does not have, in the item's
+	// own words where the item supplied them.
+	Missing string `json:"missing"`
+	// Evidence is the read that says so. An entry whose refusal nobody can check
+	// is one nobody can overrule, which for work that never started is the whole
+	// of what the development manager has to go on.
+	Evidence string `json:"evidence,omitempty"`
+	// Decides is who releases it. It is on the entry rather than inferred,
+	// because an item held back by nobody in particular is held back forever.
+	Decides string `json:"decides,omitempty"`
+}
+
+// Unready is why dispatch declined to start an item: every prerequisite it
+// states that the tree does not meet, as they were read.
+//
+// It describes a reading rather than an event, so unlike every other entry here
+// it says what was true when it was written and may since have become false —
+// the code the item pointed at can land, and then the item is ready. That is
+// said out loud on the entry rather than left for a reader to work out, because
+// a docket entry that reads like a standing fact is one somebody acts on months
+// later.
+type Unready struct {
+	Prerequisites []Prerequisite `json:"prerequisites"`
+	// ReadAt is when the tree was read. The prerequisites are that reading, and
+	// the reading is what may have gone out of date.
+	ReadAt time.Time `json:"read_at"`
+}
+
+// Kinds are the kinds this reading found, in the order they were recorded. It is
+// what the entry's key is derived from: two readings that found the same kinds of
+// thing about one item are the same fact however the wording moved.
+func (u Unready) Kinds() []string {
+	kinds := make([]string, 0, len(u.Prerequisites))
+	for _, prerequisite := range u.Prerequisites {
+		kinds = append(kinds, strings.TrimSpace(prerequisite.Kind))
+	}
+	return kinds
 }
 
 // Counters are what the item has already spent, beside what the project
@@ -382,6 +442,11 @@ type Entry struct {
 	Summary     string       `json:"summary,omitempty"`
 	Artifacts   Artifacts    `json:"artifacts"`
 	Publication *Publication `json:"publication,omitempty"`
+	// Unready is why dispatch declined to start this item, on the one class that
+	// describes work which never ran. It carries the whole of what a development
+	// manager has to decide about: what the item asks for, what the read found,
+	// and who releases it.
+	Unready *Unready `json:"unready,omitempty"`
 	// Environmental is the environment having refused this stoppage's last round,
 	// when it did. It is written into the entry rather than joined where the docket
 	// is read, unlike the re-run and the overrides beside it, because it is not a
@@ -434,12 +499,41 @@ func PublicationKey(runID string, number int) string {
 	return Key(ClassPublication, runID) + "#" + strconv.Itoa(number)
 }
 
+// UnreadyKey names the event an unready item is: this item found unready for
+// these kinds of prerequisite. There is no run in it because there is no run —
+// that is what the class is — so the item and what was found are what identify
+// it.
+//
+// The kinds are part of the identity rather than only evidence on the entry. A
+// pull re-reads the queue every interval, so keying on the item alone would
+// docket one item once and never say a word again when a different prerequisite
+// went unmet months later; keying on the reading's wording would docket the same
+// finding afresh every time somebody reworded the item. The kinds are the closed
+// vocabulary in between, and they are sorted so that two readings that found the
+// same things in a different order are one entry.
+func UnreadyKey(workItemID string, kinds []string) string {
+	sorted := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		if trimmed := strings.TrimSpace(kind); trimmed != "" {
+			sorted = append(sorted, trimmed)
+		}
+	}
+	slices.Sort(sorted)
+	return string(ClassUnreadyItem) + ":" + strings.TrimSpace(workItemID) + ":" + strings.Join(slices.Compact(sorted), "+")
+}
+
 // keys are the keys one entry may legitimately carry. There are two only for a
 // publication, and only for what is already on disk: entries recorded before the
 // pull request joined the key name the run alone, and the docket is an
 // append-only log that nothing rewrites. Both are accepted where an entry is
 // read and one is written where an entry is made.
 func (e Entry) keys() []string {
+	if e.Class == ClassUnreadyItem {
+		if e.Unready == nil {
+			return nil
+		}
+		return []string{UnreadyKey(e.WorkItemID, e.Unready.Kinds())}
+	}
 	derived := []string{Key(e.Class, e.RunID)}
 	if e.Class == ClassPublication && e.Publication != nil {
 		derived = append(derived, PublicationKey(e.RunID, e.Publication.Number))
@@ -454,7 +548,7 @@ func (e Entry) Validate() error {
 		problems = append(problems, fmt.Errorf("schema_version must be %d", SchemaVersion))
 	}
 	if !e.Class.Valid() {
-		problems = append(problems, fmt.Errorf("class %q must be %q or %q", e.Class, ClassStoppedRun, ClassPublication))
+		problems = append(problems, fmt.Errorf("class %q must be %q, %q or %q", e.Class, ClassStoppedRun, ClassPublication, ClassUnreadyItem))
 	}
 	switch key := strings.TrimSpace(e.Key); {
 	case key == "":
@@ -470,8 +564,15 @@ func (e Entry) Validate() error {
 	if err := domain.ValidateIdentifier("product id", string(e.ProductID)); err != nil {
 		problems = append(problems, err)
 	}
-	if strings.TrimSpace(e.RunID) == "" {
+	// Every class but one describes something a run did, so the run is what the
+	// entry is about. An unready item is the exception by construction: catching
+	// it before dispatch is the whole point, and an entry that had to name a run
+	// could only be written by the run this exists to save.
+	if strings.TrimSpace(e.RunID) == "" && e.Class != ClassUnreadyItem {
 		problems = append(problems, errors.New("run id is required"))
+	}
+	if strings.TrimSpace(e.RunID) != "" && e.Class == ClassUnreadyItem {
+		problems = append(problems, errors.New("an unready item entry names no run: nothing ran, which is what the class says"))
 	}
 	if strings.TrimSpace(e.WorkItemID) == "" {
 		problems = append(problems, errors.New("work item id is required"))
@@ -539,6 +640,34 @@ func (e Entry) Validate() error {
 		if e.Publication != nil {
 			problems = append(problems, errors.New("a stopped run entry describes a run rather than a publication"))
 		}
+	case ClassUnreadyItem:
+		switch {
+		case e.Unready == nil:
+			problems = append(problems, errors.New("an unready item entry carries the prerequisites the tree does not meet"))
+		case len(e.Unready.Prerequisites) == 0:
+			problems = append(problems, errors.New("an unready item entry names at least one unmet prerequisite: an item nothing is wrong with is one that was dispatched"))
+		case len(e.Unready.Prerequisites) > MaxPrerequisites:
+			problems = append(problems, fmt.Errorf("%d prerequisites are recorded, which exceeds the bound of %d", len(e.Unready.Prerequisites), MaxPrerequisites))
+		}
+		if e.Unready != nil {
+			if e.Unready.ReadAt.IsZero() {
+				problems = append(problems, errors.New("unready: read_at is required, because what the entry says is a reading of the tree at a moment rather than a standing fact"))
+			}
+			for index, prerequisite := range e.Unready.Prerequisites {
+				if strings.TrimSpace(prerequisite.Kind) == "" {
+					problems = append(problems, fmt.Errorf("prerequisites[%d]: kind is required, because the entry's key is derived from it", index))
+				}
+				if strings.TrimSpace(prerequisite.Missing) == "" {
+					problems = append(problems, fmt.Errorf("prerequisites[%d]: what is missing is required", index))
+				}
+				if len(prerequisite.Missing) > MaxMessageBytes {
+					problems = append(problems, fmt.Errorf("prerequisites[%d]: what is missing is %d bytes, limit is %d", index, len(prerequisite.Missing), MaxMessageBytes))
+				}
+			}
+		}
+		if e.Publication != nil || strings.TrimSpace(e.Blocker) != "" || strings.TrimSpace(e.Failure) != "" {
+			problems = append(problems, errors.New("an unready item entry describes work that never started: there is no blocker, no failure and no publication to carry"))
+		}
 	case ClassPublication:
 		if e.Publication == nil {
 			problems = append(problems, errors.New("a publication entry carries the publication it is about"))
@@ -574,8 +703,18 @@ func (e Entry) Validate() error {
 // never printed at the margin, exactly as a collected report is.
 func (e Entry) Render() string {
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "  [%s] %s on %s (%s)\n",
-		e.Class.Title(), e.RecordedAt.UTC().Format(time.RFC3339), e.item(), e.RunID)
+	// The run is named where there is one. An unready item has none, and printing
+	// an empty pair of brackets for it would read as a run whose identifier
+	// nobody recorded — which is a different thing entirely, and one somebody
+	// would go looking for.
+	if strings.TrimSpace(e.RunID) == "" {
+		fmt.Fprintf(&rendered, "  [%s] %s on %s (nothing ran)\n",
+			e.Class.Title(), e.RecordedAt.UTC().Format(time.RFC3339), e.item())
+	} else {
+		fmt.Fprintf(&rendered, "  [%s] %s on %s (%s)\n",
+			e.Class.Title(), e.RecordedAt.UTC().Format(time.RFC3339), e.item(), e.RunID)
+	}
+	rendered.WriteString(e.renderUnready())
 	if e.Blocker != "" {
 		rendered.WriteString(indented("Blocker", e.Blocker))
 	}
@@ -613,6 +752,33 @@ func (e Entry) Render() string {
 		e.Counters.ReviewRounds, capFigure(e.Counters.ReviewRoundsCap), roundsNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
 	rendered.WriteString(e.renderDecisions())
+	return rendered.String()
+}
+
+// renderUnready says what the item asks of the tree that the tree does not have,
+// and who releases each of them. It is silent on every entry that describes a
+// run, which is nearly all of them.
+//
+// When the tree was read is said with it, and said as a reading rather than as a
+// fact: everything else on a docket is an event that happened and stays
+// happened, and this is the one entry whose subject can become false without
+// anybody touching the item.
+func (e Entry) renderUnready() string {
+	if e.Unready == nil {
+		return ""
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      Nothing was dispatched: the tree was read at %s and does not meet what this item asks for.\n",
+		e.Unready.ReadAt.UTC().Format(time.RFC3339))
+	for _, prerequisite := range e.Unready.Prerequisites {
+		rendered.WriteString(indented("Unmet ["+prerequisite.Kind+"]", prerequisite.Missing))
+		if evidence := strings.TrimSpace(prerequisite.Evidence); evidence != "" {
+			rendered.WriteString(indented("The read that says so", evidence))
+		}
+		if decides := strings.TrimSpace(prerequisite.Decides); decides != "" {
+			rendered.WriteString(indented("Who releases it", decides))
+		}
+	}
 	return rendered.String()
 }
 

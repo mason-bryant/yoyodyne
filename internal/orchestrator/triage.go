@@ -25,6 +25,14 @@ package orchestrator
 // Both paths converge on one idempotent write keyed to the event, so a run that
 // dockets its own stoppage and a sweep that settles the same run afterwards
 // produce one entry between them rather than two accounts of one stoppage.
+//
+// A third thing stops work before it moves at all, and it is docketed here for
+// the same reason as the other two rather than for a new one. An item whose own
+// statement asks for something the tree does not have is work nothing is going
+// to pick up either, and the only way anybody found that out was to spend a run
+// on it — four times in a fortnight. RecordUnreadyItem is that finding made
+// where it costs a read, and it is the one entry on this docket with no run
+// behind it.
 
 import (
 	"errors"
@@ -32,8 +40,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -102,7 +113,13 @@ type Docketer struct {
 	// publication is stuck, and the budgets every entry reports beside what the
 	// item has already spent.
 	Triage config.Triage
-	Clock  execution.Clock
+	// ProductID is which product an entry belongs to, and is required only by the
+	// one entry that is not made from a run record. Every other entry takes it
+	// from the run, which is the more reliable source and stays the source: this
+	// is here because an item dispatch declined to start has no run to take it
+	// from, not because the product is a thing this decides.
+	ProductID domain.ProductID
+	Clock     execution.Clock
 }
 
 // DocketBuild is what one build found: the whole docket as it now stands, and
@@ -286,6 +303,73 @@ func (d Docketer) RecordStoppedRun(state runstate.State) (bool, error) {
 		return false, err
 	}
 	return d.Docket.RecordOnce(entry)
+}
+
+// RecordUnreadyItem dockets one item dispatch declined to start because the tree
+// does not meet a prerequisite it states. It reports whether this call is what
+// created the entry, so a caller can tell docketing a finding from finding it
+// already docketed — which for a watching session is nearly every pull, since
+// the queue is re-read every interval and the item is still unready.
+//
+// It is the one entry here made about work that never ran, and it takes the item
+// and the reading rather than a run record because there is no run: the whole
+// value of catching this is that it cost a read. What that means for the entry's
+// other halves is stated in the entry rather than left to be noticed — nothing
+// was preserved, nothing failed, and the counters are the item's own history
+// rather than anything this finding spent.
+//
+// An item that meets everything it states dockets nothing and is not an error,
+// which is nearly every item.
+func (d Docketer) RecordUnreadyItem(item beads.WorkItem, unmet []readiness.Unmet) (bool, error) {
+	if d.Docket == nil {
+		return false, errors.New("a triage docket is required to route an unready item to it")
+	}
+	if len(unmet) == 0 {
+		return false, nil
+	}
+	entry, err := d.unreadyEntry(item, unmet, d.now())
+	if err != nil {
+		return false, err
+	}
+	return d.Docket.RecordOnce(entry)
+}
+
+func (d Docketer) unreadyEntry(item beads.WorkItem, unmet []readiness.Unmet, now time.Time) (triage.Entry, error) {
+	read := now.UTC()
+	prerequisites := make([]triage.Prerequisite, 0, len(unmet))
+	for _, one := range unmet {
+		prerequisites = append(prerequisites, triage.Prerequisite{
+			Kind:     string(one.Kind),
+			Missing:  one.Missing,
+			Evidence: one.Evidence,
+			Decides:  one.Decides,
+		})
+	}
+	if len(prerequisites) > triage.MaxPrerequisites {
+		prerequisites = prerequisites[:triage.MaxPrerequisites]
+	}
+	entry := triage.Entry{
+		SchemaVersion: triage.SchemaVersion,
+		Key:           triage.UnreadyKey(item.ID, readiness.Kinds(unmet)),
+		Class:         triage.ClassUnreadyItem,
+		ProductID:     d.ProductID,
+		WorkItemID:    item.ID,
+		WorkItemTitle: item.Title,
+		RecordedAt:    read,
+		Unready:       &triage.Unready{Prerequisites: prerequisites, ReadAt: read},
+	}
+	// The counters are read for the reason every other entry reads them: what a
+	// development manager may still decide about this item is the same question
+	// whether the item stopped or never started, and an entry showing zeros is
+	// indistinguishable from an item nobody has decided anything about. A record
+	// that will not read says so on the entry rather than failing the finding,
+	// because a finding nobody is told at all is worse than one whose budget line
+	// is missing.
+	entry.Counters, entry.CountersProblem = d.unreadyCounters(item.ID)
+	if err := entry.Validate(); err != nil {
+		return triage.Entry{}, fmt.Errorf("docket %s as unready: %w", item.ID, err)
+	}
+	return entry, nil
 }
 
 // entriesFor is what one run record contributes to the docket, leaving out
@@ -619,6 +703,23 @@ func (d Docketer) recordedCounters(state runstate.State) (triage.Counters, error
 		return triage.Counters{}, fmt.Errorf("read what triage has recorded about %s: %w", state.WorkItemID, err)
 	}
 	return d.counters(ledger, state.RepairAttempts, 0), nil
+}
+
+// unreadyCounters is what the item has spent and what it may still spend, and
+// the reason it could not be read where that is the answer. Nothing this finding
+// did costs the item anything — no run was made — so the repair attempts and the
+// re-runs carried out are zero rather than counted from anywhere.
+func (d Docketer) unreadyCounters(workItemID string) (triage.Counters, string) {
+	if d.Decisions == nil {
+		return d.counters(runstate.TriageCounters{}, 0, 0),
+			"nothing was wired to read what triage has recorded about " + workItemID + ", so the figures beside this entry are the configured caps and no spend at all"
+	}
+	ledger, err := d.Decisions.Counters(workItemID)
+	if err != nil {
+		return d.counters(runstate.TriageCounters{}, 0, 0),
+			fmt.Sprintf("read what triage has recorded about %s: %v", workItemID, err)
+	}
+	return d.counters(ledger, 0, 0), ""
 }
 
 func docketFindings(findings []runstate.Finding) []triage.Finding {
