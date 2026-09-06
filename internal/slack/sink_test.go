@@ -439,12 +439,19 @@ func TestProductLevelNewsIsNotBuriedInAnItemsThread(t *testing.T) {
 	}
 }
 
-// The main channel view hides thread replies by design, which is right for a
-// routine note and wrong for a warning: a run parked out of tokens can sit
-// unseen inside a thread while the channel looks quiet. So the severity the
-// envelope already carries decides — a note stays where the narrative is, and
-// anything asking for attention is also sent to the channel.
-func TestRepliesThatAskForAttentionAreAlsoSentToTheChannel(t *testing.T) {
+// The main channel view hides thread replies by design, and what decides which
+// of them are shown there anyway is the reach the envelope carries.
+//
+// A filed report reaches its item's thread and no further, whether it was said
+// as a note or as a warning: it asks for nothing, the report store holds it, and
+// the summaries built from that store are what carry it to the operator. It was
+// the severity until the survey that counted 320 individual report pushes
+// against under forty posts of the kinds somebody actually has to act on.
+//
+// A critical report is the exception, and it is the operator's own rule: severity
+// is importance, so something already wrong that will cost somebody is shown
+// where he is reading whatever its kind says.
+func TestOnlyReportsOfSomethingAlreadyBrokenReachTheChannel(t *testing.T) {
 	t.Parallel()
 
 	posts := &recordedPosts{}
@@ -465,7 +472,7 @@ func TestRepliesThatAskForAttentionAreAlsoSentToTheChannel(t *testing.T) {
 	if posts.requests[0].ReplyBroadcast {
 		t.Fatalf("thread header = %#v, want no broadcast on a message that is not a reply", posts.requests[0])
 	}
-	for index, want := range []bool{false, true, true} {
+	for index, want := range []bool{false, false, true} {
 		reply := posts.requests[index+1]
 		if reply.ThreadTS != posts.timestamps[0] {
 			t.Fatalf("reply = %#v, want every severity still inside the topic's thread", reply)
@@ -505,6 +512,46 @@ func TestProductLevelNewsIsNeverBroadcastBackIntoTheChannel(t *testing.T) {
 	}
 	if posts.requests[0].ThreadTS != "" || posts.requests[0].ReplyBroadcast {
 		t.Fatalf("post = %#v, want product news posted once at the top level", posts.requests[0])
+	}
+}
+
+// The operator's motivating case, replayed: a report that is neither important
+// nor asking for anything, filed against no work item, and worn a warning icon
+// at the top of the channel. There is no thread to say it in, so saying it at all
+// means saying it at the level he reads — which is the one place it must not be.
+// It advances its cursor, the report store holds it, and the summaries built from
+// that store are what carry it.
+func TestAnUnimportantReportWithNoItemPostsNothing(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{{
+		Stream: reportStream,
+		Cursor: Cursor{Position: 1},
+		Notification: notify.Notification{
+			Topic:   notify.Product(),
+			Speaker: notify.Persona(domain.RoleDeveloper, ""),
+			Event: notify.Event{
+				Kind:     notify.KindReportFiled,
+				At:       time.Now(),
+				Severity: report.SeverityWarning,
+				Text:     "nobody is next on this",
+			},
+		},
+	}}}, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 0 {
+		t.Fatalf("posts = %#v, want nothing in the channel", posts.requests)
+	}
+	cursors, err := sink.store.LoadCursors()
+	if err != nil {
+		t.Fatalf("LoadCursors() error = %v", err)
+	}
+	if cursors.Streams[reportStream].Position != 1 {
+		t.Fatalf("cursor = %#v, want the report read past rather than re-read every pass", cursors.Streams[reportStream])
 	}
 }
 
@@ -1190,6 +1237,85 @@ func TestAnOutcomeThePassSaysTagsWhoAskedAndSettlesTheMarkOnTheirReply(t *testin
 	}
 	if worn := posts.wearing[askTS]; !worn[notify.ReceiptSettled.Symbol()] || len(worn) != 1 {
 		t.Fatalf("the reply that asked wears %#v, want the settled mark alone once the outcome was said", worn)
+	}
+}
+
+// A recorded directive is demoted to its thread, and the whole of what makes that
+// safe is that it reaches the person by name from inside the thread. Nothing in
+// the reach table says that — it is a fact about how these deliveries are built —
+// so it is asserted here rather than assumed there: the acknowledgment tags
+// whoever asked, and a delivery that carries a mention posts whatever its reach
+// would otherwise say.
+//
+// The second half is the one worth pinning. A directive that settled something
+// reaches only the thread by kind, so without the mention exception in
+// Delivery.Posts the message telling a person what became of what they typed
+// would be dropped by a policy about how much of the channel a milestone is
+// worth.
+func TestADirectiveThatTagsWhoAskedIsDeliveredWhateverItsReachSays(t *testing.T) {
+	t.Parallel()
+
+	const member = "U0OPERATOR"
+	settled := outcome(1, member, "1750000000.000100")
+	if got := settled.Notification.Reach(); got != notify.ReachThread {
+		t.Fatalf("a settled directive reaches %q, want the thread: the person is answered by name", got)
+	}
+	if !settled.Posts() {
+		t.Fatalf("%#v posts nowhere, want the answer somebody is waiting for delivered", settled)
+	}
+	// Without the mention it is the reach alone that decides, which is what makes
+	// the exception load-bearing rather than decorative.
+	untagged := settled
+	untagged.Mention = ""
+	if !untagged.Posts() {
+		t.Fatalf("a thread-reach delivery does not post, want the thread to carry it")
+	}
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{settled}}, posts)
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	said := posts.requests[len(posts.requests)-1]
+	if !strings.HasPrefix(said.Text, "<@"+member+"> ") {
+		t.Fatalf("said %q, want it tagged to whoever asked rather than left in a thread they may not have open", said.Text)
+	}
+	if said.ReplyBroadcast {
+		t.Fatalf("said = %#v, want a settled directive to stay in its thread: the tag is what reaches them", said)
+	}
+}
+
+// A delivery whose reach is the durable record still posts when it answers one
+// person by name. It is the exception Delivery.Posts carries, and it is here
+// because the record-reach case is the one where the policy and the answer
+// disagree outright: a posting policy that swallowed somebody's answer would be
+// this surface deciding a person does not need to hear back.
+func TestAnAnswerToOnePersonPostsEvenFromTheRecord(t *testing.T) {
+	t.Parallel()
+
+	answered := Delivery{
+		Stream:  directiveStream,
+		Cursor:  Cursor{Position: 1},
+		Mention: "U0OPERATOR",
+		Notification: notify.Notification{
+			Topic:   notify.Product(),
+			Speaker: notify.Harness(),
+			Event: notify.Event{
+				Kind:     notify.KindReportFiled,
+				At:       moment,
+				Severity: report.SeverityNote,
+				Text:     "an answer that would otherwise reach nobody",
+			},
+		},
+	}
+	if got := answered.Notification.Reach(); got != notify.ReachRecord {
+		t.Fatalf("reach = %q, want the record, so the exception is the only thing making this post", got)
+	}
+	if !answered.Posts() {
+		t.Fatalf("%#v posts nowhere, want a message addressed to one person delivered to them", answered)
+	}
+	if answered.Notification.Posts() {
+		t.Fatalf("the notification alone posts, so this test would pass without the exception it is for")
 	}
 }
 

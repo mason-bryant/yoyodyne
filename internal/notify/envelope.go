@@ -147,11 +147,18 @@ const (
 	KindHoldLifted     Kind = "hold.lifted"
 	// What a watch session is doing. A session that stays open until it is told
 	// to stop spends most of its life saying nothing, and an idle one and a dead
-	// one are the same silence: these are what tell them apart. Idle and braked
-	// are separate because they need different things — idle needs work admitted,
-	// braked needs somebody to look at what stopped the line — and stopping is
-	// said because a session that ended quietly is the case the rest of this
-	// exists to rule out.
+	// one are the same silence: these are what tell them apart in the record. Idle
+	// and braked are separate because they need different things — idle needs work
+	// admitted, braked needs somebody to look at what stopped the line — and
+	// stopping is recorded because a session that ended quietly is the case the
+	// rest of this exists to rule out.
+	//
+	// Only the braked one is posted, and the rest reach the durable log and no
+	// further: see reaches, where they are 473 of the 2,250 posts the operator's
+	// survey counted as narration. Nothing is lost from the channel by that,
+	// because the states somebody acts on are said by KindWatchBraked, by
+	// KindLineWaiting once there is work a stopped session would have started, and
+	// by KindStallNoticed where nothing was recorded at all.
 	KindWatchStarted Kind = "watch.started"
 	KindWatchIdle    Kind = "watch.idle"
 	KindWatchBraked  Kind = "watch.braked"
@@ -846,9 +853,22 @@ type Message struct {
 	Speaker    string          `json:"speaker"`
 	Identity   Identity        `json:"identity"`
 	Severity   report.Severity `json:"severity"`
-	Body       string          `json:"body"`
-	Refs       Refs            `json:"refs"`
-	At         time.Time       `json:"at"`
+	// Reach is how far this message is carried: the channel level, its topic's
+	// thread, or no further than the record it was read from. It is carried here
+	// rather than worked out by whatever posts, for the reason the severity is —
+	// how much attention a message asks for and how far it goes are both decided
+	// by the record, and a surface that decided either for itself would be a
+	// second policy disagreeing with the ratified one in front of the one person
+	// who would have to adjudicate it.
+	//
+	// A message that reaches only the record is never rendered, because the
+	// delivery pass declines to say it before anything renders. It is still a
+	// value this field can hold: what refuses to post is one derivation, and a
+	// caller rendering an event directly gets the same answer the pass got.
+	Reach Reach     `json:"reach"`
+	Body  string    `json:"body"`
+	Refs  Refs      `json:"refs"`
+	At    time.Time `json:"at"`
 }
 
 // Validate rejects a message that could not be posted as an account of anything.
@@ -871,6 +891,10 @@ func (m Message) Validate() error {
 	}
 	if !m.Severity.Valid() {
 		problems = append(problems, fmt.Errorf("severity %q is invalid", m.Severity))
+	}
+	if !m.Reach.Valid() {
+		problems = append(problems, fmt.Errorf("reach %q must be %q, %q, or %q",
+			m.Reach, ReachChannel, ReachThread, ReachRecord))
 	}
 	if strings.TrimSpace(m.Body) == "" {
 		problems = append(problems, errors.New("body is required"))

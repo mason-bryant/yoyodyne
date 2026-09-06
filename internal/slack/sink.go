@@ -21,7 +21,6 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
-	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 const (
@@ -855,7 +854,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 		Channel:   sink.channel,
 		Text:      tagged(p.mention, renderText(message)),
 		ThreadTS:  threadTS,
-		Broadcast: broadcast(message.Severity),
+		Broadcast: broadcast(message.Reach),
 		Username:  message.Identity.Name,
 		IconEmoji: emoji,
 		IconURL:   url,
@@ -1039,22 +1038,20 @@ func label(topic notify.Topic) string {
 // broadcast reports whether a thread reply should also be shown in the main
 // channel view. A thread is where a narrative belongs, and the channel view
 // hiding replies is what keeps three items in flight readable — but it hides a
-// warning exactly as thoroughly as it hides a routine note, and a run that
-// parked out of tokens sitting unseen inside a thread is the ten-silent-hours
-// problem at a different layer.
+// run that parked out of tokens exactly as thoroughly as it hides a check that
+// passed, and the parked run is the ten-silent-hours problem at a different
+// layer.
 //
-// So the line is the severity the envelope already carries: a note stays where
-// the narrative is, and anything asking for attention is shown where somebody
-// who has opened no threads is looking. No new judgment anywhere — a surface
-// that decided this for itself would be a second severity model disagreeing with
-// the recorded one.
-func broadcast(severity report.Severity) bool {
-	switch severity {
-	case report.SeverityCritical, report.SeverityWarning:
-		return true
-	default:
-		return false
-	}
+// So the line is the reach the envelope already carries: what is important or
+// needs the operator is shown where somebody who has opened no threads is
+// looking, and everything else stays where the narrative is. It was the severity
+// until the measurement that produced the reach — three quarters of 2,250 posts
+// were per-event narration, and every warning-severity milestone among them was
+// broadcast over the forty that actually needed somebody. No judgment is made
+// here: a surface that decided this for itself would be a second posting policy
+// disagreeing with the recorded one.
+func broadcast(reach notify.Reach) bool {
+	return reach == notify.ReachChannel
 }
 
 // renderText is the message as it appears in the channel: what the persona said,

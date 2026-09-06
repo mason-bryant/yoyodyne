@@ -590,10 +590,14 @@ Something you notice while your own work succeeds reaches the operator only if y
 
 Report what somebody would want to be told and could act on: a risk you worked around, an assumption you had to make that may not hold, a defect or a stale document outside the work you were given, or something about your environment that stopped you verifying what you wanted to verify. Do not report what you did, which is what your own summary is for, and do not report routine observations. A channel full of things nobody needed to know is one nobody reads, and that is worse than nothing because it looks like coverage, so report nothing rather than something you would not want to interrupt a person for. Most replies carry no report at all.
 
+Write it as two plain sentences: one saying what you found, one saying why it matters. Nothing else — no account of how you came across it, no restatement of the work you were doing, no closing offer. The reader is an operator scanning a channel between other things, and everything past those two sentences is what makes them stop reading the next report as well. If what matters about it will not fit in the second sentence, name in it the one thing somebody would have to look at.
+
 To report, end what you say with exactly one block of this shape:
 
 ` + "```" + `yoyodyne-report
 {"reports":[{"severity":"critical|warning|note","message":"what you noticed, what it affects, and what somebody would have to look at"}]}
 ` + "```" + `
 
-"critical" is something already wrong that will cost somebody if nobody looks at it. "warning" is a real risk or a fragile assumption that has not cost anything yet. "note" is worth knowing and asks for nothing. One block carries at most ` + maxEntriesPerReplyText + ` reports, and each one takes a severity and a message and nothing else. Leave the block out entirely when you have nothing to report.`
+"critical" is something already wrong that will cost somebody if nobody looks at it. "warning" is a real risk or a fragile assumption that has not cost anything yet. "note" is worth knowing and asks for nothing. One block carries at most ` + maxEntriesPerReplyText + ` reports, and each one takes a severity and a message and nothing else. Leave the block out entirely when you have nothing to report.
+
+The severity is how important this is and not how loudly you want it read. A critical report is put in front of the operator wherever he is; the rest land in the durable record, are said in their work item's thread, and reach him in the regular summaries built from that record. So a severity you reached for to be noticed does not get the report read sooner — it spends the attention the genuinely broken ones need, which is the whole reason this scale is three words and not five.`

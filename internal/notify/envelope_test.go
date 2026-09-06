@@ -203,6 +203,7 @@ func TestMessageRefusesWhatCouldNotBePosted(t *testing.T) {
 		Speaker:       HarnessSpeaker,
 		Identity:      Harness().Identity(),
 		Severity:      report.SeverityNote,
+		Reach:         ReachThread,
 		Body:          "Checks passed.",
 		At:            moment,
 	}
@@ -213,6 +214,7 @@ func TestMessageRefusesWhatCouldNotBePosted(t *testing.T) {
 		"wrong schema version": func(m *Message) { m.SchemaVersion = 2 },
 		"unknown kind":         func(m *Message) { m.Kind = "run.exploded" },
 		"unaddressed":          func(m *Message) { m.Topic = "" },
+		"unreachable":          func(m *Message) { m.Reach = "" },
 		"no speaker":           func(m *Message) { m.Speaker = "" },
 		"no identity":          func(m *Message) { m.Identity = Identity{} },
 		"no severity":          func(m *Message) { m.Severity = "" },

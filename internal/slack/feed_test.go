@@ -312,20 +312,23 @@ func TestARecordThatCannotBeAddressedIsReadPastRatherThanRetriedForever(t *testi
 // The operator's two switches are the awkward pair: a hold is a record, and what
 // lifts it is only its absence. Both halves are said, because a queue that goes
 // quiet is indistinguishable from a broken one until something says which.
-// What a watch session is doing is carried like every other log: each
-// transition once, in the order it happened, and nothing said twice however
-// often the sink reads. A session going quiet is the whole reason this stream
-// exists, so an idle one has to reach the channel.
-func TestWhatAWatchSessionIsDoingIsSaidOnceEach(t *testing.T) {
+// What a watch session is doing is read like every other log — each transition
+// once, in the order it happened — and almost none of it is posted. Started,
+// idle and stopped are the poll-by-poll narration of a process that spends most
+// of its life saying nothing, and they were 473 of the 2,250 measured posts: they
+// advance the cursor and stay in the watch log, which is where `yoyo status`
+// reads them. Braked is the one an operator has to act on, and it still reaches
+// the channel.
+func TestWhatAWatchSessionIsDoingStaysInTheLogExceptWhenItStops(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 	harness.watched(t, runstate.WatchIdle, "the backlog is empty", moment.Add(time.Minute))
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindWatchIdle)
-	// Read again with nothing new: a session that is still idle is still the
-	// same fact, and a channel that repeated it every minute would be one nobody
-	// reads.
+	cursors := harness.poll(t, harness.start())
+	if cursors.Streams[watchStream].Position != 2 {
+		t.Fatalf("cursor = %#v, want what posts nowhere advanced rather than re-read every pass", cursors.Streams[watchStream])
+	}
 	cursors = harness.poll(t, cursors)
 
 	harness.watched(t, runstate.WatchBraked, "the operator is holding intake", moment.Add(2*time.Minute))
@@ -345,9 +348,10 @@ func TestAWatchSessionFromBeforeTheWatermarkIsReadPast(t *testing.T) {
 	if cursors.Streams[watchStream].Position != 2 {
 		t.Fatalf("cursor = %#v, want what was read past advanced rather than re-read every pass", cursors.Streams[watchStream])
 	}
-	// What happens after the watermark is news, whatever came before it.
-	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment.Add(time.Hour))
-	harness.poll(t, cursors, notify.KindWatchStarted)
+	// What happens after the watermark is news, whatever came before it — and for
+	// this log that means the one transition somebody has to act on.
+	harness.watched(t, runstate.WatchBraked, "the operator is holding intake", moment.Add(time.Hour))
+	harness.poll(t, cursors, notify.KindWatchBraked)
 }
 
 // A provider refusing something that is not a run reaches the channel from the
@@ -756,7 +760,10 @@ func (h *testHarness) poll(t *testing.T, cursors Cursors, want ...notify.Kind) C
 	var said []notify.Kind
 	for _, delivery := range batch.Deliveries {
 		advanced.Streams[delivery.Stream] = delivery.Cursor
-		if delivery.Silent() {
+		// A delivery that posts nowhere is not something the pass said, whether
+		// selection had nothing to say about it or its reach is the record it came
+		// from. Both advance a cursor and neither reaches a reader.
+		if !delivery.Posts() {
 			continue
 		}
 		if _, err := notify.Render(delivery.Notification.Topic, delivery.Notification.Speaker, delivery.Notification.Event); err != nil {

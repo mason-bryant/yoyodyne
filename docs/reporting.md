@@ -510,10 +510,13 @@ says you exercised the owner's authority rather than that the owner answered.
 Everything above needs you at the terminal, which is the wrong requirement for
 work that runs while you are not. `yoyo slack` is the same account of the work in
 a Slack workspace: one thread per work item, one message per milestone, and every
-report an agent filed at the severity it was filed under. The backlog moving is a
+report an agent filed beside the item it was filed on. The backlog moving is a
 milestone too — work admitted with the goal it serves, decomposed, attributed, or
-reordered — so the queue changing is as visible as the runs it feeds. Each role
-speaks under its own name and in its own voice, and what no persona did — a
+reordered — so the queue changing is as visible as the runs it feeds. What the
+top of the channel carries out of all that is what is important or needs you, and
+nothing else; the rest is in the threads and in the durable records, and
+[`docs/slack/setup.md`](slack/setup.md#what-it-posts) says which is which. Each
+role speaks under its own name and in its own voice, and what no persona did — a
 promotion, a merge, your own holds — arrives from the harness itself. It is a process you
 start and leave running, and it needs your project to have opted in:
 
@@ -608,7 +611,14 @@ it is why a line with nothing at all ready still says something.
 Under that sentence it carries [the four lines](operations.md#where-the-harness-stands-the-four-lines)
 — Running, Working, Not startable, Needs a human — from the same derivation
 `yoyo status` prints them from, so the channel and the terminal answer one
-question one way. Before this the message said that choosing had stopped and
+question one way. It carries them counted rather than listed: nobody asked for
+this message, it arrives again every hour the state stands, and an enumerated
+queue under every line is a screen of detail in front of the one sentence that
+says the line has stopped. The entries are what `yoyo status` prints for somebody
+who typed it, and what @-mentioning the app is answered with — both of those are
+asks.
+
+Before this the message said that choosing had stopped and
 nothing whatever about what the machine was doing instead, which is exactly what
 somebody woken by it at three in the morning then had to reconstruct. A sink
 assembled without a way to read them says so in the message rather than leaving

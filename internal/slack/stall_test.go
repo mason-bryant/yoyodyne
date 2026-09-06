@@ -71,7 +71,7 @@ func TestARestartedSinkDoesNotSayAStandingStallAgain(t *testing.T) {
 
 	harness.now = moment.Add(time.Hour)
 	harness.stalled(t, stalls, moment, 2, harness.now)
-	harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindStallNoticed)
+	harness.poll(t, harness.start(), notify.KindStallNoticed)
 
 	// A sink that comes back with no memory at all, on a watermark taken when it
 	// came back. A stall that was already open before that is history to it, read
@@ -103,7 +103,7 @@ func TestAStallSaysItsAgeItsQueueAndWhatTheChooserLastSaid(t *testing.T) {
 	// The watch transition is read past first, so what the next pass says is the
 	// stall and nothing else.
 	harness.now = moment.Add(readmodel.DefaultStallThreshold)
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	cursors := harness.poll(t, harness.start())
 	harness.now = moment.Add(7*time.Hour + 30*time.Minute)
 	harness.stalled(t, stalls, moment, 4, harness.now)
 	said := harness.say(t, cursors, notify.KindStallNoticed)
@@ -131,7 +131,7 @@ func TestAClearedStallGoesQuietAndTheNextIsSaidAfresh(t *testing.T) {
 
 	harness.now = moment.Add(time.Hour)
 	harness.stalled(t, stalls, moment, 2, harness.now)
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindStallNoticed)
+	cursors := harness.poll(t, harness.start(), notify.KindStallNoticed)
 
 	// The checker closes it. Nothing is said about that.
 	harness.now = harness.now.Add(time.Hour)
@@ -188,9 +188,9 @@ func TestAProviderWindowIsSaidOnceAsANoteAndNeverAsAStall(t *testing.T) {
 	if !strings.Contains(said.Body, "Next: nobody's") {
 		t.Fatalf("body %q does not say the window is nobody's move", said.Body)
 	}
-	// The session's own account of the poll reaches the channel beside it, which
-	// is where the same words are said as the session's rather than the sink's.
-	cursors := harness.poll(t, start, notify.KindWatchStarted, notify.KindWatchIdle, notify.KindProviderWindow)
+	// The session's own account of the poll stays in the watch log, so the window
+	// is the whole of what the channel is told about this silence.
+	cursors := harness.poll(t, start, notify.KindProviderWindow)
 
 	// And then the ninety minutes, at the sink's own fifteen-second poll. The note
 	// is not said twice and nothing is recorded.

@@ -107,6 +107,47 @@ func TestADeepBacklogIsDigestedPerThreadRatherThanReplayed(t *testing.T) {
 	}
 }
 
+// A backlog of product-level messages digests to the top of the channel, where
+// they were already going. The product is the one topic that is not a thread, so
+// its digest has no thread to be a reply in; a posting policy that read that as
+// "a milestone with nowhere to go" would swallow the digest and, with it, every
+// delivery the digest already suppressed. The line that stopped, the intake that
+// was held and the stall behind them would go unsaid together, which is the
+// silence the whole surface exists to end.
+func TestADeepProductBacklogDigestsToTheTopOfTheChannel(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	var deliveries []Delivery
+	for step := 0; step < 80; step++ {
+		recorded := now.Add(-12 * time.Hour).Add(time.Duration(step) * 8 * time.Minute)
+		deliveries = append(deliveries, Delivery{
+			Stream: heartbeatStream,
+			Cursor: Cursor{Position: uint64(step + 1)},
+			Notification: notify.FromLine(notify.Line{
+				Stopped: "intake is held",
+				Since:   now.Add(-12 * time.Hour),
+				Ready:   4,
+			}, recorded),
+		})
+	}
+
+	posts := &recordedPosts{}
+	if err := newTestSinkAt(t, t.TempDir(), &fixedFeed{deliveries: deliveries}, posts, now).pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) == 0 {
+		t.Fatal("nothing was posted, want the collapsed product backlog said as a digest")
+	}
+	digest := posts.requests[0]
+	if digest.ThreadTS != "" {
+		t.Fatalf("digest = %#v, want the product's digest at the top of the channel rather than in a thread", digest)
+	}
+	if !strings.Contains(digest.Text, "record") {
+		t.Fatalf("digest = %q, want the durable record named as the full account", digest.Text)
+	}
+}
+
 // A digest is for accumulation, not for news. What happened in the last half
 // hour is what somebody coming back to the channel is reading for, and a
 // critical is the one thing a count must never stand in for — important
