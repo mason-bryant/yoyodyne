@@ -246,6 +246,47 @@ func TestAStallNamesTheDominantCauseAndTheNextMover(t *testing.T) {
 	}
 }
 
+// The crashed chooser, which is the case this record exists for. Its last poll
+// is still the newest thing a live session said, and the harness started
+// something after it — so the account describes a queue nothing has read since,
+// and the message says nothing accounts for the silence and sends the reader to
+// the chooser rather than to a person who can do nothing about a dead process.
+func TestAStallOverAPollOlderThanTheSilenceNamesNoCause(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(47)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment.Add(-time.Hour))
+	harness.passedOver(t, moment, runstate.PassedOver{Admitted: 47, Groups: []runstate.PassedOverGroup{
+		{Class: runstate.PassedOverHeldForAPerson, Count: 33, Items: []string{"yoyodyne-ifd.212"}},
+	}})
+
+	harness.now = moment.Add(readmodel.DefaultStallThreshold)
+	cursors := harness.poll(t, harness.start())
+	// A run started after that poll, and nothing since: the silence being reported
+	// begins after the account, so the account is from before it.
+	harness.now = moment.Add(2 * time.Hour)
+	harness.stalled(t, stalls, moment.Add(time.Hour), 47, harness.now)
+
+	// The hourly line has come due by now as well, so the stall is read off its own
+	// stream rather than off whatever the pass said first.
+	delivery := harness.stallDelivery(t, cursors)
+	said, err := notify.Render(delivery.Notification.Topic, delivery.Notification.Speaker, delivery.Notification.Event)
+	if err != nil {
+		t.Fatalf("the stall could not be said: %v", err)
+	}
+	if delivery.Notification.Event.Kind != notify.KindStallNoticed {
+		t.Fatalf("kind = %q, want the stall", delivery.Notification.Event.Kind)
+	}
+	if strings.Contains(said.Body, "held for a person") {
+		t.Fatalf("body %q states an account taken before the silence it is reporting", said.Body)
+	}
+	if !strings.Contains(said.Body, "Next: the operator's") {
+		t.Fatalf("body %q does not send the reader to the chooser", said.Body)
+	}
+}
+
 // A stall with no poll to read a cause from says what it always said. A session
 // that stopped cleanly left no account of a queue, and inventing one would be
 // the confident emptiness the accounting exists to remove.

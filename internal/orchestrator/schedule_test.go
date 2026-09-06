@@ -1203,7 +1203,7 @@ func TestAnIdleWatchSaysWhatItPassedOverAndWhichConversationCarriesIt(t *testing
 		State:         runstate.WatchIdle,
 		At:            time.Date(2026, 9, 6, 3, 0, 0, 0, time.UTC),
 		PassedOver:    idle.passedOver,
-	}}, time.Date(2026, 9, 6, 3, 0, 0, 0, time.UTC))
+	}}, time.Time{}, time.Date(2026, 9, 6, 3, 0, 0, 0, time.UTC))
 	if !accounted || !strings.Contains(cause.Says(), "carried in conversation by the architect") {
 		t.Fatalf("the alarm reads %q from what this poll recorded, want the conversation that carries the work", cause.Says())
 	}

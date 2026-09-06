@@ -206,7 +206,28 @@ type Cause struct {
 // account to give, and a session that stopped cleanly is a line somebody has to
 // start rather than a queue with something in the way of it — both are reported
 // as no cause rather than as a stale one.
-func WhyThePollStartedNothing(sessions []runstate.WatchTransition, now time.Time) (Cause, bool) {
+//
+// # A poll older than the silence accounts for nothing
+//
+// "since" is when the silence being asked about began — for a stall, the moment
+// the harness last started anything. A poll recorded before that is an account
+// of a queue from before the thing being reported, and it is refused rather than
+// stated as the present cause.
+//
+// That bound is the difference between the two sessions this cannot otherwise
+// tell apart. A live session idling over an unchanging queue writes one line and
+// then nothing, so its account is old and current at once — but it is an account
+// taken after the last thing that started, because the poll is what followed the
+// start. A session that crashed leaves its last poll behind, and a run that
+// started after it moves the silence past that poll: the account is then from
+// before the crash, the queue has not been read since, and stating it as the
+// cause would send the reader to release a queue while the thing that reads it
+// is dead. Refusing it leaves the message saying nothing accounts for the
+// silence and pointing at the chooser, which is what that case actually needs.
+//
+// A zero "since" asks the question with no silence attached and takes the latest
+// poll whatever its age.
+func WhyThePollStartedNothing(sessions []runstate.WatchTransition, since, now time.Time) (Cause, bool) {
 	// Live is newest first, so the first entry is the latest word from a session
 	// that has not stopped.
 	live := Live(sessions)
@@ -214,6 +235,9 @@ func WhyThePollStartedNothing(sessions []runstate.WatchTransition, now time.Time
 		return Cause{}, false
 	}
 	poll := live[0]
+	if !since.IsZero() && poll.At.Before(since) {
+		return Cause{}, false
+	}
 	if poll.Unreadable {
 		return Cause{Unreadable: true}, true
 	}

@@ -50,7 +50,7 @@ func lastNight() runstate.PassedOver {
 func TestTheDominantCauseIsNamedWithWhoseMoveFollowsIt(t *testing.T) {
 	t.Parallel()
 
-	cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{polled(moment, lastNight())}, moment)
+	cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{polled(moment, lastNight())}, time.Time{}, moment)
 	if !accounted {
 		t.Fatal("WhyThePollStartedNothing() found no cause in a poll that recorded one")
 	}
@@ -81,7 +81,7 @@ func TestTheIdleLineAndTheAlarmRenderOneAccount(t *testing.T) {
 			t.Fatalf("IdleLine() = %q, which does not carry %q", line, fact)
 		}
 	}
-	cause, _ := WhyThePollStartedNothing([]runstate.WatchTransition{polled(moment, account)}, moment)
+	cause, _ := WhyThePollStartedNothing([]runstate.WatchTransition{polled(moment, account)}, time.Time{}, moment)
 	if strings.Contains(cause.Says(), "held-a") {
 		t.Fatalf("Says() = %q, want the class and the count rather than the queue read out", cause.Says())
 	}
@@ -117,7 +117,7 @@ func TestAProviderWindowIsACauseAndAnswersAheadOfTheQueue(t *testing.T) {
 	poll.ProviderWindow = true
 	poll.ProviderWindowResetsAt = &lifts
 
-	cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{poll}, moment.Add(time.Minute))
+	cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{poll}, time.Time{}, moment.Add(time.Minute))
 	if !accounted {
 		t.Fatal("WhyThePollStartedNothing() found no cause in a poll waiting out a usage window")
 	}
@@ -130,7 +130,7 @@ func TestAProviderWindowIsACauseAndAnswersAheadOfTheQueue(t *testing.T) {
 
 	// And a window that has lifted accounts for nothing: what is left is the queue
 	// the poll actually read.
-	lifted, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{poll}, lifts.Add(time.Minute))
+	lifted, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{poll}, time.Time{}, lifts.Add(time.Minute))
 	if !accounted || lifted.Class != runstate.PassedOverHeldForAPerson {
 		t.Fatalf("WhyThePollStartedNothing() = %+v after the window lifted, want the queue's own cause", lifted)
 	}
@@ -144,7 +144,7 @@ func TestAPollThatCouldNotReadTheQueueIsItsOwnCause(t *testing.T) {
 
 	poll := polled(moment, runstate.PassedOver{})
 	poll.Unreadable = true
-	cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{poll}, moment)
+	cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{poll}, time.Time{}, moment)
 	if !accounted || !cause.Unreadable {
 		t.Fatalf("WhyThePollStartedNothing() = %+v, %v, want the unreadable queue named", cause, accounted)
 	}
@@ -171,9 +171,35 @@ func TestNoPollLeavesNoCauseRatherThanAnInventedOne(t *testing.T) {
 		"a session choosing work":                               {watching},
 		"an idle poll over a queue it passed nothing over from": {polled(moment, runstate.PassedOver{Admitted: 4})},
 	} {
-		if cause, accounted := WhyThePollStartedNothing(sessions, moment); accounted {
+		if cause, accounted := WhyThePollStartedNothing(sessions, time.Time{}, moment); accounted {
 			t.Fatalf("%s: WhyThePollStartedNothing() = %+v, want no cause", name, cause)
 		}
+	}
+}
+
+// The crashed chooser, which is the case the stall record exists for. Its last
+// poll is still the newest thing a live session said, and a run started after it
+// moves the silence past it — so the account describes a queue nothing has read
+// since, and stating it as the present cause would send the reader to release a
+// queue while the thing that reads it is dead.
+func TestAPollFromBeforeTheSilenceIsNotThePresentCause(t *testing.T) {
+	t.Parallel()
+
+	poll := polled(moment, lastNight())
+	// The harness started something after that poll, and then went quiet. The
+	// silence being reported begins at the start rather than at the poll.
+	started := moment.Add(5 * time.Minute)
+	if cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{poll}, started, started.Add(time.Hour)); accounted {
+		t.Fatalf("WhyThePollStartedNothing() = %+v, want no cause from a poll older than the silence", cause)
+	}
+	// A live session idling over an unchanging queue writes one line and then
+	// nothing, so its account is old and current at once — and it is an account
+	// taken after the last thing that started, which is what tells it from the one
+	// above.
+	polledAfter := polled(started.Add(time.Minute), lastNight())
+	cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{polledAfter}, started, started.Add(time.Hour))
+	if !accounted || cause.Class != runstate.PassedOverHeldForAPerson {
+		t.Fatalf("WhyThePollStartedNothing() = %+v, %v, want the account the idle session actually holds", cause, accounted)
 	}
 }
 
@@ -220,7 +246,7 @@ func TestATieIsSettledByTheOrderTheQueuePutsThemIn(t *testing.T) {
 		{ID: "first", Class: runstate.PassedOverParked},
 		{ID: "second", Class: runstate.PassedOverHeldForAPerson},
 	}, 2)
-	cause, _ := WhyThePollStartedNothing([]runstate.WatchTransition{polled(moment, account)}, moment)
+	cause, _ := WhyThePollStartedNothing([]runstate.WatchTransition{polled(moment, account)}, time.Time{}, moment)
 	if cause.Class != runstate.PassedOverParked {
 		t.Fatalf("Class = %q, want the class the queue puts first", cause.Class)
 	}
@@ -238,7 +264,7 @@ func TestWorkCarriedInConversationNamesTheRoleThatCarriesIt(t *testing.T) {
 	if carrier := Carrier(account); carrier != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("Carrier() = %q, want the conversation the item names", carrier)
 	}
-	cause, _ := WhyThePollStartedNothing([]runstate.WatchTransition{polled(moment, account)}, moment)
+	cause, _ := WhyThePollStartedNothing([]runstate.WatchTransition{polled(moment, account)}, time.Time{}, moment)
 	if !strings.Contains(cause.Says(), "carried in conversation by the architect") {
 		t.Fatalf("Says() = %q, want the role that carries it", cause.Says())
 	}

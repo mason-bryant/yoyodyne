@@ -977,9 +977,11 @@ first.
 What the message that wakes somebody says beside that is the last poll's own
 account of the queue — "33 of the 47 admitted items are held for a person,
 waiting on triage decisions" — which it reads from the watch log rather than from
-the stall. This listing keeps the chooser's last word and no cause, because the
-stall record is the absence and the account of what was in the way of the queue
-belongs to the session that read it.
+the stall, and only where that poll was made after the silence began. A crashed
+session's last poll describes a queue nothing has read since, so that message
+names no cause and sends the reader here instead. This listing keeps the
+chooser's last word and no cause, because the stall record is the absence and the
+account of what was in the way of the queue belongs to the session that read it.
 
 This is the one history in the harness that nothing else keeps, and the reason it
 exists is that the process which would have recorded a stall is the process a

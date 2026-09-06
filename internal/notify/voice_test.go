@@ -278,24 +278,53 @@ func TestAnIdleWatchNamesTheActorWhoCanActOnIt(t *testing.T) {
 // whoever releases that, rather than on somebody restarting a chooser that is
 // running and doing exactly what it should. The clause is the read model's, said
 // beside the cause the message states, so the two cannot disagree.
-func TestAStallClosesOnWhoeverReleasesTheCauseItNames(t *testing.T) {
+//
+// Every persona is rendered rather than the harness alone. The harness's is the
+// one an operator meets most, and it is not the one the mover names: the
+// development manager reads her own stall message, and a preamble of hers that
+// said nothing was holding the queue would contradict the clause telling her to
+// release it.
+func TestAStallPointsOutTheCauseAndClosesOnWhoeverReleasesIt(t *testing.T) {
 	topic := Product()
-	event := fullyRecorded(KindStallNoticed)
-	event.Detail.Cause = "33 of the 47 admitted items are held for a person, waiting on triage decisions"
-	event.Detail.Mover = "the development manager's — nothing pulls work held for a person until triage decides what happens to it"
-	message, err := Render(topic, Harness(), event)
-	if err != nil {
-		t.Fatalf("render a stall: %v", err)
+	cause := "33 of the 47 admitted items are held for a person, waiting on triage decisions"
+	mover := "the development manager's — nothing pulls work held for a person until triage decides what happens to it"
+	for _, speaker := range speakers() {
+		event := fullyRecorded(KindStallNoticed)
+		event.Detail.Cause = cause
+		event.Detail.Mover = mover
+		message, err := Render(topic, speaker, event)
+		if err != nil {
+			t.Fatalf("the %s says a stall: %v", speaker.Key(), err)
+		}
+		if !strings.Contains(message.Body, cause) {
+			t.Fatalf("the %s says a stall as %q, which does not point out the cause", speaker.Key(), message.Body)
+		}
+		if !strings.HasSuffix(message.Body, nextMoveLead+mover+".") {
+			t.Fatalf("the %s says a stall as %q, want it to close on the person who releases what it named", speaker.Key(), message.Body)
+		}
+		// The half of the old message that the cause replaces. A line that names
+		// what is holding the queue and then says nothing accounts for the silence,
+		// or that nothing has read the queue, contradicts itself in one breath —
+		// which is what the alarm did across surfaces before this and must not now
+		// do inside one message.
+		for _, contradiction := range []string{
+			"nothing accounting for it",
+			"nothing explains it",
+			"no record says why",
+			"nothing is reading",
+			"nothing holding it",
+			"no hold,",
+		} {
+			if strings.Contains(message.Body, contradiction) {
+				t.Fatalf("the %s says a stall as %q, which still claims %q beside the cause", speaker.Key(), message.Body, contradiction)
+			}
+		}
 	}
-	if !strings.Contains(message.Body, event.Detail.Cause) {
-		t.Fatalf("the stall reads as %q, which does not point out the cause", message.Body)
-	}
-	if !strings.HasSuffix(message.Body, nextMoveLead+event.Detail.Mover+".") {
-		t.Fatalf("the stall reads as %q, want it to close on the person who releases what it named", message.Body)
-	}
+
 	// A stall with no poll to read a cause from falls back to the chooser being
 	// looked at, which is the whole of what anybody can do about it.
-	event.Detail.Mover = ""
+	event := fullyRecorded(KindStallNoticed)
+	event.Detail.Cause = cause
 	fallen, err := Render(topic, Harness(), event)
 	if err != nil {
 		t.Fatalf("render a stall with no mover: %v", err)

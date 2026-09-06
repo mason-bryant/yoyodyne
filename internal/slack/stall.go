@@ -109,9 +109,17 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, sess
 	// renders: one derivation, two renderers. A surface working the cause out for
 	// itself is what paged the operator on 2026-09-06 with "nothing accounting for
 	// it" while the accounting sat one surface over.
-	cause, accounted := readmodel.WhyThePollStartedNothing(sessions, now)
-	if !accounted {
-		cause = readmodel.Cause{}
+	//
+	// It is asked against the moment the stall's own silence began, so an account
+	// from before that is refused rather than stated as the present cause: a
+	// session that crashed leaves its last poll behind, and the queue it describes
+	// has not been read since. That case wants the reader sent to the chooser, and
+	// the message says so by having no cause to name.
+	var cause readmodel.Cause
+	if standing != nil {
+		if read, accounted := readmodel.WhyThePollStartedNothing(sessions, standing.Since, now); accounted {
+			cause = read
+		}
 	}
 	return f.stallSaid(ctx, cursors, standing, window, cause, now), nil
 }
