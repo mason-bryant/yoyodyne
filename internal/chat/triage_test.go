@@ -610,6 +610,139 @@ func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
 	}
 }
 
+// The failure this reporting exists for, replayed. A triage decision spends the
+// item's durable budget and then writes the decision onto the item, and on
+// 2026-09-06 the second of those timed out on yoyodyne-ifd.142: the result said
+// "failed, and changed nothing: bd update timed_out" while the re-run it had
+// already spent was durable, and the duplicate that invited was stopped by the
+// cap rather than by anything the development manager was told. So the account
+// names the spend, and never claims nothing changed.
+func TestATimedOutTriageWriteNamesTheSpendItAlreadyMade(t *testing.T) {
+	t.Parallel()
+
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
+	answer := trackerReply("Its ground moved, so it starts over.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"rerun","reason":"the change is right and the branch it was written against has moved under it"}`)
+	tracker := &fakeTracker{
+		items: map[string]beads.WorkItem{
+			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item whose re-run was reported as unrecorded", Status: "open"},
+		},
+		// bd took the write and the harness stopped waiting on it, which is the
+		// whole of what a timeout says: the command failed, and what it was
+		// carrying may well be in the store.
+		durableErr: errors.New("bd update failed with status timed_out and exit code -1"),
+	}
+	reply := triageReply(t, tracker, budgets, answer)
+
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	// Nothing reports it as applied — the write it was told failed — and nothing
+	// reports it as having changed nothing either.
+	if outcome.Applied || !outcome.PartlyLanded() {
+		t.Fatalf("outcome = %#v, want a failure with the spend standing behind it", outcome)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	// The results carry the standing contract, which says what "changed nothing"
+	// means; what must not say it is the line about this action.
+	results := strings.ReplaceAll(renderTrackerResults(reply.Actions), trackerResultsPreamble, "")
+	for _, account := range []string{rendered, results} {
+		if strings.Contains(account, "changed nothing") {
+			t.Fatalf("a durable spend was reported as having changed nothing:\n%s", account)
+		}
+		for _, want := range []string{
+			"did not finish, and part of it stands",
+			"the re-run is spent against yoyodyne-ifd.142's durable budget: 1 re-run(s) of it are now recorded",
+			"carries it, so the write landed",
+		} {
+			if !strings.Contains(account, want) {
+				t.Fatalf("the account is missing %q:\n%s", want, account)
+			}
+		}
+	}
+
+	// And the spend really was durable, which is how the shape was found: the
+	// same decision asked for again meets the cap rather than being recorded.
+	again := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item whose re-run was reported as unrecorded", Status: "open"},
+	}}
+	refused := triageReply(t, again, budgets, trackerReply("Then start it over.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"rerun","reason":"the change is right and its ground has moved"}`))
+	if len(refused.Actions) != 1 || refused.Actions[0].Applied {
+		t.Fatalf("actions = %#v", refused.Actions)
+	}
+	if !strings.Contains(refused.Actions[0].Failure, "1 of 1 permitted re-run(s) are spent") {
+		t.Fatalf("the retry was not refused by the spend the first attempt made: %q", refused.Actions[0].Failure)
+	}
+}
+
+// The other half of the same answer. A write the tracker refused outright landed
+// nothing, and saying so is worth as much as naming what did: the decision has to
+// be recorded before anything reads the item as decided, while the spend behind
+// it must not be made again.
+func TestATriageWriteThatLandedNothingSaysSoBesideTheSpendThatStands(t *testing.T) {
+	t.Parallel()
+
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
+	answer := trackerReply("Its ground moved, so it starts over.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"rerun","reason":"the change is right and the branch it was written against has moved under it"}`)
+	tracker := &fakeTracker{
+		items: map[string]beads.WorkItem{
+			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item whose re-run was reported as unrecorded", Status: "open"},
+		},
+		err: errors.New("bd update failed with status failed and exit code 1: the item is locked"),
+	}
+	reply := triageReply(t, tracker, budgets, answer)
+
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	if outcome.Applied || !outcome.PartlyLanded() {
+		t.Fatalf("outcome = %#v, want a failure with the spend standing behind it", outcome)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	for _, want := range []string{
+		"landed, and is not to be done again: the re-run is spent against yoyodyne-ifd.142's durable budget",
+		"not known to have landed: the decision recorded on the item",
+		"does not find it",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the account is missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// A decision refused before anything was spent still says it changed nothing,
+// because that is what happened. The new answer is for a failure with something
+// behind it, and widening it to every failure would cost the sentence the
+// meaning it is being kept for.
+func TestADecisionRefusedBeforeAnythingIsSpentStillReportsChangingNothing(t *testing.T) {
+	t.Parallel()
+
+	answer := trackerReply("This one goes back for a repair.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"repair","reason":"the findings each name a file and a line"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that stopped", Status: "open"},
+	}}
+	// The run the decision names is another item's stopped work, which is refused
+	// before any budget is read and before anything is written.
+	stoppages := fakeStoppedRuns{items: map[string]string{stoppedRun: "yoyodyne-ifd.9"}}
+	reply := triageReplyAbout(t, tracker, nil, stoppages, answer)
+
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied || reply.Actions[0].PartlyLanded() {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	if !strings.Contains(rendered, "failed, and changed nothing") {
+		t.Fatalf("a refusal that changed nothing stopped saying so:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "landed") {
+		t.Fatalf("a refusal that changed nothing reported something as landed:\n%s", rendered)
+	}
+}
+
 // triageOptions is a development manager's conversation answering with one
 // reply and then closing off, which is the shape every test here needs.
 func triageOptions(t *testing.T, tracker Tracker, budgets TriageBudgets, answer string) Options {
