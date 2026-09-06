@@ -15,8 +15,9 @@ package readmodel
 // item waits on is the tracker's dependency graph, which the backlog reads for
 // itself and which clears on its own as the work lands. What somebody still has
 // to release is this: the harness's own durable account of work it stopped and
-// has not been told what to do with. Neither is a field anybody has to remember
-// to update, which is the whole of the difference.
+// has not been told what to do with, and of work it finished whose publication
+// it could not. Neither is a field anybody has to remember to update, which is
+// the whole of the difference.
 //
 // Nothing here releases anything, and that direction is deliberate. A hold is
 // lifted by a person deciding — triage picking the preserved change up, or an
@@ -86,24 +87,48 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation) back
 		}
 		reasons[escalation.WorkItemID] = undecidedStoppage(escalation)
 	}
-	// One item can have stopped more than once. The most recent stoppage is the
-	// one that describes where the work actually is, so a later run's account
-	// replaces an earlier one rather than whichever the store happened to list
-	// first.
-	held := make(map[string]runstate.State, len(runs))
-	for _, run := range runs {
-		if !preservedStoppage(run) {
-			continue
-		}
-		if previous, seen := held[run.WorkItemID]; seen && previous.UpdatedAt.After(run.UpdatedAt) {
-			continue
-		}
-		held[run.WorkItemID] = run
+	// A publication the forge never merged next. It holds the item for the same
+	// reason the merged one below does — the work is on the target branch and a
+	// run against it would redo it — but it is answered before the preserved
+	// change rather than after, because it says nothing about where the run's own
+	// branch went and the preserved-change reason does: an item that is both has a
+	// branch somebody has to decide about, and that is what its reader needs.
+	for workItemID, run := range latestPerItem(runs, func(run runstate.State) bool {
+		return outstandingPublication(run) && !mergeConfirmed(run)
+	}) {
+		reasons[workItemID] = unmergedPublication(run)
 	}
-	for workItemID, run := range held {
+	for workItemID, run := range latestPerItem(runs, preservedStoppage) {
 		reasons[workItemID] = preservedChange(run)
 	}
+	// The merged publications last. Only these know the change reached everywhere
+	// it was going, so only these may say there is nothing left to do about it —
+	// which is worth saying over the preserved-change reason, since a branch left
+	// behind a confirmed merge is debris rather than work to pick up.
+	for workItemID, run := range latestPerItem(runs, func(run runstate.State) bool {
+		return outstandingPublication(run) && mergeConfirmed(run)
+	}) {
+		reasons[workItemID] = mergedPublication(run)
+	}
 	return backlog.ReadHolds(reasons)
+}
+
+// latestPerItem is the runs a rule matches, one per work item. One item can have
+// stopped, or published, more than once; the most recent run is the one that
+// describes where the work actually is, so a later account replaces an earlier
+// one rather than whichever the store happened to list first.
+func latestPerItem(runs []runstate.State, matches func(runstate.State) bool) map[string]runstate.State {
+	latest := make(map[string]runstate.State)
+	for _, run := range runs {
+		if !matches(run) {
+			continue
+		}
+		if previous, seen := latest[run.WorkItemID]; seen && previous.UpdatedAt.After(run.UpdatedAt) {
+			continue
+		}
+		latest[run.WorkItemID] = run
+	}
+	return latest
 }
 
 // preservedStoppage reports a run that stopped on this item and left its change
@@ -126,6 +151,58 @@ func preservedChange(run runstate.State) string {
 	return fmt.Sprintf(
 		"run %s stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; triage decides what happens to it",
 		run.RunID)
+}
+
+// outstandingPublication reports a run that promoted its item's change and could
+// not finish publishing it. All three halves matter, and together they describe
+// the one item shape a developer run can do nothing at all with: the promotion
+// put the work on the target branch, which is the authoritative one, so there is
+// nothing left to implement, and what is unfinished is a publication that only a
+// person or a later sweep settles.
+//
+// A run still in flight owns its own publication and is not this. What is
+// deliberately not asked is whether the run's artifacts survived: an integrated
+// run cleans its own up, which is exactly why the preserved-change rule above
+// misses this and why yoyodyne-ifd.295 was pulled three times, once per
+// developer run that then re-derived that the change had already landed.
+//
+// It says nothing about whether the forge merged anything, which is a separate
+// question with three answers and is asked by mergeConfirmed below.
+func outstandingPublication(run runstate.State) bool {
+	return run.WorkItemID != "" &&
+		run.Status.Terminal() &&
+		run.Integration != nil &&
+		strings.TrimSpace(run.PublishFailure) != ""
+}
+
+// mergeConfirmed reports a publication the forge performed and the harness saw
+// it perform. It is what separates a leftover from an unfinished merge, and it
+// is asked of the pull request rather than of the promotion, because the
+// promotion is local and says nothing about the forge: a merge the forge dropped
+// leaves a recorded promotion exactly like a merged one does, and reading that
+// as a change the remote carries is the false statement this exists to refuse.
+func mergeConfirmed(run runstate.State) bool {
+	return run.PullRequest != nil && run.PullRequest.Merged
+}
+
+// mergedPublication says why an item whose change is merged everywhere it was
+// going is not something to pull. Nothing about the work is unfinished, so the
+// only thing a fresh run could do is find that out again.
+func mergedPublication(run runstate.State) string {
+	return fmt.Sprintf(
+		"run %s integrated its change into %s and the forge merged it, so only the publication is unfinished and there is nothing here to implement; triage decides what settles it",
+		run.RunID, run.Integration.TargetBranch)
+}
+
+// unmergedPublication says why an item the forge has not merged is not something
+// to pull either. The work is on the local target branch, which is the
+// authoritative one, so a run against it would redo work that has landed; what
+// is undecided is the merge, and re-arming one the forge dropped is a bounded
+// triage decision rather than a developer's.
+func unmergedPublication(run runstate.State) string {
+	return fmt.Sprintf(
+		"run %s integrated its change into %s and the forge has not merged it, so what is outstanding is the publication rather than the work; triage decides what settles it",
+		run.RunID, run.Integration.TargetBranch)
 }
 
 // undecidedStoppage says why an item whose stoppage nobody has answered is not

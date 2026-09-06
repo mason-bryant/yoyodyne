@@ -151,6 +151,81 @@ func (a *activeRun) exhausted(boundary string, cause error) error {
 		boundary, attempts, waited.Round(time.Second), cause)
 }
 
+// recovering is the same rule where a sweep meets the network rather than where
+// a run does. A settlement finishes the publication its run could not, so it
+// reaches the same forge over the same connection, and until yoyodyne-ifd.301 a
+// single reset there was recorded as an outstanding publication at once — twice
+// on yoyodyne-ifd.295, on the one step that was left.
+//
+// It is used at that step and no other. A sweep settles its runs one at a time
+// under each one's lease, so a window waited out here holds up every run behind
+// it; that is worth paying where the alternative is a leftover only a person can
+// remove, and is not worth paying for a reading the next sweep takes again.
+//
+// It waits on the boundary's own window, which is durable on the run, so a sweep
+// that takes up where a previous one left off spends what is left rather than a
+// whole window again. The record is written before the wait for the reason the
+// run's is, and the state the caller holds is advanced with it: this is the
+// record the settlement goes on to save.
+func (r Reconciler) recovering(ctx context.Context, state *runstate.State, boundary string, attempt func(context.Context) error) error {
+	for {
+		err := attempt(ctx)
+		if err == nil || !recovery.Recoverable(err) {
+			return err
+		}
+		waited := state.RetryAttempts(boundary)
+		delay := recovery.Interval(waited + 1)
+		if state.RetryWaited(boundary)+delay > recovery.Window {
+			return reconcilerExhausted(*state, boundary, err)
+		}
+		at := r.clock().Now()
+		state.Retries = append(state.Retries, runstate.Retry{
+			Boundary:     boundary,
+			Attempt:      waited + 1,
+			DelaySeconds: int64(delay / time.Second),
+			At:           at,
+			Failure:      boundedFailureDetail(err.Error()),
+		})
+		state.UpdatedAt = at
+		if saveErr := r.Store.Save(*state); saveErr != nil {
+			return errors.Join(err, fmt.Errorf("record the wait before asking again after %s failed: %w", boundary, saveErr))
+		}
+		if sleepErr := r.sleep(ctx, delay); sleepErr != nil {
+			// The sweep is over — cancelled, or out of time — so the boundary is left
+			// as it failed rather than asked again under a context that has ended.
+			return err
+		}
+	}
+}
+
+// reconcilerExhausted is activeRun.exhausted for a sweep: the same words, over
+// the record the sweep is holding rather than the one a run owns.
+func reconcilerExhausted(state runstate.State, boundary string, cause error) error {
+	attempts := state.RetryAttempts(boundary)
+	waited := state.RetryWaited(boundary)
+	if attempts == 0 {
+		return cause
+	}
+	return fmt.Errorf("%s kept failing on something a later attempt could have survived, and %d retr(ies) over %s did not outlast it, so it is handed to a person rather than retried further: %w",
+		boundary, attempts, waited.Round(time.Second), cause)
+}
+
+// sleep waits out one interval, cut short by a cancelled context so a shutdown
+// is never held up by a wait the backoff has grown to half an hour.
+func (r Reconciler) sleep(ctx context.Context, duration time.Duration) error {
+	if r.Sleep != nil {
+		return r.Sleep(ctx, duration)
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // renderRetryNotes carries the recoverable failures a run waited out onto the
 // work item, one line per boundary with the attempts, the intervals, and the
 // last failure that was waited out.

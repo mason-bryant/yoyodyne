@@ -3378,6 +3378,50 @@ func TestSchedulerStartsBlockedWorkNothingIsHoldingAndPassesOverAStoppage(t *tes
 	}
 }
 
+// yoyodyne-ifd.295, at the grain the scheduler reads at. The item is open, the
+// tracker reports it as ready, and nothing is wrong with it except that its work
+// is already on main: a run integrated the change and only the publication of it
+// did not finish. Pulling it started a developer three times over, each of them
+// ending in a diagnosis that the change had already landed, so the pull passes
+// over it and says why.
+func TestSchedulerPassesOverAnItemWhoseOnlyOutstandingStateIsAPublication(t *testing.T) {
+	t.Parallel()
+
+	published := beads.WorkItem{
+		ID: "yoyodyne-ifd.295", Title: "Stall detection runs without Slack", Status: "open", Priority: 2,
+	}
+	next := beads.WorkItem{
+		ID: "yoyodyne-ifd.301", Title: "An item closes on the confirmed merge", Status: "open", Priority: 2,
+	}
+	harness := newScheduleHarness(published, next)
+	harness.stoppages = haltedWork{runs: []runstate.State{{
+		RunID:      "run-55443d4c",
+		WorkItemID: published.ID,
+		// The run succeeded and cleaned up after itself: no blocker, no branch, no
+		// worktree. Nothing but the publication says anything is unfinished.
+		Status:      runstate.StatusSucceeded,
+		UpdatedAt:   harness.now.Add(-time.Hour),
+		Integration: &runstate.Integration{TargetBranch: "main", SourceCommit: "b206ca1", TargetCommit: "b206ca1"},
+		PullRequest: &runstate.PullRequest{Number: 428, Merged: true, MergeCommit: "f382df4"},
+		PublishFailure: "delete the merged remote branch: resolve yoyodyne/yoyodyne-ifd-295/55443d4c on origin " +
+			"failed with exit code 128: Read from remote host ssh.github.com: Connection reset by peer",
+	}}}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != next.ID {
+		t.Fatalf("started = %#v, want the next item pulled rather than the published one: %s", schedule.Started, schedule.Render())
+	}
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != published.ID {
+		t.Fatalf("deferred = %#v, want the outstanding publication named", schedule.Deferred)
+	}
+	if !strings.Contains(schedule.Deferred[0].Reason, "only the publication is unfinished") {
+		t.Fatalf("deferred reason = %q, want the publication named rather than a stoppage", schedule.Deferred[0].Reason)
+	}
+}
+
 // And the safe direction when the records cannot be read at all: a pull wired
 // without them holds every blocked item rather than releasing work whose hold it
 // could not see. Holding a releasable item costs one pull; releasing a held one

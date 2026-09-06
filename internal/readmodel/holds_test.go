@@ -186,6 +186,128 @@ func TestAFailedReadingIsAnErrorRatherThanNoHolds(t *testing.T) {
 	}
 }
 
+// The yoyodyne-ifd.295 shape: a run that succeeded, integrated its change, and
+// left only its publication unfinished. Nothing else holds such an item — the
+// run cleaned its own artifacts up, so the preserved-change rule says nothing
+// about it — and what that cost was three developer runs and three reviews, each
+// pulling the item as ordinary ready work and re-deriving that the change had
+// already landed.
+func TestAnItemWhoseOnlyOutstandingStateIsAPublicationIsHeldForAPerson(t *testing.T) {
+	t.Parallel()
+
+	held := heldForAPerson([]runstate.State{publishedRun("run-55443d4c", "yoyodyne-ifd.295")}, nil)
+	reason := heldReason(t, held, "yoyodyne-ifd.295")
+	for _, want := range []string{"run-55443d4c", "the forge merged it", "nothing here to implement"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the hold says %q, want it to name %q", reason, want)
+		}
+	}
+}
+
+// A merge the forge dropped is the other publication that leaves an item
+// outstanding, and it is held too: the change is on the local target branch,
+// which is the authoritative one, so a run against it would redo work that has
+// landed and re-arming the merge is a triage decision. What it must not say is
+// that the forge merged anything. Nothing did, something the base branch
+// required went unmet, and a hold asserting the merge happened would be a false
+// statement in the one derivation the scheduler and the docket both quote.
+func TestADroppedMergeIsHeldWithoutClaimingTheForgeMergedIt(t *testing.T) {
+	t.Parallel()
+
+	dropped := publishedRun("run-8f31ca02", "yoyodyne-ifd.288")
+	dropped.PullRequest.State = "OPEN"
+	dropped.PullRequest.Merged = false
+	dropped.PublishFailure = "the forge dropped the queued merge of pull request 84: it is open and has no merge queued for it"
+
+	reason := heldReason(t, heldForAPerson([]runstate.State{dropped}, nil), "yoyodyne-ifd.288")
+	if !strings.Contains(reason, "the forge has not merged it") {
+		t.Errorf("the hold says %q, want the unmerged publication named", reason)
+	}
+	if strings.Contains(reason, "the forge merged it") {
+		t.Errorf("the hold says %q, which claims a merge the forge dropped", reason)
+	}
+}
+
+// The other side of it. A publication that finished holds nothing, and neither
+// does a run still in flight, which owns its own publication and has not
+// finished asking.
+func TestAFinishedOrInFlightPublicationHoldsNothing(t *testing.T) {
+	t.Parallel()
+
+	settled := publishedRun("run-9c1f2ab3", "yoyodyne-ifd.300")
+	settled.PublishFailure = ""
+	inFlight := publishedRun("run-7d2e4cc1", "yoyodyne-ifd.302")
+	inFlight.Status = runstate.StatusRunning
+
+	held := heldForAPerson([]runstate.State{settled, inFlight}, nil)
+	for _, id := range []string{"yoyodyne-ifd.300", "yoyodyne-ifd.302"} {
+		if reason, ok := held.Reason(id); ok {
+			t.Fatalf("%s was held for %q, want nothing holding it", id, reason)
+		}
+	}
+}
+
+// An item that is both — a change still on a branch and a publication that did
+// not finish — is described by whichever of the two a reader can act on, and
+// which that is depends on the merge. A confirmed merge makes the branch debris:
+// the change is everywhere it was going, so the publication is what is left to
+// say. A merge nobody made does not, so the branch is still a decision and the
+// preserved-change reason is the one that sends triage to it.
+func TestABranchLeftBehindReadsAsThePublicationOnlyWhereTheMergeIsConfirmed(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 6, 2, 0, 0, 0, time.UTC)
+	merged := preservedRun("run-1b782eeb", "yoyodyne-ifd.295", stopped)
+	merged.Integration = &runstate.Integration{TargetBranch: "main", SourceCommit: "bb8ec09", TargetCommit: "bb8ec09"}
+	merged.PullRequest = &runstate.PullRequest{Number: 424, Branch: merged.Branch, Merged: true, MergeCommit: "262372c"}
+	merged.PublishFailure = "delete the merged remote branch: Connection reset by peer"
+
+	unmerged := preservedRun("run-8f31ca02", "yoyodyne-ifd.288", stopped)
+	unmerged.Integration = &runstate.Integration{TargetBranch: "main", SourceCommit: "0d392c4", TargetCommit: "0d392c4"}
+	unmerged.PullRequest = &runstate.PullRequest{Number: 84, Branch: unmerged.Branch, State: "OPEN"}
+	unmerged.PublishFailure = "the forge dropped the queued merge of pull request 84"
+
+	held := heldForAPerson([]runstate.State{merged, unmerged}, nil)
+	if reason := heldReason(t, held, "yoyodyne-ifd.295"); !strings.Contains(reason, "the forge merged it") {
+		t.Errorf("the merged item is held for %q, want the publication rather than the preserved change", reason)
+	}
+	if reason := heldReason(t, held, "yoyodyne-ifd.288"); !strings.Contains(reason, "its change is preserved") {
+		t.Errorf("the unmerged item is held for %q, want the branch it left behind named", reason)
+	}
+}
+
+// publishedRun is a run that finished, integrated its change, and could not
+// finish publishing it: the forge merged, and deleting the branch that merge
+// consumed failed on a reset connection.
+func publishedRun(runID, workItemID string) runstate.State {
+	return runstate.State{
+		RunID:        runID,
+		WorkItemID:   workItemID,
+		Status:       runstate.StatusSucceeded,
+		UpdatedAt:    time.Date(2026, 9, 6, 3, 2, 59, 0, time.UTC),
+		Branch:       "yoyodyne/" + workItemID + "/" + runID,
+		WorktreePath: "/state/worktrees/" + runID,
+		// An integrated run removes both, which is why nothing else holds this.
+		BranchRemoved:   true,
+		WorktreeRemoved: true,
+		Integration: &runstate.Integration{
+			TargetBranch: "main",
+			SourceCommit: "b206ca1",
+			TargetCommit: "b206ca1",
+		},
+		PullRequest: &runstate.PullRequest{
+			Number:      428,
+			Branch:      "yoyodyne/" + workItemID + "/" + runID,
+			HeadCommit:  "b206ca1",
+			State:       "MERGED",
+			Merged:      true,
+			MergeCommit: "f382df4",
+		},
+		PublishFailure: "delete the merged remote branch: resolve " + workItemID +
+			" on origin failed with exit code 128: Read from remote host ssh.github.com: Connection reset by peer",
+	}
+}
+
 func preservedRun(runID, workItemID string, stopped time.Time) runstate.State {
 	return runstate.State{
 		RunID:        runID,
