@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/doctor"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
@@ -435,6 +436,79 @@ func TestSetupLeavesAStoredTokenPairExactlyAsItIs(t *testing.T) {
 	}
 	if world.runner.ran("add-generic-password") {
 		t.Fatal("setup wrote over a token pair that was already stored")
+	}
+}
+
+// An empty file of the right name in the right place is what the documented way
+// to make it leaves behind when the editor is closed without saving, and setup
+// reporting it as a stored pair is a step reported as done over a sink that will
+// not start. The walk and the diagnosis at the end of it are asserted together,
+// because two surfaces disagreeing about one file is the defect rather than a
+// detail of either.
+func TestSetupDoesNotReportAnEmptySecretsFileAsSecretsStored(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	file := world.secretsFile("")
+	world.slackChannel = "C0123456789"
+	world.defaults = true
+
+	report := world.walk()
+
+	step := world.step(report, stepSlackSecrets)
+	if step.Status != setupHandedOff {
+		t.Fatalf("slack-secrets step = %s (%s), want the empty file left to somebody to fill in", step.Status, step.Summary)
+	}
+	// The names are what the sink says it wants when it dies, so a step that has
+	// them is one somebody can act on.
+	for _, want := range []string{slack.BotTokenVariable, slack.AppTokenVariable} {
+		if !strings.Contains(step.Summary, want) {
+			t.Errorf("slack-secrets summary = %q, want %q named", step.Summary, want)
+		}
+	}
+	if !strings.Contains(step.Detail, file) {
+		t.Errorf("slack-secrets detail = %q, want the file that is missing them named", step.Detail)
+	}
+	if step.Remedy == "" {
+		t.Error("the step somebody still owes something on says nothing about what would do it")
+	}
+	finding := world.finding(report, "slack-secrets")
+	if finding.Status != doctor.StatusWarning {
+		t.Fatalf("doctor's slack-secrets = %s (%s), want it to agree with the step: %s", finding.Status, finding.Summary, renderSetupReport(report))
+	}
+}
+
+// The other half: the file an operator finished is a stored pair, setup leaves it
+// alone, and reading it to find that out puts nothing that was in it anywhere.
+func TestSetupReportsAFilledSecretsFileAsAlreadyStored(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	world.secretsFile("export SLACK_BOT_TOKEN=xoxb-not-a-real-token\nexport SLACK_APP_TOKEN=xapp-not-a-real-token\n")
+	world.slackChannel = "C0123456789"
+	world.defaults = true
+
+	report := world.walk()
+
+	step := world.step(report, stepSlackSecrets)
+	if step.Status != setupAlready {
+		t.Fatalf("slack-secrets step = %s (%s), want the filled file read as a stored pair", step.Status, step.Summary)
+	}
+	if world.runner.ran("add-generic-password") {
+		t.Error("setup asked the keychain for a pair the file already holds")
+	}
+	// The whole report rather than what a terminal shows of it, because `--json`
+	// is what keeps this and a token in a detail nobody prints is still a token
+	// in a file.
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	written := string(encoded) + world.out.String()
+	for _, secret := range []string{"xoxb-not-a-real-token", "xapp-not-a-real-token"} {
+		if strings.Contains(written, secret) {
+			t.Fatalf("a stored token was written out: %s", written)
+		}
 	}
 }
 
@@ -1038,6 +1112,38 @@ func (w *setupWorld) step(report setupReport, name string) setupStep {
 	}
 	w.t.Fatalf("setup never reached the %s step:%s", name, renderSetupReport(report))
 	return setupStep{}
+}
+
+// finding is one check out of the diagnosis setup ends with, which is how a test
+// asserts that the walk and doctor say the same thing about one machine.
+func (w *setupWorld) finding(report setupReport, check string) doctor.Finding {
+	w.t.Helper()
+
+	for _, finding := range report.Diagnosis.Findings {
+		if finding.Check == check {
+			return finding
+		}
+	}
+	w.t.Fatalf("the diagnosis has no %s finding:%s", check, renderSetupReport(report))
+	return doctor.Finding{}
+}
+
+// secretsFile writes this project's environment file, which is where the pair
+// lives on a machine with no keychain and which the launcher reads either way.
+// The contents are the test's, because whether it holds both tokens, one, or
+// nothing at all is the whole of what the states here differ by.
+func (w *setupWorld) secretsFile(contents string) string {
+	w.t.Helper()
+
+	directory := filepath.Join(w.project, ".config", "yoyo", "calc")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		w.t.Fatalf("MkdirAll() error = %v", err)
+	}
+	path := filepath.Join(directory, "slack.env")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		w.t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
 }
 
 // lookPath resolves what this machine has, enumerated rather than inverted so a

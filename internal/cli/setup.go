@@ -771,21 +771,20 @@ const setupSlackRecipe = "docs/slack/setup.md, or " +
 // shell history -- which is the same discipline that keeps doctor from ever
 // reading one back.
 //
-// Everywhere else the store is a file this project's launch sources, and setup
-// deliberately does not create it. Existence is what this step reads as secrets
-// stored, so a file it wrote and nobody filled in is a half-finished step this
-// walk would afterwards report as already done, over a sink that will not start.
-// `yoyo doctor` asks the file for the two names instead of for its existence, so
-// what it reports on an empty one is which of them is missing.
+// Everywhere else the store is a file this project's launch sources, and what
+// this step reads is the two names in it rather than its existence -- the same
+// reading `yoyo doctor` makes, out of the same place, so the two surfaces cannot
+// disagree about one file. Existence would be the wrong question: the documented
+// way to make the file installs an empty one and then opens an editor, so an
+// operator who left the editor without saving would be told the step is already
+// done over a sink that refuses to start for want of the names nobody wrote.
+//
+// Setup still does not create the file, because the only thing that would make
+// it a stored pair is the two tokens, and those are the operator's to paste in.
 func (s *setup) ensureSlackSecrets(ctx context.Context, productID domain.ProductID) setupStep {
 	bot, app := slack.BotSecret(productID), slack.AppSecret(productID)
 	if file, found := s.namespacedEnvFile(productID); found {
-		return setupStep{
-			Step:    stepSlackSecrets,
-			Status:  setupAlready,
-			Summary: fmt.Sprintf("this project's Slack secrets are already stored for %s", productID),
-			Detail:  file,
-		}
+		return s.slackEnvFileStep(file, productID)
 	}
 	if s.goos != "darwin" {
 		directory, file := s.envFilePaths(productID)
@@ -793,7 +792,7 @@ func (s *setup) ensureSlackSecrets(ctx context.Context, productID domain.Product
 			Step:    stepSlackSecrets,
 			Status:  setupHandedOff,
 			Summary: fmt.Sprintf("this platform has no keychain, so %s's two tokens go in a file only its own launch reads", productID),
-			Detail: fmt.Sprintf("setup does not write it half-finished: a file that exists reads here as secrets stored, and an empty one would be a step reported as done over a sink that will not start. It wants %s and %s as exports",
+			Detail: fmt.Sprintf("setup does not write it, because an empty file is not a stored pair and only the two tokens would make it one. It wants %s and %s as exports",
 				botTokenVariable, appTokenVariable),
 			Remedy: fmt.Sprintf("mkdir -p %s && install -m 600 /dev/null %s && ${EDITOR:-vi} %s", directory, file, file),
 		}
@@ -904,6 +903,39 @@ func describeSecret(name, bot string) string {
 		return "bot user OAuth token, which starts xoxb-"
 	}
 	return "app-level token, which starts xapp-"
+}
+
+// slackEnvFileStep says what the environment file that is there actually holds.
+// It is handed off rather than skipped when a name is missing, because what is
+// left is somebody editing one file, and the step carries the command that opens
+// it. No value is read out of the file and none reaches the step: this report is
+// printed, and `--json` puts it somewhere that keeps it.
+func (s *setup) slackEnvFileStep(file string, productID domain.ProductID) setupStep {
+	contents, err := os.ReadFile(file)
+	if err != nil {
+		return setupStep{
+			Step:    stepSlackSecrets,
+			Status:  setupHandedOff,
+			Summary: "this project's Slack secrets file could not be read, so whether the secrets are stored is unknown",
+			Detail:  err.Error(),
+			Remedy:  fmt.Sprintf("ls -l %s", shellQuote(file)),
+		}
+	}
+	if missing := slack.UnassignedTokenVariables(contents); len(missing) > 0 {
+		return setupStep{
+			Step:    stepSlackSecrets,
+			Status:  setupHandedOff,
+			Summary: fmt.Sprintf("this project's Slack secrets file assigns no %s", strings.Join(missing, " and no ")),
+			Detail:  fmt.Sprintf("%s is there, and a sink launched from it refuses to start for want of the names it does not assign", file),
+			Remedy:  fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(file)),
+		}
+	}
+	return setupStep{
+		Step:    stepSlackSecrets,
+		Status:  setupAlready,
+		Summary: fmt.Sprintf("this project's Slack secrets are already stored for %s", productID),
+		Detail:  file,
+	}
 }
 
 func (s *setup) namespacedEnvFile(productID domain.ProductID) (string, bool) {
