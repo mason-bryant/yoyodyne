@@ -61,6 +61,15 @@ const (
 	trackerReprioritize = "reprioritize"
 	trackerUpdate       = "update"
 	trackerClose        = "close"
+	// The one triage decision that is reported, and it is reported because of what
+	// it changes rather than because it is a decision. Every other decision about a
+	// stopped run is the development manager doing the job the docket was delivered
+	// for, and a channel that narrated each of them would be the event log this
+	// exists not to be. A crossing is different in kind: it is the role giving an
+	// item more room than the project configured, on authority the operator
+	// delegated on condition of hearing about it, and the hearing is the veto.
+	trackerTriage = "triage"
+	triageCross   = "cross"
 )
 
 // exchangeUnresolved is the outcome an ask exchange records when it reaches the
@@ -277,8 +286,25 @@ type trackerAction struct {
 		// so what this buys is that the day it can, handing work back to the run
 		// queue is not narrated as a role taking it up.
 		Executor *string `json:"executor"`
-		Reason   string  `json:"reason"`
+		// Decision and Budget are the triage decision and the cap a crossing names.
+		// They are read for the one decision that is reported and ignored for the
+		// rest, exactly as every other field here is read only by the actions that
+		// carry it.
+		Decision string `json:"decision"`
+		Budget   string `json:"budget"`
+		Reason   string `json:"reason"`
 	} `json:"action"`
+	// Crossing is what the store said a delegated crossing came to, recorded beside
+	// the action rather than in it: the ceiling and the count are the guard's own
+	// figures, and the whole value of the message is that the operator is told what
+	// was actually permitted rather than what was asked for. A record that carries
+	// none is one written before crossings existed, or an action that is not one.
+	Crossing *struct {
+		Budget    string `json:"budget"`
+		Cap       int    `json:"cap"`
+		Crossing  int    `json:"crossing"`
+		Crossings int    `json:"crossings"`
+	} `json:"crossing"`
 	WorkItemID string `json:"work_item_id"`
 	// WorkItemTitle is what the tracker called the item as the action ran. It is
 	// what names the topic for every action that carries no title of its own —
@@ -356,6 +382,9 @@ func fromTrackerAction(conversation runstate.Conversation, earlier []execution.E
 		Priority: -1,
 	}
 	var kind Kind
+	// A note unless something says otherwise, which is what every account of the
+	// queue moving is: it happened, and nobody has to do anything about it.
+	severity := report.SeverityNote
 	switch {
 	// Marking work already in the backlog with an executor is the handoff itself:
 	// the item stops being a run's to carry, and from here nothing happens to it
@@ -411,6 +440,30 @@ func fromTrackerAction(conversation runstate.Conversation, earlier []execution.E
 			detail.Priority = *recorded.Action.Priority
 		}
 		detail.Executor = recorded.carriedBy()
+	// A cap crossed on delegated authority. It is a warning rather than a note,
+	// and that is the delegation's own condition rather than an opinion about how
+	// serious it is: the crossing is in force from the moment it was recorded, so
+	// the only thing standing between it and an item given room nobody wanted it to
+	// have is that the operator sees it while there is still something to undo. A
+	// note is marked with nothing, and something read tomorrow is not a veto.
+	//
+	// A crossing whose figures the record does not carry is said all the same,
+	// stating the absences. What the operator most needs to know is that a cap
+	// moved, and a message withheld for want of a count would be the delegation
+	// silently losing its condition to a schema change.
+	case recorded.Action.Action == trackerTriage && strings.TrimSpace(recorded.Action.Decision) == triageCross:
+		kind = KindCapCrossed
+		severity = report.SeverityWarning
+		detail.Budget = strings.TrimSpace(recorded.Action.Budget)
+		if crossing := recorded.Crossing; crossing != nil {
+			// The store's own figures win over the action's, because the action said
+			// which cap to cross and the store said what crossing it actually was and
+			// what the ceiling now is.
+			detail.Budget = strings.TrimSpace(crossing.Budget)
+			detail.Cap = crossing.Cap
+			detail.Crossing = crossing.Crossing
+			detail.Crossings = crossing.Crossings
+		}
 	default:
 		return Notification{}, nil
 	}
@@ -437,7 +490,7 @@ func fromTrackerAction(conversation runstate.Conversation, earlier []execution.E
 		Event: Event{
 			Kind:     kind,
 			At:       event.Timestamp,
-			Severity: report.SeverityNote,
+			Severity: severity,
 			Refs: Refs{
 				ConversationID: conversation.ConversationID,
 				WorkItemID:     strings.TrimSpace(recorded.WorkItemID),

@@ -252,6 +252,7 @@ func TestARunThatStoppedOnABlockerIsDocketedWithItsEvidence(t *testing.T) {
 	want := triage.Counters{
 		ReviewRounds: 3, ReviewRoundsCap: 4, RepairAttempts: 2, RepairGrantAttempts: 2,
 		RepairGrantsCap: 1, RerunsCap: 1, MergeRearmsCap: 1,
+		CrossingsBound: runstate.MaxDelegatedCapCrossings,
 	}
 	if entry.Counters != want {
 		t.Fatalf("counters = %#v, want %#v", entry.Counters, want)
@@ -1172,6 +1173,7 @@ func TestARunThatSpendsItsRepairBudgetDocketsItselfAsItStops(t *testing.T) {
 	want := triage.Counters{
 		ReviewRounds: 2, ReviewRoundsCap: 4, RepairAttempts: 1, RepairGrantAttempts: 2,
 		RepairGrantsCap: 1, RerunsCap: 1, MergeRearmsCap: 2,
+		CrossingsBound: runstate.MaxDelegatedCapCrossings,
 	}
 	if entry.Counters != want {
 		t.Fatalf("counters = %#v, want %#v", entry.Counters, want)

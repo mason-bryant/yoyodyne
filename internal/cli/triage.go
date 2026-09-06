@@ -468,13 +468,25 @@ A harness with no free developer is not a refusal at all: nothing is claimed or
 granted, the decision stands, and asking again once a slot frees carries out the
 same one.
 
-"override" crosses one of a work item's caps, and is the only thing that does.
-The caps stop machines looping, so they refuse a development manager past them --
-but they refused the recording of your answer to the escalation as well, which
-left an item at the end of its rounds unrunnable by every recorded path. This is
-that answer as a record: it names the budget, what you raised it to or that you
-cleared it, who you are, and why, and it is kept on the item's own triage record
-where every guard and every reading of the item finds it.
+"override" crosses one of a work item's caps by whatever ceiling you name, and is
+the only thing that does that. The caps stop machines looping, so they refuse a
+development manager past them -- but they refused the recording of your answer to
+the escalation as well, which left an item at the end of its rounds unrunnable by
+every recorded path. This is that answer as a record: it names the budget, what
+you raised it to or that you cleared it, who you are, and why, and it is kept on
+the item's own triage record where every guard and every reading of the item
+finds it.
+
+The development manager crosses a cap too, and narrowly: far enough for the one
+decision that was refused and no further, at most five times per item, and only
+with a justification, which lands on the item and
+reaches you in the channel as the crossing happens. That is a veto by reading
+rather than a request -- the crossing is in force the moment it is recorded, and
+what you do about one you disagree with is undo the work it bought. A sixth
+crossing of the same item is refused naming this command, and so is any ceiling
+beyond that; "yoyo status <beads-id>" says how many of an item's
+five are spent, and each recorded crossing is listed there beside your own
+overrides.
 
 It clears or raises and never lowers -- an override that would give the item no
 more room than it already has is refused. Lowering a cap is a judgement about the

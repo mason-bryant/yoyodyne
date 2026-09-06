@@ -17,7 +17,18 @@ package chat
 // the same gate the counters already enforce, so an item nothing was ever going
 // to stop is stopped by the cap rather than by whoever happens to be reading.
 //
-// Escalation is the one decision that reaches the operator, and it is
+// One decision moves a cap rather than spending one. Every override recorded in
+// the week to 2026-09-06 was a cap refusing this role, an escalation, and an
+// operator granting it within minutes under their own standing direction — so
+// the operator step was latency rather than judgement, and the crossing is this
+// role's now. It is narrow on purpose: far enough for the one decision that was
+// refused, five times per item, and only with the argument for it, which lands on
+// the item and reaches the operator in the channel as the crossing happens. That
+// is a veto by reading rather than a permission to ask for. Past the five, and
+// for any ceiling beyond the one that permits the decision, the caps are the
+// operator's again and the refusal says so.
+//
+// Escalation is the one decision that asks the operator for something, and it is
 // deliberately more than prose: a durable blocker on the item, so the item
 // itself says it is waiting on a person, and a report at warning severity or
 // above, so it reaches the pile the operator reads. A conversation that only
@@ -38,6 +49,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -71,12 +83,19 @@ const (
 	// decisionEscalate hands the entry to the operator, which is the only
 	// decision that asks a person for anything.
 	decisionEscalate = "escalate"
+	// decisionCross raises one of the item's caps to just past what the item has
+	// spent against it, on this role's own delegated authority, so a decision the
+	// cap refused becomes one that can be recorded. It buys no attempt and spends
+	// no budget of its own; what it spends is one of the five crossings the item
+	// gets, and the reason it carries is reported to the operator as it is
+	// recorded.
+	decisionCross = "cross"
 )
 
 // triageDecisions lists the vocabulary in the order the contract states it, so a
 // refusal names exactly what was available.
 var triageDecisions = []string{
-	decisionRepair, decisionRerun, decisionRescope, decisionRearm, decisionWait, decisionEscalate,
+	decisionRepair, decisionRerun, decisionRescope, decisionRearm, decisionWait, decisionEscalate, decisionCross,
 }
 
 // triageVerbs is what each decision records about itself on the work item. The
@@ -90,6 +109,11 @@ var triageVerbs = map[string]string{
 	decisionRearm:    "Triaged: its dropped merge to be re-armed once",
 	decisionWait:     "Triaged: waiting, because the forge still has it",
 	decisionEscalate: "Escalated to the operator by triage",
+	// The crossing's own sentence is built where it is recorded rather than taken
+	// from here, because which cap was crossed and which of the five crossings this
+	// was are the whole of what makes the note answerable. This is the fallback
+	// nothing writes and the entry the vocabulary check reads.
+	decisionCross: "Triaged: one of its caps crossed on the development manager's own authority",
 }
 
 // TriageBudgets is what one work item has already been given and may still be
@@ -109,6 +133,13 @@ type TriageBudgets interface {
 	RecordRerun(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
 	// RecordMergeRearm records that triage re-armed a merge the forge dropped.
 	RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
+	// CrossCap raises one of this item's caps to just past what the item has spent
+	// against it, on the development manager's own delegated authority, and reports
+	// what the crossing came to.
+	// Whose authority it is recorded under is the caller's rather than this
+	// conversation's, exactly as the sizes and the clock are: a conversation that
+	// could name the role could name any of them.
+	CrossCap(ctx context.Context, workItemID, budget, reason string) (runstate.TriageCrossing, error)
 }
 
 // Stoppages is what the harness durably recorded about the runs triage decides
@@ -177,6 +208,51 @@ func (a TrackerAction) triageProblems() []error {
 	case !runstate.ValidRunID(run):
 		problems = append(problems, fmt.Errorf("triage run %q is not a run identifier; a docket entry names the run it is about", run))
 	}
+	problems = append(problems, a.crossingProblems()...)
+	return problems
+}
+
+// crossingProblems holds the one decision that names a budget to the budget
+// vocabulary, and holds every other decision to naming none.
+//
+// The budget is required rather than inferred from whatever last refused, because
+// two of the three decisions that spend a budget stand behind two of them: a
+// crossing that guessed would raise one cap while the other went on refusing the
+// same decision, which is the two-sittings-per-item failure the refusals were
+// already reworded to end.
+//
+// The names are the store's own rather than a second spelling of them here. A
+// refusal prints the list, so what a development manager types is the words the
+// refusal used.
+func (a TrackerAction) crossingProblems() []error {
+	var problems []error
+	budget := strings.TrimSpace(a.Budget)
+	if strings.TrimSpace(a.Decision) != decisionCross {
+		if budget != "" {
+			problems = append(problems, fmt.Errorf(
+				"only the %q decision names a \"budget\", and this one is %q; a cap is crossed by crossing it rather than as an argument to another decision",
+				decisionCross, strings.TrimSpace(a.Decision)))
+		}
+		return problems
+	}
+	switch {
+	case budget == "":
+		problems = append(problems, fmt.Errorf("triage %q requires \"budget\", the cap being crossed: %s",
+			decisionCross, strings.Join(runstate.TriageOverrideBudgets(), ", ")))
+	case !slices.Contains(runstate.TriageOverrideBudgets(), budget):
+		problems = append(problems, fmt.Errorf("triage budget %q is not a cap; the caps are %s",
+			budget, strings.Join(runstate.TriageOverrideBudgets(), ", ")))
+	}
+	// The reason is required on every action that changes something, and it is
+	// required again here in the crossing's own words. What makes this delegation
+	// answerable is that the argument reaches the operator at the moment the cap is
+	// crossed, so a crossing that carried none would be the one thing the operator
+	// agreed to on condition it could not happen.
+	if strings.TrimSpace(a.Reason) == "" {
+		problems = append(problems, fmt.Errorf(
+			"triage %q requires \"reason\", the justification for crossing the cap: it is recorded on the item and reported to the operator as the crossing happens, and a crossing nobody argued for is refused outright",
+			decisionCross))
+	}
 	return problems
 }
 
@@ -201,6 +277,15 @@ func (r Reply) TriageDecision(runID string) (decision, reason string, found bool
 	for _, outcome := range r.Actions {
 		action := outcome.Action
 		if !outcome.Applied || action.Action != actionTriage || strings.TrimSpace(action.Run) != run {
+			continue
+		}
+		// A crossing is not what became of the stoppage. It raises a cap so that a
+		// decision can be recorded, and the decision is a separate act in the same
+		// reply or a later one — so reporting it here would say a stoppage had been
+		// settled by the step taken before settling it. A turn that crossed and
+		// decided nothing else reports nothing, which is the honest answer: the item
+		// has more room and still has nothing decided about it.
+		if strings.TrimSpace(action.Decision) == decisionCross {
 			continue
 		}
 		return strings.TrimSpace(action.Decision), strings.TrimSpace(action.Reason), true
@@ -269,9 +354,18 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 		outcome.fail(err)
 		return
 	}
+	// A crossing is not one of the decisions the budget bounds — it is what raises
+	// one of those budgets — so it is carried out on its own path rather than
+	// through the spend below. It still lands on the item, in a note naming the
+	// cap, the crossing number, and the argument, which is the half of the
+	// delegation that outlives the channel message beside it.
+	if decision == decisionCross {
+		s.carryOutCapCrossing(ctx, outcome, id, run)
+		return
+	}
 	spent, err := s.spendTriageBudget(ctx, id, decision)
 	if err != nil {
-		outcome.fail(refusedPastCap(err))
+		outcome.refused(refusedPastCap(err))
 		return
 	}
 	note := s.trackerProvenance(triageVerbs[decision]+", on the stopped work of run "+run, action.Reason)
@@ -292,6 +386,55 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 		return
 	}
 	outcome.applied("triaged %s as %q, on the stopped work of run %s%s", id, decision, run, spent)
+}
+
+// carryOutCapCrossing raises one of the item's caps on this role's own delegated
+// authority and writes the crossing onto the item.
+//
+// The cap is raised before the note is written, which is the order every decision
+// here keeps: a process that dies between the two has crossed a cap it did not
+// write down, rather than written down a crossing nothing permits. What that
+// costs is a crossing the item's notes do not explain, and the durable triage
+// record carries the reason either way.
+//
+// Nothing is spent and nothing is bought. The decision the crossing was for is
+// still a separate decision, recorded afterwards and refused by everything it was
+// always refused by — the crossing only moves the one cap it names.
+func (s *Session) carryOutCapCrossing(ctx context.Context, outcome *TrackerOutcome, workItemID, runID string) {
+	action := outcome.Action
+	budget := strings.TrimSpace(action.Budget)
+	if s.options.Triage == nil {
+		outcome.fail(errors.New("no triage budget is wired to this conversation, so a cap cannot be crossed and nothing was recorded"))
+		return
+	}
+	crossing, err := s.options.Triage.CrossCap(ctx, workItemID, budget, strings.TrimSpace(action.Reason))
+	if err != nil {
+		// A crossing past the bound names the operator's command, so it is the same
+		// kind of refusal as the one that sent the role here: what it says is what
+		// to do instead, and cutting it to a line is what loses that.
+		outcome.refused(err)
+		return
+	}
+	verb := fmt.Sprintf("Triaged: the %s cap crossed to %d on the development manager's own authority, which is crossing %d of %d for this item, on the stopped work of run %s",
+		crossing.Budget, crossing.Cap, crossing.Number, crossing.Bound, runID)
+	if _, err := s.options.Tracker.Update(ctx, workItemID, beads.WorkItemChange{
+		AppendNotes: s.trackerProvenance(verb, action.Reason),
+	}); err != nil {
+		outcome.fail(err)
+		return
+	}
+	// The crossing travels with the outcome so that what the operator is told in
+	// the channel is the record's own figures rather than a second count of them.
+	// It is the whole of the veto: the crossing is in force already, and what keeps
+	// it answerable is that the operator reads it at the moment it happens.
+	outcome.Crossing = &CapCrossing{
+		Budget:    crossing.Budget,
+		Cap:       crossing.Cap,
+		Crossing:  crossing.Number,
+		Crossings: crossing.Bound,
+	}
+	outcome.applied("crossed the %s cap for %s to %d on your own authority, which is crossing %d of %d for this item and is reported to the operator as it stands; nothing was spent and no attempt was bought, so the decision it permits is still one to record",
+		crossing.Budget, workItemID, crossing.Cap, crossing.Number, crossing.Bound)
 }
 
 // refuseTransposedStoppage refuses a decision whose run was made for some other
@@ -331,28 +474,63 @@ func (s *Session) refuseTransposedStoppage(ctx context.Context, workItemID, runI
 // refusedPastCap says what a cap refusal leaves available, and leaves every other
 // failure exactly as it was.
 //
-// A refusal is the gate working. It was also, until an operator could cross a
-// cap, the end of the road: the decision could not be recorded, so nothing could
-// carry it out, and escalating recorded nothing either — which left a
-// cap-exhausted item unrunnable by every path the harness keeps a record of. A
-// cap is crossable now, by the operator and by nobody else, so the refusal says
-// so. A development manager who escalates without knowing the remedy exists
-// escalates into the same silence the escalation is meant to break.
+// A refusal is the gate working. It was also, until a cap could be crossed, the
+// end of the road: the decision could not be recorded, so nothing could carry it
+// out, and escalating recorded nothing either — which left a cap-exhausted item
+// unrunnable by every path the harness keeps a record of. A development manager
+// who is refused without knowing the remedy exists escalates into the same
+// silence the escalation is meant to break.
 //
-// It names the command rather than the remedy, and that is the whole of what
-// this text got wrong twice. "The operator can record an override against the
-// item" was read as the item's notes — the only place a conversation writes to
-// an item at all — so the operator answered the escalation there, exactly as the
-// words directed, the same decision was asked for again, and the identical
-// refusal came back. No guard reads a note, and nothing in the sentence named
-// the verb that does. So the refusal prints the command, with the budget that
-// refused and the item already in it, and says plainly that a note is not one.
+// It names the remedy that is this role's own first, because it is the one that
+// costs nobody a wait: every override recorded in the week to 2026-09-06 was
+// granted, most within minutes, and the operator step was latency rather than
+// judgement. So what the refusal offers is the crossing verb, bounded and
+// justified; the operator's command is what it offers after that, for the item
+// that has already had its five and for the raise nobody delegated.
+//
+// It names commands rather than remedies, and that is the whole of what this text
+// got wrong twice. "The operator can record an override against the item" was
+// read as the item's notes — the only place a conversation writes to an item at
+// all — so the operator answered the escalation there, exactly as the words
+// directed, the same decision was asked for again, and the identical refusal came
+// back. No guard reads a note, and nothing in the sentence named the verb that
+// does. So the refusal prints what to write, with the budget that refused and the
+// item already in it, and says plainly that a note is not one.
 func refusedPastCap(err error) error {
 	if !errors.Is(err, runstate.ErrTriageCapReached) {
 		return err
 	}
-	return fmt.Errorf("%w. Nothing in this conversation crosses that cap, and nothing written into the item's notes crosses it either — no guard reads prose. Escalate, and the operator crosses it themselves with %s; once that is recorded, asking for this same decision again records it",
-		err, overrideCommands(err))
+	return fmt.Errorf("%w. Nothing written into the item's notes crosses that cap — no guard reads prose. What crosses it from here is %s, up to %d times per item and only with the reason it is being crossed for, which is recorded on the item and reported to the operator as you record it; once the crossing is recorded, asking for this same decision again records it. Past those %d, or for a ceiling beyond the one that permits it, escalate and the operator crosses it themselves with %s",
+		err, crossingDecisions(err), runstate.MaxDelegatedCapCrossings, runstate.MaxDelegatedCapCrossings, overrideCommands(err))
+}
+
+// crossingDecisions are the crossings that would clear one refusal, written as
+// the blocks that record them, with the budget and the item already in each.
+//
+// One per budget that refused, for the reason the operator's commands beside them
+// are one per budget: an action can stand behind two of them, and crossing one
+// leaves the same decision refused by the other. Both in one turn is one sitting
+// rather than two, which is exactly what cost two override ceremonies minutes
+// apart on each of two items on 2026-09-05.
+//
+// The run is left as a placeholder rather than filled in. Everything else here is
+// a figure the refusal already holds, and the run is the one thing it does not:
+// the decision that was refused named it, and naming the wrong one is what the
+// transposition guard exists to catch.
+func crossingDecisions(err error) string {
+	var capped runstate.TriageCapError
+	if !errors.As(err, &capped) || len(capped.Refusals) == 0 {
+		return `a triage action of ` + "`" + `{"action":"triage","id":"<work item>","run":"<run>","decision":"cross","budget":"<budget>","reason":"<why>"}` + "`"
+	}
+	crossings := make([]string, 0, len(capped.Refusals))
+	for _, refusal := range capped.Refusals {
+		crossings = append(crossings, fmt.Sprintf("`{\"action\":\"triage\",\"id\":%q,\"run\":\"<the run the entry names>\",\"decision\":%q,\"budget\":%q,\"reason\":\"<why>\"}`",
+			capped.WorkItemID, decisionCross, refusal.Budget))
+	}
+	if len(crossings) == 1 {
+		return crossings[0]
+	}
+	return strings.Join(crossings[:len(crossings)-1], ", ") + " and " + crossings[len(crossings)-1] + " — both are needed, since either budget alone still refuses it"
 }
 
 // overrideCommands are the commands that cross the caps one refusal came from,

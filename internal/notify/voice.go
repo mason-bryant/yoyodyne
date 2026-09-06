@@ -166,6 +166,7 @@ var harnessVoice = voice{
 		KindWorkHandedOff:       "{item} was handed to {executor} rather than to a developer run: {why}",
 		KindWorkPickedUp:        "Taken up in conversation: {title}",
 		KindWorkCarriedOut:      "{item} was closed by the conversation carrying it: {why}",
+		KindCapCrossed:          "The {budget} cap for {item} was crossed to {cap} by the development manager on delegated authority, which is {crossing} for this item: {why}",
 		KindRunStarted:          "{item} claimed and started as {run}, on account {account} at configuration {config}. Selected by {by}: {reason}",
 		KindChecksPassed:        "Checks passed on {item}.",
 		KindChecksFailed:        "Checks failed on {item}: {command} exited {exit}.",
@@ -224,6 +225,7 @@ var developerVoice = voice{
 		KindWorkHandedOff:       "{item} will never reach me: it is carried by {executor} rather than by a run, because {why}",
 		KindWorkPickedUp:        "Somebody has started {title} in conversation. There is no worktree and no diff in that.",
 		KindWorkCarriedOut:      "{item} is finished without a change of mine ever being written: {why}",
+		KindCapCrossed:          "The {budget} cap on {item} was crossed to {cap} without the operator being asked first — {crossing} — so what I was refused is something I can be handed now: {why}",
 		KindRunStarted:          "I've picked up {item} as {run}, on account {account} at configuration {config}. It came to me from {by}: {reason}",
 		KindChecksPassed:        "Checks are green on {item}. I ran them before calling anything done.",
 		KindChecksFailed:        "Checks are red on {item}: {command} exited {exit}. That is my next attempt, not somebody else's problem.",
@@ -282,6 +284,7 @@ var reviewerVoice = voice{
 		KindWorkHandedOff:       "{item} left the run queue for {executor}, so no change on it will come to me: {why}",
 		KindWorkPickedUp:        "{title} is under way in conversation. Nothing is coming to me for a verdict on it.",
 		KindWorkCarriedOut:      "{item} is done and was never judged, because there was no change to judge: {why}",
+		KindCapCrossed:          "{item} has been given more room than the project configured: the {budget} cap now stands at {cap}, on {crossing}. I judge the change and not the budget, and the budget is why it comes back to me again: {why}",
 		KindRunStarted:          "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. I'll judge what comes back rather than how it got here.",
 		KindChecksPassed:        "The checks behind {item} pass. Passing checks are evidence, not a verdict.",
 		KindChecksFailed:        "The checks behind {item} fail: {command} exited {exit}. There is nothing for me to judge yet.",
@@ -339,6 +342,7 @@ var developmentManagerVoice = voice{
 		KindWorkHandedOff:       "{item} is out of what I pull: it is carried by {executor}, so a run would only spend itself on it — {why}",
 		KindWorkPickedUp:        "{title} is being carried in conversation now. It stays in flight until whoever holds it closes it.",
 		KindWorkCarriedOut:      "{item} is done, closed by the conversation that carried it rather than by a run: {why}",
+		KindCapCrossed:          "I crossed the {budget} cap on {item} to {cap} myself rather than waiting to be granted it — {crossing} of the ones that are mine to take. Overrule me if I have this wrong: {why}",
 		KindRunStarted:          "I've pulled {item} off the queue, and it is claimed and started as {run}, on account {account} at configuration {config}: {reason}",
 		KindChecksPassed:        "{item} cleared its checks and is on to review.",
 		KindChecksFailed:        "{item} came back from its checks: {command} exited {exit}. It routes to repair with that intact.",
@@ -397,6 +401,7 @@ var productManagerVoice = voice{
 		KindWorkHandedOff:       "{item} is work {executor} carries rather than a run, and it is marked as such so nothing spends a run on it: {why}",
 		KindWorkPickedUp:        "Somebody has taken this up: {title}. What the work serves is unchanged by who carries it.",
 		KindWorkCarriedOut:      "{item} is delivered, in a conversation rather than in a change: {why}",
+		KindCapCrossed:          "More room went to {item} than the queue budgeted for it: the {budget} cap stands at {cap}, on {crossing}. The item is no closer to being decided for it: {why}",
 		KindRunStarted:          "Work started on {item} as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. That reason is the operator's to disagree with.",
 		KindChecksPassed:        "{item} passed its checks — progress on what it was admitted for.",
 		KindChecksFailed:        "{item} failed its checks: {command} exited {exit}. Nothing about what it is for has changed.",
@@ -455,6 +460,7 @@ var architectVoice = voice{
 		KindWorkHandedOff:       "{item} is executed by {executor} rather than by a run, and saying so is what keeps a run from discovering it by refusing an empty diff: {why}",
 		KindWorkPickedUp:        "{title} has been taken up in conversation. What it produces is a judgment rather than a diff.",
 		KindWorkCarriedOut:      "{item} is carried out, and what it settled is in the documents rather than in a promotion: {why}",
+		KindCapCrossed:          "A budget the project set has been crossed rather than argued with: {item} now has a {budget} cap of {cap}, on {crossing}. A cap crossed repeatedly is a cap that is wrong or work that is: {why}",
 		KindRunStarted:          "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. The design it derives from is unchanged.",
 		KindChecksPassed:        "{item} passed its checks. The gate held.",
 		KindChecksFailed:        "{item} failed its checks: {command} exited {exit}. A gate that catches this is a gate doing its job.",
@@ -557,6 +563,12 @@ var nextMoves = map[Kind]string{
 	KindWorkHandedOff:  "the role that carries it, in conversation — no run will ever be started for this.",
 	KindWorkPickedUp:   "the role carrying it, until the work is done and the item closed.",
 	KindWorkCarriedOut: "nobody's — the item is done.",
+	// A crossing is already in force, so nobody has to do anything for it to take
+	// effect — which is exactly why the clause names the operator anyway. The
+	// delegation was granted on the condition that they could still say no, and a
+	// message that said nobody's move followed would be telling the reader they had
+	// nothing to do about the one kind of message they were promised a say in.
+	KindCapCrossed: "the operator's, only if they disagree — the cap is crossed already, and the decision it makes recordable is the development manager's to record next.",
 	// One run's own arc. Each of these is followed by the next by itself, so what
 	// they say is who is working rather than who is being waited on.
 	KindRunStarted:     "the developer's, until the checks say otherwise.",
@@ -926,6 +938,40 @@ func (e Event) fields(topic Topic) map[string]string {
 		// is read.
 		"setting":     stated(detail.Setting, "a setting the record does not name"),
 		"improvement": stated(detail.Improvement, "what the template improved could not be read here"),
+		// The delegated cap crossing. The ceiling is said as a number rather than as
+		// arithmetic a reader has to do, and the count is said with its bound for the
+		// reason every count here is: "crossing 4" tells an operator nothing until
+		// they know there are five.
+		"budget":   stated(detail.Budget, "a cap the record does not name"),
+		"cap":      capOf(detail.Cap),
+		"crossing": crossingOf(detail),
+	}
+}
+
+// capOf is the ceiling a crossing put in force. Zero is a record that did not
+// carry one rather than a cap of nothing: a crossing raises a budget by a step,
+// so a ceiling of nought is not something the only thing that writes them can
+// produce.
+func capOf(ceiling int) string {
+	if ceiling <= 0 {
+		return "a ceiling the record does not carry"
+	}
+	return strconv.Itoa(ceiling)
+}
+
+// crossingOf says which of the crossings a role may take this one was. A record
+// that counted the crossing without carrying the bound says so, rather than
+// implying the crossing was the last available or the first: how much room is
+// left is the operator's whole reason for reading this, and a half-answer is
+// worse than an absence they can see.
+func crossingOf(detail Detail) string {
+	switch {
+	case detail.Crossing <= 0:
+		return "a crossing the record does not count"
+	case detail.Crossings <= 0:
+		return "crossing " + strconv.Itoa(detail.Crossing) + " of a bound the record does not carry"
+	default:
+		return "crossing " + strconv.Itoa(detail.Crossing) + " of " + strconv.Itoa(detail.Crossings)
 	}
 }
 

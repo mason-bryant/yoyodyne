@@ -358,9 +358,28 @@ type Counters struct {
 	// everything triage decided about it carried out, and the counter alone
 	// cannot tell that from a decision still waiting to be acted on.
 	RerunsCarriedOut int `json:"reruns_carried_out"`
+	// Crossings is how many of this item's caps the development manager has
+	// crossed on his own delegated authority, and CrossingsBound how many he gets.
+	// They travel together for the reason every count here travels with its
+	// ceiling: a development manager who sees four crossings without seeing the
+	// bound of five cannot tell whether crossing again is a decision or the
+	// escalation the bound exists to force.
+	//
+	// An entry written before the delegation existed carries zero of both, which
+	// reads as an item nobody has crossed anything on — which is what every item
+	// was.
+	Crossings      int `json:"crossings"`
+	CrossingsBound int `json:"crossings_bound"`
 }
 
-// Override is one operator decision to cross this item's caps, as the durable
+// CrossingsSpent reports an item whose delegated crossings are gone, which is the
+// counter that hands the item back to the operator: past it, more room is not the
+// development manager's to give.
+func (c Counters) CrossingsSpent() bool {
+	return c.CrossingsBound > 0 && c.Crossings >= c.CrossingsBound
+}
+
+// Override is one recorded decision to cross this item's caps, as the durable
 // triage record has it. It is declared here rather than imported from that record
 // for the reason Finding is: what reaches a development manager must not change
 // shape because the harness's own schema was refactored.
@@ -371,7 +390,17 @@ type Override struct {
 	DecidedBy string    `json:"decided_by"`
 	DecidedAt time.Time `json:"decided_at"`
 	Reason    string    `json:"reason"`
+	// CrossedBy is the role that crossed the cap on its own delegated authority,
+	// and is empty for the operator's own hand. It is carried because a development
+	// manager reading an item's budgets has to be able to tell room the operator
+	// gave it from room he gave it himself: the first is an answered escalation and
+	// the second counts against the crossings he has left.
+	CrossedBy string `json:"crossed_by,omitempty"`
 }
+
+// Delegated reports an override a role recorded on its own authority rather than
+// the operator's.
+func (o Override) Delegated() bool { return strings.TrimSpace(o.CrossedBy) != "" }
 
 // Describe says what one override did, the way the entry that carries it reads.
 func (o Override) Describe() string {
@@ -379,8 +408,12 @@ func (o Override) Describe() string {
 	if o.Cleared {
 		crossed = fmt.Sprintf("cleared the %s cap", o.Budget)
 	}
-	return fmt.Sprintf("%s, decided by %s at %s: %s",
-		crossed, strings.TrimSpace(o.DecidedBy), o.DecidedAt.UTC().Format(time.RFC3339), strings.TrimSpace(o.Reason))
+	decided := fmt.Sprintf("decided by %s", strings.TrimSpace(o.DecidedBy))
+	if o.Delegated() {
+		decided = fmt.Sprintf("crossed by the %s on delegated authority", strings.TrimSpace(o.CrossedBy))
+	}
+	return fmt.Sprintf("%s, %s at %s: %s",
+		crossed, decided, o.DecidedAt.UTC().Format(time.RFC3339), strings.TrimSpace(o.Reason))
 }
 
 // Decided reports triage having recorded a re-run of this item that the harness
@@ -891,6 +924,7 @@ func (e Entry) renderDecisions() string {
 		e.Counters.Reruns, capFigure(e.Counters.RerunsCap), e.Counters.RerunsCarriedOut,
 		e.Counters.MergeRearms, capFigure(e.Counters.MergeRearmsCap))
 	rendered.WriteString(e.renderOverrides())
+	rendered.WriteString(e.renderCrossingStanding())
 	rendered.WriteString(e.renderGrantStanding())
 	rendered.WriteString(e.renderRerunStanding())
 	rendered.WriteString(e.renderRearmStanding())
@@ -935,9 +969,40 @@ func (e Entry) renderEnvironmental() string {
 func (e Entry) renderOverrides() string {
 	var rendered strings.Builder
 	for _, override := range e.Overrides {
-		fmt.Fprintf(&rendered, "      Operator override: %s\n", override.Describe())
+		// The two are labelled apart because they answer different questions. An
+		// operator override is somebody else having answered an escalation, and a
+		// delegated crossing is the development manager's own earlier decision about
+		// this item — which is the best evidence there is about whether crossing it
+		// again will help, and it is one of five.
+		label := "Operator override"
+		if override.Delegated() {
+			label = "Cap crossed on delegated authority"
+		}
+		fmt.Fprintf(&rendered, "      %s: %s\n", label, override.Describe())
 	}
 	return rendered.String()
+}
+
+// renderCrossingStanding says where this item stands with the caps the
+// development manager may cross himself. It is silent until one has been
+// crossed, for the reason the re-arm standing is: an untouched delegation
+// announced on every ordinary stoppage is a line every reader learns to skip.
+//
+// Once one has been crossed it is never silent again, and the exhausted case says
+// what happens instead rather than only that the room is gone: an item past the
+// bound is the operator's, and a development manager who learns that by being
+// refused has spent a turn finding out something the entry could have told them.
+func (e Entry) renderCrossingStanding() string {
+	counters := e.Counters
+	if counters.Crossings == 0 {
+		return ""
+	}
+	if counters.CrossingsSpent() {
+		return fmt.Sprintf("      A further cap crossing for %s is not yours: %d of %d crossing(s) on your own authority are recorded, and past the bound the caps are the operator's again. Escalate, and say which cap and why.\n",
+			e.WorkItemID, counters.Crossings, counters.CrossingsBound)
+	}
+	return fmt.Sprintf("      %d of %s cap crossing(s) on your own authority are recorded against %s; each further one is reported to the operator as you record it.\n",
+		counters.Crossings, capFigure(counters.CrossingsBound), e.WorkItemID)
 }
 
 // capFigure is one ceiling as a reader reads it. A cleared cap stands at a number

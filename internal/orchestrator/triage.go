@@ -756,13 +756,19 @@ func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerun
 		MergeRearms:         ledger.MergeRearms,
 		MergeRearmsCap:      permitted.MergeRearms,
 		RerunsCarriedOut:    rerunsCarriedOut,
+		// What the development manager has already crossed on his own authority,
+		// beside the bound the store refuses the next one against. Both are read from
+		// the same record the guard reads, so the figure on the entry and the figure
+		// that refuses can never be two different counts.
+		Crossings:      ledger.DelegatedCrossings(),
+		CrossingsBound: runstate.MaxDelegatedCapCrossings,
 	}
 }
 
-// docketedOverrides carries the operator's recorded cap decisions onto an entry.
-// It is a copy rather than the record's own type for the reason every other
-// figure here is copied: what reaches a development manager must not change shape
-// because the durable schema was refactored.
+// docketedOverrides carries the recorded cap decisions onto an entry. It is a
+// copy rather than the record's own type for the reason every other figure here
+// is copied: what reaches a development manager must not change shape because the
+// durable schema was refactored.
 func docketedOverrides(recorded []runstate.TriageOverride) []triage.Override {
 	if len(recorded) == 0 {
 		return nil
@@ -776,9 +782,24 @@ func docketedOverrides(recorded []runstate.TriageOverride) []triage.Override {
 			DecidedBy: override.DecidedBy,
 			DecidedAt: override.DecidedAt,
 			Reason:    override.Reason,
+			// The role is carried as the title a reader reads rather than as the
+			// marker the record keys it by, for the reason the entry copies every
+			// other figure: the entry is prose a development manager reads, and a
+			// slug there is one more thing to resolve.
+			CrossedBy: crossedBy(override),
 		})
 	}
 	return carried
+}
+
+// crossedBy names the role that crossed a cap on its own authority, and is empty
+// for the operator's own override — which every one of them was before the
+// delegation existed.
+func crossedBy(override runstate.TriageOverride) string {
+	if !override.Delegated() {
+		return ""
+	}
+	return override.CrossedBy.Title()
 }
 
 // recordedCounters are the counters an entry is written with: the item's triage

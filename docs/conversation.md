@@ -1096,24 +1096,37 @@ about a change that item never made. A run the harness has no record of is
 refused the same way, since nothing then says the decision is about that item's
 stoppage at all.
 
-Four of the six the harness holds to more than a note. **A repair, a re-run, and
-a re-arm each spend the item's durable budget as they are recorded**, and are
+Five of the seven the harness holds to more than a note. **A repair, a re-run,
+and a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names every budget that refused, what each
-has spent, and the ceiling that would permit the decision, which is the evidence
-for escalating instead, and says that nothing in the conversation crosses that
-cap.
+has spent, and the ceiling that would permit the decision.
 A repair and a re-run are each once per item — a second of
 either is an escalation rather than a larger budget — and past the
 [review-round cap](configuration.md#what-one-work-item-has-been-given) even
-the first is refused. What you can do about that is
+the first is refused.
+
+**The seventh decision is `cross`, and it is what she does about that refusal
+without waking you.** It raises the budget the refusal named to exactly the
+ceiling that refusal quoted — one more than the item has spent against it — it
+takes the reason it is being crossed for, and it is bounded to five per item;
+past those five, or for any ceiling beyond that, the cap is yours again and
+the refusal says so. Each crossing is recorded on the item beside the cap and the
+crossing number, and reported to you in the channel at `warning` severity as it
+happens — a veto by reading rather than a request, because every override
+recorded in the week to 2026-09-06 was granted, most within minutes, and the step
+through you was latency rather than judgement. A crossing carrying no
+justification is refused outright, which is the condition the delegation rests
+on.
+
+What is still yours is
 [`yoyo triage override`](configuration.md#crossing-a-cap-the-operator-decides-to-cross),
-in your name and with your reason, after which asking for the same decision again
-records it: the caps refuse the machine and not your ruling on it. **The command
-is the only thing that crosses a cap**, and the refusal prints it with the budget,
-the item, and the ceiling already filled in, because naming the remedy without
-naming the verb sent two of these overrides into the item's notes instead — where
-no guard reads them, and where the resubmitted decision met the identical refusal.
-Where both of a decision's budgets are spent it prints one command for each and
+in your name and with your reason: any ceiling, any budget, and lifting one
+entirely. **Nothing crosses a cap except a recorded crossing**, and the refusal
+prints both — her own, with the budget already in it, and your command with the
+item and the ceiling filled in — because naming the remedy without naming the
+verb sent two of these overrides into the item's notes instead, where no guard
+reads them and where the resubmitted decision met the identical refusal.
+Where both of a decision's budgets are spent it prints one of each and
 says both are needed, because crossing one and meeting the other is what cost two
 override sittings minutes apart on each of two items. A merge re-arm is bounded per item by the
 integration-retry budget rather than the rounds, because it buys no round at
@@ -1128,7 +1141,7 @@ were never told about. `rescope` and `wait` are the two that are a note and
 nothing else — a re-scope's real work is the child item it creates beside the
 note, and a wait asks for nothing at all.
 
-Recording a decision is not carrying it out, and two of the six now have an
+Recording a decision is not carrying it out, and two of the seven now have an
 action that does. They are the two opposite answers to a run that stopped:
 `yoyo triage rerun` starts the item over, and `yoyo triage repair` continues the
 run that stopped on the change it already has.

@@ -2840,7 +2840,7 @@ round cap, which they share with each other and with every run of the item. The
 [table below](#what-one-work-item-has-been-given) says which bound refuses
 which.
 
-Recording a decision and carrying it out are two steps, and two of the six
+Recording a decision and carrying it out are two steps, and two of the seven
 decisions have an action for the second. They are the two opposite answers to a
 run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
 repair` continues the run that stopped on the change it already has.
@@ -3069,9 +3069,12 @@ total — across repairs, across runs — past which triage may no longer hand i
 back for another repair. Past the cap triage still has both of its other
 actions: escalate the item, or re-scope it. `0` is a choice somebody can mean and
 is accepted as one: an item that reaches triage at all is never repaired again.
-The one thing that crosses it for a single item is
-[an operator's recorded override](#crossing-a-cap-the-operator-decides-to-cross),
-which is what makes an escalation answerable rather than only sayable.
+What crosses it for a single item is
+[a recorded crossing](#crossing-a-cap-the-operator-decides-to-cross): the operator's
+own override, to any ceiling, or the development manager's, far enough for the
+one decision that was refused and five times per item — which is what makes an
+escalation answerable rather than only
+sayable, and what stops most of them being needed.
 
 `repair_grant_attempts` is how many repair attempts triage hands an item when it
 decides the work is worth another go. Leave it out and it follows
@@ -3108,7 +3111,7 @@ and the line under it names the one thing that changes that, so the dead end and
 the way out are read in the same breath:
 
 ```text
-    `yoyo triage override --budget "review round" --cap <n> --by "<you>" --reason "<why>" yoyodyne-ifd.90` is the only thing that crosses it
+    `yoyo triage override --budget "review round" --cap <n> --by "<you>" --reason "<why>" yoyodyne-ifd.90` crosses it to any ceiling; the development manager may also cross it far enough for one more decision, 5 times per item, and each of those reaches you in the channel as it happens
 ```
 
 What may still happen without crossing anything is what the budget lines beside
@@ -3123,10 +3126,12 @@ spends only its own budget, whatever the rounds say.
 ```
 
 **The first line counts what has been spent, not how many times triage looked.**
-Three of the development manager's six decisions spend a budget here — a repair
-grant, a re-run, a merge re-arm — and `wait`, `rescope`, and `escalate` cost
-nothing and reach no counter, so an item that was escalated reads `triage has
-spent nothing on it`. Whether stopped work has been decided, and what was
+Three of the development manager's seven decisions spend a budget here — a
+repair grant, a re-run, a merge re-arm — and `wait`, `rescope`, and `escalate`
+cost nothing and reach no counter, so an item that was escalated reads `triage
+has spent nothing on it`. A `cross` reaches no counter here either: it moves a
+cap rather than spending one, and where it is reported is the crossing lines
+under these budgets. Whether stopped work has been decided, and what was
 decided, is recorded on the work item itself.
 
 **This is also what the docket reports.** Every entry for an item carries these
@@ -3238,14 +3243,20 @@ which is the same judgement about the same thing one level up.
 #### Crossing a cap the operator decides to cross
 
 **A cap refuses the answer to an escalation as readily as it refuses a machine,
-and one thing crosses it: the operator, in a record.** Every cap above stops
-triage handing an item back again, which is what they are for — but they stopped
-the recording as well as the carrying out. A development manager past the round
-cap could not record a re-run of the item; `yoyo triage rerun` refuses without
-that record; and escalating recorded neither. So a cap-exhausted item was
-unrunnable by every path the harness keeps a record of, and an operator who read
-the escalation and ruled that the work should be run again had that ruling
-carried out by admitting fresh work in its place.
+so a cap is crossable — in a record, by somebody named, and for a stated
+reason.** Every cap above stops triage handing an item back again, which is what
+they are for — but they stopped the recording as well as the carrying out. A
+development manager past the round cap could not record a re-run of the item;
+`yoyo triage rerun` refuses without that record; and escalating recorded neither.
+So a cap-exhausted item was unrunnable by every path the harness keeps a record
+of, and an operator who read the escalation and ruled that the work should be run
+again had that ruling carried out by admitting fresh work in its place.
+
+There are two crossings and they are not the same size. **The operator's is
+`yoyo triage override`, below: any ceiling, any budget, including lifting one
+entirely.** **The development manager's is one step, five times per item, and
+only with a justification** — described under
+[a crossing the development manager takes himself](#a-crossing-the-development-manager-takes-himself).
 
 ```bash
 yoyo triage override --budget "review round" --cap 8 \
@@ -3272,21 +3283,23 @@ the larger of the configured cap and its override, not the override — so raisi
 item 10 like every other, rather than pinning it to the 8 somebody once gave it. An
 override only ever adds room.
 
-**It is yours and nobody else's.** No role has a word for it: the development
-manager's triage vocabulary cannot produce one, and the actions that carry
-decisions out read overrides rather than write them. It is a terminal command for
-the reason `yoyo release` is one — the switch that answers an escalation has to
-work with no conversation open.
+**An unbounded raise is yours and nobody else's.** No role can produce one: a
+crossing recorded by the development manager raises one budget just far enough
+for the decision it was refused and can never clear one, and the actions that carry decisions out read overrides
+rather than write them. It is a terminal command for the reason `yoyo release` is
+one — the switch that answers an escalation has to work with no conversation
+open.
 
-**This command is the only thing that crosses a cap, and the refusal names it.**
-An override recorded anywhere else — in the work item's notes, in the escalation,
-in the conversation that raised it — crosses nothing, because no guard reads
-prose. That is not a hypothetical misreading: a refusal that said only "the
-operator can record an override against the item" was twice answered in the
-item's notes, exactly as those words directed, and the resubmitted decision came
-back with the identical message. The development manager's refusal now prints the
-command above with the budget that refused, the item, and the ceiling that would
-permit the decision already in it.
+**Nothing crosses a cap except a recorded crossing, and the refusal names both
+kinds.** An override recorded anywhere else — in the work item's notes, in the
+escalation, in the conversation that raised it — crosses nothing, because no
+guard reads prose. That is not a hypothetical misreading: a refusal that said
+only "the operator can record an override against the item" was twice answered in
+the item's notes, exactly as those words directed, and the resubmitted decision
+came back with the identical message. The development manager's refusal now
+prints the crossing that is his own and the command above that is yours, each
+with the budget that refused, the item, and the ceiling that would permit the
+decision already in it.
 
 **A decision two spent budgets refuse is refused by both at once.** A repair
 grant and a re-run each stand behind two budgets — their own and the rounds — and
@@ -3316,6 +3329,63 @@ against one repository each hold a full set for the same item, so a cap of one i
 a cap of two across the pair. That is a recorded limit rather than a design, and
 [`docs/team-mode-scope.md`](team-mode-scope.md#a-recorded-gap-per-item-budgets-are-per-machine)
 states it where the team-mode design will need it.
+
+#### A crossing the development manager takes himself
+
+**The development manager may cross a cap that refused him, far enough for the
+one decision it refused, five times per item, and only with the reason
+recorded.** Every override recorded in
+the week to 2026-09-06 was granted, most of them within minutes of the escalation
+that asked for it, under the operator's own standing direction — so the operator
+step was latency rather than judgement. What replaced it keeps the judgement and
+removes the wait: he crosses the cap, and the operator reads about it.
+
+He records it as a triage decision like any other, naming the budget the refusal
+named:
+
+```json
+{"action":"triage","id":"yoyodyne-ifd.143","run":"run-…","decision":"cross","budget":"review round","reason":"the change was right and the ground moved under it"}
+```
+
+**Three things bound it, and they are what the operator delegated it on.**
+
+- **Exactly the ceiling the refusal named.** The crossing raises that one budget
+  to one more than the item has spent against it, which is the figure the refusal
+  already quotes as permitting the decision. It is measured from the spend rather
+  than from the ceiling, and the two differ on every item that is past its cap
+  rather than level with it — rounds are counted whatever a cap says, so the "6
+  spent … at or past the cap of 4" above is an ordinary state, and a crossing that
+  stepped from the ceiling would move it to 5, meet the same refusal, and cost him
+  another crossing and you another message for every round of the gap. An
+  unbounded raise, a cleared budget, and any ceiling beyond the one that permits
+  the decision are operator acts and are refused to him.
+- **Five per item.** A sixth crossing of the same item is refused, naming
+  `yoyo triage override` as the path, because an item that has been given more
+  room five times is one where something other than the budget is wrong. The
+  crossings are counted across every budget together: what is bounded is how often
+  he may decide the item deserves more room.
+- **A justification, always.** A crossing carrying no reason is refused outright.
+  The reason is recorded on the item beside the cap and the crossing number, and
+  it is reported to the operator in the channel at the moment of the crossing.
+
+**The channel message is the veto.** A crossing is in force from the moment it is
+recorded, so nothing waits for the operator's answer — what keeps their say is
+that they are told at once, at `warning` severity, with the item, the cap, which
+crossing of the five it was, and the reason. Disagreeing means undoing the work it
+bought, not withholding permission. A crossing that reached nobody would be the
+delegation without the condition it was granted under.
+
+`yoyo status <beads-id>` lists each recorded crossing beside the operator's own
+overrides, and says how many of the item's five are spent:
+
+```text
+  cap crossed on delegated authority: raised the review round cap to 5, crossed by the development manager on delegated authority at 2026-09-06T09:00:00Z: the change was right and the ground moved under it
+  1 of 5 cap crossing(s) the development manager may take himself are recorded; past that the caps are yours again
+```
+
+**It carries nothing out and buys nothing.** A crossing spends none of the
+budgets: it moves one cap, and the decision it makes recordable is still a
+decision he records afterwards, refused by everything it was always refused by.
 
 ## Merge and removal semantics
 
