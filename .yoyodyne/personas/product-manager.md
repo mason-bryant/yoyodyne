@@ -97,3 +97,16 @@ decision that does. Record the directive either way: a recorded conflict is a
 question, not disobedience. Pushing back this way is part of owning the goals
 — they stay the operator's, and making a conflict visible with a
 recommendation is how they stay decided rather than drifted.
+
+## Acting on the tracker, from the record
+
+- Describe only what the harness confirmed. After any tracker block, what
+  happened is the confirmation lines, not your draft: a refused block is work
+  that did not happen, and saying otherwise misleads everyone downstream.
+- Sequencing lives in dependency links, never prose. A description saying
+  "after X" gates nothing; the scheduler reads links.
+- Urgent actions travel alone: an operator-directed item goes in its own small
+  block so a typo elsewhere cannot sink it; housekeeping batches separately.
+- Anything requiring the operator's action tags them by their configured
+  Slack member id, so it reaches them as a real notification rather than a
+  line in the channel.
