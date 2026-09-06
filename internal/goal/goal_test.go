@@ -938,28 +938,45 @@ An introduction.
 // reads, and would keep passing after the project moved them.
 //
 // What this refuses and what it tolerates is a decided boundary rather than an
-// oversight, and the line is a contradiction against an absence. A repository
-// asserting something false about itself is a defect whoever wrote it and
-// whatever they meant; a repository that has written less down than it will is
-// intent part-way through being recorded, and failing a build over one makes
-// writing intent down the riskiest thing anybody can do.
+// oversight, and yoyodyne-ifd.326 moved that line. It used to fall between a
+// contradiction and an absence, which put a goals document asserting something
+// the brief does not say on the refusing side. It now falls between the
+// harness's own record and the product's prose: nothing a person writes in a
+// goals document reddens this build, and what is held here is the identity the
+// harness validates and the reports it produces about that prose.
 //
-// Refused, because each is the repository contradicting itself:
+// The reason is the one the reviewer gave for the states that were already
+// tolerated, followed the rest of the way. A `*Supports: ...*` trailer stops
+// naming a brief goal the moment somebody rewords that claim in the brief, and
+// both documents are the product manager's to write; a build that goes red on
+// the edit makes rewording the document to suit the checker the cheapest way out,
+// which is exactly the pressure the tolerated states exist to avoid. So the
+// check moved to the surfaces that can afford to be right about it — `yoyo goals
+// list` names it on stderr and in `--json`, and `internal/conformance`'s goals
+// check carries it into a release assessment, where a goals document nobody can
+// read refuses the cut and a broken link upstream is a note beside it.
+//
+// Refused, because each is the harness's own record wrong rather than a
+// document part-way written:
 //
 //   - The store failing to load, a recorded document it could not read, a
 //     `supports:` naming an artifact nobody records, a revision under no
 //     authority. TestThisRepositoryOwnArtifactsAreReadableByTheHarness refuses
 //     these one layer up for the same reason, and the reason is written down
 //     there: the harness reports them and refuses nothing over one, so a warning
-//     nobody is made to read is how one of them breaks unnoticed.
+//     nobody is made to read is how one of them breaks unnoticed. They are
+//     identity and authority the harness validates rather than anything the
+//     product manager writes in prose.
 //
-//   - A goal naming a brief goal the brief does not state. The goals document
-//     asserts the brief says something it does not, which is the same broken
-//     link as a dangling `supports:` one layer up, and it is what silently
-//     orphans the work attributed under it.
+//   - A report of any of the tolerated states below that names no file to open,
+//     and a recorded brief the collected goals do not say where to find. A
+//     legitimate state described by a report nobody can act on is ours to fix
+//     rather than the product manager's, and it is the whole of what is left
+//     here about the live documents.
 //
-// Tolerated, because each is intent not yet finished rather than intent
-// contradicted, and each is already reported by `yoyo goals list` on stderr:
+// Tolerated, because each is the product's own prose rather than the harness
+// contradicting itself, and each is already reported by `yoyo goals list` on
+// stderr and carried into `yoyo release`'s goals check:
 //
 //   - A goals document stating no goals, and no goal in force at all. A goals
 //     set is legitimately empty before the goals are written, and Collect
@@ -968,12 +985,14 @@ An introduction.
 //   - A goal naming nothing upstream. The goal has yet to say what it is for,
 //     which is a sentence somebody still has to write and not a false one.
 //
-//   - A brief stating no goals for anything to name.
+//   - A goal naming a brief goal the brief does not state. It is still a broken
+//     link and still worth fixing — it is what silently orphans the work
+//     attributed under it — and what changed is where it is judged: the release
+//     assessment reads it in front of the person who owns both documents, rather
+//     than every developer's `make test` reading it in front of somebody who
+//     may not edit either.
 //
-// What is asserted about the tolerated states instead is that the report of them
-// is usable: a legitimate state described by a problem naming no file to open is
-// still a defect here, and that part is ours to fix rather than the product
-// manager's.
+//   - A brief stating no goals for anything to name.
 func TestYoyodynesOwnArtifactsLoadAndItsGoalsAreReadFromThem(t *testing.T) {
 	t.Parallel()
 
@@ -996,15 +1015,15 @@ func TestYoyodynesOwnArtifactsLoadAndItsGoalsAreReadFromThem(t *testing.T) {
 	}
 	for _, problem := range set.LinkProblems {
 		switch problem.Kind {
-		case LinkDangling:
-			t.Errorf("a goal names a brief goal the brief does not state, so the work attributed under it traces to nothing: %s", problem)
-		case LinkUnstated:
+		case LinkDangling, LinkUnstated:
 			// Naming the document is this package's job whatever the goal says, so
 			// it is refused even though the state being reported is tolerated.
+			// LinkNoBriefGoals is about the brief rather than about any one goal and
+			// carries no path, which is why it is not held to this.
 			if problem.Path == "" || problem.ArtifactID == "" {
-				t.Errorf("a goal with no link upstream does not name the document it is written in: %#v", problem)
+				t.Errorf("a goal whose link upstream does not hold does not name the document it is written in: %#v", problem)
 			}
-			t.Logf("goal names nothing upstream: %s", problem)
+			t.Logf("goal not linked to the brief: %s", problem)
 		default:
 			t.Logf("goal not linked to the brief: %s", problem)
 		}

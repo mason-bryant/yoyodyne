@@ -266,8 +266,7 @@ Go check has ever run a line of bash.
 | What fails | Where it lives | What it means |
 | --- | --- | --- |
 | A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry — or a fragment cited from Go, YAML, or shell source naming a heading the document it names does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. Source is read for citations because prose is not the only thing that names a heading: `docs/configuration.md#checks` is written into every `.yoyodyne/config.yaml` `yoyo init` has ever generated, on disks this repository cannot reach. A cited path is resolved in the three spellings one is written in — from the repository root, from the citing file's own directory, and inside a forge blob URL — so `../README.md#further-reading` in a script counts like `README.md#further-reading` in a Go string. A citation naming a document this repository does not have in any of the three is passed over rather than reported — a fixture written to be broken is a path too, and guessing would be worse than saying nothing — so a fixture in a test must name a document this repository has not got, which is the convention the fixtures in `internal/doclink` keep. |
-| A goal in an in-force goals document written across more than one physical line | `internal/cli` (`goals_repository_test.go`) | Rejoin the statement onto one line. The goal is recorded whole either way; what the check holds is that the words an attribution must match are what the file says outright. |
-| A goal in an in-force goals document naming a brief goal the brief does not state | `internal/goal` (`goal_test.go`) | Correct the `*Supports: ...*` trailer, or the brief claim it names. What fails here is a document asserting something false about another one, which is what silently orphans the work attributed under it. The states beside it deliberately do not fail: a goal that has not said yet what it supports, a goals document that states no goals, a brief that states none, and a configured artifact home nobody has created are intent still being written rather than intent contradicted, and `yoyo goals list` reports each of them on stderr. Editing what the product intends must not be the thing that reddens a build. |
+| A report about this repository's own goals that names no place to open — a goals document that could not be read with no path beside it, a goal whose link upstream does not hold and that does not name the document it is written in, a wrapped goal with no file and line, or a recorded brief the collected goals do not say where to find | `internal/goal` (`goal_test.go`) and `internal/cli` (`goals_repository_test.go`) | Carry the path, the artifact, or the line into the report. Nothing about what the documents themselves say fails here, which is [the decision below](#why-nothing-a-goals-document-says-reddens-this-build): a goal written across more than one physical line, a goal that has not said yet what it supports, a goal naming a brief claim the brief does not state, a goals document stating no goals, a repository with no goal in force, a brief stating none, and a configured artifact home nobody has created are all reported by `yoyo goals list` and carried into `yoyo release`'s goals check instead. |
 | A coined term in a document under `docs/product`, `docs/designs`, or `docs/decisions` that [the register](terms.md) does not define — or a register entry with no definition, no place of use, or a second row for a term already listed | `internal/terms` | Write the ordinary word, or add the entry. The register decides and the check only reports: adding a row permits a term and removing it refuses the term again, neither of which is a change to any code. Frontmatter and fenced blocks are not read — a revision's recorded reason is what somebody decided in their own words, and a fenced block is code. A term of more than one word is looked for however its parts are spaced, so a hyphen, a doubled space, or a line wrap between them does not get one past the check, and a row permits every spelling of its term rather than the one the row happens to write. What no check can recognize is a word coined this morning, which is why the reviewer persona carries the same rule as a finding class. |
 | A place the harness enforces role authority that [the authority inventory](authority-inventory.md) does not list, or a listed check whose declaration has moved or been renamed | `internal/authority` | Add the row, or correct the one that moved. The inventory is the statement of what the harness authorizes today and the ground truth the capability registry re-expresses, so an authorization site nothing lists is authority nobody wrote down. The document decides and the check only reports: adding a row lists a check and moving one to the second table excuses it, neither of which is a change to any code. What the sweep can recognize is a floor — a function that names a role and refuses, a name carrying `authoriz` or `authorit`, and the `protect`, `independen`, and `lease` boundaries — so a check outside all of those is still a reviewer's to catch. |
 | A row of [the authority inventory](authority-inventory.md) that the role-capability registry neither expresses as a capability question nor names as a gap | `internal/rolecapability` | Answer the row: write the question a call site would ask instead of the role's name, or the reason there is not one yet. The registry is the inventory said once more in capabilities, so a check nobody re-expressed is one the conversion would silently drop — and a gap written down is the honest half of the claim, which is why an unanswered row fails and a gap does not. |
@@ -287,6 +286,43 @@ Go check has ever run a line of bash.
 
 Fixtures written to be malformed on purpose are not walked: anything under a
 `testdata` directory is skipped, along with `.git`, `.dolt`, and `dist`.
+
+### Why nothing a goals document says reddens this build
+
+Two of the rows above used to fail on the contents of `docs/product`: a goal
+written across more than one physical line, and a goal whose `*Supports: ...*`
+trailer named a claim the brief does not state. Both are worth fixing and
+neither is a defect in any code here. They are how somebody typed a document
+they own, and either one can appear from an ordinary edit — rewording a claim in
+the brief breaks every trailer that named the old wording, and a hard wrap is
+what most editors do to a long sentence.
+
+A build that goes red on that makes the harness the editor of the documents it
+exists to serve, and it makes rewriting the document to suit the checker the
+cheapest way to get back to green. That is the pressure the states beside them
+were already tolerated to avoid, and holding the line halfway was the
+inconsistency: the same finding was a note on a release assessment and a red
+suite in every developer's `make test`.
+
+So the checks moved to the surfaces that can afford to be right about them,
+which are the ones that read a document in front of the person who owns it:
+
+- `yoyo goals list` names each of them on stderr and carries them in `--json` —
+  `goals not read`, `goal not linked to the brief`, and `goal not written on one
+  line`.
+- `internal/conformance`'s goals check carries the same set into a release
+  assessment, and grades them. A goals document nobody can read, and a
+  repository with nothing to check an attribution against, are mismatches and
+  refuse the cut. A broken link upstream and a wrapped goal are notes beside it,
+  because the goal is still stated and the work naming it still resolves.
+- `yoyo goals attribution` exits non-zero for a work item naming a goal no goals
+  document states, and for one whose recorded goal was written over. That is the
+  harm a wrapped or reworded goal actually causes, and it is judged against the
+  tracker's own record rather than against anybody's prose.
+
+What the two rows kept is the half that was never about the documents: a report
+naming no file, no artifact, or no line is unusable, and that is this
+repository's defect rather than the product manager's.
 
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
