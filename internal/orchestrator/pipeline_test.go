@@ -638,6 +638,63 @@ func TestPipelineRefusesUnauthenticatedOrDuplicateRunBeforeClaim(t *testing.T) {
 	}
 }
 
+// The order the refusals a newcomer meets come in. The adoption walk executes
+// the README's claim that a run refuses an uncommitted primary checkout and
+// names every file that is dirty, and it executes it where a newcomer stands:
+// on a machine that has not installed Claude Code yet. A dispatch that asked the
+// provider first answered that claim with "Claude Code is not installed" —
+// true, unrelated, and not the thing the reader has to fix. The checkout is the
+// same refusal on every machine, so it is reported first; the provider is still
+// refused once there is nothing else to say.
+func TestPipelineNamesADirtyCheckoutBeforeAskingWhetherTheProviderIsInstalled(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	dirty := []string{"notes.md", filepath.Join("docs", "product.md")}
+	for _, name := range dirty {
+		if err := os.WriteFile(filepath.Join(repository, name), []byte("uncommitted\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// A machine with no Claude Code on it. AuthMethod is answered so this reads as
+	// a deliberate absence rather than as the zero value the fake fills in.
+	provider := &fakeBackend{availability: backend.Availability{AuthMethod: "none"}}
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() started against an uncommitted primary checkout")
+	}
+	if !errors.Is(err, gitworktree.ErrPrimaryNotReady) {
+		t.Fatalf("Run() error = %v, want the primary checkout refused", err)
+	}
+	for _, name := range dirty {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("Run() error = %v, want it to name %s", err, name)
+		}
+	}
+	if strings.Contains(err.Error(), "Claude Code is not installed") {
+		t.Fatalf("Run() error = %v, want the checkout named rather than the provider", err)
+	}
+	if tracker.claimed {
+		t.Fatal("a run refused for its checkout claimed work")
+	}
+
+	// And with the checkout committed, the provider is exactly as missing as it
+	// was: reporting the checkout first defers that refusal rather than dropping
+	// it.
+	runPipelineGit(t, repository, "add", ".")
+	runPipelineGit(t, repository, "commit", "-m", "adopt yoyo")
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil ||
+		!strings.Contains(err.Error(), "Claude Code is not installed") {
+		t.Fatalf("Run() error = %v, want the missing provider refused once the checkout is clean", err)
+	}
+	if tracker.claimed {
+		t.Fatal("a run refused for its provider claimed work")
+	}
+}
+
 func TestPipelineEnforcesConfiguredDeveloperCapacityBeforeClaim(t *testing.T) {
 	t.Parallel()
 

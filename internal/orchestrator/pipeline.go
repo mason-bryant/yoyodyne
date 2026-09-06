@@ -812,9 +812,13 @@ func (p Pipeline) validateDispatch() error {
 }
 
 // requireBackendReady refuses a dispatch the provider could not serve. It is
-// asked after the operator's hold rather than with the validation above,
-// because a held harness asks the provider nothing at all — not even whether it
-// is installed.
+// asked after every question this repository answers on its own — the operator's
+// hold, the work item, the state of the primary checkout — and deliberately so:
+// those refusals hold whatever is installed on the machine, and this one holds
+// only where Claude Code is not. Asked first it replaces all of them, so a
+// newcomer who has not committed their adoption is told the provider is missing
+// rather than which files are dirty. Nothing between the hold and here reserves a
+// run, claims an item, or cuts a worktree, so asking late costs nothing.
 func (p Pipeline) requireBackendReady(ctx context.Context) error {
 	availability, err := p.Backend.CheckAvailability(ctx)
 	if err != nil {
@@ -849,9 +853,6 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	// than after a developer has already produced work.
 	publishing, skipped, err := p.resolvePublishing(ctx)
 	if err != nil {
-		return Outcome{}, err
-	}
-	if err := p.requireBackendReady(ctx); err != nil {
 		return Outcome{}, err
 	}
 
@@ -950,6 +951,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	}
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
 		return Outcome{}, fmt.Errorf("repository is not ready for an isolated run: %w", err)
+	}
+	// Everything above this point was answerable from the repository alone, so it
+	// is answered first: a dirty checkout is a refusal a newcomer meets whether or
+	// not they have installed Claude Code, and it names the files they have to
+	// commit. Only now is the provider asked, and still before anything is
+	// reserved, claimed, or cut.
+	if err := p.requireBackendReady(ctx); err != nil {
+		return Outcome{}, err
 	}
 	// An automatic run is written against exactly the branch it will be promoted
 	// into, so the integration target is fixed before any work starts and never
@@ -1191,9 +1200,9 @@ func (p Pipeline) Continue(ctx context.Context, workItemID, runID string) (Outco
 	if err != nil {
 		return Outcome{}, err
 	}
-	if err := p.requireBackendReady(ctx); err != nil {
-		return Outcome{}, err
-	}
+	// The provider is not asked here: a continuation that names a run nobody is
+	// holding, or the wrong one, is refused from durable state alone, and the
+	// resume below asks about the provider once there is a run to spend it on.
 	item, err := p.Tracker.Show(ctx, workItemID)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load work item: %w", err)
@@ -1294,6 +1303,14 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			}
 		}
 		return Outcome{}, refused
+	}
+	// And the provider after it, for the reason a fresh run asks in that order: the
+	// checkout is the same refusal on every machine, the provider is a refusal only
+	// on the machines that lack it, and a run turned back by both should be told
+	// about the one it can act on. Nothing is charged here either — the run is
+	// still exactly as the process that stopped it left it.
+	if err := p.requireBackendReady(ctx); err != nil {
+		return Outcome{}, err
 	}
 	// An environmental refusal on the record belongs to a round that is over: a
 	// dispatch something turned away before it reached this run, or a round an
