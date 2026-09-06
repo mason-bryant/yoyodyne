@@ -721,10 +721,13 @@ the top of the channel, whatever severity it was filed at.
 
 Concretely: a held intake, a braked line, a parked run, a provider that ran out of
 capacity, a merge the forge will not make, a directive that paused work, a stall,
-a stale session and a refused block of tracker actions are all at the channel
-level. A run starting, checks passing, a review approving, a promotion, a
-publication, a merge completing, the backlog moving and a filed report are in the
-item's thread. What a watch session does poll by poll — started, idle, resumed,
+a stale session, a refused block of tracker actions, a change an agent proposed to
+a document it does not own, and every turn of an ask exchange are all at the
+channel level — the last because an exchange is a question waiting on you, and a
+question shown only inside a thread while its answer is shown at the top would be
+the two ends of one ask surfaced opposite ways round. A run starting, checks
+passing, a review approving, a promotion, a publication, a merge completing, the
+backlog moving and a filed report are in the item's thread. What a watch session does poll by poll — started, idle, resumed,
 stopped, redeploying — is not posted anywhere: the watch log holds every one of
 them, `yoyo status` reads it back, and the two states you have to act on are said
 by the braked line and the hourly waiting line instead.

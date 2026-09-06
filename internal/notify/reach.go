@@ -123,11 +123,18 @@ var reaches = map[Kind]Reach{
 	// thread and is carried to the channel by the summaries built from the report
 	// store — except a critical one, which reaches the channel through the
 	// promotion below because something already wrong is exactly what the operator
-	// wants told. A proposal and a closed exchange are both waiting on a decision;
-	// a turn of an exchange in flight is not yet.
+	// wants told.
+	//
+	// The other three are all waiting on somebody to decide, and the exchange is
+	// both halves of one wait: nextMoves answers "the operator's, until the
+	// exchange is answered" for a turn, and the product manager's line for it says
+	// the operator is being asked something. A question shown only inside a thread
+	// and an answer shown at the top of the channel would be the two ends of one
+	// ask surfaced opposite ways round, with the half that needs somebody being
+	// the hidden one — which is the silence this whole change is against.
 	KindReportFiled:    ReachThread,
 	KindProposalRaised: ReachChannel,
-	KindExchangeTurn:   ReachThread,
+	KindExchangeTurn:   ReachChannel,
 	KindExchangeClosed: ReachChannel,
 	// What a reply in a thread did. All four are addressed to the person who typed
 	// the words being read back to them, and all four reach that person by name

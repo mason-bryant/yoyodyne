@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -186,6 +187,56 @@ func TestWhatIsAlwaysProductAddressedSaysSoInTheTable(t *testing.T) {
 		if got := kind.Reach(); got == ReachThread {
 			t.Fatalf("%q is addressed to the product every time and reaches %q, "+
 				"so the no-thread rule decides its silence rather than anybody choosing it", kind, got)
+		}
+	}
+}
+
+// The two tables have to agree, and this is the seam where they would quietly
+// stop: nextMoves is the harness's recorded answer to "whose move follows this",
+// and the rule this reach table implements is that the channel level carries what
+// needs the operator. A kind whose own clause names him and that reaches only a
+// thread is a message saying "Next: the operator's" where he will not see it —
+// which is the silence the whole change is against, asserted away by a comment.
+//
+// Three kinds name him and are answered somewhere else instead. Each is listed
+// with why, because an exemption without a reason is how the first table came to
+// contradict the second.
+func TestAKindWhoseMoveIsTheOperatorsReachesHim(t *testing.T) {
+	t.Parallel()
+
+	const operators = "the operator's"
+	elsewhere := map[Kind]string{
+		// The clause in the table is the pausing case — nextMove answers
+		// directiveInForceMove for one that settled nothing — and reachOf promotes
+		// exactly that case to the channel. Both are pinned by
+		// TestOnlyAPausingDirectiveReachesTheChannel.
+		KindDirectiveRecorded: "promoted to the channel by reachOf when the record left something unsettled",
+		// An acknowledgment tags the person who typed the reply, so it reaches them
+		// by name from inside the thread they asked in. Pinned in the slack package
+		// by TestADirectiveThatTagsWhoAskedIsDeliveredWhateverItsReachSays.
+		KindDirectiveRefused: "posted with a mention of whoever wrote the reply it answers",
+		// Said by the waiting line as soon as there is work a stopped session would
+		// have started, and by the stall alarm where nothing was recorded at all.
+		KindWatchStopped: "said by KindLineWaiting and KindStallNoticed from the same watch log",
+	}
+	for kind, move := range nextMoves {
+		if !strings.HasPrefix(move, operators) {
+			continue
+		}
+		if _, exempt := elsewhere[kind]; exempt {
+			continue
+		}
+		if got := kind.Reach(); got != ReachChannel {
+			t.Fatalf("%q answers %q and reaches %q: the message would say his move is next "+
+				"somewhere he is not looking. Classify it ReachChannel, or exempt it here with why.", kind, move, got)
+		}
+	}
+	for kind, why := range elsewhere {
+		if !strings.HasPrefix(nextMoves[kind], operators) {
+			t.Fatalf("%q is exempted here but no longer answers %q; drop the exemption", kind, operators)
+		}
+		if strings.TrimSpace(why) == "" {
+			t.Fatalf("%q is exempted here with no reason, which is what this test exists to refuse", kind)
 		}
 	}
 }
