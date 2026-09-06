@@ -33,7 +33,14 @@ installs `bd` and runs this target on every pull request. It stays out of
 `check` because `check` is what a run applies to a developer's worktree, and
 that worktree is given neither the tracker nor a reason to cut a scratch clone.
 It needs no provider unless you pass `WALK_PROVIDER=1`, and it names any claim
-it could not exercise rather than passing over it.
+it could not exercise rather than passing over it. It does need a scratch root
+outside every git repository, which `$TMPDIR` and `/tmp` are on an ordinary
+machine: the throwaway project lives under that root, and `bd init` in a project
+inside another repository discovers that repository's tracker remote and tries
+to clone it over the network. A `TMPDIR` pointing into a repository — an agent
+run's scratch directory under `.git/worktrees` is the case this came from — is
+refused up front, naming the enclosing repository, rather than dying at the
+tracker step with nothing in the log.
 [`scripts/walk-adoption-output.md`](../scripts/walk-adoption-output.md) is the
 last recorded walk, kept from the README split as a readable record of what the
 walkthrough actually prints; CI is what re-runs it now, so the file is a
