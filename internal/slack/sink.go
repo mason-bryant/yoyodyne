@@ -437,7 +437,16 @@ func (s *Sink) deliver(ctx context.Context) error {
 	// standing is the refusal currently being waited out, empty when posting
 	// works. It is what makes the first refusal news and the tenth silence.
 	standing := ""
-	for {
+	// The context is read before the first pass as well as after it, which is the
+	// same shape the connection's own loop beside this one already has. A sink
+	// handed a context that has already ended has been stopped before it started
+	// — the operator pressed Ctrl-C during startup, or a caller is shutting the
+	// process down — and it must not read the records and try to post once on the
+	// way out. The cost of getting this wrong is not a wasted pass but the thing
+	// the stop is judged by: a sink whose Run returns only after a full pass looks
+	// hung for as long as that pass takes, at exactly the moment somebody has
+	// decided to intervene.
+	for ctx.Err() == nil {
 		wait := s.poll
 		err := s.pass(ctx)
 		switch {
@@ -463,6 +472,7 @@ func (s *Sink) deliver(ctx context.Context) error {
 			return nil
 		}
 	}
+	return nil
 }
 
 // pass reads the records once and posts what is due. It is the whole of the

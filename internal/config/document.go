@@ -48,6 +48,14 @@ type configDocument struct {
 	// effective type because there is no per-field override to distinguish.
 	Providers *map[string]backend.ProviderPlugin `yaml:"providers"`
 	Slack     *slackDocument                     `yaml:"slack"`
+	// RecurringTasks replaces an inherited mapping entirely rather than merging
+	// into it, for the reason the accounts mapping does: what the harness does on
+	// a cadence is one statement, and a schedule half from a bundle and half from
+	// a project is one nobody wrote. It decodes straight into the effective type
+	// because there is no per-field override to distinguish — and because every
+	// field of a task is required reading together: a cadence inherited under a
+	// prompt somebody replaced is the one shape this must not be able to make.
+	RecurringTasks *map[string]RecurringTask `yaml:"recurring_tasks"`
 }
 
 type productDocument struct {
