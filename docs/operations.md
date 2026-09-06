@@ -557,14 +557,20 @@ the run died before it could record the promotion. A run stopped anywhere
 earlier becomes a durable blocker naming the branch and worktree that were
 preserved. A run that finished with its merge queued at the forge is settled
 here too: reconcile asks the forge and, once the merge has landed, finishes the
-publication — merge commit recorded, remote branch deleted, and your local
-target branch caught up onto the merge commit the forge made — and closes the
-work item, which the run deliberately left open because a queued merge is a
+publication — merge commit recorded and your local target branch caught up onto
+the merge commit the forge made — and closes the work item, which the run
+deliberately left open because a queued merge is a
 publication nothing has confirmed. Settling a merge
 is complete on its own that way rather than leaning on the sweep below, so a
 checkout is never left behind by which command somebody happened to run.
+The branch the merge consumed is deleted **after** the item closes, and its
+removal cannot hold the closure up: it is hygiene on the forge rather than part
+of the publication, so a connection that drops at that last step leaves a dead
+branch and a finished item rather than an item that reads as unfinished work. It
+is asked again on the recoverable-failure backoff before it gives up, and what
+it leaves if it does is recorded below.
 
-Two settle-path outcomes leave a publication outstanding for a person, each
+Three settle-path outcomes leave a publication outstanding for a person, each
 with its own line on the work item. A merge the forge **dropped** is the
 first: something the base branch required went unmet, the harness does not
 merge past a requirement, and nothing about that publication is confirmed — so
@@ -577,11 +583,19 @@ counted in the [heartbeat](reporting.md) as a promotion awaiting the
 forge. A
 merge that **landed but could not be confirmed** is the second: the forge
 performed it, and the steps that confirm it — verifying the remote carries the
-promotion, recording the merge commit, retiring the consumed branch — failed,
+promotion and recording the merge commit — failed,
 so the record honestly says the publication is not settled even though the
-merge is real. In both, your local branch is deliberately left where it is
-rather than moved on a publication nothing verified. A catch-up the settle
-could not make is neither of these: it is ordinary, the run settles, and the
+merge is real. In those two, your local branch is deliberately left where it is
+rather than moved on a publication nothing verified. A **merged branch that
+could not be deleted** is the third, and is the mildest: the item is already
+closed and your local branch already caught up, and what is left is a branch on
+the forge that nothing sweeps for you — the convergence sweep below removes
+local branches only. It says so in a second line on the closed item naming the
+branch, and it is on the triage docket until somebody removes it. Until then it
+also holds the item out of the pull, which is the point: an item whose only
+outstanding state is a publication is not implementable work, and a run started
+against one can only rediscover that its change already landed. A catch-up the
+settle could not make is none of these: it is ordinary, the run settles, and the
 convergence sweep below finishes it on the next pass. Other reports on this page
 still reach you when the evidence demands it — a preserved blocker, a diverged
 remote, a catch-up that could not finish — but none of them asks reconcile to
@@ -879,8 +893,13 @@ Needs a human (1):
 
   One of the queue's own accounts is an item **held for a person**, which is the
   third not-startable line in the example above: a run stopped on it and its
-  change is still on a branch, or its stoppage is in front of the development
-  manager and nobody has decided about it. It names the run and what has to be decided rather than
+  change is still on a branch, its stoppage is in front of the development
+  manager and nobody has decided about it, or a run integrated its change and
+  only the publication is outstanding. The last one is not a stoppage at all and
+  is held for the opposite reason: the work has landed, so there is nothing left
+  to implement and a run started against it can only find that out again — which
+  is what yoyodyne-ifd.295 cost, three developer runs and three reviews deep.
+  It names the run and what has to be decided rather than
   leaving the item to its `blocked` status, because a status says the same word
   about a stoppage nobody has answered and about work whose every blocker closed
   months ago — and reading that word as a refusal is what hid two-thirds of the

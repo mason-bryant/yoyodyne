@@ -1839,6 +1839,146 @@ func TestReconcileAsksTheForgeAboutAQueuedMergeBeforeObservingTheRepository(t *t
 	}
 }
 
+// The yoyodyne-ifd.295 shape, replayed. The forge performed the merge it had
+// queued, and the connection dropped at the one step the settlement had left:
+// deleting the branch that merge consumed. That step is hygiene, so the item
+// closes on the confirmed merge anyway, the local target is still caught up, and
+// what the failure leaves is a dead branch on the remote recorded for triage.
+//
+// The old ordering closed the item only if the deletion succeeded. Twice on
+// yoyodyne-ifd.295 it did not, and the item stayed open with nothing holding it
+// back: the scheduler pulled it as ordinary ready work, and three developer runs
+// and three reviews were spent re-deriving that the change had already landed.
+func TestASettledMergeClosesTheItemWhenTheMergedBranchCannotBeDeleted(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	dropped := &droppingRemote{deletions: 1_000}
+	fixture.worktrees = func(observer ReconcileWorktrees) ReconcileWorktrees {
+		dropped.ReconcileWorktrees = observer
+		return dropped
+	}
+	waits := 0
+	fixture.sleep = func(context.Context, time.Duration) error {
+		waits++
+		return nil
+	}
+	outcome := fixture.run(t)
+	fixture.forge.performQueuedMerge(t)
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the merge settled as completed", results)
+	}
+	// The whole of the change: the merge is confirmed, so the item closes.
+	if !fixture.tracker.closed {
+		t.Fatal("the confirmed merge did not close the item because a branch deletion failed, which is the loop this exists to end")
+	}
+	if !strings.Contains(fixture.tracker.closeReason, "merged by the forge") {
+		t.Errorf("close reason = %q, want the forge's merge named", fixture.tracker.closeReason)
+	}
+	settled, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The failure is recorded rather than swallowed: nothing sweeps a remote
+	// branch afterwards, so the leftover is a person's and the outstanding
+	// publication is what puts it on the docket and out of the pull.
+	if !strings.Contains(settled.PublishFailure, "delete the merged remote branch") {
+		t.Errorf("durable publish failure = %q, want the leftover branch recorded", settled.PublishFailure)
+	}
+	if !strings.Contains(settled.PublishFailure, "handed to a person") {
+		t.Errorf("durable publish failure = %q, want the spent recovery window named", settled.PublishFailure)
+	}
+	// Retried under yoyodyne-ifd.264's rule rather than given up on at the first
+	// reset, and the record says so.
+	retries := 0
+	for _, retry := range settled.Retries {
+		if retry.Boundary == runstate.RetryDeleteRemoteBranch {
+			retries++
+		}
+	}
+	if retries < 2 || waits != retries {
+		t.Errorf("recorded %d retr(ies) of the deletion over %d wait(s), want the connection reset waited out repeatedly", retries, waits)
+	}
+	if dropped.attempts != retries+1 {
+		t.Errorf("the deletion was attempted %d time(s) for %d recorded retr(ies)", dropped.attempts, retries)
+	}
+	// The catch-up is not the deletion's to hold up either: the merge is
+	// confirmed, so the local target moves onto what the forge made of it.
+	if local, remote := publishedCommit(t, fixture.repository, "main"), publishedCommit(t, fixture.remote, "main"); local != remote {
+		t.Errorf("local main = %q, want it caught up to the remote's %q", local, remote)
+	}
+	if published := publishedCommit(t, fixture.remote, outcome.Branch); published != outcome.PullRequest.HeadCommit {
+		t.Errorf("remote branch = %q, want the branch the deletion could not remove left at %q", published, outcome.PullRequest.HeadCommit)
+	}
+	// A closed item that says nothing about what it left on the forge tells the
+	// person who has to remove it nothing.
+	for _, want := range []string{"could not delete the branch that merge consumed", outcome.Branch} {
+		if !strings.Contains(fixture.tracker.notes, want) {
+			t.Errorf("tracker notes do not report %q:\n%s", want, fixture.tracker.notes)
+		}
+	}
+	// The run is settled, so nothing pulls this item's thread again.
+	if again := fixture.reconcile(t); len(again) != 0 {
+		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
+	}
+}
+
+// The same drop, survived. A reset that the next attempt gets past leaves a
+// publication with nothing outstanding at all — which is the half of the
+// recoverable-failure rule that keeps a dead branch off the triage docket for a
+// connection that came back.
+func TestASettledMergeWaitsOutADroppedConnectionAtTheBranchDeletion(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	dropped := &droppingRemote{deletions: 1}
+	fixture.worktrees = func(observer ReconcileWorktrees) ReconcileWorktrees {
+		dropped.ReconcileWorktrees = observer
+		return dropped
+	}
+	fixture.sleep = func(context.Context, time.Duration) error { return nil }
+	outcome := fixture.run(t)
+	fixture.forge.performQueuedMerge(t)
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the merge settled as completed", results)
+	}
+	settled, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.PublishFailure != "" {
+		t.Errorf("publish failure = %q, want a deletion that succeeded on the second attempt to leave none", settled.PublishFailure)
+	}
+	if published := publishedCommit(t, fixture.remote, outcome.Branch); published != "" {
+		t.Errorf("merged remote branch survived at %q", published)
+	}
+	if len(settled.Retries) != 1 || settled.Retries[0].Boundary != runstate.RetryDeleteRemoteBranch {
+		t.Errorf("retries = %#v, want the one waited-out reset recorded", settled.Retries)
+	}
+}
+
+// droppingRemote is the connection to the forge going away at the step a
+// settlement has left, which is where it actually went twice on
+// yoyodyne-ifd.295. The wording is the one `git` produced there, so the class
+// the recoverable-failure rule reads is the class it was given.
+type droppingRemote struct {
+	ReconcileWorktrees
+	deletions int
+	attempts  int
+}
+
+func (d *droppingRemote) DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error {
+	d.attempts++
+	if d.attempts <= d.deletions {
+		return fmt.Errorf("resolve %s on origin failed with exit code 128: Read from remote host ssh.github.com: Connection reset by peer", worktree.Branch)
+	}
+	return d.ReconcileWorktrees.DeleteRemoteBranch(ctx, worktree, commit)
+}
+
 // queuedFixture is a publishing run whose forge queues the merge, built over
 // artifacts a second process can also see. Reconciliation is that second
 // process: it settles a queued merge from the repository, the worktree root, and
@@ -1850,6 +1990,12 @@ type queuedFixture struct {
 	store        *runstate.Store
 	tracker      *fakeTracker
 	forge        *fakeForge
+	// worktrees wraps the repository access the settlement makes, so a test can
+	// drop the connection at one step of it. A fixture that sets none settles
+	// through the real observer.
+	worktrees func(ReconcileWorktrees) ReconcileWorktrees
+	// sleep takes the backoff without taking the time.
+	sleep func(context.Context, time.Duration) error
 }
 
 func newQueuedFixture(t *testing.T) queuedFixture {
@@ -1907,11 +2053,16 @@ func (f queuedFixture) converge(t *testing.T) Convergence {
 
 func (f queuedFixture) reconciler(t *testing.T) Reconciler {
 	t.Helper()
+	worktrees := newObserver(t, f.repository, f.worktreeRoot)
+	if f.worktrees != nil {
+		worktrees = f.worktrees(worktrees)
+	}
 	return Reconciler{
 		Tracker:   f.tracker,
-		Worktrees: newObserver(t, f.repository, f.worktreeRoot),
+		Worktrees: worktrees,
 		Store:     f.store,
 		Publisher: f.forge,
+		Sleep:     f.sleep,
 	}
 }
 

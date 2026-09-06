@@ -186,6 +186,85 @@ func TestAFailedReadingIsAnErrorRatherThanNoHolds(t *testing.T) {
 	}
 }
 
+// The yoyodyne-ifd.295 shape: a run that succeeded, integrated its change, and
+// left only its publication unfinished. Nothing else holds such an item — the
+// run cleaned its own artifacts up, so the preserved-change rule says nothing
+// about it — and what that cost was three developer runs and three reviews, each
+// pulling the item as ordinary ready work and re-deriving that the change had
+// already landed.
+func TestAnItemWhoseOnlyOutstandingStateIsAPublicationIsHeldForAPerson(t *testing.T) {
+	t.Parallel()
+
+	held := heldForAPerson([]runstate.State{publishedRun("run-55443d4c", "yoyodyne-ifd.295")}, nil)
+	reason := heldReason(t, held, "yoyodyne-ifd.295")
+	for _, want := range []string{"run-55443d4c", "only the publication is outstanding", "nothing here to implement"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the hold says %q, want it to name %q", reason, want)
+		}
+	}
+}
+
+// The other side of it. A publication that finished holds nothing, and neither
+// does a run still in flight, which owns its own publication and has not
+// finished asking.
+func TestAFinishedOrInFlightPublicationHoldsNothing(t *testing.T) {
+	t.Parallel()
+
+	settled := publishedRun("run-9c1f2ab3", "yoyodyne-ifd.300")
+	settled.PublishFailure = ""
+	inFlight := publishedRun("run-7d2e4cc1", "yoyodyne-ifd.302")
+	inFlight.Status = runstate.StatusRunning
+
+	held := heldForAPerson([]runstate.State{settled, inFlight}, nil)
+	for _, id := range []string{"yoyodyne-ifd.300", "yoyodyne-ifd.302"} {
+		if reason, ok := held.Reason(id); ok {
+			t.Fatalf("%s was held for %q, want nothing holding it", id, reason)
+		}
+	}
+}
+
+// An item that is both — a change on a branch somebody has to decide about and a
+// publication that did not finish — reads as the publication. Both hold it, and
+// the wording is what a reader acts on: an integrated item has nothing on a
+// branch to pick up, and saying otherwise sends them after work that is already
+// on the target.
+func TestAnIntegratedItemReadsAsItsPublicationRatherThanAsAPreservedChange(t *testing.T) {
+	t.Parallel()
+
+	run := preservedRun("run-1b782eeb", "yoyodyne-ifd.295", time.Date(2026, 9, 6, 2, 0, 0, 0, time.UTC))
+	run.Integration = &runstate.Integration{TargetBranch: "main", SourceCommit: "bb8ec09", TargetCommit: "bb8ec09"}
+	run.PublishFailure = "delete the merged remote branch: Connection reset by peer"
+
+	reason := heldReason(t, heldForAPerson([]runstate.State{run}, nil), "yoyodyne-ifd.295")
+	if !strings.Contains(reason, "only the publication is outstanding") {
+		t.Fatalf("the hold says %q, want the publication rather than the preserved change", reason)
+	}
+}
+
+// publishedRun is a run that finished, integrated its change, and could not
+// finish publishing it: the forge merged, and deleting the branch that merge
+// consumed failed on a reset connection.
+func publishedRun(runID, workItemID string) runstate.State {
+	return runstate.State{
+		RunID:        runID,
+		WorkItemID:   workItemID,
+		Status:       runstate.StatusSucceeded,
+		UpdatedAt:    time.Date(2026, 9, 6, 3, 2, 59, 0, time.UTC),
+		Branch:       "yoyodyne/" + workItemID + "/" + runID,
+		WorktreePath: "/state/worktrees/" + runID,
+		// An integrated run removes both, which is why nothing else holds this.
+		BranchRemoved:   true,
+		WorktreeRemoved: true,
+		Integration: &runstate.Integration{
+			TargetBranch: "main",
+			SourceCommit: "b206ca1",
+			TargetCommit: "b206ca1",
+		},
+		PublishFailure: "delete the merged remote branch: resolve " + workItemID +
+			" on origin failed with exit code 128: Read from remote host ssh.github.com: Connection reset by peer",
+	}
+}
+
 func preservedRun(runID, workItemID string, stopped time.Time) runstate.State {
 	return runstate.State{
 		RunID:        runID,

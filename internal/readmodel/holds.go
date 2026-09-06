@@ -15,8 +15,9 @@ package readmodel
 // item waits on is the tracker's dependency graph, which the backlog reads for
 // itself and which clears on its own as the work lands. What somebody still has
 // to release is this: the harness's own durable account of work it stopped and
-// has not been told what to do with. Neither is a field anybody has to remember
-// to update, which is the whole of the difference.
+// has not been told what to do with, and of work it finished whose publication
+// it could not. Neither is a field anybody has to remember to update, which is
+// the whole of the difference.
 //
 // Nothing here releases anything, and that direction is deliberate. A hold is
 // lifted by a person deciding — triage picking the preserved change up, or an
@@ -103,6 +104,25 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation) back
 	for workItemID, run := range held {
 		reasons[workItemID] = preservedChange(run)
 	}
+	// The publications last, so an item whose work is integrated reads as the
+	// publication it is waiting on rather than as a change somebody has to pick
+	// up. Both would hold it and the wording is the whole of the difference: an
+	// integrated item has nothing on a branch for a fresh run to strand, and
+	// telling a reader otherwise sends them looking for work that is already on
+	// the target.
+	outstanding := make(map[string]runstate.State, len(runs))
+	for _, run := range runs {
+		if !outstandingPublication(run) {
+			continue
+		}
+		if previous, seen := outstanding[run.WorkItemID]; seen && previous.UpdatedAt.After(run.UpdatedAt) {
+			continue
+		}
+		outstanding[run.WorkItemID] = run
+	}
+	for workItemID, run := range outstanding {
+		reasons[workItemID] = unfinishedPublication(run)
+	}
 	return backlog.ReadHolds(reasons)
 }
 
@@ -126,6 +146,34 @@ func preservedChange(run runstate.State) string {
 	return fmt.Sprintf(
 		"run %s stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; triage decides what happens to it",
 		run.RunID)
+}
+
+// outstandingPublication reports a run whose change is integrated and whose
+// publication did not finish. Both halves matter, and together they describe the
+// one item shape a developer run can do nothing at all with: the work the item
+// asked for is on the target branch, so there is nothing left to implement, and
+// what is unfinished is a publication only a person or a later sweep settles.
+//
+// A run still in flight owns its own publication and is not this. What is
+// deliberately not asked is whether the run's artifacts survived: an integrated
+// run cleans its own up, which is exactly why the preserved-change rule above
+// misses this and why yoyodyne-ifd.295 was pulled three times, once per
+// developer run that then re-derived that the change had already landed.
+func outstandingPublication(run runstate.State) bool {
+	return run.WorkItemID != "" &&
+		run.Status.Terminal() &&
+		run.Integration != nil &&
+		strings.TrimSpace(run.PublishFailure) != ""
+}
+
+// unfinishedPublication says why an item whose change is integrated is not
+// something to pull. It names the run and says where the work is, because the
+// decision is about the publication rather than about the work: the change is on
+// the target branch, and starting a run would only find that out again.
+func unfinishedPublication(run runstate.State) string {
+	return fmt.Sprintf(
+		"run %s integrated its change into %s and only the publication is outstanding, so there is nothing here to implement; triage decides what settles it",
+		run.RunID, run.Integration.TargetBranch)
 }
 
 // undecidedStoppage says why an item whose stoppage nobody has answered is not

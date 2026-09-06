@@ -436,11 +436,16 @@ morning with nothing saying why.
 
 What still holds a blocked item back is a **hold**, which is the harness's own
 durable record rather than a field: a run that stopped on the item and whose
-change is still on a branch, or a stoppage put in front of the development
-manager that nobody has decided about. Neither is ever released automatically.
+change is still on a branch, a stoppage put in front of the development
+manager that nobody has decided about, or a run that integrated the item's
+change and could not finish publishing it. None is ever released automatically.
 Releasing a stoppage would start a fresh run on top of a change that is still
-there, so a hold is lifted only by triage picking the change up or by the
-escalation being answered — at which point the records stop saying the item is
+there, and releasing an outstanding publication would start one over work that
+has already landed — which is what [yoyodyne-ifd.295](operations.md#recovering-interrupted-runs)
+cost, three developer runs and three reviews each re-deriving that the change
+was already on `main`. So a hold is lifted only by triage picking the change up,
+by the escalation being answered, or by the publication being settled
+— at which point the records stop saying the item is
 held, and it becomes pullable without anybody having edited its status. A pass
 that cannot read those records holds every blocked item rather than releasing
 work whose hold it could not see.
@@ -468,8 +473,9 @@ both named. An item whose **executor is a persona conversation** rather than
 a developer run is passed over with what carries it named, which the paragraph
 after next is about. An item the product manager has **parked** is passed
 over with the parking reason named, which the paragraph after that is about. And
-an item **held for a person** — a stoppage whose change is still on a branch or
-one nobody has decided about, in the sense the hold paragraph above gives it — is
+an item **held for a person** — a stoppage whose change is still on a branch,
+one nobody has decided about, or a publication that did not finish over work
+already integrated, in the sense the hold paragraph above gives it — is
 passed over with the hold named, because like the parking it is not a wait for
 anything and will not clear on its own. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its

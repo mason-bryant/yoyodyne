@@ -2243,8 +2243,9 @@ With both on, a run works like this:
    or put back in the backlog parked or waiting on a named impediment where the
    run's own records say its change does not discharge it, its landing claim or
    what its reviewer approved (merge
-   commit recorded, remote branch deleted, your local target branch caught up
-   onto the forge's merge commit) — or, if the forge dropped the queued merge
+   commit recorded and your local target branch caught up
+   onto the forge's merge commit, with the branch the merge consumed deleted
+   afterwards as hygiene that cannot hold the closure up) — or, if the forge dropped the queued merge
    because something it required went unmet, records an outstanding publication
    and hands the item back to you with a blocker rather than closing it. It never
    merges anything itself: a requirement that stopped the forge is yours to

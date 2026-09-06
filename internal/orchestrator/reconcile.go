@@ -103,6 +103,11 @@ type Reconciler struct {
 	// it would have, and what it settled is still on the work item.
 	Docket *Docketer
 	Clock  execution.Clock
+	// Sleep is the wait between two attempts at a boundary that failed on
+	// something a later attempt may survive. It is here for the reason the
+	// pipeline's is: a test must be able to take the backoff without taking the
+	// time, and a sweep given none waits on a timer.
+	Sleep func(ctx context.Context, duration time.Duration) error
 }
 
 // ReconcileAction names what reconciliation did with one run.
@@ -437,12 +442,15 @@ func (r Reconciler) blockContradictedIntegration(ctx context.Context, state runs
 //
 //   - The forge merged. The publication finishes exactly as it would have
 //     inside the run: the remote target is confirmed to carry the promotion, the
-//     merge commit the forge made of it is recorded, the branch the merge
-//     consumed is deleted, and the local target branch is caught up onto the
-//     merge commit. That last step is done here rather than left to the
+//     merge commit the forge made of it is recorded, the local target branch is
+//     caught up onto the merge commit, and the item is closed on that
+//     confirmation. The catch-up is done here rather than left to the
 //     convergence sweep so that settling a merge is complete on its own: a
 //     caller that settles runs without sweeping afterwards must not be the
-//     difference between a converged checkout and one silently left behind.
+//     difference between a converged checkout and one silently left behind. The
+//     branch the merge consumed is deleted after the closure and cannot affect
+//     it, which is what stops a reset connection at the last step of the
+//     hygiene from leaving a finished item open.
 //   - The forge is still holding the merge. Nothing is decided, the run stays
 //     outstanding, and a later sweep asks again.
 //   - The forge dropped it: the request is closed, or open with no merge queued
@@ -491,7 +499,7 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	}
 	detail := fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
 	var catchup *gitworktree.Catchup
-	if failure := r.finishQueuedPublication(ctx, state, &published); failure != nil {
+	if failure := r.confirmQueuedPublication(ctx, &state, &published); failure != nil {
 		state.PublishFailure = failure.Error()
 		detail = failure.Error()
 	} else {
@@ -526,6 +534,19 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	// are carried on rather than dropped, because completeIntegrated is what saves
 	// this run's record and every surface reads the disposition off it.
 	state = settled
+	// The branch the merge consumed is removed last, after the item is already
+	// closed, and that ordering is the whole of yoyodyne-ifd.301's first half. It
+	// is hygiene rather than part of the publication: the merge is confirmed, the
+	// work is on both branches, and the only thing a failed deletion leaves is a
+	// dead branch on the remote. Deleting it first is what made a connection reset
+	// at the last step keep an item open — twice on yoyodyne-ifd.295, which the
+	// scheduler then pulled as ordinary ready work and three developer runs spent
+	// re-deriving that the change had already landed.
+	if state.PublishFailure == "" {
+		if failure := r.deleteMergedBranch(ctx, &state, published); failure != "" {
+			detail = failure
+		}
+	}
 	result, err := r.completeIntegrated(ctx, state, false)
 	result.Detail = detail
 	result.Catchup = catchup
@@ -623,13 +644,20 @@ func (r Reconciler) settleDroppedMerge(ctx context.Context, state runstate.State
 	return result, saveErr
 }
 
-// finishQueuedPublication does what the run would have done had the merge
-// happened while it watched: it confirms that the promotion is what reached the
-// remote target, records the merge commit the forge made of it, and deletes the
-// branch the merge consumed. A failure here is an outstanding publication rather
-// than an unsettled run — the merge already happened, and asking again would not
-// change what it produced.
-func (r Reconciler) finishQueuedPublication(ctx context.Context, state runstate.State, published *runstate.PullRequest) error {
+// confirmQueuedPublication establishes that the merge the forge reported is what
+// reached the remote target, and records the merge commit it made of the
+// promotion. That is the evidence the closure below rests on, so a failure here
+// is an outstanding publication and nothing is closed against it: the forge says
+// it merged and nothing could check what the merge produced.
+//
+// It is asked under the recoverable-failure rule, because the reading is one
+// request over the same connection the merge went over: a reset here says
+// nothing about the publication, and recording an outstanding one over it is the
+// loss yoyodyne-ifd.264 exists to stop.
+//
+// The record it is given is the one the settlement goes on to save, so the waits
+// it takes are on the run afterwards rather than overwritten by the next write.
+func (r Reconciler) confirmQueuedPublication(ctx context.Context, state *runstate.State, published *runstate.PullRequest) error {
 	integration := gitworktree.Integration{
 		Branch:               state.Branch,
 		TargetBranch:         state.Integration.TargetBranch,
@@ -637,18 +665,48 @@ func (r Reconciler) finishQueuedPublication(ctx context.Context, state runstate.
 		TargetCommit:         state.Integration.TargetCommit,
 		PreviousTargetCommit: state.Integration.PreviousTargetCommit,
 	}
-	remoteTarget, err := r.Worktrees.ConfirmRemoteTarget(ctx, integration)
-	if err != nil {
+	var remoteTarget string
+	if err := r.recovering(ctx, state, runstate.RetryRemoteTarget, func(ctx context.Context) error {
+		var err error
+		remoteTarget, err = r.Worktrees.ConfirmRemoteTarget(ctx, integration)
+		return err
+	}); err != nil {
 		return fmt.Errorf("confirm the queued merge reached %s: %w", integration.TargetBranch, err)
 	}
 	published.MergeCommit = remoteTarget
-	// The published branch is debris once its work is on the target, and it is
-	// removed on the same evidence the run would have used: the exact commit that
-	// was published and merged.
-	if err := r.Worktrees.DeleteRemoteBranch(ctx, worktreeOf(state), published.HeadCommit); err != nil {
-		return fmt.Errorf("delete the merged remote branch: %w", err)
-	}
 	return nil
+}
+
+// deleteMergedBranch removes the branch the merge consumed, once the item is
+// closed and the work is on both branches. It reports what stopped it and never
+// anything else: nothing here can undo the merge, so the worst a failure leaves
+// is a dead branch on the remote.
+//
+// That is still worth recording. Nothing sweeps a remote branch afterwards — the
+// convergence sweep only removes local ones — so the leftover is a person's, and
+// the outstanding publication is what puts it on the triage docket and holds the
+// item out of the pull for as long as it stands. What it must not do, and what
+// it did until yoyodyne-ifd.301, is decide whether the item closes.
+func (r Reconciler) deleteMergedBranch(ctx context.Context, state *runstate.State, published runstate.PullRequest) string {
+	err := r.recovering(ctx, state, runstate.RetryDeleteRemoteBranch, func(ctx context.Context) error {
+		return r.Worktrees.DeleteRemoteBranch(ctx, worktreeOf(*state), published.HeadCommit)
+	})
+	if err == nil {
+		return ""
+	}
+	failure := fmt.Errorf("delete the merged remote branch: %w", err).Error()
+	state.PublishFailure = failure
+	state.UpdatedAt = r.clock().Now()
+	if saveErr := r.Store.Save(*state); saveErr != nil {
+		return errors.Join(errors.New(failure), fmt.Errorf("record the leftover remote branch of run %s: %w", state.RunID, saveErr)).Error()
+	}
+	// The item is closed by now, so this is a second note rather than a line in
+	// the settlement's. A closure that said nothing about the branch it left
+	// behind would be the whole of what anybody reading the item is told.
+	if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderLeftoverBranchNotes(*state, failure)); err != nil {
+		return errors.Join(errors.New(failure), fmt.Errorf("record the leftover remote branch on %s: %w", state.WorkItemID, err)).Error()
+	}
+	return failure
 }
 
 // recoverIntegration records the promotion an interrupted process made but
@@ -1043,10 +1101,9 @@ func renderReconciledIntegrationNotes(state runstate.State, recovered bool) stri
 }
 
 // renderQueuedMergeNotes tells the work item what became of a merge that was
-// still queued when its run finished. The item was closed by that run — the
-// change was integrated into the authoritative local branch, which is what
-// closed it — so this note is the only place an operator learns whether the
-// publication of it completed, and what is left if it did not.
+// still queued when its run finished. The run deliberately left the closure to
+// this answer, so this note is the only place an operator learns whether the
+// publication completed, and what is left if it did not.
 func renderQueuedMergeNotes(state runstate.State, detail string, catchup *gitworktree.Catchup) string {
 	lines := []string{
 		"Yoyodyne settled the merge this run left queued with the forge.",
@@ -1064,6 +1121,21 @@ func renderQueuedMergeNotes(state runstate.State, detail string, catchup *gitwor
 			"The change is integrated into the local target branch, which is the authoritative one; only its publication is unfinished.")
 	}
 	return strings.Join(append(lines, renderCatchupNotes(catchup)...), "\n")
+}
+
+// renderLeftoverBranchNotes says what the settlement left on the remote. It is
+// a second note rather than a line in the settlement's because it is written
+// after the item has been settled, and it says nothing about where the item
+// went: that is decided by the run's own landing, and this is about a branch.
+func renderLeftoverBranchNotes(state runstate.State, failure string) string {
+	return strings.Join([]string{
+		"Yoyodyne settled the forge's merge of this item and could not delete the branch that merge consumed.",
+		"Publication outstanding: " + failure,
+		"Run: " + state.RunID,
+		"Merged remote branch: " + state.Branch,
+		"Nothing else is left of the publication: the change is on " + state.Integration.TargetBranch +
+			" locally and on the forge. Delete the branch, or leave it for whoever reads the triage docket.",
+	}, "\n")
 }
 
 // settledMergeCompletionReason closes an item on the whole of what happened to
