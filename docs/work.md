@@ -475,8 +475,9 @@ configuration they started under.
 
 **A pass also delivers stopped work into the development manager's
 conversation** — a run that failed independent review after every permitted
-attempt, rather than it waiting on the docket for somebody to tell her. Only the
-courier changes, and `yoyo work --help` has what bounds it.
+attempt, rather than that run waiting on the docket for somebody to tell the
+development manager. Only the courier changes, and `yoyo work --help` has what
+bounds it.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
