@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -39,12 +40,23 @@ import (
 //     state that enters every later turn. The budget is below; the redaction
 //     happens here rather than at each caller, so that nothing reaches the disk
 //     that did not pass it; and the audit is the invocation every revision carries.
-//   - It is db-backed as an implementation choice, decided at implementation like
-//     the other runtime-state formats. What that decision came to is the same
-//     append-only log this package's events already are, under the state root,
-//     which is what the design's fifteenth settled question asks for in as many
-//     words: an append-only revision log per store, with compaction producing a
-//     new revision that records its sources.
+//
+// What backs it is one append-only log file per agent under the state root,
+// rolled aside when it grows: the shape the design's fifteenth settled question
+// describes, in the format the rest of this package's durable state already uses.
+//
+// The design also says the store is db-backed, with bolt named as an acceptable
+// option, and this is not that. It is not that because a developer run cannot
+// make it that: this repository depends on one module, an embedded database is a
+// second, and a developer run's sandbox reaches no module proxy — `go get
+// go.etcd.io/bbolt` is refused before it resolves a version, and nothing in the
+// local module cache is an embedded database. A change adding one would not
+// build in the worktree that has to verify it. Whether a database is required
+// here or whether this satisfies the ruling is the architect's to settle rather
+// than this comment's, and it has been put to them; what makes the answer cheap
+// either way is that a revision is already the unit a store would hold, so a
+// database would replace the three functions at the foot of this file — the read,
+// the append, and the roll — and nothing above them.
 //
 // It lives beside the conversations rather than in a package of its own for the
 // consolidation the design requires: the two are the same state root, the same
@@ -96,12 +108,20 @@ func (c MemoryContinuity) Valid() bool {
 // MaxMemoryTextBytes bounds one revision, so no single write can consume the
 // budget in one go, and so a runaway generation is refused rather than stored.
 //
-// MaxMemoryLogBytes bounds the file, which the live budget does not: the log
-// keeps every superseded revision, because that history is what makes the store
-// auditable. It is generous — several hundred revisions at their own maximum —
-// and it is a ceiling rather than a rotation. Rolling a log that reaches it is
-// work nobody has needed yet and is named in the refusal so that whoever first
-// does can see what they are being asked for.
+// MaxMemoryLogBytes is where the live log is rolled aside, which the live budget
+// does not do for it: the log keeps every superseded revision, because that
+// history is what makes the store auditable, so it grows where the live set does
+// not. It is generous — several hundred revisions at their own maximum.
+//
+// It is the point at which the store rolls rather than the point at which it
+// refuses. A wall here would be one an agent could not climb back over: the way
+// out of a full store is to compact or to retire something, both of which are
+// writes on this same path, so a size that refused every write would refuse the
+// two that make room and leave the store permanently unable to record anything —
+// including its own tidying up. Rolling costs nothing an operator has to do and
+// loses nothing: the superseded revisions move to a numbered archive beside the
+// log, the reader takes the archives and the log together, and the history reads
+// as one sequence exactly as it did before.
 const (
 	MaxMemoryLiveBytes = 32 << 10
 	MaxMemoryTextBytes = 8 << 10
@@ -436,13 +456,17 @@ func (m Memory) Compacted() bool { return m.Current().Compacted() }
 // durable state that silently disappeared is the worst of the ways this could
 // fail.
 type MemoryProblem struct {
-	Agent   string `json:"agent"`
+	Agent string `json:"agent"`
+	// Log is the file the line is in, by name rather than by path. An agent's
+	// history is its log and the archives rolled off it, so a line number on its
+	// own would send whoever went looking to the wrong file.
+	Log     string `json:"log"`
 	Line    int    `json:"line"`
 	Problem string `json:"problem"`
 }
 
 func (p MemoryProblem) String() string {
-	return fmt.Sprintf("%s memory line %d: %s", p.Agent, p.Line, p.Problem)
+	return fmt.Sprintf("%s line %d: %s", p.Log, p.Line, p.Problem)
 }
 
 // MemoryStore keeps what each agent knows, in the same operating-system state
@@ -457,6 +481,10 @@ type MemoryStore struct {
 	// disk. It is a field of the store rather than an argument to the write so
 	// that there is no path onto the disk that skips it.
 	redactor execution.Redactor
+	// rollAt is the size at which the live log is rolled aside. It is a field only
+	// so a test can drive the roll without writing four megabytes to reach it;
+	// every store the harness builds gets MaxMemoryLogBytes.
+	rollAt int64
 }
 
 // NewMemoryStore builds the store for one product. The values are what must not
@@ -474,6 +502,7 @@ func NewMemoryStore(root string, productID domain.ProductID, redactValues ...str
 		root:      filepath.Join(filepath.Clean(root), "products", string(productID), "memory"),
 		productID: productID,
 		redactor:  execution.NewRedactor(redactValues...),
+		rollAt:    MaxMemoryLogBytes,
 	}, nil
 }
 
@@ -525,15 +554,15 @@ func (s *MemoryStore) Remember(ctx context.Context, revision MemoryRevision) (Me
 	if err != nil {
 		return MemoryRevision{}, err
 	}
-	recorded, problems, err := s.read(path, revision.Agent)
+	recorded, problems, err := s.recorded(revision.Agent)
 	if err != nil {
 		return MemoryRevision{}, err
 	}
-	// A log with a line nobody can read is a log this refuses to append to. The
-	// listing tolerates one because a reader is owed what there is; a writer must
-	// not, because the sequence it is about to assign is worked out from what it
-	// could read, and a revision it could not read may be the one it is numbering
-	// after.
+	// A history with a line nobody can read is a history this refuses to append to.
+	// The listing tolerates one because a reader is owed what there is; a writer
+	// must not, because the sequence it is about to assign is worked out from what
+	// it could read, and a revision it could not read may be the one it is
+	// numbering after.
 	if len(problems) > 0 {
 		return MemoryRevision{}, fmt.Errorf("%s cannot be written while %d of its lines will not decode: %s", revision.Agent, len(problems), problems[0])
 	}
@@ -553,7 +582,13 @@ func (s *MemoryStore) Remember(ctx context.Context, revision MemoryRevision) (Me
 	if len(encoded) > maxEncodedMemoryRevisionBytes {
 		return MemoryRevision{}, fmt.Errorf("the encoded revision is %d bytes, limit is %d", len(encoded), maxEncodedMemoryRevisionBytes)
 	}
-	if err := s.affordable(recorded, revision, len(encoded), path); err != nil {
+	if err := s.affordable(recorded, revision); err != nil {
+		return MemoryRevision{}, err
+	}
+	// The roll happens before the append rather than after it, so the log a write
+	// lands in is one that had room for it, and so the size that triggers a roll is
+	// never a size the log actually reached.
+	if err := s.rollIfFull(revision.Agent, path, recorded, len(encoded)); err != nil {
 		return MemoryRevision{}, err
 	}
 	if err := s.append(path, encoded); err != nil {
@@ -588,12 +623,18 @@ func (s *MemoryStore) checkContinuity(recorded []MemoryRevision, revision Memory
 
 // affordable is the budget, asked of the write that is about to happen.
 //
-// The live cost is measured over what the store would hold afterwards rather than
-// over what it holds now, so the refusal names the state the caller was trying to
+// It is the live budget and only the live budget. What an agent knows is what
+// enters its later invocations, so that is the thing worth refusing over; how much
+// history has accumulated behind it is the roll's business rather than a reason to
+// refuse anybody anything.
+//
+// The cost is measured over what the store would hold afterwards rather than over
+// what it holds now, so the refusal names the state the caller was trying to
 // reach. Compacting and retiring are what make room, and both are writes, so both
 // are measured the same way — a compaction that replaces four revisions with one
-// smaller one is affordable exactly when the result fits.
-func (s *MemoryStore) affordable(recorded []MemoryRevision, revision MemoryRevision, encoded int, path string) error {
+// smaller one is affordable exactly when the result fits, and a retirement almost
+// always is.
+func (s *MemoryStore) affordable(recorded []MemoryRevision, revision MemoryRevision) error {
 	live := 0
 	for _, memory := range assemble(append(append([]MemoryRevision{}, recorded...), revision)) {
 		if memory.Retired() {
@@ -605,35 +646,132 @@ func (s *MemoryStore) affordable(recorded []MemoryRevision, revision MemoryRevis
 		return fmt.Errorf("%w: %s would know %d bytes and the budget is %d; compact or retire a memory first",
 			ErrMemoryBudget, revision.Agent, live, MaxMemoryLiveBytes)
 	}
-	info, err := os.Stat(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("measure the %s memory log: %w", revision.Agent, err)
+	return nil
+}
+
+// rollIfFull moves an agent's history aside when its live log has grown past the
+// size a log is kept to, leaving a log that holds what the agent currently knows
+// and an archive that holds everything it used to.
+//
+// Nothing is lost and nothing is edited: the archive is the log under another
+// name, and the fresh log opens with the current revision of each live memory
+// copied across exactly as it was written — same number, same text, same
+// invocation — so the history a reader assembles is the one that was recorded.
+// The reader takes the archives and the log together, and a revision that appears
+// in both is counted once.
+//
+// It declines to roll where rolling would not help: a log whose every line is
+// still current has nothing superseded to set aside, and renaming it would leave a
+// fresh log the same size as the one it replaced. That case is bounded by the live
+// budget instead, which is what actually holds it down.
+func (s *MemoryStore) rollIfFull(agent, path string, recorded []MemoryRevision, incoming int) error {
+	stored, err := s.logSize(agent, path)
+	if err != nil {
+		return err
 	}
-	stored := int64(0)
-	if err == nil {
-		stored = info.Size()
+	if stored+int64(incoming) <= s.rollAt {
+		return nil
 	}
-	if stored+int64(encoded) > MaxMemoryLogBytes {
-		return fmt.Errorf("%w: the %s memory log is %d bytes and the ceiling is %d; its history has to be rolled aside before more is written",
-			ErrMemoryBudget, revision.Agent, stored, MaxMemoryLogBytes)
+	seed, err := currentMemoryLines(recorded)
+	if err != nil {
+		return err
+	}
+	kept := int64(0)
+	for _, line := range seed {
+		kept += int64(len(line))
+	}
+	if kept >= stored {
+		return nil
+	}
+	archive, err := s.nextArchivePath(agent)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(path, archive); err != nil {
+		return fmt.Errorf("roll the %s memory log aside: %w", agent, err)
+	}
+	if err := syncDirectory(s.root); err != nil {
+		return err
+	}
+	for _, line := range seed {
+		if err := s.append(path, line); err != nil {
+			return fmt.Errorf("carry the %s memories into a fresh log: %w", agent, err)
+		}
 	}
 	return nil
 }
 
-// Memories is everything one agent knows, in the order an operator reads it:
-// agent-continuity memories first, then the subject ones, each by name. The
-// second return is the lines that would not decode, which are reported rather
-// than raised.
-func (s *MemoryStore) Memories(agent string) ([]Memory, []MemoryProblem, error) {
-	path, err := s.logPath(agent)
-	if err != nil {
-		return nil, nil, err
+// currentMemoryLines is the current revision of every memory still live, encoded
+// as the lines a fresh log opens with. A retired memory is not carried across: its
+// history is in the archive, which is where a retired memory's history belongs.
+func currentMemoryLines(recorded []MemoryRevision) ([][]byte, error) {
+	var lines [][]byte
+	for _, memory := range assemble(recorded) {
+		if memory.Retired() {
+			continue
+		}
+		encoded, err := encodeMemoryRevision(memory.Current())
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, encoded)
 	}
-	recorded, problems, err := s.read(path, agent)
+	return lines, nil
+}
+
+func (s *MemoryStore) logSize(agent, path string) (int64, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("measure the %s memory log: %w", agent, err)
+	}
+	return info.Size(), nil
+}
+
+// Memories is everything one agent knows and every revision behind it, in the
+// order an operator reads it: agent-continuity memories first, then the subject
+// ones, each by name. The second return is the lines that would not decode, which
+// are reported rather than raised.
+//
+// It reads the archives rolled off this agent's log as well as the log, so what
+// comes back is the whole history whether or not it has ever been rolled.
+func (s *MemoryStore) Memories(agent string) ([]Memory, []MemoryProblem, error) {
+	recorded, problems, err := s.recorded(agent)
 	if err != nil {
 		return nil, nil, err
 	}
 	return assemble(recorded), problems, nil
+}
+
+// recorded is every revision this store holds for one agent, oldest file first:
+// the archives in the order they were rolled off, and then the live log. It is
+// what both the listing and the writer read, so a sequence the writer assigns
+// counts the archived revisions too and can never reuse a number that is already
+// in the history.
+func (s *MemoryStore) recorded(agent string) ([]MemoryRevision, []MemoryProblem, error) {
+	path, err := s.logPath(agent)
+	if err != nil {
+		return nil, nil, err
+	}
+	archives, err := s.archivePaths(agent)
+	if err != nil {
+		return nil, nil, err
+	}
+	var (
+		revisions []MemoryRevision
+		problems  []MemoryProblem
+	)
+	for _, each := range append(archives, path) {
+		read, found, err := s.read(each, agent)
+		if err != nil {
+			return nil, nil, err
+		}
+		revisions = append(revisions, read...)
+		problems = append(problems, found...)
+	}
+	return revisions, problems, nil
 }
 
 // Live is what the agent still knows: every memory whose latest revision is not
@@ -678,13 +816,24 @@ func (s *MemoryStore) Agents() ([]string, error) {
 	return agents, nil
 }
 
-// assemble turns a log into memories: one per name, its revisions in the order
-// they were recorded, agent-continuity first and then by name. Sorting here
-// rather than at each reader is what makes two readings of one log read the same.
+// assemble turns a history into memories: one per name, its revisions in the
+// order they were recorded, agent-continuity first and then by name. Sorting here
+// rather than at each reader is what makes two readings of one history read the
+// same.
+//
+// A revision the roll carried into a fresh log is in the archive it came from as
+// well, so a revision already seen is skipped. What identifies one is its memory
+// and its number, which the store assigns and never reuses.
 func assemble(recorded []MemoryRevision) []Memory {
 	byName := map[string]*Memory{}
+	seen := map[string]bool{}
 	var order []string
 	for _, revision := range recorded {
+		carried := fmt.Sprintf("%s\x00%d", revision.Memory, revision.Sequence)
+		if seen[carried] {
+			continue
+		}
+		seen[carried] = true
 		memory, known := byName[revision.Memory]
 		if !known {
 			memory = &Memory{
@@ -736,9 +885,9 @@ func memoryHasSequence(recorded []MemoryRevision, name string, sequence int) boo
 	return false
 }
 
-// read is one agent's log as it sits on disk. A line that will not decode, or
-// that belongs to another agent or another product, is a problem reported against
-// the agent rather than a failure to read the rest.
+// read is one of an agent's log files as it sits on disk. A line that will not
+// decode, or that belongs to another agent or another product, is a problem
+// reported against the file it is in rather than a failure to read the rest.
 func (s *MemoryStore) read(path, agent string) ([]MemoryRevision, []MemoryProblem, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -749,6 +898,7 @@ func (s *MemoryStore) read(path, agent string) ([]MemoryRevision, []MemoryProble
 	}
 	defer file.Close()
 
+	log := filepath.Base(path)
 	var (
 		revisions []MemoryRevision
 		problems  []MemoryProblem
@@ -763,16 +913,16 @@ func (s *MemoryStore) read(path, agent string) ([]MemoryRevision, []MemoryProble
 		}
 		revision, err := decodeMemoryRevision(scanner.Bytes())
 		if err != nil {
-			problems = append(problems, MemoryProblem{Agent: agent, Line: line, Problem: err.Error()})
+			problems = append(problems, MemoryProblem{Agent: agent, Log: log, Line: line, Problem: err.Error()})
 			continue
 		}
 		if revision.Agent != agent {
-			problems = append(problems, MemoryProblem{Agent: agent, Line: line,
+			problems = append(problems, MemoryProblem{Agent: agent, Log: log, Line: line,
 				Problem: fmt.Sprintf("the revision belongs to agent %s", revision.Agent)})
 			continue
 		}
 		if revision.ProductID != s.productID {
-			problems = append(problems, MemoryProblem{Agent: agent, Line: line,
+			problems = append(problems, MemoryProblem{Agent: agent, Log: log, Line: line,
 				Problem: fmt.Sprintf("the revision belongs to product %s", revision.ProductID)})
 			continue
 		}
@@ -875,13 +1025,70 @@ func (s *MemoryStore) lockAgent(ctx context.Context, agent string) (func(), erro
 	return func() { _ = releaseStateFile(file) }, nil
 }
 
-// memoryLogSuffix and memoryLockSuffix name the two files an agent has here. The
-// log ends in `.jsonl` because that is what it is, and the suffix is what tells
-// the listing a file holds memories rather than being the lock beside them.
+// The names an agent's files take here. The live log ends in `.memory.jsonl`,
+// which is what tells the listing a file holds an agent's memories rather than
+// being the lock beside it or an archive rolled off it; an archive is the same
+// name with a number in it, so the archives of one agent sort into the order they
+// were rolled and no archive is ever read as a live log.
 const (
-	memoryLogSuffix  = ".memory.jsonl"
-	memoryLockSuffix = ".memory.lock"
+	memoryLogSuffix     = ".memory.jsonl"
+	memoryLockSuffix    = ".memory.lock"
+	memoryArchiveMiddle = ".memory.archive-"
+	memoryArchiveFormat = "%s" + memoryArchiveMiddle + "%04d.jsonl"
 )
+
+// archivePaths is every archive rolled off one agent's log, oldest first. There
+// are none for an agent whose log has never been rolled, which is nearly all of
+// them.
+func (s *MemoryStore) archivePaths(agent string) ([]string, error) {
+	if err := domain.ValidateIdentifier("agent", agent); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the memory directory: %w", err)
+	}
+	prefix := agent + memoryArchiveMiddle
+	var archives []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		archives = append(archives, filepath.Join(s.root, name))
+	}
+	// The number is fixed-width, so sorting the names sorts the archives into the
+	// order they were rolled.
+	sort.Strings(archives)
+	return archives, nil
+}
+
+// nextArchivePath is where the log is about to be rolled to: the number after the
+// highest one already there, so an archive is never written over. It is read off
+// the names rather than counted, because counting would reuse a number where an
+// archive has been moved away by hand and put the history that is still there
+// behind the history that is arriving.
+func (s *MemoryStore) nextArchivePath(agent string) (string, error) {
+	archives, err := s.archivePaths(agent)
+	if err != nil {
+		return "", err
+	}
+	prefix := agent + memoryArchiveMiddle
+	highest := 0
+	for _, archive := range archives {
+		numbered, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(archive), prefix), ".jsonl"))
+		if err != nil {
+			continue
+		}
+		if numbered > highest {
+			highest = numbered
+		}
+	}
+	return filepath.Join(s.root, fmt.Sprintf(memoryArchiveFormat, agent, highest+1)), nil
+}
 
 // logPath names the one file an agent's memories live in. The agent is validated
 // as an identifier before it reaches a path, so a configured agent name can never

@@ -154,6 +154,118 @@ func TestMemoryStoreRefusesAWriteThatWouldExceedTheLiveBudget(t *testing.T) {
 	}
 }
 
+// TestAFullLogRollsRatherThanRefusing is the property the log size has to have:
+// it is where the history is set aside, never a size at which the store stops
+// working. A wall here would be one nothing could climb back over, because the way
+// out of a full store is to compact or to retire, and both are writes on the path
+// the wall would be in.
+func TestAFullLogRollsRatherThanRefusing(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore(t, t.TempDir())
+	// Small enough that a handful of revisions of one memory crosses it, so the
+	// roll is reached without writing the four megabytes the harness's own bound is.
+	store.rollAt = 3000
+
+	for round := 0; round < 12; round++ {
+		revision := testMemoryRevision()
+		revision.Text = fmt.Sprintf("what the operator wanted on round %d: %s", round, strings.Repeat("x", 400))
+		if _, err := store.Remember(context.Background(), revision); err != nil {
+			t.Fatalf("Remember() on round %d error = %v", round, err)
+		}
+	}
+
+	archives, err := store.archivePaths("product-manager")
+	if err != nil {
+		t.Fatalf("archivePaths() error = %v", err)
+	}
+	if len(archives) == 0 {
+		t.Fatal("the log grew past its size and nothing was rolled aside")
+	}
+	if size, err := store.logSize("product-manager", filepath.Join(store.Root(), "product-manager.memory.jsonl")); err != nil {
+		t.Fatalf("logSize() error = %v", err)
+	} else if size > store.rollAt {
+		t.Errorf("the live log is %d bytes and the roll is at %d", size, store.rollAt)
+	}
+
+	// The history is whole across the archives and the log: twelve revisions were
+	// written and twelve are readable, each one still naming the invocation that
+	// produced it, and none of them counted twice because the roll carried it
+	// across.
+	memories, problems, err := store.Memories("product-manager")
+	if err != nil {
+		t.Fatalf("Memories() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Memories() reported %v", problems)
+	}
+	if len(memories) != 1 {
+		t.Fatalf("Memories() returned %d memories, want 1", len(memories))
+	}
+	revisions := memories[0].Revisions
+	if len(revisions) != 12 {
+		t.Fatalf("the memory has %d revisions, want the 12 that were written", len(revisions))
+	}
+	for index, revision := range revisions {
+		if revision.Sequence != index+1 {
+			t.Fatalf("revision %d is numbered %d; the history is out of order or a number was reused", index, revision.Sequence)
+		}
+		if revision.Invocation.ID == "" {
+			t.Errorf("revision %d lost the invocation that produced it in the roll", revision.Sequence)
+		}
+	}
+	if !strings.Contains(revisions[11].Text, "round 11") {
+		t.Errorf("the last revision is %q, want the one written last", revisions[11].Text)
+	}
+}
+
+// TestARolledStoreStillCompactsAndRetires is the other half of the finding the
+// roll answers: the operations that make room have to keep working at the size
+// where room runs out, or a full store is a permanently stuck one.
+func TestARolledStoreStillCompactsAndRetires(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore(t, t.TempDir())
+	store.rollAt = 2000
+	for round := 0; round < 6; round++ {
+		revision := testMemoryRevision()
+		revision.Text = fmt.Sprintf("round %d: %s", round, strings.Repeat("y", 300))
+		if _, err := store.Remember(context.Background(), revision); err != nil {
+			t.Fatalf("Remember() on round %d error = %v", round, err)
+		}
+	}
+	compaction := testMemoryRevision()
+	compaction.Text = "all of that, said once"
+	compaction.Compacts = []int{1, 2, 3, 4, 5, 6}
+	if _, err := store.Remember(context.Background(), compaction); err != nil {
+		t.Fatalf("Remember() a compaction into a rolled store error = %v", err)
+	}
+	retirement := testMemoryRevision()
+	retirement.Text = "and it stopped being true"
+	retirement.Retired = true
+	if _, err := store.Remember(context.Background(), retirement); err != nil {
+		t.Fatalf("Remember() a retirement into a rolled store error = %v", err)
+	}
+	memories, problems, err := store.Memories("product-manager")
+	if err != nil {
+		t.Fatalf("Memories() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Memories() reported %v", problems)
+	}
+	if got := len(memories[0].Revisions); got != 8 {
+		t.Fatalf("the memory has %d revisions, want the 8 that were written", got)
+	}
+	if !memories[0].Retired() {
+		t.Errorf("the memory is not retired after a retirement was recorded")
+	}
+	// A compaction written across a roll still names what it replaced, which is the
+	// provenance the design requires of one.
+	if got := memories[0].Revisions[6].Compacts; len(got) != 6 {
+		t.Errorf("the compaction names %v, want the six revisions it replaced", got)
+	}
+}
+
 func TestMemoryStoreRefusesTextBeyondOneRevisionsBound(t *testing.T) {
 	t.Parallel()
 
@@ -304,6 +416,12 @@ func TestMemoryStoreReportsAnUnreadableLineWithoutLosingTheRest(t *testing.T) {
 	}
 	if len(problems) != 1 || problems[0].Line != 2 {
 		t.Fatalf("Memories() reported %v, want one problem on line 2", problems)
+	}
+	// The file is named as well as the line: an agent's history is its log and the
+	// archives rolled off it, so a line number alone sends a reader to the wrong
+	// file.
+	if problems[0].Log != "product-manager.memory.jsonl" {
+		t.Errorf("the problem names log %q, want the live log", problems[0].Log)
 	}
 	// A writer may not carry on over a line it could not read, because the number
 	// it is about to assign is worked out from what it could read.
