@@ -284,21 +284,18 @@ func (s *Session) recordReportHandling(outcome *TrackerOutcome) {
 		outcome.fail(errNoReports)
 		return
 	}
-	id := strings.TrimSpace(outcome.Action.Report)
-	reports, err := s.options.Reports.List()
+	subject, err := s.citedReport(outcome.Action.Report)
 	if err != nil {
-		outcome.fail(fmt.Errorf("read the collected reports: %w", err))
+		outcome.fail(fmt.Errorf("nothing was recorded: %w", err))
 		return
 	}
-	var subject report.Report
-	for _, reported := range reports {
-		if reported.ID == id {
-			subject = reported
-			break
-		}
-	}
 	if subject.ID == "" {
-		outcome.fail(fmt.Errorf("no report in the pile is %s, so nothing was recorded; name a report exactly as it was listed to you", id))
+		// The contract requires the identifier and validation refuses a handling
+		// without one, so this is unreachable rather than expected. It is stated
+		// because the failure it would otherwise be is silent: a handling recorded
+		// against no report takes nothing out of the pile while reading as though it
+		// had, which is the one thing this function must never do.
+		outcome.fail(errors.New("handle names no report, so nothing was recorded"))
 		return
 	}
 	handling := report.Handling{

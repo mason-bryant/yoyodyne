@@ -115,6 +115,38 @@ harness cannot read changes nothing at all. The distinction being drawn is
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
 
+**One thing a creation is refused for is being work already in the tracker.**
+Before an item is created the harness compares it against every item the tracker
+holds, closed work included, and looks for two things: work already admitted from
+the report or the directive this creation cites, and a child already carved out
+of the parent it names carrying the same scope. Either one refuses the creation
+and names the item, its state, and why it matched, in the result the role reads
+and the line printed to you.
+
+That is narrow on purpose. The source question is exact — a report or a directive
+is an identifier, and the item that came from one says so in its own record — and
+the scope question is a judgement, so it is asked only among the children of one
+parent, which is where a decomposition repeats itself. Nothing compares two
+unrelated items by how alike they read: a backlog shares most of its vocabulary
+with itself, and a guard that fired on a quarter of admissions would be one
+nobody reads. One record can genuinely prompt more than one piece of work — a
+directive of yours routinely does — so the refusal for a source says what to do
+about that too: the citation belongs on the one item that answers the record, and
+the second is admitted without it.
+
+A proposal is never refused for any of this. What happens there is that the
+harness does not admit it on an approved goal's authority: it comes to you with
+the item it looks like named on it, and whether the two are the same work is
+yours to say.
+
+What it is worth is two runs. `yoyodyne-ifd.274` duplicated the closed
+`yoyodyne-ifd.229`, both admitted from one developer report; `yoyodyne-ifd.241`
+was decomposed twice into the same pair of children. A duplicate cannot be
+discovered by the run that gets it — its diff against the target branch cannot
+contain work that branch already carries, so it spends its repair attempts and
+its review rounds finding that out, and the second of those two produced a
+confident review demanding code that had already merged.
+
 ## Bringing it an idea rather than a work item
 
 Most of what you say to the product manager is intent: build this, do that

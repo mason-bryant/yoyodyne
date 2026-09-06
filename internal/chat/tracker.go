@@ -18,6 +18,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/admission"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/capability"
@@ -156,7 +157,7 @@ const (
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
 	actionSurvey:       {},
-	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor", "parked", "directive"},
+	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor", "parked", "directive", "report"},
 	actionAttribute:    {"goal"},
 	actionUpdate:       {"title", "description", "note", "executor"},
 	actionReparent:     {"parent"},
@@ -295,10 +296,16 @@ type TrackerAction struct {
 	// nothing else: an item can stop more than once, and a decision that does not
 	// say which stoppage it was about is one nobody can match to an entry.
 	Run string `json:"run,omitempty"`
-	// Report names the collected report a handling settles, copied from the
-	// listing it was delivered in. It is required there and taken by nothing
-	// else: a handling that does not say which report it is about takes nothing
-	// out of the pile and tells nobody anything.
+	// Report names the collected report an action is about, copied from the
+	// listing it was delivered in. A handling requires one: a handling that does
+	// not say which report it is about takes nothing out of the pile and tells
+	// nobody anything.
+	//
+	// A creation takes it too, and there it is optional, because most work is
+	// admitted from a conversation rather than from something a role reported.
+	// Where a report is what the work came from, naming it writes that onto the
+	// item, and it is what the next admission citing the same report is checked
+	// against — which is how one report stops producing the same work twice.
 	Report string `json:"report,omitempty"`
 	// Decision is what triage decided, from the fixed vocabulary in triage.go. It
 	// is a named decision rather than prose because the harness acts on it — a
@@ -629,6 +636,13 @@ func (a TrackerAction) validateArguments() []error {
 		// creation is carried out.
 		if named := strings.TrimSpace(a.Directive); named != "" && !directive.ValidReference(named) {
 			problems = append(problems, fmt.Errorf("directive %q is not a directive identifier; name one exactly as it was recorded, or by any prefix of it that names exactly one", named))
+		}
+		// A report the admission says the work came from is checked for being an
+		// identifier here, where nothing has been created yet. Whether any report
+		// answers to it needs the pile rather than the action, so that is asked as
+		// the creation is carried out.
+		if reported := strings.TrimSpace(a.Report); reported != "" && !report.ValidID(reported) {
+			problems = append(problems, fmt.Errorf("report %q is not a report identifier; name a report exactly as it was listed to you", reported))
 		}
 		problems = append(problems, parkingProblem("parked", a.Parked))
 	case actionAttribute:
@@ -1133,6 +1147,32 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			outcome.fail(err)
 			return
 		}
+		// The report this admission says the work came from, looked up for exactly
+		// the reasons the directive is: an item whose record names a report nobody
+		// filed says where the work came from and says something untrue, and the
+		// guard below decides from these citations, so one nothing checked is a
+		// guard that has quietly stopped working.
+		cited, err := s.citedReport(action.Report)
+		if err != nil {
+			outcome.fail(err)
+			return
+		}
+		// Work admitted from a source this admission cites too, or already carved
+		// out of this parent, is not admitted again. Both shapes cost a run each in
+		// one week and neither was catchable afterwards: a duplicate's diff against
+		// the target branch cannot contain work that branch already carries, so the
+		// run spends its repair attempts and its review rounds discovering that.
+		// What is found is named rather than summarised, because acting on the item
+		// this already is needs its identifier.
+		matches, unchecked := s.alreadyAdmitted(ctx, admission.Candidate{
+			Title:   strings.TrimSpace(action.Title),
+			Parent:  action.parent(),
+			Sources: admissionSources(prompting.ID, cited.ID),
+		})
+		if len(matches) > 0 {
+			outcome.Failure = duplicateRefusal(creation, matches)
+			return
+		}
 		created, err := s.options.Tracker.Create(ctx, beads.NewWorkItem{
 			Title:       strings.TrimSpace(action.Title),
 			Description: strings.TrimSpace(action.Description),
@@ -1143,7 +1183,11 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// written on for the same reason and a second one: it is the only thing
 			// that says this work was asked for rather than proposed, and whoever
 			// asked is owed the item's identifier back.
-			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal) + s.classNote(action.Class) + directiveNote(prompting),
+			// The report an admission came from is written on for the same reasons
+			// the directive is, and one more: it is what the next admission citing
+			// that report is checked against, so a citation that lived only in the
+			// conversation would leave the guard nothing to read.
+			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal) + s.classNote(action.Class) + directiveNote(prompting) + reportNote(cited),
 			Parent: action.parent(),
 			// The executor is set as the item is admitted rather than after it,
 			// because the harness may choose an item the moment it is in the queue: a
@@ -1186,12 +1230,19 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		if action.Parked.Parked() {
 			parked = ", parked so nothing selects it until it is released: " + singleLine(action.Parked.Reason(), maxTrackerFailureBytes)
 		}
+		// Where the duplicate check could not run, the admission still happened and
+		// says so: refusing work for a tracker that would not answer would lose the
+		// admission to something that has nothing to do with it, and a duplicate
+		// nobody checked for is caught by whoever reads the queue.
+		checked := uncheckedClause(unchecked)
+		from := citedClause(cited)
 		if action.Priority != nil {
-			outcome.applied("%s at priority %d: %s%s%s%s",
-				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), parked, answering, gating)
+			outcome.applied("%s at priority %d: %s%s%s%s%s%s",
+				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), parked, from, answering, gating, checked)
 			return
 		}
-		outcome.applied("%s: %s%s%s%s", creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), parked, answering, gating)
+		outcome.applied("%s: %s%s%s%s%s%s",
+			creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), parked, from, answering, gating, checked)
 	case actionAttribute:
 		// The attribution is appended rather than written over what is there. The
 		// goal a creation recorded cannot be rewritten, and rewriting it is not
@@ -1367,6 +1418,11 @@ const retiredWithoutBeingDone = "Retired from the backlog without being done"
 // same act differently.
 type creation struct {
 	note string
+	// subject is what a refusal calls the work that was not created. It belongs
+	// beside the other two because it describes the same act: an admission and a
+	// decomposition are different things to have been refused, and a refusal that
+	// called one the other would name an authority the role does not have.
+	subject string
 	// applied renders the line the operator reads, given the identifier the
 	// tracker assigned. It is a function rather than a format string because
 	// what it interpolates includes a parent identifier, and text that came from
@@ -1384,6 +1440,7 @@ func (s *Session) creationVerb(parent string) creation {
 	if !s.authority().ParentRequired {
 		return creation{
 			note:    "Admitted to the backlog",
+			subject: "the work this would admit",
 			applied: func(id string) string { return "admitted " + id + " to the backlog" },
 		}
 	}
@@ -1392,11 +1449,13 @@ func (s *Session) creationVerb(parent string) creation {
 		// assumed: a decomposition that lost its parent is still not an admission.
 		return creation{
 			note:    "Created as decomposition",
+			subject: "the work this would create",
 			applied: func(id string) string { return "created " + id },
 		}
 	}
 	return creation{
 		note:    "Created under " + parent + ", decomposing it",
+		subject: "the work this would carve out of " + parent,
 		applied: func(id string) string { return "decomposed " + parent + " into " + id },
 	}
 }

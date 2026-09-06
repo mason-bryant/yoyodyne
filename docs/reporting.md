@@ -441,6 +441,15 @@ records and the later one is what is read. There is no vocabulary of outcomes:
 "admitted as ifd.150", "already fixed", "not worth doing" are the same fact to
 everything that reads this, and the reason says which.
 
+Where the decision is work, the admission can name the report it came from, and
+the item then records it. That citation is not bookkeeping: it is what a later
+admission citing the same report is checked against, and where one is found
+nothing is created and the result names the item that report already produced.
+`yoyodyne-ifd.274` and the closed `yoyodyne-ifd.229` were both admitted from one
+developer report, the second after the first had landed, and it cost a run that
+could not have succeeded — see [the conversation](conversation.md) for what else
+a creation is refused for.
+
 That is what `/reports` and `yoyo reports` are showing you when they count the
 unhandled ones and print what was decided under the rest. It is also the honest
 limit of it: the harness carries reports to the role that decides, and nothing
