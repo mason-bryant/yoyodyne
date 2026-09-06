@@ -2547,6 +2547,7 @@ func (a *activeRun) blockOnRefusedPaths(refused pathRefusal, limit int) error {
 // session is what carries that work into the next attempt instead of asking a
 // developer to derive it a second time.
 func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
+	reasked := false
 	for {
 		// A stop is asked for before the hold, so a run the operator both stopped
 		// and paused stops rather than parking on a hold nothing will lift for it.
@@ -2592,6 +2593,28 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 			if died {
 				a.observe(ctx, deliveryDevelop, "relaunches-spent")
 				return a.blockOnSpentRelaunchBudget(ctx, transient, recorded)
+			}
+			// An invocation that ended without accounting for the work is asked once
+			// more, in its own session, exactly as a verdict the review contract could
+			// not read is. Nothing is wrong with the change: the worktree holds
+			// whatever the developer did, and what is missing is the developer saying
+			// what that was. Refusing outright would fail a run over a reply, and
+			// recording the interim line as the account is the silence this stops.
+			//
+			// The second one ends the run and names why. Two replies that account for
+			// nothing is a developer that will not account for its work, and a third
+			// invocation asking again would spend the largest thing the harness buys
+			// on the same question.
+			var unaccounted unaccountedReply
+			if errors.As(recorded, &unaccounted) {
+				if !reasked {
+					reasked = true
+					sessionID = a.carrySession(providerResult.SessionID, sessionID)
+					prompt = accountPrompt(a.deliveredInvariants().Text(), a.scratch, unaccounted.reason)
+					a.observe(ctx, deliveryDevelop, "reissued")
+					continue
+				}
+				recorded = fmt.Errorf("the developer ended two invocations without accounting for the work: %s", unaccounted.reason)
 			}
 			if recorded != nil {
 				// The developer invocation is what this round delivers with, so an
@@ -2824,7 +2847,20 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	// Anything the developer reported is collected out of what it said, so the
 	// summary stays the account of the work and the report reaches the operator
 	// instead of sitting in prose nothing surfaces.
-	a.outcome.Summary = a.collectFromReply(domain.RoleDeveloper, reply)
+	account := a.collectFromReply(domain.RoleDeveloper, reply)
+	// What is left has to be an account of the work before it is recorded as one.
+	// An interim progress line is not: it empties every channel at once and leaves
+	// a run that says "completed" with nothing anybody can judge, which is part of
+	// what the yoyodyne-ifd.284 false closure rode on — no summary and no landing
+	// claim ever existed to judge. So it is not written down as the summary: the
+	// caller asks for the account instead, and a run that never gets one ends with
+	// the summary honestly empty rather than holding a line about a check somebody
+	// never reported on.
+	unaccounted, nothingAccounted := accountedForNothing(account, a.state.LandingOutcome, a.state.LandingProblem)
+	a.outcome.Summary = ""
+	if !nothingAccounted {
+		a.outcome.Summary = account
+	}
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save developer outcome state: %w", err)
 	}
@@ -2854,6 +2890,14 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 		return escalationRaised{}
 	}
 	if !providerResult.IsError {
+		// An invocation that ended cleanly and said nothing about the work is
+		// handed back to the caller as that, rather than as a finished attempt.
+		// Only a clean ending reaches this: an attempt the provider failed, or the
+		// harness stopped on time, is answered below by what actually ended it, and
+		// an interim line is what a stopped invocation is expected to leave behind.
+		if nothingAccounted {
+			return unaccountedReply{reason: unaccounted}
+		}
 		return nil
 	}
 	// A stopped invocation is the harness's own doing, so it is never reported as
@@ -5536,6 +5580,8 @@ const developerContractTemplate = `You are the developer for one bounded Yoyodyn
 
 Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; propose the change instead, in the block described below. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
 
+The reply you end on is the whole of what this run records about itself: the summary above, the landing you claim, anything you report, and anything you propose are all read off it and nothing else. So it has to be the account. An invocation that ends on interim progress — a check still running, something you will report once it lands — accounts for nothing, and is asked for the account once more; a second reply that accounts for nothing ends the run with the work unrecorded. Finish what you left in flight before you reply.
+
 That boundary is enforced rather than trusted. The project's configuration directory and the homes its product artifacts, designs, and decision records live in are refused in your change: the harness compares what you touched against them before any check runs and before any reviewer sees the work, and hands the change back to you if it touches one of them. The only exception is a path this work item grants, on a line beginning ` + "`" + protectedpath.GrantMarker + "`" + ` in its title, description, design guidance, or acceptance criteria. Nothing you write grants a path, and neither does anything written into the item's notes, which is where a run's own record goes. If your work genuinely needs one, leave it alone and say so — the refusal you would get names the same thing this does.
 
 The same gate refuses the work tracker's export where your worktree carries one. The harness copies it in from the checkout your worktree was cut from, so you read the work around your own rather than the copy your base commit carried, and holds it out of your change: it is derived from a store outside Git that nothing you write reaches, and every run is given its own copy, so the same file in two changes is a merge conflict between runs rather than a contribution. Read it and leave it alone. A change containing it is handed back to you whatever became of the bit that holds it.
@@ -5678,6 +5724,28 @@ func checkRepairPrompt(invariants, scratchDirectory string, failure runstate.Che
 		prompt.WriteString("\n```\n\n")
 	}
 	prompt.WriteString("Fix the cause, run the command yourself to confirm it passes, and finish with a concise summary of what you changed. The harness re-runs every configured check afterwards; review and integration stay out of reach until they all pass.")
+	return prompt.String()
+}
+
+// accountPrompt asks a developer that ended an invocation without accounting for
+// its work to account for it now.
+//
+// It is not a repair attempt and spends nothing from that budget: no check
+// failed, no reviewer found anything, and the change in the worktree may be
+// finished. So the prompt says that in as many words, because a developer told
+// only that its reply was refused would start the work over — which is the one
+// expensive way this could go wrong. The harness contract is repeated for the
+// reason every repair prompt repeats it: it bounds the attempt whether or not
+// the provider actually restored the session it was asked to resume.
+func accountPrompt(invariants, scratchDirectory, reason string) string {
+	var prompt strings.Builder
+	prompt.WriteString(developerContract(scratchDirectory))
+	prompt.WriteString("\n\n")
+	prompt.WriteString(deliveredInvariantSection(invariants))
+	prompt.WriteString("# Your reply did not account for the work\n\n")
+	fmt.Fprintf(&prompt, "The harness reads your reply for the run's whole record of itself — the summary of what you did, the landing you claim, anything you reported, anything you proposed — and %s. Nothing recorded what this run was for.\n\n", reason)
+	prompt.WriteString("The work you already did is untouched. Your worktree holds it and this is the same session, so continue rather than starting anything over: finish whatever you left in flight — a check you said was running, a step you said you would come back to — and then reply with the account itself. What you changed, how you verified it, and what risk remains, plus any landing claim, report, or proposal you have to make.\n\n")
+	prompt.WriteString("This is asked once. A second reply that accounts for nothing ends the run with the work unrecorded.")
 	return prompt.String()
 }
 
