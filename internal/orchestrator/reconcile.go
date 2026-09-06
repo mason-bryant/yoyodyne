@@ -499,7 +499,7 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	}
 	detail := fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
 	var catchup *gitworktree.Catchup
-	if failure := r.confirmQueuedPublication(ctx, &state, &published); failure != nil {
+	if failure := r.confirmQueuedPublication(ctx, state, &published); failure != nil {
 		state.PublishFailure = failure.Error()
 		detail = failure.Error()
 	} else {
@@ -650,14 +650,12 @@ func (r Reconciler) settleDroppedMerge(ctx context.Context, state runstate.State
 // is an outstanding publication and nothing is closed against it: the forge says
 // it merged and nothing could check what the merge produced.
 //
-// It is asked under the recoverable-failure rule, because the reading is one
-// request over the same connection the merge went over: a reset here says
-// nothing about the publication, and recording an outstanding one over it is the
-// loss yoyodyne-ifd.264 exists to stop.
-//
-// The record it is given is the one the settlement goes on to save, so the waits
-// it takes are on the run afterwards rather than overwritten by the next write.
-func (r Reconciler) confirmQueuedPublication(ctx context.Context, state *runstate.State, published *runstate.PullRequest) error {
+// It is asked once, exactly as it always was. The recoverable-failure rule is
+// applied below to the deletion and to nothing else here: a sweep settles its
+// runs one at a time under each one's lease, so a boundary that waits out a
+// window holds up every run behind it, and that is worth spending on the step
+// whose failure a person would otherwise have to finish by hand.
+func (r Reconciler) confirmQueuedPublication(ctx context.Context, state runstate.State, published *runstate.PullRequest) error {
 	integration := gitworktree.Integration{
 		Branch:               state.Branch,
 		TargetBranch:         state.Integration.TargetBranch,
@@ -665,12 +663,8 @@ func (r Reconciler) confirmQueuedPublication(ctx context.Context, state *runstat
 		TargetCommit:         state.Integration.TargetCommit,
 		PreviousTargetCommit: state.Integration.PreviousTargetCommit,
 	}
-	var remoteTarget string
-	if err := r.recovering(ctx, state, runstate.RetryRemoteTarget, func(ctx context.Context) error {
-		var err error
-		remoteTarget, err = r.Worktrees.ConfirmRemoteTarget(ctx, integration)
-		return err
-	}); err != nil {
+	remoteTarget, err := r.Worktrees.ConfirmRemoteTarget(ctx, integration)
+	if err != nil {
 		return fmt.Errorf("confirm the queued merge reached %s: %w", integration.TargetBranch, err)
 	}
 	published.MergeCommit = remoteTarget

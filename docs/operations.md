@@ -591,10 +591,19 @@ could not be deleted** is the third, and is the mildest: the item is already
 closed and your local branch already caught up, and what is left is a branch on
 the forge that nothing sweeps for you — the convergence sweep below removes
 local branches only. It says so in a second line on the closed item naming the
-branch, and it is on the triage docket until somebody removes it. Until then it
-also holds the item out of the pull, which is the point: an item whose only
-outstanding state is a publication is not implementable work, and a run started
-against one can only rediscover that its change already landed. A catch-up the
+branch, and it is on the triage docket until somebody removes it.
+
+All three are on that docket, and all three hold their item out of the pull for
+as long as they stand — which is the point: the promotion has already put the
+change on your local target branch, which is the authoritative one, so an item
+whose only outstanding state is a publication is not implementable work and a
+run started against one can only rediscover that. What holds it says which of
+the three it is, because they are not the same thing to act on: a confirmed
+merge means nothing at all is left to do about the work, and a merge the forge
+never made means the merge itself is still to be decided. Neither ever claims
+the other, and where a run also left a branch behind, an unconfirmed merge reads
+as that branch — the thing somebody can still act on — rather than as its
+publication. A catch-up the
 settle could not make is none of these: it is ordinary, the run settles, and the
 convergence sweep below finishes it on the next pass. Other reports on this page
 still reach you when the evidence demands it — a preserved blocker, a diverged
@@ -894,11 +903,13 @@ Needs a human (1):
   One of the queue's own accounts is an item **held for a person**, which is the
   third not-startable line in the example above: a run stopped on it and its
   change is still on a branch, its stoppage is in front of the development
-  manager and nobody has decided about it, or a run integrated its change and
-  only the publication is outstanding. The last one is not a stoppage at all and
-  is held for the opposite reason: the work has landed, so there is nothing left
-  to implement and a run started against it can only find that out again — which
-  is what yoyodyne-ifd.295 cost, three developer runs and three reviews deep.
+  manager and nobody has decided about it, or a run promoted its change and could
+  not finish publishing it. The last one is not a stoppage at all and
+  is held for the opposite reason: the change is on the target branch already, so
+  there is nothing left to implement and a run started against it can only find
+  that out again — which is what yoyodyne-ifd.295 cost, three developer runs and
+  three reviews deep. It says whether the forge merged the publication or not,
+  and never guesses: the two are different things to settle.
   It names the run and what has to be decided rather than
   leaving the item to its `blocked` status, because a status says the same word
   about a stoppage nobody has answered and about work whose every blocker closed

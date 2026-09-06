@@ -3402,6 +3402,7 @@ func TestSchedulerPassesOverAnItemWhoseOnlyOutstandingStateIsAPublication(t *tes
 		Status:      runstate.StatusSucceeded,
 		UpdatedAt:   harness.now.Add(-time.Hour),
 		Integration: &runstate.Integration{TargetBranch: "main", SourceCommit: "b206ca1", TargetCommit: "b206ca1"},
+		PullRequest: &runstate.PullRequest{Number: 428, Merged: true, MergeCommit: "f382df4"},
 		PublishFailure: "delete the merged remote branch: resolve yoyodyne/yoyodyne-ifd-295/55443d4c on origin " +
 			"failed with exit code 128: Read from remote host ssh.github.com: Connection reset by peer",
 	}}}
@@ -3416,7 +3417,7 @@ func TestSchedulerPassesOverAnItemWhoseOnlyOutstandingStateIsAPublication(t *tes
 	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != published.ID {
 		t.Fatalf("deferred = %#v, want the outstanding publication named", schedule.Deferred)
 	}
-	if !strings.Contains(schedule.Deferred[0].Reason, "only the publication is outstanding") {
+	if !strings.Contains(schedule.Deferred[0].Reason, "only the publication is unfinished") {
 		t.Fatalf("deferred reason = %q, want the publication named rather than a stoppage", schedule.Deferred[0].Reason)
 	}
 }

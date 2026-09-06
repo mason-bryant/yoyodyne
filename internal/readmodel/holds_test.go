@@ -197,10 +197,34 @@ func TestAnItemWhoseOnlyOutstandingStateIsAPublicationIsHeldForAPerson(t *testin
 
 	held := heldForAPerson([]runstate.State{publishedRun("run-55443d4c", "yoyodyne-ifd.295")}, nil)
 	reason := heldReason(t, held, "yoyodyne-ifd.295")
-	for _, want := range []string{"run-55443d4c", "only the publication is outstanding", "nothing here to implement"} {
+	for _, want := range []string{"run-55443d4c", "the forge merged it", "nothing here to implement"} {
 		if !strings.Contains(reason, want) {
 			t.Errorf("the hold says %q, want it to name %q", reason, want)
 		}
+	}
+}
+
+// A merge the forge dropped is the other publication that leaves an item
+// outstanding, and it is held too: the change is on the local target branch,
+// which is the authoritative one, so a run against it would redo work that has
+// landed and re-arming the merge is a triage decision. What it must not say is
+// that the forge merged anything. Nothing did, something the base branch
+// required went unmet, and a hold asserting the merge happened would be a false
+// statement in the one derivation the scheduler and the docket both quote.
+func TestADroppedMergeIsHeldWithoutClaimingTheForgeMergedIt(t *testing.T) {
+	t.Parallel()
+
+	dropped := publishedRun("run-8f31ca02", "yoyodyne-ifd.288")
+	dropped.PullRequest.State = "OPEN"
+	dropped.PullRequest.Merged = false
+	dropped.PublishFailure = "the forge dropped the queued merge of pull request 84: it is open and has no merge queued for it"
+
+	reason := heldReason(t, heldForAPerson([]runstate.State{dropped}, nil), "yoyodyne-ifd.288")
+	if !strings.Contains(reason, "the forge has not merged it") {
+		t.Errorf("the hold says %q, want the unmerged publication named", reason)
+	}
+	if strings.Contains(reason, "the forge merged it") {
+		t.Errorf("the hold says %q, which claims a merge the forge dropped", reason)
 	}
 }
 
@@ -223,21 +247,32 @@ func TestAFinishedOrInFlightPublicationHoldsNothing(t *testing.T) {
 	}
 }
 
-// An item that is both — a change on a branch somebody has to decide about and a
-// publication that did not finish — reads as the publication. Both hold it, and
-// the wording is what a reader acts on: an integrated item has nothing on a
-// branch to pick up, and saying otherwise sends them after work that is already
-// on the target.
-func TestAnIntegratedItemReadsAsItsPublicationRatherThanAsAPreservedChange(t *testing.T) {
+// An item that is both — a change still on a branch and a publication that did
+// not finish — is described by whichever of the two a reader can act on, and
+// which that is depends on the merge. A confirmed merge makes the branch debris:
+// the change is everywhere it was going, so the publication is what is left to
+// say. A merge nobody made does not, so the branch is still a decision and the
+// preserved-change reason is the one that sends triage to it.
+func TestABranchLeftBehindReadsAsThePublicationOnlyWhereTheMergeIsConfirmed(t *testing.T) {
 	t.Parallel()
 
-	run := preservedRun("run-1b782eeb", "yoyodyne-ifd.295", time.Date(2026, 9, 6, 2, 0, 0, 0, time.UTC))
-	run.Integration = &runstate.Integration{TargetBranch: "main", SourceCommit: "bb8ec09", TargetCommit: "bb8ec09"}
-	run.PublishFailure = "delete the merged remote branch: Connection reset by peer"
+	stopped := time.Date(2026, 9, 6, 2, 0, 0, 0, time.UTC)
+	merged := preservedRun("run-1b782eeb", "yoyodyne-ifd.295", stopped)
+	merged.Integration = &runstate.Integration{TargetBranch: "main", SourceCommit: "bb8ec09", TargetCommit: "bb8ec09"}
+	merged.PullRequest = &runstate.PullRequest{Number: 424, Branch: merged.Branch, Merged: true, MergeCommit: "262372c"}
+	merged.PublishFailure = "delete the merged remote branch: Connection reset by peer"
 
-	reason := heldReason(t, heldForAPerson([]runstate.State{run}, nil), "yoyodyne-ifd.295")
-	if !strings.Contains(reason, "only the publication is outstanding") {
-		t.Fatalf("the hold says %q, want the publication rather than the preserved change", reason)
+	unmerged := preservedRun("run-8f31ca02", "yoyodyne-ifd.288", stopped)
+	unmerged.Integration = &runstate.Integration{TargetBranch: "main", SourceCommit: "0d392c4", TargetCommit: "0d392c4"}
+	unmerged.PullRequest = &runstate.PullRequest{Number: 84, Branch: unmerged.Branch, State: "OPEN"}
+	unmerged.PublishFailure = "the forge dropped the queued merge of pull request 84"
+
+	held := heldForAPerson([]runstate.State{merged, unmerged}, nil)
+	if reason := heldReason(t, held, "yoyodyne-ifd.295"); !strings.Contains(reason, "the forge merged it") {
+		t.Errorf("the merged item is held for %q, want the publication rather than the preserved change", reason)
+	}
+	if reason := heldReason(t, held, "yoyodyne-ifd.288"); !strings.Contains(reason, "its change is preserved") {
+		t.Errorf("the unmerged item is held for %q, want the branch it left behind named", reason)
 	}
 }
 
@@ -259,6 +294,14 @@ func publishedRun(runID, workItemID string) runstate.State {
 			TargetBranch: "main",
 			SourceCommit: "b206ca1",
 			TargetCommit: "b206ca1",
+		},
+		PullRequest: &runstate.PullRequest{
+			Number:      428,
+			Branch:      "yoyodyne/" + workItemID + "/" + runID,
+			HeadCommit:  "b206ca1",
+			State:       "MERGED",
+			Merged:      true,
+			MergeCommit: "f382df4",
 		},
 		PublishFailure: "delete the merged remote branch: resolve " + workItemID +
 			" on origin failed with exit code 128: Read from remote host ssh.github.com: Connection reset by peer",

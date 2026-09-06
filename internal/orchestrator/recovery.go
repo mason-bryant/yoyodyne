@@ -157,6 +157,11 @@ func (a *activeRun) exhausted(boundary string, cause error) error {
 // single reset there was recorded as an outstanding publication at once — twice
 // on yoyodyne-ifd.295, on the one step that was left.
 //
+// It is used at that step and no other. A sweep settles its runs one at a time
+// under each one's lease, so a window waited out here holds up every run behind
+// it; that is worth paying where the alternative is a leftover only a person can
+// remove, and is not worth paying for a reading the next sweep takes again.
+//
 // It waits on the boundary's own window, which is durable on the run, so a sweep
 // that takes up where a previous one left off spends what is left rather than a
 // whole window again. The record is written before the wait for the reason the

@@ -440,8 +440,9 @@ change is still on a branch, a stoppage put in front of the development
 manager that nobody has decided about, or a run that integrated the item's
 change and could not finish publishing it. None is ever released automatically.
 Releasing a stoppage would start a fresh run on top of a change that is still
-there, and releasing an outstanding publication would start one over work that
-has already landed — which is what [yoyodyne-ifd.295](operations.md#recovering-interrupted-runs)
+there, and releasing an outstanding publication would start one over work the
+promotion has already put on the target branch — which is what
+[yoyodyne-ifd.295](operations.md#recovering-interrupted-runs)
 cost, three developer runs and three reviews each re-deriving that the change
 was already on `main`. So a hold is lifted only by triage picking the change up,
 by the escalation being answered, or by the publication being settled
