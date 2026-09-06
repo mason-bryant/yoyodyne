@@ -67,6 +67,84 @@ func TestTheDeadWindowIsNoticedAndRecordedOnce(t *testing.T) {
 	}
 }
 
+// The case the harness's own loop is wired for: a session that is alive, still
+// writing a transition on every poll, and no longer starting anything.
+//
+// It is the other half of the pair. The dead session above leaves a log that
+// stops, and `yoyo reconcile` is what reads it; this one goes on saying it is
+// polling, which is what a queue whose ready items are all claimed by runs that
+// died looks like from every surface — and no sweep is needed to see it, because
+// the loop writing those polls is the loop taking this reading.
+//
+// What makes it visible is that the silence is dated from the runs rather than
+// from the session's account of itself: a poll that started nothing is not a
+// start, so a session can say it is watching all night without moving the moment
+// this is measured from. That is `readmodel.LastStart`, and it is pinned here
+// because the whole justification for taking the reading from inside the loop
+// rests on it.
+func TestALiveSessionStillPollingAndStartingNothingIsAStall(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.ready(3)
+	// A session that has been up for three hours and last started something two
+	// hours ago. The run is over, so it accounts for nothing now.
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	harness.record(t, runstate.StatusSucceeded, moment.Add(time.Hour))
+
+	// And then thirty polls, one a minute, right up to the moment this reading is
+	// taken: the session is demonstrably alive and demonstrably starting nothing.
+	harness.now = moment.Add(3 * time.Hour)
+	for poll := 30; poll >= 1; poll-- {
+		harness.watched(t, runstate.WatchIdle, "nothing pullable this poll",
+			harness.now.Add(-time.Duration(poll)*time.Minute))
+	}
+
+	reading := harness.check(t)
+	if reading.Opened == nil {
+		t.Fatalf("Check() = %+v, want a live session that has stopped starting anything read as a stall", reading)
+	}
+	// Dated from the last run rather than from the last poll. A session whose own
+	// polls moved this would never be reported as stalled while it kept polling,
+	// which is exactly the state this loop is here to catch.
+	if !reading.Opened.Since.Equal(moment.Add(time.Hour)) {
+		t.Fatalf("the record says since %s, want %s — when the last run started rather than when the session last polled",
+			reading.Opened.Since, moment.Add(time.Hour))
+	}
+	// And the record says the session is alive, which is what tells whoever reads
+	// it to kill this one rather than start one.
+	if !strings.Contains(reading.Opened.Chooser, "has said nothing since") ||
+		!strings.Contains(reading.Opened.Chooser, string(runstate.WatchIdle)) {
+		t.Fatalf("Chooser = %q, want the live session's own last word", reading.Opened.Chooser)
+	}
+}
+
+// The same live session on a product where no run has ever started. The silence
+// is dated from the earliest thing the watch log holds rather than from the
+// latest, so a session that has been polling since it started and has never
+// pulled anything is a stall rather than a machine that looks busy.
+func TestALiveSessionThatHasNeverStartedAnythingIsAStall(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.ready(2)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	harness.now = moment.Add(2 * time.Hour)
+	for poll := 20; poll >= 1; poll-- {
+		harness.watched(t, runstate.WatchIdle, "nothing pullable this poll",
+			harness.now.Add(-time.Duration(poll)*time.Minute))
+	}
+
+	reading := harness.check(t)
+	if reading.Opened == nil {
+		t.Fatalf("Check() = %+v, want a session that has never started anything read as a stall", reading)
+	}
+	if !reading.Opened.Since.Equal(moment) {
+		t.Fatalf("the record says since %s, want %s — when this session first said it was watching",
+			reading.Opened.Since, moment)
+	}
+}
+
 // Everything that legitimately accounts for nothing having started, and none of
 // them is a stall. Each is either a decision somebody made or the harness
 // visibly working, and recording one would put a stall in the history an
@@ -451,6 +529,13 @@ func (h *harness) record(t *testing.T, status runstate.Status, at time.Time) {
 		Phase:         runstate.PhaseDeveloping,
 		StartedAt:     at,
 		UpdatedAt:     at,
+	}
+	// A run that ended is recorded as one: what dates the silence is when it
+	// started, and what stops it accounting for the quiet is that it is over.
+	if status.Terminal() {
+		completed := at
+		state.CompletedAt = &completed
+		state.Phase = runstate.PhaseComplete
 	}
 	if err := h.runs.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)

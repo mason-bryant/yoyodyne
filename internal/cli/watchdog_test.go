@@ -221,8 +221,10 @@ func TestTheWatchLoopsStallReadingIsGatedAndRecordsTheStallOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStallStore() error = %v", err)
 	}
-	// A session that said it was watching two hours ago and has started nothing
-	// since, over a queue with work in it.
+	// The session this loop belongs to: up for two hours, still writing a
+	// transition on every poll, and starting nothing over a queue with work in it.
+	// That is the case this invoker exists for — a dead session writes no polls at
+	// all, and `yoyo reconcile` is what reads that one.
 	began := time.Date(2026, 9, 6, 3, 0, 0, 0, time.UTC)
 	if err := watch.Record(runstate.WatchTransition{
 		SchemaVersion: runstate.WatchSchemaVersion,
@@ -233,6 +235,18 @@ func TestTheWatchLoopsStallReadingIsGatedAndRecordsTheStallOnce(t *testing.T) {
 		Reason:        "watching the backlog until stopped",
 	}); err != nil {
 		t.Fatalf("Record() error = %v", err)
+	}
+	for poll := 1; poll <= 8; poll++ {
+		if err := watch.Record(runstate.WatchTransition{
+			SchemaVersion: runstate.WatchSchemaVersion,
+			ProductID:     "yoyodyne",
+			SessionID:     "watch-0123456789abcdef0123456789abcdef",
+			State:         runstate.WatchIdle,
+			At:            began.Add(time.Duration(poll) * 15 * time.Minute),
+			Reason:        "nothing pullable this poll",
+		}); err != nil {
+			t.Fatalf("Record() error = %v", err)
+		}
 	}
 
 	backlog := &countingBacklog{count: 3}

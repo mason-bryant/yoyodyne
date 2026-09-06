@@ -508,7 +508,12 @@ machine, still-moving run or provider usage window to account for it is
 [recorded against the product as a stall](operations.md#when-nothing-happened-at-all),
 which `yoyo status` reads back and the Slack sink, where one is running, takes to
 the operators once. What this loop catches is the session that is alive and has
-stopped starting anything; a session that died writes nothing at all, and
+stopped starting anything — a queue whose ready items are all claimed by runs
+that died, say. It can catch that because the silence is dated from the runs
+rather than from the session's own account of itself: a poll that started nothing
+is not a start, so a session polling all night does not move the moment this is
+measured from, and one that has never started anything is dated from the first
+thing its log holds. A session that died writes no polls at all, and
 [`yoyo reconcile`](operations.md#recovering-interrupted-runs) takes the same
 reading for that case, under the same flag name. Nothing on the path asks a
 provider anything, and noticing is all it does — restarting whatever died is the
