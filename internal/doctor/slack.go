@@ -127,7 +127,10 @@ func (d *diagnosis) checkSlackSecrets(ctx context.Context, productID domain.Prod
 }
 
 // checkSlackEnvFile asks the environment file the question the sink will ask it:
-// does it assign the two variables the sink reads its tokens from. Existence is
+// does it assign the two variables the sink reads its tokens from. The reading
+// is the slack package's own, because `yoyo setup` asks the same file the same
+// question, and a second reading here is how the two surfaces come to tell an
+// operator different things about one file. Existence is
 // not that question and must not stand in for it -- the documented way to make
 // this file installs an empty one and then opens an editor, so an operator who
 // left the editor without saving has a file every check about the file passes
@@ -150,7 +153,7 @@ func (d *diagnosis) checkSlackEnvFile(file string, productID domain.ProductID) F
 			Remedy:  fmt.Sprintf("ls -l %s", shellQuote(file)),
 		}
 	}
-	if missing := unassignedVariables(contents, slack.BotTokenVariable, slack.AppTokenVariable); len(missing) > 0 {
+	if missing := slack.UnassignedTokenVariables(contents); len(missing) > 0 {
 		return Finding{
 			Check:   "slack-secrets",
 			Status:  StatusWarning,
@@ -174,54 +177,6 @@ func (d *diagnosis) checkSlackEnvFile(file string, productID domain.ProductID) F
 		Summary: fmt.Sprintf("this project's Slack secrets are stored for %s", productID),
 		Detail:  file,
 	}
-}
-
-// unassignedVariables names which of the given variables the environment file
-// leaves without a value. It reads the file the way the launcher's `set -a; .`
-// does, near enough for what is being asked: `export` is optional, the quotes
-// around a value are the shell's rather than part of it, and a comment assigns
-// nothing.
-func unassignedVariables(contents []byte, names ...string) []string {
-	assigned := map[string]bool{}
-	for _, line := range strings.Split(string(contents), "\n") {
-		if name, ok := assignment(line); ok {
-			assigned[name] = true
-		}
-	}
-	var missing []string
-	for _, name := range names {
-		if !assigned[name] {
-			missing = append(missing, name)
-		}
-	}
-	return missing
-}
-
-// assignment reads one line as the assignment it is, and answers with the name
-// and whether anything was assigned to it rather than with what was: a token
-// this returned would be one something above it could print.
-func assignment(line string) (string, bool) {
-	line = strings.TrimSpace(line)
-	if line == "" || strings.HasPrefix(line, "#") {
-		return "", false
-	}
-	if rest, found := strings.CutPrefix(line, "export "); found {
-		line = strings.TrimSpace(rest)
-	}
-	name, value, found := strings.Cut(line, "=")
-	if !found {
-		return "", false
-	}
-	return strings.TrimSpace(name), unquote(strings.TrimSpace(value)) != ""
-}
-
-// unquote strips the quotes the shell would strip, so that a name assigned `""`
-// is read as the empty assignment it becomes rather than as two characters.
-func unquote(value string) string {
-	if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
-		return strings.TrimSpace(value[1 : len(value)-1])
-	}
-	return value
 }
 
 // checkSlackSink asks what is actually reporting for this product. The lease
