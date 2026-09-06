@@ -131,6 +131,18 @@ type Conversation struct {
 	// it did and did not — so it travels the same way rather than in a field of its
 	// own.
 	PendingTrackerResults string `json:"pending_tracker_results,omitempty"`
+	// RefusedBlock is the tracker block this conversation had refused whole and
+	// has not answered yet. It is the same fact the pending results above carry
+	// into the role's next turn, kept as a record rather than as prose so that
+	// something other than the next person at a terminal can act on it: the words
+	// are what the role reads, and this is what says a turn is owed and whether
+	// the harness has started one.
+	//
+	// It is cleared by the first turn whose reply the harness could read, which is
+	// the role having answered the refusal one way or another. A refusal arriving
+	// while one is already recorded is therefore the second in a row, and is
+	// escalated rather than woken for; see TrackerRefusal.
+	RefusedBlock *TrackerRefusal `json:"refused_block,omitempty"`
 	// ContextGatheredAt is when the picture of the product the agent is working
 	// from was assembled, and ContextCommit is the repository commit it was
 	// assembled against. They are durable because the process that briefed the
@@ -190,6 +202,110 @@ type Conversation struct {
 	StartedAt             time.Time `json:"started_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
 }
+
+// TrackerRefusal is one refused tracker block as the record keeps it, and what
+// the harness has done about it.
+//
+// The refusal already reaches the role at the start of its next turn. What this
+// adds is the half nothing carried: whether a turn has been started for it. A
+// refusal recorded and never woken for waits on somebody typing, which is how
+// both of this week's refused batches came to need the operator's assistant to
+// prompt the re-issue.
+//
+// The two endings are deliberate. A refusal is put to the role once, because a
+// turn that was taken again on each pass would be the harness asking a role that
+// cannot answer, over and over, at a turn a time. A refusal that arrives while
+// one is still outstanding — the woken turn refused again, or the same defect
+// back — carries the reason it will not be woken for instead, and that is what
+// the operator is told.
+type TrackerRefusal struct {
+	// Turn is the conversation turn whose block was refused, and Actions how many
+	// it asked for. Actions is zero where the harness could not count them, which
+	// is a payload it never decoded rather than a block that asked for nothing.
+	Turn    int `json:"turn"`
+	Actions int `json:"actions,omitempty"`
+	// Problem is the refusal in the harness's own words, which is the same text
+	// the role is given back.
+	Problem   string    `json:"problem"`
+	RefusedAt time.Time `json:"refused_at"`
+	// WokenAt is when the harness started a turn for this refusal. Zero is a
+	// refusal no turn has been put to yet.
+	WokenAt time.Time `json:"woken_at,omitempty"`
+	// Attempts is how many wakeups have been claimed for this refusal, and
+	// LastAttemptAt when the most recent was. They are the pair that makes the
+	// retry below both bounded and paced, and neither is ever given back: a
+	// wakeup the provider refused returns the turn it never took and keeps its
+	// place in the count, which is what stops a window that never clears from
+	// being retried forever. See MaxRefusalWakeups.
+	Attempts      int       `json:"attempts,omitempty"`
+	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
+	// Escalated is why the harness will not wake for this refusal and has put it
+	// in front of the operator instead. Empty is the ordinary refusal.
+	Escalated string `json:"escalated,omitempty"`
+}
+
+// MaxRefusalWakeups bounds how many turns the harness starts for one refusal
+// before it stops trying.
+//
+// It counts wakeups claimed rather than turns taken, so it bounds the retry a
+// provider window earns as well as the turns a role actually answered. A wakeup
+// the provider refused for want of capacity gives back the turn it never took —
+// so the refusal is still owed one, and the window has not silently spent the
+// only one it had — but not its place in this count, which is what makes a window
+// that never clears end in abandonment rather than in a wakeup every quarter of
+// an hour for ever.
+//
+// Three is what "briefly out of capacity" is worth riding out: paced by the delay
+// below, it spans half an hour from the first attempt. A refusal that exhausts it
+// still has the harness's own words at the top of its conversation, so what it
+// loses is the harness starting the turn — which is stated where the attempts run
+// out rather than left to be inferred from the quiet.
+const MaxRefusalWakeups = 3
+
+// RefusalWakeupRetryDelay is how long a wakeup that reached nobody is left alone
+// before it is made again.
+//
+// The bound above is worth nothing without it. Whatever drives the wakeup decides
+// how often it looks, and the loop that does today looks once per pull — which on
+// a watching session is once a minute — so three attempts counted and not paced
+// would be three attempts inside three minutes, and a refusal abandoned in the
+// time a provider took to come back. Paced, it costs one refused call a quarter
+// of an hour and leaves the passes between it for the queue.
+//
+// It is measured from the last attempt rather than the first, for the reason the
+// escalation's is: a wakeup that failed, waited, and failed again waits again
+// rather than being abandoned on a clock that started before anybody knew there
+// was a problem.
+const RefusalWakeupRetryDelay = 15 * time.Minute
+
+// AwaitingWakeup reports a refusal the harness still owes a turn: no turn has
+// been put to the role, it is not one the operator has been handed instead, its
+// attempts are not spent, and the last one that reached nobody is old enough to
+// be worth making again.
+func (r TrackerRefusal) AwaitingWakeup(now time.Time) bool {
+	switch {
+	case r.Escalated != "" || !r.WokenAt.IsZero():
+		return false
+	case r.Attempts >= MaxRefusalWakeups:
+		return false
+	case r.Attempts == 0 && r.LastAttemptAt.IsZero():
+		return true
+	default:
+		return !now.Before(r.LastAttemptAt.Add(RefusalWakeupRetryDelay))
+	}
+}
+
+// MaxTrackerRefusalProblemBytes bounds the refusal a conversation record carries.
+// The whole of what the role is given back is bounded separately by the pending
+// results it travels in; this is the copy the record keeps, and it is held well
+// below the state file's own limit for the reason every other bound here is.
+const MaxTrackerRefusalProblemBytes = 4 << 10
+
+// ErrNoRefusalAwaitingWakeup reports a conversation with no refused tracker
+// block owed a turn: none recorded, one already woken for, or one the operator
+// has been handed. It is a sentinel because a pass walking past a conversation
+// somebody else just woke is the record doing its job rather than a failure.
+var ErrNoRefusalAwaitingWakeup = errors.New("the conversation has no refused tracker block awaiting a wakeup")
 
 // PendingProposal is one proposed work item as the record keeps it: what was
 // proposed, which turn proposed it, and why the harness did not simply admit
@@ -315,6 +431,21 @@ func (c Conversation) Validate() error {
 	if len(c.PendingTrackerResults) > MaxPendingTrackerResultBytes {
 		problems = append(problems, fmt.Errorf("pending tracker results are %d bytes, limit is %d",
 			len(c.PendingTrackerResults), MaxPendingTrackerResultBytes))
+	}
+	// A recorded refusal that says nothing about what was wrong is one nothing can
+	// act on: the wakeup carries the harness's own words, and a record without
+	// them would wake a role to correct something nobody stated.
+	if c.RefusedBlock != nil {
+		if strings.TrimSpace(c.RefusedBlock.Problem) == "" {
+			problems = append(problems, errors.New("a recorded tracker refusal must carry what was wrong with the block"))
+		}
+		if len(c.RefusedBlock.Problem) > MaxTrackerRefusalProblemBytes {
+			problems = append(problems, fmt.Errorf("the recorded tracker refusal is %d bytes, limit is %d",
+				len(c.RefusedBlock.Problem), MaxTrackerRefusalProblemBytes))
+		}
+		if c.RefusedBlock.RefusedAt.IsZero() {
+			problems = append(problems, errors.New("a recorded tracker refusal must say when it was refused"))
+		}
 	}
 	if len(c.DeliveredAmendmentIDs) > MaxDeliveredAmendmentIDs {
 		problems = append(problems, fmt.Errorf("%d delivered amendment ids are recorded, limit is %d",
@@ -783,6 +914,98 @@ func (s *ConversationStore) Recorded() ([]Conversation, error) {
 	return conversations, nil
 }
 
+// ClaimRefusalWakeup marks a conversation's outstanding tracker refusal as one
+// the harness has started a turn for, and returns the refusal it claimed.
+//
+// It is the claim rather than the wakeup, and the order is the order the
+// guarantee needs: the record says a turn was started before one is, so a
+// process that dies between the two has recorded a wakeup nobody made rather
+// than made one nobody recorded. The second is what would fire again on the next
+// pass, and again on the one after, which is the looping the refusal is escalated
+// rather than repeated to avoid.
+//
+// It is taken under the conversation's own lease, so the claim and the turn that
+// follows it cannot be interleaved with somebody else's turn writing the record
+// back without it. A conversation somebody is mid-turn with refuses with
+// ErrConversationHeld rather than waiting: nothing has been asked of the role
+// yet, so a later pass makes the wakeup rather than this one holding a lease open
+// for the length of another turn — and a role that is mid-turn is one whose
+// refusal may be about to be answered anyway.
+func (s *ConversationStore) ClaimRefusalWakeup(identity ConversationIdentity, at time.Time) (TrackerRefusal, error) {
+	hold, err := s.TryClaim(identity)
+	if err != nil {
+		return TrackerRefusal{}, err
+	}
+	defer hold.Release()
+	// Read again under the lease. What was listed is what the record said before
+	// the claim, and the answer that matters is what it says now.
+	conversation, err := s.Load(identity)
+	if err != nil {
+		return TrackerRefusal{}, err
+	}
+	if conversation.RefusedBlock == nil || !conversation.RefusedBlock.AwaitingWakeup(at) {
+		return TrackerRefusal{}, fmt.Errorf("%w: %s", ErrNoRefusalAwaitingWakeup, identity)
+	}
+	claimed := *conversation.RefusedBlock
+	claimed.WokenAt = at.UTC()
+	claimed.LastAttemptAt = at.UTC()
+	claimed.Attempts++
+	conversation.RefusedBlock = &claimed
+	// The record moved, so it says when — but only forward. A claim taken against
+	// a clock behind the conversation's own last turn must not rewrite the record
+	// as older than the turn that wrote it.
+	if claimed.WokenAt.After(conversation.UpdatedAt) {
+		conversation.UpdatedAt = claimed.WokenAt
+	}
+	if err := s.Save(conversation); err != nil {
+		return TrackerRefusal{}, err
+	}
+	return claimed, nil
+}
+
+// WithdrawRefusalWakeup gives back the turn a wakeup never took, so the refusal
+// is owed one again and a later pass makes it.
+//
+// What comes back is the turn and not the attempt. That distinction is the whole
+// of the bound: the attempt stands and counts against MaxRefusalWakeups, and the
+// moment of it stands and paces the next one, so a provider that goes on refusing
+// is tried a fixed number of times over a known span and then left. Giving the
+// attempt back as well would make the bound unreachable — the count would never
+// pass one — and turn "retried while the window lasts" into "retried forever",
+// which is the loop this whole record exists to avoid.
+//
+// It is spent on one ending: a wakeup the provider refused for want of capacity,
+// where no model ever saw the message. Every other failure keeps its turn spent,
+// because a turn that may have reached the role is one this cannot claim did not.
+//
+// The turn it names is checked against the record, because the refusal it was
+// claimed for may have been answered and replaced while the failed wakeup was
+// being reported: giving back a wakeup for a refusal that no longer exists would
+// re-open one somebody has already dealt with. A conversation with nothing to
+// give back is not a failure — the refusal moved on under it, which is the record
+// saying the wakeup is no longer owed.
+func (s *ConversationStore) WithdrawRefusalWakeup(ctx context.Context, identity ConversationIdentity, turn int) error {
+	hold, err := s.Claim(ctx, identity)
+	if err != nil {
+		return err
+	}
+	defer hold.Release()
+	conversation, err := s.Load(identity)
+	if err != nil {
+		return err
+	}
+	if conversation.RefusedBlock == nil ||
+		conversation.RefusedBlock.Turn != turn ||
+		conversation.RefusedBlock.WokenAt.IsZero() ||
+		conversation.RefusedBlock.Escalated != "" {
+		return nil
+	}
+	given := *conversation.RefusedBlock
+	given.WokenAt = time.Time{}
+	conversation.RefusedBlock = &given
+	return s.Save(conversation)
+}
+
 // Save replaces a role's conversation record atomically. Unlike a run, a
 // conversation is created and updated through the same call: every turn
 // rewrites the same record, and the first turn is not a special case.
@@ -793,7 +1016,7 @@ func (s *ConversationStore) Save(conversation Conversation) error {
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return fmt.Errorf("create conversation directory: %w", err)
 	}
-	path, err := s.statePathFor(conversation.identity())
+	path, err := s.statePathFor(conversation.Identity())
 	if err != nil {
 		return err
 	}
@@ -902,7 +1125,15 @@ func (s *ConversationStore) LoadEvents(conversationID string) ([]execution.Event
 // identity is where a record belongs. A record written before the agent was part
 // of the identity has none, and it belongs where it has always been: under the
 // agent named for its role, which is the only agent that could have written it.
-func (c Conversation) identity() ConversationIdentity {
+// Identity names the conversation this record is: the agent that holds it and
+// the role whose authority it carries. It is exported because a reader that
+// listed the records — the wakeup a refused tracker block is owed is the first —
+// has the record and needs the identity every other call here is keyed by.
+//
+// A record written before the agent was part of the identity names none, and such
+// a record was necessarily written for the agent named after its role, because
+// nothing else could have addressed it.
+func (c Conversation) Identity() ConversationIdentity {
 	agent := c.Agent
 	if agent == "" {
 		agent = string(c.Role)

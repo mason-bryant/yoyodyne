@@ -816,15 +816,26 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// the turn, and a report that could not be read is noted rather than
 		// returned: the rest of the answer is unaffected by either.
 		s.collectReply(&reply, parsed)
+		// A tracker block the harness would not read is recorded and handed back
+		// to the role that sent it before the turn ends. Everything else about
+		// the failure is unchanged: the answer above is real, the turn is
+		// returned as failed, and nothing in the block was carried out.
+		var refused *TrackerError
+		if errors.As(err, &refused) {
+			return reply, errors.Join(err, s.recordRefusedTrackerBlock(refused))
+		}
+		// The block was readable, so a refusal waiting on a correction has had one.
+		// It is settled here rather than after the rest of the parse is judged:
+		// what a recorded refusal is owed is a block the harness can read, and a
+		// reply whose proposals or research would not decode still sent one.
+		//
+		// Whether it asked for anything is the other half. A turn the harness woke
+		// that came back with no tracker action at all has ended the correction with
+		// the actions still lost, and the settling is what says so.
+		if settled := s.settleRefusedTrackerBlock(len(parsed.Actions) > 0); settled != nil {
+			return reply, errors.Join(err, settled)
+		}
 		if err != nil {
-			// A tracker block the harness would not read is recorded and handed back
-			// to the role that sent it before the turn ends. Everything else about
-			// the failure is unchanged: the answer above is real, the turn is
-			// returned as failed, and nothing in the block was carried out.
-			var refused *TrackerError
-			if errors.As(err, &refused) {
-				err = errors.Join(err, s.recordRefusedTrackerBlock(refused))
-			}
 			return reply, err
 		}
 		// What this role has no authority for is refused before any of it is

@@ -39,6 +39,13 @@ const (
 	// several admissions, closes, or reorderings they might have expected did not
 	// happen and the role that asked for them believed they had.
 	KindTrackerBlockRefused Kind = "tracker.block-refused"
+	// The same news once the harness has tried to fix it itself and failed: a
+	// refused block is woken for once, and a conversation whose next block was
+	// refused too is one nothing else is going to correct. It is its own kind
+	// because it is the opposite half of the same story — the self-correction was
+	// attempted and did not take — and a reader shown the refusal line twice would
+	// read two unrelated losses rather than one the harness has stopped working on.
+	KindTrackerRefusalUnresolved Kind = "tracker.refusal-unresolved"
 	// What the operator decided about work an agent proposed. It is two kinds
 	// rather than one with a field, for the reason the reviewer's verdict is:
 	// work entering the backlog and work turned down are different news, and
@@ -246,6 +253,7 @@ func Kinds() []Kind {
 		KindItemAttributed,
 		KindItemReprioritized,
 		KindTrackerBlockRefused,
+		KindTrackerRefusalUnresolved,
 		KindWorkApproved,
 		KindWorkDeclined,
 		KindWorkHandedOff,
@@ -299,7 +307,7 @@ func Kinds() []Kind {
 func (k Kind) Valid() bool {
 	switch k {
 	case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized,
-		KindTrackerBlockRefused, KindWorkApproved, KindWorkDeclined,
+		KindTrackerBlockRefused, KindTrackerRefusalUnresolved, KindWorkApproved, KindWorkDeclined,
 		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut,
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,

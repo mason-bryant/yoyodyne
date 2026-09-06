@@ -73,6 +73,11 @@ var reaches = map[Kind]Reach{
 	// several admissions or closes did not happen and the role that asked believes
 	// they did, so the queue is not what anybody thinks it is until somebody looks.
 	KindTrackerBlockRefused: ReachChannel,
+	// And louder still once the harness has tried: a refusal it woke a role to
+	// correct and got another refused block from is one nothing else in the
+	// harness will fix. It is the operator's, which is the definition of the
+	// channel level.
+	KindTrackerRefusalUnresolved: ReachChannel,
 	// What the operator decided about proposed work. He decided it, so neither is
 	// news to him. An approval created an item and belongs in that item's thread,
 	// where the rest of its narrative will be.

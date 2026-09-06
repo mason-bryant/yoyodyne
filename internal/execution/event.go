@@ -87,6 +87,15 @@ const (
 	// actions the block asked for where the harness could count them, and the
 	// refusal in the words the role is given back.
 	EventTrackerBlockRefused EventType = "tracker.block.refused"
+	// A refused block the harness has stopped trying to have corrected: the turn
+	// it started to get the actions re-issued had its own block refused, or the
+	// refusal before this one was still unanswered when this one arrived. It is
+	// separate from the refusal above because it is the opposite news — the
+	// self-correction was attempted and did not take — and a log that recorded the
+	// two the same way would say a role had lost two blocks and nothing about the
+	// harness having already tried. It carries both refusals and whether the
+	// harness woke the conversation for the first.
+	EventTrackerRefusalUnresolved EventType = "tracker.refusal.unresolved"
 	// What an agent reports while its work continues is recorded in that
 	// invocation's own log as well as in the collected pile: the run or
 	// conversation says a report was made, and the pile says what it was. A

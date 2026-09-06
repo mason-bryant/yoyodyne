@@ -1597,3 +1597,15 @@ func TestRunReportHeadlineDistinguishesAStallFromAnExhaustedBudget(t *testing.T)
 		})
 	}
 }
+
+// loadTestConversation is the durable record as it now stands, which is what a
+// process holding nothing but the state root would read.
+func loadTestConversation(t *testing.T, root string, options Options) runstate.Conversation {
+	t.Helper()
+
+	recorded, err := newTestStore(t, root).Load(options.identity())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	return recorded
+}

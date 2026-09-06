@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // trackerFence opens the one block a reply may carry tracker actions in. It is
@@ -417,6 +419,13 @@ func (e *TrackerError) Unwrap() error { return e.Err }
 // is the whole of what the role needs to write a different one, and a paraphrase
 // is the harness guessing at that.
 //
+// The third half is the turn itself. The words reached the role's next turn and
+// nothing started one, so a refusal in a conversation nobody happened to open
+// waited on a person: both of this week's refused batches needed the operator's
+// assistant to prompt the re-issue. So the refusal is written onto the
+// conversation's own record as a turn the harness owes, and the trigger that
+// wakes roles reads it from there.
+//
 // It returns what could not be recorded and nothing else. The turn has already
 // failed on the refusal itself, and a report of that failure that also failed is
 // still worth saying — but it is not a second failure of the turn.
@@ -432,8 +441,104 @@ func (s *Session) recordRefusedTrackerBlock(refused *TrackerError) error {
 	}); err != nil {
 		problems = append(problems, fmt.Errorf("record the refused tracker block: %w", err))
 	}
+	// A refusal arriving while one is still recorded is the second in a row: the
+	// first was cleared by any turn the harness could read, so nothing in between
+	// answered it. That is the woken turn refused again, or the same defect back,
+	// and waking for it a second time would be the harness asking a role that has
+	// just shown it cannot answer. It goes to the operator instead.
+	unanswered := s.state.RefusedBlock
+	recorded := &runstate.TrackerRefusal{
+		Turn:      s.state.Turns,
+		Actions:   refused.Actions,
+		Problem:   boundText(refused.Error(), runstate.MaxTrackerRefusalProblemBytes),
+		RefusedAt: s.options.clock().Now().UTC(),
+	}
+	if unanswered != nil {
+		recorded.Escalated = describeUnansweredRefusal(*unanswered)
+		if err := s.emit(execution.EventTrackerRefusalUnresolved, map[string]any{
+			"turn": s.state.Turns,
+			"role": string(s.state.Role),
+			// The refusal this turn earned, and the one before it that nothing
+			// answered. Both are carried because what the operator has to see is that
+			// the correction was attempted and did not take.
+			"actions":  refused.Actions,
+			"problem":  refused.Error(),
+			"previous": unanswered.Problem,
+			"woken":    !unanswered.WokenAt.IsZero(),
+			// The role did send a block back; it is the block that was refused. The
+			// other way a refusal goes unanswered is a turn that sent none at all, and
+			// a reader told the two apart is a reader who knows whether the role is
+			// getting one action wrong or has stopped trying to issue it.
+			"refused_again": true,
+		}); err != nil {
+			problems = append(problems, fmt.Errorf("record the tracker refusal nothing has answered: %w", err))
+		}
+	}
+	s.state.RefusedBlock = recorded
 	if err := s.carryResults(renderRefusedTrackerBlock(refused)); err != nil {
 		problems = append(problems, err)
+	}
+	return errors.Join(problems...)
+}
+
+// describeUnansweredRefusal says why a refusal will not be woken for, in the
+// words the case earns. A block refused again on the turn the harness itself
+// started and one refused again after somebody else's turn are the same ending —
+// nothing answered the first refusal — and they are said apart because only the
+// first says the harness already tried.
+func describeUnansweredRefusal(unanswered runstate.TrackerRefusal) string {
+	if !unanswered.WokenAt.IsZero() {
+		return "the harness woke this conversation to correct the refusal of turn " +
+			strconv.Itoa(unanswered.Turn) + " and the block it sent back was refused too"
+	}
+	return "the refusal of turn " + strconv.Itoa(unanswered.Turn) + " was still unanswered when this block was refused"
+}
+
+// settleRefusedTrackerBlock clears a recorded refusal the role has answered, and
+// says so where the answer put nothing back.
+//
+// What clears it is a reply the harness could read, which is the same event the
+// refusal itself is the absence of. It deliberately does not ask whether the
+// re-issued actions were the ones that were lost: what those were is in a reply
+// nobody kept, and a record that waited for a judgement nothing can make would
+// never clear — and a record that never clears is a conversation whose every
+// later refusal is escalated without ever being woken for.
+//
+// So the clearing is unconditional and the silence is not. A turn the harness
+// itself woke that answers in prose and asks for no tracker action has ended the
+// self-correction with the actions exactly as lost as they were, and nothing else
+// would say so: the wakeup is spent, no second refusal is coming, and what the
+// pass wrote down goes no further than that session's own output. That is the
+// same loss as a block refused a second time, so it reaches the operator by the
+// same event.
+//
+// A turn somebody else drove is left alone, and the difference is who was there.
+// The refusal opened that turn in the harness's own words with a person reading
+// it, and it still has its wakeup owed, so a role that answers a question rather
+// than re-issuing has lost nothing yet.
+func (s *Session) settleRefusedTrackerBlock(reissued bool) error {
+	unanswered := s.state.RefusedBlock
+	if unanswered == nil {
+		return nil
+	}
+	var problems []error
+	if !reissued && !unanswered.WokenAt.IsZero() {
+		if err := s.emit(execution.EventTrackerRefusalUnresolved, map[string]any{
+			"turn": s.state.Turns,
+			"role": string(s.state.Role),
+			// The size and the words of what is still lost, which is the refusal this
+			// turn was woken to answer rather than anything this turn earned.
+			"actions":       unanswered.Actions,
+			"problem":       unanswered.Problem,
+			"woken":         true,
+			"refused_again": false,
+		}); err != nil {
+			problems = append(problems, fmt.Errorf("record the woken turn that re-issued nothing: %w", err))
+		}
+	}
+	s.state.RefusedBlock = nil
+	if err := s.record(); err != nil {
+		problems = append(problems, fmt.Errorf("record that the %s answered the refused tracker block: %w", RoleTitle(s.state.Role), err))
 	}
 	return errors.Join(problems...)
 }

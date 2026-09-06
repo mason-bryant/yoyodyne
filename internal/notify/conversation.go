@@ -98,6 +98,12 @@ func FromConversation(conversation runstate.Conversation, events []execution.Eve
 		// would not read produces no per-action record at all, so without this the
 		// channel reports a queue that did not move as a queue nobody touched.
 		return fromRefusedTrackerBlock(conversation, event)
+	case execution.EventTrackerRefusalUnresolved:
+		// And the same news once the harness has spent its one attempt at having the
+		// block re-issued. It is said separately because the refusal above is now
+		// only half the story: what a reader needs is that the correction was tried
+		// and did not take, which is the difference between waiting and acting.
+		return fromUnresolvedTrackerRefusal(conversation, event)
 	case execution.EventProposalCreated:
 		// The approval that precedes this is deliberately not reported beside it.
 		// They are one decision, and the creation is the half that names the item
@@ -254,6 +260,118 @@ func fromRefusedTrackerBlock(conversation runstate.Conversation, event execution
 			},
 		},
 	}, nil
+}
+
+// unresolvedTrackerRefusal is the part of a recorded unresolved refusal this
+// reads, kept narrow for the reason the refusal's own shape above is: what is
+// read here is a durable record that outlives the code that wrote it.
+type unresolvedTrackerRefusal struct {
+	Role    string `json:"role"`
+	Actions int    `json:"actions"`
+	Problem string `json:"problem"`
+	// Previous is the refusal this one failed to answer, and Woken says the
+	// harness had started a turn for it. Together they are what makes this
+	// different news from a second unrelated refusal: the correction was
+	// attempted, by the harness, and it did not take.
+	Previous string `json:"previous"`
+	Woken    bool   `json:"woken"`
+	// RefusedAgain says the role sent a block back and that block was refused too,
+	// as against a turn that sent none at all. Both leave the actions exactly as
+	// lost and both end the trying, which is why they are one record; they are told
+	// apart because one is a role getting an action wrong twice and the other is a
+	// role that stopped issuing it, and only the second means nothing was refused
+	// on the turn this record is about.
+	RefusedAgain bool `json:"refused_again"`
+}
+
+// fromUnresolvedTrackerRefusal says that a role lost a block of tracker actions
+// and the turn after it did not put them back.
+//
+// It is critical where the refusal it follows is a warning, and the step between
+// them is what earns it: a refusal on its own is a loss the harness is about to
+// try to repair by itself, and this is the same loss with the repair spent. What
+// is left needs the operator, which is the whole of what the severity says.
+//
+// It is addressed to the product for the reason the refusal is: the actions were
+// refused together and which items they were about is in a reply nobody kept.
+func fromUnresolvedTrackerRefusal(conversation runstate.Conversation, event execution.Event) (Notification, error) {
+	var recorded unresolvedTrackerRefusal
+	if err := json.Unmarshal(event.Payload, &recorded); err != nil {
+		return Notification{}, fmt.Errorf("read an unresolved tracker refusal recorded in %s: %w", conversation.ConversationID, err)
+	}
+	asking := domain.AgentRole(strings.TrimSpace(recorded.Role))
+	if !asking.Valid() {
+		asking = conversation.Role
+	}
+	refused := recorded.Actions
+	if refused <= 0 {
+		refused = -1
+	}
+	return Notification{
+		Topic:   Product(),
+		Speaker: Harness(),
+		Event: Event{
+			Kind:     KindTrackerRefusalUnresolved,
+			At:       event.Timestamp,
+			Severity: report.SeverityCritical,
+			Refs:     Refs{ConversationID: conversation.ConversationID},
+			Detail: Detail{
+				Refused: refused,
+				Asking:  asking.Title(),
+				Reason:  strings.TrimSpace(recorded.Problem),
+				// What the harness already did about it, said as the cause a reader is
+				// owed: a refusal it woke the conversation for and one it never reached
+				// are the same ending by two different routes, and only the record can
+				// say which this was.
+				Cause:    unansweredRefusalCause(recorded),
+				Priority: -1,
+			},
+		},
+	}, nil
+}
+
+// unansweredRefusalCause says what the harness had already done when this
+// refusal arrived, and whether the block came back with the same defect.
+//
+// Both halves are load-bearing, because there are two ways into this record and
+// they are not the same news. One is the turn the harness itself started being
+// refused, which is the self-correction spent. The other is a second block
+// refused with the first still unanswered and no wakeup ever made — two
+// unreadable blocks in a conversation somebody was driving by hand, before any
+// pass looked. A message that claimed the harness had woken the role would be
+// wrong on that path, and it is the path the record is most likely to take on a
+// busy morning.
+//
+// There is a third way in, and it is the quietest: a turn the harness woke that
+// answered in prose and asked for no tracker action at all. Nothing was refused
+// on it, so a message written around a second refusal would describe something
+// that did not happen — and this is exactly the ending that would otherwise reach
+// nobody, since the wakeup is spent and no second refusal is coming.
+//
+// It compares the two refusals rather than quoting the earlier one. The earlier
+// refusal's words are on the durable event, and a channel line carrying two
+// error messages is one nobody reads to the end; what a reader needs from it is
+// whether the same thing went wrong twice, which is the difference between a
+// role that cannot get one action right and one making a fresh mistake.
+func unansweredRefusalCause(recorded unresolvedTrackerRefusal) string {
+	if !recorded.RefusedAgain {
+		if recorded.Woken {
+			return "the harness woke this conversation to re-issue them and the turn it took asked for no tracker action at all"
+		}
+		return "the turn after the refusal asked for no tracker action at all"
+	}
+	previous := strings.TrimSpace(recorded.Previous)
+	repeated := previous != "" && previous == strings.TrimSpace(recorded.Problem)
+	switch {
+	case recorded.Woken && repeated:
+		return "the harness woke this conversation to correct the refusal before it and got the same refusal back"
+	case recorded.Woken:
+		return "the harness woke this conversation to correct the refusal before it, and the block it sent back was refused too"
+	case repeated:
+		return "the refusal before this one was never answered, and this block earned exactly the same one"
+	default:
+		return "the refusal before this one was never answered by any turn"
+	}
 }
 
 // trackerAction is the part of a recorded tracker outcome this reads. It is a
