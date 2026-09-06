@@ -98,6 +98,12 @@ func FromConversation(conversation runstate.Conversation, events []execution.Eve
 		// would not read produces no per-action record at all, so without this the
 		// channel reports a queue that did not move as a queue nobody touched.
 		return fromRefusedTrackerBlock(conversation, event)
+	case execution.EventTrackerRefusalUnresolved:
+		// And the same news once the harness has spent its one attempt at having the
+		// block re-issued. It is said separately because the refusal above is now
+		// only half the story: what a reader needs is that the correction was tried
+		// and did not take, which is the difference between waiting and acting.
+		return fromUnresolvedTrackerRefusal(conversation, event)
 	case execution.EventProposalCreated:
 		// The approval that precedes this is deliberately not reported beside it.
 		// They are one decision, and the creation is the half that names the item
@@ -254,6 +260,82 @@ func fromRefusedTrackerBlock(conversation runstate.Conversation, event execution
 			},
 		},
 	}, nil
+}
+
+// unresolvedTrackerRefusal is the part of a recorded unresolved refusal this
+// reads, kept narrow for the reason the refusal's own shape above is: what is
+// read here is a durable record that outlives the code that wrote it.
+type unresolvedTrackerRefusal struct {
+	Role    string `json:"role"`
+	Actions int    `json:"actions"`
+	Problem string `json:"problem"`
+	// Previous is the refusal this one failed to answer, and Woken says the
+	// harness had started a turn for it. Together they are what makes this
+	// different news from a second unrelated refusal: the correction was
+	// attempted, by the harness, and it did not take.
+	Previous string `json:"previous"`
+	Woken    bool   `json:"woken"`
+}
+
+// fromUnresolvedTrackerRefusal says that a role lost a block, was given the
+// refusal back, and lost the block it sent instead.
+//
+// It is critical where the refusal it follows is a warning, and the step between
+// them is what earns it: a refusal on its own is a loss the harness is about to
+// try to repair by itself, and this is the same loss with the repair spent. What
+// is left needs the operator, which is the whole of what the severity says.
+//
+// It is addressed to the product for the reason the refusal is: the actions were
+// refused together and which items they were about is in a reply nobody kept.
+func fromUnresolvedTrackerRefusal(conversation runstate.Conversation, event execution.Event) (Notification, error) {
+	var recorded unresolvedTrackerRefusal
+	if err := json.Unmarshal(event.Payload, &recorded); err != nil {
+		return Notification{}, fmt.Errorf("read an unresolved tracker refusal recorded in %s: %w", conversation.ConversationID, err)
+	}
+	asking := domain.AgentRole(strings.TrimSpace(recorded.Role))
+	if !asking.Valid() {
+		asking = conversation.Role
+	}
+	refused := recorded.Actions
+	if refused <= 0 {
+		refused = -1
+	}
+	return Notification{
+		Topic:   Product(),
+		Speaker: Harness(),
+		Event: Event{
+			Kind:     KindTrackerRefusalUnresolved,
+			At:       event.Timestamp,
+			Severity: report.SeverityCritical,
+			Refs:     Refs{ConversationID: conversation.ConversationID},
+			Detail: Detail{
+				Refused: refused,
+				Asking:  asking.Title(),
+				Reason:  strings.TrimSpace(recorded.Problem),
+				// What the harness already did about it, said as the cause a reader is
+				// owed: a refusal it woke the conversation for and one it never reached
+				// are the same ending by two different routes, and only the record can
+				// say which this was.
+				Cause:    unansweredRefusalCause(recorded),
+				Priority: -1,
+			},
+		},
+	}, nil
+}
+
+// unansweredRefusalCause says what the harness had already done when this
+// refusal arrived. It states the absence rather than guessing: a record written
+// without the earlier refusal says the correction failed and nothing about what
+// it was correcting.
+func unansweredRefusalCause(recorded unresolvedTrackerRefusal) string {
+	previous := strings.TrimSpace(recorded.Previous)
+	if previous == "" {
+		previous = "a refusal the record does not carry"
+	}
+	if recorded.Woken {
+		return "the harness woke the conversation to correct " + previous
+	}
+	return "nothing had answered " + previous
 }
 
 // trackerAction is the part of a recorded tracker outcome this reads. It is a

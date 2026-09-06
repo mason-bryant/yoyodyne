@@ -687,16 +687,28 @@ and every firing ends in a durable report that
 [`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found) reads. A
 project that schedules nothing has none of this and its passes are unchanged.
 
+**A pass also wakes a role whose block of tracker actions the harness refused.**
+A block it cannot read is refused whole, so nothing in it happens, and the
+refusal in the harness's own words has always opened that role's next turn — but
+nothing started that turn, so the correction waited on somebody opening the
+conversation. Now the pass starts it: one wakeup per refusal, at most one per
+pass, and the role re-issues the actions itself. A block refused again on that
+woken turn goes to you rather than earning another wakeup, because a second copy
+of the same message is not going to help. Nothing about it is configured, and a
+pass with no refusal to wake for asks no provider anything.
+
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
 until you stop it. Nothing else about the pass changes, and nothing needed to:
 the re-reading above is per pull. An idle session costs one local tracker read
 per interval and asks no provider anything, unless it has a stopped run to put to
-the development manager or a recurring task that has come due. Holding intake
+the development manager, a recurring task that has come due, or a refused tracker
+block to wake a role for. Holding intake
 brakes a watching session in place rather
 than stopping it — it keeps polling, chooses nothing, and resumes when you
-release it. It does not stop those two, which are read before it and choose no
-work: a held intake still delivers a stoppage and still fires a due task, so
+release it. It does not stop those three, which are read before it and choose no
+work: a held intake still delivers a stoppage, still fires a due task, and still
+wakes a role to put its own refused block right, so
 `yoyo pause` is the switch for stopping what a quiet session spends.
 
 **Only one session watches a product at a time.** A second `yoyo work --watch`

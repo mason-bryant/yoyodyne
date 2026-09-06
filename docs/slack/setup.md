@@ -456,8 +456,13 @@ rather than any one item: the operator holding and releasing intake, the
 operator holding and lifting all harness activity, and a block of tracker actions
 the harness refused whole, said as a `warning` with the role that asked, how many
 actions it asked for, and the refusal itself, because none of them happened and
-the role that asked for them believed they had. Burying those in one item's thread
-would misfile them. A channel catching up on a backlog too deep to replay posts
+the role that asked for them believed they had. That one is a `warning` rather
+than a `critical` because the harness is about to try to repair it: it wakes that
+role's own conversation once, and the role re-issues the actions itself. The
+second line is what you get when that did not work — the woken turn's own block
+refused too — and it is a `critical`, because the actions are still lost, the
+harness has spent its one attempt, and nothing further is scheduled. Burying
+those in one item's thread would misfile them. A channel catching up on a backlog too deep to replay posts
 its digest here too, for the same reason: it stands for messages that were going
 to appear at this level, and one line saying how many is what both you and the
 workspace want out of four hundred.

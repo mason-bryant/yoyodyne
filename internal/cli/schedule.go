@@ -588,6 +588,15 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		return orchestrator.Pull{}, err
 	}
 	tracker := parts.tracker()
+	// The wakeup a refused tracker block earns. It is built before the pull rather
+	// than inside it because the conversation store it reads the refusals from is
+	// the one thing here that can refuse to be built at all, and a pull assembled
+	// around a nil it could not report would be a self-correction that quietly
+	// stopped existing.
+	corrections, err := correctorFrom(parts, configPath, stderr)
+	if err != nil {
+		return orchestrator.Pull{}, err
+	}
 	return orchestrator.Pull{
 		Tracker:    tracker,
 		Runs:       parts.store,
@@ -626,6 +635,11 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		// is the only thing that invokes a role, so a schedule that lived in a cron
 		// entry or a launchd job would be a second invoker of one.
 		Recurring: recurringTrigger(parts, configPath, stderr),
+		// And where a role whose tracker block the harness refused is woken to
+		// re-issue it. It is wired here for the same reason the two above are: the
+		// harness is the only thing that invokes a role, and the pull is where it is
+		// already deciding what to do next.
+		Corrections: corrections,
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record
@@ -717,7 +731,8 @@ execution.work_poll and reads the queue again, until you stop it with Ctrl-C.
 Nothing is cached between readings, so work you admit or reorder is picked up at
 the next poll, and an idle session costs one tracker read per interval and no
 provider call at all, unless it has a stopped run to put in front of the
-development manager. Holding intake brakes a watching session in place -- it
+development manager, a recurring task come due, or a refused tracker block to
+wake a role for. Holding intake brakes a watching session in place -- it
 keeps polling and chooses nothing -- and "yoyo release" resumes it.
 
 Every pull also puts stopped work in front of the development manager: a run
@@ -743,6 +758,20 @@ like any other provider call and --budget counts what it spent; holding intake
 does not stop it, because the judgment a held queue is waiting on is what the
 delivery produces. What it did, and anything still waiting on a person, is on the
 pass.
+
+Every pull also wakes a role whose block of tracker actions the harness refused.
+A block it cannot read is refused whole, so nothing in it happens and the queue
+is not what the role thinks it is; the refusal has always opened that role's next
+turn in the harness's own words, and now the pass starts that turn instead of it
+waiting on somebody opening the conversation. One wakeup per refusal and at most
+one per pull, oldest refusal first, and what the role does with it is re-issue
+the actions itself. A block refused again on the woken turn goes to you rather
+than earning a second wakeup, because another copy of the same message is not
+going to help. A wakeup that never reached the role is not made again -- the
+refusal falls back to what it had before, which is the role's own next turn,
+whenever one happens. A pause covers it like any other provider call and --budget
+counts what it spent; holding intake does not stop it, because it chooses no work
+and starts no run.
 
 Only one session watches a product at a time. A second one is refused as it
 starts, naming the session that holds the watch and the process running it,
@@ -794,7 +823,9 @@ that cannot replace a running process says so when the session opens, and that
 session watches without this and is restarted by hand for a deploy.
 
 --budget fails closed, and it bounds everything the session spends: the runs it
-starts, and the turns it takes putting stopped work to the development manager. A
+starts, the turns it takes putting stopped work to the development manager, the
+turns a recurring task spends, and the turn it spends waking a role to re-issue a
+refused tracker block. A
 pass with no way to price itself is refused before anything starts, and a session
 that meets a run whose recorded evidence will not price stops and says which run
 it was rather than counting it as free and carrying on inside a bound it can no

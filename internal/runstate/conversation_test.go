@@ -1009,3 +1009,69 @@ func TestAConversationFullOfUndecidedProposalsStillSaves(t *testing.T) {
 		t.Fatalf("loaded %d proposal(s), want %d", len(loaded.PendingProposals), MaxPendingProposals)
 	}
 }
+
+// A refused tracker block is claimed for a wakeup once.
+//
+// The claim is what makes the wakeup at most once per refusal. Two sessions
+// polling one record must produce one turn, and a pass that reads the claim
+// afterwards must find nothing to do — otherwise a refusal the role cannot answer
+// is a turn spent on every pull, for as long as it stands.
+func TestARefusedTrackerBlockIsClaimedForAWakeupOnce(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	conversation := testConversation(t)
+	refused := conversation.StartedAt.Add(time.Minute)
+	conversation.Turns = 1
+	conversation.ProviderModel = "opus"
+	conversation.UpdatedAt = refused
+	conversation.RefusedBlock = &TrackerRefusal{
+		Turn:      1,
+		Actions:   3,
+		Problem:   "decode tracker actions: actions[0]: reason is the parking reason at 512 bytes, limit is 480",
+		RefusedAt: refused,
+	}
+	if err := store.Save(conversation); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	identity := conversation.Identity()
+	woke := refused.Add(time.Minute)
+	claimed, err := store.ClaimRefusalWakeup(identity, woke)
+	if err != nil {
+		t.Fatalf("ClaimRefusalWakeup() error = %v", err)
+	}
+	if !claimed.WokenAt.Equal(woke) || claimed.Turn != 1 {
+		t.Fatalf("claimed = %#v, want the refusal of turn 1 marked woken at %s", claimed, woke)
+	}
+	// What the wakeup carries is the refusal in the harness's own words, so the
+	// turn it starts and the record it was claimed from are about one thing.
+	if claimed.Problem != conversation.RefusedBlock.Problem {
+		t.Fatalf("claimed refusal = %q, want the recorded one", claimed.Problem)
+	}
+
+	// A second pass — another session, another process — finds nothing owed.
+	if _, err := newConversationStore(t, root).ClaimRefusalWakeup(identity, woke.Add(time.Minute)); !errors.Is(err, ErrNoRefusalAwaitingWakeup) {
+		t.Fatalf("second ClaimRefusalWakeup() error = %v, want ErrNoRefusalAwaitingWakeup", err)
+	}
+
+	// And so does a pass over a refusal the harness has handed to the operator
+	// instead, which is the other way a refusal stops being one to wake for.
+	escalated := testConversation(t)
+	escalated.Agent = "second-product-manager"
+	escalated.Turns = 1
+	escalated.ProviderModel = "opus"
+	escalated.RefusedBlock = &TrackerRefusal{
+		Turn:      2,
+		Problem:   "decode tracker actions: actions[0]: handle report \"nope\" is not a report identifier",
+		RefusedAt: refused,
+		Escalated: "the harness woke this conversation to correct the refusal of turn 1 and the block it sent back was refused too",
+	}
+	if err := store.Save(escalated); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := store.ClaimRefusalWakeup(escalated.Identity(), woke); !errors.Is(err, ErrNoRefusalAwaitingWakeup) {
+		t.Fatalf("ClaimRefusalWakeup() on an escalated refusal error = %v, want ErrNoRefusalAwaitingWakeup", err)
+	}
+}

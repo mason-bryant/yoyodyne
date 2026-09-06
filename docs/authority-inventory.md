@@ -203,6 +203,7 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/notify/conversation.go` | `fromExchange` | Turns a recorded exchange into something the operator is told. |
 | `internal/notify/conversation.go` | `fromRefusedTrackerBlock` | Turns a recorded refusal of a whole tracker block into something the operator is told. It reads the role the record names so the message can say whose actions were lost; the refusal itself already happened, in the conversation. |
 | `internal/notify/conversation.go` | `fromTrackerAction` | Turns a carried-out tracker action into something the operator is told. |
+| `internal/notify/conversation.go` | `fromUnresolvedTrackerRefusal` | Turns a recorded refusal the harness woke a role to correct and got another refused block from into something the operator is told. It reads the role the record names so the message can say whose actions are still lost; both refusals already happened, in the conversation. |
 | `internal/notify/select.go` | `FromRun` | Selects what a finished run reports to the operator. |
 | `internal/orchestrator/amendments.go` | `(*activeRun).collectAmendments` | Records the changes a run's role proposed, addressed to the owner. Deciding one is `amendment.decide-under-owner`. |
 | `internal/orchestrator/branchreview.go` | `(BranchReviewer).collectReports` | Collects what a branch reviewer reported, which decides nothing. |

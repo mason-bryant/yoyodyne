@@ -390,6 +390,16 @@ type ScheduleRecurring interface {
 	Fire(ctx context.Context) (RecurringSweep, error)
 }
 
+// ScheduleCorrections wakes the role whose tracker block the harness refused, at
+// most one per pass. It is satisfied by Corrector.
+//
+// It is optional, and a pull wired without one pulls exactly the same work: what
+// is lost is the self-correction, so a refused block waits on somebody opening
+// that role's conversation, which is what it waited on before this existed.
+type ScheduleCorrections interface {
+	Correct(ctx context.Context) (CorrectionSweep, error)
+}
+
 // Starter runs one chosen item to its end. It is a function rather than the
 // pipeline itself because a pull hands each run the configuration that pull
 // read, and because what the scheduler needs from a run is only its outcome.
@@ -449,7 +459,11 @@ type Pull struct {
 	// Recurring fires what the configuration schedules on a cadence. Optional;
 	// see ScheduleRecurring.
 	Recurring ScheduleRecurring
-	Start     Starter
+	// Corrections wakes a role whose tracker block was refused, so the actions it
+	// lost are re-issued without a person prompting it. Optional; see
+	// ScheduleCorrections.
+	Corrections ScheduleCorrections
+	Start       Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -664,6 +678,16 @@ type Schedule struct {
 	// read. Like the escalation's, it costs the pass nothing it was doing and is
 	// reported beside the pull rather than stopping it.
 	RecurringProblem string `json:"recurring_problem,omitempty"`
+	// Corrected is the refused tracker blocks this pass woke a role to re-issue,
+	// and what came back. It is on the schedule for the reason the firings are: a
+	// pass that woke a role and spent a turn doing it is a pass that did something.
+	Corrected []Corrected `json:"corrected,omitempty"`
+	// CorrectionProblem names a wakeup that failed or a set of conversations that
+	// could not be read. Like the two above, it costs the pass nothing it was doing
+	// and is reported beside the pull rather than stopping it — but never left
+	// unsaid, because a refusal nobody woke for is exactly the loss the wakeup
+	// exists to prevent.
+	CorrectionProblem string `json:"correction_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -1030,6 +1054,13 @@ pulling:
 		// gone wrong and is waiting on a judgment, where a recurring pass is the
 		// standing look that runs whether or not anything happened.
 		s.fire(ctx, &schedule, pull)
+		// And a role whose tracker block the harness refused is woken here, last of
+		// the three. It is placed after the other two because it is the cheapest to
+		// be late with: the refusal is already in that conversation's next turn
+		// whenever one happens, so what a later pass costs it is an interval, where
+		// a stoppage nobody delivers and a cadence nobody fires cost their whole
+		// pass. Like both of them it takes at most one turn; see Corrector.
+		s.correct(ctx, &schedule, pull)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -1585,6 +1616,48 @@ func (s Scheduler) fire(ctx context.Context, schedule *Schedule, pull Pull) {
 		schedule.RecurringProblem = strings.Join(problems, "; ")
 	case fired:
 		schedule.RecurringProblem = ""
+	}
+}
+
+// correct wakes whichever role is owed a correction, and records what came back
+// on the schedule.
+//
+// Nothing here stops the pass, for the reason the firing and the delivery beside
+// it do not: a wakeup that failed costs the pass nothing it was doing, so it is
+// reported beside the pull rather than in place of it.
+func (s Scheduler) correct(ctx context.Context, schedule *Schedule, pull Pull) {
+	if pull.Corrections == nil {
+		return
+	}
+	sweep, err := pull.Corrections.Correct(ctx)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("a role whose tracker block was refused could not be woken to re-issue it, so those actions are waiting on somebody prompting it: %v", err))
+	}
+	woken := false
+	for _, corrected := range sweep.Corrected {
+		// What the wakeup cost is the session's spend, exactly as a firing's is and
+		// for the same reason: the provider charged for the turn either way, and a
+		// session bounded by a budget must not spend past it on turns nothing
+		// counted.
+		schedule.SpentUSD += corrected.CostUSD
+		if corrected.Woken {
+			schedule.Corrected = append(schedule.Corrected, corrected)
+			woken = true
+		}
+		if corrected.Problem != "" {
+			problems = append(problems, corrected.Problem)
+		}
+	}
+	// What the pass says is replaced by what this sweep found, and cleared only by
+	// a wakeup that actually took a turn — for the reason the two above are kept
+	// the same way: a pass that woke nobody is not evidence that the failure before
+	// it is resolved, since there may simply have been no refusal to wake for.
+	switch {
+	case len(problems) > 0:
+		schedule.CorrectionProblem = strings.Join(problems, "; ")
+	case woken:
+		schedule.CorrectionProblem = ""
 	}
 }
 
@@ -2370,6 +2443,13 @@ func (s Schedule) Render() string {
 	rendered.WriteString(RecurringSweep{Fired: s.Fired}.Render())
 	if s.RecurringProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.RecurringProblem)
+	}
+	// And what the pass woke to put a refused block right, said beside both: the
+	// actions a role lost are actions an operator may be expecting, and a pass that
+	// spent a turn getting them re-issued is a pass that did something.
+	rendered.WriteString(CorrectionSweep{Corrected: s.Corrected}.Render())
+	if s.CorrectionProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.CorrectionProblem)
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))

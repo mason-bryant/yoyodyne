@@ -1091,3 +1091,121 @@ func TestARefusedTrackerBlockNobodyCanCountIsStillHandedBack(t *testing.T) {
 		t.Fatalf("the next turn reported an uncounted block as an empty one:\n%s", prompt)
 	}
 }
+
+// A refused block leaves the record saying a turn is owed for it.
+//
+// The refusal reaching the role's next turn was never the missing half; what was
+// missing was the turn. So the refusal is written onto the conversation's own
+// record as a wakeup nobody has made, which is what the harness's schedule reads
+// to start one — and a reply the harness can read clears it, because the role has
+// answered and a wakeup owed forever is one that fires forever.
+func TestARefusedTrackerBlockRecordsTheWakeupItIsOwed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Parking it.",
+			`{"action":"park","id":"yoyodyne-ifd.7","reason":"`+strings.Repeat("x", domain.MaxWorkItemParkingBytes+1)+`"}`)},
+	}})
+	options.Store = newTestStore(t, root)
+	options.Tracker = &fakeTracker{}
+	session := openTestSession(t, options)
+
+	_, err := session.Send(context.Background(), "park ifd.7")
+	var unreadable *TrackerError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("Send() error = %v, want a TrackerError", err)
+	}
+	recorded := loadTestConversation(t, root, options)
+	if recorded.RefusedBlock == nil {
+		t.Fatalf("the conversation records no refused block, so nothing can wake the role for it")
+	}
+	if !recorded.RefusedBlock.AwaitingWakeup() {
+		t.Fatalf("refused block = %#v, want one still owed a wakeup", *recorded.RefusedBlock)
+	}
+	// The record carries the refusal in the harness's own words, so a wakeup made
+	// from it and the turn the role reads are about the same thing.
+	if !strings.Contains(recorded.RefusedBlock.Problem, unreadable.Error()) {
+		t.Fatalf("recorded refusal = %q, want the refusal itself", recorded.RefusedBlock.Problem)
+	}
+	if recorded.RefusedBlock.Turn != 1 {
+		t.Fatalf("recorded refusal names turn %d, want the turn whose block was refused", recorded.RefusedBlock.Turn)
+	}
+
+	// The role answers with a block the harness can read, which is the whole of
+	// what the wakeup was for. Nothing is owed after it.
+	corrected := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Shorter reason.",
+			`{"action":"park","id":"yoyodyne-ifd.7","reason":"waiting on the design"}`)},
+		{SessionID: "session-1", FinalText: "That is the parking done."},
+	}})
+	corrected.Store = newTestStore(t, root)
+	corrected.Tracker = options.Tracker
+	if _, err := openTestSession(t, corrected).Send(context.Background(), "carry on"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if answered := loadTestConversation(t, root, corrected); answered.RefusedBlock != nil {
+		t.Fatalf("refused block = %#v, want it cleared by the reply that answered it", *answered.RefusedBlock)
+	}
+}
+
+// A second refused block with the first still unanswered goes to the operator
+// rather than earning a second wakeup.
+//
+// The harness wakes a role once per refusal. A role handed its refusal back that
+// sends another block the harness cannot read has shown that another copy of the
+// same message will not help, and waking it again would be a turn a pass spent on
+// a conversation that cannot answer. So the second refusal records why it will
+// not be woken for, and is said to the operator as its own event.
+func TestASecondRefusedTrackerBlockGoesToTheOperatorRatherThanLooping(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	first := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Settling the report.",
+			`{"action":"handle","report":"not-a-report-id","reason":"already fixed"}`)},
+	}})
+	first.Store = newTestStore(t, root)
+	first.Tracker = &fakeTracker{}
+	if _, err := openTestSession(t, first).Send(context.Background(), "settle the reports"); err == nil {
+		t.Fatalf("Send() error = nil, want the malformed handle id refused")
+	}
+
+	// The harness woke the conversation for that refusal, which is what a claim on
+	// the record says.
+	store := newTestStore(t, root)
+	if _, err := store.ClaimRefusalWakeup(first.identity(), fixedClock{}.Now()); err != nil {
+		t.Fatalf("ClaimRefusalWakeup() error = %v", err)
+	}
+
+	second := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Trying again.",
+			`{"action":"handle","report":"still-not-a-report-id","reason":"already fixed"}`)},
+	}})
+	second.Store = newTestStore(t, root)
+	second.Tracker = first.Tracker
+	woken := openTestSession(t, second)
+	if _, err := woken.Send(context.Background(), "re-issue what was refused"); err == nil {
+		t.Fatalf("Send() error = nil, want the second block refused too")
+	}
+
+	after := loadTestConversation(t, root, second)
+	if after.RefusedBlock == nil {
+		t.Fatalf("the conversation records no refused block after the second refusal")
+	}
+	if after.RefusedBlock.AwaitingWakeup() {
+		t.Fatalf("refused block = %#v, want one the harness will not wake for again", *after.RefusedBlock)
+	}
+	if !strings.Contains(after.RefusedBlock.Escalated, "woke this conversation") {
+		t.Fatalf("escalation reason = %q, want it to say the harness had already woken the conversation", after.RefusedBlock.Escalated)
+	}
+	// And the operator is told, as its own event: the refusal above is a loss the
+	// harness was about to repair itself, and this is the same loss with the
+	// repair spent.
+	payload := onlyEventPayload(t, root, woken, execution.EventTrackerRefusalUnresolved)
+	for _, wanted := range []string{`"woken":true`, "still-not-a-report-id", "not-a-report-id"} {
+		if !strings.Contains(payload, wanted) {
+			t.Fatalf("the recorded escalation does not carry %q: %s", wanted, payload)
+		}
+	}
+}
