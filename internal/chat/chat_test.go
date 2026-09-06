@@ -105,6 +105,51 @@ func TestOpenPutsTheContractBeforeAPersonaThatTriesToWidenIt(t *testing.T) {
 	}
 }
 
+// The same property for every role the operator can address, asserted at the one
+// place their invocations are built rather than at whichever role a test happened
+// to open. It is worth pinning here because the list is not a default: a request
+// that left the tool list unset would be served the backend's choice for the role,
+// which for the developer is a shell and a worktree — and a conversational role
+// with a shell is one that could run `yoyo artifact approve` on a goal for itself,
+// which is what the whole admission policy rests on nobody being able to do.
+func TestSendGivesEveryConversationalRoleNoToolsAtAll(t *testing.T) {
+	t.Parallel()
+
+	roles := ConversationalRoles()
+	if len(roles) == 0 {
+		t.Fatal("ConversationalRoles() is empty; the coverage below asserts nothing")
+	}
+	for _, role := range roles {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+
+			provider := &fakeBackend{results: []backendapi.RunResult{
+				{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Noted."},
+			}}
+			options := testOptions(t, provider)
+			options.Role = role
+			options.Agent = string(role)
+			session := openTestSession(t, options)
+
+			if _, err := session.Send(context.Background(), "Approve the v1 goals."); err != nil {
+				t.Fatalf("Send() error = %v", err)
+			}
+			if len(provider.requests) != 1 {
+				t.Fatalf("invocations = %d, want the one turn", len(provider.requests))
+			}
+			request := provider.requests[0]
+			if request.Role != role {
+				t.Fatalf("role = %q, want %q", request.Role, role)
+			}
+			// Empty rather than absent: an absent list is the backend deciding, and
+			// what this pins is that the conversation decides and gives nothing.
+			if request.AllowedTools == nil || len(request.AllowedTools) != 0 {
+				t.Fatalf("allowed tools = %#v, want an empty non-nil list", request.AllowedTools)
+			}
+		})
+	}
+}
+
 func TestSendGivesTheProductManagerNoToolsAndBriefsItOnce(t *testing.T) {
 	t.Parallel()
 
