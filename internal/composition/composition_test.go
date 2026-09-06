@@ -223,6 +223,40 @@ func TestWorkflowShapeReportsWhatIsNotAWorkflow(t *testing.T) {
 	})
 }
 
+func TestWorkflowVersionPinsReportsWhatFloats(t *testing.T) {
+	t.Parallel()
+
+	// One workflow whose every install names a version, and one carrying each
+	// spelling that does not: the module install this repository was actually
+	// broken by, a branch tip, and the forge's moving release URL.
+	root := writeFixture(t, map[string]string{
+		".github/workflows/held.yml": "name: CI\non:\n  push:\n    branches: [main]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v7\n      - name: Install the tracker\n        run: go install example.com/bd@v1.2.2\n",
+		".github/workflows/free.yml": "name: CI\non:\n  push:\n    branches: [main]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Install the tracker\n        run: go install example.com/bd@latest\n      - run: go install example.com/other@main\n  walk:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -fsSL https://example.com/bd/releases/latest/download/bd.tar.gz\n",
+	})
+	assertProblems(t, WorkflowVersionPins(root, []string{
+		".github/workflows/free.yml",
+		".github/workflows/held.yml",
+	}), []string{
+		`.github/workflows/free.yml: its "build" job runs "Install the tracker", which installs whatever the upstream released most recently`,
+		`.github/workflows/free.yml: its "build" job runs step 2, which installs the upstream's branch tip`,
+		`.github/workflows/free.yml: its "walk" job runs step 1, which installs whatever the upstream released most recently`,
+	})
+}
+
+// TestWorkflowVersionPinsReadsCommandsRatherThanActions is the boundary between
+// this gate and the forge: an action is fetched by `uses:`, whose reference the
+// forge resolves and which this has no business reporting on.
+func TestWorkflowVersionPinsReadsCommandsRatherThanActions(t *testing.T) {
+	t.Parallel()
+
+	root := writeFixture(t, map[string]string{
+		".github/workflows/uses.yml": "name: CI\non:\n  push:\n    branches: [main]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@main\n",
+	})
+	if problems := WorkflowVersionPins(root, []string{".github/workflows/uses.yml"}); len(problems) != 0 {
+		t.Fatalf("problems = %v, want none: a `uses:` reference is the forge's to resolve", problems)
+	}
+}
+
 // writeFixture lays out a directory of files and returns its root.
 func writeFixture(t *testing.T, files map[string]string) string {
 	t.Helper()
