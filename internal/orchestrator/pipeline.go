@@ -4593,7 +4593,12 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	// write after it, so the entry a development manager reads reports the budgets
 	// as this leaves them rather than as the round spent them.
 	a.settleEnvironmentalRound()
-	message := cause.Error()
+	// Cut to the record's own bound as it is taken rather than as it is stored: an
+	// error that ends a run can carry a provider's whole output, and a terminal
+	// record the store refuses for its length is a run whose ending reaches
+	// nobody. The outcome carries the same words the record does, so the note on
+	// the work item and the record say the same thing about why it stopped.
+	message := runstate.RecordFailure(cause.Error())
 	completedAt := p.clock().Now()
 	// A recorded pause or stop is an instruction to resume later, and this run is
 	// ending now. Clearing all five keeps the terminal record coherent; what

@@ -564,6 +564,11 @@ func TestTheScanDoesNotBackfillDeathsFromTheRecordedHistory(t *testing.T) {
 // A failure long enough to exceed what an entry may carry is cut rather than
 // refused. An entry refused for its length is a stoppage that reaches nobody,
 // which is exactly the silence this docketing exists to end.
+//
+// The run record is now bounded at the write that makes it, so nothing the
+// harness records reaches here oversized. The cut stays, and so does this test:
+// the entry must not depend on a bound somebody else was supposed to have
+// applied, and a record written before that bound existed still dockets.
 func TestAnOversizedFailureIsCutRatherThanLosingTheEntry(t *testing.T) {
 	t.Parallel()
 
@@ -578,7 +583,7 @@ func TestAnOversizedFailureIsCutRatherThanLosingTheEntry(t *testing.T) {
 	if len(entry.Failure) > triage.MaxBlockerBytes {
 		t.Fatalf("failure is %d bytes, which the entry's own bound refuses", len(entry.Failure))
 	}
-	if !strings.Contains(entry.Failure, "the run's own record carries the whole of this failure") {
+	if !strings.Contains(entry.Failure, "the rest of this failure was not recorded") {
 		t.Fatalf("a cut failure did not say it was cut: %q", entry.Failure[len(entry.Failure)-120:])
 	}
 }
