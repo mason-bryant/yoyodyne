@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
@@ -130,8 +131,27 @@ type Delivery struct {
 	Direct bool
 }
 
-// Silent reports a delivery that advances a cursor and posts nothing.
+// Silent reports a delivery selection had nothing to say about, which advances a
+// cursor and posts nothing.
 func (d Delivery) Silent() bool { return d.Notification.Silent() }
+
+// Posts reports a delivery worth putting somewhere a person reads. It is the
+// predicate the pass actually wants, and it is wider than Silent by one case: an
+// event whose reach is the durable record it came from is a real milestone that
+// belongs in that record and nowhere else, so it advances its cursor exactly as
+// a silent one does.
+//
+// A delivery that answers one person by name is the exception, and it posts
+// whatever its reach says. Being told is the whole point of it: somebody typed a
+// reply and is waiting to hear what came of it, and a posting policy about how
+// much of the channel a milestone is worth has nothing to say about a message
+// that is a person's answer.
+func (d Delivery) Posts() bool {
+	if strings.TrimSpace(d.Mention) != "" {
+		return !d.Silent()
+	}
+	return d.Notification.Posts()
+}
 
 // Batch is one pass over the durable records: what is ready to post, which
 // streams still exist so cursors for the rest can be dropped, and what each
@@ -805,7 +825,11 @@ func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, sin
 			skipped = position
 			continue
 		}
-		if notification.Silent() || predates(since, recordedAt) {
+		// A record that posts nowhere is read past exactly as one selection had
+		// nothing to say about, and for the same reason: the position still has to
+		// move. It is what keeps a watch log of a thousand polls from being one
+		// cursor write per poll for the life of the sink.
+		if !notification.Posts() || predates(since, recordedAt) {
 			skipped = position
 			continue
 		}

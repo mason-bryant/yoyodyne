@@ -457,11 +457,22 @@ operator holding and lifting all harness activity, proposed work you turned
 down — there is no item, because nothing was created — a block of tracker actions
 the harness refused whole, said as a `warning` with the role that asked, how many
 actions it asked for, and the refusal itself, because none of them happened and
-the role that asked for them believed they had — and anything an agent filed with
-no work item attached. Burying those in one item's thread would
-misfile them. That list is what is *addressed* to the channel rather than
-everything that appears in it: a thread reply asking for attention is shown there
-as well, which is what the severity rule below does.
+the role that asked for them believed they had. Burying those in one item's thread
+would misfile them.
+
+A report an agent filed against no work item is the case that looks like it
+belongs here and does not. There is no thread to say it in, so saying it at all
+would mean saying it at the top of the channel — putting the reports with the
+least attached to them in the loudest place there is. It is kept in the report
+store, which is where every report is kept, and reaches you the way the rest of
+them do: in the pile the product manager is handed each turn, worst first, until
+somebody records what became of it. A `critical` one is the exception and is
+posted, because something already wrong is what you asked to be told wherever it
+is.
+
+That list is what is *addressed* to the channel rather than everything that
+appears in it: a thread reply is shown there as well when what it says is
+important or needs you, which is what the rule below does.
 
 A provider refusing the harness for want of capacity goes there too, wherever it
 happened. The harness asks a provider for work in three places, and each one
@@ -488,15 +499,20 @@ exhausted limit does to it — so teaching selection, or anything else, to ask a
 provider something arrives with a failing test rather than with a process that
 goes quiet and says nothing.
 
-What a watching `yoyo work` session is doing goes there too, and it is the one
-thing here that is news precisely because nothing is happening: a session that
-has gone quiet and a session that has died are the same silence otherwise. It
-says when it opens, when a poll starts nothing — with the runs it can see going
-and the items it passed over grouped by why, so an idle slot beside a working one
-does not read as a stopped line — when a held intake brakes it, as a `warning`,
-because that one needs somebody, when it resumes, and when it ends. Each of those
-is said once, so a session idling overnight posts one message rather than one a
-minute.
+What a watching `yoyo work` session is doing goes to its durable log rather than
+to the channel, with one exception. Opening, a poll that started nothing,
+resuming, ending, and stopping to be restarted onto a newer build are the poll-by-
+poll narration of a process that spends most of its life saying nothing, and they
+were 473 of the 2,250 posts an operator survey counted. `yoyo status` reads them
+back, and nothing posts them. The exception is **a held intake braking the
+session**, which is a `warning` at the channel level because it needs somebody:
+the line has stopped and stays stopped until intake is released.
+
+What that leaves is a session that quietly went away, and two messages below
+cover it from the same log: the hourly line names a session that has stopped as
+soon as there is work it would have started, and the stall alarm covers the case
+where it died having recorded nothing at all. Over an empty queue neither says
+anything, which is the healthy quiet this is deliberately silent through.
 
 **And one thing is a state rather than an event.** Everything above is said once,
 when it happens, which is right for a narrative and wrong for a night: intake
@@ -686,15 +702,32 @@ Severity is said in words rather than only in colour: a `critical` says
 still shows them for what they are. An ordinary fact carries no marker, because a
 label on everything is a label that means nothing.
 
-**Severity also decides where a message is seen.** Slack's main channel view
-hides thread replies, which is right for a routine note and wrong for a warning:
-a run parked out of tokens can sit unseen inside a thread while the channel looks
-quiet. So a `note` stays thread-only, and a `warning` or a `critical` is also
-sent to the channel — Slack's own also-send-to-channel — while still being a
-reply in its item's thread, so the narrative there is unbroken. Nothing new
-judges this: it is the severity the record was already filed under, so the
-channel view shows exactly the messages whose severity says somebody should see
-them without opening threads.
+**Where a message is seen is decided by what it is, not by how loud it is.**
+Slack's main channel view hides thread replies, and what is shown there anyway is
+what is **important** — something that matters is broken or has materially
+changed — or what **needs your action or decision**. Everything else stays in its
+item's thread, where the narrative is, and some of it is not posted at all: it
+lands in the durable record and reaches you in the regular summaries built from
+there. A message that is neither important nor asking for anything does not go to
+the top of the channel, whatever severity it was filed at.
+
+Concretely: a held intake, a braked line, a parked run, a provider that ran out of
+capacity, a merge the forge will not make, a directive that paused work, a stall,
+a stale session and a refused block of tracker actions are all at the channel
+level. A run starting, checks passing, a review approving, a promotion, a
+publication, a merge completing, the backlog moving and a filed report are in the
+item's thread. What a watch session does poll by poll — started, idle, resumed,
+stopped, redeploying — is not posted anywhere: the watch log holds every one of
+them, `yoyo status` reads it back, and the two states you have to act on are said
+by the braked line and the hourly waiting line instead.
+
+There is one promotion over all of that, and it is severity doing the job it is
+for: a `critical` — something already wrong that will cost somebody — is shown at
+the channel level whatever its kind. Severity is importance rather than
+actionability, so if something important is broken you are told; what it no
+longer does is push every `warning` to the top, which is what a survey of 2,250
+posts found had drowned the forty that actually needed somebody under some 1,700
+that did not.
 
 Each transition is said once. A thread is a narrative rather than an event log
 scrolling sideways, so a restart does not repeat what it already said — how far
@@ -926,10 +959,11 @@ This is for the humans your `operators` mapping names, whatever you granted
 them. Somebody with no entry there gets the sentence in *Somebody this project
 does not know* below instead of an answer.
 
-Ask where things stand and you get the four lines — the same four
-[`yoyo status`](../operations.md) prints and the same four the heartbeat posts,
-read from the same place so a channel and a terminal cannot answer one question
-two ways:
+Ask where things stand and you get the four lines in full — the same four
+[`yoyo status`](../operations.md) prints, entry by entry, read from the same place
+so a channel and a terminal cannot answer one question two ways. You asked, so
+you get the detail; the hourly line nobody asked for carries the same four lines
+with their queues counted rather than listed:
 
 ```text
 @yoyodyne what is running?

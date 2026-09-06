@@ -30,7 +30,7 @@ func TestAHeldLineWithReadyWorkSaysSoAgainWhileItStands(t *testing.T) {
 	// The first sighting arms the clock and says nothing: the hold said itself
 	// when it was placed, and repeating it a poll later would be the sink saying
 	// what the channel already has.
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped, notify.KindIntakeHeld)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
 	harness.now = harness.now.Add(59 * time.Minute)
 	cursors = harness.poll(t, cursors)
 
@@ -52,7 +52,7 @@ func TestTheHeartbeatNamesTheStateItsAgeAndWhatIsWaiting(t *testing.T) {
 	held := harness.now
 	harness.hold(t, "reordering the backlog first", held)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped, notify.KindIntakeHeld)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
 	harness.now = held.Add(10 * time.Hour)
 	said := harness.say(t, cursors, notify.KindLineWaiting)
 	for _, fact := range []string{"intake is held", "reordering the backlog first", "10 hours", "4 items"} {
@@ -73,7 +73,7 @@ func TestTheHeartbeatStopsWhenTheStateClears(t *testing.T) {
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 	harness.hold(t, "looking at something first", moment)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindIntakeHeld)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
 	harness.now = harness.now.Add(time.Hour)
 	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
 
@@ -98,7 +98,7 @@ func TestAnIdleLineWithNothingReadyStaysSilent(t *testing.T) {
 	harness.ready(0)
 	harness.watched(t, runstate.WatchIdle, "the backlog is empty", moment)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchIdle)
+	cursors := harness.poll(t, harness.start())
 	for hour := 0; hour < 5; hour++ {
 		harness.now = harness.now.Add(time.Hour)
 		cursors = harness.poll(t, cursors)
@@ -122,7 +122,7 @@ func TestAPromotionWaitingOnTheForgeIsCountedOnEveryQuietTick(t *testing.T) {
 
 	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksPassed,
 		notify.KindReviewApproved, notify.KindPromoted, notify.KindPublished,
-		notify.KindMergeQueued, notify.KindWatchStopped)
+		notify.KindMergeQueued)
 	harness.now = harness.now.Add(time.Hour)
 	said := harness.say(t, cursors, notify.KindLineWaiting)
 	for _, fact := range []string{"no items ready to pull", "one promotion awaiting the forge"} {
@@ -145,7 +145,7 @@ func TestTheCountStopsWhenThePublicationIsSettled(t *testing.T) {
 
 	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksPassed,
 		notify.KindReviewApproved, notify.KindPromoted, notify.KindPublished,
-		notify.KindMergeQueued, notify.KindWatchStopped)
+		notify.KindMergeQueued)
 	harness.now = harness.now.Add(time.Hour)
 	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
 
@@ -174,7 +174,7 @@ func TestADroppedMergeIsAnnouncedAtDropTimeAndCountedUntilItIsSettled(t *testing
 	harness.record(t, queued)
 	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksPassed,
 		notify.KindReviewApproved, notify.KindPromoted, notify.KindPublished,
-		notify.KindMergeQueued, notify.KindWatchStopped)
+		notify.KindMergeQueued)
 
 	// The forge gives up on it, and reconciliation records the moment.
 	dropped := queued
@@ -187,10 +187,10 @@ func TestADroppedMergeIsAnnouncedAtDropTimeAndCountedUntilItIsSettled(t *testing
 
 	said := harness.say(t, cursors, notify.KindMergeDropped)
 	if said.Severity != report.SeverityWarning {
-		t.Fatalf("the drop is said at %q, want a warning so the channel is broadcast to", said.Severity)
+		t.Fatalf("the drop is said at %q, want a warning: nobody chose it", said.Severity)
 	}
-	if !broadcast(said.Severity) {
-		t.Fatalf("a drop said at %q does not reach the channel", said.Severity)
+	if !broadcast(said.Reach) {
+		t.Fatalf("a drop that reaches %q does not reach the channel", said.Reach)
 	}
 	cursors = harness.poll(t, cursors, notify.KindMergeDropped)
 
@@ -265,7 +265,7 @@ func TestALineWithARunInFlightIsNotWaiting(t *testing.T) {
 	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
 	harness.record(t, harness.run(t, runstate.StatusRunning))
 
-	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindWatchStopped)
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted)
 	harness.now = harness.now.Add(2 * time.Hour)
 	harness.poll(t, cursors)
 }
@@ -283,7 +283,7 @@ func TestATrackerThatCannotBeReadIsSaidRatherThanGuessedAt(t *testing.T) {
 	harness.feed.Backlog = brokenBacklog{}
 	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped)
+	cursors := harness.poll(t, harness.start())
 	harness.now = harness.now.Add(time.Hour)
 	cursors = harness.poll(t, cursors)
 	if len(said) != 1 {
@@ -308,7 +308,7 @@ func TestANewStateIsArmedRatherThanInheritingTheLastOnesClock(t *testing.T) {
 	harness.ready(1)
 	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped)
+	cursors := harness.poll(t, harness.start())
 	harness.now = harness.now.Add(2 * time.Hour)
 	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
 
@@ -334,14 +334,13 @@ func TestASessionEndingBesideOneStillWatchingIsNotAStoppedLine(t *testing.T) {
 	harness.watchedAs(t, "watch-fedcba9876543210fedcba9876543210", runstate.WatchWatching, "watching the backlog until stopped", moment.Add(time.Minute))
 	harness.watchedAs(t, "watch-fedcba9876543210fedcba9876543210", runstate.WatchStopped, "the session spent the budget it was given", moment.Add(2*time.Minute))
 
-	cursors := harness.poll(t, harness.start(),
-		notify.KindWatchStarted, notify.KindWatchStarted, notify.KindWatchStopped)
+	cursors := harness.poll(t, harness.start())
 	harness.now = harness.now.Add(3 * time.Hour)
 	cursors = harness.poll(t, cursors)
 
 	// Once the session that was still watching ends too, nobody is choosing.
 	harness.watchedAs(t, "watch-0123456789abcdef0123456789abcdef", runstate.WatchStopped, "the scheduler was cancelled", harness.now)
-	cursors = harness.poll(t, cursors, notify.KindWatchStopped)
+	cursors = harness.poll(t, cursors)
 	harness.now = harness.now.Add(time.Hour)
 	harness.poll(t, cursors, notify.KindLineWaiting)
 }
@@ -365,7 +364,7 @@ func TestAStaleResidentSaysSoWhileTheRoundsAreBeingSpent(t *testing.T) {
 	harness.record(t, harness.run(t, runstate.StatusRunning))
 
 	cursors := harness.poll(t, harness.start(),
-		notify.KindRunStarted, notify.KindWatchStarted, notify.KindResidentStale)
+		notify.KindRunStarted, notify.KindResidentStale)
 	// The repository is asked at the cadence rather than at every poll, so a
 	// fifteen-second pass a moment later spawns nothing and says nothing.
 	harness.now = harness.now.Add(30 * time.Minute)
@@ -386,7 +385,7 @@ func TestTheResidentLineNamesTheCountAndTheWayOutOfIt(t *testing.T) {
 	harness.deployed(7)
 	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindResidentStale)
+	cursors := harness.poll(t, harness.start(), notify.KindResidentStale)
 	harness.now = harness.now.Add(time.Hour)
 	said := harness.say(t, cursors, notify.KindResidentStale)
 	for _, fact := range []string{"7 harness changes", staleResidentBuild[:12], "restarts itself", "installing the build"} {
@@ -407,7 +406,7 @@ func TestASessionRunningWhatIsDeployedStaysSilent(t *testing.T) {
 	harness.deployed(0)
 	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	cursors := harness.poll(t, harness.start())
 	for hour := 0; hour < 4; hour++ {
 		harness.now = harness.now.Add(time.Hour)
 		cursors = harness.poll(t, cursors)
@@ -508,14 +507,14 @@ func TestASessionWithNothingToCompareIsNotReportedAsStale(t *testing.T) {
 	harness.deployed(40)
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	cursors := harness.poll(t, harness.start())
 	harness.now = harness.now.Add(2 * time.Hour)
 	cursors = harness.poll(t, cursors)
 
 	// A session that did record one, and then ended.
 	harness.watchedBuildAs(t, "watch-fedcba9876543210fedcba9876543210", runstate.WatchStopped,
 		"the session spent the budget it was given", harness.now, staleResidentBuild)
-	cursors = harness.poll(t, cursors, notify.KindWatchStopped)
+	cursors = harness.poll(t, cursors)
 	harness.now = harness.now.Add(2 * time.Hour)
 	harness.poll(t, cursors)
 }
@@ -540,7 +539,7 @@ func TestARunInFlightNamesTheBuildWhenTheSessionDoesNot(t *testing.T) {
 	harness.record(t, dispatched)
 
 	harness.poll(t, harness.start(),
-		notify.KindRunStarted, notify.KindWatchStarted, notify.KindResidentStale)
+		notify.KindRunStarted, notify.KindResidentStale)
 }
 
 // A live session that says which binary it is is believed over the runs beside
@@ -566,7 +565,7 @@ func TestALiveSessionsOwnStampIsBelievedOverTheRunsBesideIt(t *testing.T) {
 
 	// The resident is current, so nothing is said about a stale one however
 	// recently the run beside it started.
-	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindWatchStarted)
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted)
 	harness.now = harness.now.Add(2 * time.Hour)
 	harness.poll(t, cursors)
 }
@@ -586,7 +585,7 @@ func TestAFinishedRunIsNotReadAsTheResident(t *testing.T) {
 	harness.record(t, ended)
 
 	cursors := harness.poll(t, harness.start(),
-		notify.KindRunStarted, notify.KindChecksPassed, notify.KindWatchStarted)
+		notify.KindRunStarted, notify.KindChecksPassed)
 	harness.now = harness.now.Add(2 * time.Hour)
 	harness.poll(t, cursors)
 }
@@ -607,7 +606,7 @@ func TestABuildFromAnotherRepositoryIsSilentRatherThanCountedOrNagged(t *testing
 	harness.feed.Deployments = unrelatedDeployments{}
 	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	cursors := harness.poll(t, harness.start())
 	if len(said) != 1 {
 		t.Fatalf("the sink said %v about a build from another repository, want it said once", said)
 	}
@@ -634,7 +633,7 @@ func TestARepositoryThatCannotBeReadIsSaidRatherThanGuessedAt(t *testing.T) {
 	harness.feed.Deployments = brokenDeployments{}
 	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	cursors := harness.poll(t, harness.start())
 	if len(said) != 1 {
 		t.Fatalf("the sink said %v about a repository it could not read, want it said once", said)
 	}
@@ -723,7 +722,7 @@ func (h *testHarness) say(t *testing.T, cursors Cursors, want notify.Kind) notif
 		t.Fatalf("Poll() error = %v", err)
 	}
 	for _, delivery := range batch.Deliveries {
-		if delivery.Silent() {
+		if !delivery.Posts() {
 			continue
 		}
 		if delivery.Notification.Event.Kind != want {
@@ -815,18 +814,25 @@ func TestTheHeartbeatCarriesTheFourLines(t *testing.T) {
 		Now:           func() time.Time { return harness.now },
 	}
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped, notify.KindIntakeHeld)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
 	harness.now = held.Add(2 * time.Hour)
 	said := harness.say(t, cursors, notify.KindLineWaiting)
 	for _, line := range []string{
 		"Running: nothing",
 		"Working: nothing",
 		"Not startable: nothing, of no admitted items",
-		"Needs a human (1):",
+		"Needs a human (1)",
 	} {
 		if !strings.Contains(said.Body, line) {
 			t.Fatalf("body %q does not carry %q", said.Body, line)
 		}
+	}
+	// Counted and not listed. Nobody asked for this message, and an enumerated
+	// queue under every line is a screen of detail repeated every hour in front of
+	// the one sentence that says the line has stopped. What was waiting on a person
+	// here is a resolvable directive, and its own words stay in `yoyo status`.
+	if strings.Contains(said.Body, "is unresolved") {
+		t.Fatalf("body %q enumerates a queue, want the four lines counted", said.Body)
 	}
 }
 
@@ -843,7 +849,7 @@ func TestTheHeartbeatSaysTheStateTheReadModelDerived(t *testing.T) {
 	idle := harness.now
 	harness.watched(t, runstate.WatchIdle, "nothing it could start", idle)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchIdle)
+	cursors := harness.poll(t, harness.start())
 	harness.now = idle.Add(2 * time.Hour)
 	said := harness.say(t, cursors, notify.KindLineWaiting)
 
@@ -906,7 +912,7 @@ func TestAHeartbeatWithNoStandingSaysSoRatherThanOmittingIt(t *testing.T) {
 	held := harness.now
 	harness.hold(t, "reordering the backlog first", held)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped, notify.KindIntakeHeld)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
 	harness.now = held.Add(2 * time.Hour)
 	said := harness.say(t, cursors, notify.KindLineWaiting)
 	if !strings.Contains(said.Body, "where the harness stands could not be read here") {

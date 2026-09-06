@@ -198,21 +198,29 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 // when this sink was assembled without a way to read them. Nothing is what the
 // voice states as an absence: a message that simply lacked the lines would be
 // indistinguishable from a harness with nothing in any of them.
+//
+// It is the brief rendering — the four lines with their queues counted rather
+// than listed. Nobody asked for this message: it arrives while a state stands,
+// again every hour it goes on standing, and what it owes its reader is the one
+// sentence that says the line has stopped and enough of the standing to place it.
+// The whole rendering is what `yoyo status` prints for somebody who typed it, and
+// what an @mention here is answered with, because both of those are asks.
 func (f *HarnessFeed) standing(ctx context.Context) string {
 	if f.Standing == nil {
 		return ""
 	}
-	return readmodel.ReadStanding(ctx, *f.Standing).Render()
+	return readmodel.ReadStanding(ctx, *f.Standing).RenderBrief()
 }
 
 // standingLines is the same reading with the paused banner left off, for the one
-// message whose own first sentence is that banner. Everything else here wants
-// the whole rendering, and takes it from standing above.
+// message whose own first sentence is that banner. Saying it twice in one message
+// is repetition rather than emphasis; everything else here takes the reading from
+// standing above.
 func (f *HarnessFeed) standingLines(ctx context.Context) string {
 	if f.Standing == nil {
 		return ""
 	}
-	return readmodel.ReadStanding(ctx, *f.Standing).RenderLines()
+	return readmodel.ReadStanding(ctx, *f.Standing).RenderBriefLines()
 }
 
 // residentDeliveries says that the session choosing work is running a binary the

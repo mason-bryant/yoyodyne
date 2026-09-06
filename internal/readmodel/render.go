@@ -27,6 +27,11 @@ import (
 // happening, not an export of the queue.
 const maxListed = 10
 
+// partialRead opens the line a count carries when its source answered in part.
+// It is a constant because two things read it: the renderers that write it, and
+// the brief rendering that keeps it while dropping every other indented line.
+const partialRead = "  not fully read: "
+
 // Render is the four lines. It is deterministic, so the same standing always
 // prints the same text, and it always returns exactly four labelled lines with
 // whatever they carry indented under them.
@@ -56,6 +61,70 @@ func (s Standing) RenderLines() string {
 	rendered.WriteString(s.renderNotStartable())
 	rendered.WriteString(s.renderNeedsHuman())
 	return rendered.String()
+}
+
+// RenderBrief is the same four lines with the queues counted and not listed, and
+// it is what a message nobody asked for carries.
+//
+// It exists because pushing and answering are different acts. A person at a
+// terminal typed `yoyo status`, and what they want is every run with its phase,
+// its age and what it has spent — the whole point of having asked. A message
+// that arrives on its own hour after hour is read by somebody who did not ask
+// anything, and the operator's standard for those is an exec's: brief, and about
+// what needs a decision. Under it an enumerated queue is a screen of detail
+// nobody requested, repeated every hour, in front of the one sentence that says
+// the line has stopped.
+//
+// It is not a second rendering of the standing. The labels, the words, the
+// counts and the stated absences are the ones above and come from the same
+// derivation; what it drops is the entries under a line and nothing else, so the
+// two can differ in how much they say and never in what they say. The banner is
+// carried for the reason Render carries it: the operator asked that a pause name
+// its cause in the first words of any message that reaches him.
+func (s Standing) RenderBrief() string {
+	if s.Paused == "" {
+		return s.RenderBriefLines()
+	}
+	return s.Paused + "\n" + s.RenderBriefLines()
+}
+
+// RenderBriefLines is the brief four lines without the banner, for the caller
+// that has already said what the banner says. It stands to RenderBrief exactly as
+// RenderLines stands to Render, and for the same one caller: the channel's
+// message about the provider's usage window opens with that sentence.
+func (s Standing) RenderBriefLines() string {
+	var rendered strings.Builder
+	rendered.WriteString(brief(s.renderRunning()))
+	rendered.WriteString(brief(s.renderWorking()))
+	rendered.WriteString(brief(s.renderNotStartable()))
+	rendered.WriteString(brief(s.renderNeedsHuman()))
+	return rendered.String()
+}
+
+// brief is one rendered line with the entries under it dropped. It reads the
+// full rendering rather than re-deriving a short one, which is what makes the
+// two renderings incapable of disagreeing: the line a reader sees here is
+// character for character the line the terminal prints, and what is removed is
+// only what was indented under it.
+//
+// The trailing colon goes with them. "Running (2 developer runs):" promises a
+// list that is not there, and a promise a message does not keep reads as
+// something having been lost rather than as something having been left out.
+//
+// One indented line survives, and it is the one that is not an entry: a count
+// assembled from a source that could not be fully read says so under itself, and
+// a brief rendering that dropped the caveat and kept the number would be the
+// confident emptiness this format exists to refuse.
+func brief(rendered string) string {
+	lines := strings.SplitAfter(rendered, "\n")
+	head, rest := lines[0], lines[1:]
+	kept := strings.TrimSuffix(strings.TrimSuffix(head, "\n"), ":") + "\n"
+	for _, line := range rest {
+		if strings.HasPrefix(line, partialRead) {
+			kept += line
+		}
+	}
+	return kept
 }
 
 func (s Standing) renderRunning() string {
@@ -96,7 +165,7 @@ func (s Standing) renderWorking() string {
 	// conversations that did answer are still worth reporting, and a count nobody
 	// was told was partial is a count somebody trusts.
 	if s.WorkingProblem != "" {
-		fmt.Fprintf(&rendered, "  not fully read: %s\n", s.WorkingProblem)
+		fmt.Fprintf(&rendered, "%s%s\n", partialRead, s.WorkingProblem)
 	}
 	return rendered.String()
 }
@@ -117,7 +186,7 @@ func (s Standing) renderNotStartable() string {
 		rendered.WriteString(remainder(further, "refused item"))
 	}
 	if s.NotStartableProblem != "" {
-		fmt.Fprintf(&rendered, "  not fully read: %s\n", s.NotStartableProblem)
+		fmt.Fprintf(&rendered, "%s%s\n", partialRead, s.NotStartableProblem)
 	}
 	return rendered.String()
 }
@@ -138,7 +207,7 @@ func (s Standing) renderNeedsHuman() string {
 		rendered.WriteString(remainder(further, "thing waiting on somebody"))
 	}
 	if s.NeedsHumanProblem != "" {
-		fmt.Fprintf(&rendered, "  not fully read: %s\n", s.NeedsHumanProblem)
+		fmt.Fprintf(&rendered, "%s%s\n", partialRead, s.NeedsHumanProblem)
 	}
 	return rendered.String()
 }

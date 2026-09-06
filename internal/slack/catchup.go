@@ -109,7 +109,7 @@ func (c catchUp) say(index int, delivery Delivery) (notify.Notification, bool) {
 	if _, found := c.collapsed[index]; found {
 		return notify.Notification{}, false
 	}
-	return delivery.Notification, !delivery.Silent()
+	return delivery.Notification, delivery.Posts()
 }
 
 // planCatchUp decides what a batch is too deep to say in full, and digests the
@@ -123,7 +123,7 @@ func (c catchUp) say(index int, delivery Delivery) (notify.Notification, bool) {
 func planCatchUp(deliveries []Delivery, now time.Time) catchUp {
 	pending := 0
 	for _, delivery := range deliveries {
-		if !delivery.Silent() {
+		if delivery.Posts() {
 			pending++
 		}
 	}
@@ -175,7 +175,7 @@ func planCatchUp(deliveries []Delivery, now time.Time) catchUp {
 // event with no moment on it is never old, for the reason a record with no date
 // is never history: absence of a date is not evidence of age.
 func digestible(delivery Delivery, horizon time.Time) bool {
-	if delivery.Silent() {
+	if !delivery.Posts() {
 		return false
 	}
 	event := delivery.Notification.Event
