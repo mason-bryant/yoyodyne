@@ -169,28 +169,43 @@ func (c Claim) Validate() error {
 	return nil
 }
 
-// Describe says which landing was claimed and why, in the words a reviewer and a
-// work item's notes are given it in. A claim nobody made describes nothing:
-// there is no claim to attribute, and inventing one would put words on the item
-// the developer never wrote.
+// Describe says which landing is in force and why, and stops there. It states
+// what is true of the claim and directs no reader to do anything about it, which
+// is what lets one sentence serve audiences that want opposite things from it: a
+// reviewer is told what to do with a landing where it is prompted, and a work
+// item's notes are somebody's record rather than an instruction to them.
+//
+// The claim nobody made is described too, and that is the whole of what this
+// answers that it once did not. The default is a claim like any other — it
+// closes the item — and it is the one no reply carries, so a reviewer shown only
+// the claims somebody wrote is shown nothing at all on nearly every run. That is
+// how yoyodyne-ifd.284 closed against a diagnosis: its developer wrote no block,
+// the reviewer was never told the change in front of it would close the item,
+// and it approved a document saying in its own words that the work was not
+// doable yet.
 func (c Claim) Describe() string {
 	if !c.Made() {
-		return ""
+		return "The developer claimed no landing outcome. A reply carrying no claim is the ordinary landing, so this change " +
+			"discharges the work item and the item closes on it."
 	}
-	headline := "The developer claims this change discharges the work item."
-	if !c.Discharges() {
-		headline = "The developer claims this change lands evidence and does not discharge the work item."
-		// Which of the two undischarged landings it is, because they leave the item
-		// in different places and the reviewer is the only reader that sees the
-		// claim beside the change that was offered under it.
-		if c.Parks() {
-			headline += " The item is parked with that account as its parking reason."
-		} else {
-			headline += " The item is left open waiting on " + c.Impediment() + "."
-		}
+	if c.Discharges() {
+		return "The developer claims this change discharges the work item.\nWhy: " + folded(c.Why)
 	}
-	return headline + "\nWhy: " + strings.Join(strings.Fields(c.Why), " ")
+	headline := "The developer claims this change lands evidence and does not discharge the work item."
+	// Which of the two undischarged landings it is, because they leave the item
+	// in different places and the reviewer is the only reader that sees the
+	// claim beside the change that was offered under it.
+	if c.Parks() {
+		headline += " The item is parked with that account as its parking reason."
+	} else {
+		headline += " The item is left open waiting on " + c.Impediment() + "."
+	}
+	return headline + "\nWhy: " + folded(c.Why)
 }
+
+// folded is the developer's account as one line, which is what a prompt section
+// and a work item's notes are both read as.
+func folded(why string) string { return strings.Join(strings.Fields(why), " ") }
 
 func quotedOutcomes() string {
 	quoted := make([]string, 0, len(outcomes))
@@ -278,6 +293,6 @@ Where you can name the impediment as another work item, say so and the item is l
 
 That is the only alternative to the parking, and it is deliberate: an item put back with nothing marking it is one the harness picks again straight away, for another run and another diagnosis of the same impediment. Name a work item that exists and is unfinished — you cannot open one, and finished work holds nothing back. The harness checks the tracker for it and takes the parking where the answer is anything else, so a marker you guessed at costs nothing and buys nothing. If there is no such item, leave the marker out, take the parking, and name the work that has to be admitted in your summary.
 
-The reviewer is shown which landing you claimed, so a diagnosis is judged as a diagnosis rather than as a missing implementation.
+The reviewer is shown which landing you claimed, so a diagnosis is judged as a diagnosis rather than as a missing implementation. It is shown the default too, on a reply that claims nothing: a diagnosis offered with no block is one the reviewer is told will close the item, and it asks for changes rather than approving it. So a landing you meant to be evidence and did not claim costs you a repair round rather than closing the item quietly.
 
 Claim "evidence" for work you found is not doable yet and landed the evidence for, not for work you simply did not finish. Something that stopped you is a failure, and you report it the way your role already reports one.`

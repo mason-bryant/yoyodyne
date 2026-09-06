@@ -125,7 +125,10 @@ func TestAnOversizedClaimIsRefused(t *testing.T) {
 }
 
 // What a reviewer and a work item's notes are shown has to say which of the two
-// landings was claimed, in words that cannot be read as the other.
+// landings was claimed, in words that cannot be read as the other — and nothing
+// else. Both audiences read this sentence and they want opposite things from it:
+// one is being asked to decide, and the other is a record somebody consults after
+// every decision has been taken.
 func TestTheDescriptionSaysWhichLandingWasClaimed(t *testing.T) {
 	t.Parallel()
 
@@ -140,9 +143,28 @@ func TestTheDescriptionSaysWhichLandingWasClaimed(t *testing.T) {
 	if strings.Contains(discharged, "does not discharge") {
 		t.Errorf("Describe() of a discharging claim reads as the other one: %q", discharged)
 	}
-	unclaimed := landing.Claim{}
-	if unclaimed.Describe() != "" {
-		t.Errorf("Describe() invented a claim nobody made: %q", unclaimed.Describe())
+	// The claim nobody made is the one that closed yoyodyne-ifd.284 against a
+	// diagnosis, and it used to describe nothing at all — so the reviewer, the one
+	// reader that can tell a diagnosis from an implementation, was shown nothing on
+	// nearly every run. It is described as what it is: a discharging landing that
+	// no reply carried.
+	unclaimed := landing.Claim{}.Describe()
+	if !strings.Contains(unclaimed, "claimed no landing outcome") {
+		t.Errorf("Describe() does not say the claim was never made: %q", unclaimed)
+	}
+	if strings.Contains(unclaimed, "does not discharge") {
+		t.Errorf("Describe() of the default reads as the landing that leaves the item open: %q", unclaimed)
+	}
+	// And no description directs anybody to do anything. What a reviewer does with
+	// a landing is said where the reviewer is prompted; the same words reach a work
+	// item's notes, where an instruction to ask for changes is addressed to nobody
+	// who can.
+	for _, described := range []string{unclaimed, discharged, evidence} {
+		for _, directed := range []string{"approve", "Ask for changes", "your summary"} {
+			if strings.Contains(described, directed) {
+				t.Errorf("Describe() directs its reader (%q): %q", directed, described)
+			}
+		}
 	}
 }
 

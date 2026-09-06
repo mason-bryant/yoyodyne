@@ -775,6 +775,133 @@ func TestTheReviewerIsShownWhichLandingWasClaimed(t *testing.T) {
 	}
 }
 
+// The claim reaches two readers that want opposite things from it. A reviewer is
+// being asked to decide, so it is told what turns on the claim; a work item's
+// notes are what somebody reads once every decision has been taken, and "ask for
+// changes" there is an instruction addressed to nobody who can take it. So the
+// direction is added where the reviewer is prompted and never travels to the
+// item, on either landing.
+func TestTheReviewersDirectionNeverReachesTheWorkItem(t *testing.T) {
+	t.Parallel()
+
+	for _, landed := range []struct {
+		name string
+		// reply is what the developer said, and directed is whether a reviewer
+		// looking at it should be told what approving it does — which is the
+		// question only a landing that closes the item raises.
+		reply    string
+		directed bool
+	}{
+		{name: "the default nobody writes", reply: "implemented the work item", directed: true},
+		{
+			name: "an evidence claim",
+			reply: "the diagnosis\n\n" +
+				landingBlock(`{"outcome":"evidence","why":"the design this needs has not landed"}`),
+			directed: false,
+		},
+	} {
+		t.Run(landed.name, func(t *testing.T) {
+			t.Parallel()
+
+			tracker := newOutcomeTracker()
+			provider := roleBackend(writeFeature, approveVerdict)
+			provider.developerFinalText = landed.reply
+			var reviewerPrompt string
+			underlying := provider.run
+			provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+				if request.Role == domain.RoleReviewer {
+					reviewerPrompt = request.Prompt
+				}
+				return underlying(request)
+			}
+			pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+
+			if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			// Everything the run leaves on the item, read together: the outcome notes,
+			// the reason it was closed with, the reason it went back to the backlog,
+			// and the parking it sits under.
+			onTheItem := strings.Join([]string{
+				tracker.notes, tracker.closeReason, tracker.reopenReason, tracker.item.Parking.Reason(),
+			}, "\n")
+			for _, directed := range []string{"approve it only if", "Ask for changes", "belongs in the developer's reply"} {
+				if strings.Contains(onTheItem, directed) {
+					t.Errorf("the item carries a direction written for the reviewer (%q): %q", directed, onTheItem)
+				}
+			}
+			// The item still says which landing it was settled by, or the split would
+			// have been made by dropping the claim rather than by placing it.
+			if !strings.Contains(onTheItem, "Landing claim") && !strings.Contains(onTheItem, "integrated") {
+				t.Errorf("the item says nothing about how it was settled: %q", onTheItem)
+			}
+			if got := strings.Contains(reviewerPrompt, "approve it only if it is the work the item asked for"); got != landed.directed {
+				t.Errorf("the reviewer was told what approving the claim does = %v, want %v: %q", got, landed.directed, reviewerPrompt)
+			}
+		})
+	}
+}
+
+// yoyodyne-ifd.284 replayed. A developer files a diagnosis saying the machinery
+// its item needs has not landed, and writes no landing block — so the ordinary
+// discharging landing is in force and the item closes on a document saying in its
+// own words that the work was not done. That is what happened, after the claim
+// channel shipped, because the claim nobody writes was shown to nobody: the
+// reviewer approved a diagnosis without ever being told that approving it closed
+// the item.
+//
+// The default is a claim like any other now, and the reviewer is shown it. A
+// diagnosis offered under it is a change that is not the work, the review sends
+// it back, and the repair round is where the developer claims what it actually
+// landed — which leaves the item parked rather than closed.
+func TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem(t *testing.T) {
+	t.Parallel()
+
+	tracker := newOutcomeTracker()
+	provider := roleBackend(writeFeature, repairVerdict, approveVerdict)
+	provider.developerFinalTextByAttempt = []string{
+		"the recurring-task machinery this item needs is on a branch that has not landed; this change is the diagnosis",
+		"the diagnosis stands\n\n" +
+			landingBlock(`{"outcome":"evidence","why":"the machinery this item is written against has not landed"}`),
+	}
+	var reviewerPrompts []string
+	underlying := provider.run
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer {
+			reviewerPrompts = append(reviewerPrompts, request.Prompt)
+		}
+		return underlying(request)
+	}
+	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 2
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The first review is the one that mattered: the change in front of it was a
+	// diagnosis, and it has to be told that approving it closes the item.
+	if len(reviewerPrompts) == 0 {
+		t.Fatal("the change was never reviewed")
+	}
+	if !strings.Contains(reviewerPrompts[0], "claimed no landing outcome") {
+		t.Errorf("the reviewer was not told the default claim was in force: %q", reviewerPrompts[0])
+	}
+	if !strings.Contains(reviewerPrompts[0], "approve it only if it is the work the item asked for") {
+		t.Errorf("the reviewer was not told what approving the default does: %q", reviewerPrompts[0])
+	}
+	// And the item is where the evidence says it belongs, not closed against it.
+	if outcome.WorkItemClosed || tracker.closed {
+		t.Fatalf("the item closed against a diagnosis; calls = %v", tracker.calls)
+	}
+	if !tracker.reopened || !tracker.item.Parking.Parked() {
+		t.Fatalf("the item was not put back parked; calls = %v", tracker.calls)
+	}
+	if !strings.Contains(tracker.item.Parking.Reason(), "has not landed") {
+		t.Errorf("the parking reason does not name what would release the item: %q", tracker.item.Parking)
+	}
+}
+
 // A sweep settling a run somebody killed decides the same way the run would
 // have. It has to: a run whose merge the forge only queued is settled by a later
 // process entirely, and a sweep reading the promotion alone is exactly the
