@@ -551,6 +551,11 @@ func fromApprovedWork(conversation runstate.Conversation, earlier []execution.Ev
 // fromDeclinedWork says that work an agent proposed was turned down. It is
 // addressed to the product rather than to any item, because there is no item:
 // nothing was created, which is the whole of what a decline means.
+//
+// That is also why reaches classifies the kind ReachRecord outright rather than
+// leaving it to the no-thread rule: this is the one producer that addresses the
+// product every time, so "its thread" is never an answer for it, and a silence
+// nobody chose is how a reader comes to be told one thing while another happens.
 func fromDeclinedWork(conversation runstate.Conversation, event execution.Event) (Notification, error) {
 	var declined proposedWork
 	if err := json.Unmarshal(event.Payload, &declined); err != nil {

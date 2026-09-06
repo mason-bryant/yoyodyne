@@ -116,6 +116,80 @@ func TestAReportWithNoItemToThreadItInPostsNothing(t *testing.T) {
 	}
 }
 
+// Work an agent proposed and the operator turned down is addressed to the product
+// every time rather than sometimes: nothing was created, so there is no item and
+// there will never be a thread. It therefore says so in the table rather than
+// falling through the no-thread rule, because a kind that can only ever be
+// product-addressed has no "its thread" to be sent to, and a silence nobody chose
+// is how a reader comes to be told one thing while another happens.
+func TestADeclinedProposalSaysItsOwnSilence(t *testing.T) {
+	t.Parallel()
+
+	if got := KindWorkDeclined.Reach(); got != ReachRecord {
+		t.Fatalf("a declined proposal reaches %q from the table, want the record stated rather than derived", got)
+	}
+	if got := reachOf(Product(), noted(KindWorkDeclined)); got != ReachRecord {
+		t.Fatalf("a declined proposal addressed to the product reaches %q, want the record", got)
+	}
+}
+
+// The catch-up digest is exempt from the no-thread rule, and it is the exemption
+// that matters most: a digest exists only in place of messages that were going to
+// post, and the deliveries it stands for are suppressed whether or not it goes.
+// A digest that reached nothing would take a whole collapsed backlog with it — and
+// a product-topic digest stands for channel-level messages, which is the backlog
+// somebody would most need.
+func TestACatchUpDigestAlwaysPosts(t *testing.T) {
+	t.Parallel()
+
+	item, err := WorkItem("yoyodyne-ifd.314")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	for _, addressed := range []struct {
+		topic Topic
+		want  Reach
+	}{
+		{topic: item, want: ReachThread},
+		{topic: Product(), want: ReachChannel},
+	} {
+		digest := Notification{Topic: addressed.topic, Speaker: Harness(), Event: noted(KindCatchUpDigest)}
+		if got := digest.Reach(); got != addressed.want {
+			t.Fatalf("a digest on %q reaches %q, want %q", addressed.topic.Key(), got, addressed.want)
+		}
+		if !digest.Posts() {
+			t.Fatalf("a digest on %q posts nowhere, want the backlog it stands for said", addressed.topic.Key())
+		}
+	}
+}
+
+// Every kind that can be addressed to the product topic has an answer somebody
+// chose. The no-thread rule is a safe default for a milestone whose record named
+// no item, and it is exactly the wrong answer for a kind that is product-addressed
+// by construction — so those are listed here beside what they reach, and a kind
+// that acquires a product-addressed producer without an entry is what this is
+// meant to catch when it is read next.
+func TestWhatIsAlwaysProductAddressedSaysSoInTheTable(t *testing.T) {
+	t.Parallel()
+
+	// fromDeclinedWork and the product-level producers in select.go, which address
+	// Product() unconditionally rather than through topicForItem.
+	always := []Kind{
+		KindWorkDeclined, KindTrackerBlockRefused,
+		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
+		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed,
+		KindWatchStopped, KindWatchRedeploying,
+		KindLineWaiting, KindResidentStale, KindStallNoticed, KindProviderWindow,
+		KindBundleImprovement,
+	}
+	for _, kind := range always {
+		if got := kind.Reach(); got == ReachThread {
+			t.Fatalf("%q is addressed to the product every time and reaches %q, "+
+				"so the no-thread rule decides its silence rather than anybody choosing it", kind, got)
+		}
+	}
+}
+
 // A recorded directive answers from what the record left unsettled rather than
 // from its kind, for the reason its whose-move clause does. One that left
 // something unresolved pauses the work it affects until somebody settles it; one

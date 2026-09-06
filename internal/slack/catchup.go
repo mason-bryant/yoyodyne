@@ -102,9 +102,18 @@ type catchUp struct {
 
 // say reports what to post for one delivery, and whether to post anything at
 // all.
+//
+// A digest is asked the same question every other delivery is, rather than
+// posted on the strength of having been planned. It always answers yes — a
+// digest stands in for messages that were going to post, and notify exempts it
+// from the rule that sends a message with no thread to the record — and asking
+// anyway is what keeps the two from drifting apart silently: a digest that
+// stopped posting would take with it every delivery it had already suppressed,
+// and posting one the envelope says reaches nothing would be this surface
+// contradicting the record it reads.
 func (c catchUp) say(index int, delivery Delivery) (notify.Notification, bool) {
 	if digest, found := c.digest[index]; found {
-		return digest, true
+		return digest, digest.Posts()
 	}
 	if _, found := c.collapsed[index]; found {
 		return notify.Notification{}, false

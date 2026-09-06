@@ -453,22 +453,30 @@ Into the work item's thread, as they happen:
 
 At the top level of the channel, unthreaded, goes what is about the whole line
 rather than any one item: the operator holding and releasing intake, the
-operator holding and lifting all harness activity, proposed work you turned
-down — there is no item, because nothing was created — a block of tracker actions
+operator holding and lifting all harness activity, and a block of tracker actions
 the harness refused whole, said as a `warning` with the role that asked, how many
 actions it asked for, and the refusal itself, because none of them happened and
 the role that asked for them believed they had. Burying those in one item's thread
-would misfile them.
+would misfile them. A channel catching up on a backlog too deep to replay posts
+its digest here too, for the same reason: it stands for messages that were going
+to appear at this level, and one line saying how many is what both you and the
+workspace want out of four hundred.
 
-A report an agent filed against no work item is the case that looks like it
-belongs here and does not. There is no thread to say it in, so saying it at all
-would mean saying it at the top of the channel — putting the reports with the
-least attached to them in the loudest place there is. It is kept in the report
-store, which is where every report is kept, and reaches you the way the rest of
-them do: in the pile the product manager is handed each turn, worst first, until
-somebody records what became of it. A `critical` one is the exception and is
-posted, because something already wrong is what you asked to be told wherever it
-is.
+Two things look like they belong in that list and do not, and both are the same
+case: no item, so no thread, so saying them at all would mean saying them at the
+top of the channel — which puts the messages with the least attached to them in
+the loudest place there is.
+
+**Proposed work you turned down** is the first. Nothing was created, so there is
+no item and there never will be one, and what a message would tell you is what
+you have just decided. It is in the durable record and `yoyo` reads it back.
+
+**A report an agent filed against no work item** is the second. It is kept in the
+report store, which is where every report is kept, and reaches you the way the
+rest of them do: in the pile the product manager is handed each turn, worst
+first, until somebody records what became of it. A `critical` one is the
+exception and is posted, because something already wrong is what you asked to be
+told wherever it is.
 
 That list is what is *addressed* to the channel rather than everything that
 appears in it: a thread reply is shown there as well when what it says is

@@ -73,10 +73,18 @@ var reaches = map[Kind]Reach{
 	// several admissions or closes did not happen and the role that asked believes
 	// they did, so the queue is not what anybody thinks it is until somebody looks.
 	KindTrackerBlockRefused: ReachChannel,
-	// What the operator decided about proposed work. He decided it, so it is not
-	// news to him; the item's thread is where the decision belongs.
+	// What the operator decided about proposed work. He decided it, so neither is
+	// news to him. An approval created an item and belongs in that item's thread,
+	// where the rest of its narrative will be.
 	KindWorkApproved: ReachThread,
-	KindWorkDeclined: ReachThread,
+	// A decline is the one kind here that is addressed to the product every time
+	// rather than sometimes: nothing was created, so there is no item and there
+	// will never be a thread — see fromDeclinedWork, which says so. That makes it
+	// the one kind whose answer cannot be "its thread", so it is stated here
+	// rather than left to fall out of the no-thread rule in reachOf. The record
+	// holds it, `yoyo` reads it back, and what the channel would gain is a message
+	// about work that does not exist, telling the operator what he just decided.
+	KindWorkDeclined: ReachRecord,
 	// Work a conversation carries. It waits on a role rather than on the operator,
 	// and the wait is legible in the item's thread where the handoff was said.
 	KindWorkHandedOff:  ReachThread,
@@ -169,8 +177,10 @@ var reaches = map[Kind]Reach{
 	// One value the project's template has improved. It asks for a decision and it
 	// is said exactly once per improvement, ever.
 	KindBundleImprovement: ReachChannel,
-	// What a thread gathered while nothing was posting it. It stands for that
-	// thread's narrative, so it belongs where the narrative is.
+	// What a topic gathered while nothing was posting it. It stands for that
+	// topic's narrative, so it belongs where the narrative is — and it is exempted
+	// from the no-thread rule in reachOf, because a digest is only ever produced in
+	// place of messages that were going to post.
 	KindCatchUpDigest: ReachThread,
 }
 
@@ -197,10 +207,26 @@ func (k Kind) Reach() Reach {
 // something already wrong that will cost somebody is told at the level he reads,
 // and the kind's own reach decides only where the quieter ones go.
 //
-// A thread's message with no thread to go in reaches the record instead. What is
+// A milestone with no thread to go in reaches the record instead. What is
 // addressed to the product is posted unthreaded, which is the channel level: a
 // report filed against no work item would otherwise be pushed to the top of the
-// channel precisely because there was less to say about it.
+// channel precisely because there was less to say about it. That is the whole of
+// what this rule is for, and it is a rule rather than an entry per kind because
+// most of the kinds it covers are addressed to an item every time in practice
+// and reach the product topic only from a record that named no item — which has
+// no thread and no identifier, so there is nothing in it a reader could follow.
+//
+// A kind that is addressed to the product every time answers in the table
+// instead, so that its silence is a decision somebody took rather than a rule it
+// happened to fall through. KindWorkDeclined is the one, and the conformance test
+// beside this pins the pair together.
+//
+// The catch-up digest is exempt, and it is the one thing here that must never be
+// swallowed: a digest exists only in place of messages that were going to post,
+// so it goes wherever it is addressed. A product-topic digest stands for
+// channel-level messages — a held intake, a stalled line — and dropping it would
+// take the whole collapsed backlog with it, since the deliveries it replaced are
+// suppressed either way.
 //
 // One kind answers from the record rather than from the table, for the reason
 // the whose-move clause does: a recorded directive that left something unsettled
@@ -217,6 +243,13 @@ func reachOf(topic Topic, event Event) Reach {
 		reach = ReachChannel
 	}
 	if reach == ReachThread && topic.Kind == TopicProduct {
+		// The digest is the exemption, and it says the channel rather than the
+		// thread it asked for: a message addressed to the product is posted
+		// unthreaded, and unthreaded is the channel level. Leaving it reading
+		// "thread" would be the envelope naming a place this message does not go.
+		if event.Kind == KindCatchUpDigest {
+			return ReachChannel
+		}
 		return ReachRecord
 	}
 	return reach
