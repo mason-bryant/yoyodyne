@@ -127,6 +127,24 @@ execution:
 # separately. Automatic integration is refused unless it is actually gated by
 # the checks below and a reviewer agent, and publishing is what pushes a branch
 # and opens a pull request where other people can see it.
+# The recurring tasks: the development manager's hourly sweep, enabled by the
+# operator 2026-09-06 the day its machinery landed (yoyodyne-ifd.283). The
+# product manager's coherence scan joins here when its successor item ships.
+recurring_tasks:
+  development-manager-sweep:
+    role: development-manager
+    every: 1h
+    enabled: true
+    max_turns: 4
+    prompt: |
+      Sweep for unresolved issues: stoppages nobody has decided, claims on work
+      nothing is running, deliveries that have stopped moving. Fix what your
+      authority allows, batching classes rather than going item by item; ask
+      the architect where a ruling is needed; check findings against work
+      already admitted before filing; and file root-cause work with the
+      product manager for every fix you make. End with a durable report; when
+      the system is healthy say NO FINDINGS and stop.
+
 approvals:
   brief: human
   goals: human
