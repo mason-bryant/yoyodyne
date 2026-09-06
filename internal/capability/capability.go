@@ -163,6 +163,19 @@ const (
 	// a verdict" and "the development manager may not override one" be the same
 	// question asked twice rather than two rules kept in two places.
 	ReviewVerdict Capability = "review.verdict"
+	// AgentContextMutate is writing an agent's own durable memory: what it knows
+	// about this project, recorded as revisions that enter its later invocations.
+	// The `### Agent memory` section of `docs/designs/configurable-workflows.md`
+	// requires that agent-authored memory be written only through typed context
+	// actions the role contract owns, and this is the authority those actions
+	// declare — so a role that may not hold it may not remember anything, whatever
+	// a workflow definition or a persona says.
+	//
+	// Reading is deliberately not a capability beside it. What an agent knows is
+	// assembled into its own prompt by the runtime, which is prompt assembly and
+	// stays runtime-internal; what an operator reads is the audit history, which the
+	// design settles as a CLI surface and never an agent one.
+	AgentContextMutate Capability = "agent-context.mutate"
 )
 
 // declared is every capability this repository has, in the order above. It is
@@ -193,6 +206,7 @@ var declared = []Capability{
 	ConcernRaise,
 	ExchangeAsk,
 	ReviewVerdict,
+	AgentContextMutate,
 }
 
 // All is every capability this repository declares, in declaration order.
