@@ -2,13 +2,81 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
 )
+
+// A project that has scheduled nothing gets no trigger at all, and the nil has to
+// be one the pull can actually test.
+//
+// This is the typed-nil trap, and it is worth a test of its own because the
+// failure is not a schedule that does nothing — it is a panic on every pull. A
+// (*orchestrator.Trigger)(nil) returned into an interface is not equal to nil, so
+// the pass would find a trigger, call Fire through a nil receiver, and take down
+// the session for every project that never asked for a schedule.
+func TestAProjectThatSchedulesNothingGetsNoTrigger(t *testing.T) {
+	t.Parallel()
+
+	if trigger := recurringTrigger(components{}, "", io.Discard); trigger != nil {
+		t.Errorf("trigger = %#v, want an untyped nil a pull can test against", trigger)
+	}
+}
+
+// A configured task gets a trigger wired to the product's own sweep store, which
+// is the only path by which a task ever fires.
+//
+// Every field checked here is silent if it is missing: a trigger with no claims
+// fires every pull instead of on its cadence, one with no reports produces
+// nothing anybody can read afterwards, and one with no roles cannot wake anybody.
+// None of those looks different from a schedule that has found nothing yet.
+func TestAConfiguredTaskGetsATriggerOverTheProductsSweepStore(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewStore(t.TempDir(), "example")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	parts := components{
+		config: config.Config{RecurringTasks: map[string]config.RecurringTask{
+			"development-manager-sweep": {
+				Role:    domain.RoleDevelopmentManager,
+				Every:   config.Duration(time.Hour),
+				Enabled: true,
+				Prompt:  "sweep for unresolved issues",
+			},
+		}},
+		store: store,
+	}
+
+	wired := recurringTrigger(parts, "", io.Discard)
+	if wired == nil {
+		t.Fatal("recurringTrigger() = nil, want a trigger for a project that configured a task")
+	}
+	trigger, ok := wired.(*orchestrator.Trigger)
+	if !ok {
+		t.Fatalf("recurringTrigger() = %T, want the orchestrator's trigger", wired)
+	}
+	if len(trigger.Tasks) != 1 {
+		t.Errorf("tasks = %#v, want the configured schedule as this pull read it", trigger.Tasks)
+	}
+	if trigger.Claims == nil {
+		t.Error("the trigger has nowhere to claim a cadence, so it would fire on every pull rather than every hour")
+	}
+	if trigger.Reports == nil {
+		t.Error("the trigger has nowhere to record a pass, so what it found would reach nobody")
+	}
+	if trigger.Roles == nil {
+		t.Error("the trigger has no way to reach a role's conversation, so it could never wake anybody")
+	}
+}
 
 func recordedSweep(task string, at time.Time, result *sweep.Result, problem string) runstate.Sweep {
 	return runstate.Sweep{

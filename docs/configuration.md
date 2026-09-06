@@ -3827,8 +3827,14 @@ session given a budget stops on it rather than sweeping past it, and a session
 given none is bounded by the cadence and nothing else.
 
 **`yoyo pause` is the switch that stops firings**, exactly as it stops runs and
-conversation turns; nothing is claimed while it is held, so every task keeps its
-cadence and fires once the pause lifts. **Holding intake does not stop them.**
+conversation turns. The pause is read at the start of a pass, before anything is
+claimed, so a task a held pause was in place for keeps its cadence and fires once
+the pause lifts. One narrow case costs a cadence rather than keeping it: a pause
+placed in the moment between a task's claim and its turn arrives after the claim
+has already moved the clock, so that firing is recorded as one the role could not
+be reached for and the task waits for its next cadence rather than firing when
+the pause lifts. It costs one pass of one task, and only for a pause that lands
+inside that window. **Holding intake does not stop them.**
 The hold stops the harness choosing work, and a firing chooses none: it is read
 before the hold on every pull, so a task fires under a held intake exactly as it
 does under a clear one. That is deliberate — a held queue is often waiting on

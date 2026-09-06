@@ -387,7 +387,15 @@ func appendProblem(existing, addition string) string {
 // started and failed somewhere inside it.
 func describeFailedTurn(name string, role domain.AgentRole, turn int, err error) string {
 	if errors.Is(err, ErrRoleUnreachable) {
-		return fmt.Sprintf("the recurring task %s could not be put to the %s at all, so nothing was asked and its next firing is at its next cadence: %v", name, role, err)
+		if turn == 1 {
+			return fmt.Sprintf("the recurring task %s could not be put to the %s at all, so nothing was asked and its next firing is at its next cadence: %v", name, role, err)
+		}
+		// A later turn losing the conversation is not a firing that asked nothing.
+		// The turns before it answered and the account this record carries is
+		// theirs, so the sentence has to name the turn rather than the firing —
+		// otherwise the prose says nothing was asked while the turn count beside it
+		// says otherwise, and a reader has to decide which of the two to believe.
+		return fmt.Sprintf("turn %d of the recurring task %s could not be put to the %s, so its pass is partial and carries only the turns before it: %v", turn, name, role, err)
 	}
 	return fmt.Sprintf("turn %d of the recurring task %s failed, so its pass is partial: %v", turn, name, err)
 }

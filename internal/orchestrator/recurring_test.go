@@ -320,6 +320,39 @@ func TestAnUnreachableRoleIsRecordedRatherThanLost(t *testing.T) {
 	}
 }
 
+// A later turn losing the conversation is a partial pass, not a firing that
+// asked nothing, and the record has to say which.
+//
+// The turns before it answered and their account is what the record carries, so
+// the sentence a first-turn failure earns — "could not be put to the role at
+// all, so nothing was asked" — would contradict the turn count sitting beside it
+// and leave a reader to decide which half to believe.
+func TestALaterTurnLosingTheRoleIsRecordedAsPartialRatherThanUnasked(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	role := &wokenRole{answers: []scriptedTurn{
+		{result: &sweep.Result{Status: sweep.StatusMore, Summary: "the first turn, with more to do"}},
+		{err: ErrRoleUnreachable},
+	}}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(fired.Fired) != 1 || fired.Fired[0].Turns != 1 {
+		t.Fatalf("fired = %+v, want the one turn that answered kept", fired.Fired)
+	}
+	problem := fired.Fired[0].Problem
+	if strings.Contains(problem, "nothing was asked") {
+		t.Errorf("problem = %q, want it not to claim the role was never asked when a turn had already answered", problem)
+	}
+	if !strings.Contains(problem, "turn 2") {
+		t.Errorf("problem = %q, want it to name the turn that could not be reached", problem)
+	}
+}
+
 // A turn that answered in prose without a block is not a failed turn: the role
 // answered, and what is lost is the structure. It is said out loud rather than
 // recorded as a pass that found nothing.

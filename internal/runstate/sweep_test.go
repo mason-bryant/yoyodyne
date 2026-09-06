@@ -328,6 +328,37 @@ func TestATornLineDoesNotCostTheReportsAroundIt(t *testing.T) {
 	}
 }
 
+// The sweeps a run store hands out are the ones NewSweepStore writes to, for the
+// same state root and product.
+//
+// The two derive that directory by different arithmetic — the run store walks up
+// from its own runs directory, and NewSweepStore builds the path from the state
+// root — so nothing but this holds them to the same answer. Getting it wrong is
+// silent in the worst way: firings would be written to one directory and
+// `yoyo sweeps` would read another, and an empty listing is exactly what a
+// schedule that has found nothing looks like. The whole point of the durable
+// report is to be readable afterwards, so a disagreement here would make the
+// feature appear to work while producing nothing anybody can find.
+func TestTheSweepsOfARunStoreAreWhereNewSweepStoreWrites(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runs, err := NewStore(root, "example")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	direct, err := NewSweepStore(root, "example")
+	if err != nil {
+		t.Fatalf("NewSweepStore() error = %v", err)
+	}
+	if got, want := runs.Sweeps().Root(), direct.Root(); got != want {
+		t.Errorf("run store sweeps root = %q, NewSweepStore root = %q; firings and the listing would use different directories", got, want)
+	}
+	if got, want := runs.Sweeps().Path(), direct.Path(); got != want {
+		t.Errorf("run store sweep log = %q, NewSweepStore log = %q", got, want)
+	}
+}
+
 // A scan that fails part way through is the third shape of the same rule, and
 // the one the reader has to act on differently: a line too long for the scanner
 // stops the reading dead, so nothing after it is seen at all. What came before it
