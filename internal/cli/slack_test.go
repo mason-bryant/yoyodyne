@@ -14,7 +14,6 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
-	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
 
@@ -184,7 +183,7 @@ func TestTheSinkIsAssembledForTheProductItReportsOn(t *testing.T) {
 	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
 	configPath := writeConfig(t, slackConfig)
 
-	if _, _, err := buildSlackSink(configPath, time.Second, time.Minute, readmodel.DefaultStallThreshold, "test", io.Discard); err != nil {
+	if _, _, err := buildSlackSink(configPath, time.Second, time.Minute, "test", io.Discard); err != nil {
 		t.Fatalf("buildSlackSink() error = %v", err)
 	}
 }

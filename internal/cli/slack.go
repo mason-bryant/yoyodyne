@@ -56,14 +56,14 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 	once := flags.Bool("once", false, "make one pass over the records and exit, rather than staying open")
 	poll := flags.Duration("poll", slack.DefaultPollInterval, "how often to read the durable records")
 	heartbeat := flags.Duration("heartbeat", slack.DefaultHeartbeat, "how often to say again that the line is choosing nothing over ready work")
-	// How long nothing may start, over ready work and with nothing accounting for
-	// it, before somebody is told. It is a flag because the right number is the
-	// operator's judgement about their own machine rather than the harness's: the
-	// default is what this operator asked for after being told an hour late, and a
-	// noisier machine wants it wider. It is also how often the tracker is asked
-	// for this reading, so moving it moves the whole latency rather than half of
-	// it.
-	stallAfter := flags.Duration("stall-after", readmodel.DefaultStallThreshold, "how long nothing may start over ready work before the operators are told")
+	// How long nothing may start before that is a stall is no longer decided here.
+	// The sink says what the product's stall record holds and no longer produces
+	// it, because reporting is optional and a watchdog that ran only where somebody
+	// had turned reporting on was no watchdog at all; the threshold went with the
+	// checking, to `yoyo reconcile --stall-after`. The flag is still accepted so
+	// that a launcher passing it starts a sink rather than failing to parse, and it
+	// says where the number went rather than being quietly ignored.
+	stallAfter := flags.Duration("stall-after", 0, "retired: the threshold moved to `yoyo reconcile --stall-after`, which is where stalls are now noticed")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -83,16 +83,15 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 		fmt.Fprintln(stderr, "heartbeat must be positive; it is a cadence rather than a switch, because silence has to mean nothing to do")
 		return 2
 	}
-	// Nor is there a way to ask for no watchdog, and for the same reason twice
-	// over: a threshold of zero would take the default rather than turn anything
-	// off, so a reading of it as a switch would silently do the opposite of what
-	// somebody meant by it.
-	if *stallAfter <= 0 {
-		fmt.Fprintln(stderr, "stall-after must be positive; it is how long nothing may start rather than a switch, and there is no way to ask not to be told")
-		return 2
+	// A number passed here decides nothing, so it is said rather than swallowed: a
+	// knob that looks accepted and does nothing is how an operator comes to believe
+	// they have set a threshold they have not.
+	if *stallAfter != 0 {
+		fmt.Fprintln(stderr, "--stall-after no longer decides anything here: the sink says what the stall record holds rather than noticing stalls itself")
+		fmt.Fprintln(stderr, "set the threshold where the noticing happens instead: yoyo reconcile --stall-after")
 	}
 
-	sink, channel, err := buildSlackSink(*configPath, *poll, *heartbeat, *stallAfter, version, stdout)
+	sink, channel, err := buildSlackSink(*configPath, *poll, *heartbeat, version, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "slack failed: %v\n", err)
 		return 1
@@ -267,7 +266,7 @@ func describeSupervision(supervision slack.Supervision) string {
 // that one message and nothing else — it is said in the sink's own log, or in
 // the line that could not be read, and asked again later — so this is still a
 // process that starts wherever the operator runs it.
-func buildSlackSink(configPath string, poll, heartbeat, stallAfter time.Duration, version string, stdout io.Writer) (*slack.Sink, string, error) {
+func buildSlackSink(configPath string, poll, heartbeat time.Duration, version string, stdout io.Writer) (*slack.Sink, string, error) {
 	resolved, err := loadConfiguration(configPath)
 	if err != nil {
 		return nil, "", err
@@ -439,16 +438,11 @@ func buildSlackSink(configPath string, poll, heartbeat, stallAfter time.Duration
 			},
 			// Whether anything is happening at all. Every message above this is read
 			// from something a process wrote about itself, which leaves one state
-			// unreported: the process that would have written it being dead. This
-			// notices that nothing has started while work was ready, records it where
-			// `yoyo status` reads it back, and tells the operators once.
+			// unreported: the process that would have written it being dead. The
+			// record of that is `yoyo reconcile`'s to write, because this process is
+			// optional and that one is what an unattended pass runs; this reads it and
+			// tells the operators once.
 			Stalls: stalls,
-			// And how long nothing may start before that is one. It is the operator's
-			// number rather than the harness's — what an acceptable gap looks like is a
-			// fact about their machine — and it is also how often this reading is
-			// taken, so the figure they set is the whole of how long the harness can be
-			// stopped before they hear about it.
-			StallThreshold: stallAfter,
 			// What this project's template has improved that this project never
 			// edited. Every other surface that says it is one somebody has to run,
 			// so a harness left running for a fortnight says it nowhere at all —
@@ -772,9 +766,10 @@ Options:
   --poll <d>         how often to read the durable records (default 15s)
   --heartbeat <d>    how often to say again that the line is choosing nothing
                      over ready work (default 1h)
-  --stall-after <d>  how long nothing may start over ready work, with nothing
-                     accounting for it, before the operators are told directly
-                     (default 10m). It is also how often that reading is taken,
-                     so it is the whole of how long the harness can be stopped
-                     before somebody hears about it.`)
+  --stall-after <d>  retired, and accepted so a launcher passing it still starts.
+                     A harness that has stopped is noticed by `+"`yoyo reconcile`"+`,
+                     which runs whether or not reporting was ever turned on, and
+                     `+"`yoyo reconcile --stall-after`"+` is where the threshold is set.
+                     The sink says what that record holds and no longer decides
+                     it.`)
 }

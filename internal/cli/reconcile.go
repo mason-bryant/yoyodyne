@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/watchdog"
 )
 
 type reconcileOutput struct {
@@ -34,7 +38,15 @@ type reconcileOutput struct {
 	// turn, and is carried here rather than printed for the same reason `--json`
 	// carries the whole of every other sweep.
 	Supervision []orchestrator.SupervisionResult `json:"supervision"`
-	Error       string                           `json:"error,omitempty"`
+	// Stall is what this sweep made of whether anything is happening at all: the
+	// silence it read, and what that opened, closed, or left standing in the
+	// product's own stall record.
+	Stall *watchdog.Reading `json:"stall,omitempty"`
+	// StallProblem is why that reading was not made. It costs the sweep a line and
+	// nothing else — every other step it took stands — so it is reported beside
+	// the sweep rather than failing it, exactly as a staleness reading is.
+	StallProblem string `json:"stall_problem,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // reconcileSweep is everything one sweep found, gathered so the reporting takes
@@ -45,6 +57,8 @@ type reconcileSweep struct {
 	Convergence  orchestrator.Convergence
 	Docketed     int
 	Supervision  []orchestrator.SupervisionResult
+	Stall        *watchdog.Reading
+	StallProblem string
 }
 
 // reconcileRuns settles every run an interrupted process left outstanding and
@@ -57,12 +71,30 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	// How long nothing may start, over ready work and with nothing accounting for
+	// it, before this sweep records that the harness has stopped. It is a flag
+	// because the right number is the operator's judgement about their own machine
+	// rather than the harness's, and it is here rather than on the Slack sink
+	// because this is the sweep that always runs: reporting is optional, and a
+	// threshold set on an optional process is a threshold most products never get.
+	//
+	// How promptly a stall is noticed is this number and the cadence of whatever
+	// runs this sweep, so an unattended pass should run at least as often as the
+	// threshold it sets.
+	stallAfter := flags.Duration("stall-after", readmodel.DefaultStallThreshold, "how long nothing may start over ready work before this records that the harness has stopped")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "reconcile does not accept positional arguments")
 		printReconcileUsage(stderr)
+		return 2
+	}
+	// There is deliberately no way to ask for no watchdog: a threshold of zero
+	// would take the default rather than turn anything off, so reading it as a
+	// switch would silently do the opposite of what somebody meant by it.
+	if *stallAfter <= 0 {
+		fmt.Fprintln(stderr, "stall-after must be positive; it is how long nothing may start rather than a switch, and there is no way to ask not to be told")
 		return 2
 	}
 
@@ -99,13 +131,58 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	// process is carrying is left to that process, and it invokes nothing.
 	supervision, supervisionErr := sweepSupervision(parts)
 	err = errors.Join(err, supervisionErr)
+	// Whether anything is happening at all, read last and for two reasons. It is
+	// the only step here that says something about the machine rather than about
+	// one run, and every step above it moves what it would read: a run whose
+	// process died goes on saying it is in flight until the settling above, and a
+	// phantom run counted as activity would silence this for exactly the crash it
+	// exists to catch.
+	//
+	// This sweep is where it lives because it is what an unattended pass runs and
+	// what an operator runs by hand, neither of which depends on Slack reporting
+	// having been turned on. A reading that fails is reported and does not fail the
+	// sweep: nothing was recorded, and the next pass decides.
+	stall, stallProblem := checkForStall(ctx, parts, *stallAfter)
 	return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{
 		Runs:         results,
 		Publications: publications,
 		Convergence:  convergence,
 		Docketed:     docketed.Added,
 		Supervision:  supervision,
+		Stall:        stall,
+		StallProblem: stallProblem,
 	}, err)
+}
+
+// checkForStall takes one reading of whether this product has gone quiet and
+// reconciles it against the product's durable stall record.
+//
+// The record is where `yoyo status` reads the history back from and where the
+// Slack sink reads the one message it says about it, so a product reporting
+// nowhere still records its stalls and can be asked about them afterwards — which
+// is the whole of what this being here rather than in the sink buys.
+func checkForStall(ctx context.Context, parts components, threshold time.Duration) (*watchdog.Reading, string) {
+	stalls, err := runstate.NewStallStore(parts.stateRoot, parts.config.Product.ID)
+	if err != nil {
+		return nil, err.Error()
+	}
+	reading, err := watchdog.Checker{
+		Runs:     parts.store,
+		Sessions: parts.watch,
+		Holds:    parts.holds,
+		Intake:   parts.intake,
+		// The tracker's own count of what a developer run could actually be started
+		// for, which is the same reading the sink's heartbeat takes: work marked for
+		// a conversation and work the product manager parked are ready to the tracker
+		// and are not work anything will pull.
+		Backlog:   readyBacklog{tracker: parts.tracker()},
+		Stalls:    stalls,
+		Threshold: threshold,
+	}.Check(ctx)
+	if err != nil {
+		return nil, err.Error()
+	}
+	return &reading, ""
 }
 
 // sweepSupervision takes one voice-less pass of the management loop. A product
@@ -162,6 +239,8 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 			Convergence:  convergence,
 			Docketed:     docketed,
 			Supervision:  sweep.Supervision,
+			Stall:        sweep.Stall,
+			StallProblem: sweep.StallProblem,
 		}
 		if results == nil {
 			output.Runs = []orchestrator.Reconciliation{}
@@ -240,11 +319,40 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		printPublications(stdout, stderr, publications)
 		printConvergence(stdout, stderr, convergence)
 		printSupervision(stdout, sweep.Supervision)
+		printStall(stdout, stderr, sweep.Stall, sweep.StallProblem)
 	}
 	if failed {
 		return 1
 	}
 	return 0
+}
+
+// printStall says that this product has stopped doing anything, and says nothing
+// at all about one that has not.
+//
+// A quiet machine with a drained queue, a hold somebody placed, or a run visibly
+// working is the ordinary state, and a line about it on every sweep is a line
+// nobody reads — which is the same rule the branch and publication sweeps print
+// by. What is said is the stall while it stands, whether this sweep opened it or
+// found it, because a sweep run by hand after the fact is exactly when somebody
+// is asking whether the harness is alive.
+//
+// The second line is the one to act on: a session whose last word was `stopped`
+// wants starting, and one still claiming to be watching wants killing first.
+func printStall(stdout, stderr io.Writer, reading *watchdog.Reading, problem string) {
+	if problem != "" {
+		fmt.Fprintf(stderr, "whether this product has gone quiet was not decided: %s\n", problem)
+		return
+	}
+	if reading == nil || reading.Standing == nil {
+		return
+	}
+	standing := reading.Standing
+	fmt.Fprintf(stdout, "nothing has started on this product for %s, with %d item(s) ready\n",
+		standing.For().Round(time.Second), standing.Ready)
+	if standing.Chooser != "" {
+		fmt.Fprintf(stdout, "  %s\n", standing.Chooser)
+	}
 }
 
 // printSupervision reports what the sweep actually did to an exchange, and
@@ -433,7 +541,19 @@ thread that has spent every round it was given is closed as unresolved and the
 operator told. Nothing is put in front of a role here — recovering from a lost
 process is never a reason to ask a question nobody asked for.
 
+Last, it reads whether anything is happening at all. When nothing has started for
+--stall-after, the tracker reports work ready, and no hold, no still-moving run
+and no provider usage window accounts for it, that is recorded against the
+product as a stall — which `+"`yoyo status`"+` reads back afterwards and the Slack sink,
+if one is running, takes to the operators once. It is here because this sweep runs
+whether or not reporting was ever turned on: how promptly a stopped harness is
+noticed is this threshold and the cadence of whatever runs this sweep, so an
+unattended pass should run at least as often as the threshold it sets.
+
 Options:
-  --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
-  --json            emit machine-readable JSON`)
+  --config <path>    configuration file (default: the nearest .yoyodyne/config.yaml)
+  --json             emit machine-readable JSON
+  --stall-after <d>  how long nothing may start over ready work, with nothing
+                     accounting for it, before that is recorded as a stall
+                     (default 10m)`)
 }

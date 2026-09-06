@@ -12,12 +12,11 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// The window this whole thing exists for, replayed: on 2026-09-01 the watch
-// session died on a transient tracker read at 06:05, its last word was that it
-// was watching, and for seven and a half hours nothing started while the tracker
-// went on reporting work ready. No hold, no stop, no idle poll, no run — nothing
-// any surface here reads. It was found by a person noticing.
-func TestTheDeadWindowIsNoticedRecordedAndSaidOnce(t *testing.T) {
+// The window this whole thing exists for, as this surface now meets it: on
+// 2026-09-01 the watch session died at 06:05 and nothing started for seven and a
+// half hours. What notices that is the checker, wherever it runs; what this does
+// is take the record of it to somebody's phone, exactly once.
+func TestAStallInTheRecordIsTakenToTheOperatorsOnce(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
@@ -25,16 +24,21 @@ func TestTheDeadWindowIsNoticedRecordedAndSaidOnce(t *testing.T) {
 	harness.ready(3)
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 
-	// Inside the threshold this is a gap between runs, and it says nothing.
-	harness.now = moment.Add(readmodel.DefaultStallThreshold - time.Minute)
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
-	if _, open, err := stalls.Standing(); err != nil || open {
-		t.Fatalf("Standing() = %v %v, want nothing recorded inside the threshold", open, err)
+	// Nothing is in the record yet, so this surface says nothing about it however
+	// quiet the product looks from here. Deciding that a quiet product has stalled
+	// is not the sink's, and after yoyodyne-ifd.295 it is not the sink's to record
+	// either.
+	harness.now = moment.Add(7*time.Hour + 30*time.Minute)
+	cursors := harness.quietPass(t, harness.start())
+	if events := harness.stallsRecorded(t, stalls); len(events) != 0 {
+		t.Fatalf("List() = %+v, want a sink that records nothing", events)
 	}
 
-	// Past it, it is a stall: recorded durably, and taken to the operators.
-	harness.now = moment.Add(readmodel.DefaultStallThreshold + time.Minute)
-	delivery := harness.stalled(t, cursors)
+	// The checker records one, and this says it: to the operators directly,
+	// because a harness that has stopped doing anything is the sharpest case there
+	// is of a degraded harness and a channel is somewhere somebody chooses to look.
+	harness.stalled(t, stalls, moment, 3, harness.now)
+	delivery := harness.stallDelivery(t, cursors)
 	if !delivery.Direct {
 		t.Fatal("the stall was posted to the channel alone, want the operators told directly")
 	}
@@ -42,27 +46,15 @@ func TestTheDeadWindowIsNoticedRecordedAndSaidOnce(t *testing.T) {
 		t.Fatalf("severity = %q, want a stall said as a degraded harness", delivery.Notification.Event.Severity)
 	}
 	cursors = harness.poll(t, cursors, notify.KindStallNoticed)
-	standing, open, err := stalls.Standing()
-	if err != nil || !open {
-		t.Fatalf("Standing() = %v %v, want the stall recorded", open, err)
-	}
-	if !standing.Since.Equal(moment) || standing.Ready != 3 {
-		t.Fatalf("the record says since %s over %d ready, want %s and 3", standing.Since, standing.Ready, moment)
-	}
 
-	// And then the seven and a half hours, at the sink's own fifteen-second poll.
-	// It is said once per stall and never once per check, which is what the
-	// durable record rather than this cursor guarantees.
+	// And then the rest of the window, at the sink's own fifteen-second poll. It is
+	// said once per stall and never once per check.
 	for check := 0; check < 60; check++ {
 		harness.now = harness.now.Add(7 * time.Minute)
-		cursors = harness.poll(t, cursors)
+		cursors = harness.quietPass(t, cursors)
 	}
-	events, err := stalls.List()
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("List() = %d stalls, want one across the whole window", len(events))
+	if events := harness.stallsRecorded(t, stalls); len(events) != 1 {
+		t.Fatalf("List() = %d stalls, want the one the checker recorded", len(events))
 	}
 }
 
@@ -78,6 +70,7 @@ func TestARestartedSinkDoesNotSayAStandingStallAgain(t *testing.T) {
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 
 	harness.now = moment.Add(time.Hour)
+	harness.stalled(t, stalls, moment, 2, harness.now)
 	harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindStallNoticed)
 
 	// A sink that comes back with no memory at all, on a watermark taken when it
@@ -87,33 +80,32 @@ func TestARestartedSinkDoesNotSayAStandingStallAgain(t *testing.T) {
 	harness.now = harness.now.Add(time.Hour)
 	restarted := Cursors{SchemaVersion: CursorsSchemaVersion, Since: harness.now, Streams: map[string]Cursor{}}
 	harness.now = harness.now.Add(2 * time.Hour)
-	harness.poll(t, restarted)
-	events, err := stalls.List()
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
+	harness.quietPass(t, restarted)
+	events := harness.stallsRecorded(t, stalls)
 	if len(events) != 1 || !events[0].Open() {
-		t.Fatalf("List() = %+v, want the one stall still open and not reopened", events)
+		t.Fatalf("List() = %+v, want the one stall still open and untouched", events)
 	}
 }
 
 // What it says is what somebody woken at three in the morning has to act on:
 // how long nothing has happened, how much was waiting, and — the fact that
 // decides what they do — whether the thing that chooses work is dead or is still
-// claiming to be watching.
+// claiming to be watching. Every one of those is the record's rather than this
+// surface's, which is what keeps a channel and `yoyo status` telling one story.
 func TestAStallSaysItsAgeItsQueueAndWhatTheChooserLastSaid(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
-	harness.watchesForStalls(t)
+	stalls := harness.watchesForStalls(t)
 	harness.ready(4)
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 
-	// The watch transition is read past inside the threshold, so what the next
-	// pass says is the stall and nothing else.
-	harness.now = moment.Add(readmodel.DefaultStallThreshold - time.Minute)
+	// The watch transition is read past first, so what the next pass says is the
+	// stall and nothing else.
+	harness.now = moment.Add(readmodel.DefaultStallThreshold)
 	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
 	harness.now = moment.Add(7*time.Hour + 30*time.Minute)
+	harness.stalled(t, stalls, moment, 4, harness.now)
 	said := harness.say(t, cursors, notify.KindStallNoticed)
 	for _, fact := range []string{"7 hours", "4 items", "watching", "said nothing since"} {
 		if !strings.Contains(said.Body, fact) {
@@ -125,72 +117,11 @@ func TestAStallSaysItsAgeItsQueueAndWhatTheChooserLastSaid(t *testing.T) {
 	}
 }
 
-// Everything that legitimately accounts for nothing having started, and none of
-// them is a stall. Each of these is either a decision somebody made or the
-// harness visibly working, and waking them about it is the nagging that makes a
-// channel one nobody reads.
-func TestNothingAccountedForIsEverSaidAsAStall(t *testing.T) {
-	t.Parallel()
-
-	for name, arrange := range map[string]func(*testing.T, *testHarness){
-		"the operator held everything": func(t *testing.T, h *testHarness) {
-			h.ready(3)
-			h.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
-			if _, err := h.holds.Hold(moment); err != nil {
-				t.Fatalf("Hold() error = %v", err)
-			}
-		},
-		"intake is held": func(t *testing.T, h *testHarness) {
-			h.ready(3)
-			h.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
-			h.hold(t, "reordering the backlog first", moment)
-		},
-		"a run is in flight and still moving": func(t *testing.T, h *testHarness) {
-			h.ready(3)
-			h.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
-			h.record(t, h.run(t, runstate.StatusRunning))
-			// The run's record is stamped at `moment` and these passes are hours
-			// later, so the window is what decides whether it still counts as
-			// moving. It is widened past them here because this case is about a run
-			// that is demonstrably working; the phantom is its own test below.
-			h.feed.RunActivityWindow = 24 * time.Hour
-		},
-		"the queue is drained": func(t *testing.T, h *testHarness) {
-			h.ready(0)
-			h.watched(t, runstate.WatchIdle, "the backlog is empty", moment)
-		},
-		"nobody has ever watched this product": func(t *testing.T, h *testHarness) {
-			h.ready(6)
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			harness := newTestHarness(t, time.Time{})
-			stalls := harness.watchesForStalls(t)
-			arrange(t, harness)
-
-			// Whatever else these states are said with — a hold posts itself, the
-			// heartbeat repeats a held line hourly — none of them is ever said as a
-			// stall, and none of them records one.
-			harness.now = moment.Add(9 * time.Hour)
-			cursors := harness.quietPass(t, harness.start())
-			harness.now = harness.now.Add(9 * time.Hour)
-			harness.quietPass(t, cursors)
-			events, err := stalls.List()
-			if err != nil {
-				t.Fatalf("List() error = %v", err)
-			}
-			if len(events) != 0 {
-				t.Fatalf("List() = %+v, want nothing recorded", events)
-			}
-		})
-	}
-}
-
-// A stall that clears closes its event and says nothing about the clearing: what
-// cleared it said so itself, as the run that started. And a second stall
-// afterwards is a second thing to say rather than the same one said again.
-func TestAClearingStallClosesItsEventAndTheNextOneIsSaidAfresh(t *testing.T) {
+// A stall that clears is not said again, and the next one is said afresh. What
+// cleared it said so itself, as the run that started, so the clearing is silent
+// here — and a second stall a week later is a second thing to say rather than the
+// same one repeated.
+func TestAClearedStallGoesQuietAndTheNextIsSaidAfresh(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
@@ -199,171 +130,30 @@ func TestAClearingStallClosesItsEventAndTheNextOneIsSaidAfresh(t *testing.T) {
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 
 	harness.now = moment.Add(time.Hour)
+	harness.stalled(t, stalls, moment, 2, harness.now)
 	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindStallNoticed)
 
-	// The queue drains, so nothing is waiting on anybody any more. Nothing is
-	// said about that — what cleared it is not news — and the event closes with
-	// what accounted for it. It closes at the next due reading rather than the
-	// next poll, because only the tracker can say the queue drained and that is
-	// asked once a heartbeat.
-	harness.ready(0)
-	harness.now = harness.now.Add(DefaultHeartbeat + time.Minute)
-	cursors = harness.poll(t, cursors)
-	events, err := stalls.List()
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(events) != 1 || events[0].Open() {
-		t.Fatalf("List() = %+v, want the stall closed", events)
-	}
-	if !strings.Contains(events[0].Cleared, "nothing ready") {
-		t.Fatalf("Cleared = %q, want what cleared it recorded", events[0].Cleared)
-	}
+	// The checker closes it. Nothing is said about that.
+	harness.now = harness.now.Add(time.Hour)
+	harness.cleared(t, stalls, "1 developer run(s) are in flight and still moving", harness.now)
+	cursors = harness.quietPass(t, cursors)
 
-	// Work is admitted again and still nothing starts. That is a second stall
-	// rather than the first one said twice, so it is said afresh.
-	harness.ready(5)
+	// A second stall afterwards is a second thing to say.
 	harness.now = harness.now.Add(3 * time.Hour)
+	harness.stalled(t, stalls, harness.now.Add(-time.Hour), 5, harness.now)
 	harness.poll(t, cursors, notify.KindStallNoticed)
-	events, err = stalls.List()
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(events) != 2 || events[0].Open() || !events[1].Open() {
-		t.Fatalf("List() = %+v, want the first closed and a second standing", events)
-	}
-}
-
-// An idle product asks the tracker once a stall threshold and not once a poll.
-//
-// A drained queue is deliberately not one of the states that account for the
-// quiet — nothing but the tracker can say the queue is drained — so the check
-// that spends the read is true on every poll of a perfectly healthy idle
-// product. Without a second gate that is a `bd` process every fifteen seconds
-// forever, on the machine that is behaving best.
-//
-// The gate is the threshold rather than the heartbeat, which is what the
-// operator's bar cost: how promptly a stopped harness is noticed cannot be
-// shorter than how often this reading is taken, so an hourly read made a
-// ten-minute threshold mean an hour. Six an hour is the price of that, and it is
-// two orders of magnitude away from the unbounded case this guards.
-func TestAnIdleProductAsksTheTrackerOnceAThresholdRatherThanOnceAPoll(t *testing.T) {
-	t.Parallel()
-
-	harness := newTestHarness(t, time.Time{})
-	stalls := harness.watchesForStalls(t)
-	backlog := harness.tallies(0)
-	harness.watched(t, runstate.WatchIdle, "the backlog is empty", moment)
-
-	// Six hours of a healthy idle machine, at the sink's own fifteen-second poll.
-	harness.now = moment.Add(time.Hour)
-	cursors := harness.quietPass(t, harness.start())
-	for check := 0; check < 6*60*4; check++ {
-		harness.now = harness.now.Add(15 * time.Second)
-		cursors = harness.quietPass(t, cursors)
-	}
-
-	// One read a threshold over six hours, rather than one every fifteen seconds.
-	// The figure is reported either way, because what this guards against is a
-	// regression back towards the unbounded case — 1440 reads over this window —
-	// and the number is the only thing that says how far from it this is.
-	perHour := int(time.Hour / readmodel.DefaultStallThreshold)
-	t.Logf("the tracker was read %d time(s) over six idle hours, against 1440 polls", backlog.asked)
-	if backlog.asked > 6*perHour+1 {
-		t.Fatalf("the tracker was read %d time(s) over six idle hours, want about %d an hour",
-			backlog.asked, perHour)
-	}
-	// Never reading it is the opposite failure and is not a pass: a watchdog that
-	// asks nothing notices nothing.
-	if backlog.asked == 0 {
-		t.Fatal("the tracker was never read, so a stall could not have been noticed at all")
-	}
-	events, err := stalls.List()
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("List() = %+v, want nothing recorded for a drained queue", events)
-	}
-}
-
-// A run whose process is gone does not account for the quiet.
-//
-// This is the case the whole instrument exists for. A killed run leaves durable
-// state saying it is in flight until `yoyo reconcile` settles it, so reading
-// "in flight" as "working" would silence the watchdog for exactly the crash it
-// is watching for. What separates the two is the run's own record moving: a
-// working run stamps every provider event onto it, and a dead one stamps
-// nothing.
-func TestARunWhoseProcessIsGoneDoesNotSilenceTheWatchdog(t *testing.T) {
-	t.Parallel()
-
-	harness := newTestHarness(t, time.Time{})
-	stalls := harness.watchesForStalls(t)
-	harness.ready(3)
-	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
-	// A run in flight, whose record stops moving at `moment` because the process
-	// carrying it was killed. Nothing settles it and nothing rewrites it.
-	harness.record(t, harness.run(t, runstate.StatusRunning))
-
-	// While the record is still fresh the run accounts for the quiet, which is
-	// the behaviour a working run relies on.
-	harness.now = moment.Add(30 * time.Minute)
-	cursors := harness.quietPass(t, harness.start())
-	if _, open, err := stalls.Standing(); err != nil || open {
-		t.Fatalf("Standing() = %v %v, want a moving run to account for the quiet", open, err)
-	}
-
-	// Past the window the record has stopped saying anything about a live
-	// process, and the stall is noticed.
-	harness.now = moment.Add(readmodel.DefaultRunActivityWindow + time.Hour)
-	harness.poll(t, cursors, notify.KindStallNoticed)
-	standing, open, err := stalls.Standing()
-	if err != nil || !open {
-		t.Fatalf("Standing() = %v %v, want the stall recorded over a phantom run", open, err)
-	}
-	if !standing.Since.Equal(moment) {
-		t.Fatalf("the record says since %s, want %s — the moment the last run started", standing.Since, moment)
-	}
-}
-
-// A tracker that will not answer leaves this unable to tell a stalled machine
-// from a drained queue, and it must not guess in either direction: inventing
-// ready work wakes somebody for nothing, and assuming none is the silence this
-// exists to end.
-func TestATrackerThatCannotBeReadRecordsNoStall(t *testing.T) {
-	t.Parallel()
-
-	harness := newTestHarness(t, time.Time{})
-	stalls := harness.watchesForStalls(t)
-	harness.feed.Backlog = brokenBacklog{}
-	var said []string
-	harness.feed.Log = func(format string, args ...any) { said = append(said, format) }
-	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
-
-	harness.now = moment.Add(4 * time.Hour)
-	harness.poll(t, harness.start(), notify.KindWatchStarted)
-	events, err := stalls.List()
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("List() = %+v, want nothing recorded over a tracker nobody could read", events)
-	}
-	if len(said) == 0 {
-		t.Fatal("the sink said nothing about a tracker it could not read")
-	}
 }
 
 // The other window, replayed: 2026-09-05, 12:13Z to 13:43Z. The session was
 // alive and polling, nothing started because the provider would not serve any
-// more, and the alarm fired at half an hour saying nothing accounted for it —
-// when the pause was the whole of the accounting. What this asks for is the
-// opposite of the test above: the same silence, and no stall.
+// more, and there is no stall in the record because the pause was the whole of
+// the accounting. What this surface says is the cause, once, in the channel.
+//
+// The window is derived here rather than read from the record because the record
+// holds no window: it is precisely the case where there is nothing to record.
 func TestAProviderWindowIsSaidOnceAsANoteAndNeverAsAStall(t *testing.T) {
 	t.Parallel()
 
-	// The window as the session recorded it: entered at 12:13Z, lifting at 13:43Z.
 	opened := time.Date(2026, 9, 5, 12, 13, 0, 0, time.UTC)
 	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
 	harness := newTestHarness(t, time.Time{})
@@ -372,11 +162,11 @@ func TestAProviderWindowIsSaidOnceAsANoteAndNeverAsAStall(t *testing.T) {
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", opened.Add(-time.Hour))
 	harness.waitingOnProvider(t, "Paused on the provider's usage window until 13:43Z", opened, &lifts)
 
-	// Half an hour in — past the threshold that fired the alarm — and it is a note
-	// in the channel rather than a warning on somebody's phone.
+	// Half an hour in — past the threshold that fired the alarm on the day — and it
+	// is a note in the channel rather than a warning on somebody's phone.
 	harness.now = opened.Add(30 * time.Minute)
 	start := harness.start()
-	delivery := harness.stalled(t, start)
+	delivery := harness.stallDelivery(t, start)
 	if delivery.Notification.Event.Kind != notify.KindProviderWindow {
 		t.Fatalf("kind = %q, want the provider's window rather than a stall", delivery.Notification.Event.Kind)
 	}
@@ -391,8 +181,7 @@ func TestAProviderWindowIsSaidOnceAsANoteAndNeverAsAStall(t *testing.T) {
 		t.Fatalf("the provider's window could not be said: %v", err)
 	}
 	// The operator's own acceptance, stated as he stated it: the cause is the
-	// first words of the message, with the time the provider named. Today's page
-	// failed exactly this — the alarm led, and the cause was left to archaeology.
+	// first words of the message, with the time the provider named.
 	if !strings.HasPrefix(said.Body, "Paused on the provider's usage window until 13:43Z") {
 		t.Fatalf("body %q does not open with the cause and the reset time", said.Body)
 	}
@@ -403,17 +192,13 @@ func TestAProviderWindowIsSaidOnceAsANoteAndNeverAsAStall(t *testing.T) {
 	// is where the same words are said as the session's rather than the sink's.
 	cursors := harness.poll(t, start, notify.KindWatchStarted, notify.KindWatchIdle, notify.KindProviderWindow)
 
-	// And then the ninety minutes, at the sink's own fifteen-second poll. Nothing
-	// is recorded as a stall and the note is not said twice.
+	// And then the ninety minutes, at the sink's own fifteen-second poll. The note
+	// is not said twice and nothing is recorded.
 	for harness.now.Add(5 * time.Minute).Before(lifts) {
 		harness.now = harness.now.Add(5 * time.Minute)
 		cursors = harness.quietPass(t, cursors)
 	}
-	events, err := stalls.List()
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(events) != 0 {
+	if events := harness.stallsRecorded(t, stalls); len(events) != 0 {
 		t.Fatalf("List() = %+v, want nothing recorded: the pause was the accounting", events)
 	}
 }
@@ -445,101 +230,32 @@ func TestTheHeartbeatLeavesTheProvidersWindowToTheMessageThatLeadsWithIt(t *test
 	}
 }
 
-// A window the session recorded and then never came out of is not an account of
-// anything. The record is the last word of a session that has said nothing
-// since, which is exactly the shape of a session that died — so past the
-// deadline it accounts for nothing and the watchdog says what it always said.
-func TestAWindowThatHasLiftedStopsAccountingForTheQuiet(t *testing.T) {
+// The stall record is read here and never written, which is the whole of what
+// yoyodyne-ifd.295 changed about this surface. A sink that went on producing it
+// would leave every product reporting nowhere with no history at all, because
+// Slack reporting is optional and this process may never be started.
+func TestTheSinkNeverWritesToTheStallRecord(t *testing.T) {
 	t.Parallel()
-
-	opened := time.Date(2026, 9, 5, 12, 13, 0, 0, time.UTC)
-	lifts := time.Date(2026, 9, 5, 13, 43, 0, 0, time.UTC)
-	harness := newTestHarness(t, time.Time{})
-	stalls := harness.watchesForStalls(t)
-	harness.ready(3)
-	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", opened.Add(-time.Hour))
-	harness.waitingOnProvider(t, "Paused on the provider's usage window until 13:43Z", opened, &lifts)
-
-	harness.now = lifts.Add(-time.Minute)
-	cursors := harness.poll(t, harness.start(),
-		notify.KindWatchStarted, notify.KindWatchIdle, notify.KindProviderWindow)
-
-	// The window lifted and the session went on saying nothing. That is a stall.
-	harness.now = lifts.Add(readmodel.DefaultStallThreshold + time.Minute)
-	harness.poll(t, cursors, notify.KindStallNoticed)
-	if _, open, err := stalls.Standing(); err != nil || !open {
-		t.Fatalf("Standing() = %v %v, want a stall once the window it was waiting on has lifted", open, err)
-	}
-}
-
-// How long the harness may be stopped before somebody is told is one number, and
-// it is the operator's.
-//
-// It was two before this, and only one of them was settable: the threshold said
-// how long a gap had to be to count, and the tracker read that decides it was
-// taken once an hour. So a threshold of half an hour meant up to ninety minutes
-// from the harness stopping to somebody hearing about it, which is what the
-// operator was actually complaining about on 2026-09-05 when he was paged an
-// hour late and said the bar is minutes rather than an hour.
-func TestHowLongTheHarnessMayBeStoppedIsOneSettableNumber(t *testing.T) {
-	t.Parallel()
-
-	// The default is the bar he set: minutes, and well inside an hour.
-	if readmodel.DefaultStallThreshold >= time.Hour {
-		t.Fatalf("the default threshold is %s, want well below an hour", readmodel.DefaultStallThreshold)
-	}
 
 	harness := newTestHarness(t, time.Time{})
 	stalls := harness.watchesForStalls(t)
-	harness.ready(3)
-	// A machine whose operator wants to hear sooner than the default, which is the
-	// half of this that no flag reached before.
-	harness.feed.StallThreshold = 3 * time.Minute
+	// Everything a stall is made of: ready work, a session whose last word was
+	// that it was watching, and hours of nothing since.
+	harness.ready(5)
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 
-	// Two minutes in, this is a gap between runs.
-	harness.now = moment.Add(2 * time.Minute)
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
-	if _, open, err := stalls.Standing(); err != nil || open {
-		t.Fatalf("Standing() = %v %v, want nothing recorded inside the operator's threshold", open, err)
-	}
-
-	// Four minutes in, it is a stall — at the next fifteen-second poll rather than
-	// at the next hour, because a machine that had been starting runs has spent no
-	// tracker read in hours and the first pass past the threshold asks.
-	harness.now = moment.Add(3*time.Minute + 15*time.Second)
-	delivery := harness.stalled(t, cursors)
-	if delivery.Notification.Event.Kind != notify.KindStallNoticed {
-		t.Fatalf("kind = %q, want the stall said at the operator's threshold", delivery.Notification.Event.Kind)
-	}
-	if !delivery.Direct {
-		t.Fatal("the stall was posted to the channel alone, want the operators told directly")
+	harness.now = moment.Add(9 * time.Hour)
+	cursors := harness.quietPass(t, harness.start())
+	harness.now = harness.now.Add(9 * time.Hour)
+	harness.quietPass(t, cursors)
+	if events := harness.stallsRecorded(t, stalls); len(events) != 0 {
+		t.Fatalf("List() = %+v, want a surface that records nothing", events)
 	}
 }
 
 // watchesForStalls gives the feed the product's own stall record, which is what
-// every sink the harness builds is given, and hands it back so a test can read
-// what was actually written down.
-// tallyBacklog answers what is ready and counts how often it was asked, which is
-// the whole of what the cost rule is about: `bd` is a process the sink spawns,
-// and the number of times it spawns one is the thing under test.
-type tallyBacklog struct {
-	count int
-	asked int
-}
-
-func (b *tallyBacklog) Ready(context.Context) (int, error) {
-	b.asked++
-	return b.count, nil
-}
-
-// tallies gives the feed a backlog that counts the reads made of it.
-func (h *testHarness) tallies(count int) *tallyBacklog {
-	backlog := &tallyBacklog{count: count}
-	h.feed.Backlog = backlog
-	return backlog
-}
-
+// every sink the harness builds is given, and hands it back so a test can put a
+// stall in it and read what was there afterwards.
 func (h *testHarness) watchesForStalls(t *testing.T) *runstate.StallStore {
 	t.Helper()
 	stalls, err := runstate.NewStallStore(h.root, "yoyodyne")
@@ -548,6 +264,39 @@ func (h *testHarness) watchesForStalls(t *testing.T) *runstate.StallStore {
 	}
 	h.feed.Stalls = stalls
 	return stalls
+}
+
+// stalled opens a stall in the record the way the checker does, which is the
+// only way one is opened at all.
+func (h *testHarness) stalled(t *testing.T, stalls *runstate.StallStore, since time.Time, ready int, at time.Time) {
+	t.Helper()
+	if _, err := stalls.Reconcile(runstate.StallObservation{
+		Stalled: true,
+		Since:   since,
+		Ready:   ready,
+		Chooser: "the session choosing work last recorded watching at " +
+			since.UTC().Format(time.RFC3339) + ", and has said nothing since",
+		At: at,
+	}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+}
+
+// cleared closes the standing stall, saying what accounted for it.
+func (h *testHarness) cleared(t *testing.T, stalls *runstate.StallStore, explains string, at time.Time) {
+	t.Helper()
+	if _, err := stalls.Reconcile(runstate.StallObservation{Explains: explains, At: at}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+}
+
+func (h *testHarness) stallsRecorded(t *testing.T, stalls *runstate.StallStore) []runstate.StallEvent {
+	t.Helper()
+	events, err := stalls.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	return events
 }
 
 // quietPass makes one pass, allows it to say whatever else the records call for,
@@ -565,16 +314,16 @@ func (h *testHarness) quietPass(t *testing.T, cursors Cursors) Cursors {
 	for _, delivery := range batch.Deliveries {
 		advanced.Streams[delivery.Stream] = delivery.Cursor
 		if !delivery.Silent() && delivery.Notification.Event.Kind == notify.KindStallNoticed {
-			t.Fatal("this product was said to have gone quiet, want something else accounting for it")
+			t.Fatal("this product was said to have gone quiet, want nothing said about it")
 		}
 	}
 	return advanced
 }
 
-// stalled makes one pass and returns the delivery the stall stream produced,
-// which is where a test reads the parts a rendered message does not carry:
-// whether the operators were told directly at all.
-func (h *testHarness) stalled(t *testing.T, cursors Cursors) Delivery {
+// stallDelivery makes one pass and returns the delivery the stall stream
+// produced, which is where a test reads the parts a rendered message does not
+// carry: whether the operators were told directly at all.
+func (h *testHarness) stallDelivery(t *testing.T, cursors Cursors) Delivery {
 	t.Helper()
 	batch, err := h.feed.Poll(context.Background(), cursors)
 	if err != nil {

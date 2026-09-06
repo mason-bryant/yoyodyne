@@ -701,9 +701,28 @@ The one thing the sweep costs is `/continue` on a stoppage past the tail, which
 needs the checkout it was going to hand back. The branch is still there and so is
 the preserved work, so replanning or re-running the item is not affected.
 
+The last thing the sweep does is read whether anything is happening at all. When
+nothing has started for `--stall-after` — ten minutes by default — the tracker
+reports work ready, and no hold, no still-moving run and no provider usage window
+accounts for it, that is recorded against the product as a stall and said here:
+
+```
+nothing has started on this product for 2h14m0s, with 3 item(s) ready
+  the session choosing work last recorded watching at 2026-09-01T06:05:00Z, and has said nothing since
+```
+
+The second line is the one to act on: a session whose last word was `stopped`
+wants starting, and one still claiming to be `watching` wants killing first. A
+machine that is behaving says nothing here at all. Where the record goes and why
+this is the sweep that writes it is
+[when nothing happened at all](#when-nothing-happened-at-all); what it costs is
+one tracker read per sweep, and only on a sweep where nothing else already
+accounts for the quiet.
+
 Repeating the whole thing is safe — a settled run is no longer outstanding, a
-branch already level with the remote has nothing to catch up to, and cleanup
-over artifacts that are already gone does nothing. A run another process still holds
+branch already level with the remote has nothing to catch up to, cleanup over
+artifacts that are already gone does nothing, and a stall already standing is not
+recorded twice. A run another process still holds
 is left to that process, and a run `yoyo run` can continue on its own — one
 inside its repair loop, one paused for a provider usage limit, one whose
 provider the harness stopped on time, one paused for an [unresolved
@@ -929,12 +948,27 @@ This is the one history in the harness that nothing else keeps, and the reason i
 exists is that the process which would have recorded a stall is the process a
 stall means has died. A session that crashes writes no stop, so every other
 surface reads a dead machine as a quiet one — which is exactly what happened on
-2026-09-01, for seven and a half hours, until a person noticed. What notices now
-is the Slack sink's own loop, which outlives the scheduler; it records the stall
-and
-[sends it as a direct message once](reporting.md#reporting-into-slack),
-never once per check. A product with no sink running records nothing, so this
-listing is empty on one.
+2026-09-01, for seven and a half hours, until a person noticed.
+
+**What notices is [`yoyo reconcile`](#recovering-interrupted-runs)**, as the last
+step of the same sweep that settles the runs a dead process left behind — which
+is why it is that sweep and not another: a killed run goes on saying it is in
+flight until the settling, and a phantom run counted as activity would silence
+this for exactly the crash it exists to catch. Reporting has nothing to do with
+it. A product that never turned Slack on records its stalls and reads them back
+here, and a product that did gets the same record
+[taken to the operators once](reporting.md#reporting-into-slack) by a sink that
+reads it rather than produces it. That was the other way round until
+`yoyodyne-ifd.295`, and it meant the products least able to notice a stopped
+harness were the ones with no stall history at all.
+
+How promptly a stall is noticed is `--stall-after` — ten minutes by default — and
+the cadence of whatever runs the sweep, so an unattended pass should run it at
+least as often as the threshold it sets. Nothing `yoyo` installs runs anything on
+a schedule yet: the productized maintenance job is `yoyodyne-ifd.207`, and until
+it lands the schedule is yours, exactly as
+[`yoyo slack ensure`](#checking-the-installation)'s is. A product nothing ever
+sweeps records nothing, so this listing is empty on one.
 
 A product that has never gone quiet says nothing here at all. The five most
 recent stalls are printed, newest first, and `--json` carries every one of them

@@ -678,42 +678,50 @@ transient tracker read at 06:05 and wrote nothing further: no stop, no idle poll
 no run, no hold. For seven and a half hours every surface here was correct and
 silent, and the operator found it by noticing.
 
-So the sink also reads the absence. When nothing has started for ten minutes,
-the tracker reports work ready, and no hold, no full machine, no still-moving run
-and no provider usage window accounts for it, that is a stall: it is recorded
-durably against the product, and
-each one is sent as a direct message to every person the project granted
-direct-work, exactly once. What it says is how long nothing has happened, how
-much was waiting, the four lines, and — the fact that decides what to do about it
-— what the thing that chooses work last said before it went silent, because a
-session whose last word was `stopped` wants starting and one still claiming to be
-watching wants killing first.
+So something reads the absence. When nothing has started for ten minutes, the
+tracker reports work ready, and no hold, no full machine, no still-moving run and
+no provider usage window accounts for it, that is a stall: it is recorded durably
+against the product, and each one is sent as a direct message to every person the
+project granted direct-work, exactly once. What it says is how long nothing has
+happened, how much was waiting, the four lines, and — the fact that decides what
+to do about it — what the thing that chooses work last said before it went
+silent, because a session whose last word was `stopped` wants starting and one
+still claiming to be watching wants killing first.
 
-**Ten minutes is a default and `--stall-after` is where it is changed.** It used
-to be half an hour, and half an hour was not what it cost: the tracker read this
-turns on was taken once an hour, so the number an operator could set was not the
-number that decided when they were told, and a harness that stopped could be
-quiet for ninety minutes before anybody heard. That is what happened on
-2026-09-05, and what the operator said about it is that his bar is minutes rather
-than an hour. So the threshold is now the whole of it — it is how long a gap has
-to be *and* how often the reading is taken — and one figure moves both. A page
-arrives within twice it at the very worst, and in the ordinary case within the
-threshold and one fifteen-second poll, because a machine that has been starting
-runs has spent no tracker read in hours and the first pass past the threshold
-asks immediately. Every legitimate reason for a quiet line is named and read
-first, which is what makes a margin measured in minutes safe: the two switches, a
-run in flight and still moving, a product nobody watches, and the provider's own
-usage window.
+**The sink says it and does not notice it.** What notices is
+[`yoyo reconcile`](operations.md#recovering-interrupted-runs), the sweep an
+unattended pass already runs, and the threshold is
+`yoyo reconcile --stall-after`. That division is `yoyodyne-ifd.295` and it exists
+because everything on this page is opt-in: reporting is an observation and never
+a gate, so while the sink was the only thing taking this reading, a product that
+never started one recorded no stalls at all and its
+[`yoyo status` history](operations.md#when-nothing-happened-at-all) was
+permanently empty — the instrument that exists so silence is impossible, absent
+for exactly the installations least able to notice. `yoyo slack --stall-after`
+is still accepted so a launcher passing it starts a sink, and it decides nothing;
+the sink says so on startup when it is given one.
+
+**Ten minutes is a default.** It used to be half an hour, and half an hour was
+not what it cost: the tracker read this turns on was taken once an hour, so the
+number an operator could set was not the number that decided when they were told,
+and a harness that stopped could be quiet for ninety minutes before anybody
+heard. That is what happened on 2026-09-05, and what the operator said about it
+is that his bar is minutes rather than an hour. What decides the latency now is
+that number and how often the sweep runs, which is one more reason the two want
+setting together: a sweep run every half hour makes a ten-minute threshold mean
+half an hour. Every legitimate reason for a quiet line is named and read first,
+which is what makes a margin measured in minutes safe: the two switches, a run in
+flight and still moving, a product nobody watches, and the provider's own usage
+window.
 
 **It is deliberately not a model-based watcher, and nothing on this path may
 become one.** Every watcher the harness has that asks a model something — the
 development manager's sweep, any role turn — pauses with the provider's usage
 window, so a watchdog built on one goes to sleep at exactly the moment the thing
-it watches goes quiet. This is plain Go reading durable files, in the process
-that outlives the scheduler, and it makes no provider call directly or
-transitively. The other half of that boundary is that noticing is all it does:
-restarting whatever died belongs to the session's own exit and to the supervisor
-that starts it, not to the surface that happened to still be awake.
+it watches goes quiet. Both halves are plain Go reading durable files, and
+neither makes a provider call directly or transitively. The other half of that
+boundary is that noticing is all either of them does: restarting whatever died
+belongs to the session's own exit and to the supervisor that starts it.
 
 A run in flight quiets it only while that run is still moving, which is what
 keeps a killed one from silencing it: a run whose process is gone leaves a record
@@ -752,14 +760,13 @@ It is said once per stall rather than repeated while it stands, which is the
 opposite of the waiting line above and deliberate: an hourly repetition is right
 for a state somebody may have to sit with and wrong for one that is either acted
 on or is not. Saying it once is a property of the record rather than of the sink,
-so a checker running every fifteen seconds says nothing on the second check and a
-restarted sink says nothing about a stall that was already open. The tracker
-behind it is asked once a threshold rather than once a poll — six times an hour
-at the default, against the four times a minute an ungated reading would cost —
-and the waiting line above keeps its own hourly read; what the interval buys back
-is that an idle product spawns no `bd` storm. When it clears
-the record closes, saying what accounted for it, and the channel hears nothing —
-what cleared it said so itself, as the run that started. The whole history is
+so a sweep run every few minutes opens nothing on the second pass and a restarted
+sink says nothing about a stall that was already open. The tracker behind it is
+asked once a sweep, and only on a sweep where nothing else already accounts for
+the quiet, so an idle product spawns no `bd` storm; the waiting line above keeps
+its own hourly read and this surface now spends none of its own on stalls. When
+it clears the record closes, saying what accounted for it, and the channel hears
+nothing — what cleared it said so itself, as the run that started. The whole history is
 read back afterwards by
 [`yoyo status`](operations.md#when-nothing-happened-at-all), which is the only
 place it exists: a stall leaves no other trace, because the process that would
