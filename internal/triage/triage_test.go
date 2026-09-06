@@ -537,3 +537,152 @@ func TestAnEntryIsRefusedWhenItsFailureExceedsTheBound(t *testing.T) {
 		t.Fatalf("Validate() error = %v, want the failure refused for its length", err)
 	}
 }
+
+func unreadyEntry() Entry {
+	read := time.Date(2026, 9, 6, 9, 0, 0, 0, time.UTC)
+	prerequisites := []Prerequisite{{
+		Kind:     "forbidden-by-ruling",
+		Missing:  `it says of itself: "Blocked until the architect's answer exists"`,
+		Evidence: "the sentence is in the item's own statement, and nothing in the tracker records it as a dependency",
+		Decides:  "the product manager, or the development manager who records the dependency",
+	}}
+	return Entry{
+		SchemaVersion: SchemaVersion,
+		Key:           UnreadyKey("yoyodyne-ifd.100.1", []string{"forbidden-by-ruling"}),
+		Class:         ClassUnreadyItem,
+		ProductID:     "yoyodyne",
+		WorkItemID:    "yoyodyne-ifd.100.1",
+		WorkItemTitle: "Commit and publish an approved artifact write",
+		RecordedAt:    read,
+		Unready:       &Unready{Prerequisites: prerequisites, ReadAt: read},
+		Counters:      Counters{ReviewRounds: 0, ReviewRoundsCap: 4, RepairGrantAttempts: 2},
+	}
+}
+
+// The one entry on this docket with no run behind it. It is valid without one
+// precisely because nothing ran: an entry that had to name a run could only be
+// written by the run this exists to save.
+func TestAnUnreadyItemEntryNamesNoRun(t *testing.T) {
+	t.Parallel()
+
+	entry := unreadyEntry()
+
+	if err := entry.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want an entry about work that never started to be valid", err)
+	}
+	withRun := unreadyEntry()
+	withRun.RunID = "run-0123456789abcdef0123456789abcdef"
+	if err := withRun.Validate(); err == nil || !strings.Contains(err.Error(), "names no run") {
+		t.Fatalf("Validate() error = %v, want an unready entry carrying a run to be refused", err)
+	}
+}
+
+// The evidence that makes the class the thing it claims to be. An entry that
+// cannot say what the item asks for is one nobody can act on.
+func TestAnUnreadyItemEntryIsRefusedWithoutItsPrerequisites(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name  string
+		entry func() Entry
+		want  string
+	}{
+		{
+			name:  "nothing recorded at all",
+			entry: func() Entry { entry := unreadyEntry(); entry.Unready = nil; return entry },
+			want:  "carries the prerequisites",
+		},
+		{
+			name: "an empty list",
+			entry: func() Entry {
+				entry := unreadyEntry()
+				entry.Unready = &Unready{ReadAt: entry.RecordedAt}
+				return entry
+			},
+			want: "names at least one unmet prerequisite",
+		},
+		{
+			name: "a prerequisite that does not say what is missing",
+			entry: func() Entry {
+				entry := unreadyEntry()
+				entry.Unready.Prerequisites[0].Missing = ""
+				return entry
+			},
+			want: "what is missing is required",
+		},
+		{
+			name: "no reading time, so the entry reads as a standing fact",
+			entry: func() Entry {
+				entry := unreadyEntry()
+				entry.Unready.ReadAt = time.Time{}
+				return entry
+			},
+			want: "read_at is required",
+		},
+		{
+			name:  "evidence that belongs to a run",
+			entry: func() Entry { entry := unreadyEntry(); entry.Blocker = "something stopped"; return entry },
+			want:  "work that never started",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := test.entry().Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, test.want)
+			}
+		})
+	}
+}
+
+// The key is the item and what was found about it, so a session that meets the
+// same unready item at every poll dockets it once — and one that later finds a
+// different kind of prerequisite unmet dockets that as the separate finding it
+// is. The kinds are sorted so that the order they were read in decides nothing.
+func TestAnUnreadyItemIsKeyedByTheItemAndWhatWasFound(t *testing.T) {
+	t.Parallel()
+
+	first := UnreadyKey("yoyodyne-ifd.100.1", []string{"stale-pinpoint", "forbidden-by-ruling"})
+	again := UnreadyKey("yoyodyne-ifd.100.1", []string{"forbidden-by-ruling", "stale-pinpoint"})
+	if first != again {
+		t.Fatalf("keys = %q and %q, want the order they were read in to decide nothing", first, again)
+	}
+	if other := UnreadyKey("yoyodyne-ifd.100.1", []string{"stale-pinpoint"}); other == first {
+		t.Fatalf("key = %q, want a different finding about one item to be a different entry", other)
+	}
+	if !strings.Contains(first, "yoyodyne-ifd.100.1") || len(first) > MaxKeyBytes {
+		t.Fatalf("key = %q, want it to name the item and stay inside the bound", first)
+	}
+	// A key that does not derive from what the entry describes would make two
+	// records of one finding, which is what the derivation exists to prevent.
+	entry := unreadyEntry()
+	entry.Key = "unready_item:yoyodyne-ifd.100.1:something-else"
+	if err := entry.Validate(); err == nil || !strings.Contains(err.Error(), "does not name") {
+		t.Fatalf("Validate() error = %v, want a key that does not derive from the entry to be refused", err)
+	}
+}
+
+// What a development manager reads. The run is not named, because there is none
+// and an empty pair of brackets reads as a run whose identifier nobody recorded;
+// and the reading is dated, because this is the one entry whose subject can go
+// out of date without anybody touching the item.
+func TestAnUnreadyItemRendersAsWorkThatNeverStarted(t *testing.T) {
+	t.Parallel()
+
+	rendered := unreadyEntry().Render()
+
+	for _, required := range []string{
+		"item the tree is not ready for",
+		"nothing ran",
+		"the tree was read at 2026-09-06T09:00:00Z",
+		"Unmet [forbidden-by-ruling]",
+		"Blocked until the architect's answer exists",
+		"Who releases it",
+		"the development manager who records the dependency",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, required)
+		}
+	}
+}

@@ -1130,7 +1130,7 @@ func TestAssembleProductCarriesTheTriageDocket(t *testing.T) {
 	}
 	for _, required := range []string{
 		"## Triage docket",
-		"An entry states that something stopped.",
+		"An entry states that something stopped or never started.",
 		"[stopped run] 2026-08-19T12:00:00Z on yoyodyne-task",
 		"Blocker: Yoyodyne stopped this item: the repair budget was spent.",
 		"Finding [blocker] (feature.txt:1): add the missing file",

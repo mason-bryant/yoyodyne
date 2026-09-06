@@ -1786,7 +1786,7 @@ happens at a time, and a change whose target moved while it was being reviewed i
 replayed onto where the target went and promoted by fast-forward, or blocked if
 it will not replay. Nothing is ever forced.
 
-Six things keep an item out of a pass, reported at two different grains. Three are
+Seven things keep an item out of a pass, reported at two different grains. Four are
 named against the item, because nothing else would report that this item was
 passed over. An unresolved directive is named with the directive's own words: it
 needs a person. An item whose unfinished children already carry its execution is
@@ -1806,7 +1806,13 @@ by naming them after `conflict-surface:` on a line of its own, in its title,
 description, design guidance, or acceptance criteria; an item that declares
 nothing has those same fields read for the files it plainly names, and that
 inference takes only a path with a separator and an extension on the end, because
-a surface invented out of prose would hold unrelated work back. The tracker not
+a surface invented out of prose would hold unrelated work back. And an item the
+tree is not ready for — one that pinpoints a `file:line` or a package-qualified
+symbol the repository no longer has, or that says in its own authored words that
+something must land before it starts — is named with the unmet prerequisite and
+routed to the [triage docket](#triage-thresholds) rather than
+to a run; [how work flows](work.md#letting-the-harness-choose-the-work) says what
+the two readings are and who releases each. The tracker not
 reporting an item as ready, a run for it
 already being in flight anywhere, and there being no free slot are facts about
 the pass rather than about any one item, so the pass reports them as such — the
@@ -2791,7 +2797,9 @@ triage:
 ```
 
 **These are read by the triage docket**, which is where work that has stopped
-moving is collected and delivered to the development manager: `stuck_merge_age`
+moving — and work that never started, because the tree does not meet a
+prerequisite the item states — is collected and delivered to the development
+manager: `stuck_merge_age`
 decides when an unmerged publication is docketed, and the item's budgets —
 rounds spent, repair grants, re-runs, merge re-arms — are carried on every
 entry so a decision about one is made against what the item is allowed to

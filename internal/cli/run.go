@@ -431,6 +431,9 @@ func docketerFrom(parts components) *orchestrator.Docketer {
 		// decision about it are one set of numbers.
 		Caps:   orchestrator.TriageCaps(parts.config.Execution, parts.config.Triage),
 		Triage: parts.config.Triage,
+		// Which product an entry belongs to, for the one entry that is not made
+		// from a run record and so has no run to read it off.
+		ProductID: parts.config.Product.ID,
 	}
 }
 

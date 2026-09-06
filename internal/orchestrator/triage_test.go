@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -1288,5 +1289,86 @@ func TestASweepThatCannotDocketStillSettlesTheRun(t *testing.T) {
 	}
 	if settled.Blocker == "" {
 		t.Fatalf("settled run = %#v, want the blocker recorded on it", settled)
+	}
+}
+
+// The entry made about work that never started. It is the whole of what the
+// development manager gets — there is no branch to look at, no reviewer's words,
+// and no failing check — so what it must carry is what the item asks for, the
+// read that says the tree does not have it, and who releases it.
+func TestAnUnreadyItemIsDocketedWithWhatIsMissingAndWhoDecides(t *testing.T) {
+	t.Parallel()
+
+	docket := &memoryDocket{}
+	docketer := docketerDeciding(nil, docket, &recordedDecisions{}, &recordedDecisions{})
+	docketer.ProductID = "yoyodyne"
+	item := beads.WorkItem{
+		ID:    "yoyodyne-ifd.100.1",
+		Title: "Commit and publish an approved artifact write",
+	}
+	unmet := []readiness.Unmet{{
+		Kind:     readiness.KindForbiddenByRuling,
+		Missing:  `it says of itself: "Blocked until the architect's answer exists"`,
+		Evidence: "the sentence is in the item's own statement",
+		Decides:  "the product manager, or the development manager who records the dependency",
+	}}
+
+	created, err := docketer.RecordUnreadyItem(item, unmet)
+	if err != nil {
+		t.Fatalf("RecordUnreadyItem() error = %v", err)
+	}
+	if !created {
+		t.Fatal("RecordUnreadyItem() created nothing, want the finding docketed")
+	}
+	entry := docket.entries[0]
+	if entry.Class != triage.ClassUnreadyItem || entry.RunID != "" {
+		t.Fatalf("entry = %+v, want an unready item with no run behind it", entry)
+	}
+	if entry.WorkItemTitle != item.Title || entry.ProductID != "yoyodyne" {
+		t.Fatalf("entry = %+v, want the item and its product named", entry)
+	}
+	if entry.Unready == nil || len(entry.Unready.Prerequisites) != 1 {
+		t.Fatalf("entry.Unready = %+v, want the one unmet prerequisite carried", entry.Unready)
+	}
+	carried := entry.Unready.Prerequisites[0]
+	if carried.Kind != string(readiness.KindForbiddenByRuling) || carried.Missing != unmet[0].Missing ||
+		carried.Evidence != unmet[0].Evidence || carried.Decides != unmet[0].Decides {
+		t.Fatalf("prerequisite = %+v, want the reading carried whole", carried)
+	}
+	// The budgets travel with it for the reason they travel with every entry: what
+	// may still be decided about this item is the same question whether it stopped
+	// or never started.
+	if entry.Counters.ReviewRoundsCap != docketedTriage.ReviewRoundsCap {
+		t.Fatalf("counters = %+v, want the configured ceilings beside the finding", entry.Counters)
+	}
+
+	// A watching session meets the same unready item at every poll. It is one
+	// finding, so it is one entry.
+	createdAgain, err := docketer.RecordUnreadyItem(item, unmet)
+	if err != nil {
+		t.Fatalf("RecordUnreadyItem() error = %v", err)
+	}
+	if createdAgain || len(docket.entries) != 1 {
+		t.Fatalf("docket = %v, want the same finding docketed once", docket.keys())
+	}
+}
+
+// An item that meets everything it states dockets nothing and is not an error,
+// which is nearly every item.
+func TestAnItemWithNothingUnmetIsNotDocketed(t *testing.T) {
+	t.Parallel()
+
+	docket := &memoryDocket{}
+	docketer := docketerDeciding(nil, docket, &recordedDecisions{}, &recordedDecisions{})
+
+	created, err := docketer.RecordUnreadyItem(beads.WorkItem{ID: "yoyodyne-ifd.304"}, nil)
+	if err != nil {
+		t.Fatalf("RecordUnreadyItem() error = %v", err)
+	}
+	if created || len(docket.entries) != 0 {
+		t.Fatalf("docket = %v, want nothing said about a ready item", docket.keys())
+	}
+	if _, err := (Docketer{}).RecordUnreadyItem(beads.WorkItem{ID: "x"}, []readiness.Unmet{{Kind: "k", Missing: "m"}}); err == nil {
+		t.Fatal("RecordUnreadyItem() routed a finding with no docket wired")
 	}
 }
