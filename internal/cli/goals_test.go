@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -959,5 +960,93 @@ An introduction.
 	}
 	if len(decoded.LinkProblems) != 2 {
 		t.Fatalf("link_problems = %+v, want the unstated and dangling goals reported", decoded.LinkProblems)
+	}
+}
+
+// The two states no build reddens over are the two this listing has to carry, so
+// the check that moved here is exercised rather than assumed: a goal hard-wrapped
+// across lines and a goal naming a brief claim the brief does not state are each
+// reported by `yoyo goals list`, on stderr with a place to open and in `--json`
+// under their own field, and neither of them stops the command.
+func TestTheListReportsAWrappedGoalAndADanglingBriefLinkWithoutRefusing(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil)+`
+# Product brief
+
+An introduction.
+
+## Goals
+
+- **Intent in, software out** — the harness carries approved intent to merged code.
+`)
+	goalsPath := "docs/product/goals/v1-goals.md"
+	writeArtifact(t, project, goalsPath, artifactDocument("v1-goals", "goals", "V1 goals", []string{"brief"})+`
+# V1 goals
+
+An introduction.
+
+## Goals
+
+- Run development nearly autonomously. The human's routine interface is the
+  product manager, who states intent and answers what is escalated.
+  *Supports: intent in, software out.*
+- Publish work as pull requests the harness opens.
+  *Supports: a claim the brief does not state.*
+`)
+
+	stdout, stderr, code := runCLI(t, "goals", "list", "--config", configPath)
+	// Neither state refuses: the goal is stated and work naming it still
+	// resolves, which is why these are read on stderr rather than failed on.
+	if code != 0 {
+		t.Fatalf("list code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "Run development nearly autonomously.") {
+		t.Fatalf("list stdout = %q, want the wrapped goal still listed as a goal work can name", stdout)
+	}
+	for _, want := range []string{
+		"goal not written on one line: " + goalsPath + ":",
+		"goal not linked to the brief:",
+		"a claim the brief does not state",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("list stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+
+	jsonStdout, jsonStderr, jsonCode := runCLI(t, "goals", "list", "--json", "--config", configPath)
+	if jsonCode != 0 {
+		t.Fatalf("json list code = %d, stderr = %q", jsonCode, jsonStderr)
+	}
+	// Decoded by field name, because what a program reads is the operator-facing
+	// contract rather than whatever shape this package happens to marshal.
+	var decoded struct {
+		WrapProblems []goal.WrapProblem `json:"wrap_problems"`
+		LinkProblems []goal.LinkProblem `json:"link_problems"`
+	}
+	if err := json.Unmarshal([]byte(jsonStdout), &decoded); err != nil {
+		t.Fatalf("decode json listing: %v", err)
+	}
+	if len(decoded.WrapProblems) != 1 || len(decoded.LinkProblems) != 1 {
+		t.Fatalf("wrap_problems = %+v and link_problems = %+v, want one of each", decoded.WrapProblems, decoded.LinkProblems)
+	}
+	if kind := decoded.LinkProblems[0].Kind; kind != goal.LinkDangling {
+		t.Fatalf("link problem kind = %q, want %q", kind, goal.LinkDangling)
+	}
+	// The line is a place to open rather than a number: it names the physical
+	// line the wrapped entry starts on, counted from the top of the file.
+	wrapped := decoded.WrapProblems[0]
+	content, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(goalsPath)))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	lines := strings.Split(string(content), "\n")
+	if wrapped.Line < 1 || wrapped.Line > len(lines) {
+		t.Fatalf("wrap problem = %#v, want a line in a file of %d lines", wrapped, len(lines))
+	}
+	if got := lines[wrapped.Line-1]; !strings.HasPrefix(got, "- Run development nearly autonomously.") {
+		t.Fatalf("line %d is %q, want the entry the wrapped goal opens on", wrapped.Line, got)
 	}
 }
