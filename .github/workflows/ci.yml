@@ -75,6 +75,14 @@ jobs:
   adoption:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      # The tracker version this job installs, written once and used by every
+      # step below that needs it. The pin belongs to this repository rather than
+      # to the upstream: nothing here follows somebody else's release schedule,
+      # and the version moves when a person edits this line and nothing else.
+      # docs/developing-yoyo.md#the-tracker-version-ci-pins is who owns it and
+      # how to move it.
+      BD_VERSION: 1.2.2
     steps:
       - uses: actions/checkout@v7
 
@@ -93,13 +101,58 @@ jobs:
       # module path its own tags disagree about, and a C++ ICU toolchain — all
       # of which broke every PR here on 2026-09-05 when @latest moved. A pinned
       # binary has none of those moving parts; bump the version deliberately.
+      #
+      # Every failure here names the pin rather than the walkthrough, because a
+      # bump gone wrong is what this step exists to catch: a release that is not
+      # there to download, an archive with no binary in it, and a binary that
+      # reports some version other than the one asked for.
       - name: Install the tracker the walkthrough needs
         run: |
-          curl -fsSL -o /tmp/beads.tar.gz https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz
+          set -euo pipefail
+          release="https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz"
+          if ! curl -fsSL -o /tmp/beads.tar.gz "$release"; then
+            echo "::error::The pinned tracker v${BD_VERSION} did not download from ${release}. What is wrong is BD_VERSION in this workflow, not the adoption walkthrough: see docs/developing-yoyo.md#the-tracker-version-ci-pins" >&2
+            exit 1
+          fi
           tar -xzf /tmp/beads.tar.gz -C /tmp
           BD=$(find /tmp -maxdepth 2 -name bd -type f | head -1)
+          if [ -z "$BD" ]; then
+            echo "::error::The archive for the pinned tracker v${BD_VERSION} carries no bd binary where this expects one. What is wrong is BD_VERSION in this workflow, not the adoption walkthrough: see docs/developing-yoyo.md#the-tracker-version-ci-pins" >&2
+            exit 1
+          fi
           install -m 0755 "$BD" /usr/local/bin/bd 2>/dev/null || sudo install -m 0755 "$BD" /usr/local/bin/bd
-          bd version
+          # Failure and all: a binary that installed and will not run reports
+          # nothing the pin is named in, and the version check below is what
+          # says so.
+          installed=$(bd version 2>&1 || true)
+          echo "$installed"
+          case "$installed" in
+            *"${BD_VERSION}"*) ;;
+            *)
+              echo "::error::The tracker installed reports '${installed}', which does not name the pinned v${BD_VERSION}. What is wrong is BD_VERSION in this workflow, not the adoption walkthrough: see docs/developing-yoyo.md#the-tracker-version-ci-pins" >&2
+              exit 1
+              ;;
+          esac
+
+      # A bump is verified rather than trusted. These are the checks that pin
+      # every bd behavior the harness assumes -- they skip on a machine with no
+      # tracker, which is every machine `make check` runs on that has not
+      # installed one, and here they run against the binary just pinned. So a
+      # version that changed one of those behaviors fails here, naming the
+      # assumption it broke, rather than surfacing further down as a walkthrough
+      # that stopped working.
+      #
+      # -count=1 because the Go test cache is keyed on this repository's own
+      # inputs and not on which bd is on PATH: a change that moves BD_VERSION
+      # alone would otherwise replay a pass recorded against the version before
+      # it, which is exactly the change this step is for.
+      - name: Check the pinned tracker behaves as the harness assumes
+        run: |
+          set -uo pipefail
+          if ! go test ./internal/beads -run Conformance -count=1; then
+            echo "::error::The tracker pinned at v${BD_VERSION} no longer behaves as this repository assumes; the failure above names the assumption. Where this change moved BD_VERSION, that version change is what to reconsider: see docs/developing-yoyo.md#the-tracker-version-ci-pins" >&2
+            exit 1
+          fi
 
       # `make adoption` builds this checkout's own binary and walks the
       # documented steps against a throwaway Python project -- its own scratch

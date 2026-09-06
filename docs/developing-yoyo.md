@@ -29,7 +29,9 @@ repository and state directory, removed when it exits — and asserts what each
 step is documented to do. It is the gate on a change to the README's install or
 getting-started sections, and it is a merge gate rather than a habit: the
 `adoption` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
-installs `bd` and runs this target on every pull request. It stays out of
+installs `bd` — at [a pinned version this repository
+owns](#the-tracker-version-ci-pins) — and runs this target on every pull
+request. It stays out of
 `check` because `check` is what a run applies to a developer's worktree, and
 that worktree is given neither the tracker nor a reason to cut a scratch clone.
 It needs no provider unless you pass `WALK_PROVIDER=1`, and it names any claim
@@ -45,6 +47,55 @@ tracker step with nothing in the log.
 last recorded walk, kept from the README split as a readable record of what the
 walkthrough actually prints; CI is what re-runs it now, so the file is a
 snapshot rather than the evidence anything rests on.
+
+## The tracker version CI pins
+
+The `adoption` job installs `bd` from a prebuilt upstream release at a pinned
+version: `BD_VERSION` in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml), one line, used both
+to build the download URL and to check that the binary which arrived is the one
+that was asked for. Nothing in CI follows the upstream's release schedule, and
+that is the whole point of the line: on 2026-09-05 an unpinned
+`go install …@latest` moved and turned every pull request here red at a step
+nobody had changed, where it read as a broken adoption walkthrough rather than
+as somebody else's release.
+
+The pin is this repository's, not the upstream's. There is nobody to ask and
+nothing that moves it automatically: it moves when a person edits that line in
+an ordinary pull request, reviewed like any other change, and it is allowed to
+go stale — a pinned version that still behaves as the harness assumes is not a
+version that needs bumping.
+
+To bump it deliberately:
+
+1. Edit `BD_VERSION` in the `adoption` job. It is the only place the version is
+   written; the URL and the check on the installed binary both read it.
+2. Install that version locally and run the checks that pin what the harness
+   assumes of `bd`:
+
+   ```sh
+   go test ./internal/beads -run Conformance -count=1
+   ```
+
+   They skip where `bd` is not on `PATH`, so a green run on a machine without
+   the tracker has verified nothing. `-count=1` because the test cache is keyed
+   on this repository's inputs rather than on which `bd` answered, so a rerun
+   after installing a different version can otherwise replay the old pass.
+3. Open the change. CI runs those same checks against the pinned binary, before
+   it walks the adoption path.
+
+That third step is what a bad bump fails, and it fails naming the assumption the
+new version broke rather than the walkthrough — the walkthrough never runs. A
+version that is not there to download, an archive with no binary in it, or a
+binary reporting some version other than the one asked for, fails earlier still,
+at the install step, which names `BD_VERSION` and this section.
+
+What cannot happen quietly is the pin turning back into a floating reference.
+`make test` holds every workflow in this repository to installing tools at
+versions it names — `@latest`, a branch tip, and the forge's moving release URL
+are each reported by `internal/composition` — so replacing the version with
+whatever is newest fails a declared check on the machine of whoever wrote it,
+rather than on somebody else's release day.
 
 ## Before you change how a run works
 

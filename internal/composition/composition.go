@@ -110,7 +110,7 @@ var Classes = []Class{
 		ID:         "yaml",
 		Extensions: []string{".yaml", ".yml"},
 		Checks:     []string{"make test"},
-		Exercised:  "decoded in composition's repository test, and the workflows held to the shape a workflow needs — a trigger, jobs, and each job with a runner and steps — because workflow YAML on a tag trigger otherwise first executes during a real publication. The project configuration and the built-in bundle are loaded through internal/config on top of that, and internal/doclink reads all of it for the documentation fragments a comment cites.",
+		Exercised:  "decoded in composition's repository test, and the workflows held to the shape a workflow needs — a trigger, jobs, and each job with a runner and steps — because workflow YAML on a tag trigger otherwise first executes during a real publication. The workflows are held to installing tools at versions this repository names rather than at whatever an upstream released this morning, which is the other way a workflow fails without this repository having changed. The project configuration and the built-in bundle are loaded through internal/config on top of that, and internal/doclink reads all of it for the documentation fragments a comment cites.",
 	},
 	{
 		ID:         "json",

@@ -125,6 +125,100 @@ type workflowFile struct {
 	Jobs map[string]workflowJob `yaml:"jobs"`
 }
 
+// workflowRunStep is the part of a step this package reads the shell of: what
+// the step calls itself, and what it runs. A step with no `run:` is an action,
+// whose version is pinned in the `uses:` reference rather than in a command.
+type workflowRunStep struct {
+	Name string `yaml:"name"`
+	Run  string `yaml:"run"`
+}
+
+// workflowRunJob and workflowRunFile are the same file read for its commands
+// rather than for its shape. They are separate from the types above because
+// `steps:` is decoded here as a list of mappings, and holding the shape gate to
+// that would turn a malformed `steps:` into "this does not decode as a
+// workflow" instead of the job-shaped complaint it makes today.
+type workflowRunJob struct {
+	Steps []workflowRunStep `yaml:"steps"`
+}
+
+type workflowRunFile struct {
+	Jobs map[string]workflowRunJob `yaml:"jobs"`
+}
+
+// floatingReference is one way a command names a version that moves, and what
+// it actually installs when it runs.
+type floatingReference struct {
+	Marker string
+	Gets   string
+}
+
+// floatingReferences are the spellings a workflow command uses to fetch
+// whatever the upstream has now. They are literals rather than a parse of the
+// command, because the claim is not that this understands shell: it is that the
+// module install this repository was actually broken by, and the two neighbours
+// somebody reaches for next, cannot come back without saying so.
+var floatingReferences = []floatingReference{
+	{Marker: "@latest", Gets: "whatever the upstream released most recently"},
+	{Marker: "@main", Gets: "the upstream's branch tip"},
+	{Marker: "@master", Gets: "the upstream's branch tip"},
+	{Marker: "releases/latest/", Gets: "whatever the upstream released most recently"},
+}
+
+// WorkflowVersionPins reports every workflow command that installs a tool at a
+// version somebody else decides.
+//
+// A workflow step is the one place in this repository where a stranger's
+// release lands in a pull request nobody wrote: `go install …@latest` in the
+// adoption job moved on 2026-09-05 and turned every open pull request red at a
+// step none of them had touched, where it read as a broken adoption walkthrough
+// rather than as an upstream release. Pinning the version ended that instance;
+// this ends the class, because the pin is one edit away from being a floating
+// reference again and no reviewer reliably sees which of the two they are
+// reading. What the pin costs in return — somebody has to move it deliberately —
+// is docs/developing-yoyo.md#the-tracker-version-ci-pins.
+func WorkflowVersionPins(root string, paths []string) []Problem {
+	var problems []Problem
+	for _, path := range paths {
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			problems = append(problems, Problem{Path: path, Reason: fmt.Sprintf("it could not be read: %v", err)})
+			continue
+		}
+		var workflow workflowRunFile
+		if err := yaml.Unmarshal(content, &workflow); err != nil {
+			problems = append(problems, Problem{Path: path, Reason: fmt.Sprintf("its commands could not be read: %v", err)})
+			continue
+		}
+		// Sorted for the same reason the shape gate sorts: a map ranges in a
+		// different order every run, and what a gate reports has to be the same
+		// twice over one checkout.
+		for _, name := range slices.Sorted(maps.Keys(workflow.Jobs)) {
+			for index, step := range workflow.Jobs[name].Steps {
+				for _, floating := range floatingReferences {
+					if !strings.Contains(step.Run, floating.Marker) {
+						continue
+					}
+					problems = append(problems, Problem{
+						Path:   path,
+						Reason: fmt.Sprintf("its %q job runs %s, which installs %s: name a version instead", name, describeStep(step, index), floating.Gets),
+					})
+				}
+			}
+		}
+	}
+	return problems
+}
+
+// describeStep is how a problem names the step it found, which is by the step's
+// own name where it has one -- that is what somebody scrolls the file for.
+func describeStep(step workflowRunStep, index int) string {
+	if step.Name != "" {
+		return fmt.Sprintf("%q", step.Name)
+	}
+	return fmt.Sprintf("step %d", index+1)
+}
+
 // WorkflowShape holds each workflow to the shape a workflow needs.
 //
 // Decoding alone is not enough for these: workflow YAML is only ever executed by

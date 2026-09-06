@@ -120,6 +120,25 @@ func TestEveryWorkflowInThisRepositoryIsShapedLikeOne(t *testing.T) {
 	}
 }
 
+// TestEveryWorkflowInThisRepositoryPinsWhatItInstalls covers the other way a
+// workflow goes red without this repository having changed. The adoption job
+// installs the tracker, and while it did so at `@latest` a release somebody
+// else cut failed every open pull request at a step none of them had touched.
+// The version is pinned now; what this holds is that it stays a version rather
+// than drifting back to whatever is newest, which a reviewer reading a diff of
+// shell inside YAML does not reliably notice.
+func TestEveryWorkflowInThisRepositoryPinsWhatItInstalls(t *testing.T) {
+	t.Parallel()
+
+	workflows := Workflows(repositoryFiles(t))
+	if len(workflows) == 0 {
+		t.Fatalf("no workflow was found under %s; this repository has two", WorkflowDirectory)
+	}
+	for _, problem := range WorkflowVersionPins(repositoryRoot, workflows) {
+		t.Errorf("a workflow in this repository installs a tool at a version somebody else decides: %s", problem)
+	}
+}
+
 // TestTheStatusToolReportsWhatItClaims runs the status tool's suite, for the
 // same reason the release verb's and the notes writer's suites are run from Go:
 // the tool is shell, its claims are what the README and the operations guide
