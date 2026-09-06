@@ -132,6 +132,24 @@ var expresses = map[string]expression{
 		asks:     []capability.Capability{capability.WorkTriage},
 		gap:      "holding triage does not say which run a decision may name; that is a scope over the subject, and scopes are the next step of this workstream",
 	},
+	"conversation.crossing-is-justified": {
+		question: "none: a crossing carrying its reason and naming its cap is a shape of what was said",
+		gap:      "what a decision must contain to be recorded is not an authority anybody holds, exactly as the escalation's report is not",
+	},
+	"triage.delegated-crossing": {
+		question: "does the role hold triage?",
+		asks:     []capability.Capability{capability.WorkTriage},
+		gap:      "holding triage does not say how far it may move a cap or how often; a step size and a per-item bound are scopes over the subject, and scopes are the next step of this workstream",
+	},
+	"triage.override-is-the-operators": {
+		question: "none: the operator is not a role and holds no bundle",
+		gap:      "what the operator may do by hand at a terminal is outside this vocabulary entirely, which is why the refusal has to live in the store rather than in a bundle",
+	},
+	"triage.crossing-record": {
+		question: "does the role hold triage?",
+		asks:     []capability.Capability{capability.WorkTriage},
+		gap:      "the same scope gap the crossing above has, made of the durable record rather than of the act",
+	},
 	"exchange.ask-authority": {
 		question: "are both ends of the ask on the channel?",
 		asks:     []capability.Capability{capability.ExchangeAsk},
