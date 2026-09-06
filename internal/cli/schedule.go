@@ -561,8 +561,12 @@ func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 		// What the session could see going, and the conversation it is waiting on
 		// where it is waiting on one. Both are what keep an idle line from reading as
 		// a stopped machine or as a queue nobody has admitted work to.
-		Running:    transition.Running,
-		Executor:   transition.Executor,
+		Running:  transition.Running,
+		Executor: transition.Executor,
+		// The same account the reason states, in classes rather than in prose, so
+		// the alarm that wakes somebody names the cause the poll already found
+		// instead of deriving its own.
+		PassedOver: transition.PassedOver,
 		Unreadable: transition.Unreadable,
 		// The provider's usage window, so a wait nobody can shorten is readable as
 		// one rather than as a queue nothing is pulling.

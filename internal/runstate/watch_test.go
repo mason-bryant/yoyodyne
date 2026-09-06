@@ -379,6 +379,59 @@ func TestASessionSaysWhenAPollWasMadeInsideTheProvidersWindow(t *testing.T) {
 	}
 }
 
+// What a poll passed over, kept in classes rather than only in the prose the
+// reason states. The prose is for whoever reads the log; the classes are for
+// whatever has to answer a question about the queue, which on 2026-09-06 was an
+// alarm that derived its own answer beside a session that had already found this
+// one.
+func TestASessionRecordsWhatItPassedOverInClasses(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	idle := testWatchTransition(testWatchSessionID, WatchIdle,
+		"33 items passed over, of 47 admitted: held for a person (yoyodyne-ifd.212, and 32 further)")
+	idle.PassedOver = PassedOver{Admitted: 47, Groups: []PassedOverGroup{
+		{Class: PassedOverHeldForAPerson, Count: 33, Items: []string{"yoyodyne-ifd.212"}},
+		{Class: PassedOverCarriedInConversation, Role: domain.RoleArchitect, Count: 9},
+	}}
+	if err := store.Record(idle); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	recorded, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].PassedOver.Admitted != 47 || recorded[0].PassedOver.Passed() != 42 {
+		t.Fatalf("transitions = %#v, want the account back with its counts", recorded)
+	}
+
+	// Only an idle poll passes anything over: a watching session is starting what
+	// it read, and a braked or stopped one never got as far as the queue.
+	watching := testWatchTransition(testWatchSessionID, WatchWatching, "watching the backlog until stopped")
+	watching.PassedOver = PassedOver{Admitted: 1, Groups: []PassedOverGroup{{Class: PassedOverParked, Count: 1}}}
+	if err := store.Record(watching); err == nil {
+		t.Fatal("Record() error = nil, want an account of a pull no watching session made refused")
+	}
+	// A class nothing named is an item disappearing into a count that says
+	// something else about it, which is the misreading the taxonomy exists to end.
+	unnamed := testWatchTransition(testWatchSessionID, WatchIdle, "1 item passed over, of 1 admitted")
+	unnamed.PassedOver = PassedOver{Admitted: 1, Groups: []PassedOverGroup{{Class: "something-nobody-named", Count: 1}}}
+	if err := store.Record(unnamed); err == nil {
+		t.Fatal("Record() error = nil, want a class outside the taxonomy refused")
+	}
+	// And an account that contradicts itself: every fraction said about a class is
+	// drawn from its count, so a count under what it names is refused rather than
+	// rendered.
+	miscounted := testWatchTransition(testWatchSessionID, WatchIdle, "2 items passed over, of 2 admitted")
+	miscounted.PassedOver = PassedOver{Admitted: 2, Groups: []PassedOverGroup{
+		{Class: PassedOverParked, Count: 1, Items: []string{"one", "two"}},
+	}}
+	if err := store.Record(miscounted); err == nil {
+		t.Fatal("Record() error = nil, want a group naming more items than it counts refused")
+	}
+}
+
 // A log that cannot be read is an error rather than an absence, for the reason
 // every other record here is: a session nobody can read must not be reported as
 // a session that never ran.

@@ -103,7 +103,17 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, sess
 	if !window.Standing(now) {
 		window = readmodel.ProviderWindow{}
 	}
-	return f.stallSaid(ctx, cursors, standing, window, now), nil
+	// What the last poll that started nothing said was holding the queue, which is
+	// the one thing this message was missing. It is read from the same log the
+	// window above is and by the same read model the session's own idle line
+	// renders: one derivation, two renderers. A surface working the cause out for
+	// itself is what paged the operator on 2026-09-06 with "nothing accounting for
+	// it" while the accounting sat one surface over.
+	cause, accounted := readmodel.WhyThePollStartedNothing(sessions, now)
+	if !accounted {
+		cause = readmodel.Cause{}
+	}
+	return f.stallSaid(ctx, cursors, standing, window, cause, now), nil
 }
 
 // windowKey names one provider usage window, so a window that is said is said
@@ -140,7 +150,7 @@ func windowKey(window readmodel.ProviderWindow) string {
 // report. Saying the window is what turns the reading from a warning that no
 // longer fires into an answer — an operator who sees nothing cannot tell a
 // window from a watchdog somebody switched off.
-func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, window readmodel.ProviderWindow, now time.Time) []Delivery {
+func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, window readmodel.ProviderWindow, cause readmodel.Cause, now time.Time) []Delivery {
 	cursor := cursors.Streams[stallStream]
 	advanced := cursor
 	if mark, said := advanced.Marked(stallMark); said {
@@ -201,9 +211,15 @@ func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *
 			// they would not think to look for.
 			Direct: true,
 			Notification: notify.FromStall(notify.Stall{
-				Since:    standing.Since,
-				Ready:    standing.Ready,
-				Chooser:  standing.Chooser,
+				Since:   standing.Since,
+				Ready:   standing.Ready,
+				Chooser: standing.Chooser,
+				// The cause the last poll recorded and whose move follows it, both
+				// worded by the read model that derived them. A stall with no poll to
+				// read leaves both empty, and the message says what it always said:
+				// that nothing the record holds accounts for the silence.
+				Cause:    cause.Says(),
+				Mover:    cause.Whose(),
 				Standing: f.standing(ctx),
 			}, now),
 		}}

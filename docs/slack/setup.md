@@ -579,13 +579,27 @@ whoever you grant `direct-work` as a direct message, once per stall and never on
 per check:
 
 > Nothing at all has started on this product for 7 hours, with 3 items ready to
-> pull and nothing accounting for it. The session choosing work last recorded
-> watching at 2026-09-01T06:05:00Z, and has said nothing since.
+> pull: 33 of the 47 admitted items are held for a person, waiting on triage
+> decisions. The session choosing work last recorded watching at
+> 2026-09-01T06:05:00Z, and has said nothing since. Next: the development
+> manager's — nothing pulls work held for a person until triage decides what
+> happens to it.
 
-That last sentence is what to act on: a session whose last word was `stopped`
-wants starting, and one still claiming to be watching wants killing first. When it
-clears the record closes and the channel hears nothing — the run that started says
-that itself — and
+**The cause is the last poll's own, rather than this message's.** A session that
+starts nothing records what it passed over and why — held for a person, parked,
+carried in a conversation, sequenced behind a run, waiting out the provider's
+usage window — and this reads that account rather than working out a second one
+from the silence. The two used to be derived separately and disagreed: on
+2026-09-06 the alarm said nothing accounted for an hour of quiet while the
+session's own idle line, in the same log, held the whole accounting. Where no
+poll left an account — a session that stopped cleanly, or one that never idled —
+the message says the cause is something the record does not name, and the move is
+the operator's.
+
+The chooser's last word is the other thing to act on: a session whose last word
+was `stopped` wants starting, and one still claiming to be watching wants killing
+first. When it clears the record closes and the channel hears nothing — the run
+that started says that itself — and
 [`yoyo status`](../operations.md#when-nothing-happened-at-all) reads the whole
 history back afterwards, which is the only place it exists.
 

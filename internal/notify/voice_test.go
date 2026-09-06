@@ -274,6 +274,37 @@ func TestAnIdleWatchNamesTheActorWhoCanActOnIt(t *testing.T) {
 	}
 }
 
+// A stall over a queue whose last poll said what was in the way of it closes on
+// whoever releases that, rather than on somebody restarting a chooser that is
+// running and doing exactly what it should. The clause is the read model's, said
+// beside the cause the message states, so the two cannot disagree.
+func TestAStallClosesOnWhoeverReleasesTheCauseItNames(t *testing.T) {
+	topic := Product()
+	event := fullyRecorded(KindStallNoticed)
+	event.Detail.Cause = "33 of the 47 admitted items are held for a person, waiting on triage decisions"
+	event.Detail.Mover = "the development manager's — nothing pulls work held for a person until triage decides what happens to it"
+	message, err := Render(topic, Harness(), event)
+	if err != nil {
+		t.Fatalf("render a stall: %v", err)
+	}
+	if !strings.Contains(message.Body, event.Detail.Cause) {
+		t.Fatalf("the stall reads as %q, which does not point out the cause", message.Body)
+	}
+	if !strings.HasSuffix(message.Body, nextMoveLead+event.Detail.Mover+".") {
+		t.Fatalf("the stall reads as %q, want it to close on the person who releases what it named", message.Body)
+	}
+	// A stall with no poll to read a cause from falls back to the chooser being
+	// looked at, which is the whole of what anybody can do about it.
+	event.Detail.Mover = ""
+	fallen, err := Render(topic, Harness(), event)
+	if err != nil {
+		t.Fatalf("render a stall with no mover: %v", err)
+	}
+	if !strings.HasSuffix(fallen.Body, nextMoveLead+nextMoves[KindStallNoticed]) {
+		t.Fatalf("the stall reads as %q, want the table's answer where no poll named one", fallen.Body)
+	}
+}
+
 // The admission pointer is said only where admitting ready work is what changes
 // the answer. A session polling beside a run, or over work only a conversation
 // carries, is not waiting on the product manager for anything.

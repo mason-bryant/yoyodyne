@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1182,6 +1183,29 @@ func TestAnIdleWatchSaysWhatItPassedOverAndWhichConversationCarriesIt(t *testing
 	}
 	if want := domain.ConversationWith(domain.RoleArchitect); idle.executor != want {
 		t.Fatalf("idle executor = %q, want %q, the conversation that carries the work passed over", idle.executor, want)
+	}
+	// And the same account in classes rather than in prose, which is what a
+	// surface that has to answer a question about the queue reads instead of
+	// working the answer out from the silence around it.
+	want := runstate.PassedOver{Admitted: 3, Groups: []runstate.PassedOverGroup{{
+		Class: runstate.PassedOverCarriedInConversation,
+		Role:  domain.RoleArchitect,
+		Count: 3,
+		Items: []string{"yoyodyne-ifd.212", "yoyodyne-ifd.203", "yoyodyne-ifd.162"},
+	}}}
+	if !reflect.DeepEqual(idle.passedOver, want) {
+		t.Fatalf("idle passed over = %+v, want %+v", idle.passedOver, want)
+	}
+	cause, accounted := readmodel.WhyThePollStartedNothing([]runstate.WatchTransition{{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     "watch-0123456789abcdef0123456789abcdef",
+		State:         runstate.WatchIdle,
+		At:            time.Date(2026, 9, 6, 3, 0, 0, 0, time.UTC),
+		PassedOver:    idle.passedOver,
+	}}, time.Date(2026, 9, 6, 3, 0, 0, 0, time.UTC))
+	if !accounted || !strings.Contains(cause.Says(), "carried in conversation by the architect") {
+		t.Fatalf("the alarm reads %q from what this poll recorded, want the conversation that carries the work", cause.Says())
 	}
 }
 
@@ -2582,6 +2606,10 @@ type recordedTransition struct {
 	// nothing accounts for.
 	window         bool
 	windowResetsAt *time.Time
+	// passedOver is the same account the reason states, in the classes every
+	// reader of it reads. It is what the stall alarm names a cause from, so a test
+	// about what a woken operator is told reads it here.
+	passedOver runstate.PassedOver
 }
 
 func (r *recordedSessions) Record(transition SessionState) error {
@@ -2600,6 +2628,7 @@ func (r *recordedSessions) Record(transition SessionState) error {
 
 		window:         transition.ProviderWindow,
 		windowResetsAt: transition.ProviderWindowResetsAt,
+		passedOver:     transition.PassedOver,
 	})
 	return nil
 }

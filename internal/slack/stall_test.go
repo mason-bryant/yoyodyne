@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -203,6 +204,73 @@ func TestAProviderWindowIsSaidOnceAsANoteAndNeverAsAStall(t *testing.T) {
 	}
 }
 
+// The page of 2026-09-06, replayed. Nothing had started for an hour over a queue
+// the tracker called ready, and what this message said was that nothing
+// accounted for it — while the session's own idle line, one surface over, held
+// the whole accounting: a third of the queue waiting on triage decisions.
+//
+// The operator's words are the acceptance: that message should have pointed out
+// the cause. So it reads the account the poll wrote down rather than deriving
+// its own from the silence, and closes on the person who releases what it names.
+func TestAStallNamesTheDominantCauseAndTheNextMover(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(47)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment.Add(-time.Hour))
+	harness.passedOver(t, moment, runstate.PassedOver{Admitted: 47, Groups: []runstate.PassedOverGroup{
+		{Class: runstate.PassedOverHeldForAPerson, Count: 33, Items: []string{"yoyodyne-ifd.212"}},
+		{Class: runstate.PassedOverCarriedInConversation, Role: domain.RoleArchitect, Count: 9},
+		{Class: runstate.PassedOverSequencedBehindWork, Count: 5},
+	}})
+
+	// The two watch transitions are read past first, so what the next pass says is
+	// the stall and nothing else.
+	harness.now = moment.Add(readmodel.DefaultStallThreshold)
+	cursors := harness.poll(t, harness.start())
+	harness.now = moment.Add(time.Hour)
+	harness.stalled(t, stalls, moment.Add(-time.Hour), 47, harness.now)
+
+	said := harness.say(t, cursors, notify.KindStallNoticed)
+	if !strings.Contains(said.Body, "33 of the 47 admitted items are held for a person, waiting on triage decisions") {
+		t.Fatalf("body %q does not point out the cause", said.Body)
+	}
+	if !strings.Contains(said.Body, "Next: the development manager's") {
+		t.Fatalf("body %q does not name the person who releases what it named", said.Body)
+	}
+	// And the clause it used to close on, which sent the operator to restart a
+	// chooser that was running and doing exactly what it should.
+	if strings.Contains(said.Body, "started again if it has died") {
+		t.Fatalf("body %q still sends the reader after the chooser", said.Body)
+	}
+}
+
+// A stall with no poll to read a cause from says what it always said. A session
+// that stopped cleanly left no account of a queue, and inventing one would be
+// the confident emptiness the accounting exists to remove.
+func TestAStallWithNoPollToReadSaysNothingAccountsForIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(4)
+	harness.watched(t, runstate.WatchStopped, "the session was stopped", moment)
+
+	harness.now = moment.Add(readmodel.DefaultStallThreshold)
+	cursors := harness.poll(t, harness.start())
+	harness.now = moment.Add(time.Hour)
+	harness.stalled(t, stalls, moment, 4, harness.now)
+
+	said := harness.say(t, cursors, notify.KindStallNoticed)
+	if !strings.Contains(said.Body, "something the record does not name") {
+		t.Fatalf("body %q does not state the absence of an accounting", said.Body)
+	}
+	if !strings.Contains(said.Body, "Next: the operator's") {
+		t.Fatalf("body %q does not fall back to the chooser being looked at", said.Body)
+	}
+}
+
 // One silence, one message. The heartbeat's waiting line is derived from the
 // same reading and would otherwise say the window too — hourly, and with the
 // cause after the fact that choosing stopped, which is the shape the operator
@@ -264,6 +332,25 @@ func (h *testHarness) watchesForStalls(t *testing.T) *runstate.StallStore {
 	}
 	h.feed.Stalls = stalls
 	return stalls
+}
+
+// passedOver records the idle poll that found the queue and left it where it
+// was, which is the account both the session's own line and the alarm are
+// rendered from.
+func (h *testHarness) passedOver(t *testing.T, at time.Time, account runstate.PassedOver) {
+	t.Helper()
+	if err := h.watch.Record(runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     "watch-0123456789abcdef0123456789abcdef",
+		State:         runstate.WatchIdle,
+		At:            at,
+		Reason:        readmodel.IdleLine(account, 0),
+		Executor:      readmodel.Carrier(account),
+		PassedOver:    account,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
 }
 
 // stalled opens a stall in the record the way the checker does, which is the

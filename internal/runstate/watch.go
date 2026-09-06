@@ -101,6 +101,97 @@ func (s WatchState) Valid() bool {
 	}
 }
 
+// PassedOverClass is one reason a poll left an item where it was. The set is
+// closed, and every place a pull passes an item over names one of them: a class
+// nobody named is an item that disappears into a count saying something else
+// about it.
+//
+// It is recorded rather than only rendered into the reason above, and that is
+// what makes the accounting readable by something other than the session that
+// wrote it. On 2026-09-06 the stall alarm paged that nothing had started for an
+// hour with nothing accounting for it, while the poll's own account of the same
+// queue — a third of it waiting on triage decisions — sat one surface over as
+// prose nothing could take apart. A surface that has to parse a sentence to
+// learn the cause derives its own instead, which is two readings of one machine.
+type PassedOverClass string
+
+const (
+	PassedOverCarriedInConversation PassedOverClass = "carried in conversation"
+	PassedOverParked                PassedOverClass = "parked"
+	PassedOverHeldForAPerson        PassedOverClass = "held for a person"
+	PassedOverWaitingOnOtherWork    PassedOverClass = "waiting on other work"
+	PassedOverAlreadyTried          PassedOverClass = "already tried this session"
+	PassedOverAlreadyInFlight       PassedOverClass = "already in flight"
+	PassedOverCoveredByChildren     PassedOverClass = "covered by its children"
+	PassedOverPausedByDirective     PassedOverClass = "paused by a directive"
+	PassedOverSequencedBehindWork   PassedOverClass = "sequenced behind work in flight"
+	PassedOverPrerequisiteUnmet     PassedOverClass = "the tree does not meet what it asks for"
+)
+
+// PassedOverClasses is the whole taxonomy, in the order a pull meets them. A
+// caller that has to cover every class reads it from here rather than repeating
+// the list.
+func PassedOverClasses() []PassedOverClass {
+	return []PassedOverClass{
+		PassedOverCarriedInConversation,
+		PassedOverParked,
+		PassedOverHeldForAPerson,
+		PassedOverWaitingOnOtherWork,
+		PassedOverAlreadyTried,
+		PassedOverAlreadyInFlight,
+		PassedOverCoveredByChildren,
+		PassedOverPausedByDirective,
+		PassedOverSequencedBehindWork,
+		PassedOverPrerequisiteUnmet,
+	}
+}
+
+func (c PassedOverClass) Valid() bool {
+	for _, known := range PassedOverClasses() {
+		if c == known {
+			return true
+		}
+	}
+	return false
+}
+
+// PassedOverGroup is one class of what a poll passed over: how many items fell
+// into it, which of them it named, and the conversation that carries them where
+// the class names one.
+//
+// The count is exact and the naming is bounded, which is the division every
+// listing here makes: a backlog of forty deferred items is forty in the count
+// and five in the names, because a line whose job is to be read at a glance is
+// not a list of identifiers.
+type PassedOverGroup struct {
+	Class PassedOverClass  `json:"class"`
+	Role  domain.AgentRole `json:"role,omitempty"`
+	Count int              `json:"count"`
+	Items []string         `json:"items,omitempty"`
+}
+
+// PassedOver is one poll's whole account of the items it left where they were,
+// against the size of the queue it read them from.
+//
+// The queue's own size travels with the groups so that a fraction said about
+// them is a fraction of one reading. A surface that took the count from here and
+// the total from its own tracker read would be saying "33 of 47" about two
+// different moments.
+type PassedOver struct {
+	Admitted int               `json:"admitted,omitempty"`
+	Groups   []PassedOverGroup `json:"groups,omitempty"`
+}
+
+// Passed is how many items the account covers, which is the sum of what each
+// class holds rather than how many classes there are.
+func (p PassedOver) Passed() int {
+	passed := 0
+	for _, group := range p.Groups {
+		passed += group.Count
+	}
+	return passed
+}
+
 // WatchTransition is one moment a session changed what it was doing, and why.
 // The reason is prose because what an operator does about a braked session
 // depends entirely on what braked it.
@@ -143,6 +234,15 @@ type WatchTransition struct {
 	// waiting on the architect, and telling the reader it waits on an admission
 	// sends them to the one person who can do nothing about it.
 	Executor domain.WorkItemExecutor `json:"executor,omitempty"`
+	// PassedOver is what the poll left where it was, in classes rather than in
+	// prose. The reason above says the same account in words for whoever is
+	// reading the log; this is the same account for whatever has to answer a
+	// question about it — which is how the stall alarm names the cause instead of
+	// deriving its own ignorance beside a session that had already worked it out.
+	//
+	// It is empty on every transition but an idle one, and empty on an idle poll
+	// that passed nothing over, which is a session watching a queue it emptied.
+	PassedOver PassedOver `json:"passed_over,omitzero"`
 	// Unreadable marks the poll that chose nothing because the harness could not
 	// be read at all, which is the third state whose next move is nobody's to
 	// make: a store that will not answer is not waiting on an admission, a
@@ -223,6 +323,31 @@ func (t WatchTransition) Validate() error {
 	// conversation accounts for.
 	if t.Executor != "" && !t.Executor.Valid() {
 		problems = append(problems, fmt.Errorf("watch transition executor %q is not a marker an item is carried by", t.Executor))
+	}
+	// Only an idle poll passes anything over. A watching session is starting what
+	// it read, and a braked or stopped one never got as far as the queue, so an
+	// account of what was left behind on one of those is a reading no pull made.
+	if len(t.PassedOver.Groups) > 0 && t.State != WatchIdle {
+		problems = append(problems, fmt.Errorf("a %s transition cannot say what a poll passed over, which is a thing only an idle one does", t.State))
+	}
+	for _, group := range t.PassedOver.Groups {
+		if !group.Class.Valid() {
+			problems = append(problems, fmt.Errorf("watch transition passes items over as %q, which is not a class a pull leaves an item in", group.Class))
+		}
+		// A group naming more items than it counts is an account that contradicts
+		// itself, and the count is what every fraction said about it is drawn from.
+		if group.Count < 1 || group.Count < len(group.Items) {
+			problems = append(problems, fmt.Errorf("watch transition counts %d items as %q while naming %d of them", group.Count, group.Class, len(group.Items)))
+		}
+		// A marker the harness does not recognize names a role nothing can address,
+		// for the reason the executor above may not: the whole use of the role here
+		// is to name somebody a reader can go to.
+		if group.Role != "" && !group.Role.Valid() {
+			problems = append(problems, fmt.Errorf("watch transition passes items over to %q, which is not a role anything addresses", group.Role))
+		}
+	}
+	if t.PassedOver.Admitted < 0 {
+		problems = append(problems, fmt.Errorf("watch transition read a queue of %d admitted items, which is not a count", t.PassedOver.Admitted))
 	}
 	// Only an idle poll can be one made inside a provider's window. A session
 	// marked as waiting out a window while it is watching, braked, or stopped
