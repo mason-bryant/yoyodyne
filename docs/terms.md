@@ -47,9 +47,9 @@ may edit. `in force`, `minute zero` and `posture` are the sweep's decoration
 rather than mechanism names, and each survives only in the invariants home: two
 inside the text of an active invariant, and `in force` in the prose that governs
 how an invariant is amended. That wording is the architect's alone — the sweep
-says so outright — so the entry is what keeps the word readable until she
-decides otherwise, and each is retired when she does. The operator has objected
-to `in force` by name, so these three are the entries most worth losing.
+says so outright — so the entry is what keeps the word readable until the
+architect decides otherwise, and each is retired when it does. The operator has
+objected to `in force` by name, so these three are the entries most worth losing.
 
 ## Replaced rather than registered
 
@@ -61,7 +61,7 @@ and the rest are still in places outside this sweep — mostly the tracker's own
 items, which are the product manager's to reword. One exception the re-run
 confirms: `re-arm` is still written once in `designs/v1-harness-design.md`,
 inside a recorded amendment reason in the frontmatter, which is the architect's
-account of what she decided on a date rather than a sentence to clarify. The
+account of what it decided on a date rather than a sentence to clarify. The
 check does not read frontmatter, for that reason. Either way the check below
 refuses any of them coming back into the prose of a governed document without an
 entry.
