@@ -621,6 +621,11 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		// source it caches to one reading of a queue that is re-read every interval.
 		Tree:   &readiness.Repository{Root: parts.repository},
 		Triage: docketerFrom(parts),
+		// What the configuration schedules on a cadence. It is wired into the pull
+		// for the same reason the delivery above is, and for one more: the harness
+		// is the only thing that invokes a role, so a schedule that lived in a cron
+		// entry or a launchd job would be a second invoker of one.
+		Recurring: recurringTrigger(parts, configPath, stderr),
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record

@@ -2294,6 +2294,12 @@ type scheduleHarness struct {
 	routeErr   error
 	docketed   []string
 	unroutable bool
+	// fire stands in for waking a role on its cadence, with the number of passes
+	// already made. A pull is wired with one only where a test asks for it, so
+	// every other test's pass is a project that has scheduled nothing — which is
+	// every project until one opts in.
+	firings int
+	fire    func(*scheduleHarness, int) (RecurringSweep, error)
 
 	pulls      int
 	order      []string
@@ -2393,6 +2399,12 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	if h.escalate != nil {
 		escalations = h
 	}
+	// A project that has scheduled nothing carries no trigger at all rather than
+	// one with an empty schedule, which is what recurringTrigger returns for it.
+	var recurring ScheduleRecurring
+	if h.fire != nil {
+		recurring = h
+	}
 	h.mu.Unlock()
 	h.mu.Lock()
 	tree := h.tree
@@ -2404,7 +2416,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h, Stoppages: stoppages,
 		Capacity: capacity, Start: h.start, Escalations: escalations,
-		Tree: tree, Triage: docket,
+		Tree: tree, Triage: docket, Recurring: recurring,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.
@@ -2413,6 +2425,16 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		Brake:                       h,
 		Spend:                       h,
 	}, nil
+}
+
+// Fire stands in for waking a role on its cadence, which like the delivery
+// below is a provider turn the scheduler never makes itself.
+func (h *scheduleHarness) Fire(context.Context) (RecurringSweep, error) {
+	h.mu.Lock()
+	h.firings++
+	passes, fire := h.firings, h.fire
+	h.mu.Unlock()
+	return fire(h, passes)
 }
 
 // Escalate stands in for delivering one stopped run to the development
@@ -3155,6 +3177,214 @@ func TestRepeatedDeliveryFailuresAreOneProblemOnThePass(t *testing.T) {
 	scheduler.escalate(context.Background(), &schedule, pull)
 	if len(schedule.Escalated) != 1 || schedule.EscalationProblem != "" {
 		t.Fatalf("schedule = %#v, want the delivery kept and the failure behind it cleared", schedule)
+	}
+}
+
+// firedTasks is a schedule of recurring tasks that has already decided what this
+// pass will find, so the wiring between a pull and its trigger can be driven
+// without a provider, a conversation, or a clock.
+type firedTasks struct {
+	sweep RecurringSweep
+	err   error
+}
+
+func (f firedTasks) Fire(context.Context) (RecurringSweep, error) { return f.sweep, f.err }
+
+// The item's central claim is that the sweep runs from configuration, and this is
+// the join that makes it true: a pull carrying a trigger puts what fired onto the
+// schedule and charges what it cost to the session.
+//
+// Both halves are silent when they break. A pass that never called the trigger
+// looks exactly like a schedule with nothing due, and a firing whose cost never
+// reached SpentUSD is a session spending past a --budget it was given while every
+// surface reports it inside one.
+func TestAFiredTaskReachesTheScheduleWithItsCost(t *testing.T) {
+	t.Parallel()
+
+	scheduler := Scheduler{}
+	pull := Pull{Recurring: firedTasks{sweep: RecurringSweep{Fired: []Fired{{
+		Task:          "development-manager-sweep",
+		Role:          domain.RoleDevelopmentManager,
+		Turns:         2,
+		CostUSD:       0.25,
+		Findings:      3,
+		SilentRepairs: 1,
+	}}}}}
+	schedule := Schedule{}
+
+	scheduler.fire(context.Background(), &schedule, pull)
+
+	if len(schedule.Fired) != 1 {
+		t.Fatalf("fired = %#v, want the firing on the pass", schedule.Fired)
+	}
+	if schedule.Fired[0].Task != "development-manager-sweep" || schedule.Fired[0].Turns != 2 {
+		t.Errorf("fired = %#v, want the task and its turns as the trigger reported them", schedule.Fired[0])
+	}
+	if schedule.Fired[0].SilentRepairs != 1 {
+		t.Errorf("silent repairs = %d, want the count carried to the pass", schedule.Fired[0].SilentRepairs)
+	}
+	if schedule.SpentUSD != 0.25 {
+		t.Errorf("spent = %v, want the firing's turns charged to the session", schedule.SpentUSD)
+	}
+	if schedule.RecurringProblem != "" {
+		t.Errorf("recurring problem = %q, want none for a firing that worked", schedule.RecurringProblem)
+	}
+}
+
+// A pull with nothing due says nothing and spends nothing, which is almost every
+// pull on a healthy harness. A pass that reported an empty firing would put a
+// line into every poll of a watching session for the rest of the night.
+func TestAPassWithNothingDueSaysNothingAboutTheSchedule(t *testing.T) {
+	t.Parallel()
+
+	scheduler := Scheduler{}
+	schedule := Schedule{}
+
+	scheduler.fire(context.Background(), &schedule, Pull{Recurring: firedTasks{}})
+
+	if len(schedule.Fired) != 0 || schedule.RecurringProblem != "" || schedule.SpentUSD != 0 {
+		t.Fatalf("schedule = %#v, want a pass with nothing due to leave it alone", schedule)
+	}
+}
+
+// A pull wired without a trigger is every project that has scheduled nothing, and
+// it pulls exactly as it did before the schedule existed.
+func TestAPullWithoutATriggerIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	scheduler := Scheduler{}
+	schedule := Schedule{}
+
+	scheduler.fire(context.Background(), &schedule, Pull{})
+
+	if len(schedule.Fired) != 0 || schedule.RecurringProblem != "" {
+		t.Fatalf("schedule = %#v, want a pull with no schedule to say nothing about one", schedule)
+	}
+}
+
+// A firing that failed is a problem on the pass rather than an event, and what it
+// spent is still charged: the provider bills a turn that failed exactly as it
+// bills one that answered, so a session counting against a budget has to see it.
+func TestAFailedFiringIsAProblemThatStillCosts(t *testing.T) {
+	t.Parallel()
+
+	scheduler := Scheduler{}
+	pull := Pull{Recurring: firedTasks{sweep: RecurringSweep{Fired: []Fired{{
+		Task:    "development-manager-sweep",
+		Role:    domain.RoleDevelopmentManager,
+		Turns:   0,
+		CostUSD: 0.05,
+		Problem: "the conversation could not be opened",
+	}}}}}
+	schedule := Schedule{}
+
+	scheduler.fire(context.Background(), &schedule, pull)
+
+	if len(schedule.Fired) != 0 {
+		t.Fatalf("fired = %#v, want a firing that took no turn kept as a problem rather than an event", schedule.Fired)
+	}
+	if schedule.RecurringProblem != "the conversation could not be opened" {
+		t.Errorf("recurring problem = %q, want what stopped the firing", schedule.RecurringProblem)
+	}
+	if schedule.SpentUSD != 0.05 {
+		t.Errorf("spent = %v, want a failed turn charged like any other", schedule.SpentUSD)
+	}
+}
+
+// A schedule that could not be read at all is said on the pass rather than
+// stopping it: a firing that failed costs the pull nothing it was doing.
+func TestAScheduleThatCouldNotBeFiredIsSaidRatherThanStoppingThePass(t *testing.T) {
+	t.Parallel()
+
+	scheduler := Scheduler{}
+	schedule := Schedule{}
+
+	scheduler.fire(context.Background(), &schedule, Pull{Recurring: firedTasks{err: errors.New("the claim could not be taken")}})
+
+	if !strings.Contains(schedule.RecurringProblem, "the claim could not be taken") {
+		t.Errorf("recurring problem = %q, want the failure named on the pass", schedule.RecurringProblem)
+	}
+	if len(schedule.Fired) != 0 {
+		t.Errorf("fired = %#v, want nothing recorded as having fired", schedule.Fired)
+	}
+}
+
+// The tests above drive fire with a Pull built by hand, which leaves the one
+// thing the item's central claim actually rests on untested: that a pass carrying
+// a trigger calls it at all. Every full-pull test here passes a Pull with no
+// Recurring, so fire returns at its first line in all of them — and a pull that
+// never reached the trigger looks exactly like a schedule with nothing due, which
+// is the failure mode this whole item exists to eliminate.
+//
+// So this drives the pulling loop itself: an ordinary drain over an ordinary
+// queue, with a task due on its first pull.
+func TestADrainingPassFiresTheScheduleItWasWiredWith(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	// Due on the first pull and not on the ones after it, which is what a cadence
+	// does: the claim is the due check, and a task already claimed this hour is
+	// passed over rather than fired again.
+	harness.fire = func(_ *scheduleHarness, passes int) (RecurringSweep, error) {
+		if passes > 1 {
+			return RecurringSweep{}, nil
+		}
+		return RecurringSweep{Fired: []Fired{{
+			Task:          "development-manager-sweep",
+			Role:          domain.RoleDevelopmentManager,
+			Turns:         2,
+			CostUSD:       0.25,
+			Findings:      3,
+			SilentRepairs: 1,
+		}}}, nil
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if harness.firings == 0 {
+		t.Fatalf("firings = 0, want the pass to have asked the trigger it was wired with: %s", schedule.Render())
+	}
+	if len(schedule.Fired) != 1 {
+		t.Fatalf("fired = %#v, want the firing on the pass's own schedule", schedule.Fired)
+	}
+	if schedule.Fired[0].Task != "development-manager-sweep" || schedule.Fired[0].Turns != 2 {
+		t.Errorf("fired = %#v, want the task and its turns as the trigger reported them", schedule.Fired[0])
+	}
+	if schedule.SpentUSD != 0.25 {
+		t.Errorf("spent = %v, want the firing's turns charged to the session that took them", schedule.SpentUSD)
+	}
+	if schedule.RecurringProblem != "" {
+		t.Errorf("recurring problem = %q, want none for a firing that worked", schedule.RecurringProblem)
+	}
+	// The firing is beside the work rather than instead of it: a pass that woke a
+	// role still drains the queue it was pulling.
+	if len(schedule.Started) != 1 {
+		t.Errorf("started = %d, want the ready item run as it would have been: %s", len(schedule.Started), schedule.Render())
+	}
+}
+
+// And a pass wired with no schedule is every project that has configured no
+// recurring task: it pulls exactly as it did before this existed, and says
+// nothing about a schedule it does not have.
+func TestADrainingPassWithNoScheduleSaysNothingAboutOne(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if harness.firings != 0 {
+		t.Errorf("firings = %d, want a pull with no trigger to ask for none", harness.firings)
+	}
+	if len(schedule.Fired) != 0 || schedule.RecurringProblem != "" {
+		t.Errorf("schedule = %#v, want nothing said about a schedule that was never wired", schedule)
+	}
+	if len(schedule.Started) != 1 {
+		t.Errorf("started = %d, want the ready item run: %s", len(schedule.Started), schedule.Render())
 	}
 }
 
