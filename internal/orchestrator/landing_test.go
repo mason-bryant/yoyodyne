@@ -775,6 +775,66 @@ func TestTheReviewerIsShownWhichLandingWasClaimed(t *testing.T) {
 	}
 }
 
+// yoyodyne-ifd.284 replayed. A developer files a diagnosis saying the machinery
+// its item needs has not landed, and writes no landing block — so the ordinary
+// discharging landing is in force and the item closes on a document saying in its
+// own words that the work was not done. That is what happened, after the claim
+// channel shipped, because the claim nobody writes was shown to nobody: the
+// reviewer approved a diagnosis without ever being told that approving it closed
+// the item.
+//
+// The default is a claim like any other now, and the reviewer is shown it. A
+// diagnosis offered under it is a change that is not the work, the review sends
+// it back, and the repair round is where the developer claims what it actually
+// landed — which leaves the item parked rather than closed.
+func TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem(t *testing.T) {
+	t.Parallel()
+
+	tracker := newOutcomeTracker()
+	provider := roleBackend(writeFeature, repairVerdict, approveVerdict)
+	provider.developerFinalTextByAttempt = []string{
+		"the recurring-task machinery this item needs is on a branch that has not landed; this change is the diagnosis",
+		"the diagnosis stands\n\n" +
+			landingBlock(`{"outcome":"evidence","why":"the machinery this item is written against has not landed"}`),
+	}
+	var reviewerPrompts []string
+	underlying := provider.run
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer {
+			reviewerPrompts = append(reviewerPrompts, request.Prompt)
+		}
+		return underlying(request)
+	}
+	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 2
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The first review is the one that mattered: the change in front of it was a
+	// diagnosis, and it has to be told that approving it closes the item.
+	if len(reviewerPrompts) == 0 {
+		t.Fatal("the change was never reviewed")
+	}
+	if !strings.Contains(reviewerPrompts[0], "claimed no landing outcome") {
+		t.Errorf("the reviewer was not told the default claim was in force: %q", reviewerPrompts[0])
+	}
+	if !strings.Contains(reviewerPrompts[0], "approve it only if it is the work the item asked for") {
+		t.Errorf("the reviewer was not told what approving the default does: %q", reviewerPrompts[0])
+	}
+	// And the item is where the evidence says it belongs, not closed against it.
+	if outcome.WorkItemClosed || tracker.closed {
+		t.Fatalf("the item closed against a diagnosis; calls = %v", tracker.calls)
+	}
+	if !tracker.reopened || !tracker.item.Parking.Parked() {
+		t.Fatalf("the item was not put back parked; calls = %v", tracker.calls)
+	}
+	if !strings.Contains(tracker.item.Parking.Reason(), "has not landed") {
+		t.Errorf("the parking reason does not name what would release the item: %q", tracker.item.Parking)
+	}
+}
+
 // A sweep settling a run somebody killed decides the same way the run would
 // have. It has to: a run whose merge the forge only queued is settled by a later
 // process entirely, and a sweep reading the promotion alone is exactly the

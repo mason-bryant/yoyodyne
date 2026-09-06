@@ -285,7 +285,13 @@ amendment channels do not:
 - The reviewer is shown it, above the patch and inside the untrusted evidence,
   so a diagnosis is judged as a diagnosis rather than as a missing
   implementation. A change that claims evidence and is plainly the
-  implementation is a finding, for the mirror-image reason.
+  implementation is a finding, for the mirror-image reason. The default is shown
+  too, on the nearly-every run that claims nothing: the reviewer is told this
+  change closes the item and to approve it only if it is the work the item asked
+  for. Without that the claim that closes items was the one claim nobody ever
+  saw — which is how a diagnosis came to be approved, and its item closed, by a
+  reviewer that called the change evidence in its own summary
+  (`docs/diagnoses/yoyodyne-ifd-209-26-closure-routes.md`).
 - A claim the harness cannot read withholds the closure rather than being
   swallowed the way an unreadable report is. The developer wrote a block, so it
   was trying to say something about the closure; an item left open is something

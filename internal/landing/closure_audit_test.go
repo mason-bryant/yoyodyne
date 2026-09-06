@@ -1,0 +1,331 @@
+package landing_test
+
+// The audit of every place this repository closes a work item, held to the code
+// it describes.
+//
+// Closure is the one act a landing decides. A run that lands evidence integrates
+// exactly as any other run does and leaves its item open, so a closure taken
+// without reading the claim is a false closure — the class that closed
+// yoyodyne-ifd.284 against a diagnosis saying in its own words that the work was
+// not doable yet, and that yoyodyne-ifd.209.23 and .209.24 shipped the claim to
+// stop. What those two could not ship is a guarantee that the next closure route
+// somebody writes reads it, because the guarantee is about code that does not
+// exist yet.
+//
+// So every call that closes an item is listed below with what makes it safe, and
+// this fails on one that is not listed. Two kinds are safe and the audit says
+// which each is: a run's own settlement, which must consult the landing, and an
+// act a person took, which is not a landing at all and has nothing to consult.
+// The consult is checked mechanically rather than taken from the row — a row can
+// claim a guard the declaration lost — so a settlement that stops asking fails
+// here even though its row still reads correctly.
+//
+// `docs/diagnoses/yoyodyne-ifd-209-26-closure-routes.md` is the audit written
+// out, with how yoyodyne-ifd.284 came to be closed.
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// repositoryRoot is the checkout this test reads, reached from the package
+// directory. The code is swept where it actually lives, because a copy is
+// exactly what cannot carry the route somebody added.
+const repositoryRoot = "../.."
+
+// closureTrees are the source trees swept. Everything the harness runs is in one
+// of them, and a tree added later is one this has to be told about, which is a
+// change somebody makes on purpose.
+var closureTrees = []string{"internal", "cmd"}
+
+// closureKind is what makes one closure site safe.
+type closureKind string
+
+const (
+	// kindSettlement is a run settling its own work item. It closes only where the
+	// landing discharges, and the declaration it sits in has to say so.
+	kindSettlement closureKind = "settlement"
+	// kindHuman is a person closing an item themselves, through the product
+	// manager's conversation. There is no landing to consult: nothing integrated,
+	// no developer claimed anything, and the decision is the one the operator's
+	// role is for.
+	kindHuman closureKind = "human"
+)
+
+// closureSite is one declaration that closes a work item, and what makes it safe
+// there.
+type closureSite struct {
+	File        string
+	Declaration string
+	// Calls is how many closures the declaration takes, so a second one added to a
+	// declaration already listed is audited rather than covered by the first.
+	Calls int
+	// ConsultsLanding is whether the declaration reads the landing's outcome. It
+	// is swept from the source rather than asserted here, so the audit cannot
+	// claim a guard the code no longer has.
+	ConsultsLanding bool
+	// Kind is which of the two safe shapes this is.
+	Kind closureKind
+	// Why is what makes it safe, in prose, because the question a reader has to
+	// settle is whether this site is a run's settlement or a person's decision and
+	// no sweep can answer that.
+	Why string
+}
+
+func (s closureSite) key() string { return s.File + "\t" + s.Declaration }
+
+// auditedClosures is the audit itself: every place this repository closes a work
+// item, and what makes each one safe.
+var auditedClosures = []closureSite{
+	{
+		File: "internal/chat/tracker.go", Declaration: "(*Session) carryOutTrackerAction", Calls: 2,
+		ConsultsLanding: false, Kind: kindHuman,
+		Why: "the product manager closing or retiring an item in conversation. Nothing integrated and no developer claimed anything, so there is no landing to read; what authorizes it is the role, and the two calls are the close and the retirement.",
+	},
+	{
+		File: "internal/orchestrator/pipeline.go", Declaration: "(*activeRun) complete", Calls: 1,
+		ConsultsLanding: true, Kind: kindSettlement,
+		Why: "a run settling its own item once its promotion is where it will stay. It closes only on a landing that discharges; an undischarged one goes to settleUndischarged instead, and a merge the forge only queued defers the whole settlement to reconciliation.",
+	},
+	{
+		File: "internal/orchestrator/reconcile.go", Declaration: "(Reconciler) closeSettledMerge", Calls: 1,
+		ConsultsLanding: true, Kind: kindSettlement,
+		Why: "the sweep settling a run whose queued merge the forge has since performed. The forge merging the change settles where the work is and not whether it discharges the item, so the claim is read back from the durable record the run that made it left behind.",
+	},
+	{
+		File: "internal/orchestrator/reconcile.go", Declaration: "(Reconciler) completeIntegrated", Calls: 1,
+		ConsultsLanding: true, Kind: kindSettlement,
+		Why: "the sweep finishing a run somebody interrupted after its change was promoted. It decides the same way the run itself would have, from the same durable claim, so an interrupted run and a finished one leave the item in the same place.",
+	},
+}
+
+// Every closure in this repository is listed above, everything listed above
+// still closes something, and every settlement among them still reads the
+// landing. The first stops a new route shipping unaudited; the second stops the
+// list becoming a record of code that has moved on; the third is the one the
+// false-closure class actually needs, because a settlement can lose its guard
+// without moving.
+func TestEveryRouteThatClosesAWorkItemIsAudited(t *testing.T) {
+	t.Parallel()
+
+	found, err := closureSitesIn(repositoryRoot)
+	if err != nil {
+		t.Fatalf("closureSitesIn() error = %v", err)
+	}
+	// A sweep that found nothing would report no unaudited route, which is the one
+	// way this check can pass while reading nothing at all.
+	if len(found) == 0 {
+		t.Fatal("the sweep found no work item closures in this repository; it is looking in the wrong place")
+	}
+
+	audited := make(map[string]closureSite, len(auditedClosures))
+	for _, site := range auditedClosures {
+		if _, listed := audited[site.key()]; listed {
+			t.Errorf("the audit lists %s: %s twice", site.File, site.Declaration)
+		}
+		if strings.TrimSpace(site.Why) == "" {
+			t.Errorf("the audit lists %s: %s and does not say what makes it safe", site.File, site.Declaration)
+		}
+		if site.Kind == kindSettlement && !site.ConsultsLanding {
+			t.Errorf("the audit lists %s: %s as a run's settlement that does not consult the landing, which is the false closure itself",
+				site.File, site.Declaration)
+		}
+		audited[site.key()] = site
+	}
+
+	for _, site := range found {
+		listed, ok := audited[site.key()]
+		if !ok {
+			// Named one at a time, with what the reader has to decide, because a count
+			// of unaudited routes is not something anybody can act on.
+			t.Errorf("%s: %s closes a work item in %d place(s) and the audit does not list it. Add a row saying what makes it safe: "+
+				"a run's settlement closes only where the landing discharges, and a closure a person took has no landing to read. "+
+				"A settlement that closes without consulting the claim is how yoyodyne-ifd.284 was closed against its own diagnosis",
+				site.File, site.Declaration, site.Calls)
+			continue
+		}
+		if listed.Calls != site.Calls {
+			t.Errorf("%s: %s closes a work item in %d place(s) and the audit records %d; read the ones that changed and correct the row",
+				site.File, site.Declaration, site.Calls, listed.Calls)
+		}
+		if listed.ConsultsLanding != site.ConsultsLanding {
+			t.Errorf("%s: %s %s the landing outcome and the audit says it %s; the guard moved and the row did not",
+				site.File, site.Declaration, consults(site.ConsultsLanding), consults(listed.ConsultsLanding))
+		}
+		delete(audited, site.key())
+	}
+
+	stale := make([]string, 0, len(audited))
+	for _, site := range audited {
+		stale = append(stale, site.File+": "+site.Declaration)
+	}
+	sort.Strings(stale)
+	for _, row := range stale {
+		t.Errorf("the audit lists %s, which closes no work item any more; remove the row", row)
+	}
+}
+
+func consults(reads bool) string {
+	if reads {
+		return "reads"
+	}
+	return "does not read"
+}
+
+// closureSitesIn is every declaration in the swept trees that closes a work
+// item, in a stable order. Test sources are left out: what this is for is the
+// routes the harness actually takes, and a test that closes an item is
+// describing one rather than deciding anything.
+func closureSitesIn(root string) ([]closureSite, error) {
+	var sites []closureSite
+	for _, tree := range closureTrees {
+		treeRoot := filepath.Join(root, tree)
+		if _, err := os.Stat(treeRoot); err != nil {
+			// A tree a checkout does not carry is not a failure here: the caller
+			// finding no closures at all is what says the sweep read the wrong place.
+			continue
+		}
+		err := filepath.WalkDir(treeRoot, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				// A fixture is a description of code rather than code the harness runs,
+				// exactly as every other repository sweep here reads it.
+				if entry.Name() == "testdata" {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			relative, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			found, err := closureSitesInFile(path, filepath.ToSlash(relative))
+			if err != nil {
+				return err
+			}
+			sites = append(sites, found...)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(sites, func(first, second int) bool {
+		if sites[first].File != sites[second].File {
+			return sites[first].File < sites[second].File
+		}
+		return sites[first].Declaration < sites[second].Declaration
+	})
+	return sites, nil
+}
+
+// closureSitesInFile counts the closures in one file, by the declaration they
+// sit in, and says of each declaration whether it also reads the landing's
+// outcome. Both are read off the same declaration on purpose: what makes a
+// settlement safe is that the closure and the consult are in one place, so a
+// guard moved out of the declaration is a guard this reports as gone.
+func closureSitesInFile(path, relative string) ([]closureSite, error) {
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", relative, err)
+	}
+	var sites []closureSite
+	for _, declaration := range parsed.Decls {
+		closures, consultsLanding := 0, false
+		ast.Inspect(declaration, func(node ast.Node) bool {
+			if closesWorkItem(node) {
+				closures++
+			}
+			if readsLandingOutcome(node) {
+				consultsLanding = true
+			}
+			return true
+		})
+		if closures == 0 {
+			continue
+		}
+		sites = append(sites, closureSite{
+			File:            relative,
+			Declaration:     declarationName(declaration),
+			Calls:           closures,
+			ConsultsLanding: consultsLanding,
+		})
+	}
+	return sites, nil
+}
+
+// closesWorkItem reports a call that closes a work item in the tracker. It is
+// recognized as `Complete` on something named Tracker rather than as the name
+// alone, because `Complete` is also what a cost record and a worktree cleanup
+// answer about themselves and neither of those closes anything.
+func closesWorkItem(node ast.Node) bool {
+	call, ok := node.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Complete" {
+		return false
+	}
+	receiver, ok := selector.X.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	return receiver.Sel.Name == "Tracker"
+}
+
+// readsLandingOutcome reports a declaration asking what a landing does to its
+// item. Both derivations count: LandingDischarges is the question itself, and
+// landingSettled is how a sweep asks it of an item it has already read.
+func readsLandingOutcome(node ast.Node) bool {
+	call, ok := node.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	switch named := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return named.Sel.Name == "LandingDischarges"
+	case *ast.Ident:
+		return named.Name == "landingSettled"
+	}
+	return false
+}
+
+// declarationName says where a closure sits, in the words somebody would use to
+// find it: the method with its receiver, the function, or the file scope a
+// package-level value is initialized in.
+func declarationName(declaration ast.Decl) string {
+	function, ok := declaration.(*ast.FuncDecl)
+	if !ok {
+		return "file scope"
+	}
+	if function.Recv != nil && len(function.Recv.List) == 1 {
+		return "(" + receiverName(function.Recv.List[0].Type) + ") " + function.Name.Name
+	}
+	return function.Name.Name
+}
+
+func receiverName(receiver ast.Expr) string {
+	switch typed := receiver.(type) {
+	case *ast.StarExpr:
+		return "*" + receiverName(typed.X)
+	case *ast.IndexExpr:
+		return receiverName(typed.X)
+	case *ast.Ident:
+		return typed.Name
+	}
+	return "?"
+}

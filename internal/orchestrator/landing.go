@@ -162,6 +162,13 @@ func claimedLanding(state runstate.State) landing.Claim {
 // judged as a diagnosis rather than as a missing implementation. A claim that
 // could not be read is described as that: the reviewer is the one reader who can
 // still tell from the change itself which of the two it was looking at.
+//
+// It answers for every run rather than only for the ones that claimed something.
+// The default closes the item and nobody writes it, so a reviewer shown only the
+// written claims is shown nothing on nearly every run — which is how a diagnosis
+// came to be approved by a reviewer that never knew approving it would close the
+// item. `docs/diagnoses/yoyodyne-ifd-209-26-closure-routes.md` audits the
+// closure routes this feeds.
 func describeLanding(state runstate.State) string {
 	if state.LandingProblem != "" {
 		return "The developer claimed a landing outcome that could not be read: " + state.LandingProblem +

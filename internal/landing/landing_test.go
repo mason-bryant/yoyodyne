@@ -140,9 +140,25 @@ func TestTheDescriptionSaysWhichLandingWasClaimed(t *testing.T) {
 	if strings.Contains(discharged, "does not discharge") {
 		t.Errorf("Describe() of a discharging claim reads as the other one: %q", discharged)
 	}
-	unclaimed := landing.Claim{}
-	if unclaimed.Describe() != "" {
-		t.Errorf("Describe() invented a claim nobody made: %q", unclaimed.Describe())
+	// The claim nobody made is the one that closed yoyodyne-ifd.284 against a
+	// diagnosis, and it used to describe nothing at all — so the reviewer, the one
+	// reader that can tell a diagnosis from an implementation, was shown nothing on
+	// nearly every run. It is described as what it is: a discharging landing that
+	// no reply carried.
+	unclaimed := landing.Claim{}.Describe()
+	if !strings.Contains(unclaimed, "claimed no landing outcome") {
+		t.Errorf("Describe() does not say the claim was never made: %q", unclaimed)
+	}
+	if strings.Contains(unclaimed, "does not discharge") {
+		t.Errorf("Describe() of the default reads as the landing that leaves the item open: %q", unclaimed)
+	}
+	// Whoever is shown a discharging landing is told what approving it does, on
+	// the written claim and on the default alike. Without that the reviewer of a
+	// diagnosis is being asked to approve a closure nobody named to it.
+	for _, described := range []string{unclaimed, discharged} {
+		if !strings.Contains(described, "approve it only if it is the work the item asked for") {
+			t.Errorf("a discharging landing was described without saying what approving it does: %q", described)
+		}
 	}
 }
 
