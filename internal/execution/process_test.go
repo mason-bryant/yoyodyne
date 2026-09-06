@@ -66,11 +66,22 @@ func TestOSProcessRunnerFailure(t *testing.T) {
 	}
 }
 
+// A process that outlives its total budget is reported as timed out.
+//
+// The budget has to absorb the child's own startup, for the reason the idle
+// bound below does and then one of its own: the total budget arms its context
+// before the process is started, so a budget shorter than the exec takes has
+// its deadline fire inside Start() -- and what comes back is then
+// ErrProcessNotStarted rather than a timed-out result, which is a different
+// answer to a different question. Twenty milliseconds was under that cost on a
+// loaded machine under the race detector, and this is the failure it produced.
+// The bound below is far above the exec and far below the five seconds the
+// helper sleeps, so what ends this process is still unambiguously the budget.
 func TestOSProcessRunnerTimeout(t *testing.T) {
 	t.Parallel()
 
 	command := helperCommand("sleep", "")
-	command.Timeout = 20 * time.Millisecond
+	command.Timeout = 500 * time.Millisecond
 	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
