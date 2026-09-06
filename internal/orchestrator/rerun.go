@@ -48,22 +48,29 @@ package orchestrator
 // claim and any agent. So it is given back, and the carry-out reports the same
 // waiting state it would have reported a moment earlier.
 //
-// # Why a pause the fresh run meets gives the claim back
+// # Why a fresh run that never existed gives the claim back
 //
-// The other is a pause. The operator's hold on all activity, an unresolved
-// directive, work the item waits on, and a held intake all stop the pipeline
-// before it reserves anything, so what comes back is a paused outcome carrying no
-// run: no run record, no claimed item, no agent. That is the same nothing a
-// refused reservation leaves, and it has to cost the same — a claim settled
-// against an empty run identifier is a stoppage whose next carry-out is refused
-// as already re-run, for a run nobody made. So the claim is given back and the
-// pause is reported in place of the run, and lifting it and asking again carries
-// out the same decision.
+// The other is everything else the pipeline answers with before it reserves
+// anything: a pause — the operator's hold on all activity, an unresolved
+// directive, work the item waits on, a held intake — and any refusal at all. Each
+// of them comes back as an outcome carrying no run: no run record, no claimed
+// item, no agent. That is the same nothing a refused reservation leaves, and it
+// has to cost the same — a claim settled against an empty run identifier is a
+// stoppage whose next carry-out is refused as already re-run, for a run nobody
+// made, which is the contradiction the first exercised re-run met on
+// yoyodyne-ifd.125.1. So the claim is given back and what the run met is reported
+// in place of it, and asking again once that no longer holds carries out the same
+// decision.
 //
-// Two of those four are read here before the claim as well, and that is not the
-// same question asked twice: the reading before the claim keeps a harness that is
-// already held from spending anything, and this is what covers a hold, a
-// directive, or a dependency that arrives while the claim is being taken.
+// The outcome's own run identifier is what says which side of the reservation the
+// pipeline stopped on, rather than a list here of the conditions it might have
+// stopped for. A refusal that nonetheless names a run is a run that existed and
+// did something, so its claim stands and is settled like any other.
+//
+// Some of those conditions are read here before the claim as well, and that is
+// not the same question asked twice: the reading before the claim keeps a harness
+// that is already held, or an item no run may start on, from spending anything,
+// and this is what covers what arrives while the claim is being taken.
 //
 // # Why the hold applies
 //
@@ -155,10 +162,10 @@ type RerunRecords interface {
 	Claim(ctx context.Context, rerun runstate.Rerun) (runstate.Rerun, error)
 	Settle(ctx context.Context, docketKey, runID string, preserved runstate.PreservedArtifacts) (runstate.Rerun, error)
 	Claimed(workItemID string) ([]runstate.Rerun, error)
-	// Withdraw gives the claim back, for the two cases where the run it was taken
-	// for provably never existed: a reservation refused for developer capacity, and
-	// a pause met where the fresh run would have started. See
-	// runstate.RerunStore.Withdraw for why those cases and no other.
+	// Withdraw gives the claim back, for the case where the run it was taken for
+	// provably never existed: the pipeline answered before it reserved anything,
+	// whether with a refusal, a pause, or a full harness. See
+	// runstate.RerunStore.Withdraw for why that case and no other.
 	Withdraw(ctx context.Context, docketKey string) error
 }
 
@@ -304,12 +311,15 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	result.Preserved = preservedOf(prior)
 	// The docket says what was true when the entry was made. What decides whether
 	// this stoppage may be run again is what is true now, so the run's own record
-	// is asked rather than the entry that describes it.
+	// is asked rather than the entry that describes it. Both this and the run in
+	// flight below describe something that is still moving, so both stop being
+	// true on their own — which is what a reader of either refusal has to act on,
+	// and why each of them says the stoppage kept its re-run.
 	if err := stoppageIsOver(prior); err != nil {
-		return result, err
+		return result, unspentRefusal(err)
 	}
 	if err := r.noRunInFlight(entry.WorkItemID); err != nil {
-		return result, err
+		return result, unspentRefusal(err)
 	}
 	// That the development manager decided this is read rather than taken on
 	// trust. The reason this run records names that role, so an action carried out
@@ -384,6 +394,14 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	// once-only guard.
 	if pausedBeforeStarting(outcome) {
 		return r.withdrawPaused(ctx, entry, outcome, result), runErr
+	}
+	// And so is every other refusal made before the reservation, which is the case
+	// the two above are particular kinds of: the pipeline asks the item's state,
+	// the repository's, and the provider's before it reserves anything, and any of
+	// them can have changed since this action asked its own questions. Nothing was
+	// reserved, so the claim goes back and the refusal is reported saying so.
+	if refusedBeforeStarting(outcome, runErr) {
+		return r.withdrawRefused(ctx, entry, runErr, result)
 	}
 	result.Outcome = outcome
 	result.Preserved = r.settle(ctx, entry, prior, outcome, &result)
@@ -500,6 +518,17 @@ func (r Rerunner) decided(entry triage.Entry) (decided runstate.TriageCounters, 
 	return counters, len(claimed), nil
 }
 
+// unspentRefusal says what a refusal made before the claim cost the stoppage,
+// which is nothing. It is worth saying rather than leaving implied: what the
+// refusals before the claim have in common is that the condition can clear, and a
+// reader who cannot tell whether asking again is worth anything has to go and
+// read the record to find out. The conditions these refusals are about are the
+// shared ones, so the sentence is added where the re-run asks them rather than
+// inside a helper the repair action asks the same question through.
+func unspentRefusal(err error) error {
+	return fmt.Errorf("%w; nothing was claimed, so the stoppage keeps its re-run — asking again once that is no longer so carries out the same decision", err)
+}
+
 // itemCanBeRun reports the work item being in a state a fresh run may start on,
 // which for a docketed stoppage ordinarily means somebody has put it back: a run
 // that stopped on a durable blocker blocked its item, and a blocked item is not
@@ -602,6 +631,17 @@ func pausedBeforeStarting(outcome Outcome) bool {
 	return outcome.Paused && outcome.RunID == ""
 }
 
+// refusedBeforeStarting reports the fresh run having been refused before it was
+// reserved. The missing run identifier is the whole of the condition, and it is
+// proof rather than a guess: the pipeline reserves the run and its record in one
+// step, everything it refuses before that returns an empty outcome, and every
+// failure after it is reported on the run it failed. So a refusal carrying no run
+// is one that claimed no work item, cut no worktree and invoked no agent, and the
+// claim taken for it is a claim nothing was done on.
+func refusedBeforeStarting(outcome Outcome, err error) bool {
+	return err != nil && outcome.RunID == ""
+}
+
 // withdraw gives back the claim taken for a fresh run a full harness refused to
 // reserve, and reports the same waiting state a carry-out that met capacity
 // before the claim reports.
@@ -624,20 +664,42 @@ func (r Rerunner) withdrawPaused(ctx context.Context, entry triage.Entry, paused
 	return result
 }
 
-// giveBack returns the claim taken for a fresh run that provably never existed.
-// met names what the run met instead, so a claim that could not be given back
-// reads as the thing that stopped it rather than as a record failure with no
-// cause.
+// withdrawRefused gives back the claim taken for a fresh run the pipeline
+// refused before it reserved anything, and reports the refusal with the
+// accounting the asker needs: nothing ran and nothing was spent, so the same
+// decision is carried out by asking again once the refusal no longer holds.
+//
+// The accounting goes into the error rather than beside it, because a refused
+// carry-out is reported as its refusal — a result that says only "not started"
+// is the one thing this path never returns.
+func (r Rerunner) withdrawRefused(ctx context.Context, entry triage.Entry, refusal error, result RerunResult) (RerunResult, error) {
+	result.Started = false
+	problem := r.giveBack(ctx, entry, fmt.Sprintf(
+		"the fresh run of %s was refused where it would have started", entry.WorkItemID), &result)
+	if problem != "" {
+		return result, fmt.Errorf("%w; %s", refusal, problem)
+	}
+	return result, fmt.Errorf("%w; nothing was reserved, so the claim taken for it was given back and the stoppage keeps its re-run — asking again once that no longer refuses carries out the same decision", refusal)
+}
+
+// giveBack returns the claim taken for a fresh run that provably never existed,
+// and reports what stopped it where it could not. met names what the run met
+// instead, so a claim that could not be given back reads as the thing that
+// stopped it rather than as a record failure with no cause.
 //
 // That failure is said out loud rather than swallowed: the stoppage has then paid
 // for a refusal that was meant to be free, and the decision it authorized needs a
 // person to look at it, because nothing else here will notice.
-func (r Rerunner) giveBack(ctx context.Context, entry triage.Entry, met string, result *RerunResult) {
-	if err := r.Reruns.Withdraw(ctx, entry.Key); err != nil {
-		result.note(fmt.Sprintf(
-			"%s, and the claim taken for it could not be given back, so the stoppage has spent its re-run on a run that never started: %v",
-			met, err))
+func (r Rerunner) giveBack(ctx context.Context, entry triage.Entry, met string, result *RerunResult) string {
+	err := r.Reruns.Withdraw(ctx, entry.Key)
+	if err == nil {
+		return ""
 	}
+	problem := fmt.Sprintf(
+		"%s, and the claim taken for it could not be given back, so the stoppage has spent its re-run on a run that never started: %v",
+		met, err)
+	result.note(problem)
+	return problem
 }
 
 // pauseMet names the pause a fresh run met, for a report that has to say what

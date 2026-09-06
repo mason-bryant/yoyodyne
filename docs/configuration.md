@@ -2852,9 +2852,13 @@ clears and reading it alone would let a second stoppage of an already re-run ite
 start on the strength of a decision that was about the first. A second stoppage
 needs a second decision, which past the once-per-item cap is an escalation rather
 than a larger budget. It is refused, finally, unless the work item itself is one
-a run may start on — open, with nothing it depends on outstanding — which for a
-docketed stoppage ordinarily means somebody has put it back, because the run
-stopping blocked it. The intake hold applies too, because the harness is the one
+a run may start on — open or blocked, with nothing it depends on outstanding.
+Blocked is deliberately among them: stopping the run blocked the item, and a
+status written when work stops and never rewritten when what stopped it clears is
+not something to refuse a decision over, so re-entry supersedes the standing
+blocker rather than waiting for somebody to remember to reopen the item. What
+still refuses is unfinished work the item waits for, and an item that has left
+the backlog. The intake hold applies too, because the harness is the one
 choosing the work; a re-run under a hold starts nothing and claims nothing, so the
 stoppage keeps its re-run for after the hold is lifted. The fresh run records
 the development manager as having chosen it and the reasoning the harness was
@@ -2866,11 +2870,21 @@ and the claim is what spends it. A condition asked after the claim would spend
 the budget on refusing to use it: the item's status is the one that showed this,
 where a re-run of a blocked item was refused for the status and the next attempt
 was then refused by the once-only guard, for a run that had never happened. So a
-refused re-run leaves the stoppage its re-run and says what would make it stop
-refusing, and asking again once that is true carries out the same decision. The
-opposite order holds past the claim, deliberately: the claim is taken before the
-run is started, so a process that dies between the two has spent a re-run nobody
-took rather than taken one nobody recorded.
+refused re-run leaves the stoppage its re-run and says so, along with what would
+make it stop refusing, and asking again once that is true carries out the same
+decision. The opposite order holds past the claim, deliberately: the claim is
+taken before the run is started, so a process that dies between the two has spent
+a re-run nobody took rather than taken one nobody recorded.
+
+**A refusal the fresh run meets past the claim gives the claim back**, because
+the pipeline asks the item's state, the repository's and the provider's again
+where it would start, and any of them can have changed since this action asked
+its own. A refusal made there reserved no run, so it claimed no work item, cut no
+worktree and invoked no agent, and what says which side of the reservation it
+stopped on is whether the outcome names a run at all. So the claim goes back, the
+refusal says so, and asking again once it no longer refuses carries out the same
+decision. A refusal that does name a run is a run that existed and did something:
+its claim stands and is settled like any other.
 
 **A full harness is a state rather than a refusal.** `execution.max_concurrent_developers`
 is read before the claim, from the same runs in flight the reservation counts, and
@@ -2897,8 +2911,8 @@ and lifting it and asking again carries out the same decision — rather than
 meeting the once-only guard for a run nobody ever made. Two of the four are read
 before the claim as well, which is not the same question twice: that reading
 keeps a harness already held from spending anything, and this covers one that
-arrives while the claim is being taken. These two cases are the only things that
-give a claim back.
+arrives while the claim is being taken. A claim carrying a run is never given
+back, whatever became of that run.
 
 The re-run is recorded beside the counters, one file per docketed stoppage at
 `<state root>/products/<product id>/reruns/`, and it carries what the stopped
@@ -2908,9 +2922,9 @@ what to cherry-pick — and **retired** explicitly once it has. Anything that co
 not be retired stays kept with the reason recorded: a worktree holding
 uncommitted work and a branch whose work nothing promoted are both left exactly
 where they are, because nothing else records what they hold. Nothing automated
-deletes the record, for the reason nothing deletes a counter file — save the two
-withdrawals above, which remove a claim whose run was refused a developer slot or
-met a pause where it would have started, and so never existed.
+deletes the record, for the reason nothing deletes a counter file — save the
+withdrawals above, which remove a claim whose fresh run the pipeline answered
+before it reserved anything, and which therefore never existed.
 
 A retirement is written onto the stopped run itself as well, under that run's own
 lease, because its record is what `yoyo status` and the docket read to say

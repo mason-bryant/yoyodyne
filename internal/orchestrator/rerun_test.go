@@ -347,6 +347,11 @@ func TestARerunIsRefusedWhileAnythingOfTheStoppedRunIsStillLive(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), refusal.want) {
 				t.Fatalf("Rerun() error = %v, want a refusal naming %q", err, refusal.want)
 			}
+			// Both of these clear on their own, so what the refusal owes a reader
+			// is that the decision is still there to carry out afterwards.
+			if !strings.Contains(err.Error(), "keeps its re-run") {
+				t.Fatalf("refusal %q does not say the stoppage keeps its re-run", err)
+			}
 			if len(harness.started) != 0 {
 				t.Fatalf("started = %#v, want nothing started", harness.started)
 			}
@@ -376,8 +381,14 @@ func TestARerunIsRefusedWhileTheItemHasARunInFlight(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), inFlight.RunID) {
 		t.Fatalf("Rerun() error = %v, want a refusal naming the run in flight", err)
 	}
+	if !strings.Contains(err.Error(), "keeps its re-run") {
+		t.Fatalf("refusal %q does not say the stoppage keeps its re-run", err)
+	}
 	if len(harness.started) != 0 {
 		t.Fatalf("started = %#v, want nothing started", harness.started)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+		t.Fatalf("a refused re-run spent the stoppage's claim")
 	}
 }
 
@@ -493,9 +504,53 @@ func TestAClaimThatCouldNotBeGivenBackIsReported(t *testing.T) {
 	}
 }
 
-// A refusal that is not about capacity is settled like any other run that ended
-// badly: the claim stands, because something happened on it.
-func TestARunThatFailedForSomethingElseKeepsItsClaim(t *testing.T) {
+// The contradiction the first exercised re-run met on yoyodyne-ifd.125.1, in the
+// shape anything refused past the claim leaves: a refusal made before the fresh
+// run was reserved recorded no run and spent the stoppage's one re-run anyway, so
+// the next attempt was refused as already re-run for a run that had never
+// happened. Nothing was reserved, so the claim goes back and the same decision is
+// carried out by asking again.
+func TestARerunRefusedBeforeItWasReservedGivesTheClaimBackAndCanBeAskedAgain(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.failure = errors.New("repository is not ready for an isolated run: the checkout has uncommitted changes")
+	harness.outcome = Outcome{}
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("Rerun() error = %v, want the refusal reported", err)
+	}
+	// The refusal is only free if it says so, because what a reader decides next
+	// turns on whether asking again is worth anything.
+	if !strings.Contains(err.Error(), "keeps its re-run") {
+		t.Fatalf("refusal %q does not say the stoppage keeps its re-run", err)
+	}
+	if result.Started {
+		t.Fatalf("result = %#v, want a run that was never reserved reported as not started", result)
+	}
+	if result.RecordProblem != "" {
+		t.Fatalf("record problem = %q, want the claim given back cleanly", result.RecordProblem)
+	}
+	if _, claimed, err := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the claim given back", claimed, err)
+	}
+
+	// And the decision survives it: the second attempt carries out the same one
+	// rather than meeting the once-only guard for a run nobody made.
+	harness.failure = nil
+	harness.outcome = Outcome{RunID: "run-fedcba9876543210fedcba9876543210", WorkItemID: docketedItem, Status: runstate.StatusSucceeded}
+	if _, err := harness.rerunner().Rerun(context.Background(), rerunRequest()); err != nil {
+		t.Fatalf("Rerun() after the refusal error = %v, want the same decision carried out", err)
+	}
+	if len(harness.started) != 2 {
+		t.Fatalf("starts = %d, want the refused attempt and the one that ran", len(harness.started))
+	}
+}
+
+// A run that was reserved and then failed is settled like any other run that
+// ended badly: the claim stands, because something happened on it. The run its
+// outcome names is what says so.
+func TestARunThatFailedAfterItWasReservedKeepsItsClaim(t *testing.T) {
 	t.Parallel()
 
 	harness := newRerunHarness(t, stoppedState())
@@ -505,7 +560,31 @@ func TestARunThatFailedForSomethingElseKeepsItsClaim(t *testing.T) {
 		t.Fatalf("Rerun() error = %v, want the failure reported", err)
 	}
 	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); !claimed {
-		t.Fatal("a re-run that failed for something other than capacity gave its claim back")
+		t.Fatal("a re-run whose fresh run was reserved and then failed gave its claim back")
+	}
+}
+
+// A claim that could not be given back after a refusal is said out loud in the
+// refusal itself, because that is the only thing this path reports: the stoppage
+// has spent its re-run on a run that never started, and only somebody looking can
+// give it back.
+func TestAClaimThatCouldNotBeGivenBackAfterARefusalIsReported(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.failure = errors.New("repository is not ready for an isolated run: the checkout has uncommitted changes")
+	harness.outcome = Outcome{}
+	rerunner := harness.rerunner()
+	rerunner.Reruns = unwithdrawableReruns{RerunRecords: harness.reruns}
+	result, err := rerunner.Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("Rerun() error = %v, want the refusal still reported", err)
+	}
+	if !strings.Contains(err.Error(), "could not be given back") {
+		t.Fatalf("Rerun() error = %v, want the spent claim named in the refusal", err)
+	}
+	if !strings.Contains(result.RecordProblem, "could not be given back") {
+		t.Fatalf("record problem = %q, want the spent claim named", result.RecordProblem)
 	}
 }
 
@@ -1094,6 +1173,59 @@ func TestARerunOnABlockedItemIsCarriedOutWithoutAnybodyReopeningIt(t *testing.T)
 	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
 	if err != nil {
 		t.Fatalf("Rerun() on a blocked item error = %v, want the decision carried out", err)
+	}
+	if !rerun.Started || rerun.Outcome.Integration == nil {
+		t.Fatalf("result = %#v, want the fresh run started and landed", rerun)
+	}
+}
+
+// The same accounting over the real pipeline, for a refusal the action's own
+// pre-flight cannot cover: something else starts the item while this carry-out is
+// committing to it, and the pipeline refuses the fresh run before it reserves
+// anything. Nothing was reserved, so the claim goes back rather than leaving the
+// stoppage refused as already re-run for a run nobody made.
+func TestARerunRefusedByThePipelineGivesTheClaimBackAndLaunchesLater(t *testing.T) {
+	t.Parallel()
+
+	var pipelined *pipelinedRerun
+	racing := runningState("run-22223333444455556666777788889999", docketedItem)
+	raced := false
+	pipelined = newPipelinedRerun(t, func() {
+		if raced {
+			return
+		}
+		raced = true
+		if err := pipelined.runs.Create(racing); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	})
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	if err == nil || !strings.Contains(err.Error(), racing.RunID) {
+		t.Fatalf("Rerun() error = %v, want the run that took the item named", err)
+	}
+	if !strings.Contains(err.Error(), "keeps its re-run") {
+		t.Fatalf("refusal %q does not say the stoppage keeps its re-run", err)
+	}
+	if result.Started {
+		t.Fatalf("result = %#v, want nothing reported as started", result)
+	}
+	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+		t.Fatalf("developer invocations = %d, want none behind a run that was never reserved", invocations)
+	}
+	if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the claim given back", claimed, err)
+	}
+
+	// The other run ends, and the same decision is carried out.
+	racing.Status = runstate.StatusSucceeded
+	completed := docketedNow
+	racing.CompletedAt = &completed
+	if err := pipelined.runs.Save(racing); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	if err != nil {
+		t.Fatalf("Rerun() once the item was free error = %v", err)
 	}
 	if !rerun.Started || rerun.Outcome.Integration == nil {
 		t.Fatalf("result = %#v, want the fresh run started and landed", rerun)
