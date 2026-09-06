@@ -37,9 +37,11 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/redeploy"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
+	"github.com/mason-bryant/yoyodyne/internal/watchdog"
 )
 
 type scheduleOutput struct {
@@ -57,6 +59,14 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	watch := flags.Bool("watch", false, "keep pulling work as it becomes ready, until stopped")
 	untilDrained := flags.Bool("until-drained", false, "return once nothing more is ready to pull (the default)")
 	budget := flags.Float64("budget", 0, "stop once this session has spent this many dollars (default: unbounded)")
+	// How long nothing may start, over ready work and with nothing accounting for
+	// it, before this session records that the harness has stopped. It is the
+	// same number `yoyo reconcile --stall-after` takes, and the two are the two
+	// places the reading happens: this loop catches a session that is alive and
+	// has stopped choosing, and the sweep catches the session that died. An
+	// operator who moves one should move the other, or the wider setting is the
+	// one that does not decide.
+	stallAfter := flags.Duration("stall-after", readmodel.DefaultStallThreshold, "how long nothing may start over ready work before this session records that the harness has stopped")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -78,6 +88,13 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// meant is how a session ends up running all night that was meant to return.
 	if *watch && *untilDrained {
 		fmt.Fprintln(stderr, "--watch and --until-drained ask for opposite things: one stays open, the other returns when the queue is empty")
+		return 2
+	}
+	// There is no way to ask for no watchdog, for the reason the sweep gives: a
+	// threshold of zero would take the default rather than turn anything off, so
+	// reading it as a switch would silently do the opposite of what somebody meant.
+	if *stallAfter <= 0 {
+		fmt.Fprintln(stderr, "stall-after must be positive; it is how long nothing may start rather than a switch, and there is no way to ask not to be told")
 		return 2
 	}
 
@@ -117,6 +134,17 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 		sessions = opened
 		scheduler.Sessions = sessions
+		// This loop is the harness's own, so it is one of the two places the stall
+		// reading is taken. Failing to assemble it does not stop the session: a
+		// watchdog that could not be built is a session with no watchdog, which is
+		// every session before this existed, and refusing to choose work over it
+		// would be the reporting process's failure stopping the work again.
+		watchdogFor, err := openStallWatch(*configPath, *stallAfter, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "this session will not notice that the harness has stopped, and `yoyo reconcile` is what notices instead: %v\n", err)
+		} else {
+			scheduler.Watchdog = watchdogFor
+		}
 		// Which file this process was started from, read before anything runs. A
 		// watching session outlives the deploys that land behind it, and this is
 		// what lets it take one up between runs rather than dispatching from a
@@ -336,6 +364,102 @@ func openWatchSession(configPath string) (orchestrator.WatchSessions, error) {
 		// revision leaves this empty, which reads as a comparison nobody can make.
 		build: buildinfo.Commit(),
 	}, nil
+}
+
+// openStallWatch builds the stall reading this session takes of itself, gated so
+// a loop that polls in seconds does not spawn a tracker process every poll.
+//
+// The reading is the same one `yoyo reconcile` takes, from the same package and
+// over the same records, so a session and a sweep cannot come to two answers
+// about one machine. What differs is only which failure each catches: a session
+// that is alive and has stopped choosing writes nothing about that and is caught
+// here, and a session that died is caught by the sweep.
+func openStallWatch(configPath string, threshold time.Duration, stderr io.Writer) (func(context.Context), error) {
+	parts, err := buildComponents(configPath)
+	if err != nil {
+		return nil, err
+	}
+	stalls, err := runstate.NewStallStore(parts.stateRoot, parts.config.Product.ID)
+	if err != nil {
+		return nil, err
+	}
+	watch := &stallWatch{
+		checker: watchdog.Checker{
+			Runs:      parts.store,
+			Sessions:  parts.watch,
+			Holds:     parts.holds,
+			Intake:    parts.intake,
+			Backlog:   readyBacklog{tracker: parts.tracker()},
+			Stalls:    stalls,
+			Threshold: threshold,
+		},
+		threshold: threshold,
+		stderr:    stderr,
+	}
+	return watch.check, nil
+}
+
+// stallWatch is one session's memory of when it last took the reading, which is
+// the whole of the gate.
+//
+// The gate is the threshold rather than the poll interval, and that is a cost
+// decision rather than a promptness one: a drained queue is deliberately not a
+// state that accounts for the quiet, since nothing but the tracker can say the
+// queue is drained, so an ungated reading would spawn `bd` on every poll of a
+// perfectly healthy idle product. Gating at the threshold cannot delay a stall
+// past it either — the reading is due exactly as often as a stall could newly
+// become true.
+//
+// Nothing here is synchronized because nothing needs to be: the scheduler calls
+// this from the one goroutine that runs its loop, never from a run's.
+type stallWatch struct {
+	checker   watchdog.Checker
+	threshold time.Duration
+	stderr    io.Writer
+	// last is when the reading was last taken, zero before the first.
+	last time.Time
+	// now is injected so a test does not have to spend real minutes.
+	now func() time.Time
+}
+
+// check takes the reading where one is due, and says what it found only where
+// there is something to say: a stall this reading opened, or a reading that could
+// not be made. A machine that is behaving says nothing at all, on every poll for
+// the life of the session.
+func (w *stallWatch) check(ctx context.Context) {
+	at := w.stamp()
+	if !w.last.IsZero() && at.Sub(w.last) < w.threshold {
+		return
+	}
+	w.last = at
+	reading, err := w.checker.Check(ctx)
+	if err != nil {
+		// Nothing was recorded and nothing is guessed. It is said where the session
+		// says everything else about itself, and asked again at the next interval
+		// rather than at the next poll, so a tracker that is down does not become a
+		// tracker asked every fifteen seconds.
+		fmt.Fprintf(w.stderr, "whether this product has gone quiet was not decided: %v\n", err)
+		return
+	}
+	// Only a stall this reading opened is said. One that was already standing has
+	// been said once already, by whichever reading opened it, and repeating it
+	// every threshold for the life of the session is the nagging the record exists
+	// to prevent.
+	if reading.Opened == nil {
+		return
+	}
+	fmt.Fprintf(w.stderr, "nothing has started on this product for %s, with %d item(s) ready\n",
+		reading.Opened.For().Round(time.Second), reading.Opened.Ready)
+	if reading.Opened.Chooser != "" {
+		fmt.Fprintf(w.stderr, "  %s\n", reading.Opened.Chooser)
+	}
+}
+
+func (w *stallWatch) stamp() time.Time {
+	if w.now == nil {
+		return time.Now().UTC()
+	}
+	return w.now().UTC()
 }
 
 // watchSessionLog is the scheduler's account of itself, written into the
@@ -580,11 +704,27 @@ that meets a run whose recorded evidence will not price stops and says which run
 it was rather than counting it as free and carrying on inside a bound it can no
 longer hold.
 
+A watching session also notices that the harness has stopped doing anything. On
+every poll, at most once per --stall-after, it reads whether anything has started
+at all: nothing for that long, work the tracker calls ready, and no hold, full
+machine, still-moving run or provider usage window to account for it is recorded
+against the product as a stall, which "yoyo status" reads back and the Slack sink,
+where one is running, takes to the operators once. This is the loop that catches a
+session which is alive and has stopped choosing; a session that died writes
+nothing at all, and "yoyo reconcile" is what catches that. Nothing on the path
+asks a provider anything, and noticing is all it does -- it restarts nothing. The
+reading costs one tracker read per --stall-after, and none at all while something
+else already accounts for the quiet.
+
 Options:
-  --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
-  --limit <n>       stop after starting this many runs (default: no bound)
-  --watch           keep pulling work as it becomes ready, until stopped
-  --until-drained   return once nothing more is ready to pull (the default)
-  --budget <usd>    stop once this session has spent this much (default: unbounded)
-  --json            emit machine-readable JSON`)
+  --config <path>    configuration file (default: the nearest .yoyodyne/config.yaml)
+  --limit <n>        stop after starting this many runs (default: no bound)
+  --watch            keep pulling work as it becomes ready, until stopped
+  --until-drained    return once nothing more is ready to pull (the default)
+  --budget <usd>     stop once this session has spent this much (default: unbounded)
+  --stall-after <d>  how long nothing may start over ready work, with nothing
+                     accounting for it, before a watching session records that
+                     the harness has stopped (default 10m). It is the same number
+                     "yoyo reconcile --stall-after" takes.
+  --json             emit machine-readable JSON`)
 }

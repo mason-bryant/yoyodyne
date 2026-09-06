@@ -468,6 +468,28 @@ type Scheduler struct {
 	// consulted only while watching, because a drain is a command somebody is
 	// waiting on the return of rather than a process that outlives a deploy.
 	Deployment ScheduleDeployment
+	// Watchdog notices that this product has started nothing at all while work
+	// was ready, and records it where every surface reads it back. It is called
+	// once per pull, from this loop's own goroutine and before anything is
+	// chosen, and it decides nothing about the pass: it cannot stop it, cannot
+	// fail it, and is never consulted about what to start.
+	//
+	// It is here because this is the harness's own loop — the one process that is
+	// running whenever the harness is choosing work at all — and a watchdog that
+	// hung off an optional process was no watchdog for the products that never
+	// started one. What it catches from here is the session that is alive and has
+	// stopped starting anything; the session that died writes nothing and is
+	// caught by `yoyo reconcile`, which is the other invoker for exactly that
+	// reason.
+	//
+	// It is optional, and a pass wired without one runs precisely as it did
+	// before this existed. A drain is wired without one deliberately: it is a
+	// command somebody is waiting on the return of rather than a process that
+	// keeps running, which is the same reason the redeploy check is a watch's
+	// alone. What it costs is the caller's to bound — see the gate in the command
+	// that wires it, because this loop polls in seconds and the reading behind it
+	// spawns a tracker process.
+	Watchdog func(ctx context.Context)
 	// Sleep waits out one poll interval and reports false when the context ended
 	// first. It is injected so a test does not have to spend real seconds, and
 	// defaults to a timer.
@@ -865,6 +887,14 @@ pulling:
 		if ctx.Err() != nil {
 			schedule.Stopped = ScheduleCancelled
 			break
+		}
+		// Whether anything is happening at all, asked before anything is chosen
+		// and answered from records rather than from this pass's own account of
+		// itself. A session that has stopped choosing would report nothing about
+		// that however carefully this loop described itself, which is the whole
+		// reason the reading is of the durable records instead.
+		if s.Watchdog != nil {
+			s.Watchdog(ctx)
 		}
 		// Whether a build has been deployed over this one, asked before anything
 		// is chosen and before the configuration is even read. It is asked here

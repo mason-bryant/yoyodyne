@@ -218,17 +218,14 @@ type HarnessFeed struct {
 	StaleBuildThreshold int
 	// Stalls is the durable record of this product having gone quiet — nothing
 	// started, over work the tracker calls ready, with nothing accounting for it.
-	// It is the only record here this feed writes to, and it writes to it because
-	// there is nothing else left alive to: the state it records is precisely the
-	// one in which the process that would have recorded it is dead or wedged.
-	//
-	// What it decides is still not the sink's. The reading is the read model's and
-	// one stall at a time is the record's own rule; this holds the store so that
-	// the loop which outlives a dead scheduler is the loop that asks.
+	// It is read here and never written: what notices and records a stall is
+	// internal/watchdog, run from machinery that is always running, because Slack
+	// reporting is opt-in and a watchdog that only ran where somebody had turned it
+	// on left the products least able to notice with no history at all.
 	//
 	// It is optional, and a feed assembled without one says everything else and
-	// never notices a stall — which is the seven and a half hours that asked for
-	// this, so every sink the harness builds is given one.
+	// never says this product has gone quiet — which is the seven and a half hours
+	// that asked for this, so every sink the harness builds is given one.
 	Stalls *runstate.StallStore
 	// Improvements is what the project's template supplies now against what it
 	// supplied when this project was generated, read for the one class of value
@@ -241,14 +238,6 @@ type HarnessFeed struct {
 	// configuration's three-way comparison, which `yoyo config drift` prints from
 	// too; this reads it and says one of them at a time.
 	Improvements Improvements
-	// StallThreshold is how long nothing may start before that is a stall rather
-	// than a gap between runs. Zero takes readmodel.DefaultStallThreshold.
-	StallThreshold time.Duration
-	// RunActivityWindow is how long a run's own record may go unmoved before it
-	// stops accounting for the quiet. It exists because a run in flight is the one
-	// explanation here read from a record its own process writes, so it is the one
-	// a dead process keeps writing. Zero takes readmodel.DefaultRunActivityWindow.
-	RunActivityWindow time.Duration
 	// Standing is where the harness stands, as the read model derives it: the same
 	// four lines `yoyo status` prints, said with the heartbeat so a channel and a
 	// terminal answer one question one way. It is optional, and a feed assembled
@@ -398,10 +387,10 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	batch.Deliveries = append(batch.Deliveries, f.holdDeliveries(cursors.Streams[productStream], held)...)
 
 	// What is ready to pull is asked at most once a pass, however many of this
-	// pass's readings want it. Two of them do — the waiting line and the stall
-	// watchdog — and each gates itself to one reading a heartbeat, so on the
-	// passes where those intervals coincide this is what keeps the cost at the
-	// one tracker read a heartbeat this surface promises rather than two.
+	// pass's readings want it. One does today — the waiting line, which gates
+	// itself to one reading a heartbeat — and it is still asked through this
+	// rather than directly, so a second reading that wants the number costs
+	// nothing and cannot disagree with the first about one queue.
 	ready := f.readyOnce()
 
 	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, awaitingForge, ready, batch.Streams)
@@ -425,18 +414,17 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, resident...)
 
-	// Whether anything is happening at all, from the same three readings again:
-	// the runs, for when one last started; the watch log, for whether anything was
-	// ever choosing and what it last said; and the switches, for whether somebody
-	// stopped it on purpose. It is last because it is the only one here that can
-	// write, and everything it writes is about what the whole pass just read.
+	// Whether anything is happening at all, as the product's own stall record
+	// holds it — plus the provider's usage window from the same reading of the
+	// watch log this pass already made, which is the one quiet stretch that has an
+	// answer and no record.
 	//
 	// It is a separate stream from the heartbeat above for the reason the resident
-	// is: the heartbeat says a state something wrote down, and this says the
-	// absence of anything having been written down at all — which is the state the
-	// heartbeat structurally cannot see, because the thing that feeds it is what
-	// has died.
-	stalled, err := f.stallDeliveries(ctx, cursors, held, sessions, states, ready, batch.Streams)
+	// is: the heartbeat says a state something wrote down about itself, and this
+	// says the absence of anything having been written down at all — which is the
+	// state the heartbeat structurally cannot see, because the thing that feeds it
+	// is what has died.
+	stalled, err := f.stallDeliveries(ctx, cursors, sessions, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}

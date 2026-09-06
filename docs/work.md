@@ -499,6 +499,27 @@ watching, idle, braked, resumed, stopped — where `yoyo status` and the Slack s
 read it, because an idle session and a dead one are otherwise the same silence. A
 poll that starts nothing names the runs going and what it passed over.
 
+**A watching session also notices that the harness has stopped doing anything.**
+Everything above is what the session says about itself, which works exactly as
+long as it is choosing at all. So on every poll — at most once per
+`--stall-after`, ten minutes by default — it reads the durable records instead:
+nothing started for that long, work the tracker calls ready, and no hold, full
+machine, still-moving run or provider usage window to account for it is
+[recorded against the product as a stall](operations.md#when-nothing-happened-at-all),
+which `yoyo status` reads back and the Slack sink, where one is running, takes to
+the operators once. What this loop catches is the session that is alive and has
+stopped starting anything — a queue whose ready items are all claimed by runs
+that died, say. It can catch that because the silence is dated from the runs
+rather than from the session's own account of itself: a poll that started nothing
+is not a start, so a session polling all night does not move the moment this is
+measured from, and one that has never started anything is dated from the first
+thing its log holds. A session that died writes no polls at all, and
+[`yoyo reconcile`](operations.md#recovering-interrupted-runs) takes the same
+reading for that case, under the same flag name. Nothing on the path asks a
+provider anything, and noticing is all it does — restarting whatever died is the
+session's own exit and the supervisor that starts it. It costs one tracker read
+per `--stall-after`, and none while something else already accounts for the quiet.
+
 **A reading of the harness that fails does not end the session.** The tracker is
 a database a reconcile and every settling run write to, so a reading that fails
 is contention far more often than it is a store that is broken. The one that
