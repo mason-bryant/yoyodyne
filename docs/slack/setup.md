@@ -540,10 +540,12 @@ write it: a watch session that crashes writes no stop, and one that wedges goes 
 recording that it is watching. So the harness watches for nothing having
 happened at all — no run started for ten minutes, work a run could be started
 for, and no hold, full machine, run in flight or provider usage window to account
-for it. That is recorded against the product by
-[`yoyo reconcile`](../operations.md#recovering-interrupted-runs) rather than by
-this process, and the sink sends the record to whoever you grant `direct-work` as
-a direct message, once per stall and never once per check:
+for it. That is recorded against the product by the two commands that take the
+reading — [`yoyo work --watch`](../work.md#letting-the-harness-choose-the-work) as
+it polls, and [`yoyo reconcile`](../operations.md#recovering-interrupted-runs) on
+every sweep — rather than by this process, and the sink sends the record to
+whoever you grant `direct-work` as a direct message, once per stall and never once
+per check:
 
 > Nothing at all has started on this product for 7 hours, with 3 items ready to
 > pull and nothing accounting for it. The session choosing work last recorded
@@ -556,20 +558,30 @@ that itself — and
 [`yoyo status`](../operations.md#when-nothing-happened-at-all) reads the whole
 history back afterwards, which is the only place it exists.
 
-**Ten minutes is a default, and `yoyo reconcile --stall-after` is where it is
-changed.** The threshold is on that sweep rather than on this process because
-everything on this page is optional: while the sink was the only thing taking
-this reading, a product that never turned Slack on recorded no stalls at all, and
-those are the installations least able to notice a harness that has stopped. So
-the sweep an unattended pass already runs is what notices, and this reports what
-it recorded. `yoyo slack --stall-after` is still accepted so a launcher passing it
-starts a sink; it decides nothing, and the sink says so when it is given one.
+**Ten minutes is a default, and `--stall-after` on either of those commands is
+where it is changed.** The threshold is on them rather than on this process
+because everything on this page is optional: while the sink was the only thing
+taking this reading, a product that never turned Slack on recorded no stalls at
+all, and those are the installations least able to notice a harness that has
+stopped. So the harness's own loop takes the reading as it polls, the sweep takes
+it for the case that loop cannot see — itself being dead — and this reports what
+they recorded. `yoyo slack --stall-after` is still accepted so a launcher passing
+it starts a sink; it decides nothing, and the sink says so when it is given one.
 
-How long a stopped harness can be quiet is now the threshold *and* how often that
-sweep runs, so set the two together — a sweep every half hour makes a ten-minute
-threshold mean half an hour. Set the threshold wider on a machine whose gaps
-between runs are legitimately long; there is no way to set it to nothing, because
-what that buys is silence that means the harness is dead.
+**The sink says where the reading is taken, every time it starts.** Two lines, on
+stdout, whatever the flags were: that stalls are noticed by those two commands and
+not here, and that a machine running neither records none. It is unconditional
+because losing the watchdog looks like nothing at all from a channel — a product
+with no stalls and a product nobody is checking read the same — and an
+installation that had one before this changed must not lose it quietly.
+
+A watching session holds to the threshold exactly, since it takes the reading
+itself. Where the session is the thing that died, how long a stopped harness can
+be quiet is the threshold *and* how often the sweep runs, so set those two
+together — a sweep every half hour makes a ten-minute threshold mean half an hour.
+Set the threshold wider on a machine whose gaps between runs are legitimately
+long; there is no way to set it to nothing, because what that buys is silence that
+means the harness is dead.
 
 **Nothing on this path may ask a model anything.** Every watcher the harness has
 that does — the development manager's sweep, any role turn — pauses with the
@@ -620,20 +632,22 @@ usage limit, probes every half hour.
 Reading what is ready costs one local tracker (`bd`) read, and never on the path
 of any run. One thing here wants that number now — the waiting line above, which
 asks at most once a `--heartbeat` — because the watchdog's own read went with the
-watchdog: the sweep takes it at most once per sweep, and only where nothing else
-already accounts for the quiet. A held line, a full machine, a run still moving
-and a standing provider usage window each answer without it and cost nothing. A
-drained queue does not: nothing but the tracker can say the queue is drained, so
-a perfectly healthy idle product pays that one read on every sweep, and what
-bounds the cost is how often the sweep runs rather than any gate inside it. A
+watchdog: a watching session takes it at most once per `--stall-after`, the sweep
+takes it at most once per sweep, and both only where nothing else already accounts
+for the quiet. A held line, a full machine, a run still moving and a standing
+provider usage window each answer without it and cost nothing. A drained queue
+does not: nothing but the tracker can say the queue is drained, so a perfectly
+healthy idle product pays that one read per reading, and what bounds the cost is
+the threshold and the sweep's cadence rather than anything inside the reading. A
 tracker the sink cannot read — no `bd` on the machine it runs on, say — costs that
 one message: the sink says so in its own log and asks again at the next interval,
 rather than guessing a number in either direction, and the sweep reports the same
 refusal the same way.
 
-What the sweep's cadence costs is promptness rather than the stall: a stall is
-noticed at the first sweep after the threshold has passed, and it closes at the
-first sweep after it clears. The moment recorded against it is when the harness
+What a cadence costs is promptness rather than the stall: a stall is noticed at
+the first reading after the threshold has passed — the next poll of a watching
+session, or the next sweep where the session is what died — and it closes at the
+first reading after it clears. The moment recorded against it is when the harness
 last started something rather than when anybody noticed, so the event says how
 long nothing happened whatever the noticing cost.
 

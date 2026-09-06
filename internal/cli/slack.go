@@ -63,7 +63,7 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 	// checking, to `yoyo reconcile --stall-after`. The flag is still accepted so
 	// that a launcher passing it starts a sink rather than failing to parse, and it
 	// says where the number went rather than being quietly ignored.
-	stallAfter := flags.Duration("stall-after", 0, "retired: the threshold moved to `yoyo reconcile --stall-after`, which is where stalls are now noticed")
+	stallAfter := flags.Duration("stall-after", 0, "retired: the threshold moved to the commands that notice a stall, yoyo work --watch and yoyo reconcile")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -88,7 +88,7 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 	// they have set a threshold they have not.
 	if *stallAfter != 0 {
 		fmt.Fprintln(stderr, "--stall-after no longer decides anything here: the sink says what the stall record holds rather than noticing stalls itself")
-		fmt.Fprintln(stderr, "set the threshold where the noticing happens instead: yoyo reconcile --stall-after")
+		fmt.Fprintln(stderr, "set the threshold where the noticing happens instead: yoyo work --watch --stall-after, or yoyo reconcile --stall-after")
 	}
 
 	sink, channel, err := buildSlackSink(*configPath, *poll, *heartbeat, version, stdout)
@@ -96,6 +96,13 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 		fmt.Fprintf(stderr, "slack failed: %v\n", err)
 		return 1
 	}
+	// Said on every start, whatever the flags were, because the change it
+	// describes takes something away from an installation that had it. A sink used
+	// to notice stalls itself; it now reports what the two commands below record,
+	// and an operator running neither of them has no watchdog at all. That is
+	// exactly the state nobody would think to check for, so it is said here rather
+	// than left in a document.
+	sayWhereStallsAreNoticed(stdout)
 
 	if *once {
 		// One pass is what a setup document can tell somebody to run: it posts
@@ -114,6 +121,22 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 		return 1
 	}
 	return 0
+}
+
+// sayWhereStallsAreNoticed states, on every start of this process, that the sink
+// no longer notices a stopped harness and names the two things that do.
+//
+// It is unconditional because the failure it guards against is silent by
+// construction. An installation that has had a sink running since before
+// yoyodyne-ifd.295 had a watchdog by having this process; after it, the sink is a
+// consumer of a record something else writes, and a machine that runs neither a
+// watch session nor a scheduled sweep records nothing at all. Nothing about that
+// is visible from a channel — a product with no stalls and a product nobody is
+// checking look identical — so the one moment it can be said to the person who
+// started this is here.
+func sayWhereStallsAreNoticed(stdout io.Writer) {
+	fmt.Fprintln(stdout, "this sink reports stalls and no longer notices them: `yoyo work --watch` takes that reading as it polls, and `yoyo reconcile` takes it on every sweep")
+	fmt.Fprintln(stdout, "a product running neither records no stalls at all, and nothing here would say so; scheduling the sweep is yoyodyne-ifd.207's, and until it lands it is yours")
 }
 
 // ensureSlackSink is the step a maintenance pass takes about reporting: this
@@ -767,9 +790,9 @@ Options:
   --heartbeat <d>    how often to say again that the line is choosing nothing
                      over ready work (default 1h)
   --stall-after <d>  retired, and accepted so a launcher passing it still starts.
-                     A harness that has stopped is noticed by `+"`yoyo reconcile`"+`,
-                     which runs whether or not reporting was ever turned on, and
-                     `+"`yoyo reconcile --stall-after`"+` is where the threshold is set.
-                     The sink says what that record holds and no longer decides
-                     it.`)
+                     A harness that has stopped is noticed by the two commands
+                     that run whether or not reporting was ever turned on --
+                     `+"`yoyo work --watch`"+` as it polls, and `+"`yoyo reconcile`"+` on every
+                     sweep -- and each takes the threshold under this name. The
+                     sink says what they record and no longer decides it.`)
 }

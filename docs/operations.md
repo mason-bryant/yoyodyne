@@ -950,25 +950,32 @@ stall means has died. A session that crashes writes no stop, so every other
 surface reads a dead machine as a quiet one — which is exactly what happened on
 2026-09-01, for seven and a half hours, until a person noticed.
 
-**What notices is [`yoyo reconcile`](#recovering-interrupted-runs)**, as the last
-step of the same sweep that settles the runs a dead process left behind — which
-is why it is that sweep and not another: a killed run goes on saying it is in
-flight until the settling, and a phantom run counted as activity would silence
-this for exactly the crash it exists to catch. Reporting has nothing to do with
-it. A product that never turned Slack on records its stalls and reads them back
-here, and a product that did gets the same record
-[taken to the operators once](reporting.md#reporting-into-slack) by a sink that
-reads it rather than produces it. That was the other way round until
+**Two things notice, and between them they cover the two ways it happens.**
+[`yoyo work --watch`](work.md#letting-the-harness-choose-the-work) takes the
+reading as it polls, at most once per `--stall-after`: that is the harness's own
+loop, and it catches the session that is alive and has stopped starting anything —
+a queue whose ready items are all claimed by runs that died, say. A session that
+died itself writes nothing at all, so [`yoyo reconcile`](#recovering-interrupted-runs)
+takes the same reading as the last step of the sweep that settles what a dead
+process left behind. That ordering is why it is that sweep and not another: a
+killed run goes on saying it is in flight until the settling, and a phantom run
+counted as activity would silence this for exactly the crash it exists to catch.
+
+Reporting has nothing to do with either. A product that never turned Slack on
+records its stalls and reads them back here, and a product that did gets the same
+record [taken to the operators once](reporting.md#reporting-into-slack) by a sink
+that reads it rather than produces it. That was the other way round until
 `yoyodyne-ifd.295`, and it meant the products least able to notice a stopped
 harness were the ones with no stall history at all.
 
-How promptly a stall is noticed is `--stall-after` — ten minutes by default — and
-the cadence of whatever runs the sweep, so an unattended pass should run it at
-least as often as the threshold it sets. Nothing `yoyo` installs runs anything on
-a schedule yet: the productized maintenance job is `yoyodyne-ifd.207`, and until
-it lands the schedule is yours, exactly as
-[`yoyo slack ensure`](#checking-the-installation)'s is. A product nothing ever
-sweeps records nothing, so this listing is empty on one.
+How promptly a stall is noticed is `--stall-after` — ten minutes by default, and
+the same flag on both commands — and, for the sweep, the cadence of whatever runs
+it. Nothing `yoyo` installs runs the sweep on a schedule yet: the productized
+maintenance job is `yoyodyne-ifd.207`, and until it lands scheduling it is yours,
+exactly as [`yoyo slack ensure`](#checking-the-installation)'s is. A machine
+running neither a watch session nor a sweep records no stalls, so this listing is
+empty on one; the sink says so when it starts, because that is the state nobody
+would think to check for.
 
 A product that has never gone quiet says nothing here at all. The five most
 recent stalls are printed, newest first, and `--json` carries every one of them

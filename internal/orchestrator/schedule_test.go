@@ -3380,3 +3380,44 @@ func TestSchedulerHoldsBlockedWorkWhenNothingCanSayWhatIsHoldingIt(t *testing.T)
 			schedule.Started, schedule.Pullable, schedule.Render())
 	}
 }
+
+// The loop that chooses work is the one process that is running whenever the
+// harness is choosing at all, so it is where the stall reading is taken from —
+// once per pull, before anything is chosen, and deciding nothing about the pass.
+//
+// It is here rather than only in the sweep because of what each catches. A
+// session that died writes nothing about that and is `yoyo reconcile`'s to
+// notice; a session that is alive and has stopped starting anything is this
+// loop's, and nothing outside it was watching for that without an operator's
+// cron.
+func TestAWatchingSessionTakesTheStallReadingOncePerPull(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	// Two quiet polls and then the operator stops the session, so the loop makes
+	// more than one pull with nothing to start — which is the shape a stalled
+	// machine is in.
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 2 }
+
+	readings := 0
+	schedule, err := Scheduler{
+		Open: harness.open, Watching: true, Sleep: harness.sleep,
+		Watchdog: func(context.Context) { readings++ },
+	}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	harness.mu.Lock()
+	pulls := harness.pulls
+	harness.mu.Unlock()
+	if readings == 0 {
+		t.Fatal("the session took no stall reading at all, so a harness that stopped choosing would go unnoticed")
+	}
+	if readings != pulls {
+		t.Fatalf("the session took %d reading(s) over %d pull(s), want one per pull", readings, pulls)
+	}
+	// It decides nothing: the pass ends exactly as a pass wired without one does.
+	if schedule.Stopped != ScheduleCancelled {
+		t.Fatalf("stopped = %q, want the session ended by its operator", schedule.Stopped)
+	}
+}
