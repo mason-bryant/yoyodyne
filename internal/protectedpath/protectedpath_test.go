@@ -43,6 +43,44 @@ func TestProtectCoversTheConfigurationAndEveryArtifactHome(t *testing.T) {
 	}
 }
 
+// The product's goals are the load-bearing one. Work that traces to a goal the
+// operator approved is admitted without asking them, and `yoyo artifact approve`
+// records that approval in the goals document itself — so a run that could write
+// there could approve a goal for itself and then admit whatever it liked against
+// it. Nothing names the goals home separately: it is protected because it sits
+// inside the specifications home, and what this pins is that the general rule
+// reaches it, wherever a project keeps that home.
+func TestTheProductsGoalsAreProtectedBecauseTheProductsHomeIs(t *testing.T) {
+	t.Parallel()
+
+	if directories := defaultSet().Directories(); !slices.Contains(directories, config.DefaultSpecifications) {
+		t.Fatalf("Directories() = %v, want the product's home %q among them", directories, config.DefaultSpecifications)
+	}
+	changed := []string{
+		"docs/product/goals/v1-goals.md",
+		"docs/product/goals/v1-non-goals.md",
+		"docs/product/brief.md",
+	}
+	want := []string{"docs/product/brief.md", "docs/product/goals/v1-goals.md", "docs/product/goals/v1-non-goals.md"}
+	if got := defaultSet().Refused(changed, nil); !slices.Equal(got, want) {
+		t.Fatalf("Refused() = %v, want %v", got, want)
+	}
+	// A project that keeps its product intent somewhere else protects the goals it
+	// keeps there, and nothing at the recommended path it does not use.
+	moved := Protect(config.Config{Product: config.Product{
+		Specifications: "intent",
+		Designs:        config.DefaultDesigns,
+		Decisions:      config.DefaultDecisions,
+		Invariants:     config.DefaultInvariants,
+	}})
+	if refused := moved.Refused([]string{"intent/goals/v1-goals.md"}, nil); len(refused) != 1 {
+		t.Fatalf("Refused() on a moved product home = %v, want the goals refused", refused)
+	}
+	if refused := moved.Refused([]string{"docs/product/goals/v1-goals.md"}, nil); len(refused) != 0 {
+		t.Fatalf("Refused() = %v, want nothing refused where this project keeps no product home", refused)
+	}
+}
+
 func TestRefusedNamesEveryUngrantedProtectedPathAndNothingElse(t *testing.T) {
 	t.Parallel()
 
