@@ -102,27 +102,35 @@ anything more has been spent.
    claimed. A project that asked for pull requests and cannot open one fails
    here; a project whose repository has no configured remote degrades to local
    behavior and says so on the outcome as `publish_skipped`.
-4. **Provider availability.** Not installed, or not authenticated, refuses.
-5. **The work item**, loaded from the tracker.
-6. **Unresolved directives that pause this item.** The work stops before it is
+4. **The work item**, loaded from the tracker.
+5. **Unresolved directives that pause this item.** The work stops before it is
    claimed and the outcome names the directive.
-7. **Unfinished work this item depends on.** Only a `blocks` dependency counts;
+6. **Unfinished work this item depends on.** Only a `blocks` dependency counts;
    a parent-child link is not a blocker. The work stops before it is claimed and
    the outcome names the blocking items.
-8. **A run already in flight.** Adopting it takes the same exclusive lease a
+7. **A run already in flight.** Adopting it takes the same exclusive lease a
    fresh reservation takes. It is continued only when its remaining work is
    fully described by durable state — a usage-limit or overload pause, a
    provider the harness stopped on time, a directive pause, a dependency pause,
    an operator hold, or a resumable repair loop under automatic integration —
    and is otherwise refused as `ExistingRunError`.
-9. **The intake hold**, asked only here and only for work the harness chose for
+8. **The intake hold**, asked only here and only for work the harness chose for
    itself. What it holds is the choosing, so a run already under way carries on
    under it and an item the operator named is exempt.
-10. **A fresh run substituted for a repair somebody is owed.** An item whose last
-    run stopped owing a repair refuses a clean start unless triage claimed the
-    re-run.
-11. **Item readiness**, the context bundle, the invariants, and the repository's
-    readiness for an isolated worktree.
+9. **A fresh run substituted for a repair somebody is owed.** An item whose last
+   run stopped owing a repair refuses a clean start unless triage claimed the
+   re-run.
+10. **Item readiness**, the context bundle, the invariants, and the repository's
+    readiness for an isolated worktree — which is where a primary checkout
+    somebody left uncommitted is refused, by name, file by file.
+11. **Provider availability.** Not installed, or not authenticated, refuses. It
+    is asked here, after every question this repository can answer on its own,
+    because it is the only refusal among them that is a fact about the machine:
+    the ones ahead of it hold whether or not Claude Code is installed, so asking
+    this one first would answer a newcomer's uncommitted checkout with "Claude
+    Code is not installed". Nothing has been reserved, claimed, or cut by the
+    time it is asked, so deferring it spends nothing. A resumed run asks the same
+    two questions in the same order, and is charged for neither.
 12. **The integration target.** An automatic or publishing run fixes the branch
     it will be promoted into before any work starts, and never infers it
     afterwards.
@@ -135,8 +143,8 @@ anything more has been spent.
     `running` in the `developing` phase.
 
 **Nine of those sixteen steps have a trace; seven do not.** Traced are the
-operator's hold (2), loading the item (5), the directive and dependency
-questions (6, 7), continuing a run already in flight (8), the intake hold (9),
+operator's hold (2), loading the item (4), the directive and dependency
+questions (5, 6), continuing a run already in flight (7), the intake hold (8),
 fixing the integration target (12), the claim (15), and the worktree (16) — each
 by the scenario named for it, or by every scenario that reaches it.
 
@@ -147,19 +155,22 @@ configuration refusals (1) — a missing collaborator, a configuration that does
 not validate, a backend with no compiled adapter, an unpinned model selector, no
 configured checks, or a review policy that does not gate automatic integration;
 publishing settled before the claim (3), which belongs to the publishing half
-listed below; provider availability (4); the `ExistingRunError` refusal of a run
-in flight whose remaining work durable state does not fully describe (8); the
-refusal of a clean start where a repair is owed (10); item readiness, the
-context bundle, the invariants, and the repository's readiness (11); an account
+listed below; provider availability (11); the `ExistingRunError` refusal of a run
+in flight whose remaining work durable state does not fully describe (7); the
+refusal of a clean start where a repair is owed (9); item readiness, the
+context bundle, the invariants, and the repository's readiness (10); an account
 pool with nothing left to spend (13); and the `execution.max_concurrent_developers`
 bound reservation enforces (14).
 
 **The order is a guarantee no trace holds either.** Each refusal above is
 asserted somewhere in `internal/orchestrator`, but that a held harness refuses
-before the provider is asked, and that the provider is asked before the tracker
-is, is a property of the sequence rather than of any one step — so a new
-executor could satisfy every individual refusal and still ask them in an order
-that spends more before refusing. Measuring that needs its own harness.
+before the provider is asked, and that every refusal answerable from this
+repository alone — the uncommitted checkout among them — is reported before the
+provider is asked at all, is a property of the sequence rather than of any one
+step — so a new executor could satisfy every individual refusal and still ask
+them in an order that spends more before refusing, or answer a question about
+the repository with a fact about the machine. Measuring that needs its own
+harness.
 
 ## The steps of a run
 
