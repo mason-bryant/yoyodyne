@@ -283,11 +283,10 @@ type DiffLimits struct {
 	// MaxFiles bounds separately rendered untracked files. Tracked changes are
 	// already rendered together and remain bounded by MaxTotalBytes.
 	MaxFiles int
-	// MaxCommits bounds how many commits of an accumulated change are described.
-	// A worktree's change is measured against one base commit rather than read
-	// out of its history, so this bounds a branch-scope change and the one place
-	// a worktree's own commits are described: a change that leaves the base
-	// unchanged while commits sit above it.
+	// MaxCommits bounds how many commits of a change are described. It bounds a
+	// branch-scope change and the listing that says what a worktree's patch
+	// spans; neither patch is bounded by it, because a worktree's change is
+	// measured against one base commit rather than assembled out of its history.
 	MaxCommits int
 }
 
@@ -303,6 +302,24 @@ type ChangeDiff struct {
 	UntrackedFiles []string      `json:"untracked_files,omitempty"`
 	OmittedFiles   []OmittedFile `json:"omitted_files,omitempty"`
 	Truncated      bool          `json:"truncated"`
+	// BaseCommit is the commit the change is measured against, and Commits are
+	// the commits already made for it over that base, oldest first. They are
+	// carried because a patch says what changed and nothing says what it spans:
+	// a run that continues on a branch its earlier attempts already committed to
+	// hands over a patch that covers those commits, and a reader told only
+	// "worktree changes" reads it as the uncommitted tail of one. That reading
+	// cost nine review filings across two work items, each discounting a verdict
+	// over committed work the reviewer had in fact been shown.
+	//
+	// They are empty on a branch-scope change, which names its own base and
+	// history in the fields beside this one.
+	BaseCommit string   `json:"base_commit,omitempty"`
+	Commits    []Commit `json:"commits,omitempty"`
+	// CommitsOmitted counts the commits the bound dropped from that listing,
+	// oldest first. It does not truncate the change: the patch is the whole
+	// range whatever the listing holds, so what an omission costs is the reader's
+	// account of which commits made it rather than any part of the change itself.
+	CommitsOmitted int `json:"commits_omitted,omitempty"`
 	// CommitsWithoutEffect are the commits the worktree carries over its base
 	// where the change against that base is nothing: work an attempt committed
 	// and a later attempt undid. It is filled in that case alone, because that
@@ -753,23 +770,37 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	}
 	changes.Patch = patch.String()
 
+	// What the patch spans, said rather than left to be inferred. The base is
+	// what every part of the change above was measured against, and the commits
+	// are the attempts already published for it: together they say the patch
+	// covers the branch and not the tail of it.
+	changes.BaseCommit = worktree.BaseCommit
+	if head != worktree.BaseCommit {
+		total, err := m.countCommits(ctx, worktree.BaseCommit, head)
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+		changes.Commits, err = m.describeCommits(ctx, worktree.BaseCommit, head, limits.MaxCommits)
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+		changes.CommitsOmitted = total - len(changes.Commits)
+	}
+
 	// An empty change over the base is evidence only once it says what the
 	// commits above that base did. A published attempt's work lives in commits
 	// here, so an empty patch under a HEAD that has moved reads two ways — a
 	// change made and then undone, or a change the assembly failed to collect —
 	// and a reviewer with no way to tell them apart reads the second, which is
-	// the report yoyodyne-ifd.236 was filed on. The commits are described the way
-	// a branch review describes its own, because it is the same question about
-	// the same thing.
+	// the report yoyodyne-ifd.236 was filed on. The commits are the same ones
+	// listed above; what this field adds is the sentence saying which emptiness
+	// the patch is.
 	//
 	// A truncated change is left alone: a patch the bounds emptied is not a change
 	// that came to nothing, and the reviewer is already told which of those it has.
 	if head != worktree.BaseCommit && changes.Patch == "" && !changes.Truncated &&
 		len(changes.UntrackedFiles) == 0 && len(changes.OmittedFiles) == 0 {
-		changes.CommitsWithoutEffect, err = m.describeCommits(ctx, worktree.BaseCommit, head, limits.MaxCommits)
-		if err != nil {
-			return ChangeDiff{}, err
-		}
+		changes.CommitsWithoutEffect = changes.Commits
 	}
 	return changes, nil
 }

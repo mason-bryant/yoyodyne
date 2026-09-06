@@ -903,6 +903,69 @@ func TestManagerUnifiedChangesSeesWhatAnAttemptAlreadyCommitted(t *testing.T) {
 	if len(changes.CommitsWithoutEffect) != 0 {
 		t.Errorf("commits without effect = %#v, want none beside a change", changes.CommitsWithoutEffect)
 	}
+	// What the patch spans is carried with it: the base it is measured against
+	// and the attempt already published for it. A reader given the patch alone
+	// cannot tell it from the uncommitted half of the same change.
+	if changes.BaseCommit != worktree.BaseCommit {
+		t.Errorf("base commit = %q, want the recorded base %q", changes.BaseCommit, worktree.BaseCommit)
+	}
+	if len(changes.Commits) != 1 || changes.Commits[0].Commit != worktree.HarnessCommit ||
+		changes.Commits[0].Subject != "yoyodyne: published attempt" {
+		t.Fatalf("commits = %#v, want the published attempt the patch spans", changes.Commits)
+	}
+	if changes.CommitsOmitted != 0 {
+		t.Errorf("commits omitted = %d, want none", changes.CommitsOmitted)
+	}
+}
+
+// The shape yoyodyne-ifd.321 was admitted on: a run that continues on a branch
+// its earlier attempts already committed to. The patch spans both commits and
+// the uncommitted repair beside them, and now says so — five reviews across two
+// items discounted their own verdicts for want of that sentence.
+func TestManagerUnifiedChangesNamesEveryCommitAContinuedRunCarries(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-continued", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "reduced.md", "the reduction\n")
+	first := harnessCommit(t, worktree.Path, "yoyodyne: the reduction")
+	writeFile(t, worktree.Path, "widened.go", "package widened\n")
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: the widening")
+	writeFile(t, worktree.Path, "repair.go", "package repair\n")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if len(changes.Commits) != 2 {
+		t.Fatalf("commits = %#v, want both commits above the base", changes.Commits)
+	}
+	if changes.Commits[0].Commit != first || changes.Commits[1].Commit != worktree.HarnessCommit {
+		t.Errorf("commits = %#v, want them oldest first", changes.Commits)
+	}
+	// Named and shown: the listing is the account of a patch that carries the
+	// same work, rather than a substitute for a patch that does not.
+	for _, want := range []string{"+the reduction", "package widened", "package repair"} {
+		if !strings.Contains(changes.Patch, want) {
+			t.Errorf("patch over a continued run is missing %q:\n%s", want, changes.Patch)
+		}
+	}
+	// A bound on the listing cuts the account of the change, never the change:
+	// the patch is the whole range whichever commits the listing could hold.
+	bounded, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxCommits: 1})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if len(bounded.Commits) != 1 || bounded.CommitsOmitted != 1 {
+		t.Fatalf("bounded commits = %#v, omitted = %d, want one of each", bounded.Commits, bounded.CommitsOmitted)
+	}
+	if bounded.Truncated || bounded.Patch != changes.Patch {
+		t.Errorf("a bounded commit listing truncated the change: truncated = %t", bounded.Truncated)
+	}
 }
 
 func TestManagerUnifiedChangesNamesCommittedWorkThatLeavesTheBaseUnchanged(t *testing.T) {

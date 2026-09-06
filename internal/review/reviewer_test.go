@@ -91,7 +91,7 @@ func TestReviewApprovesAndCarriesTheBoundedEvidence(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Add a runner",
-		"# Actual worktree changes",
+		"# The whole change under review",
 		"?? runner_test.go",
 		"diff --git a/runner.go b/runner.go",
 		"- make test: passed=true",
@@ -871,6 +871,130 @@ func TestReviewTellsTheReviewerWhenCommittedWorkWasUndone(t *testing.T) {
 	} {
 		if !strings.Contains(provider.request.Prompt, want) {
 			t.Errorf("prompt is missing %q for an undone change", want)
+		}
+	}
+}
+
+// The yoyodyne-ifd.121.5 and yoyodyne-ifd.274 shape: a run continuing on a
+// branch its earlier attempts already committed to. The patch spans those
+// commits, and until the evidence said so both reviewers judged it as the
+// uncommitted tail — hedging verdicts over work they had been shown, and one of
+// them naming a branch commit that never existed.
+func TestReviewSaysThePatchSpansTheBranchsCommittedWork(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"approve","approves":"implementation","summary":"the whole change is here"}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		Status:     "M README.md\nM internal/contextbundle/product.go",
+		Patch:      "diff --git a/README.md b/README.md\n-a removed line\n",
+		BaseCommit: "f5fa080c32ab8805ffea11566f11a2049f03f44a",
+		Commits: []gitworktree.Commit{
+			{Commit: "11c45d2b0f4e6a1d9c3b8a7f5e2d1c0b9a8f7e6d", Subject: "yoyodyne: the reduction"},
+			{Commit: "3a236e2c1d0b9a8f7e6d5c4b3a2918f7e6d5c4b3", Subject: "yoyodyne: the repair"},
+		},
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		"## What this patch covers",
+		"measured against base commit f5fa080c32ab8805ffea11566f11a2049f03f44a",
+		"the 2 commit(s) already made for it on this branch",
+		"No committed work of this change is missing from it",
+		"11c45d2b0f4e6a1d9c3b8a7f5e2d1c0b9a8f7e6d yoyodyne: the reduction",
+		"3a236e2c1d0b9a8f7e6d5c4b3a2918f7e6d5c4b3 yoyodyne: the repair",
+	} {
+		if !strings.Contains(provider.request.Prompt, want) {
+			t.Errorf("evidence for a continued run is missing %q:\n%s", want, provider.request.Prompt)
+		}
+	}
+	// And the contract says the same thing where the developer cannot edit it,
+	// including what a patch measured against a base commit structurally cannot
+	// show: the work that was already in that base.
+	for _, want := range []string{
+		"spans the attempts already committed for this item",
+		"already in the base commit is not part of this change",
+	} {
+		if !strings.Contains(provider.request.SystemPrompt, want) {
+			t.Errorf("review contract is missing %q", want)
+		}
+	}
+}
+
+// A change with nothing committed for it yet still says what it is measured
+// against, so "no commits" is a fact the reviewer reads rather than the absence
+// of a section it cannot notice.
+func TestReviewSaysWhenNothingHasBeenCommittedForTheChange(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"approve","approves":"implementation","summary":"fine"}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		Patch:      "diff --git a/runner.go b/runner.go\n+added\n",
+		BaseCommit: "d5e914b9fd3607a7b90f23a4a55efbcd014935e1",
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if !strings.Contains(provider.request.Prompt, "nothing has been committed for it yet") {
+		t.Errorf("evidence does not say the change is uncommitted:\n%s", provider.request.Prompt)
+	}
+}
+
+// A branch review names its own base and history above the patch, so the span
+// section would say the same thing twice in different words.
+func TestReviewLeavesTheSpanSectionOutOfABranchReview(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"approve","summary":"the accumulated change holds together"}`}
+	request := newRequest(nil)
+	request.Scope = ScopeBranch
+	request.WorkItemID = ""
+	request.Branch = BranchScope{
+		Name:       "main",
+		BaseCommit: "1111111111111111111111111111111111111111",
+		HeadCommit: "2222222222222222222222222222222222222222",
+		Commits:    []gitworktree.Commit{{Commit: "2222222222222222222222222222222222222222", Subject: "yoyodyne: one item"}},
+	}
+	request.Changes = gitworktree.ChangeDiff{Patch: "diff --git a/runner.go b/runner.go\n+added\n"}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if strings.Contains(provider.request.Prompt, "## What this patch covers") {
+		t.Errorf("branch evidence describes its span twice:\n%s", provider.request.Prompt)
+	}
+}
+
+// A bound that cut the patch is stated against the commits the patch is made
+// of, so the reviewer reads the omission as part of this change rather than as
+// evidence that was never collected.
+func TestReviewNamesTheCommitsATruncatedPatchWasCutFrom(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"the change is not all here","findings":[{"severity":"major","message":"the patch is cut"}]}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		Patch:          "diff --git a/big.md b/big.md\n",
+		Truncated:      true,
+		BaseCommit:     "f5fa080c32ab8805ffea11566f11a2049f03f44a",
+		Commits:        []gitworktree.Commit{{Commit: "11c45d2b0f4e6a1d9c3b8a7f5e2d1c0b9a8f7e6d", Subject: "yoyodyne: the reduction"}},
+		CommitsOmitted: 3,
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		"This patch is truncated",
+		"the bounded rendering of the 1 commit(s) named above",
+		"3 older commit(s) above the base are not named here",
+	} {
+		if !strings.Contains(provider.request.Prompt, want) {
+			t.Errorf("truncated evidence is missing %q:\n%s", want, provider.request.Prompt)
 		}
 	}
 }

@@ -75,8 +75,14 @@ the work item, its design guidance and acceptance criteria, the invariants
 delivered with it, and the check results. The change it is shown is measured
 against the commit the run was cut from rather than against what happens to be
 uncommitted, so work an attempt already published — every attempt is committed
-by the harness before the checks run — is in the patch it judges. The one
-emptiness that follows from that is stated rather than left to be read: a
+by the harness before the checks run — is in the patch it judges. The evidence
+says that rather than leaving it to be worked out: it names the base commit the
+change is measured against and lists the commits already made for it, so a
+reviewer never has to guess whether a branch's committed work is inside the
+patch or behind it. It used to have to, and
+[nine review filings across two items](diagnoses/yoyodyne-ifd-321-review-evidence-span.md)
+hedged their verdicts over committed work they had in fact been shown. The one
+emptiness that follows from the same measurement is stated too: a
 worktree carrying commits whose combined effect on the base is nothing is a
 change made and then undone, and the evidence says so and lists them, because a
 reviewer told only that the patch is empty concludes the harness lost the
