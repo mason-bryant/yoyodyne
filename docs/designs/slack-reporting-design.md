@@ -30,6 +30,10 @@ revisions:
       by: architect
       at: 2026-09-03T16:45:00Z
       reason: approved amendments 2a89bb4b and fb58a54c (3cb3ca45 declined as duplicate) - the direct-message tier's admitting rule is two named classes, degraded and advisory-once, with the shipped states listed and the bundle-improvement notice admitted as the first advisory-once member with durable dedup; rules yoyodyne-ifd.241.1 and 241.3
+    - action: amended
+      by: architect
+      at: 2026-09-07T00:30:00Z
+      reason: yoyodyne-ifd.313 - the operator-approved communication rule recorded as binding on every communicator, final text from the item with his three amendments applied verbatim; governs the recurring-loop reports from their first posts, with yoyodyne-ifd.314's reach rule implementing placement beneath it
 ---
 
 # Slack reporting: events out, directives in, one thread per topic
@@ -142,3 +146,13 @@ Every inbound message gets an in-thread acknowledgment that is itself an outboun
 ## Invariants and existing constraints
 
 `one-promotion-per-target-branch` is untouched: this design performs no Git operation and no promotion. `selected-work-passes-intake-and-records-why` binds nothing here — this design schedules nothing and claims nothing — but the run-started message deliberately surfaces the selection reason that invariant makes durable. No agent acquires a credential or a new capability anywhere in this design; every post and every directive recording is the harness's own act.
+
+## The communication rule
+
+Every message the harness or an agent sends to a person follows four rules, whether the text comes from a template or a model:
+
+1. **Write for an executive.** Brief, to the point, focused on what requires action, a decision, or represents a serious and unsolvable problem. One plain sentence of what; one of why it matters.
+2. **Post on importance or on an ask; otherwise do not post.** Severity is importance, not actionability: important breakage posts even without an ask. Brief periodic status is fine — "*{item title}* has merged" is ok; the prohibition is walls and useless text, not short factual posts. Routine narration goes to the durable record, with an item's milestones in its own thread.
+3. **Never bare id lists.** Aggregate with meaning — "31 items wait on triage decisions; the architect holds 8 rulings; next mover: the architect" — naming an item title-first only when the reader must act on it.
+4. **Every message answers "why is the reader reading this" or is not sent** — with a generous reading of why: "so the operator knows a feature merged and can test it" is a legitimate answer. The test kills pointless text, not useful awareness.
+
