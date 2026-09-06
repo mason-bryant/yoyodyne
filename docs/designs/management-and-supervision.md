@@ -22,6 +22,10 @@ revisions:
       by: architect
       at: 2026-09-03T16:45:00Z
       reason: yoyodyne-ifd.130.1 - the supervision tree recorded, one product-manager supervisor, children surviving supervisor death with reattachment by presence and lease, bounded restarts degrading visibly through the standing ladder, and the three operator verbs as the only stop paths; launchd and cutover mechanics deferred to yoyodyne-ifd.142 by name
+    - action: amended
+      by: architect
+      at: 2026-09-06T17:30:00Z
+      reason: approved amendment 97e14527 from yoyodyne-ifd.290 - liveness detection is non-model machinery immune to usage windows, and restarts belong to bounded exits and the supervisor, never to noticing surfaces; constraint named by the operator 2026-09-05 after a late page
 ---
 
 # Management and supervision: the typed request contract and process residency
@@ -61,6 +65,8 @@ The long-term shape is **one durable interaction and state service**, with local
 A watch session takes up a build installed over it by itself: between runs, never interrupting one. The takeover happens only at a boundary where the process has nothing in flight; the new process reattaches through the normal lease machinery; and pinned workflow instances continue on their pinned definitions and authority — a new binary changes the executor, never in-flight work's contract. This is settled here rather than deferred: a later headless supervisor inherits this behavior rather than re-deciding it.
 
 **The supervision tree.** One supervisor per product: the product-manager service (interim: the chat process). Its children: the Slack reporter, the scheduler/watch loop, the triage dispatcher, the management-loop dispatcher, and — where started — the dashboard command. The supervisor owns start, stop, restart, and the health/readiness of children; each child owns its own domain and none owns workflow truth, per the standing invariants. **Children survive supervisor death**: they are independent processes with recorded presence, and a returning supervisor reattaches through those records and the lease machinery rather than killing and respawning — the same rule a returning chat client already follows. A child that crashes is restarted with backoff; a child that fails repeatedly is not restarted indefinitely — it is left down and reported as **degraded**, reaching the operator through the standing ladder rather than a restart loop. **The escalation ladder is the governed one and the supervisor invents no new verb**: report, then status banners, then a direct message in the degraded class. Operator stopping remains the three existing verbs — hold intake, pause spending, stop everything — and the supervisor is their executor, never a fourth path.
+
+Detection of nothing-running lives in non-model machinery that keeps running through a provider usage window. A watchdog that asks a model anything pauses with the provider's window and sleeps through exactly the silence it exists to notice — the operator was paged an hour late by precisely this. And restarting a stuck or dead resident belongs to that resident's own bounded exit and to the supervisor that starts it, never to a surface that happens to notice: a noticing surface that restarts things is a second invoker, which this design already rules out for roles and rules out here for processes.
 
 ## Recovery
 
