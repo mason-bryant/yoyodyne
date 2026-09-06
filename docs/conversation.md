@@ -1086,7 +1086,7 @@ about a change that item never made. A run the harness has no record of is
 refused the same way, since nothing then says the decision is about that item's
 stoppage at all.
 
-Four of the seven the harness holds to more than a note. **A repair, a re-run,
+Five of the seven the harness holds to more than a note. **A repair, a re-run,
 and a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names every budget that refused, what each
 has spent, and the ceiling that would permit the decision.

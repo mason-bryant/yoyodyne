@@ -27,7 +27,7 @@ package chat
 // permission to ask for. Past the five, and for anything larger than a step, the
 // caps are the operator's again and the refusal says so.
 //
-// Escalation is the one decision that reaches the operator, and it is
+// Escalation is the one decision that asks the operator for something, and it is
 // deliberately more than prose: a durable blocker on the item, so the item
 // itself says it is waiting on a person, and a report at warning severity or
 // above, so it reaches the pile the operator reads. A conversation that only
