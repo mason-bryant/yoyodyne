@@ -37,6 +37,15 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
+const (
+	// watchLeaseFile is the lock one watching session holds for as long as it
+	// watches, and watchHolderFile is that session saying which one it is. They
+	// sit beside the log rather than among the runs because what is singular is
+	// the session, not any run it starts.
+	watchLeaseFile  = ".watch.lock"
+	watchHolderFile = ".watch.holder"
+)
+
 // WatchSchemaVersion is 1 and has never changed.
 const WatchSchemaVersion = 1
 
@@ -281,6 +290,104 @@ func (s *WatchStore) Root() string { return s.root }
 // Path names the log itself, so a failure can say where the account of the
 // session actually is.
 func (s *WatchStore) Path() string { return filepath.Join(s.root, "watch.jsonl") }
+
+// Lease makes this process the product's only watching session, reporting
+// whether it got it.
+//
+// Two sessions watching one product are not two workers. They read one queue and
+// choose from it independently, and a run is not in the run store until it
+// reserves — several steps after the item was chosen — so both can pick the same
+// item inside that window, and the occupied-item bookkeeping each keeps is its
+// own. Two of them briefly coexisted while the 2026-09-05 wedge was being
+// cleared, which is what this refuses.
+//
+// The session stamps itself beside the lock as it takes it, under the lock, so a
+// session refused here can say which one has it rather than only that somebody
+// does. A lease that cannot be stamped is dropped rather than kept: a session
+// nothing can name is exactly what the refusal exists to stop somebody meeting.
+func (s *WatchStore) Lease(sessionID string) (*Lease, bool, error) {
+	if !watchSessionIDPattern.MatchString(sessionID) {
+		return nil, false, fmt.Errorf("watch session id %q is invalid", sessionID)
+	}
+	lease, held, err := TryLeasePath(filepath.Join(s.root, watchLeaseFile), "watch session")
+	if err != nil || !held {
+		return nil, held, err
+	}
+	holder := filepath.Join(s.root, watchHolderFile)
+	if err := s.stampHolder(holder, sessionID); err != nil {
+		return nil, false, errors.Join(err, lease.Release())
+	}
+	lease.holder = holder
+	return lease, true, nil
+}
+
+// WatchHolder is the session holding this product's watch, as it stamped itself
+// when it took the lease. It carries the session identifier the log and `yoyo
+// status` also carry, so a refusal and every other surface name one session
+// rather than two, and the process, which is what somebody stops when stopping
+// it is what they want.
+type WatchHolder struct {
+	SessionID string    `json:"session_id"`
+	PID       int       `json:"pid"`
+	HeldAt    time.Time `json:"held_at"`
+}
+
+// Holder is the session that stamped itself as watching this product, reported
+// as an absence where none has rather than as a failure. It says nothing about
+// whether that session is still alive — the lease is what decides that, and this
+// is only how the holder of one is named — so it is read after a lease was
+// refused rather than instead of trying to take one.
+func (s *WatchStore) Holder() (WatchHolder, bool, error) {
+	file, err := os.Open(filepath.Join(s.root, watchHolderFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return WatchHolder{}, false, nil
+	}
+	if err != nil {
+		return WatchHolder{}, false, fmt.Errorf("open the watch holder: %w", err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
+	decoder.DisallowUnknownFields()
+	var holder WatchHolder
+	if err := decoder.Decode(&holder); err != nil {
+		return WatchHolder{}, false, fmt.Errorf("decode the watch holder: %w", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return WatchHolder{}, false, fmt.Errorf("decode the watch holder: %w", err)
+	}
+	if holder.PID <= 0 {
+		return WatchHolder{}, false, errors.New("the watch holder names no process")
+	}
+	return holder, true, nil
+}
+
+// stampHolder writes this process's stamp for the watch it now holds. It is
+// replaced by rename rather than written in place, so a reader sees the whole of
+// one stamp or none of it and never half of one.
+func (s *WatchStore) stampHolder(path, sessionID string) error {
+	temporary, err := os.CreateTemp(s.root, ".watch-holder-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary watch holder: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return fmt.Errorf("secure temporary watch holder: %w", err)
+	}
+	holder := WatchHolder{SessionID: sessionID, PID: os.Getpid(), HeldAt: time.Now().UTC()}
+	if err := writeJSONFile(temporary, "watch holder", holder); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary watch holder: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace watch holder: %w", err)
+	}
+	return syncDirectory(s.root)
+}
 
 // Record appends one transition. It is an append rather than a rewrite for the
 // reason every other log here is: a transition is written once and never

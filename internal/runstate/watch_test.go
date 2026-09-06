@@ -70,6 +70,78 @@ func TestAProductNobodyHasWatchedHasNoSession(t *testing.T) {
 	}
 }
 
+// One product has one watching session. Two of them read one queue and choose
+// from it independently, and an item chosen is not in the run store until the
+// run reserves, so the second session picks work the first has already taken in
+// exactly that window -- which is what happened while the 2026-09-05 wedge was
+// being cleared.
+func TestOneProductHasOneWatchingSession(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	lease, held, err := store.Lease(testWatchSessionID)
+	if err != nil || !held {
+		t.Fatalf("Lease() = %t, %v, want the first session admitted", held, err)
+	}
+	// A second session against the same product, from a store built exactly as
+	// another process would build it.
+	second := newTestWatchStore(t, root)
+	if _, held, err := second.Lease("watch-fedcba9876543210fedcba9876543210"); err != nil || held {
+		t.Fatalf("second Lease() = %t, %v, want the second session refused while the first watches", held, err)
+	}
+	// And the refusal can say which session it was refused for, rather than only
+	// that somebody is there.
+	holder, found, err := second.Holder()
+	if err != nil || !found {
+		t.Fatalf("Holder() = %#v, found %v, error %v, want the session holding it named", holder, found, err)
+	}
+	if holder.SessionID != testWatchSessionID || holder.PID != os.Getpid() || holder.HeldAt.IsZero() {
+		t.Fatalf("holder = %#v, want the session, the process and when it took the watch", holder)
+	}
+
+	// The session ends, and the next one is admitted. What the first left behind
+	// is nothing: the stamp goes with the lock, so a reader is never told a
+	// session holds a watch it has let go of.
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if _, found, err := store.Holder(); err != nil || found {
+		t.Fatalf("Holder() after release = found %v, error %v, want nobody named", found, err)
+	}
+	next, held, err := second.Lease("watch-fedcba9876543210fedcba9876543210")
+	if err != nil || !held {
+		t.Fatalf("Lease() after release = %t, %v, want the next session admitted", held, err)
+	}
+	if err := next.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+}
+
+// A watch is held for a session, so a lease asked for under a name nothing
+// generated is refused rather than taken under a name no surface can match.
+func TestAWatchIsHeldForASessionThatCanBeNamed(t *testing.T) {
+	t.Parallel()
+
+	store := newTestWatchStore(t, t.TempDir())
+	if _, held, err := store.Lease("session-one"); err == nil || held {
+		t.Fatalf("Lease() with an invented session = %t, %v, want a refusal", held, err)
+	}
+	// A stamp that will not decode is a holder nobody can name, which is reported
+	// rather than answered with a session invented from a broken file.
+	lease, held, err := store.Lease(testWatchSessionID)
+	if err != nil || !held {
+		t.Fatalf("Lease() = %t, %v, want the session admitted", held, err)
+	}
+	defer lease.Release()
+	if err := os.WriteFile(filepath.Join(store.Root(), watchHolderFile), []byte("{not json}"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, _, err := store.Holder(); err == nil {
+		t.Fatal("Holder() error = nil, want an unreadable stamp reported rather than read as nobody")
+	}
+}
+
 func TestATransitionThatCannotBeReadBackOrDoesNotBelongHereIsRefused(t *testing.T) {
 	t.Parallel()
 

@@ -126,8 +126,33 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// corrected in the same log it was claimed in.
 	var binary *redeploy.Binary
 	var sessions orchestrator.WatchSessions
+	var watching *runstate.Lease
 	if *watch {
-		opened, err := openWatchSession(*configPath)
+		sessionID, err := runstate.NewWatchSessionID()
+		if err != nil {
+			fmt.Fprintf(stderr, "work failed: %v\n", err)
+			return 1
+		}
+		// One session per product, taken before this one reads anything and held
+		// for as long as it watches. A second session is refused here rather than
+		// discovered later, because what two of them share is the queue: neither
+		// can see what the other has chosen until the run reserves.
+		watching, err = holdTheWatch(*configPath, sessionID)
+		if err != nil {
+			fmt.Fprintf(stderr, "work failed: %v\n", err)
+			return 1
+		}
+		// Every way out of this command goes through here, which is what makes the
+		// release one thing rather than one per exit: the pass returning, a bound
+		// stopping it, and the restart that did not happen after the session
+		// stopped to take up a deploy. A restart that does happen has already let
+		// the watch go, below, so the build it becomes can take it.
+		defer func() {
+			if err := watching.Release(); err != nil {
+				fmt.Fprintf(stderr, "%v\n", err)
+			}
+		}()
+		opened, err := openWatchSession(*configPath, sessionID)
 		if err != nil {
 			fmt.Fprintf(stderr, "work failed: %v\n", err)
 			return 1
@@ -172,7 +197,7 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if !schedule.Redeploying() || binary == nil {
 		return code
 	}
-	return takeUpTheDeploy(binary, sessions, stderr, code, *budget, schedule.SpentUSD, *limit, len(schedule.Started))
+	return takeUpTheDeploy(binary, sessions, watching, stderr, code, *budget, schedule.SpentUSD, *limit, len(schedule.Started))
 }
 
 // deployedBinary is what taking up a deploy needs of the file this session is
@@ -194,7 +219,18 @@ type deployedBinary interface {
 // stops, which is the only moment there is, because a re-execution that works
 // never comes back to write anything — so a refusal that said nothing would
 // leave every surface telling a reader that a stopped line is on its way back.
-func takeUpTheDeploy(binary deployedBinary, sessions orchestrator.WatchSessions, stderr io.Writer, code int, budget, spent float64, limit, started int) int {
+func takeUpTheDeploy(binary deployedBinary, sessions orchestrator.WatchSessions, watching *runstate.Lease, stderr io.Writer, code int, budget, spent float64, limit, started int) int {
+	// The watch goes first, before either branch below. The scheduler has stopped
+	// the session and waited out every run it started, so nothing after this
+	// chooses work again — and the build this restarts into takes the same lease
+	// as it starts, which a process still holding it would refuse. It is dropped
+	// here rather than left to the operating system closing the descriptor as the
+	// image is replaced, because that would make the restart depend on a flag on
+	// the file the lock happens to be taken through. Releasing twice is a no-op,
+	// so the command's own release still covers the exits below.
+	if err := watching.Release(); err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
+	}
 	// A bounded session arrives here with something left of both its bounds: what
 	// it has spent and how many runs it has started are checked at the top of
 	// every pull, ahead of the redeploy, so a bound that is gone stops the session
@@ -339,17 +375,55 @@ func replaceFlagValue(args []string, name, value string) {
 	}
 }
 
-// openWatchSession names one session of watching and gives it somewhere durable
-// to say what it is doing. The identifier is made here rather than in the
-// scheduler because it is the session's identity rather than the loop's, and
-// because a scheduler that generated one would have no way to tell a caller
-// which session it had just written under.
-func openWatchSession(configPath string) (orchestrator.WatchSessions, error) {
+// holdTheWatch makes this process the product's only watching session, and names
+// the session that has it where it cannot.
+//
+// Two sessions against one product double-spend rather than share the work:
+// each reads the whole ready queue and chooses from it, and an item one of them
+// chose is invisible to the other until its run reserves, several steps later.
+// The refusal names the holder because that is what somebody acts on — the same
+// session `yoyo status` reports, and the process to stop where stopping it is
+// what they want — and it refuses whether or not the holder can be named, since
+// not knowing which session has the watch is no reason to start a second one.
+func holdTheWatch(configPath, sessionID string) (*runstate.Lease, error) {
 	parts, err := buildComponents(configPath)
 	if err != nil {
 		return nil, err
 	}
-	sessionID, err := runstate.NewWatchSessionID()
+	lease, held, err := parts.watch.Lease(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !held {
+		return nil, fmt.Errorf("another session is already watching this product%s; one session per product is what keeps two of them from choosing the same item", heldWatchBy(parts.watch))
+	}
+	return lease, nil
+}
+
+// heldWatchBy names the session holding the watch, as the end of the sentence
+// that refuses a second one. A stamp that is not there or will not read says so
+// rather than being left out: the reader is owed the difference between a
+// refusal that named nobody and one that could not.
+func heldWatchBy(watch *runstate.WatchStore) string {
+	holder, found, err := watch.Holder()
+	switch {
+	case err != nil:
+		return fmt.Sprintf(", and which session it is could not be read: %v", err)
+	case !found:
+		return ", and it did not record which session it is"
+	}
+	return fmt.Sprintf(": session %s, process %d, watching since %s",
+		holder.SessionID, holder.PID, holder.HeldAt.Format(time.RFC3339))
+}
+
+// openWatchSession gives one session of watching somewhere durable to say what
+// it is doing. The identifier is the command's rather than the scheduler's,
+// because it is the session's identity rather than the loop's: the same name is
+// stamped on the watch this session holds, so a session refused by that lease
+// and a session read out of this log are the same session to whoever reads
+// either.
+func openWatchSession(configPath, sessionID string) (orchestrator.WatchSessions, error) {
+	parts, err := buildComponents(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -656,6 +730,15 @@ like any other provider call and --budget counts what it spent; holding intake
 does not stop it, because the judgment a held queue is waiting on is what the
 delivery produces. What it did, and anything still waiting on a person, is on the
 pass.
+
+Only one session watches a product at a time. A second one is refused as it
+starts, naming the session that holds the watch and the process running it,
+because two sessions read one queue and can both choose an item before either
+has reserved a run for it. The watch is held for as long as the session runs and
+is let go however it ends, including when it stops to restart into a build
+deployed over it -- so the session that comes back takes it up again. A drain
+takes nothing and is refused nothing: what this refuses is a second session that
+stays open, which is the shape that ran on 2026-09-05.
 
 A watching session guards itself three ways. It does not start the same item
 twice unless the item has changed -- what it says, what it is for, its priority,

@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -241,7 +242,8 @@ func TestARestartThatDoesNotHappenLeavesNoRecordSayingTheSessionIsComingBack(t *
 	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
 	configPath := writeConfig(t, validConfig)
 
-	sessions, err := openWatchSession(configPath)
+	sessionID := newWatchSessionID(t)
+	sessions, err := openWatchSession(configPath, sessionID)
 	if err != nil {
 		t.Fatalf("openWatchSession() error = %v", err)
 	}
@@ -261,9 +263,15 @@ func TestARestartThatDoesNotHappenLeavesNoRecordSayingTheSessionIsComingBack(t *
 	// executable, a path that went away between the stat and the exec.
 	refused := &refusedRestart{args: []string{"/usr/local/bin/yoyo", "work", "--watch"}}
 	var said strings.Builder
-	if code := takeUpTheDeploy(refused, sessions, &said, 0, 0, 0, 0, 0); code != 1 {
+	watching := heldWatch(t, configPath, sessionID)
+	if code := takeUpTheDeploy(refused, sessions, watching, &said, 0, 0, 0, 0, 0); code != 1 {
 		t.Fatalf("takeUpTheDeploy() = %d, want the failed restart to fail the command", code)
 	}
+	// The watch goes with the session whichever way this ends. A restart that
+	// worked would have the build it became take the same lease, and this one --
+	// the fallback exit, where the re-execution was refused -- leaves it free for
+	// whoever starts the next session.
+	watchIsFree(t, configPath)
 	if !strings.Contains(said.String(), "could not") {
 		t.Fatalf("stderr = %q, want whoever is at the terminal told the restart did not happen", said.String())
 	}
@@ -303,9 +311,10 @@ func TestARestartThatDoesNotHappenLeavesNoRecordSayingTheSessionIsComingBack(t *
 	// than on a failure, because nothing failed.
 	unspent := &refusedRestart{args: []string{"/usr/local/bin/yoyo", "work", "--watch", "--budget", "50"}}
 	said.Reset()
-	if code := takeUpTheDeploy(unspent, sessions, &said, 0, 50, 50, 0, 0); code != 0 {
+	if code := takeUpTheDeploy(unspent, sessions, heldWatch(t, configPath, sessionID), &said, 0, 50, 50, 0, 0); code != 0 {
 		t.Fatalf("takeUpTheDeploy() = %d, want a session stopped on its bound rather than a failure", code)
 	}
+	watchIsFree(t, configPath)
 	if unspent.attempts != 0 {
 		t.Fatalf("Take() was called %d time(s), want a bound that is gone to refuse the restart before it", unspent.attempts)
 	}
@@ -315,6 +324,128 @@ func TestARestartThatDoesNotHappenLeavesNoRecordSayingTheSessionIsComingBack(t *
 	}
 	if latest.Restarting || !strings.Contains(latest.Reason, "budget") {
 		t.Fatalf("latest = %#v, want an ending naming the bound that refused the restart", latest)
+	}
+}
+
+// The wedge-recovery shape: a second watching session started while the first is
+// still alive. Two of them read one queue and choose from it independently, and
+// a run is not in durable state until it reserves, so both can pick the same
+// item in that window -- which is how two watches came to be running against one
+// product on 2026-09-05. The second is refused as it starts, and told which
+// session has the watch rather than only that somebody does.
+func TestASecondWatchingSessionIsRefusedWhileTheFirstIsAlive(t *testing.T) {
+	// Not parallel: the state root the watch is taken under is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	// The session that is already watching, holding what the command holds for as
+	// long as it runs.
+	sessionID := newWatchSessionID(t)
+	watching := heldWatch(t, configPath, sessionID)
+
+	_, stderr, code := runCLI(t, "work", "--config", configPath, "--watch")
+	if code != 1 {
+		t.Fatalf("second work --watch code = %d, stderr = %q, want it refused", code, stderr)
+	}
+	for _, want := range []string{
+		"already watching this product",
+		// Named, because a refusal an operator cannot act on sends them looking
+		// for a process by hand -- which on a machine running several products is
+		// how the wrong session gets stopped.
+		sessionID,
+		fmt.Sprintf("process %d", os.Getpid()),
+		"one session per product",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr = %q, want it to say %q", stderr, want)
+		}
+	}
+	// A session that was refused says nothing about itself: it never watched, and
+	// a log entry from it would be a session `yoyo status` reports as running.
+	watch, err := runstate.NewWatchStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewWatchStore() error = %v", err)
+	}
+	recorded, err := watch.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 0 {
+		t.Fatalf("watch log = %#v, want nothing from a session that was refused", recorded)
+	}
+
+	// The first session ends, and the next one is admitted -- the recovery this
+	// must not stand in the way of.
+	if err := watching.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	watchIsFree(t, configPath)
+}
+
+// A drain takes no watch, so an operator's own pass is not refused by a session
+// that is watching, and a drain leaves nothing behind that would refuse one.
+func TestADrainNeitherTakesTheWatchNorIsRefusedByIt(t *testing.T) {
+	// Not parallel: the state root the watch is taken under is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+	intake, err := runstate.NewIntakeHoldStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewIntakeHoldStore() error = %v", err)
+	}
+	// Held intake keeps this pass off the tracker, which is not what is being
+	// tested and is not available here.
+	if _, err := intake.Hold("the queue needs reordering first", time.Now()); err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+
+	watching := heldWatch(t, configPath, newWatchSessionID(t))
+	if _, stderr, code := runCLI(t, "work", "--config", configPath); code != 0 {
+		t.Fatalf("work code = %d, stderr = %q, want a drain unaffected by a session watching", code, stderr)
+	}
+	if err := watching.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if _, stderr, code := runCLI(t, "work", "--config", configPath); code != 0 {
+		t.Fatalf("work code = %d, stderr = %q", code, stderr)
+	}
+	watchIsFree(t, configPath)
+}
+
+// newWatchSessionID names a session the way the command does.
+func newWatchSessionID(t *testing.T) string {
+	t.Helper()
+	sessionID, err := runstate.NewWatchSessionID()
+	if err != nil {
+		t.Fatalf("NewWatchSessionID() error = %v", err)
+	}
+	return sessionID
+}
+
+// heldWatch is a session holding the product's watch, taken exactly as the
+// command takes it.
+func heldWatch(t *testing.T, configPath, sessionID string) *runstate.Lease {
+	t.Helper()
+	lease, err := holdTheWatch(configPath, sessionID)
+	if err != nil {
+		t.Fatalf("holdTheWatch() error = %v", err)
+	}
+	t.Cleanup(func() { lease.Release() })
+	return lease
+}
+
+// watchIsFree asserts that nobody holds the product's watch, by taking it. The
+// lock is advisory and per open file description, so this is the same question
+// the next session asks and gets the same answer.
+func watchIsFree(t *testing.T, configPath string) {
+	t.Helper()
+	lease, err := holdTheWatch(configPath, newWatchSessionID(t))
+	if err != nil {
+		t.Fatalf("the watch was not let go of: %v", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
 	}
 }
 
@@ -342,7 +473,7 @@ func TestAWatchSessionWritesIntoTheProductsOwnWatchLog(t *testing.T) {
 	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
 	configPath := writeConfig(t, validConfig)
 
-	sessions, err := openWatchSession(configPath)
+	sessions, err := openWatchSession(configPath, newWatchSessionID(t))
 	if err != nil {
 		t.Fatalf("openWatchSession() error = %v", err)
 	}
@@ -369,8 +500,9 @@ func TestAWatchSessionWritesIntoTheProductsOwnWatchLog(t *testing.T) {
 		t.Fatalf("reason = %q, want what the session said about itself", recorded[0].Reason)
 	}
 	// A second session is a second identity in the same log, so two of them
-	// interleaved can still be read apart.
-	other, err := openWatchSession(configPath)
+	// interleaved -- one after the other, since only one watches at a time -- can
+	// still be read apart.
+	other, err := openWatchSession(configPath, newWatchSessionID(t))
 	if err != nil {
 		t.Fatalf("openWatchSession() error = %v", err)
 	}

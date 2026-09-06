@@ -487,6 +487,18 @@ the development manager. Holding intake brakes a watching session in place rathe
 than stopping it — it keeps polling, chooses nothing, and resumes when you
 release it.
 
+**Only one session watches a product at a time.** A second `yoyo work --watch`
+is refused as it starts, in a sentence naming the session holding the watch and
+the process running it. Two sessions are not two workers: each reads the whole
+ready queue and chooses from it, and an item one of them chose is invisible to
+the other until its run reserves — several steps later — so both can start on
+it. Two of them briefly coexisted while the 2026-09-05 wedge was being cleared,
+which is what this stops. The watch is an advisory lock the operating system
+drops when its holder exits, so a session that was killed leaves nothing for
+anybody to clear, and a session that stops to take up a deploy lets it go before
+it restarts so the build it becomes can take it up. A drain takes nothing and is
+refused nothing: what this refuses is a second session that stays open.
+
 Three things guard a loop that no longer ends. A session does not start the same
 item twice unless the item has changed — what it says, what it is for, its
 priority, its status, what it depends on, its notes — so a start the harness
