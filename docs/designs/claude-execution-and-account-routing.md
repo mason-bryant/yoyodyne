@@ -10,6 +10,10 @@ revisions:
       by: architect
       at: 2026-08-23T16:39:19Z
       reason: promoted from the operator's multi-model execution and account routing brief under the 2026-08-22 mandate; deviations recorded in the promotion, with the capacity-blocked state carried as deviation-to-implement from the observability promotion
+    - action: amended
+      by: architect
+      at: 2026-09-07T00:30:00Z
+      reason: yoyodyne-ifd.306 - conversation account failover designed, turn-granular, durable-record rebuild exercising provider-independence, named-account affinity with return at window reopen, per-turn alias attribution with failover reason, cost paid in context reconstruction only while the window is closed; configuration is a pooled named endpoint plus operator-local enablement
 ---
 
 # Claude execution: pinned invocations, capacity semantics, and the additive account-pooling contract
@@ -41,3 +45,18 @@ Claude accounts become named execution endpoints. A pool round-robins its active
 ## Fallback, bounded now for later
 
 No automatic account or provider fallback exists in V1. When fallback of any kind arrives, it chooses only among operator-approved backends, models, accounts, and policies; it starts a new provider-native session and reconstructs full durable context; the run records original and fallback backend, model, alias, reason, revision, and cost; and it **never weakens checks, authority, review independence, or acceptance criteria** — a cheaper path through the gates is not a path. Development-manager routing among governed execution profiles is post-v1 and evidence-gated, per the management-and-supervision design: profiles chosen on measured cost, complexity, and outcomes, never invented provider policy.
+
+## Conversation failover
+
+**The pin was an optimization, never the record.** A conversation's account pin exists for provider-session resume; `durable-state-is-provider-independent` already guarantees any account can host any turn by rebuilding from the durable conversation record. Failover is that invariant exercised, not weakened.
+
+**Trigger.** At turn start — and at reissue after a refusal — if the conversation's named account is usage-limited or capacity-blocked, the turn is served by another active pooled account under operator-approved policy. Never mid-generation, and never a different provider: this is account selection inside the pool the operator configured, which the fallback clause already permits — operator-approved accounts, recorded, gates untouched (a conversation produces no gate evidence, so none are in reach).
+
+**The rebuild.** A provider session is account-bound, so a failover turn reconstructs the conversation from the durable record rather than resuming — which is exactly what the record exists to make possible. **Return:** the named account keeps affinity; the conversation returns to it at the first turn after its window reopens, and the failover account accrues none, so a conversation cannot flap between accounts.
+
+**Attribution.** Every turn records the serving alias and configuration revision — the same pinning run records carry — plus, on a failover turn, the named account and the reason. Nothing is silent: the record says which account served every turn, and the cost surfaces price it as they price everything, from the provider's own report.
+
+**The cost story.** A failover turn pays full context reconstruction where a resumed turn pays a session resume — more expensive per turn, paid only while the named window is closed, and that price is the point: the deciders keep thinking through a window instead of stopping with the doers.
+
+**Configuration.** The second account enters as a named endpoint in operator-local machine capacity, per the pooling contract — account profile, auth reference — with conversation failover enabled as operator-local policy naming which pooled accounts may serve conversations. No run schema and no conversation schema changes: the alias fields carry it.
+

@@ -10,6 +10,10 @@ revisions:
       by: architect
       at: 2026-09-01T19:35:00Z
       reason: drafted by the developer under yoyodyne-ifd.36, carried whole to the architect, and ratified with amendments recorded in conversation - the authority paragraph rebound to authority-by-capability and configuration-never-grants-authority with role definitions excluded from materialization, draft scaffolding replaced by the ratification decisions, and conversion output placed under the working-tree publication rule. The four questions the draft asked the architect are answered in its Decided-at-ratification section
+    - action: amended
+      by: architect
+      at: 2026-09-07T00:30:00Z
+      reason: 'yoyodyne-ifd.294 - the config.lock baseline ratified as a contract: bundle name, bundle revision digest, per-value digests and never values, a version field, generated and committed, nothing in the load path reading it, held by a conformance test; recorded in the baseline section, the 2026-09-02 ratification entries confirmed present'
 ---
 
 # Portable agent configuration
@@ -178,11 +182,17 @@ This is the specific thing an explicit configuration trades away, and the
 mechanism that buys it back is **a baseline, recorded at materialization, that
 is never read at load time**.
 
-`materialize` and `init` write `.yoyodyne/config.lock`: the bundle's name, the
-bundle's revision digest, and the digest of each value as that bundle supplied
-it. It is generated, it is committed with the configuration, and **nothing in
-the load path reads it**. What the file says is still exactly what runs, which
-is ifd.35's guarantee and is not weakened here.
+`materialize` and `init` write `.yoyodyne/config.lock`, and its shape is a
+ratified contract: the bundle's name, the bundle's revision digest, and the
+digest of each value as that bundle supplied it — digests, never the values
+themselves; a version field, because a committed file that outlives schemas
+needs one, by the same rule `config.yaml` follows; generated, never
+hand-authored; committed with the configuration; and **nothing in the load
+path reads it**, held by a conformance test asserting the loader never opens
+the file. Any implemented format meeting that contract is ratified as it
+stands; anything beyond it — values rather than digests, anything a loader
+consults — is a deviation to correct. What the file says is still exactly what
+runs, which is ifd.35's guarantee and is not weakened here.
 
 With a baseline, `yoyo config drift` is a three-way comparison rather than a
 diff, and it sorts every value into four answers:
