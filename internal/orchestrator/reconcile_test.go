@@ -516,12 +516,14 @@ func TestReconcileBlocksAnUnapprovedPromotionItFinds(t *testing.T) {
 		t.Fatal("interrupted Run() error = nil")
 	}
 	// Strip the approval the run recorded, leaving the promoted commit without
-	// the evidence that authorized it.
+	// the evidence that authorized it. What it approved goes with it: the two are
+	// one verdict, and the record refuses one without the other.
 	interrupted, err := store.Load(pipelineRunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	interrupted.ReviewDecision = ""
+	interrupted.ReviewApproves = ""
 	if err := store.Save(interrupted); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}

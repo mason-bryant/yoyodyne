@@ -22,6 +22,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/landing"
+	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -98,6 +99,104 @@ func TestAnHonestNotDoableYetLandingIntegratesAndReParksItsItem(t *testing.T) {
 	recorded := onlyRecordedRun(t, store)
 	if recorded.Outcome != runstate.OutcomeSucceeded {
 		t.Errorf("run outcome = %q, want %q: landing evidence is not a failed run", recorded.Outcome, runstate.OutcomeSucceeded)
+	}
+}
+
+// yoyodyne-ifd.284 replayed exactly as it happened, with the one thing it was
+// missing: the developer writes no block at all, so the claim in force is the
+// default that closes the item, and the reviewer reads the change for what it is
+// and approves it as evidence. The change is promoted as any approved change is,
+// and the item stays open — parked, in the reviewer's own words, which is the
+// sentence it was already writing into its summary when the item closed against
+// its own diagnosis.
+func TestAnApprovalOfEvidenceLeavesTheItemOpenInTheReviewersWords(t *testing.T) {
+	t.Parallel()
+
+	tracker := newOutcomeTracker()
+	provider := roleBackend(writeFeature, approveEvidenceVerdict)
+	provider.developerFinalText = "the machinery this item is written against has not landed; this change is the diagnosis"
+	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The approval is an approval: the evidence landed and was promoted, and the
+	// run succeeded.
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("an approval of evidence did not integrate: %#v", outcome)
+	}
+	if outcome.ReviewDecision != review.DecisionApprove || outcome.ReviewApproves != review.ApprovesEvidence {
+		t.Fatalf("the run did not record what the approval approved: decision = %q, approves = %q",
+			outcome.ReviewDecision, outcome.ReviewApproves)
+	}
+	// And it closes nothing. The developer claimed the ordinary landing, which is
+	// the claim that used to decide this on its own.
+	if outcome.Landing != "" {
+		t.Fatalf("the developer claimed %q; this replay is the run that claimed nothing", outcome.Landing)
+	}
+	if outcome.WorkItemClosed || tracker.closed {
+		t.Fatalf("the item closed against a change its reviewer called evidence; calls = %v", tracker.calls)
+	}
+	if !tracker.reopened || tracker.item.Status != "open" {
+		t.Fatalf("the item was left claimed by a run that has ended; calls = %v", tracker.calls)
+	}
+	// Parked, because the marker is the developer's channel and a reviewer has
+	// none: an item returned bare is the one the next pull selects.
+	if !tracker.item.Parking.Parked() {
+		t.Fatalf("the item went back to the backlog unparked; calls = %v", tracker.calls)
+	}
+	// In the reviewer's words. Nobody else wrote an account of this decision.
+	for _, where := range []string{tracker.item.Parking.Reason(), tracker.reopenReason, tracker.notes} {
+		if !strings.Contains(where, "the design it needs has not landed") {
+			t.Errorf("the item does not carry the reviewer's account: %q", where)
+		}
+	}
+	if !strings.Contains(tracker.notes, "approved the change as evidence") {
+		t.Errorf("the notes do not say which reader withheld the closure: %q", tracker.notes)
+	}
+	// The record is durable, because the closure is not always made by the process
+	// that read the verdict.
+	recorded := onlyRecordedRun(t, store)
+	if recorded.Outcome != runstate.OutcomeSucceeded {
+		t.Errorf("run outcome = %q, want %q: approving evidence is not a failed run", recorded.Outcome, runstate.OutcomeSucceeded)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.ReviewApproves != runstate.ApprovesEvidence || state.Discharges() {
+		t.Errorf("the durable record does not withhold the closure: approves = %q, discharges = %t",
+			state.ReviewApproves, state.Discharges())
+	}
+}
+
+// An approval that never said what it approves is asked for once more rather
+// than settled from the answer nobody gave. The change is built, checked, and
+// waiting on one invocation, and the default it would fall back to is the
+// closing one.
+func TestAnApprovalThatSaysNothingIsAskedForAgain(t *testing.T) {
+	t.Parallel()
+
+	tracker := newOutcomeTracker()
+	unstated := `{"decision":"approve","summary":"the change is fine"}`
+	provider := roleBackend(writeFeature, unstated, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("the re-asked review did not settle the run: %#v, closed = %t", outcome, tracker.closed)
+	}
+	// The re-ask is a second review rather than a second developer attempt: the
+	// change said nothing wrong, the reviewer did.
+	if outcome.RepairAttempts != 0 {
+		t.Errorf("repair attempts = %d, want the change handed back to nobody", outcome.RepairAttempts)
+	}
+	if outcome.ReviewApproves != review.ApprovesImplementation {
+		t.Errorf("the run recorded approves = %q, want the kind the second verdict stated", outcome.ReviewApproves)
 	}
 }
 
@@ -825,7 +924,7 @@ func TestTheReviewersDirectionNeverReachesTheWorkItem(t *testing.T) {
 			onTheItem := strings.Join([]string{
 				tracker.notes, tracker.closeReason, tracker.reopenReason, tracker.item.Parking.Reason(),
 			}, "\n")
-			for _, directed := range []string{"approve it only if", "Ask for changes", "belongs in the developer's reply"} {
+			for _, directed := range []string{"Judge the change against that claim", "Approve it as evidence instead"} {
 				if strings.Contains(onTheItem, directed) {
 					t.Errorf("the item carries a direction written for the reviewer (%q): %q", directed, onTheItem)
 				}
@@ -835,7 +934,7 @@ func TestTheReviewersDirectionNeverReachesTheWorkItem(t *testing.T) {
 			if !strings.Contains(onTheItem, "Landing claim") && !strings.Contains(onTheItem, "integrated") {
 				t.Errorf("the item says nothing about how it was settled: %q", onTheItem)
 			}
-			if got := strings.Contains(reviewerPrompt, "approve it only if it is the work the item asked for"); got != landed.directed {
+			if got := strings.Contains(reviewerPrompt, "Approve it as evidence instead"); got != landed.directed {
 				t.Errorf("the reviewer was told what approving the claim does = %v, want %v: %q", got, landed.directed, reviewerPrompt)
 			}
 		})
@@ -851,9 +950,11 @@ func TestTheReviewersDirectionNeverReachesTheWorkItem(t *testing.T) {
 // the item.
 //
 // The default is a claim like any other now, and the reviewer is shown it. A
-// diagnosis offered under it is a change that is not the work, the review sends
-// it back, and the repair round is where the developer claims what it actually
-// landed — which leaves the item parked rather than closed.
+// diagnosis offered under it is a change that is not the work, and the reviewer
+// has two answers for that: approve it as evidence, which the test above this one
+// is, or send it back — after which the repair round is where the developer
+// claims what it actually landed. This is that second route, and it leaves the
+// item parked rather than closed just as the first does.
 func TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem(t *testing.T) {
 	t.Parallel()
 
@@ -887,7 +988,7 @@ func TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem(t *testing.T) {
 	if !strings.Contains(reviewerPrompts[0], "claimed no landing outcome") {
 		t.Errorf("the reviewer was not told the default claim was in force: %q", reviewerPrompts[0])
 	}
-	if !strings.Contains(reviewerPrompts[0], "approve it only if it is the work the item asked for") {
+	if !strings.Contains(reviewerPrompts[0], "Approve it as evidence instead") {
 		t.Errorf("the reviewer was not told what approving the default does: %q", reviewerPrompts[0])
 	}
 	// And the item is where the evidence says it belongs, not closed against it.
@@ -1042,25 +1143,48 @@ func TestTheClosureDerivationReadsTheSameRecordEverywhere(t *testing.T) {
 			discharges: false,
 			parks:      true,
 		},
+		{
+			// The reviewer's half of the same question. The developer claimed the
+			// ordinary landing — which is the claim nobody writes — and the reviewer
+			// approved the change as evidence rather than as the work, which is the
+			// yoyodyne-ifd.284 shape and has to leave the item exactly where an
+			// evidence landing does.
+			name: "an approval of evidence over the default claim",
+			state: runstate.State{
+				ReviewDecision: runstate.ReviewApprove,
+				ReviewApproves: runstate.ApprovesEvidence,
+				ReviewSummary:  "a sound diagnosis rather than the work",
+			},
+			discharges: false,
+			parks:      true,
+		},
+		{
+			name: "an approval of the implementation",
+			state: runstate.State{
+				ReviewDecision: runstate.ReviewApprove,
+				ReviewApproves: runstate.ApprovesImplementation,
+			},
+			discharges: true,
+		},
 	} {
 		t.Run(recorded.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := recorded.state.LandingDischarges(); got != recorded.discharges {
-				t.Fatalf("LandingDischarges() = %t, want %t", got, recorded.discharges)
+			if got := recorded.state.Discharges(); got != recorded.discharges {
+				t.Fatalf("Discharges() = %t, want %t", got, recorded.discharges)
 			}
 			// Where the item is left is the other half of the same derivation, and it
 			// is read by both settlement sites for the same reason: an item parked by
 			// the run and reopened bare by the sweep is an item selection picks up
 			// again the moment the sweep runs.
-			if got := recorded.state.LandingParks(); got != recorded.parks {
-				t.Fatalf("LandingParks() = %t, want %t", got, recorded.parks)
+			if got := recorded.state.Parks(); got != recorded.parks {
+				t.Fatalf("Parks() = %t, want %t", got, recorded.parks)
 			}
-			// An item already in the state the landing calls for is settled, which
+			// An item already in the state the run calls for is settled, which
 			// is what makes settling one twice settle it once.
 			for status, want := range map[string]bool{"closed": true, "open": !recorded.discharges, "in_progress": false} {
-				if got := landingSettled(recorded.state, status); got != want {
-					t.Errorf("landingSettled(%q) = %t, want %t", status, got, want)
+				if got := itemSettled(recorded.state, status); got != want {
+					t.Errorf("itemSettled(%q) = %t, want %t", status, got, want)
 				}
 			}
 		})

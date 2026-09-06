@@ -111,6 +111,15 @@ const (
 	ReviewRepair  = "repair"
 )
 
+// What an approval approves is duplicated here for the same reason, and it is
+// the review vocabulary that decides most: an approval of evidence closes no
+// work item, so a record that could not carry the word would settle the item as
+// though the reviewer had said the other thing.
+const (
+	ApprovesImplementation = "implementation"
+	ApprovesEvidence       = "evidence"
+)
+
 const (
 	SeverityBlocker = "blocker"
 	SeverityMajor   = "major"
@@ -126,11 +135,11 @@ const (
 	LandingEvidence   = "evidence"
 )
 
-// The two vocabularies above stated as lists, which is what the validation below
-// reads. Neither is repeated in a switch anywhere in this package, so the list
+// The vocabularies above stated as lists, which is what the validation below
+// reads. None of them is repeated in a switch anywhere in this package, so a list
 // and what a record may carry cannot come to disagree.
 //
-// Both lists are closed and both stay closed. A stored value nothing recognizes
+// Every list is closed and stays closed. A stored value nothing recognizes
 // is worse than a refused one here: what reads these fields ranks a severity to
 // order a listing, and builds the repair prompt a developer is handed back from
 // them, and neither has an answer for a word it has never seen. Opening them —
@@ -147,6 +156,7 @@ const (
 // check rather than somebody's run.
 var (
 	reviewDecisions   = []string{ReviewApprove, ReviewRepair}
+	reviewApprovals   = []string{ApprovesImplementation, ApprovesEvidence}
 	findingSeverities = []string{SeverityBlocker, SeverityMajor, SeverityMinor}
 	landingOutcomes   = []string{LandingDischarged, LandingEvidence}
 )
@@ -157,6 +167,10 @@ var (
 func ReviewDecisions() []string { return slices.Clone(reviewDecisions) }
 
 func FindingSeverities() []string { return slices.Clone(findingSeverities) }
+
+// ReviewApprovals is what an approval may say it approves, read the same way and
+// closed for the same reason.
+func ReviewApprovals() []string { return slices.Clone(reviewApprovals) }
 
 // LandingOutcomes is the landing vocabulary the durable schema stores, read the
 // same way and closed for the same reason.
@@ -979,8 +993,14 @@ type State struct {
 	ReviewModel         string `json:"review_model,omitempty"`
 	ReviewResolvedModel string `json:"review_resolved_model,omitempty"`
 	ReviewDecision      string `json:"review_decision,omitempty"`
-	ReviewSummary       string `json:"review_summary,omitempty"`
-	ReviewFindings      int    `json:"review_findings,omitempty"`
+	// ReviewApproves is what the reviewer said its approval approves: the work the
+	// item asked for, or evidence that does not discharge it. It is durable for the
+	// reason the landing claim below is — the closure is not always made by the
+	// process that read the verdict — and it is empty on a repair, which closes
+	// nothing, and on every run recorded before an approval said which it was.
+	ReviewApproves string `json:"review_approves,omitempty"`
+	ReviewSummary  string `json:"review_summary,omitempty"`
+	ReviewFindings int    `json:"review_findings,omitempty"`
 	// LandingOutcome is what the developer claimed its change does to the work
 	// item, and LandingReason is its own account of the claim. They are durable
 	// because the closure is not always made by the process that read them: a run
@@ -1391,6 +1411,15 @@ func (s State) Validate() error {
 	}
 	if s.ReviewDecision != "" && !slices.Contains(reviewDecisions, s.ReviewDecision) {
 		problems = append(problems, errors.New("review_decision is invalid"))
+	}
+	if s.ReviewApproves != "" && !slices.Contains(reviewApprovals, s.ReviewApproves) {
+		problems = append(problems, errors.New("review_approves is invalid"))
+	}
+	// What an approval approves is only recorded against an approval. A repair
+	// closes nothing, so a record carrying both would say the settlement was
+	// decided by a verdict that sent the change back.
+	if s.ReviewApproves != "" && s.ReviewDecision != ReviewApprove {
+		problems = append(problems, errors.New("review_approves is only for a verdict recorded as approve"))
 	}
 	if s.LandingOutcome != "" && !slices.Contains(landingOutcomes, s.LandingOutcome) {
 		problems = append(problems, errors.New("landing_outcome is invalid"))
@@ -1839,17 +1868,42 @@ func (s State) AwaitingForge() bool {
 	return !s.PullRequest.Merged
 }
 
-// LandingDischarges reports whether this run's landing is the kind that closes
-// its work item. It is the one derivation every closure site reads — the run's
-// own completion, the sweep that settles a queued merge, and the sweep that
-// finishes an interrupted run — so a change that integrates cannot be closed by
-// one of them and left open by another.
+// Discharges reports whether this run closes its work item. It is the one
+// derivation every closure site reads — the run's own completion, the sweep that
+// settles a queued merge, and the sweep that finishes an interrupted run — so a
+// change that integrates cannot be closed by one of them and left open by
+// another.
+//
+// Two readers of the same change answer it, and either one saying "this is not
+// the work" leaves the item open. The developer's claim is one, and the
+// reviewer's approval is the other: the claim decides by default and its default
+// is the one nobody writes, so an approval that reads the change as evidence is
+// the only thing standing between a diagnosis and the closure it would otherwise
+// get. yoyodyne-ifd.284 is what that costs when the second reader has nowhere to
+// say it.
+func (s State) Discharges() bool {
+	return s.LandingDischarges() && s.ApprovalDischarges()
+}
+
+// LandingDischarges is the developer's half of the question above: whether what
+// this run claimed about its own change closes the item.
 //
 // It answers no in exactly two cases: a claim of evidence, and a claim that
 // arrived unreadable. Everything else discharges, which is every run that
 // claimed nothing and every run recorded before this channel existed.
 func (s State) LandingDischarges() bool {
 	return s.LandingOutcome != LandingEvidence && s.LandingProblem == ""
+}
+
+// ApprovalDischarges is the reviewer's half: whether the approval this change
+// was integrated on is one that closes the item.
+//
+// A verdict that recorded nothing about what it approves discharges, which is
+// every run reviewed before an approval said which it was, and every run whose
+// change was never approved at all — the closure sites all ask this of a change
+// that integrated, and nothing integrates without an approval.
+func (s State) ApprovalDischarges() bool {
+	return s.ReviewApproves != ApprovesEvidence
 }
 
 // LandingImpediment is the work item this run's landing named as what its own
@@ -1869,17 +1923,20 @@ func (s State) LandingImpediment() string {
 	return impediment
 }
 
-// LandingParks reports an item this run's landing returns to the backlog parked,
-// which is what an undischarged landing does unless it named the impediment it
-// waits for. It is derived here beside the closure so that both settlement sites
-// — the run's own and the sweep that finishes an interrupted one — put the item
-// in the same place.
+// Parks reports an item this run returns to the backlog parked, which is what an
+// undischarged run does unless its landing named the impediment it waits for. It
+// is derived here beside the closure so that both settlement sites — the run's
+// own and the sweep that finishes an interrupted one — put the item in the same
+// place.
 //
 // A claim that could not be read parks too. The marker would have come out of
 // the same block the outcome did, so there is nothing to hold the item back with,
-// and an item returned bare is one selection picks again immediately.
-func (s State) LandingParks() bool {
-	return !s.LandingDischarges() && s.LandingImpediment() == ""
+// and an item returned bare is one selection picks again immediately. So does an
+// item the reviewer approved evidence for: the marker is the developer's channel
+// and a reviewer has none, which leaves the parking as the only disposition that
+// holds such an item back.
+func (s State) Parks() bool {
+	return !s.Discharges() && s.LandingImpediment() == ""
 }
 
 // validateIndependentInvocations enforces what an integrated change claims: two

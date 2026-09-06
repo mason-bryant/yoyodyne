@@ -10,7 +10,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// The durable schema keeps its own copy of the reviewer's two vocabularies, so a
+// The durable schema keeps its own copy of the reviewer's vocabularies, so a
 // record is checked against what a record may hold rather than against whatever
 // this version of the harness happens to produce. The copy is worth having; the
 // drift between the copies is not. A severity or a decision the reviewer can
@@ -49,6 +49,30 @@ func TestTheDurableSchemaStoresEveryVerdictTheReviewerCanProduce(t *testing.T) {
 	for _, decision := range review.Decisions() {
 		if !slices.Contains(durableDecisions, string(decision)) {
 			t.Fatalf("the reviewer can decide %q and the durable schema stores only %v", decision, durableDecisions)
+		}
+	}
+
+	// What an approval approves is the third of these vocabularies and the one that
+	// decides most: an approval of evidence closes no work item, so a word the
+	// record could not carry would settle the item as though the reviewer had said
+	// the other thing.
+	durableApprovals := runstate.ReviewApprovals()
+	for _, approval := range review.Approvals() {
+		if !slices.Contains(durableApprovals, string(approval)) {
+			t.Fatalf("the reviewer can approve %q and the durable schema stores only %v", approval, durableApprovals)
+		}
+		// Checked through a state a run actually saves, so the vocabulary is held
+		// where it crosses rather than only where it is listed.
+		state := runstate.State{ReviewDecision: runstate.ReviewApprove, ReviewApproves: string(approval)}
+		if err := state.Validate(); err != nil && strings.Contains(err.Error(), "review_approves is invalid") {
+			t.Fatalf("a stored %q approval is refused: %v", approval, err)
+		}
+		// And the two derivations have to agree about which approval withholds the
+		// closure, because the reviewer answers in one vocabulary and the closure is
+		// decided in the other.
+		if approval.Discharges() != state.ApprovalDischarges() {
+			t.Errorf("approval %q discharges=%t as a verdict and %t as a record", approval,
+				approval.Discharges(), state.ApprovalDischarges())
 		}
 	}
 }

@@ -531,7 +531,7 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 	}
 	if outcome.Integration != nil {
 		report.Integrated = true
-		report.Undischarged = !outcome.LandingDischarges()
+		report.Undischarged = !outcome.Discharges()
 		// The account and the disposition describe an item that was not closed, so
 		// they are absent from a run that closed one rather than carried beside it
 		// saying where an item nobody left open was left.

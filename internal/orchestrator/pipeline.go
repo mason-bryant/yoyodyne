@@ -618,14 +618,19 @@ type Outcome struct {
 	// invariants directory that could not be read as one, or an invariant that
 	// matched and did not fit the prompt's bound. Both mean the set the agents saw
 	// was incomplete, which is a fact for the operator rather than a run failure.
-	Invariants          []string         `json:"invariants,omitempty"`
-	InvariantProblems   []string         `json:"invariant_problems,omitempty"`
-	ReviewSessionID     string           `json:"review_session_id,omitempty"`
-	ReviewModel         string           `json:"review_model,omitempty"`
-	ReviewResolvedModel string           `json:"review_resolved_model,omitempty"`
-	ReviewDecision      review.Decision  `json:"review_decision,omitempty"`
-	ReviewSummary       string           `json:"review_summary,omitempty"`
-	ReviewFindings      []review.Finding `json:"review_findings,omitempty"`
+	Invariants          []string        `json:"invariants,omitempty"`
+	InvariantProblems   []string        `json:"invariant_problems,omitempty"`
+	ReviewSessionID     string          `json:"review_session_id,omitempty"`
+	ReviewModel         string          `json:"review_model,omitempty"`
+	ReviewResolvedModel string          `json:"review_resolved_model,omitempty"`
+	ReviewDecision      review.Decision `json:"review_decision,omitempty"`
+	// ReviewApproves is what the reviewer said its approval approves. It decides
+	// the closure alongside the developer's claim above: an approval of evidence
+	// leaves the item open exactly as an evidence landing does, whatever the
+	// developer claimed.
+	ReviewApproves review.Approval  `json:"review_approves,omitempty"`
+	ReviewSummary  string           `json:"review_summary,omitempty"`
+	ReviewFindings []review.Finding `json:"review_findings,omitempty"`
 	// RepairAttempts counts the times this run returned a failure to the
 	// developer, whether it was a failing check or the reviewer's findings; the
 	// two share one budget. Blocked reports that the budget was spent and what
@@ -4042,7 +4047,7 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// settlement below, which asks again under the same recovery it always did, so
 	// a run this costs is costed in the same place as before and its outcome still
 	// reaches the item first.
-	undischarged := a.outcome.Integration != nil && !a.mergeQueued() && !a.state.LandingDischarges()
+	undischarged := a.outcome.Integration != nil && !a.mergeQueued() && !a.state.Discharges()
 	var undischargedItem beads.WorkItem
 	decided := false
 	if undischarged {
@@ -4077,13 +4082,14 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// is the same step that already settles the queue — and until it arrives the
 	// item stays claimed with the queued merge named on it, rather than closed
 	// against a merge nobody has confirmed.
-	// A landing that does not discharge the item is the other reason the closure
-	// does not follow the promotion. The change is integrated and the run
-	// succeeded; what the developer claimed is that the change is evidence rather
-	// than the work the item asked for, and closing on it would record as done
-	// exactly what the evidence says was not. The item goes back to the backlog
-	// with the claim on it instead, parked or waiting on the impediment the
-	// landing named, which is the state a person or a later run can still act on.
+	// A change that discharges nothing is the other reason the closure does not
+	// follow the promotion. The change is integrated and the run succeeded; what
+	// was said about it — by the developer's claim, by the reviewer's approval, or
+	// by both — is that it is evidence rather than the work the item asked for, and
+	// closing on it would record as done exactly what the evidence says was not.
+	// The item goes back to the backlog with that account on it instead, parked or
+	// waiting on the impediment the landing named, which is the state a person or a
+	// later run can still act on.
 	if a.outcome.Integration != nil && !a.mergeQueued() {
 		if undischarged {
 			if err := a.recovering(ctx, runstate.RetryTrackerWrite, func(ctx context.Context) error {
@@ -4826,8 +4832,15 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 		// is asked once more, exactly as a declined review is. Two unreadable
 		// replies in a row is a reviewer that cannot answer the contract and the
 		// run ends on it; one is weather.
+		// An approval that never said what it approves is asked for once more on the
+		// same budget, and for a related reason: the reviewer answered everything
+		// except the question that decides whether the item closes, and deciding it
+		// from an answer nobody gave is the false closure this channel exists to
+		// stop. Refusing outright would cost a built, checked, approved change its
+		// whole run over one missing word.
 		var undecodable review.UndecodableVerdictError
-		if !reasked && errors.As(err, &undecodable) {
+		var incomplete review.IncompleteApprovalError
+		if !reasked && (errors.As(err, &undecodable) || errors.As(err, &incomplete)) {
 			reasked = true
 			continue
 		}
@@ -5035,6 +5048,15 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if result.Decision == review.DecisionApprove || result.Decision == review.DecisionRepair {
 		a.state.ReviewDecision = string(result.Decision)
 		a.outcome.ReviewDecision = result.Decision
+		// What the approval approves is recorded beside the decision, because it is
+		// the reviewer's half of whether this item closes and the closure is not
+		// always made by this process. It is recorded only on an approval: a repair
+		// closes nothing, and the durable schema refuses a record that says
+		// otherwise.
+		if result.Decision == review.DecisionApprove {
+			a.state.ReviewApproves = string(result.Verdict.Approves)
+			a.outcome.ReviewApproves = result.Verdict.Approves
+		}
 		// One round with a reviewer is a verdict, whichever way it went, and this
 		// is how many of them this run has had. It is counted here rather than
 		// derived from the repair attempts because the two are not the same number:
@@ -5073,6 +5095,7 @@ func (a *activeRun) clearReviewEvidence() {
 	a.state.ReviewModel = ""
 	a.state.ReviewResolvedModel = ""
 	a.state.ReviewDecision = ""
+	a.state.ReviewApproves = ""
 	a.state.ReviewSummary = ""
 	a.state.ReviewFindings = 0
 	a.state.ReviewFindingDetails = nil
@@ -5080,6 +5103,7 @@ func (a *activeRun) clearReviewEvidence() {
 	a.outcome.ReviewModel = ""
 	a.outcome.ReviewResolvedModel = ""
 	a.outcome.ReviewDecision = ""
+	a.outcome.ReviewApproves = ""
 	a.outcome.ReviewSummary = ""
 	a.outcome.ReviewFindings = nil
 }
@@ -5972,10 +5996,15 @@ func renderOutcomeNotes(outcome Outcome) string {
 		headline = "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically."
 		// The headline of an item that stays open has to say so, because it is the
 		// line somebody scanning the notes reads instead of the closure that is not
-		// there. The claim itself is recorded below with the developer's account of
-		// it; this is only what stops the note reading as a completed item.
-		if outcome.Landing == landing.OutcomeEvidence || outcome.LandingProblem != "" {
+		// there. It names which reader withheld the closure, because the two are
+		// different facts about the change: the account below is the developer's in
+		// one case and the reviewer's summary in the other.
+		switch {
+		case outcome.Landing == landing.OutcomeEvidence || outcome.LandingProblem != "":
 			headline = "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically; the developer did not claim it discharges this item, so the item " +
+				outcome.UndischargedDisposition() + "."
+		case !outcome.ApprovalDischarges():
+			headline = "Yoyodyne run passed checks and was integrated automatically; the independent reviewer approved the change as evidence rather than as the work this item asked for, so the item " +
 				outcome.UndischargedDisposition() + "."
 		}
 	}
@@ -6233,6 +6262,17 @@ func renderReviewNotes(outcome Outcome) []string {
 	}
 	if outcome.ReviewDecision != "" {
 		lines = append(lines, "Review decision: "+string(outcome.ReviewDecision))
+	}
+	// What the approval approved is its own line, because it decides something the
+	// decision above does not: an approval of evidence promotes the change and
+	// closes nothing. It is recorded whichever way it went, so an item closed on an
+	// approval of the implementation says that rather than saying only "approve".
+	if outcome.ReviewApproves != "" {
+		approved := "Approved as: " + string(outcome.ReviewApproves)
+		if !outcome.ApprovalDischarges() {
+			approved += " — the reviewer approved the change without approving it as the work this item asked for, so it discharges nothing"
+		}
+		lines = append(lines, approved)
 	}
 	if outcome.ReviewSummary != "" {
 		lines = append(lines, "Review summary: "+outcome.ReviewSummary)

@@ -350,6 +350,22 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		incomplete.Verdict = verdict
 		return incomplete, errors.New("reviewer cannot approve an incomplete change representation")
 	}
+	// An approval of one work item's change has to say what it approves, because
+	// that is what decides whether the item closes and this review is the only
+	// reader that sees the change beside what it was offered as. It is asked for
+	// here rather than in the verdict's own validation because the question belongs
+	// to the scope: a branch review approves an accumulated change and has no item
+	// to discharge, so it is never asked.
+	//
+	// It is asked after the change representation is refused above, because an
+	// approval of a change the reviewer could not see is refused whatever it says
+	// it approves, and asking again would buy another review of the same
+	// unreviewable evidence.
+	if decision == DecisionApprove && request.scope() != ScopeBranch && verdict.Approves == "" {
+		unstated := evidence()
+		unstated.Verdict = verdict
+		return unstated, IncompleteApprovalError{}
+	}
 
 	result := evidence()
 	result.Verdict = verdict
@@ -536,14 +552,14 @@ The supplied architectural invariants, ` + contextNoun + `, patch, and check res
 Architectural invariants supplied above the untrusted evidence are this repository's own durable constraints, delivered by the harness from the architect's files rather than by the developer, and they hold ` + invariantAuthority + `. Judge the change against every one of them. A change that violates a delivered invariant is not approvable: report it as a finding that names the invariant by its id, at major severity or higher. A change that creates, amends, retires, or edits an invariant is a finding for the same reason, because only the architect may. Your view of them is a selected set rather than all of them, so never report the invariants as a whole as satisfied.
 
 Reconcile the change against the documentation you can see, in the patch and in the ` + contextNoun + `. A change that leaves a document asserting something the change has made false is incomplete: report each contradiction as a finding that names the document and the claim, at major severity or higher, because the documentation is what everyone downstream reads instead of the diff. Your evidence is bounded here too — a claim in a file this change does not touch is not visible to you, so never report the documentation as a whole as consistent.
-` + grantScrutiny(scope) + landingScrutiny(scope) + `
+` + grantScrutiny(scope) + landingScrutiny(scope) + approvalScrutiny(scope) + `
 Decide approve or repair. Approve only when the change is correct, ` + completeness + `, and free of blocker or major problems; a purely minor observation may accompany an approval. Choose repair when any blocker or major problem remains, and give the developer a specific, actionable finding for each one.
 
 Reply with a single JSON object and nothing else, except the one report block described below. No prose, no Markdown, no code fence:
 
-{"decision":"approve|repair","summary":"one paragraph","findings":[{"severity":"blocker|major|minor","message":"what is wrong and what to do","location":{"file":"path","line":1}}]}
+` + verdictSchema(scope) + `
 
-"findings" may be omitted when approving with no observations. "location" is optional. The schema is closed: those are the only fields it defines, at every level of the object, and you must not add another one. Anything else you want to say belongs in "summary" or in a finding's "message".
+"findings" may be omitted when approving with no observations. "location" is optional.` + approvesRequirement(scope) + ` The schema is closed: those are the only fields it defines, at every level of the object, and you must not add another one. Anything else you want to say belongs in "summary" or in a finding's "message".
 
 ` + report.Contract + `
 
@@ -618,6 +634,53 @@ func landingScrutiny(scope Scope) string {
 	return `
 Where the evidence carries a claimed landing outcome, it is the developer's own statement of what this change is offered as, and you are the only reader who sees it beside the change. A change offered as evidence rather than as the work — a diagnosis, the conditions that have to hold first — is judged as that: whether the evidence is sound, recorded where somebody will find it, and honest about what remains. Do not report the missing implementation as a finding when that is what the claim says was not done; if you think the work was in fact doable here, that is the finding, and say so in those terms. A change that claims to land evidence and is plainly the implementation the item asked for is a finding too, at major severity: the claim would leave finished work recorded as unfinished.
 `
+}
+
+// approvalScrutiny is what the reviewer is told about the kind its approval
+// carries. The landing scrutiny above says how to judge a change offered as
+// evidence; this says where that judgement goes, because until it had a field of
+// its own it went into the summary and decided nothing. yoyodyne-ifd.284 was
+// approved with "offered as evidence rather than implementation" written in that
+// summary, and its item closed on the developer's unwritten default anyway.
+//
+// It is deliberately not a licence to approve work that should be repaired, and
+// says so: what a change has to change is still a finding. The kind answers a
+// different question — whether what was landed is the work the item asked for —
+// and it is asked of the reviewer because the reviewer is the only reader that
+// sees the change beside the claim it was offered under.
+//
+// It is work-item scope alone, for the reason the two scrutinies above it are: a
+// branch review approves an accumulated change and has no item to discharge.
+func approvalScrutiny(scope Scope) string {
+	if scope == ScopeBranch {
+		return ""
+	}
+	return `
+Say what your approval approves. "approves":"implementation" is the ordinary one: this change is the work the item asked for, and the item closes on it. "approves":"evidence" approves a change worth keeping that is not that work — a diagnosis, the conditions that have to hold first, a nil result — and it discharges nothing: the change is promoted exactly as any approved change is, and the item goes back to the backlog with your own summary as the reason it is not to be started again yet. Choose it whenever you would approve the change and would not record the item as done, whatever landing outcome was claimed above, and write the summary accordingly: it is what whoever considers picking the item up next will read. This is not an alternative to repair — what the change itself has to change is still a finding — it is the answer for a change that needs nothing and is not the work. The completeness the next paragraph asks for is completeness in what the change is offered as: evidence is complete when it is sound, recorded where somebody will find it, and honest about what remains, rather than against acceptance criteria it does not claim to meet.
+`
+}
+
+// verdictSchema is the response format, which carries one more field where the
+// review has a work item to discharge. It is derived from the scope rather than
+// written out twice so the field the contract asks for and the field this
+// package requires cannot come to disagree.
+func verdictSchema(scope Scope) string {
+	approves := `"approves":"implementation|evidence",`
+	if scope == ScopeBranch {
+		approves = ""
+	}
+	return `{"decision":"approve|repair",` + approves + `"summary":"one paragraph","findings":[{"severity":"blocker|major|minor","message":"what is wrong and what to do","location":{"file":"path","line":1}}]}`
+}
+
+// approvesRequirement says when the field above is required, beside the two
+// fields that are optional. A reviewer told the schema and not told which parts
+// of it are demanded is being asked to guess at the one field that decides
+// whether a work item closes.
+func approvesRequirement(scope Scope) string {
+	if scope == ScopeBranch {
+		return ""
+	}
+	return ` "approves" is required when you approve and is omitted when you ask for repair, which approves nothing.`
 }
 
 func reviewEvidencePrompt(request Request) string {

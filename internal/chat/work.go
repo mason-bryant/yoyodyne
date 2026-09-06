@@ -268,12 +268,13 @@ type RunReport struct {
 	TargetBranch   string `json:"target_branch,omitempty"`
 	Commit         string `json:"commit,omitempty"`
 	WorkItemClosed bool   `json:"work_item_closed,omitempty"`
-	// Undischarged reports an integrated change whose developer claimed it does
-	// not discharge the item, with the account it gave and where the item was
-	// left. A reader told only that the change was integrated would read it as
-	// done — which is the reading this whole distinction exists to stop — and one
-	// told only that the item is open would go looking for it in a queue nothing
-	// is going to offer it from.
+	// Undischarged reports an integrated change that does not discharge its item —
+	// its developer claimed as much, or its reviewer approved it as evidence
+	// rather than as the work — with the account whichever of them said so gave,
+	// and where the item was left. A reader told only that the change was
+	// integrated would read it as done — which is the reading this whole
+	// distinction exists to stop — and one told only that the item is open would go
+	// looking for it in a queue nothing is going to offer it from.
 	//
 	// The disposition is the harness's own derivation rather than this surface's
 	// reading of the two fields beside it: a parking waits for a person and a

@@ -12,10 +12,16 @@ package landing_test
 // somebody writes reads it, because the guarantee is about code that does not
 // exist yet.
 //
+// Two readers decide it now rather than one: the developer's claim, and the
+// reviewer's approval, which since yoyodyne-ifd.209.27 says whether it approves
+// the work or evidence. Either one withholds the closure, so what a settlement
+// has to consult is the question over both of them rather than either half.
+//
 // So every call that closes an item is listed below with what makes it safe, and
 // this fails on one that is not listed. Two kinds are safe and the audit says
-// which each is: a run's own settlement, which must consult the landing, and an
-// act a person took, which is not a landing at all and has nothing to consult.
+// which each is: a run's own settlement, which must ask whether the change
+// discharges the item, and an act a person took, which is neither a landing nor
+// a review and has nothing to consult.
 // The consult is checked mechanically rather than taken from the row — a row can
 // claim a guard the declaration lost — so a settlement that stops asking fails
 // here even though its row still reads correctly.
@@ -59,7 +65,7 @@ type closureKind string
 
 const (
 	// kindSettlement is a run settling its own work item. It closes only where the
-	// landing discharges, and the declaration it sits in has to say so.
+	// change discharges the item, and the declaration it sits in has to ask so.
 	kindSettlement closureKind = "settlement"
 	// kindHuman is a person closing an item themselves, through the product
 	// manager's conversation. There is no landing to consult: nothing integrated,
@@ -80,10 +86,11 @@ type closureSite struct {
 	// Calls is how many closures the declaration takes, so a second one added to a
 	// declaration already listed is audited rather than covered by the first.
 	Calls int
-	// ConsultsLanding is whether the declaration reads the landing's outcome. It
-	// is swept from the source rather than asserted here, so the audit cannot
-	// claim a guard the code no longer has.
-	ConsultsLanding bool
+	// ConsultsDischarge is whether the declaration asks whether the change
+	// discharges the item — the whole question, over the developer's claim and the
+	// reviewer's approval together. It is swept from the source rather than
+	// asserted here, so the audit cannot claim a guard the code no longer has.
+	ConsultsDischarge bool
 	// Kind is which of the two safe shapes this is.
 	Kind closureKind
 	// Why is what makes it safe, in prose, because the question a reader has to
@@ -99,23 +106,23 @@ func (s closureSite) key() string { return s.File + "\t" + s.Declaration }
 var auditedClosures = []closureSite{
 	{
 		File: "internal/chat/tracker.go", Declaration: "(*Session) carryOutTrackerAction", Calls: 2,
-		ConsultsLanding: false, Kind: kindHuman,
-		Why: "the product manager closing or retiring an item in conversation. Nothing integrated and no developer claimed anything, so there is no landing to read; what authorizes it is the role, and the two calls are the close and the retirement.",
+		ConsultsDischarge: false, Kind: kindHuman,
+		Why: "the product manager closing or retiring an item in conversation. Nothing integrated, no developer claimed anything and no reviewer approved anything, so there is nothing to read; what authorizes it is the role, and the two calls are the close and the retirement.",
 	},
 	{
 		File: "internal/orchestrator/pipeline.go", Declaration: "(*activeRun) complete", Calls: 1,
-		ConsultsLanding: true, Kind: kindSettlement,
-		Why: "a run settling its own item once its promotion is where it will stay. It closes only on a landing that discharges; an undischarged one goes to settleUndischarged instead, and a merge the forge only queued defers the whole settlement to reconciliation.",
+		ConsultsDischarge: true, Kind: kindSettlement,
+		Why: "a run settling its own item once its promotion is where it will stay. It closes only where the change discharges the item — the developer's claim and the reviewer's approval both saying so; anything else goes to settleUndischarged instead, and a merge the forge only queued defers the whole settlement to reconciliation.",
 	},
 	{
 		File: "internal/orchestrator/reconcile.go", Declaration: "(Reconciler) closeSettledMerge", Calls: 1,
-		ConsultsLanding: true, Kind: kindSettlement,
-		Why: "the sweep settling a run whose queued merge the forge has since performed. The forge merging the change settles where the work is and not whether it discharges the item, so the claim is read back from the durable record the run that made it left behind.",
+		ConsultsDischarge: true, Kind: kindSettlement,
+		Why: "the sweep settling a run whose queued merge the forge has since performed. The forge merging the change settles where the work is and not whether it discharges the item, so the claim and the approval are read back from the durable record the run that made them left behind.",
 	},
 	{
 		File: "internal/orchestrator/reconcile.go", Declaration: "(Reconciler) completeIntegrated", Calls: 1,
-		ConsultsLanding: true, Kind: kindSettlement,
-		Why: "the sweep finishing a run somebody interrupted after its change was promoted. It decides the same way the run itself would have, from the same durable claim, so an interrupted run and a finished one leave the item in the same place.",
+		ConsultsDischarge: true, Kind: kindSettlement,
+		Why: "the sweep finishing a run somebody interrupted after its change was promoted. It decides the same way the run itself would have, from the same durable record, so an interrupted run and a finished one leave the item in the same place.",
 	},
 }
 
@@ -146,8 +153,8 @@ func TestEveryRouteThatClosesAWorkItemIsAudited(t *testing.T) {
 		if strings.TrimSpace(site.Why) == "" {
 			t.Errorf("the audit lists %s: %s and does not say what makes it safe", site.File, site.Declaration)
 		}
-		if site.Kind == kindSettlement && !site.ConsultsLanding {
-			t.Errorf("the audit lists %s: %s as a run's settlement that does not consult the landing, which is the false closure itself",
+		if site.Kind == kindSettlement && !site.ConsultsDischarge {
+			t.Errorf("the audit lists %s: %s as a run's settlement that does not ask whether the change discharges the item, which is the false closure itself",
 				site.File, site.Declaration)
 		}
 		audited[site.key()] = site
@@ -159,8 +166,8 @@ func TestEveryRouteThatClosesAWorkItemIsAudited(t *testing.T) {
 			// Named one at a time, with what the reader has to decide, because a count
 			// of unaudited routes is not something anybody can act on.
 			t.Errorf("%s: %s closes a work item in %d place(s) and the audit does not list it. Add a row saying what makes it safe: "+
-				"a run's settlement closes only where the landing discharges, and a closure a person took has no landing to read. "+
-				"A settlement that closes without consulting the claim is how yoyodyne-ifd.284 was closed against its own diagnosis",
+				"a run's settlement closes only where the change discharges the item, and a closure a person took has nothing to read. "+
+				"A settlement that closes without asking is how yoyodyne-ifd.284 was closed against its own diagnosis",
 				site.File, site.Declaration, site.Calls)
 			continue
 		}
@@ -168,9 +175,9 @@ func TestEveryRouteThatClosesAWorkItemIsAudited(t *testing.T) {
 			t.Errorf("%s: %s closes a work item in %d place(s) and the audit records %d; read the ones that changed and correct the row",
 				site.File, site.Declaration, site.Calls, listed.Calls)
 		}
-		if listed.ConsultsLanding != site.ConsultsLanding {
-			t.Errorf("%s: %s %s the landing outcome and the audit says it %s; the guard moved and the row did not",
-				site.File, site.Declaration, consults(site.ConsultsLanding), consults(listed.ConsultsLanding))
+		if listed.ConsultsDischarge != site.ConsultsDischarge {
+			t.Errorf("%s: %s %s whether the change discharges the item and the audit says it %s; the guard moved and the row did not",
+				site.File, site.Declaration, consults(site.ConsultsDischarge), consults(listed.ConsultsDischarge))
 		}
 		delete(audited, site.key())
 	}
@@ -245,8 +252,8 @@ func closureSitesIn(root string) ([]closureSite, error) {
 }
 
 // closureSitesInFile counts the closures in one file, by the declaration they
-// sit in, and says of each declaration whether it also reads the landing's
-// outcome. Both are read off the same declaration on purpose: what makes a
+// sit in, and says of each declaration whether it also asks whether the change
+// discharges the item. Both are read off the same declaration on purpose: what makes a
 // settlement safe is that the closure and the consult are in one place, so a
 // guard moved out of the declaration is a guard this reports as gone.
 func closureSitesInFile(path, relative string) ([]closureSite, error) {
@@ -261,7 +268,7 @@ func closureSitesInFile(path, relative string) ([]closureSite, error) {
 			if closesWorkItem(node) {
 				closures++
 			}
-			if readsLandingOutcome(node) {
+			if readsDischargeDecision(node) {
 				consultsLanding = true
 			}
 			return true
@@ -270,10 +277,10 @@ func closureSitesInFile(path, relative string) ([]closureSite, error) {
 			continue
 		}
 		sites = append(sites, closureSite{
-			File:            relative,
-			Declaration:     declarationName(declaration),
-			Calls:           closures,
-			ConsultsLanding: consultsLanding,
+			File:              relative,
+			Declaration:       declarationName(declaration),
+			Calls:             closures,
+			ConsultsDischarge: consultsLanding,
 		})
 	}
 	return sites, nil
@@ -305,19 +312,27 @@ func closesWorkItem(node ast.Node) bool {
 	return false
 }
 
-// readsLandingOutcome reports a declaration asking what a landing does to its
-// item. Both derivations count: LandingDischarges is the question itself, and
-// landingSettled is how a sweep asks it of an item it has already read.
-func readsLandingOutcome(node ast.Node) bool {
+// readsDischargeDecision reports a declaration asking whether the change it is
+// closing an item against discharges that item. Both derivations count:
+// Discharges is the question itself, and itemSettled is how a sweep asks it of
+// an item it has already read.
+//
+// It is deliberately the whole question rather than either half of it.
+// LandingDischarges answers for the developer's claim alone and
+// ApprovalDischarges for the reviewer's approval alone, and a settlement that
+// consulted one of them would close an item the other said to leave open — which
+// is the same false closure one step along from the one that closed
+// yoyodyne-ifd.284.
+func readsDischargeDecision(node ast.Node) bool {
 	call, ok := node.(*ast.CallExpr)
 	if !ok {
 		return false
 	}
 	switch named := call.Fun.(type) {
 	case *ast.SelectorExpr:
-		return named.Sel.Name == "LandingDischarges"
+		return named.Sel.Name == "Discharges"
 	case *ast.Ident:
-		return named.Name == "landingSettled"
+		return named.Name == "itemSettled"
 	}
 	return false
 }
