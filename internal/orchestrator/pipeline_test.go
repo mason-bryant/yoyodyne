@@ -27,9 +27,15 @@ import (
 )
 
 const (
-	pipelineRunID  = "run-0123456789abcdef0123456789abcdef"
-	approveVerdict = `{"decision":"approve","summary":"the change matches the acceptance criteria"}`
-	repairVerdict  = `{"decision":"repair","summary":"the change misses the acceptance criteria","findings":[{"severity":"blocker","message":"add the missing file","location":{"file":"feature.txt","line":1}}]}`
+	pipelineRunID = "run-0123456789abcdef0123456789abcdef"
+	// The ordinary approval: the reviewer approves the change as the work the item
+	// asked for, which is what closes the item.
+	approveVerdict = `{"decision":"approve","approves":"implementation","summary":"the change matches the acceptance criteria"}`
+	// The other approval. The change is promoted exactly as the one above is and
+	// discharges nothing, because what it landed is not the work the item asked
+	// for.
+	approveEvidenceVerdict = `{"decision":"approve","approves":"evidence","summary":"this is a sound diagnosis rather than the conversion the item asked for; the design it needs has not landed"}`
+	repairVerdict          = `{"decision":"repair","summary":"the change misses the acceptance criteria","findings":[{"severity":"blocker","message":"add the missing file","location":{"file":"feature.txt","line":1}}]}`
 	// A repair whose whole residue is one minor finding: the work goes back to
 	// the developer, and the item is charged no round for it.
 	minorVerdict = `{"decision":"repair","summary":"the change is right; one small note","findings":[{"severity":"minor","message":"rename this variable","location":{"file":"feature.txt","line":1}}]}`
@@ -1510,7 +1516,7 @@ func TestPipelineIntegratesAVerdictCarryingFieldsTheSchemaDoesNotName(t *testing
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
-	}, `{"decision":"approve","summary":"the change matches the acceptance criteria","severity_note":"no blocking issues found"}`)
+	}, `{"decision":"approve","approves":"implementation","summary":"the change matches the acceptance criteria","severity_note":"no blocking issues found"}`)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)

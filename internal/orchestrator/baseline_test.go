@@ -662,7 +662,7 @@ func baselineOperatorStop(t *testing.T) *baselineFixture {
 func baselineReviewDrift(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
 	provider := roleBackend(baselineImplements,
-		`{"decision":"approve","summary":"the change matches the acceptance criteria","severity_note":"no blocking issues found"}`)
+		`{"decision":"approve","approves":"implementation","summary":"the change matches the acceptance criteria","severity_note":"no blocking issues found"}`)
 	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
 	return fixture
 }

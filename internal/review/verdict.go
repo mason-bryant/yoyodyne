@@ -31,9 +31,32 @@ const (
 	SeverityMinor   Severity = "minor"
 )
 
-// The two vocabularies above as lists, which is what validates a verdict below:
-// a value permitted here and a value the contract accepts are one list rather
-// than two that can drift.
+// Approval is what an approving verdict approves. It exists because approving a
+// change and discharging the work item it was made for are two different facts,
+// and only the reviewer sees both the change and what it was offered as: the
+// developer's claim decides the closure by default, and a reviewer that reads a
+// diagnosis as a diagnosis would otherwise have nowhere to put that but its own
+// prose. yoyodyne-ifd.284 is the whole of the case — approved with "offered as
+// evidence rather than implementation" written in its summary, and closed on the
+// developer's unwritten default anyway.
+//
+// It says nothing about whether the change is good. Both approvals promote the
+// change; what differs is only what becomes of the item afterwards.
+type Approval string
+
+const (
+	// ApprovesImplementation is the ordinary approval: the change is the work the
+	// item asked for, and the item closes on it.
+	ApprovesImplementation Approval = "implementation"
+	// ApprovesEvidence approves a change that lands something worth keeping and is
+	// not the work — a diagnosis, the conditions that have to hold first. It
+	// integrates exactly as any approval does and discharges nothing.
+	ApprovesEvidence Approval = "evidence"
+)
+
+// The three vocabularies above as lists, which is what validates a verdict
+// below: a value permitted here and a value the contract accepts are one list
+// rather than two that can drift.
 //
 // Anything added to either has to be added to the durable schema that stores it,
 // which keeps its own copy so a record is checked against what a record may hold
@@ -45,14 +68,17 @@ const (
 var (
 	decisions  = []Decision{DecisionApprove, DecisionRepair}
 	severities = []Severity{SeverityBlocker, SeverityMajor, SeverityMinor}
+	approvals  = []Approval{ApprovesImplementation, ApprovesEvidence}
 )
 
-// Decisions and Severities are those vocabularies as a caller outside this
-// package reads them, each answered with a copy so nothing holding one can
-// rewrite the contract.
+// Decisions, Severities, and Approvals are those vocabularies as a caller
+// outside this package reads them, each answered with a copy so nothing holding
+// one can rewrite the contract.
 func Decisions() []Decision { return slices.Clone(decisions) }
 
 func Severities() []Severity { return slices.Clone(severities) }
+
+func Approvals() []Approval { return slices.Clone(approvals) }
 
 // Location optionally anchors a finding to a place in the reviewed change.
 type Location struct {
@@ -67,9 +93,17 @@ type Finding struct {
 	Location *Location `json:"location,omitempty"`
 }
 
-// Verdict is the reviewer's approve-or-repair decision on one change.
+// Verdict is the reviewer's approve-or-repair decision on one change, and — on
+// an approval of one work item's change — what that approval approves.
 type Verdict struct {
-	Decision Decision  `json:"decision"`
+	Decision Decision `json:"decision"`
+	// Approves is what an approval approves: the work the item asked for, or
+	// evidence that does not discharge it. It is empty on a repair, which
+	// approves nothing and closes nothing, and empty at branch scope, which has no
+	// work item to discharge. An approval that has to carry it and does not is
+	// refused where the scope is known rather than here, because this type is the
+	// same at both scopes.
+	Approves Approval  `json:"approves,omitempty"`
 	Summary  string    `json:"summary"`
 	Findings []Finding `json:"findings,omitempty"`
 }
@@ -137,7 +171,7 @@ func Decode(data []byte) (Verdict, []string, error) {
 // The closed schema, named once so the decoder and the drift walk below cannot
 // disagree about what the contract defines.
 var (
-	verdictFields  = []string{"decision", "summary", "findings"}
+	verdictFields  = []string{"decision", "approves", "summary", "findings"}
 	findingFields  = []string{"severity", "message", "location"}
 	locationFields = []string{"file", "line"}
 )
@@ -200,6 +234,20 @@ func (v Verdict) Validate() error {
 	if v.Decision == DecisionRepair && len(v.Findings) == 0 {
 		problems = append(problems, errors.New("repair requires at least one finding"))
 	}
+	// The vocabulary is closed like the two above it, and for the same reason: what
+	// this field decides is whether a work item closes, so a word nothing
+	// recognizes must be refused where the verdict is read rather than guessed at
+	// by the settlement. Its absence is not refused here — a repair carries none,
+	// and a branch review has no item to discharge — and where an approval must
+	// carry one that is enforced against the scope, which this type does not know.
+	if v.Approves != "" && !v.Approves.Valid() {
+		problems = append(problems, fmt.Errorf("approves %q must be %q or %q", v.Approves, ApprovesImplementation, ApprovesEvidence))
+	}
+	// A repair that says what it approves is not refused for it. It approves
+	// nothing and closes nothing either way, so the field decides nothing there and
+	// is never recorded; refusing a verbose verdict would only cost the change a
+	// review, which is the trade the decoder above already made about a field the
+	// schema does not name at all.
 	for i, finding := range v.Findings {
 		if err := finding.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("findings[%d]: %w", i, err))
@@ -301,4 +349,27 @@ func (d Decision) Valid() bool {
 
 func (s Severity) Valid() bool {
 	return slices.Contains(severities, s)
+}
+
+func (a Approval) Valid() bool {
+	return slices.Contains(approvals, a)
+}
+
+// Discharges reports whether an approval closes the work item it was made for.
+// It is stated as "everything except evidence discharges" for the reason the
+// developer's claim is: the answer that closes an item must never be reached by
+// a value nobody recognized, and an unrecognized one is refused before it is
+// stored.
+func (a Approval) Discharges() bool { return a != ApprovesEvidence }
+
+// IncompleteApprovalError reports an approval of one work item's change that did
+// not say what it approves. The verdict was read and is not wrong about the
+// change — this is the reviewer answering everything except the one question
+// that decides whether the item closes — so it is distinct from a reply nothing
+// could decode and from a verdict that contradicts itself, and the caller asks
+// once more rather than deciding the closure from an answer it does not have.
+type IncompleteApprovalError struct{}
+
+func (IncompleteApprovalError) Error() string {
+	return "the reviewer approved without saying whether it approves the implementation or evidence"
 }

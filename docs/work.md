@@ -169,12 +169,15 @@ sets it to `automatic`, so a run that passes its checks and is approved by the
 reviewer is committed, fast-forwarded into the target branch, settled in Beads,
 and its worktree and branch removed — the JSON reports the integrated commit and
 what was cleaned up. Settled is closed for nearly every run, and the exception is
-a landing the developer claimed does not discharge the item: an honest "not
-doable yet" lands its evidence like any other change and puts the item back in
-the backlog parked, with the claim recorded on it, rather than closing an item
-against the evidence that says the work was not done. [What a landing claims](#what-a-landing-claims)
-is the whole of that. A freshly generated configuration says `human` instead, so
-a new project preserves the worktree for external integration until it opts in.
+a change that discharges nothing: a landing the developer claimed does not
+discharge the item, or an approval the reviewer gave to evidence rather than to
+the work. An honest "not doable yet" lands its evidence like any other change and
+puts the item back in the backlog parked, with the account recorded on it, rather
+than closing an item against the evidence that says the work was not done.
+[What a landing claims](#what-a-landing-claims) and
+[what an approval approves](#what-an-approval-approves) are the whole of that. A
+freshly generated configuration says `human` instead, so a new project preserves
+the worktree for external integration until it opts in.
 Either way the harness refuses `automatic` unless deterministic checks and a
 reviewer agent both exist.
 
@@ -287,10 +290,10 @@ amendment channels do not:
   implementation. A change that claims evidence and is plainly the
   implementation is a finding, for the mirror-image reason. The default is shown
   too, on the nearly-every run that claims nothing: the reviewer is told this
-  change closes the item and to approve it only if it is the work the item asked
-  for. Without that the claim that closes items was the one claim nobody ever
-  saw — which is how a diagnosis came to be approved, and its item closed, by a
-  reviewer that called the change evidence in its own summary
+  change closes the item unless its own approval says otherwise. Without that the
+  claim that closes items was the one claim nobody ever saw — which is how a
+  diagnosis came to be approved, and its item closed, by a reviewer that called
+  the change evidence in its own summary
   (`docs/diagnoses/yoyodyne-ifd-209-26-closure-routes.md`).
 - A claim the harness cannot read withholds the closure rather than being
   swallowed the way an unreadable report is. The developer wrote a block, so it
@@ -299,6 +302,46 @@ amendment channels do not:
 - It is durable, because the closure is not always made by the process that read
   it. A merge the forge only queued is settled by a later `yoyo reconcile`, and
   that sweep decides from the recorded claim rather than from the promotion.
+
+## What an approval approves
+
+The claim above decides the closure by default, and the default is the claim
+nobody writes: across 290 succeeded-and-integrated runs, six claimed evidence and
+284 claimed nothing at all. So the reviewer is the second reader of the same
+question, and the only one that sees the change beside what it was offered as. An
+approval says which of two things it approves:
+
+```json
+{"decision":"approve","approves":"implementation","summary":"..."}
+{"decision":"approve","approves":"evidence","summary":"..."}
+```
+
+`implementation` is the ordinary approval: the change is the work the item asked
+for, and the item closes on it. `evidence` approves a change worth keeping that
+is not that work — a diagnosis, the conditions that have to hold first, a nil
+result. It is an approval like any other, so the change is committed, promoted,
+and published exactly as it would have been; what it does not do is discharge the
+item, which goes back to the backlog parked, with the reviewer's own summary as
+the parking reason. That summary is what whoever considers picking the item up
+next reads, and it is the only account of the decision anybody wrote.
+
+It is not an alternative to repair. What the change itself has to change is still
+a finding; this answers the different question of whether what landed is the work
+the item asked for.
+
+Either reader withholding the closure is enough, and neither overrides the other:
+an item is closed only where the developer's landing discharges it *and* the
+reviewer approved it as the implementation. An approval that says nothing at all
+is refused and the review is asked for once more rather than settled from the
+answer nobody gave — the default it would fall back to is the closing one. A
+branch review is never asked, because it approves an accumulated change and has
+no single item to discharge.
+
+This exists because the reviewer already wrote the judgement and had nowhere to
+put it. yoyodyne-ifd.284 was closed against a diagnosis by a reviewer whose own
+summary called the change *"offered as evidence rather than implementation"* —
+prose nothing reads, beside a claim nobody wrote
+(`docs/diagnoses/yoyodyne-ifd-209-26-closure-routes.md`).
 
 ## Letting the harness choose the work
 

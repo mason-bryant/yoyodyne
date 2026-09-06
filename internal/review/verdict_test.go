@@ -36,6 +36,26 @@ func TestDecodeAcceptsValidVerdicts(t *testing.T) {
 			},
 		},
 		{
+			// The field is part of the closed schema, so it decodes rather than being
+			// reported as drift the reviewer invented.
+			name:  "approval that says what it approves",
+			input: `{"decision":"approve","approves":"evidence","summary":"A diagnosis rather than the work."}`,
+			want:  Verdict{Decision: DecisionApprove, Approves: ApprovesEvidence, Summary: "A diagnosis rather than the work."},
+		},
+		{
+			// A repair approves nothing, so it is not refused for naming a kind — it
+			// is a verbose verdict, and the decision it carries closes nothing either
+			// way.
+			name:  "repair that names an approval kind anyway",
+			input: `{"decision":"repair","approves":"implementation","summary":"One problem.","findings":[{"severity":"major","message":"Unbounded input."}]}`,
+			want: Verdict{
+				Decision: DecisionRepair,
+				Approves: ApprovesImplementation,
+				Summary:  "One problem.",
+				Findings: []Finding{{Severity: SeverityMajor, Message: "Unbounded input."}},
+			},
+		},
+		{
 			name:  "repair with actionable findings",
 			input: `{"decision":"repair","summary":"Two problems.","findings":[{"severity":"blocker","message":"Decoder accepts trailing JSON.","location":{"file":"internal/review/verdict.go","line":42}},{"severity":"major","message":"Missing test coverage.","location":{"file":"internal/review/verdict_test.go"}}]}`,
 			want: Verdict{
@@ -252,6 +272,14 @@ func TestDecodeRejectsInvalidVerdicts(t *testing.T) {
 			name:    "fractional location line",
 			input:   `{"decision":"repair","summary":"Bad.","findings":[{"severity":"major","message":"Fix.","location":{"file":"a.go","line":1.5}}]}`,
 			wantErr: "decode review verdict",
+		},
+		{
+			// The vocabulary is closed for the reason the two above it are, and for a
+			// sharper one: what this word decides is whether a work item closes, so a
+			// word nothing recognizes must never reach the settlement.
+			name:    "unrecognized approval kind",
+			input:   `{"decision":"approve","approves":"partial","summary":"Fine."}`,
+			wantErr: `approves "partial"`,
 		},
 		{
 			name:    "repair without findings",

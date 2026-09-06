@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/landing"
+	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -159,10 +160,18 @@ func (a *activeRun) applyUndischargedDisposition(settled runstate.State) {
 // It deliberately never says "does not discharge". That phrase is how a reviewer
 // is told the other landing, and a discharging claim carrying it would read as
 // its own opposite.
-const judgingDischarge = "Judge the change against that claim: approve it only if it is the work the item asked for. " +
+//
+// What it directs changed with yoyodyne-ifd.209.27, because the reviewer now has
+// somewhere to put the judgement. It used to ask for changes so the developer
+// could claim the evidence itself, which costs a repair round on a change that
+// needs no work and depends on the next attempt remembering the block. The
+// approval carries the kind now, so the reviewer settles it in one verdict — and
+// the account the item is left with is the reviewer's own, which is the sentence
+// it was already writing into its summary when yoyodyne-ifd.284 closed.
+const judgingDischarge = "Judge the change against that claim: it closes the work item unless your own approval says otherwise. " +
 	"A change offered as evidence that the work is not doable yet — a diagnosis, a record of what has to land first — is not the work, " +
-	"and approving it under this claim closes the item against its own evidence. Ask for changes instead, and say in your summary that " +
-	"a landing block claiming evidence belongs in the developer's reply."
+	"and approving it as an implementation closes the item against its own evidence. Approve it as evidence instead, which keeps the " +
+	"change and leaves the item open with your summary as the reason it is not to be started again."
 
 // claimedLanding rebuilds the claim from the durable record, which is what the
 // reviewer is shown and what a work item's notes are written from. It is read
@@ -207,22 +216,41 @@ func describeLanding(state runstate.State) string {
 	return described
 }
 
-// LandingDischarges reports whether this run's landing is the kind that closes
-// its work item, from the outcome a caller was handed rather than from the
-// durable record. It is the outcome's half of runstate.State.LandingDischarges
-// and answers over the same two facts, so a surface describing a run from what
-// it returned and one describing it from its record cannot disagree about
-// whether the item was discharged.
+// Discharges reports whether this run closes its work item, from the outcome a
+// caller was handed rather than from the durable record. It is the outcome's
+// half of runstate.State.Discharges and answers over the same facts, so a
+// surface describing a run from what it returned and one describing it from its
+// record cannot disagree about whether the item was discharged.
+func (o Outcome) Discharges() bool {
+	return o.LandingDischarges() && o.ApprovalDischarges()
+}
+
+// LandingDischarges is the developer's half of that question, and
+// ApprovalDischarges the reviewer's. They are separate because what a surface
+// says about an item left open depends on which of the two readers said so.
 func (o Outcome) LandingDischarges() bool {
 	return o.Landing != landing.OutcomeEvidence && o.LandingProblem == ""
 }
 
+func (o Outcome) ApprovalDischarges() bool {
+	return o.ReviewApproves != review.ApprovesEvidence
+}
+
 // UndischargedAccount is what a surface says about an item a run left open: the
-// developer's own words where it wrote them, and what went wrong with the claim
-// where it did not.
+// words of whichever reader said the change is not the work, and what went wrong
+// with the claim where the developer's could not be read.
+//
+// The developer is answered for first where both said it. The claim is the
+// developer's account of its own change and it was made before the review, so it
+// is the account a reader of the item is looking for; the reviewer's is on the
+// item too, in the notes.
 func (o Outcome) UndischargedAccount() string {
 	if o.LandingProblem != "" {
 		return "the landing outcome it claimed could not be read (" + o.LandingProblem + ")"
+	}
+	if o.LandingDischarges() && !o.ApprovalDischarges() {
+		return "its reviewer approved the change as evidence rather than as the work this item asked for: " +
+			strings.Join(strings.Fields(o.ReviewSummary), " ")
 	}
 	return strings.Join(strings.Fields(o.LandingReason), " ")
 }
@@ -264,11 +292,22 @@ func renderLandingNote(outcome Outcome) string {
 	return line
 }
 
-// undischargedLandingReason is what is written onto an item a landing did not
+// undischargedLandingReason is what is written onto an item a run did not
 // discharge. It names the run, so the evidence that landed can be found from the
-// item, and the developer's own account of why, so the item does not read
-// afterwards as work somebody abandoned.
+// item, and the account of why, so the item does not read afterwards as work
+// somebody abandoned.
+//
+// Whose account that is depends on which reader withheld the closure. A
+// reviewer's approval of evidence is answered for in the reviewer's own words —
+// its summary is the only account of that decision anybody wrote — and it is
+// checked after the developer's claim because a run whose developer also said so
+// is a developer's landing that the review agreed with rather than a second
+// decision.
 func undischargedLandingReason(state runstate.State) string {
+	if state.LandingDischarges() && !state.ApprovalDischarges() {
+		return fmt.Sprintf("Yoyodyne run %s integrated a change its independent reviewer approved as evidence rather than as the work this item asked for, so the item stays open with its change integrated and parked. The reviewer's account: %s",
+			state.RunID, state.ReviewSummary)
+	}
 	if state.LandingProblem != "" {
 		return fmt.Sprintf("Yoyodyne run %s integrated its change and claimed a landing outcome that could not be read, so this item was not closed against it: %s. The change is on %s; whether it discharges this item is a person's call.",
 			state.RunID, state.LandingProblem, state.TargetBranch)
@@ -295,18 +334,26 @@ func undischargedLandingReason(state runstate.State) string {
 // one just diagnosed, and the run that made it is recorded as succeeded so no
 // brake counts it either.
 //
-// It carries the developer's own account, because what a parking reason is for is
-// the person deciding whether to release it, and the developer's account is the
-// one sentence in the record that names what would release this item. The
+// It carries the account of whoever withheld the closure, because what a parking
+// reason is for is the person deciding whether to release the item, and that
+// account is the one sentence in the record that names what would release it. The
 // reason is bounded to what the tracker holds as one value on one line; the whole
 // of it is on the item as notes either way, which is where a truncated account
 // can be read in full.
 func undischargedParking(state runstate.State) domain.WorkItemParking {
-	if !state.LandingParks() {
+	if !state.Parks() {
 		return ""
 	}
 	reason := fmt.Sprintf("yoyodyne run %s landed evidence for this item rather than the work, and did not discharge it: %s",
 		state.RunID, state.LandingReason)
+	// An item its reviewer left open is parked in the reviewer's words, because
+	// they are the only account of that decision: the developer claimed the
+	// ordinary landing, and the sentence a person deciding whether to pick this item
+	// up needs is the one that says why the change was not the work.
+	if state.LandingDischarges() && !state.ApprovalDischarges() {
+		reason = fmt.Sprintf("yoyodyne run %s landed a change its independent reviewer approved as evidence rather than the work, so it does not discharge this item: %s",
+			state.RunID, state.ReviewSummary)
+	}
 	// A landing that asked to wait on something and could not is parked with the
 	// request named, so the parking does not read as one nobody asked anything
 	// about. It goes after the account because the account is what a release is

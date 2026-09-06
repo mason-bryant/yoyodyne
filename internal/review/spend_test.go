@@ -111,7 +111,7 @@ func (p *pricedBackend) Run(_ context.Context, _ backendapi.RunRequest) (backend
 		Backend:       domain.BackendClaudeCode,
 		SessionID:     "review-session",
 		ResolvedModel: "claude-opus-5",
-		FinalText:     `{"decision":"approve","summary":"fine"}`,
+		FinalText:     `{"decision":"approve","approves":"implementation","summary":"fine"}`,
 		CostUSD:       p.cost,
 		CostReported:  true,
 		Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},

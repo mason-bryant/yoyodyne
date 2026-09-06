@@ -409,16 +409,19 @@ the queue is shown, so you can see what you parked rather than inferring it; and
 matters because a creation's identifier does not reach the product manager until
 its next turn.
 
-You are not the only one that parks. A run whose developer lands evidence rather
-than the work parks the item it was made for, with the developer's account of
-what would release it as the parking reason — so an item that comes back from a
-run parked is one to read the reason on and decide about, exactly as with one you
-parked yourself. The exception is a landing that named the impediment as another
-work item, which leaves the item open waiting on that work instead and never
-lifts a parking you had placed. Where a run does park an item you had parked, its
-reason replaces yours and yours goes into the item's notes, so the decision you
-took is still readable. [What a landing claims](work.md#what-a-landing-claims) is
-why.
+You are not the only one that parks. A run whose change is evidence rather than
+the work parks the item it was made for, with the account of what would release
+it as the parking reason — so an item that comes back from a run parked is one to
+read the reason on and decide about, exactly as with one you parked yourself.
+Either of two readers can say so, and the reason is written in the words of
+whichever did: the developer, claiming a landing that discharges nothing, or the
+reviewer, approving the change as evidence rather than as the work. The exception
+is a landing that named the impediment as another work item, which leaves the
+item open waiting on that work instead and never lifts a parking you had placed.
+Where a run does park an item you had parked, its reason replaces yours and yours
+goes into the item's notes, so the decision you took is still readable.
+[What a landing claims](work.md#what-a-landing-claims) and
+[what an approval approves](work.md#what-an-approval-approves) are why.
 
 A low priority is not parking, and that distinction is what this cost to learn.
 Priority 4 was being used as parking by convention, which reads as "last" to
