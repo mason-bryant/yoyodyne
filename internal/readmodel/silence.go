@@ -47,7 +47,9 @@ import (
 // The margin it used to buy was half an hour, and the window that was actually
 // paid for while nobody was told was seven and a half hours. An operator who
 // wants the older margin back sets it: this is the default rather than the rule,
-// and `yoyo slack --stall-after` is where it is changed.
+// and it is changed on the two commands that take the reading, `yoyo work
+// --watch --stall-after` and `yoyo reconcile --stall-after`. Not on the sink,
+// which reports what they recorded rather than noticing anything itself.
 const DefaultStallThreshold = 10 * time.Minute
 
 // DefaultRunActivityWindow is how long a run's own record may go unmoved before
@@ -180,10 +182,12 @@ func ActiveRuns(runs []runstate.State, now time.Time, within time.Duration) int 
 // than a sufficient one: a drained queue is deliberately not an explanation
 // here, because nothing but the tracker can say the queue is drained, so a
 // caller that asked on this alone would ask on every poll of an idle product.
-// Gating how often it then asks is the caller's, and the sink does it on the
-// stall threshold itself rather than on the heartbeat the rest of its tracker
-// reads keep: how promptly this is noticed is the whole of what the threshold
-// is for, and gating the read at an hour made a ten-minute bar mean an hour.
+// Gating how often it then asks is the caller's, and the two callers that take
+// this reading gate it on the stall threshold itself rather than on an interval
+// of their own: a watching session reads at most once per threshold however
+// often it pulls, and a sweep reads once per sweep. How promptly this is
+// noticed is the whole of what the threshold is for, and gating the read at an
+// hour made a ten-minute bar mean an hour.
 func (a Activity) Unexplained() bool {
 	return a.explanation() == ""
 }

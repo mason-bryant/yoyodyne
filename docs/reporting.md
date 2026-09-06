@@ -690,7 +690,7 @@ still claiming to be watching wants killing first.
 
 **The sink says it and does not notice it.** What notices is the harness's own
 loop — [`yoyo work --watch`](work.md#letting-the-harness-choose-the-work), on
-every poll and at most once per `--stall-after` — and
+every pull and at most once per `--stall-after` — and
 [`yoyo reconcile`](operations.md#recovering-interrupted-runs), which takes the
 same reading on every sweep for the case the loop cannot see: itself being dead.
 Both take the threshold under that name. That division is `yoyodyne-ifd.295` and
