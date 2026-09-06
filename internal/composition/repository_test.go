@@ -14,9 +14,14 @@ package composition
 // a run has.
 
 import (
+	"context"
+	"errors"
+	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 )
@@ -37,6 +42,12 @@ const (
 // cheap enough to run from here. `bin/yoyo-status` is shell, so before this
 // nothing a run applied executed a line of it.
 const statusToolSuitePath = "../../scripts/yoyo-status-test.sh"
+
+// adoptionWalkthroughPath is the README's "Getting started" executed against a
+// throwaway project. `make adoption` runs the whole of it; what is run from
+// here is its refusal of a scratch root inside a git repository, which needs
+// none of what the rest of the walk needs.
+const adoptionWalkthroughPath = "../../scripts/walk-adoption.sh"
 
 // TestThisRepositoryIsAllAccountedFor is the audit. Every file this repository
 // carries belongs to a content class, every class recognizes something, and
@@ -122,6 +133,48 @@ func TestTheStatusToolReportsWhatItClaims(t *testing.T) {
 	report, err := suite.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s did not pass (%v):\n%s", statusToolSuitePath, err, report)
+	}
+}
+
+// TestTheAdoptionWalkthroughRefusesAScratchRootInsideARepository holds the one
+// part of the walkthrough a declared check can reach. `make adoption` is not
+// one of the four, and the walk itself needs a tracker and a scratch clone that
+// a run's worktree is not given -- but the refusal happens before any of that,
+// so it costs a temporary repository and nothing else. It is worth the line
+// because the case it refuses is the one a run is in: a run's TMPDIR points
+// inside the repository's .git, and before this refusal existed that read as a
+// broken adoption path rather than as a misplaced temporary directory.
+func TestTheAdoptionWalkthroughRefusesAScratchRootInsideARepository(t *testing.T) {
+	t.Parallel()
+
+	requireTool(t, "bash")
+	requireTool(t, "git")
+	root := t.TempDir()
+	if made, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init in %s error = %v:\n%s", root, err, made)
+	}
+	// The refusal is immediate, so the walk is given a deadline rather than the
+	// run of the machine: a refusal that stopped working would otherwise walk
+	// the whole adoption path from inside `make test`, which is minutes, a
+	// tracker, and a network this has no business needing.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	walk := exec.CommandContext(ctx, "bash", adoptionWalkthroughPath)
+	walk.Env = append(os.Environ(), "TMPDIR="+root)
+	report, err := walk.CombinedOutput()
+	if err == nil {
+		t.Fatalf("%s walked a scratch root inside a git repository:\n%s", adoptionWalkthroughPath, report)
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+		t.Fatalf("%s did not refuse the root (%v); its prerequisite refusals exit 2:\n%s", adoptionWalkthroughPath, err, report)
+	}
+	// The refusal has to say which of the two things it is, because a walk that
+	// simply stopped is what this replaced.
+	for _, said := range []string{"outside every git repository", "TMPDIR"} {
+		if !strings.Contains(string(report), said) {
+			t.Errorf("the refusal never says %q, so it does not name what to do:\n%s", said, report)
+		}
 	}
 }
 

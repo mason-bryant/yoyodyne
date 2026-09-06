@@ -43,6 +43,10 @@ readme_clone_url="https://github.com/mason-bryant/yoyodyne"
 readme_install_module="github.com/mason-bryant/yoyodyne"
 
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The default root is safe and needs nothing done to it: $TMPDIR is the user's
+# own directory and /tmp is the system's, and neither is inside a git repository
+# on an ordinary machine. A caller that has pointed TMPDIR at one is refused
+# below, where the reason is written down.
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/yoyodyne-walk.XXXXXX")"
 # TMPDIR often ends in a slash on macOS; normalize so path assertions compare
 # against the same spelling the harness prints.
@@ -60,6 +64,30 @@ cleanup() {
   rm -rf "$scratch"
 }
 trap cleanup EXIT
+
+# The scratch root has to be outside every git repository. The throwaway project
+# is created inside it, and `bd init` there discovers the enclosing repository's
+# tracker remote and tries to clone it -- which under a sandbox that denies the
+# network dies at step 2 under `set -e` with nothing from bd in the log, so a
+# misplaced temporary directory reads as a broken adoption path. That is not
+# hypothetical: it cost run-626e851a a whole walkthrough, its TMPDIR having
+# pointed into a harness run scratch directory under this repository's
+# .git/worktrees. Refusing here rather than passing --no-remote to `bd init` is
+# what the tracker actually offers -- `bd init` has --remote and no way to
+# decline one -- and it is the answer that covers whatever else in the walk
+# would find the enclosing repository next.
+if enclosing="$(git -C "$scratch" rev-parse --absolute-git-dir 2>/dev/null)"; then
+  {
+    printf 'walk-adoption.sh needs a scratch root outside every git repository.\n'
+    printf '  scratch root:         %s\n' "$scratch"
+    printf '  enclosing repository: %s\n' "$enclosing"
+    printf 'The throwaway project is created under that root, and `bd init` in it\n'
+    printf "discovers the enclosing repository's tracker remote and tries to clone it.\n"
+    printf 'Point TMPDIR somewhere outside any repository and walk again:\n'
+    printf '  TMPDIR=/tmp %s\n' "${BASH_SOURCE[0]}"
+  } >&2
+  exit 2
+fi
 
 export YOYODYNE_STATE_HOME="$scratch/state"
 export GOCACHE="${GOCACHE:-$scratch/gocache}"
