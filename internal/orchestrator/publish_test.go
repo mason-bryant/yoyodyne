@@ -343,6 +343,61 @@ func TestPullRequestTitleCutsAtAWordBoundary(t *testing.T) {
 	}
 }
 
+// The shape yoyodyne-ifd.321 was admitted on, end to end: publishing commits
+// each attempt, so the second review judges a branch that already carries the
+// first one. The patch it is handed spans both — it always did — and it now
+// says which commits it spans, because the reviewers that read it as the
+// uncommitted tail discounted their own verdicts over work they had been shown.
+func TestPipelineTellsAReviewerWhatThePatchOfAContinuedRunSpans(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if request.Role != domain.RoleDeveloper {
+			return nil
+		}
+		attempts++
+		if attempts == 1 {
+			return os.WriteFile(filepath.Join(request.WorkingDirectory, "reduced.md"), []byte("the reduction\n"), 0o600)
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "repair.md"), []byte("the repair\n"), 0o600)
+	}, repairVerdict, approveVerdict)
+	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.RepairAttempts != 1 {
+		t.Fatalf("outcome = %#v, want one repair round that was then approved", outcome)
+	}
+	reviews := provider.requestsForRole(domain.RoleReviewer)
+	if len(reviews) != 2 {
+		t.Fatalf("reviews = %d, want the first verdict and the repair's", len(reviews))
+	}
+	if outcome.BaseCommit == "" {
+		t.Fatalf("outcome = %#v, want the base the change is measured against", outcome)
+	}
+	repair := reviews[1].Prompt
+	for _, want := range []string{
+		"## What this patch covers",
+		"This change is measured against base commit " + outcome.BaseCommit,
+		"### Commits already made for this change, oldest first",
+		"No committed work of this change is missing from it",
+		// The first attempt is a commit by now and is in the patch all the same,
+		// beside the repair that followed it.
+		"+the reduction",
+		"+the repair",
+	} {
+		if !strings.Contains(repair, want) {
+			t.Errorf("the continued run's review evidence is missing %q:\n%s", want, repair)
+		}
+	}
+}
+
 // A repository with no remote is the degradation the design requires: the run
 // behaves exactly as it did before publishing existed, and says why.
 func TestPipelineWithoutARemoteRunsExactlyAsItDidBefore(t *testing.T) {
