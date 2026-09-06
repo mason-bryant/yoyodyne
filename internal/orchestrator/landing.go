@@ -144,6 +144,26 @@ func (a *activeRun) applyUndischargedDisposition(settled runstate.State) {
 	a.outcome.LandingImpedimentProblem = settled.LandingImpedimentProblem
 }
 
+// judgingDischarge is what a reviewer does with a landing that closes the item,
+// and it is here rather than beside the claim because it is a direction to one
+// reader. The same claim is written into the work item's notes, where a sentence
+// telling somebody to ask for changes would be an instruction nobody is there to
+// take — so what the claim says about itself is the vocabulary's, and what to do
+// about it belongs to the prompt that asks.
+//
+// It is said for both discharging landings — the claim a developer wrote out and
+// the default no reply carries — because the two carry the same risk: a change
+// that is not the work, approved under a claim saying it is, records as done
+// exactly what the change itself says was not.
+//
+// It deliberately never says "does not discharge". That phrase is how a reviewer
+// is told the other landing, and a discharging claim carrying it would read as
+// its own opposite.
+const judgingDischarge = "Judge the change against that claim: approve it only if it is the work the item asked for. " +
+	"A change offered as evidence that the work is not doable yet — a diagnosis, a record of what has to land first — is not the work, " +
+	"and approving it under this claim closes the item against its own evidence. Ask for changes instead, and say in your summary that " +
+	"a landing block claiming evidence belongs in the developer's reply."
+
 // claimedLanding rebuilds the claim from the durable record, which is what the
 // reviewer is shown and what a work item's notes are written from. It is read
 // back rather than carried alongside so that a repair round, a resumed run, and
@@ -169,12 +189,22 @@ func claimedLanding(state runstate.State) landing.Claim {
 // came to be approved by a reviewer that never knew approving it would close the
 // item. `docs/diagnoses/yoyodyne-ifd-209-26-closure-routes.md` audits the
 // closure routes this feeds.
+//
+// The direction is added here rather than carried in the claim's own words, and
+// only for the landings that close something. Every branch of this function ends
+// in one, because a reviewer shown a claim and not told what turns on it is being
+// asked to decide something nobody named to it — which is the whole of the defect
+// above.
 func describeLanding(state runstate.State) string {
 	if state.LandingProblem != "" {
 		return "The developer claimed a landing outcome that could not be read: " + state.LandingProblem +
 			"\nJudge the change on what it is, and say in your summary which of the two it looks like."
 	}
-	return claimedLanding(state).Describe()
+	described := claimedLanding(state).Describe()
+	if state.LandingDischarges() {
+		return described + "\n" + judgingDischarge
+	}
+	return described
 }
 
 // LandingDischarges reports whether this run's landing is the kind that closes

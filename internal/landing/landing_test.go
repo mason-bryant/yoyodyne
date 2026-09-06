@@ -125,7 +125,10 @@ func TestAnOversizedClaimIsRefused(t *testing.T) {
 }
 
 // What a reviewer and a work item's notes are shown has to say which of the two
-// landings was claimed, in words that cannot be read as the other.
+// landings was claimed, in words that cannot be read as the other — and nothing
+// else. Both audiences read this sentence and they want opposite things from it:
+// one is being asked to decide, and the other is a record somebody consults after
+// every decision has been taken.
 func TestTheDescriptionSaysWhichLandingWasClaimed(t *testing.T) {
 	t.Parallel()
 
@@ -152,12 +155,15 @@ func TestTheDescriptionSaysWhichLandingWasClaimed(t *testing.T) {
 	if strings.Contains(unclaimed, "does not discharge") {
 		t.Errorf("Describe() of the default reads as the landing that leaves the item open: %q", unclaimed)
 	}
-	// Whoever is shown a discharging landing is told what approving it does, on
-	// the written claim and on the default alike. Without that the reviewer of a
-	// diagnosis is being asked to approve a closure nobody named to it.
-	for _, described := range []string{unclaimed, discharged} {
-		if !strings.Contains(described, "approve it only if it is the work the item asked for") {
-			t.Errorf("a discharging landing was described without saying what approving it does: %q", described)
+	// And no description directs anybody to do anything. What a reviewer does with
+	// a landing is said where the reviewer is prompted; the same words reach a work
+	// item's notes, where an instruction to ask for changes is addressed to nobody
+	// who can.
+	for _, described := range []string{unclaimed, discharged, evidence} {
+		for _, directed := range []string{"approve", "Ask for changes", "your summary"} {
+			if strings.Contains(described, directed) {
+				t.Errorf("Describe() directs its reader (%q): %q", directed, described)
+			}
 		}
 	}
 }

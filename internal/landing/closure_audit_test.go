@@ -20,6 +20,14 @@ package landing_test
 // claim a guard the declaration lost — so a settlement that stops asking fails
 // here even though its row still reads correctly.
 //
+// What the sweep sees is every `Complete` call that is passed something,
+// anywhere in the swept trees and on any receiver, so a closure written through
+// a local or a differently named field is caught rather than missed. What it
+// does not see is a closure that reaches the tracker under another name — a
+// wrapper called `Finish`, a `bd close` shelled out to directly, a status set
+// through `Update`. Those are not hypothetical categories to guard here; they
+// are what a reader of this file should know it is not watching for.
+//
 // `docs/diagnoses/yoyodyne-ifd-209-26-closure-routes.md` is the audit written
 // out, with how yoyodyne-ifd.284 came to be closed.
 
@@ -58,6 +66,10 @@ const (
 	// no developer claimed anything, and the decision is the one the operator's
 	// role is for.
 	kindHuman closureKind = "human"
+	// kindUnrelated is a call the sweep's shape catches that closes no work item.
+	// There are none today, and the row exists so that the next one is excluded by
+	// somebody writing down why rather than by the sweep quietly not seeing it.
+	kindUnrelated closureKind = "unrelated"
 )
 
 // closureSite is one declaration that closes a work item, and what makes it safe
@@ -267,24 +279,30 @@ func closureSitesInFile(path, relative string) ([]closureSite, error) {
 	return sites, nil
 }
 
-// closesWorkItem reports a call that closes a work item in the tracker. It is
-// recognized as `Complete` on something named Tracker rather than as the name
-// alone, because `Complete` is also what a cost record and a worktree cleanup
-// answer about themselves and neither of those closes anything.
+// closesWorkItem reports a call the tracker closes a work item through. It is
+// every `Complete` call that is passed something, whatever it is called on: a
+// sweep keyed to a receiver named `Tracker` would miss the closure written
+// through a local, a parameter, or a field somebody named otherwise, which is
+// exactly the route this audit exists to have nowhere to hide.
+//
+// The argument is what keeps the shape usable. `Complete` is also what a cost
+// record and a worktree cleanup answer about themselves, and both of those are
+// predicates taking nothing, so requiring an argument separates the question
+// from the act without naming either. A `Complete(x)` that turns out to close
+// nothing is audited as kindUnrelated rather than being excluded here, because a
+// row somebody wrote is a decision and a silent exclusion is not.
 func closesWorkItem(node ast.Node) bool {
 	call, ok := node.(*ast.CallExpr)
-	if !ok {
+	if !ok || len(call.Args) == 0 {
 		return false
 	}
-	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Complete" {
-		return false
+	switch named := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return named.Sel.Name == "Complete"
+	case *ast.Ident:
+		return named.Name == "Complete"
 	}
-	receiver, ok := selector.X.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	return receiver.Sel.Name == "Tracker"
+	return false
 }
 
 // readsLandingOutcome reports a declaration asking what a landing does to its

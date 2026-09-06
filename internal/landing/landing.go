@@ -169,22 +169,11 @@ func (c Claim) Validate() error {
 	return nil
 }
 
-// judgingDischarge is what a reviewer does with a landing that closes the item.
-// It is said for both of them — the claim a developer wrote out and the default
-// no reply carries — because the two carry the same risk: a change that is not
-// the work, approved under a claim saying it is, records as done exactly what
-// the change itself says was not.
-//
-// It deliberately never says "does not discharge". That phrase is how a reviewer
-// is told the other landing, and a discharging claim carrying it would read as
-// its own opposite.
-const judgingDischarge = "Judge the change against that claim: approve it only if it is the work the item asked for. " +
-	"A change offered as evidence that the work is not doable yet — a diagnosis, a record of what has to land first — is not the work, " +
-	"and approving it under this claim closes the item against its own evidence. Ask for changes instead, and say in your summary that " +
-	"a landing block claiming evidence belongs in the developer's reply."
-
-// Describe says which landing is in force and why, in the words a reviewer and a
-// work item's notes are given it in.
+// Describe says which landing is in force and why, and stops there. It states
+// what is true of the claim and directs no reader to do anything about it, which
+// is what lets one sentence serve audiences that want opposite things from it: a
+// reviewer is told what to do with a landing where it is prompted, and a work
+// item's notes are somebody's record rather than an instruction to them.
 //
 // The claim nobody made is described too, and that is the whole of what this
 // answers that it once did not. The default is a claim like any other — it
@@ -197,10 +186,10 @@ const judgingDischarge = "Judge the change against that claim: approve it only i
 func (c Claim) Describe() string {
 	if !c.Made() {
 		return "The developer claimed no landing outcome. A reply carrying no claim is the ordinary landing, so this change " +
-			"discharges the work item and the item closes on it.\n" + judgingDischarge
+			"discharges the work item and the item closes on it."
 	}
 	if c.Discharges() {
-		return "The developer claims this change discharges the work item.\nWhy: " + folded(c.Why) + "\n" + judgingDischarge
+		return "The developer claims this change discharges the work item.\nWhy: " + folded(c.Why)
 	}
 	headline := "The developer claims this change lands evidence and does not discharge the work item."
 	// Which of the two undischarged landings it is, because they leave the item

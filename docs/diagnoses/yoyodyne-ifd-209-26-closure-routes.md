@@ -70,13 +70,17 @@ writes — and it was the only one nobody read.
 ## What ifd.209.26 changed
 
 The default is described like any other claim. `Claim.Describe()` answers for the
-unmade claim too, so every review prompt carries the landing in force, and a
-discharging landing — written out or defaulted — carries what a reviewer does
-with it: approve only if the change is the work the item asked for, and ask for
-changes where it is a diagnosis. Replaying the ifd.284 shape now costs a repair
-round, in which the developer claims the evidence it actually landed, and the
-item is parked rather than closed
-(`TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem`).
+unmade claim too, so every review prompt carries the landing in force. What a
+reviewer does with a landing that closes the item — approve only if the change is
+the work the item asked for, and ask for changes where it is a diagnosis — is
+added by `describeLanding` on the review-prompt path rather than by the claim
+itself: the same words are written onto the work item, where a direction to ask
+for changes is addressed to nobody who can take one. Replaying the ifd.284 shape
+now costs a repair round, in which the developer claims the evidence it actually
+landed, and the item is parked rather than closed
+(`TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem`;
+`TestTheReviewersDirectionNeverReachesTheWorkItem` holds the two audiences
+apart).
 
 ## What this does not do
 
