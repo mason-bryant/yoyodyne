@@ -620,13 +620,16 @@ usage limit, probes every half hour.
 Reading what is ready costs one local tracker (`bd`) read, and never on the path
 of any run. One thing here wants that number now — the waiting line above, which
 asks at most once a `--heartbeat` — because the watchdog's own read went with the
-watchdog: the sweep takes it once per sweep, and only on a sweep where nothing
-else already accounts for the quiet. That gating is why a healthy idle product
-costs nothing, since the state being looked for is partly a drained queue and
-nothing but the tracker can say the queue is drained. A tracker the sink cannot
-read — no `bd` on the machine it runs on, say — costs that one message: the sink
-says so in its own log and asks again at the next interval, rather than guessing a
-number in either direction, and the sweep reports the same refusal the same way.
+watchdog: the sweep takes it at most once per sweep, and only where nothing else
+already accounts for the quiet. A held line, a full machine, a run still moving
+and a standing provider usage window each answer without it and cost nothing. A
+drained queue does not: nothing but the tracker can say the queue is drained, so
+a perfectly healthy idle product pays that one read on every sweep, and what
+bounds the cost is how often the sweep runs rather than any gate inside it. A
+tracker the sink cannot read — no `bd` on the machine it runs on, say — costs that
+one message: the sink says so in its own log and asks again at the next interval,
+rather than guessing a number in either direction, and the sweep reports the same
+refusal the same way.
 
 What the sweep's cadence costs is promptness rather than the stall: a stall is
 noticed at the first sweep after the threshold has passed, and it closes at the
