@@ -599,14 +599,20 @@ from the silence. The two used to be derived separately and disagreed: on
 2026-09-06 the alarm said nothing accounted for an hour of quiet while the
 session's own idle line, in the same log, held the whole accounting.
 
-**A poll from before the silence names nothing.** Where no poll left an account —
-a session that stopped cleanly, or one that never idled — the message says the
+**An account a start overtook names nothing.** Where no poll left an account — a
+session that stopped cleanly, or one that never idled — the message says the
 cause is something the record does not name, and the move is the operator's. The
-same is true of an account taken before the silence being reported began, which
-is the crashed session: its last poll is still the newest thing a live session
-said, and a run started after it means the queue it describes has not been read
-since. That case wants the reader sent to the chooser, so it is, and the message
-names no cause.
+same is true where something started after the last poll and the line then went
+quiet: the queue has not been read since it moved, so that account is not stated
+as the present cause and the message points at the chooser instead.
+
+**A named cause is not evidence that the chooser is alive.** A session that died
+while idle polled after the last thing that started, so its account survives that
+bound and is named — and it is the right answer about the queue, because those
+items really are held. What says whether the process is still there is the
+chooser's last word in the same message: "last recorded idle at
+2026-09-06T02:05:00Z, and has said nothing since" is a session to look at
+whatever the queue is holding.
 
 The chooser's last word is the other thing to act on: a session whose last word
 was `stopped` wants starting, and one still claiming to be watching wants killing

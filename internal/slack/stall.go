@@ -110,11 +110,13 @@ func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, sess
 	// itself is what paged the operator on 2026-09-06 with "nothing accounting for
 	// it" while the accounting sat one surface over.
 	//
-	// It is asked against the moment the stall's own silence began, so an account
-	// from before that is refused rather than stated as the present cause: a
-	// session that crashed leaves its last poll behind, and the queue it describes
-	// has not been read since. That case wants the reader sent to the chooser, and
-	// the message says so by having no cause to name.
+	// It is asked against the moment the stall's own silence began, so an account a
+	// start overtook is refused rather than stated as the present cause: where
+	// something ran after that poll and the line then went quiet, the queue has not
+	// been read since it moved. It does not tell a live session from a dead one — a
+	// session that died while idle polled after the last start, so its account
+	// stands and is named — which is why the chooser's last word is said beside the
+	// cause rather than replaced by it.
 	var cause readmodel.Cause
 	if standing != nil {
 		if read, accounted := readmodel.WhyThePollStartedNothing(sessions, standing.Since, now); accounted {

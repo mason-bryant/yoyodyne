@@ -177,12 +177,11 @@ func TestNoPollLeavesNoCauseRatherThanAnInventedOne(t *testing.T) {
 	}
 }
 
-// The crashed chooser, which is the case the stall record exists for. Its last
-// poll is still the newest thing a live session said, and a run started after it
-// moves the silence past it — so the account describes a queue nothing has read
-// since, and stating it as the present cause would send the reader to release a
-// queue while the thing that reads it is dead.
-func TestAPollFromBeforeTheSilenceIsNotThePresentCause(t *testing.T) {
+// An account a start overtook. The poll is still the newest thing a live session
+// said, but work ran after it and the line then went quiet, so the queue it
+// describes has not been read since it moved and stating it as the present cause
+// would have the reader release a queue nothing has looked at since.
+func TestAnAccountAStartOvertookIsNotThePresentCause(t *testing.T) {
 	t.Parallel()
 
 	poll := polled(moment, lastNight())
@@ -192,10 +191,11 @@ func TestAPollFromBeforeTheSilenceIsNotThePresentCause(t *testing.T) {
 	if cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{poll}, started, started.Add(time.Hour)); accounted {
 		t.Fatalf("WhyThePollStartedNothing() = %+v, want no cause from a poll older than the silence", cause)
 	}
-	// A live session idling over an unchanging queue writes one line and then
-	// nothing, so its account is old and current at once — and it is an account
-	// taken after the last thing that started, which is what tells it from the one
-	// above.
+	// A poll made after the last start is not overtaken however long it has stood,
+	// which is the case the bound is careful to keep: a session idling over an
+	// unchanging queue writes one line and then nothing. It reads the same whether
+	// that session is still polling or died after writing it, and what tells those
+	// apart is the chooser's last word rather than anything here.
 	polledAfter := polled(started.Add(time.Minute), lastNight())
 	cause, accounted := WhyThePollStartedNothing([]runstate.WatchTransition{polledAfter}, started, started.Add(time.Hour))
 	if !accounted || cause.Class != runstate.PassedOverHeldForAPerson {

@@ -207,23 +207,27 @@ type Cause struct {
 // start rather than a queue with something in the way of it — both are reported
 // as no cause rather than as a stale one.
 //
-// # A poll older than the silence accounts for nothing
+// # An account a start overtook is not the present cause
 //
 // "since" is when the silence being asked about began — for a stall, the moment
 // the harness last started anything. A poll recorded before that is an account
-// of a queue from before the thing being reported, and it is refused rather than
-// stated as the present cause.
+// something has overtaken: work started after the poll and the line then went
+// quiet, so the queue has not been read since it moved, and what the poll
+// describes is a state nothing has checked against what happened next. It is
+// refused rather than stated as the present cause, which leaves the message
+// saying nothing accounts for the silence and pointing at the chooser.
 //
-// That bound is the difference between the two sessions this cannot otherwise
-// tell apart. A live session idling over an unchanging queue writes one line and
-// then nothing, so its account is old and current at once — but it is an account
-// taken after the last thing that started, because the poll is what followed the
-// start. A session that crashed leaves its last poll behind, and a run that
-// started after it moves the silence past that poll: the account is then from
-// before the crash, the queue has not been read since, and stating it as the
-// cause would send the reader to release a queue while the thing that reads it
-// is dead. Refusing it leaves the message saying nothing accounts for the
-// silence and pointing at the chooser, which is what that case actually needs.
+// A live session idling over an unchanging queue writes one line and then
+// nothing, so its account is old and current at once. That is the case the bound
+// is careful to keep: the poll is what followed the last start, so it is not
+// overtaken however long it has stood.
+//
+// What the bound does not do is tell a live session from a dead one, and nothing
+// here can. A session that died while idle also polled after the last start, so
+// its account stands and is named — which is the right answer about the queue,
+// since those items are still held, still parked, still carried, and no answer at
+// all about the process. What answers that is the chooser's last word, which
+// every message says beside the cause rather than in place of it.
 //
 // A zero "since" asks the question with no silence attached and takes the latest
 // poll whatever its age.

@@ -246,12 +246,12 @@ func TestAStallNamesTheDominantCauseAndTheNextMover(t *testing.T) {
 	}
 }
 
-// The crashed chooser, which is the case this record exists for. Its last poll
-// is still the newest thing a live session said, and the harness started
-// something after it — so the account describes a queue nothing has read since,
-// and the message says nothing accounts for the silence and sends the reader to
-// the chooser rather than to a person who can do nothing about a dead process.
-func TestAStallOverAPollOlderThanTheSilenceNamesNoCause(t *testing.T) {
+// An account a start overtook, which is what a session that died carrying a run
+// leaves behind. Its last poll is still the newest thing a live session said, and
+// the harness started something after it — so the queue it describes has not been
+// read since it moved, and the message says nothing accounts for the silence and
+// sends the reader to the chooser.
+func TestAStallOverAnAccountAStartOvertookNamesNoCause(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
