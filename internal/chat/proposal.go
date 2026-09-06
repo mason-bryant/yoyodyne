@@ -87,13 +87,19 @@ type PendingProposal struct {
 	ConversationID string   `json:"conversation_id"`
 	Turn           int      `json:"turn"`
 	Proposal       Proposal `json:"proposal"`
-	// Asking is what about this proposal kept the harness from admitting it in a
-	// project that admits work itself: the goal it names resolved to nothing, or
-	// to a document nobody approved, or to one amended since. It is empty where
-	// the answer is not about the proposal at all — a project that asks about
-	// every work item, and a proposal that was admitted — because a reason
-	// recorded there would be the policy repeated on every card rather than
-	// anything about the work.
+	// Asking is what about this proposal is being put to the operator: work
+	// already in the tracker that this looks like, or the reason the harness would
+	// not admit it itself in a project that admits work — the goal it names
+	// resolved to nothing, or to a document nobody approved, or to one amended
+	// since. It is empty where the answer is not about the proposal at all — a
+	// project that asks about every work item, and a proposal that was admitted —
+	// because a reason recorded there would be the policy repeated on every card
+	// rather than anything about the work.
+	//
+	// A resemblance is the exception to that last part and is recorded whatever
+	// the policy is, because it is about the work rather than about the policy: it
+	// is the same duplicate either way, and the operator deciding needs the
+	// identifier of the item it already is.
 	//
 	// It is recorded with the proposal rather than worked out again at the
 	// prompt: the answer depends on the goals as they stood when the proposal was

@@ -856,7 +856,13 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		if err := s.verifyProposalReferences(ctx, parsed.Proposals); err != nil {
 			return reply, &ProposalPlacementError{Err: err}
 		}
-		pending, err := s.recordProposals(parsed.Proposals)
+		// What each proposal looks like among the work already admitted is judged
+		// before any of it is recorded, so a proposal that is work the tracker
+		// already holds reaches the operator saying which item that is rather than
+		// being admitted on a goal's authority with nobody looking. It refuses
+		// nothing: whether two pieces of work are the same one is a judgement, and
+		// the operator is exactly who makes it.
+		pending, err := s.recordProposals(parsed.Proposals, s.resemblingProposals(ctx, parsed.Proposals))
 		if err != nil {
 			reply.Proposals = append(reply.Proposals, pending...)
 			return reply, err
@@ -1491,7 +1497,11 @@ type rejection struct {
 // prompt, and recorded with it. The judgement depends on the goals as they stand
 // now, and a proposal decided tomorrow would otherwise be judged against goals
 // that had moved since it was made.
-func (s *Session) recordProposals(proposals []Proposal) ([]PendingProposal, error) {
+//
+// resembling is what each proposal looks like among the work already admitted,
+// judged by the caller against one reading of the tracker, and empty for the
+// proposals that look like nothing — which is nearly all of them.
+func (s *Session) recordProposals(proposals []Proposal, resembling []string) ([]PendingProposal, error) {
 	pending := make([]PendingProposal, 0, len(proposals))
 	for i, proposal := range proposals {
 		record := &proposalRecord{pending: PendingProposal{
@@ -1499,11 +1509,12 @@ func (s *Session) recordProposals(proposals []Proposal) ([]PendingProposal, erro
 			ConversationID: s.state.ConversationID,
 			Turn:           s.state.Turns,
 			Proposal:       proposal,
-			// Only a gap that is about this proposal is written down. In a project
-			// that asks about every item the answer is the policy rather than
+			// Only what is about this proposal is written down. In a project that
+			// asks about every item the admission gap is the policy rather than
 			// anything about the work, and repeating it on every card would say
-			// nothing.
-			Asking: s.proposalAdmissionGap(proposal.Goal, proposal.Class),
+			// nothing; a resemblance is about the work, so it is written down under
+			// either policy.
+			Asking: s.proposalGate(proposal, resemblanceAt(resembling, i)),
 		}}
 		if err := s.emit(execution.EventProposalRecorded, record.pending); err != nil {
 			return pending, fmt.Errorf("record work item proposal: %w", err)
@@ -1522,6 +1533,35 @@ func (s *Session) recordProposals(proposals []Proposal) ([]PendingProposal, erro
 		}
 	}
 	return pending, nil
+}
+
+// proposalGate is what about this proposal is put to the operator: the work
+// already in the tracker that it looks like, or the gap that kept it out of a
+// queue it would otherwise have gone into.
+//
+// The resemblance answers first, and answers whatever the project's admission
+// policy is. Every other reason on this field is about the policy and the goals,
+// so a project that asks about every item has nothing to say there — but a
+// duplicate is about the work, and it is the same duplicate under either policy.
+// It is also the one an operator being asked most needs in front of them: the
+// item this already is has an identifier, and approving without it is how a
+// duplicate gets approved twice.
+func (s *Session) proposalGate(proposal Proposal, resembling string) string {
+	if resembling != "" {
+		return resembling
+	}
+	return s.proposalAdmissionGap(proposal.Goal, proposal.Class)
+}
+
+// resemblanceAt is what one proposal looked like, from a list judged for the
+// whole turn. It tolerates a short list rather than indexing into one: a caller
+// that judged nothing is a caller that could not read the tracker, and that costs
+// the sentence rather than the proposal.
+func resemblanceAt(resembling []string, at int) string {
+	if at < 0 || at >= len(resembling) {
+		return ""
+	}
+	return resembling[at]
 }
 
 // proposalAdmissionGap is the gap worth writing on the proposal itself: what
@@ -2713,7 +2753,7 @@ Keeping the queue coherent is yours to do, not to ask for. To act on the work tr
 {"actions":[
   {"action":"read","id":"beads-id"},
   {"action":"survey"},
-  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"executor":"conversation:architect","parked":"why this is admitted already parked","directive":"directive-id","reason":"why you are doing this"},
+  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"executor":"conversation:architect","parked":"why this is admitted already parked","directive":"directive-id","report":"report-id","reason":"why you are doing this"},
   {"action":"attribute","id":"beads-id","goal":"the goal this work serves","reason":"why this is the goal it serves"},
   {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","executor":"conversation:architect","reason":"why"},
   {"action":"reparent","id":"beads-id","parent":"beads-id","reason":"why"},
@@ -2728,7 +2768,7 @@ Keeping the queue coherent is yours to do, not to ask for. To act on the work tr
 ]}
 ` + "```" + `
 
-That example lists every action there is. "create" admits work to the backlog and "reprioritize" is how you order it; "attribute" records the goal an item already in the backlog serves; "park" and "unpark" take admitted work out of reach and put it back; "close" and "retire" are the two ways work leaves it; "handle" says what became of a report, and is the one action that is not about a work item at all; "read" and "survey" only look. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each action takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read" and "survey", and it is what the operator reads afterwards to understand what you did. "goal" is required on "create" and on "attribute" and taken by nothing else: it names the goal the work serves, in the words the goals document states it in, and it is recorded on the item. An action naming a goal the goals do not state is refused and changes nothing, and work you cannot name a goal for is raised as a concern instead of admitted. Work admitted before goals were checked names none, and a survey says which items those are; "attribute" is how one of them acquires a goal, appended to what the item already records rather than replacing it, so the goal an item was admitted under is never rewritten. Attributing work is a judgement about what it is for: read the item before you attribute it, and where you cannot say which goal it serves, raise it rather than picking the nearest one. "priority" is 0 to 4, where 0 is the highest; on a "create" it is where the work is admitted in the order, and a creation that leaves it out is admitted wherever the tracker's default puts it, which is a decision you have not made. "report" is required on "handle" and taken by nothing else: it names a report exactly as it was listed to you, and "handle" takes no id, because a report is not a work item and nothing in the backlog changes. "parent" on a reparent may be empty to detach the item. "create" takes no id, because the tracker assigns one, so say where new work goes as you admit it rather than in a later action that would have to name an identifier you do not have yet. Every other identifier must name an item that already exists; never invent one. Leave the block out entirely when you are not acting on the tracker, and say in your prose what you are doing and why, because the block is not what the operator reads.
+That example lists every action there is. "create" admits work to the backlog and "reprioritize" is how you order it; "attribute" records the goal an item already in the backlog serves; "park" and "unpark" take admitted work out of reach and put it back; "close" and "retire" are the two ways work leaves it; "handle" says what became of a report, and is the one action that is not about a work item at all; "read" and "survey" only look. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each action takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read" and "survey", and it is what the operator reads afterwards to understand what you did. "goal" is required on "create" and on "attribute" and taken by nothing else: it names the goal the work serves, in the words the goals document states it in, and it is recorded on the item. An action naming a goal the goals do not state is refused and changes nothing, and work you cannot name a goal for is raised as a concern instead of admitted. Work admitted before goals were checked names none, and a survey says which items those are; "attribute" is how one of them acquires a goal, appended to what the item already records rather than replacing it, so the goal an item was admitted under is never rewritten. Attributing work is a judgement about what it is for: read the item before you attribute it, and where you cannot say which goal it serves, raise it rather than picking the nearest one. "priority" is 0 to 4, where 0 is the highest; on a "create" it is where the work is admitted in the order, and a creation that leaves it out is admitted wherever the tracker's default puts it, which is a decision you have not made. "report" is required on "handle" and optional on "create", and it names a report exactly as it was listed to you. On a "handle" it says which report you are recording a decision about, and "handle" takes no id, because a report is not a work item and nothing in the backlog changes. On a "create" it says the work is being admitted because of that report, which writes the report onto the item and is what the harness checks the next admission citing it against; leave it out where the work came from the conversation rather than from something a role reported. Naming a report nobody filed refuses the whole creation and admits nothing, so never invent one. "parent" on a reparent may be empty to detach the item. "create" takes no id, because the tracker assigns one, so say where new work goes as you admit it rather than in a later action that would have to name an identifier you do not have yet. Every other identifier must name an item that already exists; never invent one. Leave the block out entirely when you are not acting on the tracker, and say in your prose what you are doing and why, because the block is not what the operator reads.
 
 "executor" says what carries the work where a developer run does not, and it names whose conversation carries it: "conversation:architect", "conversation:product-manager", "conversation:development-manager", "conversation:developer", or "conversation:reviewer". It means the work happens in a conversation with that role — a document the architect owns, a decomposition settled with the development manager, a decision recorded with you — rather than in a run with a worktree, a diff, and a reviewer. Name the role rather than the bare word "conversation", which is refused: from the moment you hand an item over until whoever holds it starts on it, the role you named here is the only thing that says who has it, and an unattributed handoff is a thread nobody can read. Give it on "create" where you already know that; "update" takes it too, because the queue is older than the marker and an item admitted before it can acquire one. An item carrying it keeps its place in your order and is never selected for a developer run, and the harness names it as passed over rather than dropping it silently. Set it only where it is true: an ordinary item marked this way is work nothing will ever pick up, and a conversation item left unmarked is selected for a run that spends itself and two review rounds producing an empty diff, with those rounds counted against the item's cap. Work that names no executor is a developer run, which is nearly all of it.
 
@@ -2736,7 +2776,9 @@ That example lists every action there is. "create" admits work to the backlog an
 
 "directive" is taken by "create" and by nothing else, and most creations leave it out. Give it when the work is being admitted because the operator directed it — a directive recorded in this conversation, or one somebody recorded by replying in a work item's thread — and give the identifier exactly as it was recorded, or any prefix of it that names exactly one. The harness resolves it against the durable directives before it creates anything: a creation naming a directive nobody recorded is refused whole and admits nothing, so never invent one and never guess at an identifier you were not given.
 
-Naming it does two things you cannot do any other way. The item records which directive it answers, so the queue says which of its work somebody asked for rather than only what it is for. And the directive's own record is told what it became, which is the only account there ever is of what came of an operational directive: such a directive takes effect the moment it is recorded and has nothing to resolve, so without this it stands open forever and whoever asked for it is never told the work exists. Where a directive prompted several items, name it on the one that answers it; the record carries one account of what became of it, and a second creation naming it is admitted with that said plainly rather than refused.
+Naming it does two things you cannot do any other way. The item records which directive it answers, so the queue says which of its work somebody asked for rather than only what it is for. And the directive's own record is told what it became, which is the only account there ever is of what came of an operational directive: such a directive takes effect the moment it is recorded and has nothing to resolve, so without this it stands open forever and whoever asked for it is never told the work exists. Where a directive prompted several items, name it on the one that answers it and leave it off the others; the record carries one account of what became of it, and the check below refuses a second creation that cites it, naming the item it already produced.
+
+Work is not admitted twice from one source. Before anything is created, the harness compares what you are admitting against every item the tracker holds, open and closed: an item already admitted from the report or the directive this creation cites, and a child already carved out of the parent it names carrying the same scope. Where it finds one, nothing is created, and the result names the item, the state the tracker holds it in, and why it matched. That is not a refusal to get past by rewording the title — read the item it names. Where that item is open, act on it: update it, or widen it. Where it is closed, the work is done, and a run made for a second item could not contain anything the target branch does not already carry; that is what each of the two duplicates behind this rule cost, a run and its review rounds apiece. Where you have read it and this is genuinely separate work, propose it rather than admitting it, and say in the rationale what is separate about it, so the operator decides with the same match in front of them. A source is the one case with a second answer, because one record can genuinely prompt more than one piece of work: admit the second without citing the report or the directive, which is what naming it on the one item that answers the record already meant. A proposal is never refused for any of this — the match is written onto it and put to the operator.
 
 ` + providerPathClause + `
 

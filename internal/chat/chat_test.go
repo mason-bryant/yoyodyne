@@ -1372,7 +1372,13 @@ type fakeTracker struct {
 	// open is what a survey of the open queue answers with, and listed is the
 	// status each survey asked for, so a survey that read the wrong slice of the
 	// tracker is visible rather than merely plausible.
-	open    []beads.WorkItem
+	open []beads.WorkItem
+	// all is what a listing that names no status answers with: every item the
+	// tracker holds, closed work included. It is a separate slice rather than the
+	// open one because the difference decides something — the duplicate guard has
+	// to see work that has already landed — and a fake that answered the same
+	// either way would pass a guard that only ever read the open queue.
+	all     []beads.WorkItem
 	listed  []string
 	listErr error
 	// shown is every item it was asked to read, in order, so a turn that looks
@@ -1413,6 +1419,9 @@ func (f *fakeTracker) List(_ context.Context, status string) ([]beads.WorkItem, 
 	f.listed = append(f.listed, status)
 	if f.listErr != nil {
 		return nil, f.listErr
+	}
+	if strings.TrimSpace(status) == "" {
+		return f.all, nil
 	}
 	return f.open, nil
 }
