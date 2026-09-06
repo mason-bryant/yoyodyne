@@ -313,12 +313,21 @@ func TestTheDecisionsThatSpendABudgetAreRefusedWithoutOne(t *testing.T) {
 		"rescope":  true,
 		"wait":     true,
 		"escalate": true,
+		// Crossing a cap spends none of the budgets, but it writes to the same
+		// record they are refused against, so a conversation that cannot reach that
+		// record cannot cross one either. A crossing recorded nowhere is a cap
+		// reported as raised that every guard still refuses.
+		"cross": false,
 	} {
 		t.Run(decision, func(t *testing.T) {
 			t.Parallel()
 
+			crossed := ""
+			if decision == "cross" {
+				crossed = `,"budget":"` + runstate.TriageReviewRoundBudget + `"`
+			}
 			answer := trackerReply("Decided.",
-				`{"action":"triage","id":"yoyodyne-ifd.90","run":"`+stoppedRun+`","decision":"`+decision+`","reason":"the docket entry says so"}`)
+				`{"action":"triage","id":"yoyodyne-ifd.90","run":"`+stoppedRun+`","decision":"`+decision+`"`+crossed+`,"reason":"the docket entry says so"}`)
 			if decision == "escalate" {
 				answer = reportReply(answer, `{"severity":"warning","message":"yoyodyne-ifd.90 needs a repository setting only a person can change."}`)
 			}
@@ -519,11 +528,15 @@ func TestTriageIsRefusedOnWorkThatHasClosed(t *testing.T) {
 	}
 }
 
-// A cap refusal has to leave the development manager holding something the
-// operator can run. Naming the remedy without naming the verb is what sent two
-// overrides into a work item's notes — where "record an override against the
-// item" pointed, and where no guard reads — and left the resubmitted decision
-// meeting the identical refusal.
+// A cap refusal has to leave the development manager holding something to write.
+// Naming the remedy without naming the verb is what sent two overrides into a
+// work item's notes — where "record an override against the item" pointed, and
+// where no guard reads — and left the resubmitted decision meeting the identical
+// refusal.
+//
+// It offers his own crossing first and the operator's command after it, because
+// the crossing is the one that costs nobody a wait: the operator delegated it
+// precisely so that the ordinary refusal stops producing an escalation.
 func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
 	t.Parallel()
 
@@ -550,7 +563,12 @@ func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
 				// operator types the command rather than reconstructing the figure.
 				"--cap 5",
 				"yoyodyne-ifd.224",
-				"nothing written into the item's notes crosses it either",
+				"Nothing written into the item's notes crosses that cap",
+				// His own crossing, offered before the escalation and with the budget
+				// that refused already in it.
+				`"decision":"cross"`,
+				`"budget":"review round"`,
+				"up to 5 times per item",
 			},
 		},
 		{
@@ -572,6 +590,10 @@ func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
 				"4 of 4 permitted review round(s) are spent",
 				`yoyo triage override --budget "repair grant" --cap 2`,
 				`yoyo triage override --budget "review round" --cap 5`,
+				// One crossing per budget as well, for the same reason: crossing one
+				// leaves the same decision refused by the other.
+				`"budget":"repair grant"`,
+				`"budget":"review round"`,
 				"both are needed",
 			},
 		},
@@ -582,7 +604,8 @@ func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
 			err:  fmt.Errorf("the budget is gone: %w", runstate.ErrTriageCapReached),
 			want: []string{
 				`yoyo triage override --budget "<budget>"`,
-				"nothing written into the item's notes crosses it either",
+				`"decision":"cross"`,
+				"Nothing written into the item's notes crosses that cap",
 			},
 		},
 	} {
@@ -724,6 +747,10 @@ func (b *triageBudgetGate) RecordRerun(ctx context.Context, workItemID string) (
 
 func (b *triageBudgetGate) RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
 	return b.store.RecordMergeRearm(ctx, workItemID, b.now(), b.caps)
+}
+
+func (b *triageBudgetGate) CrossCap(ctx context.Context, workItemID, budget, reason string) (runstate.TriageCrossing, error) {
+	return b.store.CrossCap(ctx, workItemID, domain.RoleDevelopmentManager, budget, reason, b.now(), b.caps)
 }
 
 func (b *triageBudgetGate) now() time.Time { return b.clock.Now() }

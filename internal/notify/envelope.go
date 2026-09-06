@@ -60,6 +60,14 @@ const (
 	KindWorkHandedOff  Kind = "work.handed-off"
 	KindWorkPickedUp   Kind = "work.picked-up"
 	KindWorkCarriedOut Kind = "work.carried-out"
+	// A cap the development manager crossed on his own delegated authority. It is
+	// here rather than left to the item's notes because the crossing is the whole
+	// of what the delegation traded away: the operator no longer approves it in
+	// advance, so what keeps the veto is that they read it at the moment it
+	// happens, with the cap, which of the item's five crossings it was, and the
+	// argument for it. A crossing nobody was told about is the delegation without
+	// the condition it was granted under.
+	KindCapCrossed Kind = "cap.crossed"
 	// KindRunStarted carries the recorded selection reason with it, so the fact
 	// the selected-work-passes-intake-and-records-why invariant makes durable is
 	// the fact an operator actually reads.
@@ -244,6 +252,7 @@ func Kinds() []Kind {
 		KindWorkHandedOff,
 		KindWorkPickedUp,
 		KindWorkCarriedOut,
+		KindCapCrossed,
 		KindRunStarted,
 		KindChecksPassed,
 		KindChecksFailed,
@@ -293,7 +302,7 @@ func (k Kind) Valid() bool {
 	switch k {
 	case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized,
 		KindTrackerBlockRefused, KindWorkApproved, KindWorkDeclined,
-		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut,
+		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut, KindCapCrossed,
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped,
@@ -775,12 +784,30 @@ type Detail struct {
 	// whose actions were lost is the record.
 	Refused int    `json:"refused,omitempty"`
 	Asking  string `json:"asking,omitempty"`
+	// Budget, Cap, Crossing, and Crossings are the delegated cap crossing, read by
+	// KindCapCrossed: which cap was crossed, the ceiling now in force for it, which
+	// of the item's permitted crossings this was, and how many the role gets.
+	//
+	// All four are carried rather than derived, because the operator's veto rests
+	// on them being the record's own figures: the guard raised that cap to that
+	// number and counted that crossing, and a surface that recounted the item's
+	// overrides for itself could tell the operator a different story about what it
+	// just permitted. The count is said with its bound for the reason every count
+	// in this vocabulary is — a third crossing means nothing to a reader who cannot
+	// see there are five.
+	Budget    string `json:"budget,omitempty"`
+	Cap       int    `json:"cap,omitempty"`
+	Crossing  int    `json:"crossing,omitempty"`
+	Crossings int    `json:"crossings,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
 	// a role changed the backlog, read by the tracker kinds; why proposed work
 	// was turned down, read by KindWorkDeclined; why a thread reply recorded
 	// nothing, read by KindDirectiveRefused; and why a block of tracker actions
-	// was refused whole, read by KindTrackerBlockRefused. An operator who holds in
-	// a hurry owes nobody an explanation, so absence is ordinary.
+	// was refused whole, read by KindTrackerBlockRefused; and the justification a
+	// cap was crossed on, read by KindCapCrossed. An operator who holds in a hurry
+	// owes nobody an explanation, so absence is ordinary — except on a crossing,
+	// where the harness refuses one carrying no reason before it is ever recorded,
+	// so an absence there is a record written by something that should not exist.
 	Reason string `json:"reason,omitempty"`
 }
 

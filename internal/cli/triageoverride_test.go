@@ -94,7 +94,10 @@ func TestAnOperatorOverrideMakesTheRefusedDecisionRecordable(t *testing.T) {
 		"--by \"<operator>\"",
 		"--reason \"<why>\"",
 		cappedItem,
-		"nothing written into the item's notes crosses it either",
+		"Nothing written into the item's notes crosses that cap",
+		// And his own crossing, offered before the escalation: the delegation is
+		// what the ordinary refusal now points at first.
+		`"decision":"cross"`,
 	} {
 		if !strings.Contains(refused.Failure, want) {
 			t.Fatalf("the refusal is missing %q:\n%s", want, refused.Failure)
@@ -199,7 +202,7 @@ func TestANoteOnTheItemDoesNotCrossACap(t *testing.T) {
 	if refused.Applied {
 		t.Fatalf("a note crossed a cap: %#v", refused)
 	}
-	if !strings.Contains(refused.Failure, "nothing written into the item's notes crosses it either") {
+	if !strings.Contains(refused.Failure, "Nothing written into the item's notes crosses that cap") {
 		t.Fatalf("the refusal does not say why the note changed nothing:\n%s", refused.Failure)
 	}
 	counters, err := triage.Counters(cappedItem)

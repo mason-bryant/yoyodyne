@@ -1081,8 +1081,14 @@ func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
 	// remains is the operator who answers the escalation in the item's notes,
 	// where no guard reads it.
 	if !strings.Contains(rendered,
-		"`yoyo triage override --budget \"review round\" --cap <n> --by \"<you>\" --reason \"<why>\" yoyodyne-ifd.90` is the only thing that crosses it") {
+		"`yoyo triage override --budget \"review round\" --cap <n> --by \"<you>\" --reason \"<why>\" yoyodyne-ifd.90` crosses it to any ceiling") {
 		t.Fatalf("rendered = %q, want the command that crosses the cap named beside it", rendered)
+	}
+	// And that the item may move without them, which is what the delegation
+	// traded for the wait it removed: an operator reading a cap at its limit is
+	// entitled to know the development manager can cross it by one himself.
+	if !strings.Contains(rendered, "the development manager may also cross it by one, 5 times per item") {
+		t.Fatalf("rendered = %q, want the delegated crossing said beside the operator's command", rendered)
 	}
 	// It is said where it applies and nowhere else: an item with rounds to spare
 	// has no cap to cross.

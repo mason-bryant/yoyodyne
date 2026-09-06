@@ -520,12 +520,14 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 	case counters.RoundsRemaining(caps.ReviewRounds) == 0:
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item — at or past the cap of %d, so no decision that buys a round remains\n",
 			counters.ReviewRounds, caps.ReviewRounds)
-		// The one thing that changes that, said where the operator meets the dead
-		// end rather than left to be found. A cap is crossed by this command and by
-		// nothing else, and an override recorded anywhere else — the item's own
+		// What changes that, said where the operator meets the dead end rather than
+		// left to be found. This is the command that crosses it by any ceiling; the
+		// development manager crosses it by one himself, which is said here because
+		// an operator who reads a cap at its limit is entitled to know the item may
+		// move without them. An override recorded anywhere else — the item's own
 		// notes included, which is where two of them went — reaches no guard.
-		fmt.Fprintf(writer, "    `yoyo triage override --budget %q --cap <n> --by \"<you>\" --reason \"<why>\" %s` is the only thing that crosses it\n",
-			runstate.TriageReviewRoundBudget, counters.WorkItemID)
+		fmt.Fprintf(writer, "    `yoyo triage override --budget %q --cap <n> --by \"<you>\" --reason \"<why>\" %s` crosses it to any ceiling; the development manager may also cross it by one, %d times per item, and each of those reaches you in the channel as it happens\n",
+			runstate.TriageReviewRoundBudget, counters.WorkItemID, runstate.MaxDelegatedCapCrossings)
 	default:
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item, under the cap of %d\n",
 			counters.ReviewRounds, caps.ReviewRounds)
@@ -549,8 +551,23 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 	// figure above is one of these caps, so an operator reading a budget larger
 	// than the project configured and finding no account of it here would have to
 	// go looking in the state directory for the reason.
+	//
+	// Whose crossing each one was is the label rather than a detail inside the
+	// sentence, because they are read for opposite reasons: the operator's own
+	// override is something they did and can remember doing, and a delegated
+	// crossing is something that happened while they were not asked. The count of
+	// the second is said under them, so an operator scanning an item can see how
+	// much of the delegation it has used without counting lines.
 	for _, override := range counters.Overrides {
-		fmt.Fprintf(writer, "  operator override: %s\n", override.Describe())
+		label := "operator override"
+		if override.Delegated() {
+			label = "cap crossed on delegated authority"
+		}
+		fmt.Fprintf(writer, "  %s: %s\n", label, override.Describe())
+	}
+	if crossings := counters.DelegatedCrossings(); crossings > 0 {
+		fmt.Fprintf(writer, "  %d of %d cap crossing(s) the development manager may take himself are recorded; past that the caps are yours again\n",
+			crossings, runstate.MaxDelegatedCapCrossings)
 	}
 	fmt.Fprintln(writer, "  waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say")
 }
