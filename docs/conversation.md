@@ -1134,11 +1134,12 @@ still standing on whichever of the two put it on the docket: its blocker, or, fo
 a run that died before anything recorded one, the change it left behind. Either
 way that is read from the run's own record rather than from the docket entry. One
 docketed stoppage is re-run once. The work item has to be one a run
-may start on — open, with nothing it depends on outstanding — which for a
-docketed stoppage usually means somebody has put it back, because stopping the
-run blocked it. And a decision of the development
-manager's has to be there to carry out: deciding a re-run spends the item's
-re-run budget as it is decided, and each decision authorizes exactly one re-run,
+may start on — open or blocked, with nothing it depends on outstanding. Blocked
+counts because stopping the run is what blocked it, so re-entry supersedes that
+blocker rather than waiting for somebody to remember to reopen the item; what
+still refuses is unfinished work the item waits for. And a decision of the
+development manager's has to be there to carry out: deciding a re-run spends the
+item's re-run budget as it is decided, and each decision authorizes one re-run,
 so the harness reads what it has already carried out for the item back against
 what was decided. An item nobody decided this about is refused, and so is one
 whose decision has already been acted on — a second stoppage of an item that was
@@ -1153,8 +1154,9 @@ That matters most for the item's own state: the budget is spent by claiming it
 rather than by running anything, so a refusal made after the claim would be the
 decision defeating itself on exactly the blocked items it exists for — refused
 once for the status, and refused again by the once-only guard for a run that
-never happened. Put the item back and ask again, and the same decision is
-carried out.
+never happened. A refusal the fresh run meets past the claim gives the claim
+back for the same reason: it reserved no run, so nothing was done on the claim,
+and asking again once it no longer refuses carries out the same decision.
 
 **A harness with no free developer refuses nothing at all.** Two developers
 happening to be busy at that second is not an argument about the work, and it
