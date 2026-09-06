@@ -274,6 +274,14 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 		outcome.fail(refusedPastCap(err))
 		return
 	}
+	// The spend is durable from here on, and everything below it is a write to a
+	// tracker that can fail. So it is written onto the outcome before the write
+	// rather than after it: an action that fails now is an action with a spend
+	// behind it, and a report saying it changed nothing is a report inviting the
+	// spend to be made twice.
+	if spent.landed != "" {
+		outcome.noteLanded("%s", spent.landed)
+	}
 	note := s.trackerProvenance(triageVerbs[decision]+", on the stopped work of run "+run, action.Reason)
 	if decision == decisionEscalate {
 		// An escalation is recorded as a blocker rather than as a note, because
@@ -282,6 +290,7 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 		// exists to stop somebody discovering by accident.
 		if _, err := s.options.Tracker.Block(ctx, id, note); err != nil {
 			outcome.fail(err)
+			s.settleTrackerBlock(ctx, outcome, id, note)
 			return
 		}
 		outcome.applied("escalated %s to the operator and blocked it, on the stopped work of run %s", id, run)
@@ -289,9 +298,92 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 	}
 	if _, err := s.options.Tracker.Update(ctx, id, beads.WorkItemChange{AppendNotes: note}); err != nil {
 		outcome.fail(err)
+		s.settleTrackerNote(ctx, outcome, id, note, "the decision recorded on the item")
 		return
 	}
-	outcome.applied("triaged %s as %q, on the stopped work of run %s%s", id, decision, run, spent)
+	outcome.applied("triaged %s as %q, on the stopped work of run %s%s", id, decision, run, spent.clause)
+}
+
+// settleTrackerNote asks the tracker whether a write it reported as failed
+// nonetheless reached the item, and records the answer as something known to
+// have landed or as something not known to have.
+//
+// A timeout is what it is for. The harness stopping its wait on bd says nothing
+// about whether bd finished, so the failure it reports covers both a write that
+// never happened and one that happened after nobody was listening — and on
+// 2026-09-06 it was the second, on the triage note for yoyodyne-ifd.142. Reading
+// the item back is one further bd call at a point where the action has already
+// failed, which is cheap against what guessing costs: a decision reported as
+// unrecorded is a decision asked for again, and the budget behind it spent twice.
+//
+// It never turns a failure into a success. What it settles is what the outcome
+// says about the write, not whether the action was applied — the caller has
+// already failed the outcome, and a write nobody can confirm is not a decision
+// this conversation may report as recorded.
+//
+// The note is found by looking for it, which works because a provenance line
+// names the conversation and the turn: the same decision recorded on an earlier
+// turn does not match, so what is found is this write and not its predecessor.
+func (s *Session) settleTrackerNote(ctx context.Context, outcome *TrackerOutcome, id, note, what string) {
+	item, err := s.settlingRead(ctx, id)
+	if err != nil {
+		outcome.noteUnknown("%s; the tracker would not say whether the write reached %s: %s", what, id, err)
+		return
+	}
+	if carriesNote(item, note) {
+		outcome.noteLanded("%s; %s carries it, so the write landed and asking for it again would record it twice", what, id)
+		return
+	}
+	outcome.noteUnknown("%s; reading %s afterwards does not find it, so it has to be recorded before anything reads the item as decided", what, id)
+}
+
+// settleTrackerBlock is settleTrackerNote for the write an escalation makes,
+// which is not a note. Blocking is one bd invocation that does two things —
+// `bd update --status=blocked --append-notes=<reason>`, in beads.Client.Block —
+// so a blocker that landed leaves both marks on the item, and either of them is
+// evidence the invocation ran. Settling this against the note alone would rest
+// the whole answer on the half of that command whose absence proves least, on
+// the one decision whose failure has a person waiting behind it.
+//
+// The status is only evidence where the item was not already blocked when the
+// action started, which is what the reading taken before the write is for: an
+// item somebody else blocked yesterday is blocked now for a reason that is not
+// this escalation, and an escalation that never landed would then be reported as
+// having done. A prior reading that failed says nothing either way, and the
+// status is passed over rather than guessed at.
+func (s *Session) settleTrackerBlock(ctx context.Context, outcome *TrackerOutcome, id, note string) {
+	const what = "the blocker naming the operator"
+	item, err := s.settlingRead(ctx, id)
+	if err != nil {
+		outcome.noteUnknown("%s; the tracker would not say whether the write reached %s: %s", what, id, err)
+		return
+	}
+	blockedNow := strings.TrimSpace(item.Status) == blockedWorkItemStatus
+	blockedBefore := outcome.TargetStatus == "" || outcome.TargetStatus == blockedWorkItemStatus
+	if carriesNote(item, note) || (blockedNow && !blockedBefore) {
+		outcome.noteLanded("%s; %s is blocked and carries it, so the write landed and escalating again would block it twice over", what, id)
+		return
+	}
+	outcome.noteUnknown("%s; reading %s afterwards finds neither the blocker nor the reason, so nothing on the item yet says a person is waiting on it", what, id)
+}
+
+// carriesNote reports an item whose notes hold the write one action was making.
+// It is a search because that is all the tracker offers, and it is exact enough
+// to be one: a provenance line names the conversation and the turn, so the same
+// decision recorded on an earlier turn does not match it.
+func carriesNote(item beads.WorkItem, note string) bool {
+	return strings.Contains(item.Notes, strings.TrimSpace(note))
+}
+
+// settlingRead reads an item back after a write to it failed, under a context of
+// its own rather than the one the write ran under. Dropping the cancellation is
+// the point: where the failure was this conversation's own deadline running out,
+// a read taken under it fails before it reaches the tracker and settles nothing —
+// which is the timeout case the settling exists for, answered by the one thing
+// that cannot answer it. What bounds the read instead is the tracker client's own
+// per-command timeout, which is what bounds every other call it makes.
+func (s *Session) settlingRead(ctx context.Context, id string) (beads.WorkItem, error) {
+	return s.options.Tracker.Show(context.WithoutCancel(ctx), id)
 }
 
 // refuseTransposedStoppage refuses a decision whose run was made for some other
@@ -392,42 +484,66 @@ func overrideCommands(err error) string {
 	return strings.Join(commands[:len(commands)-1], ", ") + " and " + commands[len(commands)-1] + " — both are needed, since either budget alone still refuses it"
 }
 
+// triageSpend is what a decision cost the item's durable budget, said twice: as
+// the clause a recorded decision appends to its own summary, and as the standing
+// fact a failure after the spend has to report on its own.
+//
+// Two forms rather than one because they are read in opposite situations. The
+// clause continues a sentence about a decision that was recorded; the standing
+// fact is all there is to say to somebody deciding whether to ask for the same
+// decision again, and it has to name the item, since the summary that would have
+// named it was never written.
+type triageSpend struct {
+	clause string
+	landed string
+}
+
 // spendTriageBudget spends what the decision costs and says what it came to, or
 // says nothing for a decision that costs nothing. Three of the six buy another
 // attempt at work that already failed once, and those are the three the durable
 // budget bounds; re-scoping, waiting, and escalating buy no attempt at all and
 // are never refused for budget.
-func (s *Session) spendTriageBudget(ctx context.Context, workItemID, decision string) (string, error) {
+func (s *Session) spendTriageBudget(ctx context.Context, workItemID, decision string) (triageSpend, error) {
 	switch decision {
 	case decisionRepair, decisionRerun, decisionRearm:
 	default:
-		return "", nil
+		return triageSpend{}, nil
 	}
 	if s.options.Triage == nil {
-		return "", errors.New("no triage budget is wired to this conversation, so a repair, a re-run, or a re-arm cannot be bounded and was not recorded")
+		return triageSpend{}, errors.New("no triage budget is wired to this conversation, so a repair, a re-run, or a re-arm cannot be bounded and was not recorded")
 	}
 	switch decision {
 	case decisionRepair:
 		granted, err := s.options.Triage.GrantRepair(ctx, workItemID)
 		if err != nil {
-			return "", err
+			return triageSpend{}, err
+		}
+		spent := triageSpend{
+			clause: fmt.Sprintf("; it is granted %d further review round(s)", granted.Rounds),
+			landed: fmt.Sprintf("the repair grant is spent against %s's durable budget: %d further review round(s) are granted to it", workItemID, granted.Rounds),
 		}
 		if granted.Truncated {
-			return fmt.Sprintf("; the grant was cut from %d round(s) to the %d the cap still had room for",
-				granted.Requested, granted.Rounds), nil
+			spent.clause = fmt.Sprintf("; the grant was cut from %d round(s) to the %d the cap still had room for",
+				granted.Requested, granted.Rounds)
 		}
-		return fmt.Sprintf("; it is granted %d further review round(s)", granted.Rounds), nil
+		return spent, nil
 	case decisionRerun:
 		counters, err := s.options.Triage.RecordRerun(ctx, workItemID)
 		if err != nil {
-			return "", err
+			return triageSpend{}, err
 		}
-		return fmt.Sprintf("; %d re-run(s) of it are now recorded", counters.Reruns), nil
+		return triageSpend{
+			clause: fmt.Sprintf("; %d re-run(s) of it are now recorded", counters.Reruns),
+			landed: fmt.Sprintf("the re-run is spent against %s's durable budget: %d re-run(s) of it are now recorded", workItemID, counters.Reruns),
+		}, nil
 	default:
 		counters, err := s.options.Triage.RecordMergeRearm(ctx, workItemID)
 		if err != nil {
-			return "", err
+			return triageSpend{}, err
 		}
-		return fmt.Sprintf("; %d merge re-arm(s) of it are now recorded", counters.MergeRearms), nil
+		return triageSpend{
+			clause: fmt.Sprintf("; %d merge re-arm(s) of it are now recorded", counters.MergeRearms),
+			landed: fmt.Sprintf("the merge re-arm is spent against %s's durable budget: %d re-arm(s) of it are now recorded", workItemID, counters.MergeRearms),
+		}, nil
 	}
 }

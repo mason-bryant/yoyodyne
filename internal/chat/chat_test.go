@@ -1443,6 +1443,18 @@ type fakeTracker struct {
 	// not record a dependency looks like from here: the item was created, and the
 	// thing that would hold it back was refused.
 	linkErr error
+	// durableErr fails a write after taking it, which is what a bd invocation the
+	// harness stopped waiting on looks like from in here: the store kept the
+	// write and the caller was told the command failed. It is the shape a
+	// re-reading of the item settles, and the shape `err` cannot produce — that
+	// one is a write the tracker refused outright.
+	durableErr error
+	// blockLosesNote takes a durable block without leaving the reason legible in
+	// the item's notes, which is what a tracker that renders notes back
+	// differently from how they were written looks like. It is the shape that
+	// separates the two marks a blocker leaves: the item comes back blocked, and
+	// searching its notes for the write finds nothing.
+	blockLosesNote bool
 }
 
 // trackerUpdate is one edit the fake was asked to apply.
@@ -1488,6 +1500,10 @@ func (f *fakeTracker) Update(_ context.Context, id string, change beads.WorkItem
 		return beads.WorkItem{}, f.err
 	}
 	f.updates = append(f.updates, trackerUpdate{id: id, change: change})
+	if f.durableErr != nil {
+		f.append(id, change.AppendNotes)
+		return beads.WorkItem{}, f.durableErr
+	}
 	return beads.WorkItem{ID: id, Title: change.Title}, nil
 }
 
@@ -1496,7 +1512,30 @@ func (f *fakeTracker) Block(_ context.Context, id, reason string) (beads.WorkIte
 		return beads.WorkItem{}, f.err
 	}
 	f.blocked = append(f.blocked, [2]string{id, reason})
+	if f.durableErr != nil {
+		// Blocking is one bd invocation that sets the status and appends the
+		// reason, so a block the store kept leaves both — unless this fake was
+		// asked for the case where only the status is legible afterwards.
+		item := f.items[id]
+		item.Status = "blocked"
+		f.items[id] = item
+		if !f.blockLosesNote {
+			f.append(id, reason)
+		}
+		return beads.WorkItem{}, f.durableErr
+	}
 	return beads.WorkItem{ID: id, Status: "blocked"}, nil
+}
+
+// append adds to what an item's notes say, so a write the fake took and then
+// reported as failed is one a later read of the item finds.
+func (f *fakeTracker) append(id, notes string) {
+	if strings.TrimSpace(notes) == "" {
+		return
+	}
+	item := f.items[id]
+	item.Notes = strings.TrimSpace(item.Notes + "\n\n" + notes)
+	f.items[id] = item
 }
 
 func (f *fakeTracker) AddBlocker(_ context.Context, id, blockerID string) error {

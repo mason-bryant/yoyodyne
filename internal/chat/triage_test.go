@@ -610,6 +610,321 @@ func TestACapRefusalNamesTheCommandThatCrossesTheCap(t *testing.T) {
 	}
 }
 
+// The failure this reporting exists for, replayed. A triage decision spends the
+// item's durable budget and then writes the decision onto the item, and on
+// 2026-09-06 the second of those timed out on yoyodyne-ifd.142: the result said
+// "failed, and changed nothing: bd update timed_out" while the re-run it had
+// already spent was durable, and the duplicate that invited was stopped by the
+// cap rather than by anything the development manager was told. So the account
+// names the spend, and never claims nothing changed.
+func TestATimedOutTriageWriteNamesTheSpendItAlreadyMade(t *testing.T) {
+	t.Parallel()
+
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
+	answer := trackerReply("Its ground moved, so it starts over.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"rerun","reason":"the change is right and the branch it was written against has moved under it"}`)
+	tracker := &fakeTracker{
+		items: map[string]beads.WorkItem{
+			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item whose re-run was reported as unrecorded", Status: "open"},
+		},
+		// bd took the write and the harness stopped waiting on it, which is the
+		// whole of what a timeout says: the command failed, and what it was
+		// carrying may well be in the store.
+		durableErr: errors.New("bd update failed with status timed_out and exit code -1"),
+	}
+	reply := triageReply(t, tracker, budgets, answer)
+
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	// Nothing reports it as applied — the write it was told failed — and nothing
+	// reports it as having changed nothing either.
+	if outcome.Applied || !outcome.PartlyLanded() {
+		t.Fatalf("outcome = %#v, want a failure with the spend standing behind it", outcome)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	// The results carry the standing contract, which says what "changed nothing"
+	// means; what must not say it is the line about this action.
+	results := strings.ReplaceAll(renderTrackerResults(reply.Actions), trackerResultsPreamble, "")
+	for _, account := range []string{rendered, results} {
+		if strings.Contains(account, "changed nothing") {
+			t.Fatalf("a durable spend was reported as having changed nothing:\n%s", account)
+		}
+		for _, want := range []string{
+			"did not finish, and part of it stands",
+			"the re-run is spent against yoyodyne-ifd.142's durable budget: 1 re-run(s) of it are now recorded",
+			"carries it, so the write landed",
+		} {
+			if !strings.Contains(account, want) {
+				t.Fatalf("the account is missing %q:\n%s", want, account)
+			}
+		}
+	}
+
+	// And the spend really was durable, which is how the shape was found: the
+	// same decision asked for again meets the cap rather than being recorded.
+	again := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item whose re-run was reported as unrecorded", Status: "open"},
+	}}
+	refused := triageReply(t, again, budgets, trackerReply("Then start it over.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"rerun","reason":"the change is right and its ground has moved"}`))
+	if len(refused.Actions) != 1 || refused.Actions[0].Applied {
+		t.Fatalf("actions = %#v", refused.Actions)
+	}
+	if !strings.Contains(refused.Actions[0].Failure, "1 of 1 permitted re-run(s) are spent") {
+		t.Fatalf("the retry was not refused by the spend the first attempt made: %q", refused.Actions[0].Failure)
+	}
+}
+
+// The other half of the same answer. A write the tracker refused outright landed
+// nothing, and saying so is worth as much as naming what did: the decision has to
+// be recorded before anything reads the item as decided, while the spend behind
+// it must not be made again.
+func TestATriageWriteThatLandedNothingSaysSoBesideTheSpendThatStands(t *testing.T) {
+	t.Parallel()
+
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
+	answer := trackerReply("Its ground moved, so it starts over.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"rerun","reason":"the change is right and the branch it was written against has moved under it"}`)
+	tracker := &fakeTracker{
+		items: map[string]beads.WorkItem{
+			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item whose re-run was reported as unrecorded", Status: "open"},
+		},
+		err: errors.New("bd update failed with status failed and exit code 1: the item is locked"),
+	}
+	reply := triageReply(t, tracker, budgets, answer)
+
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	if outcome.Applied || !outcome.PartlyLanded() {
+		t.Fatalf("outcome = %#v, want a failure with the spend standing behind it", outcome)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	for _, want := range []string{
+		"landed, and is not to be done again: the re-run is spent against yoyodyne-ifd.142's durable budget",
+		"not known to have landed: the decision recorded on the item",
+		"does not find it",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the account is missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// An escalation is not a note, so what settles a failed one is not a note
+// either. Blocking is one bd invocation that sets the status and appends the
+// reason, and a block the store kept leaves both marks — so a reading that finds
+// either says the write landed, and the escalation is not to be made a second
+// time. The second case is the one that separates them: an item that comes back
+// blocked with nothing legible in its notes is still an item somebody is waiting
+// on.
+func TestADurableEscalationIsReportedAsLandedHoweverItsBlockWasReported(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		losesNote bool
+	}{
+		{name: "the block leaves both marks"},
+		{name: "only the status is legible afterwards", losesNote: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			answer := reportReply(
+				trackerReply("This one is upstream of the change.",
+					`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"escalate","reason":"the findings dispute the acceptance criteria, and another attempt loses the same argument"}`),
+				`{"severity":"warning","message":"yoyodyne-ifd.142 has been round triage twice; its criteria are disputed rather than its change."}`,
+			)
+			tracker := &fakeTracker{
+				items: map[string]beads.WorkItem{
+					"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that keeps coming back", Status: "open"},
+				},
+				durableErr:     errors.New("bd update failed with status timed_out and exit code -1"),
+				blockLosesNote: testCase.losesNote,
+			}
+			reply := triageReplyWithReports(t, tracker, nil, &fakeReports{}, answer)
+
+			if len(reply.Actions) != 1 {
+				t.Fatalf("actions = %#v", reply.Actions)
+			}
+			outcome := reply.Actions[0]
+			if outcome.Applied || !outcome.PartlyLanded() {
+				t.Fatalf("outcome = %#v, want a failure with the blocker standing behind it", outcome)
+			}
+			rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+			if strings.Contains(rendered, "changed nothing") {
+				t.Fatalf("a durable blocker was reported as having changed nothing:\n%s", rendered)
+			}
+			for _, want := range []string{
+				"did not finish, and part of it stands",
+				"landed, and is not to be done again: the blocker naming the operator",
+				"escalating again would block it twice over",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("the account is missing %q:\n%s", want, rendered)
+				}
+			}
+		})
+	}
+}
+
+// The status is only this escalation's evidence where the item was not already
+// blocked when the action started. An item somebody blocked earlier is blocked
+// now for a reason that is not this decision, so a failed block on one of those
+// settles nothing — reading it as landed would report an escalation nobody made
+// and leave a person nobody told.
+func TestABlockedItemsPriorStateIsNotReadAsThisEscalationLanding(t *testing.T) {
+	t.Parallel()
+
+	answer := reportReply(
+		trackerReply("This one is upstream of the change.",
+			`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"escalate","reason":"the findings dispute the acceptance criteria, and another attempt loses the same argument"}`),
+		`{"severity":"warning","message":"yoyodyne-ifd.142 has been round triage twice; its criteria are disputed rather than its change."}`,
+	)
+	tracker := &fakeTracker{
+		items: map[string]beads.WorkItem{
+			// Already blocked before this decision was asked for, and the write that
+			// would have blocked it again was refused outright.
+			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that keeps coming back", Status: "blocked"},
+		},
+		err: errors.New("bd update failed with status timed_out and exit code -1"),
+	}
+	reply := triageReplyWithReports(t, tracker, nil, &fakeReports{}, answer)
+
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	if outcome.Applied || outcome.PartlyLanded() || len(outcome.Unknown) != 1 {
+		t.Fatalf("outcome = %#v, want a failure that settled nothing from a blocker it did not place", outcome)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	if !strings.Contains(rendered, "not known to have landed: the blocker naming the operator") {
+		t.Fatalf("the account does not leave the blocker unsettled:\n%s", rendered)
+	}
+}
+
+// A decision that spends nothing can still have its one write fail, and then
+// there is no spend to name and nothing that says the write landed. That is not
+// "changed nothing": the harness not knowing and nothing having happened are
+// different claims, and only the second frees the action to be asked for again.
+func TestAnUnconfirmedTriageWriteSaysItDidNotFinishRatherThanThatItFailed(t *testing.T) {
+	t.Parallel()
+
+	answer := reportReply(
+		trackerReply("This one is upstream of the change.",
+			`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"escalate","reason":"the findings dispute the acceptance criteria, and another attempt loses the same argument"}`),
+		`{"severity":"warning","message":"yoyodyne-ifd.142 has been round triage twice; its criteria are disputed rather than its change."}`,
+	)
+	tracker := &fakeTracker{
+		items: map[string]beads.WorkItem{
+			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that keeps coming back", Status: "open"},
+		},
+		// The write was refused rather than taken, so reading the item back finds
+		// no blocker — which settles nothing about a write that timed out and is
+		// all this can honestly say about one that did not.
+		err: errors.New("bd update failed with status timed_out and exit code -1"),
+	}
+	reply := triageReplyWithReports(t, tracker, nil, &fakeReports{}, answer)
+
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	// An escalation spends no budget, so there is nothing standing behind this
+	// failure — only something nothing can answer about.
+	if outcome.Applied || outcome.PartlyLanded() || len(outcome.Unknown) != 1 {
+		t.Fatalf("outcome = %#v, want a failure with nothing landed and one thing unsettled", outcome)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	results := strings.ReplaceAll(renderTrackerResults(reply.Actions), trackerResultsPreamble, "")
+	for _, account := range []string{rendered, results} {
+		if strings.Contains(account, "changed nothing") {
+			t.Fatalf("an unsettled write was reported as having changed nothing:\n%s", account)
+		}
+		for _, want := range []string{
+			"did not finish, and what it may have changed is not settled",
+			"not known to have landed: the blocker naming the operator",
+		} {
+			if !strings.Contains(account, want) {
+				t.Fatalf("the account is missing %q:\n%s", want, account)
+			}
+		}
+	}
+}
+
+// A decision that was recorded whole says what it did and nothing else. The
+// spend is noted on the outcome before the write that could fail, so a write
+// that did not fail has to take the note back with it: an account of what a
+// failure left behind, printed under an action that succeeded, reports work that
+// finished as work that half did.
+func TestARecordedDecisionCarriesNoAccountOfWhatAFailureWouldHaveLeft(t *testing.T) {
+	t.Parallel()
+
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
+	answer := trackerReply("Its ground moved, so it starts over.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"rerun","reason":"the change is right and the branch it was written against has moved under it"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that stopped", Status: "open"},
+	}}
+	reply := triageReply(t, tracker, budgets, answer)
+
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	if len(outcome.Landed) != 0 || len(outcome.Unknown) != 0 {
+		t.Fatalf("outcome = %#v, want nothing left over from the failure that did not happen", outcome)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	// The standing contract explains the words; what must carry none of them is
+	// the line about this action.
+	results := strings.ReplaceAll(renderTrackerResults(reply.Actions), trackerResultsPreamble, "")
+	for _, account := range []string{rendered, results} {
+		for _, unwanted := range []string{"landed, and is not to be done again", "not known to have landed", "did not finish"} {
+			if strings.Contains(account, unwanted) {
+				t.Fatalf("a recorded decision was reported with %q in it:\n%s", unwanted, account)
+			}
+		}
+		if !strings.Contains(account, "1 re-run(s) of it are now recorded") {
+			t.Fatalf("the spend was not reported where it belongs, in the summary:\n%s", account)
+		}
+	}
+}
+
+// A decision refused before anything was spent still says it changed nothing,
+// because that is what happened. The new answer is for a failure with something
+// behind it, and widening it to every failure would cost the sentence the
+// meaning it is being kept for.
+func TestADecisionRefusedBeforeAnythingIsSpentStillReportsChangingNothing(t *testing.T) {
+	t.Parallel()
+
+	answer := trackerReply("This one goes back for a repair.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"repair","reason":"the findings each name a file and a line"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that stopped", Status: "open"},
+	}}
+	// The run the decision names is another item's stopped work, which is refused
+	// before any budget is read and before anything is written.
+	stoppages := fakeStoppedRuns{items: map[string]string{stoppedRun: "yoyodyne-ifd.9"}}
+	reply := triageReplyAbout(t, tracker, nil, stoppages, answer)
+
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied || reply.Actions[0].PartlyLanded() {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	if !strings.Contains(rendered, "failed, and changed nothing") {
+		t.Fatalf("a refusal that changed nothing stopped saying so:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "landed") {
+		t.Fatalf("a refusal that changed nothing reported something as landed:\n%s", rendered)
+	}
+}
+
 // triageOptions is a development manager's conversation answering with one
 // reply and then closing off, which is the shape every test here needs.
 func triageOptions(t *testing.T, tracker Tracker, budgets TriageBudgets, answer string) Options {

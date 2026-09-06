@@ -111,7 +111,14 @@ argument is validated before anything runs, at most ten actions happen per reply
 each one is recorded in the conversation's log as asked-for and then as applied
 or failed, and all of them are printed to you as they happen. An action that
 failed is reported as failed rather than described as done, and a block the
-harness cannot read changes nothing at all. The distinction being drawn is
+harness cannot read changes nothing at all. Some actions are more than one write,
+and one that failed after part of it landed — or that failed without anything
+being able to say whether it landed — is reported as neither: it says it did not
+finish, and lists what landed and what nothing can say either way. Only "failed"
+means the action changed nothing, so an action reported as unfinished is never
+one to simply ask for again — see
+[deciding what becomes of stopped work](#deciding-what-becomes-of-stopped-work),
+where the spend an action makes before it writes is the case this exists for. The distinction being drawn is
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
 
@@ -1127,6 +1134,26 @@ harness refuses one carrying no such report rather than blocking an item you
 were never told about. `rescope` and `wait` are the two that are a note and
 nothing else — a re-scope's real work is the child item it creates beside the
 note, and a wait asks for nothing at all.
+
+**A decision whose write fails after the budget is spent says so, rather than
+saying it changed nothing.** The spend is durable the moment it is recorded and
+the note onto the item comes after it, so a tracker that times out in between
+leaves an action that half happened — and the result reports it as one: it names
+the spend as landed and not to be made again, and says whether the write reached
+the item, which it settles by reading the item back and saying what it found or
+saying plainly that it could not. What it looks for is what that decision would
+have left: the note for the five decisions that write one, and for an escalation
+the blocker itself, since blocking sets the item's status as well as recording
+the reason — and an item that was already blocked when the decision was asked for
+settles nothing, because that blocker is somebody else's. A decision that spends
+nothing — an escalation, a re-scope, a wait — has no spend to name, and a write of
+one that cannot be confirmed is reported the same way rather than as a failure:
+it says it did not finish and that what it may have changed is not settled,
+because the harness not knowing is not the same claim as nothing having happened. That distinction is not cosmetic: on
+2026-09-06 a re-run of yoyodyne-ifd.142 was reported as having changed nothing
+while its spend had already landed, and what stopped the same decision being
+asked for a second time was the cap refusing it rather than anything anybody was
+told.
 
 Recording a decision is not carrying it out, and two of the six now have an
 action that does. They are the two opposite answers to a run that stopped:
