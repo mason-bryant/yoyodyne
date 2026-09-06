@@ -16,6 +16,14 @@
 // discharge the item. A reply that claims nothing claims the ordinary landing,
 // because nearly every run is one and a protocol that made every developer
 // declare the obvious would be a protocol nobody read.
+//
+// A third outcome is not a landing at all. An item that cannot be met as it
+// stands has nothing worth integrating and nobody in the run who can decide what
+// happens to it, so the claim ends the run where it was raised and routes the
+// item to the development manager instead. It is here rather than in a channel
+// of its own because it answers the same question the other two do — what
+// becomes of the work item — and because the reviewer has the same verb, so the
+// two roles say one thing one way.
 package landing
 
 import (
@@ -75,9 +83,20 @@ const (
 	// item: a diagnosis, the conditions that have to hold first, the reason the
 	// work is not doable yet. The change integrates and the item stays open.
 	OutcomeEvidence Outcome = "evidence"
+	// OutcomeEscalate is the developer saying the item cannot be met as it
+	// stands, and asking the development manager to decide what happens to it.
+	// Nothing is integrated, the item is parked, and the claim reaches her as a
+	// docketed decision with this account on it.
+	//
+	// It is the developer's half of one verb the reviewer has too, and it exists
+	// because honesty about an unmeetable item used to cost more than pretending:
+	// the exits were a repair round spent against a wall, or a budget spent to
+	// exhaustion before anything reached her. Both spend runs to say what one
+	// verdict says.
+	OutcomeEscalate Outcome = "escalate"
 )
 
-var outcomes = []Outcome{OutcomeDischarged, OutcomeEvidence}
+var outcomes = []Outcome{OutcomeDischarged, OutcomeEvidence, OutcomeEscalate}
 
 // Outcomes is the closed vocabulary a claim may carry, as a caller outside this
 // package reads it. It answers with a copy, because a package-level slice is a
@@ -119,11 +138,19 @@ func (c Claim) Made() bool { return c.Outcome != "" }
 // claim discharges: a reply with no block is the ordinary run, and every run made
 // before this channel existed is one of those.
 //
-// It is stated as "everything except evidence discharges" rather than as
-// "discharged discharges" so that the default can never be the closing one by
-// accident — a value this vocabulary does not recognize is refused before it is
-// ever stored, and this is the derivation every closure site reads.
-func (c Claim) Discharges() bool { return c.Outcome != OutcomeEvidence }
+// It is stated as "everything except the two undischarging outcomes discharges"
+// rather than as "discharged discharges" so that the default can never be the
+// closing one by accident — a value this vocabulary does not recognize is refused
+// before it is ever stored, and this is the derivation every closure site reads.
+func (c Claim) Discharges() bool {
+	return c.Outcome != OutcomeEvidence && c.Outcome != OutcomeEscalate
+}
+
+// Escalates reports the claim that asks the development manager to decide what
+// happens to the item. It is separate from the closure question above because
+// the two answer different things: an escalation withholds the closure like a
+// landing of evidence does, and unlike one it routes the item to somebody.
+func (c Claim) Escalates() bool { return c.Outcome == OutcomeEscalate }
 
 // Impediment is the work item a leave-open claim named, and is empty for every
 // other claim. A claim that does not discharge its item and names none is the
@@ -149,14 +176,19 @@ func (c Claim) Validate() error {
 	case len(trimmed) > MaxWhyBytes:
 		problems = append(problems, fmt.Errorf("why is %d bytes, limit is %d", len(trimmed), MaxWhyBytes))
 	}
-	// The marker is refused on a discharging claim rather than ignored there. A
-	// developer that wrote both said two things that cannot both be true — the
-	// item closes, and it waits for something — and guessing which it meant is how
-	// a closed item comes to carry a dependency nobody can account for.
+	// The marker is refused anywhere but a landing of evidence rather than ignored
+	// there. A developer that wrote it beside a discharging claim said two things
+	// that cannot both be true — the item closes, and it waits for something — and
+	// guessing which it meant is how a closed item comes to carry a dependency
+	// nobody can account for. Beside an escalation it says two more: that the
+	// development manager decides what happens to this item, and that the item
+	// already knows what it is waiting for. A developer that can name the
+	// impediment has the evidence landing for it, and an escalation is what is
+	// left when nothing in the tracker is the answer.
 	if impediment := c.Impediment(); impediment != "" {
 		switch {
-		case c.Outcome.Valid() && c.Discharges():
-			problems = append(problems, errors.New(`blocked_by is only for a landing that does not discharge the item`))
+		case c.Outcome.Valid() && c.Outcome != OutcomeEvidence:
+			problems = append(problems, errors.New(`blocked_by is only for a landing of evidence`))
 		case len(impediment) > MaxBlockedByBytes:
 			problems = append(problems, fmt.Errorf("blocked_by is %d bytes, limit is %d", len(impediment), MaxBlockedByBytes))
 		case !blockedByPattern.MatchString(impediment):
@@ -190,6 +222,10 @@ func (c Claim) Describe() string {
 	}
 	if c.Discharges() {
 		return "The developer claims this change discharges the work item.\nWhy: " + folded(c.Why)
+	}
+	if c.Escalates() {
+		return "The developer claims this work item cannot be met as it stands and has raised it to the development manager to decide. " +
+			"Nothing was integrated, and the item is parked with that account until she decides.\nWhy: " + folded(c.Why)
 	}
 	headline := "The developer claims this change lands evidence and does not discharge the work item."
 	// Which of the two undischarged landings it is, because they leave the item
@@ -295,4 +331,14 @@ That is the only alternative to the parking, and it is deliberate: an item put b
 
 The reviewer is shown which landing you claimed, so a diagnosis is judged as a diagnosis rather than as a missing implementation. It is shown the default too, on a reply that claims nothing: a diagnosis offered with no block is one the reviewer is told will close the item, and what it does instead is approve the change as evidence, which keeps the change and leaves the item open on the reviewer's account of it rather than yours. So a landing you meant to be evidence and did not claim is settled by somebody who did not do the work, in words you did not write, rather than closing the item quietly.
 
-Claim "evidence" for work you found is not doable yet and landed the evidence for, not for work you simply did not finish. Something that stopped you is a failure, and you report it the way your role already reports one.`
+Claim "evidence" for work you found is not doable yet and landed the evidence for, not for work you simply did not finish. Something that stopped you is a failure, and you report it the way your role already reports one.
+
+There is a third outcome, for the item that cannot be met at all as it stands — the acceptance criteria contradict a ruling, ask for something no change here can produce, or describe work that has to be replanned before anybody can do it:
+
+` + "```" + `yoyodyne-landing
+{"outcome":"escalate","why":"what makes the item unmeetable as written, and what you would need decided"}
+` + "```" + `
+
+"escalate" ends the run where you raised it and puts the item in front of the development manager as a decision — replan, park, resequence, or redirect — with your account as the whole of what she reads about it. Nothing is integrated, and the item is parked until she decides, so it is not picked up again in the meantime. Raise it as soon as you are sure rather than after attempting the work anyway: the point of the verb is that saying so costs one round instead of a run, and it takes no "blocked_by" — an impediment you can name as a work item is the evidence landing above, and this is the answer for when nothing in the backlog is what the item is waiting on.
+
+Escalating is not how you report being unable to finish. It is a claim about the item rather than about your run: the work as specified cannot be done by anybody, not that this attempt did not manage it. Something that stopped you is a failure, and you report it the way your role already reports one.`

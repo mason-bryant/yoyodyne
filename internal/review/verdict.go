@@ -21,6 +21,19 @@ type Decision string
 const (
 	DecisionApprove Decision = "approve"
 	DecisionRepair  Decision = "repair"
+	// DecisionEscalate is the reviewer saying the work item cannot be met as it
+	// stands, whatever change is put in front of it: the acceptance criteria
+	// contradict a ruling, ask for something no change can produce, or describe
+	// work that has to be replanned first. It approves nothing and asks for
+	// nothing, because there is nothing a repair round could do about it.
+	//
+	// It is the reviewer's half of one verb the developer has too. Before it, a
+	// reviewer that saw an unmeetable item had only the expensive exits: repair
+	// verdicts against a wall until the item's rounds ran out, which is how
+	// yoyodyne-ifd.100.1 spent three runs and six rounds against criteria a ruling
+	// forbade. The verdict ends the run where it was raised and routes the item to
+	// the development manager as a decision instead.
+	DecisionEscalate Decision = "escalate"
 )
 
 type Severity string
@@ -66,7 +79,7 @@ const (
 // TestTheDurableSchemaStoresEveryVerdictTheReviewerCanProduce rather than by
 // whoever adds the value remembering.
 var (
-	decisions  = []Decision{DecisionApprove, DecisionRepair}
+	decisions  = []Decision{DecisionApprove, DecisionRepair, DecisionEscalate}
 	severities = []Severity{SeverityBlocker, SeverityMajor, SeverityMinor}
 	approvals  = []Approval{ApprovesImplementation, ApprovesEvidence}
 )
@@ -226,7 +239,7 @@ func unknownKeys(fields map[string]json.RawMessage, prefix string, known []strin
 func (v Verdict) Validate() error {
 	var problems []error
 	if !v.Decision.Valid() {
-		problems = append(problems, fmt.Errorf("decision %q must be %q or %q", v.Decision, DecisionApprove, DecisionRepair))
+		problems = append(problems, fmt.Errorf("decision %q must be %q, %q or %q", v.Decision, DecisionApprove, DecisionRepair, DecisionEscalate))
 	}
 	if strings.TrimSpace(v.Summary) == "" {
 		problems = append(problems, errors.New("summary is required"))
@@ -234,6 +247,11 @@ func (v Verdict) Validate() error {
 	if v.Decision == DecisionRepair && len(v.Findings) == 0 {
 		problems = append(problems, errors.New("repair requires at least one finding"))
 	}
+	// An escalation is not held to a finding, and deliberately. A finding is what
+	// the change has to do before it is approved, and this verdict's whole content
+	// is that no change to this change would help — so what it owes is the summary
+	// every verdict owes, which is what the development manager reads and the whole
+	// of what she decides from.
 	// The vocabulary is closed like the two above it, and for the same reason: what
 	// this field decides is whether a work item closes, so a word nothing
 	// recognizes must be refused where the verdict is read rather than guessed at
@@ -243,11 +261,11 @@ func (v Verdict) Validate() error {
 	if v.Approves != "" && !v.Approves.Valid() {
 		problems = append(problems, fmt.Errorf("approves %q must be %q or %q", v.Approves, ApprovesImplementation, ApprovesEvidence))
 	}
-	// A repair that says what it approves is not refused for it. It approves
-	// nothing and closes nothing either way, so the field decides nothing there and
-	// is never recorded; refusing a verbose verdict would only cost the change a
-	// review, which is the trade the decoder above already made about a field the
-	// schema does not name at all.
+	// A repair or an escalation that says what it approves is not refused for it.
+	// Neither approves anything or closes anything, so the field decides nothing
+	// there and is never recorded; refusing a verbose verdict would only cost the
+	// change a review, which is the trade the decoder above already made about a
+	// field the schema does not name at all.
 	for i, finding := range v.Findings {
 		if err := finding.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("findings[%d]: %w", i, err))
@@ -281,13 +299,15 @@ func TrivialResidue(findings []Finding) bool {
 // that contradicts its own findings. Approval cannot carry a blocker or major
 // finding, because a change that still needs that work is not approved
 // whatever the reviewer labelled it. Repair stays authoritative for any valid
-// finding, including a purely minor one.
+// finding, including a purely minor one, and so does an escalation: a reviewer
+// that named what is wrong with the change and then said the item cannot be met
+// at all has said both, and the finding does not contradict the second.
 func (v Verdict) Resolve() (Decision, error) {
 	if err := v.Validate(); err != nil {
 		return "", err
 	}
-	if v.Decision == DecisionRepair {
-		return DecisionRepair, nil
+	if v.Decision == DecisionRepair || v.Decision == DecisionEscalate {
+		return v.Decision, nil
 	}
 	var actionable []string
 	for _, finding := range v.Findings {
@@ -372,4 +392,20 @@ type IncompleteApprovalError struct{}
 
 func (IncompleteApprovalError) Error() string {
 	return "the reviewer approved without saying whether it approves the implementation or evidence"
+}
+
+// MisplacedEscalationError reports an escalation raised by a review that has no
+// work item to raise it about. The verdict was read and the reviewer may well be
+// right about the change; what it has no answer for is where the escalation
+// would go — a branch review judges commits whose items it was never given, and
+// the decision this verb routes is a decision about one item.
+//
+// The contract does not offer the word at that scope, so this is a reviewer that
+// went outside it rather than one the harness asked an impossible question. It is
+// its own error because it is a different fact from a verdict nothing could
+// decode and from one that contradicts itself.
+type MisplacedEscalationError struct{}
+
+func (MisplacedEscalationError) Error() string {
+	return "the reviewer escalated a review that has no work item to escalate"
 }

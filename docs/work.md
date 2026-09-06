@@ -175,7 +175,9 @@ the work. An honest "not doable yet" lands its evidence like any other change an
 puts the item back in the backlog parked, with the account recorded on it, rather
 than closing an item against the evidence that says the work was not done.
 [What a landing claims](#what-a-landing-claims) and
-[what an approval approves](#what-an-approval-approves) are the whole of that. A
+[what an approval approves](#what-an-approval-approves) are the whole of that.
+A run that never gets that far because either role found the item unmeetable is
+[an escalation](#saying-the-item-cannot-be-met), which integrates nothing. A
 freshly generated configuration says `human` instead, so a new project preserves
 the worktree for external integration until it opts in.
 Either way the harness refuses `automatic` unless deterministic checks and a
@@ -342,6 +344,65 @@ put it. yoyodyne-ifd.284 was closed against a diagnosis by a reviewer whose own
 summary called the change *"offered as evidence rather than implementation"* —
 prose nothing reads, beside a claim nobody wrote
 (`docs/diagnoses/yoyodyne-ifd-209-26-closure-routes.md`).
+
+## Saying the item cannot be met
+
+Both of the answers above are about a change: this is the work, or this is
+evidence worth keeping. Neither is the answer for a work item nothing could
+satisfy — one whose acceptance criteria contradict a delivered invariant or a
+recorded ruling, ask for something no change in the repository can produce, or
+describe work that has to be replanned before anybody can do it.
+
+Saying that used to cost more than not saying it, which is backwards. A reviewer
+that saw it could only ask for repair, round after round, until the item's budget
+ran out and the stoppage reached the development manager that way:
+yoyodyne-ifd.100.1 spent three runs and six review rounds on repair verdicts
+against criteria a design ruling had already forbidden. A developer that saw it
+could only land a diagnosis, which is a landing of evidence and parks the item
+without putting the finding in front of anybody who can act on it.
+
+So both roles have one verb for it. The developer claims it as a landing outcome:
+
+````
+```yoyodyne-landing
+{"outcome":"escalate","why":"the acceptance criteria ask for what the entanglement ruling forbids, so no change here meets them"}
+```
+````
+
+and the reviewer decides it as a verdict:
+
+```json
+{"decision":"escalate","summary":"the criteria ask for the conversion the ruling forbade; this needs replanning"}
+```
+
+Whichever raises it, the run ends in the round it was raised in. Nothing further
+is bought: a developer's escalation runs no checks, buys no review, and publishes
+nothing, and a reviewer's hands nothing back, so it costs the one review round it
+was raised in and no repair attempt. The run is recorded as having succeeded,
+because it did what it was for — recording it as a failure would count honesty
+about an unmeetable item in the same tally as a broken toolchain, and the
+failure-storm brake counts that tally. `yoyo status` says **succeeded**, which
+is what the run did; what it raised is on the item's notes, in its parking
+reason, and on the triage docket.
+
+The item neither closes nor goes back bare-pullable. It is parked, in the words
+of whichever role raised it, and the parking reason says who releases it: the
+development manager, once she has decided. And the escalation is docketed as the
+run ends, so it reaches her the way a stopped run does — as an *item raised as
+unmeetable* on the triage docket, carrying the account, what was preserved, and
+what the item has spent. The decision she takes is hers: replan, park,
+resequence, or redirect.
+
+An escalation takes no `blocked_by`. A developer that can name the impediment as
+another work item has the evidence landing above for exactly that; this verb is
+the answer for when nothing in the backlog is what the item is waiting on, and
+the parking is what holds it while the decision is pending.
+
+It is not the answer for a run that could not finish. That is a failure and is
+reported as one. Nor is it an alternative to repair: a change that has work left
+to do is a repair however much of it there is, and an escalation says that no
+change would help. A branch review cannot escalate at all, because it has no
+single item to raise and nowhere to send the decision.
 
 ## Letting the harness choose the work
 

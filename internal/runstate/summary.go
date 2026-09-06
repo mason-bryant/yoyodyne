@@ -43,6 +43,14 @@ const (
 	// they have in common is the fact a reader is asking about: the work is still
 	// there and it is waiting on a decision. Which of them it was is the reason
 	// printed under the run and the phase printed beside this word.
+	//
+	// A run either role escalated is deliberately not one of these, and the reason
+	// is what this word is wired to rather than what it means. The item is back in
+	// a person's hands there too, but the surfaces that read this treat a stoppage
+	// as a blocker recorded — the operator's line for one says the item is blocked
+	// and the harness could not finish it, and an escalated run is neither. It
+	// reports as the succeeded run it is, and what it raised is said on the item's
+	// notes, in its parking reason, and on the triage docket entry it made.
 	OutcomeStopped RunOutcome = "stopped"
 	// OutcomeCancelled is the run something stopped rather than judged: the
 	// operator, or a killed process. Nothing here is a verdict on the change.

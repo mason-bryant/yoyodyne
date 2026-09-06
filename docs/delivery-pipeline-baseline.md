@@ -522,10 +522,17 @@ is unmeasured. Most of these are asserted somewhere in
   traces, and a second sweep finding nothing is recorded beside them; `held`,
   `resumable`, `queued`, `failed`, and `unsettled` do not.
 - The escalation in `escalate.go`, which delivers a run stopped on a 2-of-2
-  review verdict into the development manager's conversation. It happens after a
-  run has stopped rather than inside one, so no trace here reaches it, and a
-  parity harness measuring what becomes of a stopped run has to measure it
-  separately.
+  review verdict, or an item a role raised as unmeetable, into the development
+  manager's conversation. It happens after a run has stopped rather than inside
+  one, so no trace here reaches it, and a parity harness measuring what becomes
+  of a stopped run has to measure it separately.
+- **A run either role escalated.** A developer or a reviewer saying the work item
+  cannot be met as it stands ends the run in the round it was raised in, with
+  nothing integrated and the item parked. The delivery definition has no outcome
+  for it, so such a run records a workflow divergence naming the state its
+  instance stopped in — which is the same thing every ending the definition
+  cannot express records, and is why no trace here holds one. It is asserted end
+  to end in `internal/orchestrator/escalation_test.go` instead.
 
 **Outcomes and fields.**
 

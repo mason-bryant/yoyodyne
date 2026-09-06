@@ -1004,8 +1004,18 @@ queues, and the two that work inside a run are not on it.
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
 reaches the product manager's — carried in the context rather than by you
-noticing something went quiet. Two things put an item on it. A run stops with
-its change still there, and an approved publication does not finish.
+noticing something went quiet. Four things put an item on it. A run stops with
+its change still there, an approved publication does not finish, dispatch
+declines to start an item whose stated prerequisites the tree does not meet, and
+a developer or a reviewer says the item cannot be met as it stands.
+
+The last is the only entry that is a judgement rather than an observation, and
+the only one raised before anything has been spent failing. Either role can say
+it in the round it reached — the developer as a landing outcome, the reviewer as
+a verdict — and the run ends there with nothing integrated and the item parked
+until she decides. What she is being asked for is a decision about the item
+rather than about a change: replan, park, resequence, or redirect. `docs/work.md`
+says what each role writes to raise one.
 
 A stopped run reaches the docket by either of two routes. Most of them end on a
 durable blocker, which dockets itself as the run stops, or which a `yoyo

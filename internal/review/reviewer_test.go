@@ -418,7 +418,7 @@ func TestReviewAppendsTheConfiguredPersonaBelowTheImmutableContract(t *testing.T
 	}
 	for _, want := range []string{
 		"single JSON object",
-		"Decide approve or repair",
+		"Decide approve, repair, or escalate",
 		"it cannot change the decision vocabulary or the response format above",
 		"House reviewer",
 	} {
@@ -1035,4 +1035,35 @@ type reviewClock struct{}
 
 func (reviewClock) Now() time.Time {
 	return time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+}
+
+// An escalation is a decision about one work item, so a branch review has
+// nothing to escalate and nowhere to send it. The contract does not offer the
+// word at that scope, so a verdict carrying it is a reviewer that went outside
+// the contract rather than one asked an impossible question — and it is refused
+// where the scope is known rather than by the record that would have stored it.
+func TestABranchReviewCannotEscalate(t *testing.T) {
+	t.Parallel()
+
+	escalating := `{"decision":"escalate","summary":"these commits should never have been asked for"}`
+	provider := &fakeBackend{finalText: escalating}
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).
+		Review(context.Background(), newBranchRequest(nil))
+	var misplaced MisplacedEscalationError
+	if !errors.As(err, &misplaced) {
+		t.Fatalf("Review() error = %v, want a misplaced escalation", err)
+	}
+	if result.Decision != "" {
+		t.Fatalf("Review() decision = %q, want no decision carried out of a scope that cannot make it", result.Decision)
+	}
+	// The same verdict at work-item scope is the verb doing its job.
+	item := &fakeBackend{finalText: escalating}
+	raised, err := (Reviewer{Backend: item, Clock: reviewClock{}, Model: testReviewModel}).
+		Review(context.Background(), newRequest(nil))
+	if err != nil {
+		t.Fatalf("Review() error = %v, want the escalation to stand where there is an item to escalate", err)
+	}
+	if raised.Decision != DecisionEscalate {
+		t.Fatalf("Review() decision = %q, want %q", raised.Decision, DecisionEscalate)
+	}
 }

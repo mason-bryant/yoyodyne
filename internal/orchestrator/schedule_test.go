@@ -3051,7 +3051,7 @@ func TestAPassPutsStoppedWorkToTheDevelopmentManager(t *testing.T) {
 	if len(schedule.Started) != 1 {
 		t.Fatalf("started = %#v, want the pass to have gone on choosing work", schedule.Started)
 	}
-	if !strings.Contains(schedule.Render(), "escalated the stoppage of run run-0123456789abcdef0123456789abcdef") {
+	if !strings.Contains(schedule.Render(), "put the stoppage of run run-0123456789abcdef0123456789abcdef") {
 		t.Fatalf("rendered = %q, want the delivery said beside what the pass pulled", schedule.Render())
 	}
 }
