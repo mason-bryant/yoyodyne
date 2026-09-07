@@ -14,11 +14,17 @@ revisions:
       by: architect
       at: 2026-09-07T00:30:00Z
       reason: yoyodyne-ifd.306 - conversation account failover designed, turn-granular, durable-record rebuild exercising provider-independence, named-account affinity with return at window reopen, per-turn alias attribution with failover reason, cost paid in context reconstruction only while the window is closed; configuration is a pooled named endpoint plus operator-local enablement
+    - action: amended
+      by: architect
+      at: 2026-09-07T19:30:00Z
+      reason: yoyodyne-ifd.337 - the provider-general contract moves to provider-adapters-and-endpoints; this document keeps the Claude-specific configuration and capacity semantics
 ---
 
 # Claude execution: pinned invocations, capacity semantics, and the additive account-pooling contract
 
 ## What this is for
+
+The provider-general contract — adapter obligations, role eligibility, endpoints, and cross-provider failover — is governed by [provider-adapters-and-endpoints](provider-adapters-and-endpoints.md); what remains here is Claude-specific.
 
 V1 executes every role through Claude Code, on one configured account, with fixed operator-configured model assignments — and the discipline that makes that narrow choice safe to widen later: every invocation pinned and recorded, capacity failures visible rather than silently routed around, and durable state that never depends on a provider session. It serves the goals that safety invariants hold whatever the configuration says and that the operator can see what the system does on their behalf. The Codex adapter and the generic provider plugin are parked at priority 4, preserved and off the critical path; the backend boundary remains where a second connector would attach, and no connector work exists merely to exercise it.
 
