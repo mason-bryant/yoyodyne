@@ -479,6 +479,22 @@ func (r *resolution) applyAgent(name string, document agentDocument, applied lay
 		}
 		agent.origins["persona"] = applied.origin
 	}
+	if document.Failover != nil {
+		// The block replaces whatever was inherited, so an override that names only
+		// half of it leaves the other half at its zero value rather than at some
+		// underneath layer's — which is what keeps `enabled: false` a way of
+		// switching failover off rather than a way of inheriting somebody else's
+		// alternate.
+		failover := Failover{}
+		if document.Failover.Enabled != nil {
+			failover.Enabled = *document.Failover.Enabled
+		}
+		if document.Failover.Model != nil {
+			failover.Model = strings.TrimSpace(*document.Failover.Model)
+		}
+		agent.config.Failover = failover
+		agent.origins["failover"] = applied.origin
+	}
 	return nil
 }
 

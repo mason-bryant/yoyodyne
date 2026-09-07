@@ -18,15 +18,24 @@ package chat
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/modelfailover"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // UsageLimits is where a provider's refusal is collected. It is satisfied by
 // runstate.UsageLimitStore.
+//
+// It is read as well as written because failover reads it: which models the
+// provider has refused, and until when, is what says whether the next turn
+// should ask the configured model at all. That is the same log rather than a
+// second one, because a window is one fact and two records of it would be two
+// answers.
 type UsageLimits interface {
 	Record(exhaustion runstate.UsageLimitExhaustion) error
+	List() ([]runstate.UsageLimitExhaustion, error)
 }
 
 // noteUsageLimit records a provider refusal this turn met, and reports only what
@@ -58,6 +67,45 @@ func (s *Session) noteUsageLimit(result backend.RunResult, err error) error {
 		return fmt.Errorf("record the provider's refusal: %w", err)
 	}
 	return nil
+}
+
+// failoverPolicy is what this conversation's turn may be served by when the
+// configured model will not take it, and where the substitution is written
+// down. A conversation whose agent has not enabled failover produces the zero
+// policy, which is failover off: the turn is one invocation under the
+// configured model, exactly as it was.
+//
+// The substitution is recorded in the same log a refusal is, for the same
+// reason a refusal is recorded there at all — a window closing is a fact about
+// the product rather than about this conversation, and the process that meets it
+// is rarely the process that takes the next turn.
+func (s *Session) failoverPolicy() modelfailover.Policy {
+	alternate := strings.TrimSpace(s.options.FailoverModel)
+	if alternate == "" {
+		return modelfailover.Policy{}
+	}
+	policy := modelfailover.Policy{
+		Alternate:         alternate,
+		Now:               s.options.clock().Now,
+		UnknownResetPause: s.options.UsageLimitUnknownResetPause,
+		ProductID:         s.options.ProductID,
+		// The same sentence a refusal here writes, because it is the same thing
+		// that would have stopped — and what makes this entry the other half of
+		// that fact is that something served it anyway.
+		Waiting:        fmt.Sprintf("the %s conversation %s", RoleTitle(s.state.Role), s.state.ConversationID),
+		ConversationID: s.state.ConversationID,
+		RecordFailure: func(err error) {
+			s.failoverProblem = appendProblem(s.failoverProblem, singleLine(err.Error(), maxTrackerFailureBytes))
+		},
+	}
+	// A conversation with nowhere to record one still fails over — the turn is
+	// what matters — and pays a refused invocation each turn to rediscover the
+	// window. The log is only wired where there is one, so a typed nil never
+	// reaches the failover as a store it can call.
+	if s.options.UsageLimits != nil {
+		policy.Windows = s.options.UsageLimits
+	}
+	return policy
 }
 
 // ErrProviderCapacity marks the failure of a turn the provider declined for

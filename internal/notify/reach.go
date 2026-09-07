@@ -123,6 +123,12 @@ var reaches = map[Kind]Reach{
 	// Capacity that ran out somewhere that is not a run: hours in which nothing
 	// will happen, which look exactly like a healthy quiet queue.
 	KindUsageLimitExhausted: ReachChannel,
+	// Capacity that ran out and was worked around. It reaches the channel beside
+	// the refusal above rather than below it, because what an operator has to be
+	// able to see is that an agent is answering on a model they permitted rather
+	// than the one they configured — and a substitution nobody is told about is a
+	// change to what the work was produced by that leaves no trace anybody reads.
+	KindModelSubstituted: ReachChannel,
 	// What an agent said in its own words. A report is the single largest source of
 	// individual pushes and asks for nothing by design, so it lives in its item's
 	// thread and is carried to the channel by the summaries built from the report

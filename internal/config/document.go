@@ -167,6 +167,11 @@ type agentDocument struct {
 	// it, because half of one persona and half of another is guidance nobody
 	// wrote.
 	Persona *personaDocument `yaml:"persona"`
+	// Failover replaces an inherited failover block completely, for the reason
+	// the persona does: the enablement and the alternate are one answer, and a
+	// layer that switched failover on over an alternate some layer underneath
+	// named would be serving this agent's turns from a model nobody chose for it.
+	Failover *failoverDocument `yaml:"failover"`
 	// Disabled removes an inherited agent. It is explicit so a project never
 	// loses an agent by accidentally omitting it.
 	Disabled *bool `yaml:"disabled"`
@@ -176,12 +181,18 @@ type agentDocument struct {
 // disabled, which is how a contradictory "remove it and also configure it"
 // entry is detected.
 func (d agentDocument) overridesFields() bool {
-	return d.Role != nil || d.Backend != nil || d.Model != nil || d.Account != nil || d.Instances != nil || d.Persona != nil
+	return d.Role != nil || d.Backend != nil || d.Model != nil || d.Account != nil || d.Instances != nil ||
+		d.Persona != nil || d.Failover != nil
 }
 
 type personaDocument struct {
 	Version *string `yaml:"version"`
 	Path    *string `yaml:"path"`
+}
+
+type failoverDocument struct {
+	Enabled *bool   `yaml:"enabled"`
+	Model   *string `yaml:"model"`
 }
 
 func decodeDocument(reader io.Reader) (configDocument, error) {

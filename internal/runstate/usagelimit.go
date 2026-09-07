@@ -72,6 +72,18 @@ type UsageLimitExhaustion struct {
 	// be told about.
 	WorkItemID     string `json:"work_item_id,omitempty"`
 	ConversationID string `json:"conversation_id,omitempty"`
+	// Model is the model selector the refused invocation asked for. It is
+	// optional because most refusals are recorded by processes that have nothing
+	// to do about which model was refused, and it is here because failover does:
+	// a window is a fact about one model rather than about the account, so a
+	// refusal that does not say which model was refused cannot be read back as a
+	// window that has since reopened.
+	Model string `json:"model,omitempty"`
+	// ServedBy is the permitted alternate that took the turn instead, and empty
+	// where nothing did. It is what makes this entry a substitution rather than a
+	// stoppage: the same refusal happened either way, and what an operator needs
+	// to know is whether the work carried on.
+	ServedBy string `json:"served_by,omitempty"`
 }
 
 func (e UsageLimitExhaustion) Validate() error {
@@ -94,7 +106,47 @@ func (e UsageLimitExhaustion) Validate() error {
 	if e.ResetsAt != nil && e.ResetsAt.IsZero() {
 		problems = append(problems, errors.New("resets_at is present but names no moment; a provider that named none records none"))
 	}
+	// A substitution says what was refused as well as what served, because the
+	// pair is the whole of what it claims: an alternate named beside no model is
+	// a record of a turn being moved off nothing.
+	if strings.TrimSpace(e.ServedBy) != "" && strings.TrimSpace(e.Model) == "" {
+		problems = append(problems, errors.New("served_by names an alternate and model names nothing; a substitution says which model was refused"))
+	}
+	if strings.TrimSpace(e.ServedBy) != "" && strings.TrimSpace(e.ServedBy) == strings.TrimSpace(e.Model) {
+		problems = append(problems, errors.New("served_by and model name the same model; a substitution is a turn served by the model that was not refused"))
+	}
 	return errors.Join(problems...)
+}
+
+// Substituted reports a refusal a permitted alternate served through. It is the
+// difference between an hour of silence and an hour of work carrying on under a
+// different model, which is the whole of what separates a warning here from a
+// note.
+func (e UsageLimitExhaustion) Substituted() bool {
+	return strings.TrimSpace(e.ServedBy) != ""
+}
+
+// WindowClosed reports a refusal still standing at the given moment.
+//
+// A reset time the provider named and that is in the future is the window, and
+// the refusal stands until it. Where the provider named none — and where it
+// named one that was already past when it refused, which describes no wait at
+// all — what stands in for it is unknownResetPause, the caller's configured
+// interval between probes. That is the same substitution the run path makes for
+// the same case: a limit reported without a reset is not the absence of
+// capacity, it is capacity nobody was given a deadline for, so the harness waits
+// its configured interval and asks again rather than either guessing a deadline
+// or asking on every turn.
+//
+// A caller with no interval to offer passes zero, and then only a named reset
+// time can make a refusal stand — which is the honest answer for a caller that
+// has no polling discipline of its own to apply.
+func (e UsageLimitExhaustion) WindowClosed(at time.Time, unknownResetPause time.Duration) bool {
+	standsUntil := e.At.Add(unknownResetPause)
+	if e.ResetsAt != nil && e.ResetsAt.After(e.At) {
+		standsUntil = *e.ResetsAt
+	}
+	return standsUntil.After(at)
 }
 
 // Describe says what the refusal was, as the object of "waiting out". It is the

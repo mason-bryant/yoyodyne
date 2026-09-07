@@ -25,6 +25,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/modelfailover"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
@@ -184,6 +185,19 @@ type exchangeVoice struct {
 	// gets.
 	stateRoot    string
 	redactValues []string
+	// clock is what the round reads the time from: when a refusal happened, and
+	// whether a window an earlier refusal described still stands. It is a field
+	// rather than a call to time.Now so the failover seam is testable on a fixed
+	// clock, which is how the rest of this behaviour is tested. A voice built
+	// without one reads the wall clock.
+	clock func() time.Time
+}
+
+func (v exchangeVoice) now() time.Time {
+	if v.clock == nil {
+		return time.Now().UTC()
+	}
+	return v.clock().UTC()
 }
 
 func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (exchange.Spoken, error) {
@@ -225,7 +239,13 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 			ExchangeID:     question.ExchangeID,
 		},
 	}
-	result, err := provider.Run(ctx, backend.RunRequest{
+	// The round is served by the answering agent's permitted alternate where its
+	// own model has no capacity, exactly as that agent's conversation turn is. An
+	// exchange is that role speaking, so a role that can still speak in its own
+	// conversation and not when another role asks it something would be the same
+	// stall moved one seam along. The failover sits outside the meter so each
+	// attempt is priced against the model that attempt asked for.
+	result, served, err := modelfailover.Serve(ctx, provider, backend.RunRequest{
 		// The exchange is the record this invocation belongs to, so it is what the
 		// provider is told the invocation is: an answering round has no run and no
 		// conversation of its own.
@@ -243,7 +263,7 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 		RedactValues:     v.redactValues,
 		AccountAlias:     account.Alias,
 		AccountConfigDir: account.Directory,
-	})
+	}, v.failoverPolicy(question, name))
 	// What served the round travels back with what it cost, so the exchange record
 	// pins the invocation to a backend, a model, an account, a configuration, and
 	// the harness that made the call rather than to a provider session that
@@ -253,11 +273,14 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 	// charged to. The build is this process's own, because a resident conducting an
 	// exchange goes on running the binary it was started with.
 	spoken := exchange.Spoken{
-		Agent:          name,
-		SessionID:      result.SessionID,
-		CostUSD:        result.CostUSD,
-		Backend:        agent.Backend,
-		Model:          agent.Model,
+		Agent:     name,
+		SessionID: result.SessionID,
+		CostUSD:   result.CostUSD,
+		Backend:   agent.Backend,
+		// The model that actually asked, which is the configured one unless the
+		// permitted alternate served the round. Recording the configured selector
+		// would leave the exchange record naming a model that refused it.
+		Model:          served.Model,
 		ResolvedModel:  result.ResolvedModel,
 		AccountAlias:   account.Alias,
 		ConfigRevision: v.config.Revision(),
@@ -291,7 +314,7 @@ func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend
 	exhaustion := runstate.UsageLimitExhaustion{
 		SchemaVersion: runstate.UsageLimitSchemaVersion,
 		ProductID:     v.productID,
-		At:            time.Now().UTC(),
+		At:            v.now(),
 		Waiting: fmt.Sprintf("the %s answering exchange %s, asked by the %s",
 			chat.RoleTitle(question.Role), question.ExchangeID, chat.RoleTitle(question.Asker)),
 		Kind: result.UsageLimit.Kind,
@@ -304,6 +327,41 @@ func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend
 		return fmt.Errorf("record the provider's refusal: %w", err)
 	}
 	return nil
+}
+
+// failoverPolicy is what an answering round may be served by when the model the
+// answering agent is configured for will not take it, and where the substitution
+// is written down. An agent that has not enabled failover produces the zero
+// policy, which is failover off: one invocation, under the configured model,
+// exactly as before.
+func (v exchangeVoice) failoverPolicy(question exchange.Question, name string) modelfailover.Policy {
+	alternate := v.config.AgentFailoverModel(name)
+	if alternate == "" {
+		return modelfailover.Policy{}
+	}
+	policy := modelfailover.Policy{
+		Alternate: alternate,
+		Now:       v.now,
+		// How long a refusal that named no reset time stands before the answering
+		// agent's own model is asked again, which is the same interval a run probes
+		// one on. Without it every round would re-ask an exhausted model and
+		// announce the substitution again with it.
+		UnknownResetPause: v.config.Execution.UsageLimitUnknownResetPause.Duration(),
+		ProductID:         v.productID,
+		// The same sentence a refusal here writes, because it is the same thing
+		// that would have stopped — and what makes this the other half of that fact
+		// is that something served it anyway. It carries no work item and no
+		// conversation for the reason the refusal beside it carries none: an
+		// answering round belongs to an exchange, and an exchange is not one of the
+		// two references this record holds. Both are therefore addressed to the
+		// product line, which is where a reader of either already looks.
+		Waiting: fmt.Sprintf("the %s answering exchange %s, asked by the %s",
+			chat.RoleTitle(question.Role), question.ExchangeID, chat.RoleTitle(question.Asker)),
+	}
+	if v.usageLimits != nil {
+		policy.Windows = v.usageLimits
+	}
+	return policy
 }
 
 // renderQuestion is what the answering role is sent. The thread before this
