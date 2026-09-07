@@ -601,8 +601,8 @@ func TestAReadingOfTheDecisionsThatFailedDoesNotStopThePass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
 	}
-	if !strings.Contains(schedule.CarryOutProblem, "would not be read") {
-		t.Fatalf("problem = %q, want the reading that failed said out loud", schedule.CarryOutProblem)
+	if !strings.Contains(schedule.CarryOutReadProblem, "would not be read") {
+		t.Fatalf("problem = %q, want the reading that failed said out loud", schedule.CarryOutReadProblem)
 	}
 	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-ifd.500" {
 		t.Fatalf("started = %#v, want the queue's own work pulled regardless", schedule.Started)
@@ -743,5 +743,114 @@ func TestAPreservedWorktreeSomebodyHasBeenInStopsTheCarryOutAndSaysWhy(t *testin
 	}
 	if harness.carried(t) != 0 {
 		t.Fatalf("the grant was spent on a repair that never happened")
+	}
+}
+
+// The gate the pass itself would otherwise swallow. A held intake stops the pull
+// before it chooses anything, so a carry-out placed after that would never be
+// attempted while the hold stood — and a decision that cannot be carried out with
+// nothing anywhere saying why is the one outcome this mechanism forbids. Nothing
+// is claimed under the hold: the action reads it again and refuses, and what the
+// pass keeps is the refusal.
+func TestAHeldIntakeStillAttemptsTheCarryOutSoTheRefusalIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.500")...)
+	harness.capacity = 2
+	harness.held = &runstate.IntakeHold{HeldAt: harness.now, Reason: "the queue is heading somewhere odd"}
+	harness.outstanding = outstandingUntilCarried(decidedTask("yoyodyne-ifd.346"))
+	harness.carry = func(_ *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
+		// What the action reports when it reads the same hold the pass just read.
+		// Nothing is claimed and nothing is started; the finding is the whole of it.
+		return CarriedOut{
+			WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
+			Gate: runstate.TriageGateIntakeHold, Waiting: true,
+			Problem: "the \"rerun\" the development manager decided is waiting on " + runstate.TriageGateIntakeHold,
+		}, Outcome{}, nil
+	}
+	schedule, err := (Scheduler{Open: harness.open}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(harness.carried) != 1 {
+		t.Fatalf("carried = %#v, want the decision attempted so the hold has somewhere to be recorded", harness.carried)
+	}
+	if !strings.Contains(schedule.CarryOutProblem, runstate.TriageGateIntakeHold) {
+		t.Fatalf("problem = %q, want the hold named as the gate that stopped it", schedule.CarryOutProblem)
+	}
+	// The pass still chose nothing, which is what the hold is for.
+	if schedule.Stopped != ScheduleIntakeHeld || schedule.IntakeHeld == nil {
+		t.Fatalf("stopped = %q, held = %#v, want the pass to have chosen nothing under the hold", schedule.Stopped, schedule.IntakeHeld)
+	}
+	for _, started := range schedule.Started {
+		if started.WorkItemID == "yoyodyne-ifd.500" {
+			t.Fatalf("started = %#v, want no queue work chosen under a held intake", schedule.Started)
+		}
+	}
+}
+
+// The same for the other gate the pass short-circuits on. A full harness stops
+// the pull before it reaches the queue, so a carry-out placed after that would be
+// silent for as long as every slot was taken.
+func TestAFullHarnessStillAttemptsTheCarryOutSoTheRefusalIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.capacity = 1
+	// One slot, taken by a run this pass did not start.
+	harness.inFlight["yoyodyne-ifd.400"] = runningState("run-aaaabbbbccccddddeeeeffff00002222", "yoyodyne-ifd.400")
+	harness.outstanding = outstandingUntilCarried(decidedTask("yoyodyne-ifd.346"))
+	harness.carry = func(_ *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
+		return CarriedOut{
+			WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
+			Gate: runstate.TriageGateCapacity, Waiting: true,
+			Problem: "the \"rerun\" the development manager decided is waiting on " + runstate.TriageGateCapacity,
+		}, Outcome{}, nil
+	}
+	schedule, err := (Scheduler{Open: harness.open}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(harness.carried) != 1 {
+		t.Fatalf("carried = %#v, want the decision attempted so the full harness has somewhere to be recorded", harness.carried)
+	}
+	if !strings.Contains(schedule.CarryOutProblem, runstate.TriageGateCapacity) {
+		t.Fatalf("problem = %q, want developer capacity named as the gate that stopped it", schedule.CarryOutProblem)
+	}
+}
+
+// A reading that failed and an attempt that fired are different facts about one
+// pass, and the pass has to keep both: folding them into one line had the
+// successful attempt erase the account of the decision nothing could read.
+func TestAFiredDecisionDoesNotEraseAReadingThatFailed(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.capacity = 2
+	readable := outstandingUntilCarried(decidedTask("yoyodyne-ifd.346"))
+	harness.outstanding = func(h *scheduleHarness) ([]CarryOutTask, error) {
+		tasks, _ := readable(h)
+		// Part of the record answered and part of it did not, which is what
+		// Outstanding reports when one item's triage record cannot be read.
+		return tasks, errors.New("the triage record of yoyodyne-ifd.347 would not be read")
+	}
+	harness.carry = func(h *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
+		return CarriedOut{
+			WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
+			Carried: true, Reason: rerunReasoning,
+		}, h.complete(task.WorkItemID), nil
+	}
+	schedule, err := (Scheduler{Open: harness.open}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.CarriedOut) != 1 {
+		t.Fatalf("carried out = %#v, want the decision that could be read fired", schedule.CarriedOut)
+	}
+	if !strings.Contains(schedule.CarryOutReadProblem, "yoyodyne-ifd.347") {
+		t.Fatalf("read problem = %q, want the decision nothing could read still accounted for", schedule.CarryOutReadProblem)
+	}
+	if schedule.CarryOutProblem != "" {
+		t.Fatalf("problem = %q, want nothing said about a gate, since none stopped the attempt", schedule.CarryOutProblem)
 	}
 }

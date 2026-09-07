@@ -725,13 +725,19 @@ type Schedule struct {
 	// item was never in the queue.
 	CarriedOut []CarriedOut `json:"carried_out,omitempty"`
 	// CarryOutProblem names a decision the harness tried to fire and a gate
-	// stopped, or a reading of the decisions that failed. It costs the pass nothing
-	// it was doing, so it is reported beside the pull rather than stopping it — and
-	// it is never left unsaid, because a decision that quietly fails to fire is the
-	// exact condition this pass exists to end. The same account is on the item's own
-	// triage record and on the docket entry the development manager reads, which is
-	// where it survives the session.
+	// stopped. It costs the pass nothing it was doing, so it is reported beside the
+	// pull rather than stopping it — and it is never left unsaid, because a decision
+	// that quietly fails to fire is the exact condition this pass exists to end. The
+	// same account is on the item's own triage record and on the docket entry the
+	// development manager reads, which is where it survives the session.
 	CarryOutProblem string `json:"carry_out_problem,omitempty"`
+	// CarryOutReadProblem names a reading of the recorded decisions that failed,
+	// which is a different fact from a gate refusing one and is kept apart from it
+	// for that reason. A pass can read part of the record, fire what it could read,
+	// and still have a decision nobody could read at all — and folding the two into
+	// one line meant the successful attempt erased the account of the item nothing
+	// ever looked at.
+	CarryOutReadProblem string `json:"carry_out_read_problem,omitempty"`
 	// Fired is the recurring tasks this pass woke a role for, and what came back.
 	// It is on the schedule for the reason the escalations are: a pass that woke a
 	// role and spent turns doing it is a pass that did something, and an operator
@@ -1141,6 +1147,70 @@ pulling:
 			s.brake(&schedule, pull, blockedInARow)
 			blockedInARow = 0
 		}
+		// What is in flight is read before the hold rather than after it. It chooses
+		// nothing — it is two counts taken from the durable records — and reading it
+		// here is what lets the carry-out below be attempted whatever the hold turns
+		// out to say.
+		occupied, err := occupiedItems(pull.Runs)
+		if err != nil {
+			if !unreadable(err) {
+				break
+			}
+			continue
+		}
+		for id := range mine {
+			occupied[id] = struct{}{}
+		}
+		free := pull.Capacity - len(occupied)
+
+		// A decision the development manager recorded is fired here, against the same
+		// capacity the queue's own work is chosen against and before any of it: a
+		// stoppage she has already judged is work that was chosen once and stopped,
+		// and leaving it behind the queue would be the harness preferring fresh work
+		// to work it has already spent a run on.
+		//
+		// It takes a slot and is waited out exactly as a chosen item is. What it is
+		// not is a queue entry: the item is blocked or claimed rather than pullable,
+		// so nothing below would ever have reached it, and the started entry it
+		// leaves is what accounts for the run.
+		//
+		// It is attempted before the hold and before the capacity check below, and
+		// that placement is the whole of what keeps those two gates from being
+		// silent. Both stop the pass here, so a carry-out placed after either would
+		// never be reached while either was closed — and a decision that cannot be
+		// carried out with nothing anywhere saying why is the one outcome this
+		// mechanism exists to end. Nothing is chosen by attempting it: the hold and
+		// the capacity are read again inside the action, which is where they refuse
+		// and where the refusal is written onto the item as a finding the development
+		// manager reads. So the harness claims nothing under a hold and records why
+		// it did not, which is what the hold is for and what she was missing.
+		carrying := false
+		if task, found := s.nextCarryOut(&schedule, pull, occupied); found {
+			index := len(schedule.Started)
+			schedule.Started = append(schedule.Started, Started{
+				WorkItemID: task.WorkItemID,
+				Reason:     carryingOutReason(task),
+			})
+			// Both, for the two different questions below: occupied is what stops the
+			// queue scan choosing the same item beside this, and mine is what stops the
+			// next pull counting the slot free before the run has reserved it.
+			occupied[task.WorkItemID] = struct{}{}
+			mine[task.WorkItemID] = index
+			running++
+			// Only where there was one to take. An attempt made with no slot free is
+			// one the action's own capacity gate refuses before it reserves anything,
+			// and a count driven negative here would offer the queue below room the
+			// harness does not have.
+			if free > 0 {
+				free--
+			}
+			carrying = true
+			go func(task CarryOutTask) {
+				carried, outcome, err := pull.CarryOut.Carry(ctx, task)
+				completions <- completed{index: index, outcome: outcome, err: err, carriedOut: &carried}
+			}(task)
+		}
+
 		// The intake hold is read before anything is chosen, because choosing is
 		// the whole of what it holds. It is asked again on every pull rather than
 		// once for the pass: the hold that matters is the one the operator places
@@ -1165,9 +1235,9 @@ pulling:
 			// can do to a session they are not sitting at.
 			if !wait(pull, runstate.WatchBraked, account{
 				reason: brakedReason(schedule.Braked != nil, hold),
-				// This session's own runs: a held intake stops the choosing and
-				// interrupts nothing, and the reader has to be able to tell those apart.
-				// What another process has going is not read until after the hold is.
+				// This session's own runs rather than everything in flight: a held
+				// intake stops the choosing and interrupts nothing, and the reader has
+				// to be able to tell those apart.
 				running: running,
 			}) {
 				schedule.Stopped = ScheduleCancelled
@@ -1177,19 +1247,8 @@ pulling:
 		}
 		schedule.IntakeHeld = nil
 
-		occupied, err := occupiedItems(pull.Runs)
-		if err != nil {
-			if !unreadable(err) {
-				break
-			}
-			continue
-		}
-		for id := range mine {
-			occupied[id] = struct{}{}
-		}
 		schedule.Capacity = pull.Capacity
 		schedule.Occupied = len(occupied)
-		free := pull.Capacity - len(occupied)
 		if free < 1 {
 			if running > 0 {
 				if !collect() {
@@ -1210,39 +1269,6 @@ pulling:
 				break
 			}
 			continue
-		}
-
-		// A decision the development manager recorded is fired here, against the same
-		// capacity the queue's own work is chosen against and before any of it: a
-		// stoppage she has already judged is work that was chosen once and stopped,
-		// and leaving it behind the queue would be the harness preferring fresh work
-		// to work it has already spent a run on.
-		//
-		// It takes a slot and is waited out exactly as a chosen item is. What it is
-		// not is a queue entry: the item is blocked or claimed rather than pullable,
-		// so nothing below would ever have reached it, and the started entry it
-		// leaves is what accounts for the run.
-		carrying := false
-		if free > 0 {
-			if task, found := s.nextCarryOut(&schedule, pull, occupied); found {
-				index := len(schedule.Started)
-				schedule.Started = append(schedule.Started, Started{
-					WorkItemID: task.WorkItemID,
-					Reason:     carryingOutReason(task),
-				})
-				// Both, for the two different questions below: occupied is what stops the
-				// queue scan choosing the same item beside this, and mine is what stops the
-				// next pull counting the slot free before the run has reserved it.
-				occupied[task.WorkItemID] = struct{}{}
-				mine[task.WorkItemID] = index
-				running++
-				free--
-				carrying = true
-				go func(task CarryOutTask) {
-					carried, outcome, err := pull.CarryOut.Carry(ctx, task)
-					completions <- completed{index: index, outcome: outcome, err: err, carriedOut: &carried}
-				}(task)
-			}
 		}
 
 		read, err := pull.queue(ctx)
@@ -1804,8 +1830,13 @@ func (s Scheduler) nextCarryOut(schedule *Schedule, pull Pull, occupied map[stri
 		return CarryOutTask{}, false
 	}
 	outstanding, err := pull.CarryOut.Outstanding()
+	// Kept apart from what a gate said about the attempt this pass then makes.
+	// Reading part of the record and firing what could be read are compatible, and
+	// a pass that reported them in one line had the successful attempt erase the
+	// account of the decision nothing could look at.
+	schedule.CarryOutReadProblem = ""
 	if err != nil {
-		schedule.CarryOutProblem = fmt.Sprintf(
+		schedule.CarryOutReadProblem = fmt.Sprintf(
 			"what the development manager has decided and the harness has not carried out could not be read in full, so a decision may be waiting that nothing here fired: %v", err)
 	}
 	for _, task := range outstanding {
@@ -2584,6 +2615,9 @@ func (s Schedule) Render() string {
 	}
 	if s.CarryOutProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.CarryOutProblem)
+	}
+	if s.CarryOutReadProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.CarryOutReadProblem)
 	}
 	// And what the pass woke on a cadence, said beside both: a session that spent
 	// turns on a sweep is a session that did something, and the whole account of
