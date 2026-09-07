@@ -867,6 +867,11 @@ anchor that resolves to nothing fails a gate on every run and every repair,
 rather than costing a reviewer a paragraph saying they could not verify it. The
 policy above is enforced rather than asked for, and the remaining manual part is
 only the tables' *line numbers*, which the checker has no opinion about.
+`make check` carries it too, since `check` is `fmtcheck test race vet` and
+`test` is what runs it. yoyodyne-ifd.310 was admitted to arrange exactly that
+and found it already done; [the diagnosis](diagnoses/yoyodyne-ifd-310-link-checker-already-in-the-gate.md)
+records how that was established, and why the `scripts/check-doc-links.py` the
+reports named is on three preserved branches rather than on main.
 
 **One kind of citation the checker cannot see**, named here so no later run
 mistakes a green `make test` for a clean sweep:
