@@ -34,7 +34,7 @@ func TestARepairDispatchCreatesNoWorktree(t *testing.T) {
 	docket := &memoryDocket{}
 
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, docket)
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, 2, docketedNow, handbackCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), 2, docketedNow, handbackCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	worktreesBefore := worktreeDirectories(t, worktreeRoot)

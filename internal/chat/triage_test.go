@@ -70,6 +70,75 @@ func TestATriageDecisionIsRecordedOnTheWorkItem(t *testing.T) {
 	}
 }
 
+// The note on the item is for people; the durable record is what the harness
+// acts on. A decision that lived only in prose is why the verb that carries one
+// out had to be handed the reasoning again as words on a command line, and
+// record them as the development manager's — so what lands here is the decision,
+// the stoppage it settles, the reasoning, and the turn it was recorded on.
+func TestATriageDecisionIsRecordedDurablyWhereTheHarnessReadsIt(t *testing.T) {
+	t.Parallel()
+
+	const reasoning = "the change is correct and its base moved under it, so nothing here needs repairing"
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
+	answer := trackerReply("Decided.",
+		`{"action":"triage","id":"yoyodyne-ifd.311","run":"`+stoppedRun+`","decision":"rerun","reason":"`+reasoning+`"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.311": {ID: "yoyodyne-ifd.311", Title: "the item that stopped", Status: "open"},
+	}}
+	reply := triageReply(t, tracker, budgets, answer)
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+
+	counters := budgets.counters(t, "yoyodyne-ifd.311")
+	decided, found := counters.DecisionOf(stoppedRun)
+	if !found {
+		t.Fatalf("counters = %#v, want the decision standing about the stoppage it names", counters)
+	}
+	if decided.Decision != runstate.TriageDecisionRerun || decided.Reason != reasoning {
+		t.Fatalf("decision = %#v, want the re-run and the reasoning it was recorded with", decided)
+	}
+	// The role and the turn are the conversation's own facts, and they are what an
+	// attribution built from this decision cites.
+	if decided.DecidedBy != RoleTitle(domain.RoleDevelopmentManager) {
+		t.Fatalf("decision = %#v, want the role that recorded it", decided)
+	}
+	if strings.TrimSpace(decided.Conversation) == "" || decided.Turn < 1 {
+		t.Fatalf("decision = %#v, want the conversation and turn it was recorded on", decided)
+	}
+	// The spend and the decision are one write, so the budget moved with it.
+	if counters.Reruns != 1 {
+		t.Fatalf("counters = %#v, want the decision's spend recorded beside it", counters)
+	}
+}
+
+// A decision that spends nothing is recorded just as durably. It buys no
+// attempt, so no budget moves — but the next reader of the stoppage, and the
+// lifecycle that will one day close its docket entry, need to know somebody
+// looked and what they concluded.
+func TestADecisionThatSpendsNothingIsStillRecordedDurably(t *testing.T) {
+	t.Parallel()
+
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
+	answer := trackerReply("Decided.",
+		`{"action":"triage","id":"yoyodyne-ifd.311","run":"`+stoppedRun+`","decision":"wait","reason":"the forge still has the merge, so waiting is what it needs"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.311": {ID: "yoyodyne-ifd.311", Title: "the item that stopped", Status: "open"},
+	}}
+	if reply := triageReply(t, tracker, budgets, answer); len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+
+	counters := budgets.counters(t, "yoyodyne-ifd.311")
+	decided, found := counters.DecisionOf(stoppedRun)
+	if !found || decided.Decision != runstate.TriageDecisionWait {
+		t.Fatalf("counters = %#v, want the wait recorded about the stoppage", counters)
+	}
+	if counters.Passes() != 0 {
+		t.Fatalf("counters = %#v, want a decision that buys no attempt to spend nothing", counters)
+	}
+}
+
 // Escalating is the decision that reaches a person, and it is two things at
 // once: the item says durably that it is waiting on somebody, and the report
 // reaches the pile the operator reads. Either alone is how stopped work went
@@ -369,6 +438,14 @@ func TestATriageDecisionIsRefusedWhenItNamesNoDecisionOrNoStoppage(t *testing.T)
 			name:   "a run identifier no run could have",
 			action: `{"action":"triage","id":"yoyodyne-ifd.90","run":"the last one","decision":"wait","reason":"why"}`,
 			want:   `is not a run identifier`,
+		},
+		{
+			// The reasoning is what the decision is: it is recorded durably and a
+			// carry-out records it as why the run it starts exists, so a decision
+			// without one leaves the harness nothing to attribute a run to.
+			name:   "no reasoning",
+			action: `{"action":"triage","id":"yoyodyne-ifd.90","run":"` + stoppedRun + `","decision":"wait"}`,
+			want:   `triage requires "reason"`,
 		},
 		{
 			name:   "an argument triage has no use for",
@@ -1029,16 +1106,32 @@ func newTriageBudgetGate(t *testing.T, caps runstate.TriageCaps, rounds int) *tr
 	return &triageBudgetGate{store: store, caps: caps, rounds: rounds}
 }
 
-func (b *triageBudgetGate) GrantRepair(ctx context.Context, workItemID string) (runstate.RepairGrant, error) {
-	return b.store.GrantRepair(ctx, workItemID, b.rounds, b.now(), b.caps)
+func (b *triageBudgetGate) GrantRepair(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.RepairGrant, error) {
+	return b.store.GrantRepair(ctx, workItemID, decision, b.rounds, b.now(), b.caps)
 }
 
-func (b *triageBudgetGate) RecordRerun(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
-	return b.store.RecordRerun(ctx, workItemID, b.now(), b.caps)
+func (b *triageBudgetGate) RecordRerun(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
+	return b.store.RecordRerun(ctx, workItemID, decision, b.now(), b.caps)
 }
 
-func (b *triageBudgetGate) RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
-	return b.store.RecordMergeRearm(ctx, workItemID, b.now(), b.caps)
+func (b *triageBudgetGate) RecordMergeRearm(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
+	return b.store.RecordMergeRearm(ctx, workItemID, decision, b.now(), b.caps)
+}
+
+func (b *triageBudgetGate) RecordDecision(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
+	return b.store.RecordDecision(ctx, workItemID, decision, b.now())
+}
+
+// counters is what the item's durable record says, which is where a decision is
+// read back from: the words a conversation reported are not the record, and the
+// whole point of the record is that they are not the same thing.
+func (b *triageBudgetGate) counters(t *testing.T, workItemID string) runstate.TriageCounters {
+	t.Helper()
+	counters, err := b.store.Counters(workItemID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	return counters
 }
 
 func (b *triageBudgetGate) now() time.Time { return b.clock.Now() }

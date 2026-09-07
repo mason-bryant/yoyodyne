@@ -59,7 +59,7 @@ func TestAnEmptyDiffRoundTheEnvironmentRefusedSpendsNothing(t *testing.T) {
 
 	// The development manager's decision, which spends the item's repair-grant
 	// budget as it is recorded.
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, 2, docketedNow, environmentalCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), 2, docketedNow, environmentalCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	before, err := store.Triage().Counters(tracker.item.ID)
@@ -162,7 +162,7 @@ func TestNoSequenceOfEnvironmentalRefusalsWalksAnItemToItsCap(t *testing.T) {
 	repository, worktreeRoot, store := restartableFixture(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, 2, docketedNow, environmentalCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), 2, docketedNow, environmentalCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	before, err := store.Triage().Counters(tracker.item.ID)
@@ -361,7 +361,7 @@ func TestAGrantedRoundThatNeverRanIsRefusedThoughItsWorktreeHoldsTheChange(t *te
 	repository, worktreeRoot, store := restartableFixture(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, 2, docketedNow, environmentalCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), 2, docketedNow, environmentalCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	// The grant carried out onto the change it was granted to repair. Nothing is

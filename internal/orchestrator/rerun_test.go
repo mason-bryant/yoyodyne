@@ -27,7 +27,30 @@ const (
 	// different run to the one the test pipeline reserves for the fresh attempt.
 	priorRunID    = "run-99998888777766665555444433332222"
 	rerunGuidance = "Triaged: to be run again from the start. The preserved branch yoyodyne/task/abc holds the finished rename; cherry-pick its second commit rather than writing it again."
+	// decidedRunID is the stoppage a decision stands about where the test is not
+	// about which stoppage it was. The sequences that are about that name their
+	// own run.
+	decidedRunID = "run-11112222333344445555666677778888"
+	// decidedIn and decidedOnTurn are where the development manager recorded the
+	// decision. A re-run cites them, so they are what a test asserting the
+	// attribution looks for.
+	decidedIn     = "chat-0123456789abcdef"
+	decidedOnTurn = 3
 )
+
+// triageDecided is one decision of the development manager's as the durable
+// record holds it: the word, the stoppage it settles, the reasoning it was made
+// on, and where it was recorded.
+func triageDecided(decision, runID string) runstate.TriageDecision {
+	return runstate.TriageDecision{
+		Decision:     decision,
+		RunID:        runID,
+		Reason:       rerunReasoning,
+		DecidedBy:    "development manager",
+		Conversation: decidedIn,
+		Turn:         decidedOnTurn,
+	}
+}
 
 // startedRun is one call of the re-run action's starter: what it was asked to
 // run, and the selection it was asked to run it under.
@@ -114,9 +137,10 @@ func newRerunHarness(t *testing.T, state runstate.State) *rerunHarness {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
 	}
 	// The decision itself: the development manager recorded a re-run of this
-	// item, which spent the item's re-run budget. That footprint is what the
-	// action reads to know somebody decided this.
-	recordRerunDecision(t, runs, state.WorkItemID)
+	// item's stopped run, which spent the item's re-run budget in the same write.
+	// That record is what the action reads to know somebody decided this, and
+	// what the reasoning it records is read from.
+	recordRerunDecision(t, runs, state.WorkItemID, state.RunID)
 	return &rerunHarness{
 		docket: docket,
 		runs:   runs,
@@ -136,11 +160,12 @@ func newRerunHarness(t *testing.T, state runstate.State) *rerunHarness {
 }
 
 // recordRerunDecision is what the development manager's triage does to the
-// item's durable record when it decides a re-run: it spends the item's one
-// re-run before anything acts on the decision.
-func recordRerunDecision(t *testing.T, runs *runstate.Store, workItemID string) {
+// item's durable record when it decides a re-run of one stopped run: it writes
+// the decision and spends the item's one re-run in a single write, before
+// anything acts on either.
+func recordRerunDecision(t *testing.T, runs *runstate.Store, workItemID, priorRunID string) {
 	t.Helper()
-	if _, err := runs.Triage().RecordRerun(context.Background(), workItemID, docketedNow, rerunCaps); err != nil {
+	if _, err := runs.Triage().RecordRerun(context.Background(), workItemID, triageDecided(runstate.TriageDecisionRerun, priorRunID), docketedNow, rerunCaps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 }
@@ -163,8 +188,10 @@ func (h *rerunHarness) integrated() {
 	}
 }
 
+// rerunRequest names the stoppage and nothing else: what the fresh run records
+// as why it exists is read from the decision, not carried here.
 func rerunRequest() RerunRequest {
-	return RerunRequest{Run: docketedRunID, Reason: rerunReasoning}
+	return RerunRequest{Run: docketedRunID}
 }
 
 // The invariant's second half: work the harness chose accounts for itself. A
@@ -258,12 +285,12 @@ func TestOneDocketedStoppageIsRerunOnce(t *testing.T) {
 	}
 }
 
-// One decision buys one re-run, and the item's counter alone cannot say so: it
-// is a total nothing clears, so a second stoppage of an already re-run item
-// would pass it on the strength of a decision that was about the first stoppage
-// and has already been carried out. What has been claimed is read back against
-// what was decided, so the second stoppage is refused until somebody decides
-// about it — which past the cap is an escalation rather than a larger budget.
+// One decision buys one re-run of the stoppage it was about, and the item's
+// counter alone cannot say so: it is a total nothing clears, so a second
+// stoppage of an already re-run item would pass it on the strength of a decision
+// that was about the first stoppage. The decision names its own stoppage, so the
+// second one is refused until somebody decides about that one — which past the
+// cap is an escalation rather than a larger budget.
 func TestASecondStoppageOfAnAlreadyRerunItemIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -282,9 +309,9 @@ func TestASecondStoppageOfAnAlreadyRerunItemIsRefused(t *testing.T) {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
 	}
 
-	_, err := harness.rerunner().Rerun(context.Background(), RerunRequest{Run: second.RunID, Reason: rerunReasoning})
-	if err == nil || !strings.Contains(err.Error(), "has carried out 1") {
-		t.Fatalf("Rerun() error = %v, want a refusal naming the decision already carried out", err)
+	_, err := harness.rerunner().Rerun(context.Background(), RerunRequest{Run: second.RunID})
+	if err == nil || !strings.Contains(err.Error(), "no triage decision about the stoppage of run "+second.RunID) {
+		t.Fatalf("Rerun() error = %v, want a refusal naming the stoppage nobody has decided about", err)
 	}
 	if len(harness.started) != 1 {
 		t.Fatalf("started = %#v, want the item run again once in total", harness.started)
@@ -294,7 +321,7 @@ func TestASecondStoppageOfAnAlreadyRerunItemIsRefused(t *testing.T) {
 	}
 	// Deciding about the second stoppage is what makes it actionable — and the
 	// cap is what makes that a person's decision rather than this action's.
-	if _, err := harness.runs.Triage().RecordRerun(context.Background(), second.WorkItemID, docketedNow, rerunCaps); err == nil {
+	if _, err := harness.runs.Triage().RecordRerun(context.Background(), second.WorkItemID, triageDecided(runstate.TriageDecisionRerun, decidedRunID), docketedNow, rerunCaps); err == nil {
 		t.Fatal("RecordRerun() gave a second re-run of one item, which the cap refuses")
 	}
 }
@@ -897,7 +924,7 @@ func TestARerunHandsTheDevelopmentManagersGuidanceToTheDeveloper(t *testing.T) {
 	t.Parallel()
 
 	pipelined := newPipelinedRerun(t, nil)
-	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err != nil {
 		t.Fatalf("Rerun() error = %v", err)
 	}
@@ -946,7 +973,7 @@ func TestAHoldArrivingAfterTheClaimStillStopsTheFreshRun(t *testing.T) {
 			t.Fatalf("Hold() error = %v", err)
 		}
 	})
-	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err != nil {
 		t.Fatalf("Rerun() error = %v", err)
 	}
@@ -1031,7 +1058,7 @@ func TestAPauseMetWhereTheFreshRunWouldStartGivesTheClaimBack(t *testing.T) {
 				paused = true
 				door.pause(t, pipelined)
 			})
-			result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+			result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 			if err != nil {
 				t.Fatalf("Rerun() error = %v, want the pause reported rather than a failure", err)
 			}
@@ -1066,7 +1093,7 @@ func TestAPauseMetWhereTheFreshRunWouldStartGivesTheClaimBack(t *testing.T) {
 			// The pause lifts, and the same decision is carried out — rather than
 			// being refused by the once-only guard for a run that never happened.
 			door.lift(t, pipelined)
-			rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+			rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 			if err != nil {
 				t.Fatalf("Rerun() once the pause lifted error = %v", err)
 			}
@@ -1126,7 +1153,7 @@ func TestARerunRacedForTheLastSlotGivesTheClaimBackAndLaunchesLater(t *testing.T
 			t.Fatalf("Create() error = %v", err)
 		}
 	})
-	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err != nil {
 		t.Fatalf("Rerun() error = %v, want the raced slot waited on rather than failed", err)
 	}
@@ -1147,7 +1174,7 @@ func TestARerunRacedForTheLastSlotGivesTheClaimBackAndLaunchesLater(t *testing.T
 	if err := pipelined.runs.Save(occupying); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err != nil {
 		t.Fatalf("Rerun() once a slot freed error = %v", err)
 	}
@@ -1170,7 +1197,7 @@ func TestARerunOnABlockedItemIsCarriedOutWithoutAnybodyReopeningIt(t *testing.T)
 	// What stopping the run did to the item, which is the state a docketed
 	// stoppage is ordinarily found in.
 	pipelined.tracker.item.Status = "blocked"
-	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err != nil {
 		t.Fatalf("Rerun() on a blocked item error = %v, want the decision carried out", err)
 	}
@@ -1199,7 +1226,7 @@ func TestARerunRefusedByThePipelineGivesTheClaimBackAndLaunchesLater(t *testing.
 			t.Fatalf("Create() error = %v", err)
 		}
 	})
-	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err == nil || !strings.Contains(err.Error(), racing.RunID) {
 		t.Fatalf("Rerun() error = %v, want the run that took the item named", err)
 	}
@@ -1223,7 +1250,7 @@ func TestARerunRefusedByThePipelineGivesTheClaimBackAndLaunchesLater(t *testing.
 	if err := pipelined.runs.Save(racing); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err != nil {
 		t.Fatalf("Rerun() once the item was free error = %v", err)
 	}
@@ -1311,7 +1338,7 @@ func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 	if _, err := docketerOver(nil, docket).RecordStoppedRun(stopped); err != nil {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
 	}
-	recordRerunDecision(t, store, stopped.WorkItemID)
+	recordRerunDecision(t, store, stopped.WorkItemID, stopped.RunID)
 
 	return &pipelinedRerun{
 		runs:       store,
@@ -1346,30 +1373,47 @@ func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 	}
 }
 
-// A re-run with no reasoning is refused rather than recorded: an accounted run
-// is the whole of what the record is for.
-func TestARerunWithoutTheDecisionsReasoningIsRefused(t *testing.T) {
+// The decision standing about this stoppage has to be a re-run. A development
+// manager who decided to wait decided something the harness must not start a run
+// on: carrying it out would attribute a fresh run to a decision nobody made,
+// which is the whole failure this record exists to end.
+func TestAStoppageDecidedSomethingOtherThanARerunIsRefused(t *testing.T) {
 	t.Parallel()
 
 	harness := newRerunHarness(t, stoppedState())
-	_, err := harness.rerunner().Rerun(context.Background(), RerunRequest{Run: docketedRunID})
-	if err == nil || !strings.Contains(err.Error(), "reasoning") {
-		t.Fatalf("Rerun() error = %v, want a refusal naming the missing reasoning", err)
+	// The development manager came back to the same stoppage and decided to wait,
+	// which supersedes the re-run they had recorded about it.
+	if _, err := harness.runs.Triage().RecordDecision(context.Background(), docketedItem,
+		triageDecided(runstate.TriageDecisionWait, docketedRunID), docketedNow); err != nil {
+		t.Fatalf("RecordDecision() error = %v", err)
+	}
+	_, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), `is "wait" rather than a re-run`) {
+		t.Fatalf("Rerun() error = %v, want a refusal naming the decision that is standing", err)
 	}
 	if len(harness.started) != 0 {
 		t.Fatalf("started = %#v, want nothing started", harness.started)
 	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+		t.Fatalf("a re-run nobody decided spent the stoppage's claim")
+	}
 }
 
-// A reason longer than a run's recorded selection may hold is folded to fit
+// A recorded reasoning longer than a run's selection may hold is folded to fit
 // rather than refusing to carry out the decision.
 func TestALongDecisionIsFoldedIntoWhatTheRunCanRecord(t *testing.T) {
 	t.Parallel()
 
 	harness := newRerunHarness(t, stoppedState())
-	request := rerunRequest()
-	request.Reason = strings.Repeat("the ground moved. ", runstate.MaxSelectionReasonBytes/10)
-	result, err := harness.rerunner().Rerun(context.Background(), request)
+	// The development manager argued it at length, on the same stoppage, which
+	// supersedes the shorter decision the harness was built with.
+	longWinded := triageDecided(runstate.TriageDecisionRerun, docketedRunID)
+	longWinded.Reason = strings.Repeat("the ground moved. ", 200)
+	if _, err := harness.runs.Triage().RecordRerun(context.Background(), docketedItem, longWinded, docketedNow,
+		runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 2, MergeRearms: 2}); err != nil {
+		t.Fatalf("RecordRerun() error = %v", err)
+	}
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
 	if err != nil {
 		t.Fatalf("Rerun() error = %v", err)
 	}
@@ -1434,8 +1478,8 @@ func TestARerunNobodyDecidedIsRefused(t *testing.T) {
 		},
 	}
 	_, err = rerunner.Rerun(context.Background(), rerunRequest())
-	if err == nil || !strings.Contains(err.Error(), "no re-run of") {
-		t.Fatalf("Rerun() error = %v, want a refusal naming the missing decision", err)
+	if err == nil || !strings.Contains(err.Error(), "no triage decision about the stoppage of run") {
+		t.Fatalf("Rerun() error = %v, want a refusal naming the missing decision record", err)
 	}
 	if started != 0 {
 		t.Fatalf("started = %d, want nothing started on nobody's decision", started)
@@ -1445,9 +1489,11 @@ func TestARerunNobodyDecidedIsRefused(t *testing.T) {
 	}
 }
 
-// The recorded reason separates what the harness verified from what it was
-// told, because only one of the two is checkable.
-func TestTheRecordedReasonSeparatesTheDecisionFromTheProseItWasGiven(t *testing.T) {
+// The recorded reason cites the decision it was built from, which is what makes
+// the attribution on the run checkable rather than only plausible: every part of
+// it is read from the record the development manager's conversation wrote, so a
+// reader who doubts it can go to the turn it names.
+func TestTheRecordedReasonCitesTheDecisionItWasReadFrom(t *testing.T) {
 	t.Parallel()
 
 	harness := newRerunHarness(t, stoppedState())
@@ -1457,7 +1503,9 @@ func TestTheRecordedReasonSeparatesTheDecisionFromTheProseItWasGiven(t *testing.
 	}
 	for _, want := range []string{
 		"durable triage budget",
-		"reasoning given to the harness when it was asked to",
+		"recorded by the development manager in conversation " + decidedIn,
+		fmt.Sprintf("after turn %d", decidedOnTurn),
+		"reasoning that decision was recorded with",
 		rerunReasoning,
 	} {
 		if !strings.Contains(result.Reason, want) {

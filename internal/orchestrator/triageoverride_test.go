@@ -135,7 +135,12 @@ func TestARerunReasonNamesTheCrossedCapsAndStaysInsideTheSelectionBound(t *testi
 		},
 	}
 	entry := triage.Entry{WorkItemID: docketedItem, RunID: docketedRunID}
-	reason := rerunReason(entry, counters, 0, strings.Repeat("a ", runstate.MaxSelectionReasonBytes))
+	// The decision itself carries an argument long enough to fill whatever the
+	// prefix leaves, at the full length the record permits one.
+	decision := triageDecided(runstate.TriageDecisionRerun, docketedRunID)
+	decision.Reason = strings.Repeat("a ", runstate.MaxTriageDecisionReasonBytes/2)
+	decision.DecidedAt = overrideDecidedAt
+	reason := rerunReason(entry, counters, 0, decision)
 
 	if len(reason) > runstate.MaxSelectionReasonBytes {
 		t.Fatalf("reason is %d bytes, which exceeds the %d the selection record accepts",
@@ -174,11 +179,11 @@ func TestARerunReasonSaysNothingAboutOverridesOnAnItemThatHasNone(t *testing.T) 
 	t.Parallel()
 
 	entry := triage.Entry{WorkItemID: docketedItem, RunID: docketedRunID}
-	reason := rerunReason(entry, runstate.TriageCounters{Reruns: 1}, 0, rerunReasoning)
+	reason := rerunReason(entry, runstate.TriageCounters{Reruns: 1}, 0, triageDecided(runstate.TriageDecisionRerun, docketedRunID))
 	if strings.Contains(reason, "override") {
 		t.Fatalf("reason mentions an override on an item that has none: %q", reason)
 	}
 	if !strings.Contains(reason, rerunReasoning) {
-		t.Fatalf("reason = %q, want the reasoning it was given carried whole", reason)
+		t.Fatalf("reason = %q, want the recorded reasoning carried whole", reason)
 	}
 }

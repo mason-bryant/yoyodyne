@@ -11,11 +11,21 @@ package chat
 //
 // So a decision is a recorded act rather than a paragraph. It names the
 // stoppage it settles, it lands on the work item where anybody who reads the
-// item finds it, and the three decisions that buy another attempt spend the
-// item's durable triage budget as they are recorded. That last part is what
-// makes the guards real: a repair grant, a re-run, and a re-arm each go through
-// the same gate the counters already enforce, so an item nothing was ever going
-// to stop is stopped by the cap rather than by whoever happens to be reading.
+// item finds it, and it lands on the item's durable triage record where the
+// harness can read it — the decision, the reasoning, the role, and the turn it
+// was recorded on — beside whatever budget it spends and in the same write. The
+// three decisions that buy another attempt spend that budget as they are
+// recorded, which is what makes the guards real: a repair grant, a re-run, and a
+// re-arm each go through the same gate the counters already enforce, so an item
+// nothing was ever going to stop is stopped by the cap rather than by whoever
+// happens to be reading.
+//
+// The durable half is what an action carrying a decision out reads. Until it
+// existed, the reasoning lived only in the item's notes, so the verb that starts
+// a fresh run had to be handed it again as words on a command line and recorded
+// them as the development manager's — an attribution anybody at a terminal could
+// write, on the one record `selected-work-passes-intake-and-records-why` exists
+// to make trustworthy.
 //
 // Escalation is the one decision that reaches the operator, and it is
 // deliberately more than prose: a durable blocker on the item, so the item
@@ -48,36 +58,37 @@ import (
 // The decisions triage may record. They are the two decision trees the
 // development manager works through — one for a run that stopped, one for a
 // publication that did not finish — written as a closed vocabulary, because the
-// harness acts on three of them and cannot act on prose.
+// harness acts on three of them and cannot act on prose. They are the durable
+// record's own words rather than a second spelling of them: a decision recorded
+// here is read back by the action that carries it out, so the two packages must
+// not be able to disagree about what a decision is called.
 const (
 	// decisionRepair hands the item another bounded go at the change it already
 	// has, on the branch and worktree the stopped run preserved.
-	decisionRepair = "repair"
+	decisionRepair = runstate.TriageDecisionRepair
 	// decisionRerun runs the item again from the start, which is what a correct
 	// change whose ground moved needs.
-	decisionRerun = "rerun"
+	decisionRerun = runstate.TriageDecisionRerun
 	// decisionRescope splits what was out of scope into a child of the item. The
 	// parent's own criteria are not narrowed here: they are the product
 	// manager's, and what this records is the decision plus the argument for
 	// narrowing them.
-	decisionRescope = "rescope"
+	decisionRescope = runstate.TriageDecisionRescope
 	// decisionRearm repeats an authorized merge request the forge dropped for a
 	// transient cause.
-	decisionRearm = "rearm"
+	decisionRearm = runstate.TriageDecisionRearm
 	// decisionWait is the decision that nothing is to be done yet: the forge
 	// still has the merge, and waiting is what it needs. It is recorded rather
 	// than left unsaid so the next reader knows somebody looked.
-	decisionWait = "wait"
+	decisionWait = runstate.TriageDecisionWait
 	// decisionEscalate hands the entry to the operator, which is the only
 	// decision that asks a person for anything.
-	decisionEscalate = "escalate"
+	decisionEscalate = runstate.TriageDecisionEscalate
 )
 
 // triageDecisions lists the vocabulary in the order the contract states it, so a
 // refusal names exactly what was available.
-var triageDecisions = []string{
-	decisionRepair, decisionRerun, decisionRescope, decisionRearm, decisionWait, decisionEscalate,
-}
+var triageDecisions = runstate.TriageDecisionVocabulary()
 
 // triageVerbs is what each decision records about itself on the work item. The
 // item's notes are read by people and by later conversations rather than by
@@ -101,14 +112,24 @@ var triageVerbs = map[string]string{
 // A conversation without it can still decide anything that spends nothing.
 // What it cannot do is grant, re-run, or re-arm, because a budget that cannot be
 // read must never be spent through as though it were empty.
+//
+// Every operation takes the decision itself rather than only the item, because
+// the decision is what the spend is authorized by and the two are one durable
+// write: an item's record cannot come to say a budget was spent without saying
+// what was decided, by whom, and about which stoppage.
 type TriageBudgets interface {
 	// GrantRepair records a repair grant and reports what it came to, truncated
 	// to the review rounds the item's cap still has room for.
-	GrantRepair(ctx context.Context, workItemID string) (runstate.RepairGrant, error)
+	GrantRepair(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.RepairGrant, error)
 	// RecordRerun records that triage caused this item to be run again.
-	RecordRerun(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
+	RecordRerun(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error)
 	// RecordMergeRearm records that triage re-armed a merge the forge dropped.
-	RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
+	RecordMergeRearm(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error)
+	// RecordDecision records a decision that spends nothing, which is the other
+	// half of the vocabulary. It is a separate operation because there is no
+	// budget to write it beside: what makes those three atomic is the counter they
+	// move, and these move none.
+	RecordDecision(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error)
 }
 
 // Stoppages is what the harness durably recorded about the runs triage decides
@@ -176,6 +197,14 @@ func (a TrackerAction) triageProblems() []error {
 		problems = append(problems, errors.New("triage requires \"run\", the run the docket entry names"))
 	case !runstate.ValidRunID(run):
 		problems = append(problems, fmt.Errorf("triage run %q is not a run identifier; a docket entry names the run it is about", run))
+	}
+	// The reasoning is required because it is what the decision is: it is recorded
+	// as part of the durable decision, and a re-run of this stoppage carries it as
+	// the fresh run's own account of why it exists. A decision recorded without it
+	// would leave the harness with nothing to attribute the run to but its own
+	// summary of somebody else's judgement.
+	if strings.TrimSpace(a.Reason) == "" {
+		problems = append(problems, errors.New("triage requires \"reason\", the reasoning the decision is recorded with; it is what a carry-out records as why the run it starts exists"))
 	}
 	return problems
 }
@@ -252,10 +281,14 @@ func refuseUnreportedEscalation(parsed parsedReply) error {
 
 // carryOutTriage records one triage decision. Whether the run it names is this
 // item's stopped work is asked first, because a decision landing on the wrong
-// item is a decision that should never have been paid for; the budget is then
-// spent before the decision is written down, which is the order the durable
-// counters are built for: a process that dies between the two has spent an
-// attempt nobody took, rather than recorded a decision nothing bounds.
+// item is a decision that should never have been paid for; the decision is then
+// written to the item's durable record together with whatever budget it spends,
+// in one write, and the note onto the tracker comes after both.
+//
+// The durable record is the decision and the note is its account for people. A
+// note is prose nothing reads, which is why the harness carrying a decision out
+// once had to be handed the reasoning again as words on a command line; what it
+// reads now is what the role recorded here.
 //
 // A refusal from the budget is the gate doing its job rather than a failure of
 // the conversation: the development manager is told which cap refused it and
@@ -269,7 +302,18 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 		outcome.fail(err)
 		return
 	}
-	spent, err := s.spendTriageBudget(ctx, id, decision)
+	spent, err := s.recordTriageDecision(ctx, id, runstate.TriageDecision{
+		Decision: decision,
+		RunID:    run,
+		Reason:   action.Reason,
+		// Who decided it and where, which is what an attribution citing this
+		// decision points at. They are the conversation's own facts rather than
+		// anything the reply asserted: a role that could name itself could name
+		// another.
+		DecidedBy:    RoleTitle(s.state.Role),
+		Conversation: s.state.ConversationID,
+		Turn:         s.state.Turns,
+	})
 	if err != nil {
 		outcome.fail(refusedPastCap(err))
 		return
@@ -498,23 +542,39 @@ type triageSpend struct {
 	landed string
 }
 
-// spendTriageBudget spends what the decision costs and says what it came to, or
-// says nothing for a decision that costs nothing. Three of the six buy another
-// attempt at work that already failed once, and those are the three the durable
-// budget bounds; re-scoping, waiting, and escalating buy no attempt at all and
-// are never refused for budget.
-func (s *Session) spendTriageBudget(ctx context.Context, workItemID, decision string) (triageSpend, error) {
-	switch decision {
-	case decisionRepair, decisionRerun, decisionRearm:
-	default:
+// recordTriageDecision writes the decision to the item's durable record, spends
+// what it costs, and says what the spend came to — or says nothing about a spend
+// for a decision that costs nothing. Three of the six buy another attempt at work
+// that already failed once, and those are the three the durable budget bounds;
+// re-scoping, waiting, and escalating buy no attempt at all and are never refused
+// for budget.
+//
+// A conversation with no record wired can still decide the three that spend
+// nothing, exactly as it always could, and its decision reaches the item's notes
+// and no further. What it cannot do is grant, re-run, or re-arm: a budget that
+// cannot be read must never be spent through as though it were empty, and a
+// decision the harness will act on must be one the harness can read back.
+//
+// Only a spend is reported as landed afterwards, and that is the right line: a
+// decision that spends nothing and then fails to reach the item leaves a record
+// that asking again supersedes rather than duplicates, so there is nothing there
+// for a second attempt to spend twice.
+func (s *Session) recordTriageDecision(ctx context.Context, workItemID string, decided runstate.TriageDecision) (triageSpend, error) {
+	if !decided.Spends() {
+		if s.options.Triage == nil {
+			return triageSpend{}, nil
+		}
+		if _, err := s.options.Triage.RecordDecision(ctx, workItemID, decided); err != nil {
+			return triageSpend{}, err
+		}
 		return triageSpend{}, nil
 	}
 	if s.options.Triage == nil {
 		return triageSpend{}, errors.New("no triage budget is wired to this conversation, so a repair, a re-run, or a re-arm cannot be bounded and was not recorded")
 	}
-	switch decision {
+	switch decided.Decision {
 	case decisionRepair:
-		granted, err := s.options.Triage.GrantRepair(ctx, workItemID)
+		granted, err := s.options.Triage.GrantRepair(ctx, workItemID, decided)
 		if err != nil {
 			return triageSpend{}, err
 		}
@@ -528,7 +588,7 @@ func (s *Session) spendTriageBudget(ctx context.Context, workItemID, decision st
 		}
 		return spent, nil
 	case decisionRerun:
-		counters, err := s.options.Triage.RecordRerun(ctx, workItemID)
+		counters, err := s.options.Triage.RecordRerun(ctx, workItemID, decided)
 		if err != nil {
 			return triageSpend{}, err
 		}
@@ -537,7 +597,7 @@ func (s *Session) spendTriageBudget(ctx context.Context, workItemID, decision st
 			landed: fmt.Sprintf("the re-run is spent against %s's durable budget: %d re-run(s) of it are now recorded", workItemID, counters.Reruns),
 		}, nil
 	default:
-		counters, err := s.options.Triage.RecordMergeRearm(ctx, workItemID)
+		counters, err := s.options.Triage.RecordMergeRearm(ctx, workItemID, decided)
 		if err != nil {
 			return triageSpend{}, err
 		}

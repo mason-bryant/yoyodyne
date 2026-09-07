@@ -40,6 +40,13 @@ package runstate
 // than the decision: an action records itself through one of them and is
 // refused by the cap it finds, instead of arriving with a budget of its own
 // invention.
+//
+// What each of those three writes beside the counter it spends is the decision
+// that authorized it — which stoppage, whose reasoning, and where it was
+// recorded — in the same update and under the same lock, so an item's record
+// cannot say a budget was spent without saying what was decided. That is what
+// the hand afterwards reads instead of taking words from whoever typed the
+// command. See triagedecision.go.
 
 import (
 	"context"
@@ -205,6 +212,13 @@ type TriageCounters struct {
 	// under the same lock. An item nobody has decided anything like this about
 	// carries none, which is every item. See triageoverride.go.
 	Overrides []TriageOverride `json:"overrides,omitempty"`
+	// Decisions are the development manager's own decisions about this item's
+	// stoppages, one standing per stopped run. They are kept here for the reason
+	// the overrides are, and for a sharper version of it: the counters say a
+	// budget was spent and the decision says what was decided and by whom, so a
+	// carry-out that read them from two places could act on a decision the spend
+	// beside it never authorized. See triagedecision.go.
+	Decisions []TriageDecision `json:"decisions,omitempty"`
 	UpdatedAt time.Time        `json:"updated_at"`
 }
 
@@ -264,6 +278,7 @@ func (c TriageCounters) Validate() error {
 		problems = append(problems, errors.New("a charging process requires the round it charged"))
 	}
 	problems = append(problems, validateTriageOverrides(c.Overrides)...)
+	problems = append(problems, validateTriageDecisions(c.Decisions)...)
 	if c.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("updated at is required"))
 	}
@@ -783,15 +798,28 @@ func NewChargingProcess() (string, error) {
 // It is written before the developer is handed anything, so a process that dies
 // between the two has spent a grant it did not give. That is the direction this
 // record exists to fail in: the other one is a grant given twice.
-func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds int, at time.Time, caps TriageCaps) (RepairGrant, error) {
+//
+// The decision that bought it is written in the same update, because a spend is
+// only ever authorized by one: what the counters would say on their own is that
+// somebody was given a grant, and what a later reader needs is which stoppage it
+// was about and who decided it. See triagedecision.go.
+func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, decision TriageDecision, rounds int, at time.Time, caps TriageCaps) (RepairGrant, error) {
 	if rounds < 1 {
 		return RepairGrant{}, errors.New("a repair grant gives at least one round")
 	}
 	if err := caps.Validate(); err != nil {
 		return RepairGrant{}, err
 	}
+	when := at
+	if when.IsZero() {
+		when = time.Now()
+	}
+	decided, err := spendingDecision(decision, TriageDecisionRepair, when)
+	if err != nil {
+		return RepairGrant{}, err
+	}
 	granted := RepairGrant{Requested: rounds}
-	counters, err := s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+	counters, err := s.update(ctx, workItemID, when, func(counters *TriageCounters) error {
 		// The caps as the operator's own recorded decisions leave them. Every
 		// refusal below is against these rather than against what the project
 		// configured, which is the whole of what makes an override executable: the
@@ -844,7 +872,7 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 		counters.RepairGrants++
 		counters.GrantedRounds += granted.Rounds
 		counters.CommittedRounds = counters.committed() + granted.Rounds
-		return nil
+		return counters.recordDecision(decided)
 	})
 	if err != nil {
 		return RepairGrant{}, err
@@ -870,11 +898,25 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 // reason recorded as the run's selection reason. Both belong to the caller —
 // this store counts budgets, it does not start runs — and an action that
 // reached here without them has gone around the invariant, not through it.
-func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at time.Time, caps TriageCaps) (TriageCounters, error) {
+//
+// The decision itself is written in the same update, and for the re-run that is
+// the half the invariant turns on: the selection reason a fresh run records
+// names the development manager, and what makes that attribution evidence rather
+// than an assertion is that the words in it are read back from what the role
+// recorded here. See triagedecision.go.
+func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, decision TriageDecision, at time.Time, caps TriageCaps) (TriageCounters, error) {
 	if err := caps.Validate(); err != nil {
 		return TriageCounters{}, err
 	}
-	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+	when := at
+	if when.IsZero() {
+		when = time.Now()
+	}
+	decided, err := spendingDecision(decision, TriageDecisionRerun, when)
+	if err != nil {
+		return TriageCounters{}, err
+	}
+	return s.update(ctx, workItemID, when, func(counters *TriageCounters) error {
 		// The caps as the operator's own recorded decisions leave them, for the
 		// reason a grant's are: this refusal is the one that deadlocked the
 		// escalation protocol, and an override is what crosses it.
@@ -910,7 +952,7 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at tim
 			}
 		}
 		counters.Reruns++
-		return nil
+		return counters.recordDecision(decided)
 	})
 }
 
@@ -928,11 +970,22 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at tim
 // that lease, and the re-arm repeats only the identical, already-authorized
 // forge request against a head and target the original gate's checks still
 // pass. Those belong to the action; this store counts what it has been given.
-func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, at time.Time, caps TriageCaps) (TriageCounters, error) {
+//
+// The decision that bought it is written in the same update, as every other
+// spend's is. See triagedecision.go.
+func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, decision TriageDecision, at time.Time, caps TriageCaps) (TriageCounters, error) {
 	if err := caps.Validate(); err != nil {
 		return TriageCounters{}, err
 	}
-	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+	when := at
+	if when.IsZero() {
+		when = time.Now()
+	}
+	decided, err := spendingDecision(decision, TriageDecisionRearm, when)
+	if err != nil {
+		return TriageCounters{}, err
+	}
+	return s.update(ctx, workItemID, when, func(counters *TriageCounters) error {
 		permitted := caps.Overridden(counters.Overrides)
 		// One budget, because a re-arm buys no round: there is no second bound for it
 		// to stand behind and nothing else to say in the same breath.
@@ -948,8 +1001,25 @@ func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, a
 			}
 		}
 		counters.MergeRearms++
-		return nil
+		return counters.recordDecision(decided)
 	})
+}
+
+// spendingDecision is the decision a spend is authorized by, checked against the
+// operation being asked for. The word and the budget have to agree: an operation
+// that took whatever decision it was handed would let a wait pay for a re-run,
+// which is the attribution the whole record exists to make impossible.
+func spendingDecision(decision TriageDecision, expected string, at time.Time) (TriageDecision, error) {
+	prepared, err := prepareTriageDecision(decision, at)
+	if err != nil {
+		return TriageDecision{}, err
+	}
+	if prepared.Decision != expected {
+		return TriageDecision{}, fmt.Errorf(
+			"a %q spend is authorized by a %q decision, and this one is %q; nothing was recorded and nothing was spent",
+			expected, expected, prepared.Decision)
+	}
+	return prepared, nil
 }
 
 // RoundKey names the developer attempt one review judged: the run it was made

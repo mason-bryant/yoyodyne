@@ -21,6 +21,24 @@ import (
 // else a round has to have been charged by somebody and this is who.
 const countingProcess = "pid-1-000000000000000a"
 
+// decidedRunID is the stoppage the decisions below are about. Every spend is
+// authorized by a decision now, and the tests here are about the budgets rather
+// than about which stoppage was decided, so one run stands for all of them.
+const decidedRunID = "run-11112222333344445555666677778888"
+
+// triageDecided is one decision as the durable record requires it: the word, the
+// stoppage, the reasoning, and who recorded it where.
+func triageDecided(decision, runID string) TriageDecision {
+	return TriageDecision{
+		Decision:     decision,
+		RunID:        runID,
+		Reason:       "the reasoning the development manager recorded for this decision",
+		DecidedBy:    "development manager",
+		Conversation: "chat-0123456789abcdef",
+		Turn:         3,
+	}
+}
+
 func newTriageStore(t *testing.T) *TriageStore {
 	t.Helper()
 	store, err := NewTriageStore(t.TempDir(), domain.ProductID("yoyodyne"))
@@ -67,7 +85,7 @@ func TestTriageCountersSurviveTheProcessThatWroteThem(t *testing.T) {
 	if _, err := first.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", countingProcess, time.Now()); err != nil {
 		t.Fatalf("RecordReviewRound() error = %v", err)
 	}
-	if _, err := first.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); err != nil {
+	if _, err := first.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 
@@ -228,7 +246,7 @@ func TestARepairGrantIsTruncatedToTheRoundsTheCapHasRoomFor(t *testing.T) {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
-	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), caps)
+	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -261,7 +279,7 @@ func TestASecondGrantIsTruncatedAgainstWhatTheFirstAlreadyPromised(t *testing.T)
 	// Three grants permitted so the round cap is what answers here rather than the
 	// grant budget, which is the bound this is not about.
 	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 3, Reruns: 1, MergeRearms: 1}
-	first, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 3, time.Now(), caps)
+	first, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 3, time.Now(), caps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -270,7 +288,7 @@ func TestASecondGrantIsTruncatedAgainstWhatTheFirstAlreadyPromised(t *testing.T)
 	}
 	// Not one round has been produced in between, so a grant truncated against the
 	// rounds counted would be given three again.
-	second, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 3, time.Now(), caps)
+	second, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 3, time.Now(), caps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -282,7 +300,7 @@ func TestASecondGrantIsTruncatedAgainstWhatTheFirstAlreadyPromised(t *testing.T)
 	}
 	// And with the cap's room entirely promised, a third is refused outright
 	// rather than granted nothing.
-	_, err = store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), caps)
+	_, err = store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
 	if !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("GrantRepair() with the cap's room promised = %v, want a refusal", err)
 	}
@@ -296,7 +314,7 @@ func TestASecondGrantIsTruncatedAgainstWhatTheFirstAlreadyPromised(t *testing.T)
 	}
 	// A re-run is refused by the same room, because it too would produce a verdict
 	// past what the cap has left.
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordRerun() with the cap's room promised = %v, want a refusal", err)
 	}
 }
@@ -310,7 +328,7 @@ func TestAGrantThatHasBeenCarriedOutIsNotChargedTwice(t *testing.T) {
 
 	store := newTriageStore(t)
 	caps := TriageCaps{ReviewRounds: 8, RepairGrants: 2, Reruns: 1, MergeRearms: 1}
-	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), caps); err != nil {
+	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	for _, attempt := range []string{"run-a#1", "run-a#2"} {
@@ -318,7 +336,7 @@ func TestAGrantThatHasBeenCarriedOutIsNotChargedTwice(t *testing.T) {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
-	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), caps)
+	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -340,7 +358,7 @@ func TestARepairGrantWithRoomIsGivenInFull(t *testing.T) {
 	t.Parallel()
 
 	store := newTriageStore(t)
-	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1})
+	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1})
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -370,19 +388,19 @@ func TestTriageActionsAreRefusedPastTheirCaps(t *testing.T) {
 	}
 	grant := func(caps TriageCaps) func(*TriageStore) error {
 		return func(store *TriageStore) error {
-			_, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), caps)
+			_, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
 			return err
 		}
 	}
 	rerun := func(caps TriageCaps) func(*TriageStore) error {
 		return func(store *TriageStore) error {
-			_, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps)
+			_, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps)
 			return err
 		}
 	}
 	rearm := func(caps TriageCaps) func(*TriageStore) error {
 		return func(store *TriageStore) error {
-			_, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", time.Now(), caps)
+			_, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRearm, decidedRunID), time.Now(), caps)
 			return err
 		}
 	}
@@ -493,12 +511,12 @@ func TestARepairGrantIsRefusedWhenNoRoundsRemain(t *testing.T) {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
-	_, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), caps)
+	_, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
 	if !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("GrantRepair() error = %v, want a refusal for want of rounds", err)
 	}
 	// And so is a re-run, which buys a whole run of rounds the item cannot spend.
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordRerun() error = %v, want a refusal for want of rounds", err)
 	}
 }
@@ -535,7 +553,7 @@ func TestASecondTriagePassIsVisibleFromTheItemsRecordAlone(t *testing.T) {
 
 	store := newTriageStore(t)
 	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}
-	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), caps); err != nil {
+	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	after, err := store.Counters("yoyodyne-ifd.7")
@@ -545,7 +563,7 @@ func TestASecondTriagePassIsVisibleFromTheItemsRecordAlone(t *testing.T) {
 	if after.Passes() != 1 || after.TriagedAgain() {
 		t.Fatalf("counters after one pass = %+v, want one pass and no repeat", after)
 	}
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	again, err := store.Counters("yoyodyne-ifd.7")
@@ -568,15 +586,15 @@ func TestTriageCountersAreKeptPerWorkItem(t *testing.T) {
 	// each taking one is exactly the leak this would catch: a budget shared
 	// between them would refuse the second item its first re-run.
 	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1}
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.8", time.Now(), caps); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.8", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() on a second item error = %v", err)
 	}
 	// Two identifiers that a naive file name would fold together stay apart, which
 	// is what the digest in the name is for.
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd-7", time.Now(), caps); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd-7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() on a similarly named item error = %v", err)
 	}
 	for _, item := range []string{"yoyodyne-ifd.7", "yoyodyne-ifd.8", "yoyodyne-ifd-7"} {
@@ -632,7 +650,7 @@ func TestUnreadableTriageCountersAreARefusalRatherThanAnEmptyBudget(t *testing.T
 	t.Parallel()
 
 	store := newTriageStore(t)
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1}); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1}); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	entries, err := os.ReadDir(store.Root())
@@ -655,7 +673,7 @@ func TestUnreadableTriageCountersAreARefusalRatherThanAnEmptyBudget(t *testing.T
 	if _, err := store.Counters("yoyodyne-ifd.7"); err == nil {
 		t.Fatal("Counters() over an unreadable record = nil error, want a refusal")
 	}
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{ReviewRounds: 5, RepairGrants: 1, Reruns: 1}); err == nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), TriageCaps{ReviewRounds: 5, RepairGrants: 1, Reruns: 1}); err == nil {
 		t.Fatal("RecordRerun() over an unreadable record = nil error, want a refusal")
 	}
 }
@@ -671,7 +689,7 @@ func TestTriageCountersOfAnotherProductAreRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageStore() error = %v", err)
 	}
-	if _, err := mine.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1}); err != nil {
+	if _, err := mine.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1}); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	theirs, err := NewTriageStore(root, domain.ProductID("other"))
@@ -786,7 +804,7 @@ func TestCountersWrittenBeforeCommittedRoundsAreStillSpendable(t *testing.T) {
 	if counters.RoundsUncommitted(4) != 2 || counters.RoundsRemaining(4) != 2 {
 		t.Fatalf("counters = %+v, want the two rounds the cap has left, promised to nothing", counters)
 	}
-	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 2, Reruns: 1, MergeRearms: 1})
+	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 2, Reruns: 1, MergeRearms: 1})
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -802,17 +820,17 @@ func TestNegativeTriageCapsAreRefused(t *testing.T) {
 	t.Parallel()
 
 	store := newTriageStore(t)
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{ReviewRounds: -1}); err == nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), TriageCaps{ReviewRounds: -1}); err == nil {
 		t.Fatal("RecordRerun() with a negative cap = nil error, want a refusal")
 	}
 	// Zero is a choice -- never do this, hand it to a person -- and refuses the
 	// action rather than the caps. `triage.review_rounds_cap` accepts zero for
 	// exactly this: an item that reaches triage is escalated or re-scoped rather
 	// than repaired again.
-	if _, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{}); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRearm, decidedRunID), time.Now(), TriageCaps{}); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordMergeRearm() under a zero cap = %v, want a cap refusal", err)
 	}
-	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), TriageCaps{ReviewRounds: 0}); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), TriageCaps{ReviewRounds: 0}); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("GrantRepair() under a zero round cap = %v, want a cap refusal", err)
 	}
 }
@@ -836,7 +854,7 @@ func TestAnUnchargedVerdictLeavesEveryBudgetWhereItStood(t *testing.T) {
 	// An item mid-flight rather than a fresh one: a grant recorded, a round spent
 	// against it, so every counter the record keeps carries something an uncharged
 	// verdict could disturb.
-	if _, err := store.GrantRepair(ctx, item, 2, time.Now(), caps); err != nil {
+	if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	if _, err := store.RecordReviewRound(ctx, item, "run-a#1", countingProcess, time.Now()); err != nil {
@@ -913,7 +931,7 @@ func TestTheDocumentedCapEscalationsNoLongerEscalate(t *testing.T) {
 				}
 			},
 			decision: func(store *TriageStore, item string) error {
-				_, err := store.RecordRerun(context.Background(), item, time.Now(), caps)
+				_, err := store.RecordRerun(context.Background(), item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps)
 				return err
 			},
 		},
@@ -927,7 +945,7 @@ func TestTheDocumentedCapEscalationsNoLongerEscalate(t *testing.T) {
 				}
 			},
 			decision: func(store *TriageStore, item string) error {
-				_, err := store.GrantRepair(context.Background(), item, 1, time.Now(), caps)
+				_, err := store.GrantRepair(context.Background(), item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
 				return err
 			},
 		},
@@ -946,7 +964,7 @@ func TestTheDocumentedCapEscalationsNoLongerEscalate(t *testing.T) {
 				}
 			},
 			decision: func(store *TriageStore, item string) error {
-				_, err := store.GrantRepair(context.Background(), item, 1, time.Now(), caps)
+				_, err := store.GrantRepair(context.Background(), item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
 				return err
 			},
 		},
@@ -992,12 +1010,12 @@ func TestTwoSpentBudgetsRefuseOneDecisionTogether(t *testing.T) {
 	// One grant given and its rounds spent, which puts the item at the end of both
 	// budgets at once: the grant budget by the grant, the round budget by what it
 	// committed.
-	if _, err := store.GrantRepair(ctx, item, 2, time.Now(), caps); err != nil {
+	if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	spendTriageRounds(t, store, item, 4)
 
-	_, err := store.GrantRepair(ctx, item, 1, time.Now(), caps)
+	_, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
 	var refusal TriageCapError
 	if !errors.As(err, &refusal) {
 		t.Fatalf("second GrantRepair() error = %v, want a cap refusal", err)
@@ -1036,7 +1054,7 @@ func TestTwoSpentBudgetsRefuseOneDecisionTogether(t *testing.T) {
 	}, time.Now(), caps); err != nil {
 		t.Fatalf("Override() error = %v", err)
 	}
-	_, err = store.GrantRepair(ctx, item, 1, time.Now(), caps)
+	_, err = store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
 	var crossed TriageCapError
 	if !errors.As(err, &crossed) || len(crossed.Refusals) != 1 {
 		t.Fatalf("GrantRepair() past the first override = %v, want the round budget alone still refusing it", err)

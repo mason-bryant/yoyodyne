@@ -45,7 +45,7 @@ func TestAnOperatorOverrideCrossesTheRoundCapThatDeadlockedTheEscalation(t *test
 	// Where it stopped: five of four, and the development manager cannot record
 	// the decision the operator is about to be asked to rule on.
 	var refusal TriageCapError
-	if _, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps); !errors.As(err, &refusal) {
+	if _, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), overrideCaps); !errors.As(err, &refusal) {
 		t.Fatalf("RecordRerun() at 5 of 4 rounds error = %v, want a cap refusal", err)
 	}
 	if _, refusedByRounds := refusal.RefusedBy(TriageReviewRoundBudget); !refusedByRounds {
@@ -75,7 +75,7 @@ func TestAnOperatorOverrideCrossesTheRoundCapThatDeadlockedTheEscalation(t *test
 
 	// The ledger now accepts the decision the escalation was about, which is the
 	// whole of what the re-run verb requires before it starts anything.
-	after, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps)
+	after, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), overrideCaps)
 	if err != nil {
 		t.Fatalf("RecordRerun() past a recorded override error = %v, want it accepted", err)
 	}
@@ -104,11 +104,11 @@ func TestAnOverrideRaisesOneBudgetAndLeavesTheRestRefusing(t *testing.T) {
 
 	// The item's own re-run budget is untouched, so the second re-run is refused
 	// exactly as it was before anybody crossed anything.
-	if _, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps); err != nil {
+	if _, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), overrideCaps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	var refusal TriageCapError
-	_, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps)
+	_, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), overrideCaps)
 	if !errors.As(err, &refusal) {
 		t.Fatalf("second RecordRerun() error = %v, want a cap refusal", err)
 	}
@@ -118,7 +118,7 @@ func TestAnOverrideRaisesOneBudgetAndLeavesTheRestRefusing(t *testing.T) {
 
 	// And the room the override gave runs out: six rounds spent is six of six.
 	spendRounds(t, store, item, 5, 6)
-	if _, err := store.GrantRepair(ctx, item, 1, time.Now(), overrideCaps); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), overrideCaps); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("GrantRepair() at the raised cap error = %v, want the raised cap refusing it in turn", err)
 	}
 }
@@ -145,17 +145,17 @@ func TestAClearedBudgetStopsRefusing(t *testing.T) {
 		t.Fatalf("Overridden() re-run cap = %d, want it cleared", got)
 	}
 	for taken := range 3 {
-		if _, err := store.RecordRerun(ctx, item, time.Now(), overrideCaps); err != nil {
+		if _, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), overrideCaps); err != nil {
 			t.Fatalf("RecordRerun() %d past a cleared cap error = %v", taken+1, err)
 		}
 	}
 	// Clearing one budget clears one budget. The merge re-arms are still two.
 	for taken := range 2 {
-		if _, err := store.RecordMergeRearm(ctx, item, time.Now(), overrideCaps); err != nil {
+		if _, err := store.RecordMergeRearm(ctx, item, triageDecided(TriageDecisionRearm, decidedRunID), time.Now(), overrideCaps); err != nil {
 			t.Fatalf("RecordMergeRearm() %d error = %v", taken+1, err)
 		}
 	}
-	if _, err := store.RecordMergeRearm(ctx, item, time.Now(), overrideCaps); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.RecordMergeRearm(ctx, item, triageDecided(TriageDecisionRearm, decidedRunID), time.Now(), overrideCaps); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordMergeRearm() past its own cap error = %v, want it still refused", err)
 	}
 }
@@ -378,7 +378,7 @@ func TestAConfiguredRaisePastAnOverrideDoesNotLowerThatItemsCap(t *testing.T) {
 	// And the guards agree, which is the half that matters: the item has spent
 	// five, so it has room under ten and would have none under eight-as-a-ceiling
 	// only if the override had been allowed to lower anything.
-	if _, err := store.GrantRepair(ctx, item, 4, time.Now(), raised); err != nil {
+	if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 4, time.Now(), raised); err != nil {
 		t.Fatalf("GrantRepair() under the raised configured cap error = %v", err)
 	}
 
