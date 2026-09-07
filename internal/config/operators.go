@@ -59,6 +59,17 @@ const (
 	// holds it, because the coordination design assumes intent that cannot
 	// conflict with itself — several humans amending goals concurrently is
 	// conflict machinery nobody has designed (docs/team-mode-scope.md).
+	//
+	// Nothing checks it. `yoyo artifact approve` records `by: operator` on the
+	// strength of whoever ran the command, and a terminal carries no identifier to
+	// resolve against the mapping, so this grant is the project's record of who
+	// owns intent rather than a gate an act passes through — the duplicate-holder
+	// refusal below is the whole of what reads it. What actually keeps an agent
+	// out of the goals is stated in internal/chat/admission.go and rests on two
+	// other enforcements: a conversation runs with no tools, and a run's change is
+	// refused at the protected homes before any check or reviewer sees it.
+	// Recording the resolved human here is designed and unbuilt
+	// (docs/team-mode-coordination.md, "Operator identity, designed once").
 	GrantOwnIntent Grant = "own-intent"
 	// GrantDirectWork is the authority to steer work already in flight: the
 	// directives that reach a run, and the thread replies the Slack sink records
@@ -129,6 +140,12 @@ func (c Config) ResolveOperator(namespace Namespace, identifier string) (string,
 // OperatorHolds is the whole of an authority check: resolve the human from
 // whichever namespace the act arrived through, then ask what that human may do.
 // An unbound identifier holds nothing, so the check defaults closed.
+//
+// It is what an authority check would be rather than one anything makes yet.
+// SlackOperators below is the only reading of a grant that reaches an
+// enforcement point, and a thread reply is the only act carrying an identifier
+// this could be asked about; every other arrival is a command line, which says
+// nothing about who typed at it.
 func (c Config) OperatorHolds(namespace Namespace, identifier string, grant Grant) bool {
 	_, operator, found := c.ResolveOperator(namespace, identifier)
 	return found && operator.Holds(grant)
