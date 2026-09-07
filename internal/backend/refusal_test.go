@@ -52,6 +52,10 @@ var providerInvocations = map[string]string{
 	"internal/cli/exchange.go": "an inter-role ask exchange answering a round: exchangeVoice.noteUsageLimit " +
 		"records the refusal naming the exchange it stopped, because an answering round has neither a run " +
 		"to park nor a conversation of its own to fail at anybody's terminal",
+	"internal/cli/sidestream.go": "a side conversation taking a turn: sideVoice.noteSideUsageLimit records the " +
+		"refusal naming the side thread it stopped and the main conversation that thread is held beside, " +
+		"because a side turn has no run to park and the conversation it is beside is not its own to fail — " +
+		"and a side thread is exactly the question somebody asked because the main thread was already busy",
 }
 
 // TestEveryProviderInvocationAccountsForAnExhaustedLimit fails when the tree

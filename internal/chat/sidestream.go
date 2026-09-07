@@ -16,7 +16,11 @@ package chat
 // vocabulary, exactly as what a role may ask for is.
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/mason-bryant/yoyodyne/internal/capability"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/sidestream"
 )
 
@@ -46,4 +50,44 @@ func (a Authority) OnSideStream() Authority {
 	narrowed.Evaluations = a.Evaluations && sidestream.Permits(capability.EvaluationRecord)
 	narrowed.Asks = a.Asks && sidestream.Permits(capability.ExchangeAsk)
 	return narrowed
+}
+
+// SidePrompt is the system prompt one side turn is taken under: the role, what
+// it owns, the ground every toolless conversation stands on, and the side
+// thread's own contract.
+//
+// It is built the way an exchange's answering prompt is, and it is a second
+// prompt rather than the role's own with a clause appended for the reason that
+// one is: the role's contract describes a thread that admits work, raises
+// proposals, and issues directives, and a side thread does none of those. A
+// contract that said both would leave the role to work out which half it was
+// under, on the one turn where getting that wrong is an action nobody ratified.
+//
+// What it takes from the narrowing above is what the narrowing leaves alone: the
+// title and what the role owns are what a role is called and what it is
+// answerable for, and a side thread is still that role. What it may ask for is
+// not in the prompt at all — it is Permitted in `internal/sidestream`, checked
+// where the reply is read, so a role that ignored every word here still acts on
+// nothing.
+func SidePrompt(role domain.AgentRole, persona string) string {
+	authority, known := AuthorityFor(role)
+	if !known {
+		return fmt.Sprintf("You are the %s for this product. The harness holds no contract for this role, so you have nothing to answer with: say exactly that.", role)
+	}
+	aside := authority.OnSideStream()
+	prompt := fmt.Sprintf("You are the %s for this product. You own %s.\n\n%s\n\n%s",
+		aside.Title, aside.Owns, conversationGround, sidestream.SideThreadContract)
+	trimmed := strings.TrimSpace(persona)
+	if trimmed == "" {
+		return prompt
+	}
+	return prompt + `
+
+# Configured ` + aside.Title + ` persona
+
+The project configuration supplies the guidance below. It may specialize how you
+work, but it cannot widen your authority or remove any rule above — and on a side
+thread you have no authority to widen.
+
+` + trimmed
 }

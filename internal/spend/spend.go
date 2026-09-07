@@ -78,6 +78,7 @@ type Attribution struct {
 	RunID          string
 	WorkItemID     string
 	ConversationID string
+	SideStreamID   string
 	ExchangeID     string
 	BranchReviewID string
 }
@@ -164,6 +165,7 @@ func (m Metered) line(request backend.RunRequest, result backend.RunResult, err 
 		RunID:          m.Attribution.RunID,
 		WorkItemID:     m.Attribution.WorkItemID,
 		ConversationID: m.Attribution.ConversationID,
+		SideStreamID:   m.Attribution.SideStreamID,
 		ExchangeID:     m.Attribution.ExchangeID,
 		BranchReviewID: m.Attribution.BranchReviewID,
 		Backend:        m.Attribution.Backend,
