@@ -14,12 +14,14 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -139,6 +141,34 @@ func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workIte
 
 func (b conversationTriageBudgets) RecordDecision(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
 	return b.store.RecordDecision(ctx, workItemID, decision, b.clock.Now())
+}
+
+// conversationHeldWork wires what the harness is holding for a person into the
+// conversation that corrects backlog state, so a repair is refused by the same
+// hold that keeps the item out of the queue.
+//
+// It is the shared derivation rather than a reading of its own, which is the
+// whole point of wiring it here: a conversation that worked out for itself which
+// work is held would be a second opinion about it, in front of the role that
+// acts on the answer. A run store this process has none of leaves it unwired,
+// and an unwired conversation corrects nothing rather than correcting whatever
+// it cannot see a hold on.
+func conversationHeldWork(parts components) chat.HeldWork {
+	if parts.store == nil {
+		return nil
+	}
+	return conversationHolds{store: parts.store}
+}
+
+// conversationHolds reads the held work through the read model, on demand: what
+// is held changes as runs stop and as triage decides, so a repair asks now
+// rather than at the moment the conversation opened.
+type conversationHolds struct {
+	store *runstate.Store
+}
+
+func (h conversationHolds) HeldForAPerson(context.Context) (backlog.Holds, error) {
+	return readmodel.HeldForAPerson(h.store)
 }
 
 // conversationStoppages wires the durable run records a triage decision is

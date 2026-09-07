@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -706,9 +707,12 @@ func TestSurveyingTheQueueAnswersFromTheTrackerRatherThanTheOpeningPicture(t *te
 	}
 
 	// A survey is a read of the tracker's own open slice, which is the same slice
-	// the opening picture was assembled from.
-	if len(tracker.listed) != 1 || tracker.listed[0] != openWorkItemStatus {
-		t.Fatalf("statuses surveyed = %#v, want one survey of the open items", tracker.listed)
+	// the opening picture was assembled from, and of the blocked slice beside it:
+	// the state a repair corrects is judged over the whole admitted queue, and a
+	// status left over from a stoppage that ended is exactly what keeps an item
+	// out of the open listing.
+	if want := []string{openWorkItemStatus, blockedWorkItemStatus}; !slices.Equal(tracker.listed, want) {
+		t.Fatalf("statuses surveyed = %#v, want %#v", tracker.listed, want)
 	}
 	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
 		t.Fatalf("actions = %#v", reply.Actions)

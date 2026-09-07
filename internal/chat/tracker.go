@@ -21,6 +21,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/admission"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/backlogrepair"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
@@ -144,6 +145,14 @@ const (
 	actionUnpark = "unpark"
 	actionLink   = "link"
 	actionUnlink = "unlink"
+	// actionRepair corrects backlog state the records have made stale: a status
+	// of blocked with nothing unfinished behind it, a dependency on work that
+	// closed, an attribution the goals no longer state. It is not an update with
+	// a well-chosen argument, because its subject is not what the item says but
+	// whether what the tracker records about it is still true — the harness
+	// judges that against the records before it writes anything, and refuses the
+	// act where they still say the old state is right. See repair.go.
+	actionRepair = "repair"
 	actionClose  = "close"
 	actionRetire = "retire"
 	// actionTriage records what the development manager decided about work that
@@ -179,6 +188,7 @@ var trackerActionArguments = map[string][]string{
 	actionUnpark:       {},
 	actionLink:         {"depends_on"},
 	actionUnlink:       {"depends_on"},
+	actionRepair:       {"state", "depends_on", "goal"},
 	actionClose:        {},
 	actionRetire:       {},
 	actionTriage:       {"run", "decision"},
@@ -214,6 +224,7 @@ var trackerCapabilities = map[string]capability.Capability{
 	actionUnpark:       capability.BacklogOrder,
 	actionLink:         capability.WorkDecompose,
 	actionUnlink:       capability.WorkDecompose,
+	actionRepair:       capability.WorkItemRepairState,
 	actionClose:        capability.BacklogAdmit,
 	actionRetire:       capability.BacklogAdmit,
 	actionTriage:       capability.WorkTriage,
@@ -224,8 +235,8 @@ var trackerCapabilities = map[string]capability.Capability{
 // so a refusal names exactly what was available.
 var trackerActionNames = []string{
 	actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate, actionReparent,
-	actionReprioritize, actionPark, actionUnpark, actionLink, actionUnlink, actionClose,
-	actionRetire, actionTriage, actionHandle,
+	actionReprioritize, actionPark, actionUnpark, actionLink, actionUnlink, actionRepair,
+	actionClose, actionRetire, actionTriage, actionHandle,
 }
 
 // providerPathClause is what every role that writes an item's text is told
@@ -320,6 +331,12 @@ type TrackerAction struct {
 	// item, and it is what the next admission citing the same report is checked
 	// against — which is how one report stops producing the same work twice.
 	Report string `json:"report,omitempty"`
+	// State is which kind of stale backlog state a repair corrects, from the
+	// vocabulary internal/backlogrepair declares. It is required there and taken
+	// by nothing else: the three are found in different records and corrected by
+	// different writes, and an act that did not say which it was would be the
+	// harness guessing which of an item's states the role meant.
+	State backlogrepair.Class `json:"state,omitempty"`
 	// Decision is what triage decided, from the fixed vocabulary in triage.go. It
 	// is a named decision rather than prose because the harness acts on it — a
 	// repair, a re-run, and a re-arm each spend a budget, and an escalation
@@ -820,6 +837,8 @@ func (a TrackerAction) validateArguments() []error {
 		} else if strings.TrimSpace(a.DependsOn) == strings.TrimSpace(a.ID) {
 			problems = append(problems, errors.New("an item cannot depend on itself"))
 		}
+	case actionRepair:
+		problems = append(problems, a.repairProblems()...)
 	case actionTriage:
 		problems = append(problems, a.triageProblems()...)
 	case actionHandle:
@@ -942,6 +961,9 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(a.Note) != "" {
 		carried = append(carried, "note")
+	}
+	if strings.TrimSpace(string(a.State)) != "" {
+		carried = append(carried, "state")
 	}
 	if strings.TrimSpace(a.Run) != "" {
 		carried = append(carried, "run")
@@ -1232,6 +1254,13 @@ func refuseWhenClosed(action, id, status string) string {
 		return fmt.Sprintf("%s is already closed, so there was nothing to close", id)
 	case actionRetire:
 		return fmt.Sprintf("%s is already closed and has left the backlog, so there was nothing to retire", id)
+	case actionRepair:
+		// Closed work has left the backlog, so what its status, its links, and its
+		// attribution say decides nothing about what happens next: correcting one
+		// would be tidying a record nothing reads, and clearing a blocked status on
+		// it would put finished work back in the queue. A note about what was
+		// learned is still worth writing, which is what "update" is for.
+		return fmt.Sprintf("%s is closed and has left the backlog, so nothing selects it and its state decides nothing; it was left exactly as it is", id)
 	case actionTriage:
 		// Triage decides what becomes of work that stopped, and closed work has
 		// left the backlog: there is nothing to hand back, nothing to run again,
@@ -1270,7 +1299,11 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			outcome.fail(err)
 			return
 		}
-		outcome.Detail = renderOpenQueueEvidence(items, s.options.Goals)
+		// The stale state goes with the survey rather than into a listing of its
+		// own, because the pass that corrects it is the pass that takes a survey:
+		// a status left over from a stoppage that ended is invisible in a listing
+		// of open work, since that status is exactly what keeps the item out of it.
+		outcome.Detail = renderOpenQueueEvidence(items, s.options.Goals) + s.renderStaleBacklogState(ctx, items)
 		outcome.applied("surveyed the queue: %d open item(s) as the tracker holds it now", len(items))
 	case actionCreate:
 		// Admission carries the priority it is admitted at, because the item's
@@ -1507,6 +1540,8 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			return
 		}
 		outcome.applied("retired %s from the backlog without it being done", id)
+	case actionRepair:
+		s.carryOutRepair(ctx, outcome)
 	case actionTriage:
 		s.carryOutTriage(ctx, outcome)
 	case actionHandle:

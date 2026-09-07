@@ -369,6 +369,14 @@ func (t *openItemTracker) Block(_ context.Context, id, reason string) (beads.Wor
 	return t.item(), nil
 }
 
+func (t *openItemTracker) Unblock(_ context.Context, id, note string) (beads.WorkItem, error) {
+	if id != t.id {
+		return beads.WorkItem{}, fmt.Errorf("this tracker holds %s rather than %s", t.id, id)
+	}
+	t.notes = append(t.notes, note)
+	return t.item(), nil
+}
+
 func (t *openItemTracker) AddBlocker(context.Context, string, string) error    { return nil }
 func (t *openItemTracker) RemoveBlocker(context.Context, string, string) error { return nil }
 
