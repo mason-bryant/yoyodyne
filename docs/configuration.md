@@ -3653,10 +3653,38 @@ person.
 | `own-intent` | stating and approving what the product is for: the brief, the goals, and the non-goals. **At most one human may hold it** — several people amending goals concurrently is conflict machinery nobody has designed. |
 | `direct-work` | steering work already in flight: the directives that reach a run, and the thread replies the Slack sink acts on. |
 
-The grants are checked where the act arrives rather than where it is recorded,
-which is what makes them worth stating: the point of attaching authority to a
-person is that `by: operator` becomes a proven human rather than whoever ran the
-command.
+**One grant is checked today, and it is worth being exact about which.** The
+Slack sink's allow-list is derived from the `direct-work` holders who bound a
+member id, so a thread reply is acted on or refused by asking this mapping who
+sent it. That is a grant checked where the act arrives, and it is the only one —
+a thread reply is also the only act that carries an identifier the harness can
+resolve, because the workspace issued that identifier and put it on the message.
+
+**`own-intent` is checked by nothing, and `by: operator` proves only that a
+command was run.** A terminal carries no identifier at all, so `yoyo artifact
+approve` records `by: operator` on the strength of whoever ran it, and so do
+`yoyo amendment approve`, `yoyo directive record`, and the `--by` on `yoyo triage
+override`, which is a string somebody types. Nothing in any of those records
+distinguishes the operator from anything else with a shell. Read an `own-intent`
+grant as this project's record of who owns intent — which is what refuses a
+second holder when the configuration loads, and what a person auditing the
+mapping reads — rather than as a gate an act passes through.
+
+**What keeps an agent out of the goals is two enforcements that do not depend on
+the signature.** A conversation runs with no tools at all, so the roles that
+could argue for a goal cannot run a command; and a run's change is compared
+against the [protected paths](#protected-paths-in-a-developers-change) before any
+check runs and before any reviewer sees it, so an approval a developer wrote is
+refused with the rest of the diff and never reaches the repository the goals are
+read from. [What reaches the queue](#what-reaches-the-queue) rests on those two
+rather than on who an approval says gave it, which is what
+`internal/chat/admission.go` says in its own words. If either is ever loosened,
+this is what was resting on them.
+
+Making an approval name the resolved human, and refusing one from anybody who
+does not hold `own-intent`, is designed and not built.
+[Operator identity, designed once](team-mode-coordination.md#operator-identity-designed-once)
+is where it is specified, and what it would and would not close.
 
 ## Reporting to Slack
 
