@@ -235,10 +235,15 @@ func (a Answer) Tentative() bool { return len(a.Commitments) > 0 }
 // to them, and concludes them into the merge.
 type Runner struct {
 	Store Store
-	// Leases is what makes one side stream take its turns one at a time. A runner
-	// wired without one still works and is what a test holding a thread on its own
-	// gets; wired, a turn on a stream another process is carrying is refused
-	// rather than written over that process's turn.
+	// Leases is what makes one side stream take its turns one at a time, and it
+	// is required. A runner without one is a runner with no exclusion at all: two
+	// processes would each load the record and the second write would take the
+	// first away, which is a turn somebody paid for and nothing recorded.
+	//
+	// It is required rather than optional because that exclusion is the whole of
+	// what makes this safe to have, and an optional field is one a later caller
+	// forgets. The merge above is refused when it is missing for the same reason,
+	// and this fails the same way rather than quietly working without it.
 	//
 	// It is the stream's lease and never the main thread's, which is the whole of
 	// the concurrency answer: nothing here is a second holder of what the main
@@ -257,6 +262,26 @@ type Runner struct {
 	RepositoryID string
 	Now          func() time.Time
 	NewID        func() (string, error)
+}
+
+// wired reports a runner assembled without something it cannot work without,
+// before anything is recorded.
+//
+// The record and the lease are both checked here rather than where each is first
+// reached, because the alternative writes a stream and then discovers there is
+// nothing to hold it with — an orphan record for a turn that was never taken.
+// The merge is not checked here: a thread that never concludes never needs one,
+// and refusing to open a thread over a merge nothing has asked for yet would
+// refuse the case this is for.
+func (r Runner) wired() error {
+	switch {
+	case r.Store == nil:
+		return errors.New("no side stream store is wired, so nothing said on a side thread could be recorded")
+	case r.Leases == nil:
+		return errors.New("no leases are wired, so a turn on a side thread would exclude nothing")
+	default:
+		return nil
+	}
 }
 
 func (r Runner) now() time.Time {
@@ -299,8 +324,8 @@ func (r Runner) Put(ctx context.Context, ask Ask) (Answer, error) {
 	if err := ask.Validate(); err != nil {
 		return Answer{}, err
 	}
-	if r.Store == nil {
-		return Answer{}, errors.New("no side stream store is wired, so nothing said on a side thread could be recorded")
+	if err := r.wired(); err != nil {
+		return Answer{}, err
 	}
 	// A thread already open is held for the whole of what happens to it here.
 	// Two processes taking turns on one stream at once would each load the record
@@ -426,8 +451,8 @@ func (r Runner) Put(ctx context.Context, ask Ask) (Answer, error) {
 // the stream's own lease so nothing concludes a thread another process is
 // carrying.
 func (r Runner) Conclude(ctx context.Context, id, substance string, commitments []string, outcome Outcome) (Stream, error) {
-	if r.Store == nil {
-		return Stream{}, errors.New("no side stream store is wired, so there is no side thread to conclude")
+	if err := r.wired(); err != nil {
+		return Stream{}, err
 	}
 	if !outcome.Valid() {
 		return Stream{}, fmt.Errorf("outcome %q is not one a side stream ends with", outcome)
@@ -543,14 +568,16 @@ func (r Runner) speak(ctx context.Context, stream Stream, question string) (Spok
 // hold takes the lease on one side stream for the duration of what is about to
 // be done to it, and returns how to give it back.
 //
-// A runner with no leases wired takes nothing and returns a release that does
-// nothing, which is what a test holding a thread on its own gets. A lease a live
-// process holds is a refusal rather than a wait: what is owned here is one
-// thread's turn, and queueing for it would mean two processes taking turns
-// writing the same turn rather than one process having it.
+// A runner with no leases wired refuses rather than taking a turn nothing
+// excludes, which is the same way a missing merge is answered: the two are the
+// guarantees this package exists to hold, and one held only where somebody
+// remembered to wire it is not held. A lease a live process holds is a refusal
+// rather than a wait: what is owned here is one thread's turn, and queueing for
+// it would mean two processes taking turns writing the same turn rather than one
+// process having it.
 func (r Runner) hold(id string) (func(), error) {
 	if r.Leases == nil {
-		return func() {}, nil
+		return nil, fmt.Errorf("no leases are wired to this runner, so a turn on %s would exclude nothing", id)
 	}
 	lease, taken, err := r.Leases.Hold(id)
 	if err != nil {

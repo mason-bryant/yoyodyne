@@ -249,6 +249,29 @@ func TestASideTurnIsTakenUnderTheStreamsOwnLease(t *testing.T) {
 	}
 }
 
+// The exclusion and the merge are the two guarantees this package holds, and a
+// runner missing either refuses rather than working without it: one held only
+// where somebody remembered to wire it is not held.
+func TestARunnerMissingItsExclusionTakesNoTurn(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	voice := &fakeVoice{answers: []string{"Yes."}}
+	runner := testRunner(store, voice, &fakeMerge{})
+	runner.Leases = nil
+
+	if _, err := runner.Put(context.Background(), testAsk()); err == nil ||
+		!strings.Contains(err.Error(), "would exclude nothing") {
+		t.Fatalf("Put() with no leases error = %v, want it refused", err)
+	}
+	if len(voice.asked) != 0 {
+		t.Fatal("a turn was taken with nothing excluding a second process from it")
+	}
+	if len(store.streams) != 0 {
+		t.Fatal("a stream was opened for a turn that could not be taken")
+	}
+}
+
 // Concluding is the merge, so a runner with no merge wired refuses rather than
 // closing a thread whose substance would then reach nobody.
 func TestAThreadWhoseSubstanceWouldReachNobodyIsNotClosedQuietly(t *testing.T) {
@@ -376,7 +399,10 @@ func testAsk() Ask {
 func testRunner(store *fakeStore, voice Voice, merge *fakeMerge) Runner {
 	at := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
 	runner := Runner{
-		Store:     store,
+		Store: store,
+		// The lease is required, so every runner here has one: a turn that excluded
+		// nothing is refused rather than taken.
+		Leases:    &fakeLeases{},
 		Voice:     voice,
 		ProductID: "yoyodyne",
 		Now: func() time.Time {
