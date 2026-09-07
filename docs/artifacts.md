@@ -100,16 +100,37 @@ is the reference for the schema, the fields, and what is reported.
 
 ## Goals, and what work serves them
 
-Identity ends at the document. The last link of the chain is the goal a work
-item names, and that link is closed by reading the goals out of the goals
-artifacts themselves: every statement under a goals document's `Goals` heading
-is a goal work can be attributed to, and an attribution resolves by naming one
-of them in the words that document states it in.
+The last link of the chain is the goal a work item names, and that link is
+closed by reading the goals out of the goals artifacts themselves: every entry
+under a goals document's `Goals` heading is a goal work can be attributed to.
+
+Each goal carries a stable identity, and that identity is what an attribution
+resolves by. It is written in square brackets at the start of the entry:
+
+```markdown
+- [traceable-chain] Maintain a traceable chain from the product brief through goals, designs, work, code changes, and verification.
+  *Supports: every change traces to intent somebody approved.*
+```
+
+The identifier is assigned once, never reused, and unchanged by every re-wording
+of the sentence beside it. The words are what you read and what a work item
+displays; they are not what the match depends on, so amending a goal is editing
+a sentence rather than renaming a thing — no admission quoting the old wording
+is refused, and no item attributed to it is orphaned. That was not true until
+yoyodyne-ifd.344: attribution matched on the exact prose, and three amendments
+in three weeks orphaned items or refused admissions, the last of them found
+because four admissions failed at intake in front of the operator.
+
+A goal stating no identifier is matched on its words alone, which is the older
+arrangement and the one a re-wording breaks. `yoyo goals list` says which goals
+those are, and `yoyo goals attribution` says which work items still match that
+way.
 
 ```sh
-./bin/yoyo goals list          # the goals work can be attributed to, and where each is stated
+./bin/yoyo goals list          # the goals work can be attributed to, their identities, and where each is stated
 ./bin/yoyo goals attribution   # what each work item the tracker holds says it is for
 ./bin/yoyo goals witness       # witness the goals already recorded on work items
+./bin/yoyo goals reattribute   # move an attribution off the wording and onto the goal's identity
 ./bin/yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
@@ -145,6 +166,17 @@ the statement is the item's own — and it is worth running once over an existin
 backlog. It walks every status the tracker holds rather than the queue, because
 the command that destroys an attribution reaches a claimed or closed item just
 as easily, and most of the losses on record were on items that had closed.
+
+`yoyo goals reattribute` is the same kind of sweep for the same kind of gap, on
+the other side of it: an attribution recorded before goals carried identities
+names the words, and the words are what the next amendment changes. It resolves
+what each item recorded against the goals as they now stand and appends the same
+goal named by its identity, so nothing about what the work is for is decided —
+the goal is the one the item already named. An item whose recorded goal resolves
+to nothing, or whose goal carries no identity yet, is reported and left exactly
+as it was rather than guessed at, and the command exits non-zero while any item
+is left behind. `--dry-run` reports what it would do and writes nothing, which
+is worth reading before a run over a live backlog.
 
 The witness is what survives a loss; `yoyo goals guard` stops the write that
 causes one. It reads a tool call an agent session is about to make and

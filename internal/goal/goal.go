@@ -11,13 +11,32 @@
 //
 // So a goal is read out of the goals artifacts themselves: each statement under
 // a goals document's `Goals` heading is a goal that can be named, and resolving
-// an attribution is finding the artifact that states it. The match is on the
-// words, because the words are all the document offers — a goal carries no
-// identity of its own inside the document stating it, so its statement is its
-// identity. Case, spacing, and trailing punctuation are folded, because those
-// differences are not disagreements about which goal is meant, and nothing else
-// is guessed at: an attribution no document states is unresolved rather than
-// approximately right.
+// an attribution is finding the artifact that states it.
+//
+// # What an attribution matches on
+//
+// A goal carries a stable identifier, written in square brackets at the start of
+// its entry, and that identifier is what an attribution resolves by. It is
+// assigned once and never reused, and it survives every re-wording of the goal:
+// the words are what a person reads and what a work item displays, and they are
+// not what the match depends on.
+//
+// The match was on the words until yoyodyne-ifd.344, because the words were all
+// the document offered, and three amendments in three weeks showed what that
+// costs. Re-wording a goal orphaned every item attributed to it and refused
+// every admission quoting it — silently, until four admissions failed at intake
+// and the operator learned of it by watching them fail. An offer to re-attribute
+// at amendment time would have been a patch on a design that treats prose as a
+// key; an identifier makes the class impossible, and reduces amending a goal to
+// editing a sentence rather than renaming a thing.
+//
+// The words still resolve, for a goal that carries no identifier yet and for an
+// attribution recorded before identifiers existed. Case, spacing, and trailing
+// punctuation are folded there, because those differences are not disagreements
+// about which goal is meant, and nothing else is guessed at: an attribution no
+// document states is unresolved rather than approximately right. What that path
+// does not survive is the re-wording, which is why `yoyo goals reattribute`
+// exists to move an attribution off it.
 //
 // A goal therefore carries the operator's approval of the document stating it,
 // because that is now what the gate rests on: work is admitted to the queue
@@ -76,6 +95,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
@@ -100,10 +120,48 @@ const MaxStatementBytes = 400
 // bound keeps a runaway file from becoming the whole of what a caller holds.
 const maxGoalsPerDocument = 200
 
+// MaxIdentityBytes bounds one goal's identifier. It is short because an
+// identifier is a name somebody types onto a work item rather than a sentence,
+// and it is bounded at all so that a bracketed run of prose at the start of an
+// entry is read as the prose it is rather than as an identifier nothing states.
+const MaxIdentityBytes = 64
+
+// identityPattern matches the identifier a goal entry opens with: letters,
+// digits, and single hyphens between them, in square brackets at the very start.
+// Anything else the brackets could hold — spaces, punctuation, a Markdown link —
+// is prose, and an entry carrying it states no identifier rather than a
+// malformed one.
+var identityPattern = regexp.MustCompile(`(?i)^\[([a-z0-9]+(?:-[a-z0-9]+)*)\]\s*`)
+
+// SplitIdentity separates the stable identifier a goal entry or an attribution
+// opens with from the words after it, and returns no identifier for text that
+// opens with none. It is one function for both because they are one form: what a
+// goals document writes is what a work item names it by, so a reader who has
+// seen one has seen the other.
+//
+// The identifier is folded to lower case for the reason a statement is folded:
+// two spellings of one name are a difference in how it was typed rather than a
+// disagreement about which goal is meant. The documents write it in lower case;
+// an item that shouted it still resolves.
+func SplitIdentity(text string) (identity, statement string) {
+	trimmed := strings.TrimSpace(text)
+	match := identityPattern.FindStringSubmatch(trimmed)
+	if match == nil || len(match[1]) > MaxIdentityBytes {
+		return "", trimmed
+	}
+	return strings.ToLower(match[1]), strings.TrimSpace(trimmed[len(match[0]):])
+}
+
 // Goal is one goal a repository records, and the artifact that states it. The
 // artifact is carried because that is what an attribution resolves to: knowing
 // the words matched is not knowing which document they were agreed in.
 type Goal struct {
+	// Identity is what an attribution resolves by: a name assigned to this goal
+	// once, never reused, and unchanged by every re-wording of the statement
+	// under it. It is empty for a goal whose document states none, which still
+	// resolves by its words and is still orphaned by a re-wording — which is what
+	// assigning one puts a stop to.
+	Identity  string `json:"identity,omitempty"`
 	Statement string `json:"statement"`
 	// Supports names the goal in the product brief that this goal serves, read
 	// from the emphasized trailer under it. It is what makes the second-to-last
@@ -136,6 +194,20 @@ type Goal struct {
 // deliberately not approved here: the approval still stands for what it was
 // given for, and the goal as it now reads is not what was seen.
 func (g Goal) Approved() bool { return g.Approval == artifact.ApprovalApproved }
+
+// Reference is how this goal is named on a work item: its identifier, which is
+// what the match depends on, and its words, which are what a reader sees. The
+// words are a copy for reading and never the key, so an item carrying yesterday's
+// wording of a goal still resolves to it.
+//
+// A goal that carries no identifier is named by its words alone, because that is
+// all there is to name it by.
+func (g Goal) Reference() string {
+	if g.Identity == "" {
+		return g.Statement
+	}
+	return "[" + g.Identity + "] " + g.Statement
+}
 
 // BriefGoal is one goal the product brief states. It is what a goal's trailer
 // resolves to, and it is named the same way a goal is: by its own words, because
@@ -225,6 +297,28 @@ func (p WrapProblem) String() string {
 	return fmt.Sprintf("%s:%d: %s", p.Path, p.Line, p.Reason)
 }
 
+// IdentityProblem is one identifier that more than one goal in force carries.
+// It is reported beside a set that holds every goal it read, exactly as a broken
+// link and a wrapped statement are: both goals are stated, and what is wrong is
+// that the name they share picks out neither.
+//
+// An identifier is assigned once and never reused, so two goals carrying one is
+// a document defect rather than a choice to be made between them. Attributing
+// work to that identifier is refused while it lasts — the moment refusing costs
+// nothing is before the item exists, and guessing which of the two was meant is
+// exactly the inference identity exists to remove.
+type IdentityProblem struct {
+	Identity string `json:"identity"`
+	// Stated names the goals documents that carry it, so what has to be fixed is
+	// a pair of files a reader can open rather than a name with nowhere to go.
+	Stated []string `json:"stated"`
+	Reason string   `json:"reason"`
+}
+
+func (p IdentityProblem) String() string {
+	return fmt.Sprintf("%s: %s", p.Identity, p.Reason)
+}
+
 // Problem names one goals document whose goals could not be read, and says why.
 // It is reported beside the goals that did load: a document nobody can read is
 // a gap in what work can be attributed to, and a gap nobody is told about looks
@@ -266,6 +360,11 @@ type Set struct {
 	// from each other: the goal is in the set and its link upstream may be
 	// perfectly good, and what is wrong is how the document is written.
 	WrapProblems []WrapProblem `json:"wrap_problems,omitempty"`
+	// IdentityProblems are the identifiers more than one goal in force carries.
+	// They are kept apart for the same reason again: the goals are in the set and
+	// each says something the product intends, and what is wrong is that the name
+	// they share picks out neither of them.
+	IdentityProblems []IdentityProblem `json:"identity_problems,omitempty"`
 	// Unavailable is why the goals are not known at all, as opposed to known to
 	// be none. A caller that could not load the artifacts says so here: work
 	// admitted while the goals cannot be read is not work whose goal was
@@ -326,6 +425,10 @@ type Witness struct {
 // against what the repository records.
 type Attribution struct {
 	State State `json:"state"`
+	// Identity is the goal identifier the item records, and is empty on an item
+	// that records only wording. It is what the match was made on where it is
+	// set, so an attribution carrying one is one a re-wording cannot orphan.
+	Identity string `json:"identity,omitempty"`
 	// Named is what the item names, in its own words. It is empty exactly when
 	// the item names nothing.
 	Named string `json:"named,omitempty"`
@@ -346,6 +449,15 @@ type Attribution struct {
 // an uncheckable one is an unanswered question, and neither is traceability.
 func (a Attribution) Resolved() bool {
 	return a.State == StateAttributed
+}
+
+// ResolvedByWording reports an attribution that resolved on the words alone,
+// which is an attribution the next amendment to that goal orphans. It is what
+// `yoyo goals reattribute` moves onto the goal's identifier and what the audit
+// names, because an item in this state reads exactly like one that is safe until
+// somebody edits a sentence.
+func (a Attribution) ResolvedByWording() bool {
+	return a.Resolved() && a.Identity == ""
 }
 
 // Divergent reports an attribution that is wrong rather than merely absent: a
@@ -399,6 +511,24 @@ func (a Attribution) ApprovalGap() string {
 // back.
 func Note(statement string) string {
 	return AttributionPrefix + " " + strings.TrimSpace(statement)
+}
+
+// NoteFor is the line to record for a goal somebody named. Where the name
+// resolves to a goal carrying an identifier, what is written is that identifier
+// and the words the document currently states, so the item afterwards names the
+// goal rather than a copy of its wording: the next amendment moves the words and
+// leaves the match alone.
+//
+// A name that resolves to nothing, or to a goal whose document states no
+// identifier, is written down as it was given. Nothing is invented here — an
+// identifier the harness made up would be a name no document states, which is
+// the failure this exists to prevent arrived at from the other side.
+func (s Set) NoteFor(named string) string {
+	attribution := s.Attribute(named)
+	if attribution.Resolved() && attribution.Goal.Identity != "" {
+		return Note(attribution.Goal.Reference())
+	}
+	return Note(named)
 }
 
 // NamedIn returns the goal a work item's notes record, and whether they record
@@ -488,6 +618,10 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 			continue
 		}
 		for _, entry := range stated {
+			// The bound is applied to the entry as the document writes it, identifier
+			// and all, because that is what a work item has to be able to name: the
+			// identifier travels with the words onto the item, so a goal whose entry
+			// is too long to record is too long whichever part of it is at fault.
 			if len(entry.statement) > MaxStatementBytes {
 				set.Problems = append(set.Problems, Problem{
 					Path: recorded.Path,
@@ -496,8 +630,10 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 				})
 				continue
 			}
+			identity, statement := SplitIdentity(entry.statement)
 			set.Goals = append(set.Goals, Goal{
-				Statement:  entry.statement,
+				Identity:   identity,
+				Statement:  statement,
 				Supports:   supported(entry.trailer),
 				ArtifactID: recorded.ID,
 				Path:       recorded.Path,
@@ -523,7 +659,57 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 		}
 	}
 	set.LinkProblems = linkProblems(set.Goals, set.BriefGoals, brief, briefInForce, briefUnreadable)
+	set.IdentityProblems = identityProblems(set.Goals)
 	return set
+}
+
+// identityProblems reports every identifier more than one goal in force carries.
+// Only goals in force are judged, by the same rule the link upstream is judged
+// by: a goal in a superseded document is not something work can name, and an
+// identifier it shares with its own replacement is the ordinary shape of a goal
+// that was carried forward rather than a defect.
+func identityProblems(goals []Goal) []IdentityProblem {
+	carrying := map[string][]Goal{}
+	var order []string
+	for _, candidate := range goals {
+		if !candidate.InForce || candidate.Identity == "" {
+			continue
+		}
+		if _, seen := carrying[candidate.Identity]; !seen {
+			order = append(order, candidate.Identity)
+		}
+		carrying[candidate.Identity] = append(carrying[candidate.Identity], candidate)
+	}
+	var problems []IdentityProblem
+	for _, identity := range order {
+		stating := carrying[identity]
+		if len(stating) < 2 {
+			continue
+		}
+		problems = append(problems, IdentityProblem{
+			Identity: identity,
+			Stated:   statedIn(stating),
+			Reason: fmt.Sprintf("%d goals in force carry it — %s — and an identity is assigned once and never reused, so work naming it names no one goal and is refused until one of them is corrected",
+				len(stating), strings.Join(statedIn(stating), " and ")),
+		})
+	}
+	return problems
+}
+
+// statedIn names where a set of goals is written, as the artifact and the file a
+// reader has to open. Both are named because a duplicated identity is fixed by
+// editing a document rather than by knowing which one it was, and a report that
+// names no place to open is this repository's defect rather than the product
+// manager's. Two goals stated by one document name it once.
+func statedIn(goals []Goal) []string {
+	var stating []string
+	for _, candidate := range goals {
+		named := fmt.Sprintf("%s (%s)", candidate.ArtifactID, candidate.Path)
+		if !slices.Contains(stating, named) {
+			stating = append(stating, named)
+		}
+	}
+	return stating
 }
 
 // linkProblems reports every goal whose link to the brief does not hold. Only
@@ -626,14 +812,92 @@ func (s Set) Uncheckable() (string, bool) {
 
 // Attribute judges one named goal: the goal a creation states as it is admitted,
 // or the one an item already carries.
+//
+// A name opening with an identifier is resolved by that identifier and by
+// nothing else, whatever wording follows it. That is the whole of what identity
+// buys: the words on the item are a copy for reading, and a copy that has fallen
+// behind the document is not a claim to correct. A name opening with no
+// identifier is resolved by its words, which is what an attribution written
+// before identifiers existed carries and what a goal stating none can be matched
+// by at all.
 func (s Set) Attribute(named string) Attribution {
-	statement := strings.TrimSpace(named)
-	if statement == "" {
+	text := strings.TrimSpace(named)
+	if text == "" {
 		return Attribution{State: StateUnattributed, Reason: "it names no goal, so nothing says what the work is for"}
 	}
 	if !s.Known() {
-		return Attribution{State: StateUncheckable, Named: statement, Reason: s.uncheckableReason()}
+		return Attribution{State: StateUncheckable, Named: text, Reason: s.uncheckableReason()}
 	}
+	if identity, statement := SplitIdentity(text); identity != "" {
+		return s.attributeByIdentity(identity, statement)
+	}
+	return s.attributeByWording(text)
+}
+
+// attributeByIdentity resolves a name that opens with an identifier. The words
+// after it are carried as what the item says it serves and are never matched on:
+// an item naming an identity states which goal it means, and the harness reading
+// its wording as a second opinion would be the prose key coming back in.
+func (s Set) attributeByIdentity(identity, statement string) Attribution {
+	named := statement
+	if named == "" {
+		// An item may name the identifier alone, and then the identifier is what it
+		// names. Reporting an empty claim would say the item names no goal, which is
+		// a different item from this one.
+		named = "[" + identity + "]"
+	}
+	var inForce []Goal
+	var replaced *Goal
+	for index, candidate := range s.Goals {
+		if candidate.Identity != identity {
+			continue
+		}
+		if candidate.InForce {
+			inForce = append(inForce, candidate)
+			continue
+		}
+		if replaced == nil {
+			replaced = &s.Goals[index]
+		}
+	}
+	switch {
+	case len(inForce) == 1:
+		return Attribution{State: StateAttributed, Identity: identity, Named: named, Goal: inForce[0]}
+	case len(inForce) > 1:
+		// Reported rather than chosen between. The identifier was supposed to pick
+		// out one goal, two documents state it, and picking the first would attribute
+		// the work to whichever file the artifact store happened to read first.
+		return Attribution{
+			State:    StateUnresolved,
+			Identity: identity,
+			Named:    named,
+			Reason: fmt.Sprintf("more than one goal in force carries the identity %q — %s — so it does not name one goal; the identity is assigned once and never reused, and the documents stating it twice have to be corrected",
+				identity, strings.Join(statedIn(inForce), " and ")),
+		}
+	case replaced != nil:
+		return Attribution{
+			State:    StateUnresolved,
+			Identity: identity,
+			Named:    named,
+			Reason: fmt.Sprintf("the only goal carrying the identity %q is in %s, which is no longer in force, so it is not a goal the product currently intends",
+				identity, replaced.ArtifactID),
+		}
+	default:
+		return Attribution{
+			State:    StateUnresolved,
+			Identity: identity,
+			Named:    named,
+			Reason:   fmt.Sprintf("no goal recorded in %s carries the identity %q", strings.Join(s.Sources, ", "), identity),
+		}
+	}
+}
+
+// attributeByWording resolves a name that carries no identifier, on the words
+// alone. It is what an attribution made before identifiers existed takes, and
+// what a goal whose document states no identifier is reachable by at all; an
+// attribution that resolves here is one the next re-wording of that goal
+// orphans, which is what ResolvedByWording says and what reattribution moves.
+func (s Set) attributeByWording(statement string) Attribution {
 	folded := fold(statement)
 	var replaced *Goal
 	for index, candidate := range s.Goals {

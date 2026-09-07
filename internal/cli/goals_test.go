@@ -55,7 +55,7 @@ An introduction.
 
 ## Goals
 
-- Maintain a traceable chain from the brief through to verification.
+- [traceable-chain] Maintain a traceable chain from the brief through to verification.
 - Isolate implementation tasks in harness-managed worktrees.
 `)
 
@@ -69,9 +69,11 @@ An introduction.
 	// this is a buffer rather than a terminal, and it is the whole of what the
 	// listing says.
 	want := `Maintain a traceable chain from the brief through to verification.
+  identity: traceable-chain
   stated by: v1-goals (docs/product/goals/v1-goals.md)
 
 Isolate implementation tasks in harness-managed worktrees.
+  identity: none, so work naming it matches on its wording
   stated by: v1-goals (docs/product/goals/v1-goals.md)
 
 upstream: these goals support the goals the product brief states, in docs/product/brief.md
@@ -120,6 +122,7 @@ func TestTheGoalsListingIsDressedWithoutTheDressingCarryingAnything(t *testing.T
 		Sources: []string{"v1-goals"},
 		Goals: []goal.Goal{
 			{
+				Identity:   "traceable-chain",
 				Statement:  "Maintain a traceable chain from the brief through to verification.",
 				Supports:   "Every change traces to intent somebody approved",
 				ArtifactID: "v1-goals",
@@ -156,7 +159,7 @@ func TestTheGoalsListingIsDressedWithoutTheDressingCarryingAnything(t *testing.T
 	if !strings.HasPrefix(lines[0], "\x1b[1m") {
 		t.Fatalf("the statement was not weighted: %q", lines[0])
 	}
-	for _, index := range []int{1, 2} {
+	for _, index := range []int{1, 2, 3} {
 		if !strings.HasPrefix(lines[index], "\x1b[3m") {
 			t.Fatalf("a line about the goal was not slanted: %q", lines[index])
 		}
@@ -165,10 +168,12 @@ func TestTheGoalsListingIsDressedWithoutTheDressingCarryingAnything(t *testing.T
 	// blank line between entries, the marker on a goal nobody may name now, and
 	// the closing line naming the brief upstream.
 	want := `Maintain a traceable chain from the brief through to verification.
+  identity: traceable-chain
   stated by: v1-goals (docs/product/goals/v1-goals.md)
   supports: Every change traces to intent somebody approved
 
 Ship the first version by hand. [no longer in force]
+  identity: none, so work naming it matches on its wording
   stated by: v0-goals (docs/product/goals/v0-goals.md)
 
 upstream: these goals support the goals the product brief states, in docs/product/brief.md
@@ -455,6 +460,111 @@ func TestWitnessingRecordsTheGoalAnItemAlreadyStatesAndDecidesNothing(t *testing
 	}
 }
 
+// The migration off the wording: an attribution recorded before goals carried
+// identities names the words, and the words are what the next amendment changes.
+// What it must not do is decide anything about any work — the goal it records is
+// the goal the item already named, and an item it cannot resolve is reported and
+// left exactly as it was.
+func TestReattributingMovesAnAttributionOntoItsGoalsIdentityAndGuessesAtNothing(t *testing.T) {
+	t.Parallel()
+
+	chain := "Maintain a traceable chain from the brief through to verification."
+	worktrees := "Isolate implementation tasks in harness-managed worktrees."
+	goals := goal.Set{
+		Sources: []string{"v1-goals"},
+		Goals: []goal.Goal{
+			{Identity: "traceable-chain", Statement: chain, ArtifactID: "v1-goals", InForce: true},
+			// Beside it, a goal nobody has assigned an identity to yet. Work naming it
+			// has nothing to be moved onto, which is a document to amend rather than
+			// an item to correct.
+			{Statement: worktrees, ArtifactID: "v1-goals", InForce: true},
+		},
+	}
+	bd := &sweepRunner{listed: map[string][]map[string]any{
+		"open": {
+			// Attributed by its wording, to a goal that now carries an identity. This
+			// is the one item the migration exists for.
+			{"id": "yoyodyne-ifd.102.2", "title": "Triage docket", "status": "open",
+				"priority": 1, "issue_type": "task", "notes": "Admitted long ago.\n\n" + goal.Note(chain)},
+			// Already naming the identity: nothing to move, and a second note would be
+			// a write per item on every run for no fact gained.
+			{"id": "yoyodyne-ifd.68", "title": "Slack reporting", "status": "open",
+				"priority": 2, "issue_type": "task", "notes": goal.Note("[traceable-chain] " + chain)},
+			// Resolves, and the goal it resolves to carries no identity.
+			{"id": "yoyodyne-ifd.99", "title": "Worktrees", "status": "open",
+				"priority": 2, "issue_type": "task", "notes": goal.Note(worktrees)},
+			// Names something no goals document states: the audit's finding, and not
+			// a claim this may correct by moving it somewhere.
+			{"id": "yoyodyne-ifd.45", "title": "Something else", "status": "open",
+				"priority": 3, "issue_type": "task", "notes": goal.Note("A goal nobody wrote.")},
+			// Names no goal at all: what work is for is the product manager's
+			// judgement, and this writes none.
+			{"id": "yoyodyne-ifd.7", "title": "Admitted by hand", "status": "open",
+				"priority": 3, "issue_type": "task", "notes": "Admitted by hand."},
+		},
+	}}
+
+	tracker := beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}
+	read, err := workItemsWithStatus(context.Background(), tracker, trackerStatuses)
+	if err != nil {
+		t.Fatalf("workItemsWithStatus() error = %v", err)
+	}
+	moved, unmatched, failures := recordGoalIdentities(context.Background(), tracker, goals, read, false)
+	if failures != 0 {
+		t.Fatalf("moved = %#v", moved)
+	}
+	if len(moved) != 1 || moved[0].WorkItemID != "yoyodyne-ifd.102.2" || moved[0].Identity != "traceable-chain" {
+		t.Fatalf("moved = %#v", moved)
+	}
+	if len(bd.appended) != 1 || !strings.Contains(bd.appended["yoyodyne-ifd.102.2"], goal.Note("[traceable-chain] "+chain)) {
+		t.Fatalf("the migration wrote %#v", bd.appended)
+	}
+	// The item now names the goal by the thing that does not move, and the witness
+	// outside its notes was carried along with it.
+	if bd.written["yoyodyne-ifd.102.2"] != "[traceable-chain] "+chain {
+		t.Fatalf("the witness was not moved with the attribution: %#v", bd.written)
+	}
+	// Two items left exactly as they were, each said for what it is: a document to
+	// amend, and a claim to correct.
+	if len(unmatched) != 2 {
+		t.Fatalf("unmatched = %#v", unmatched)
+	}
+	reasons := map[string]string{}
+	for _, entry := range unmatched {
+		reasons[entry.WorkItemID] = entry.Reason
+	}
+	if !strings.Contains(reasons["yoyodyne-ifd.99"], "carries no identity") {
+		t.Fatalf("unmatched = %#v", unmatched)
+	}
+	if !strings.Contains(reasons["yoyodyne-ifd.45"], "no goal recorded in v1-goals") {
+		t.Fatalf("unmatched = %#v", unmatched)
+	}
+
+	var rendered bytes.Buffer
+	printReattributed(&rendered, len(read), moved, unmatched, false)
+	for _, want := range []string{
+		"5 work item(s) read: 1 re-attributed by identity, 2 could not be re-attributed",
+		"yoyodyne-ifd.102.2 -> [traceable-chain] " + chain,
+		"yoyodyne-ifd.99 left as it was",
+	} {
+		if !strings.Contains(rendered.String(), want) {
+			t.Fatalf("reattribute stdout = %q, want it to contain %q", rendered.String(), want)
+		}
+	}
+
+	// A migration over a live backlog is worth reading before it is run, so the
+	// same report is available with nothing written.
+	dry := &sweepRunner{listed: bd.listed}
+	dryRead, err := workItemsWithStatus(context.Background(), beads.Client{Runner: dry, Binary: "bd-test", Dir: "/repo"}, trackerStatuses)
+	if err != nil {
+		t.Fatalf("workItemsWithStatus() error = %v", err)
+	}
+	planned, _, _ := recordGoalIdentities(context.Background(), beads.Client{Runner: dry, Binary: "bd-test", Dir: "/repo"}, goals, dryRead, true)
+	if len(planned) != 1 || len(dry.appended) != 0 {
+		t.Fatalf("--dry-run wrote %#v", dry.appended)
+	}
+}
+
 // The other half of the sweep above, standing in front of the writer instead of
 // behind it: the tool call an agent session is about to make, decided before the
 // notes are replaced rather than reported after they were.
@@ -727,10 +837,15 @@ func TestTheAuditFailsADestroyedAttributionOnClosedWorkAndNamesTheRestOfIt(t *te
 // sweepRunner is a bd that answers listings and keeps what a witness wrote, so
 // a sweep can be checked for what it did and did not touch.
 type sweepRunner struct {
-	listed  map[string][]map[string]any
-	written map[string]string
-	refuse  bool
-	refusal string
+	listed map[string][]map[string]any
+	// written is the witness each update carried, and appended is the text each
+	// one added to the item's notes. Both are recorded because the two writes this
+	// package makes are read differently: the sweep is judged by the witness it
+	// stored, and the migration by the attribution it wrote onto the item.
+	appended map[string]string
+	written  map[string]string
+	refuse   bool
+	refusal  string
 }
 
 func (r *sweepRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
@@ -740,16 +855,31 @@ func (r *sweepRunner) Run(_ context.Context, command execution.Command, _ execut
 		}
 		id := command.Args[1]
 		for _, argument := range command.Args {
+			if note, carried := strings.CutPrefix(argument, "--append-notes="); carried {
+				if r.appended == nil {
+					r.appended = map[string]string{}
+				}
+				r.appended[id] = note
+			}
+		}
+		witnessed := ""
+		for _, argument := range command.Args {
 			statement, carried := strings.CutPrefix(argument, "--set-metadata=yoyodyne_goal_recorded=")
 			if !carried {
 				continue
 			}
+			witnessed = statement
 			if r.written == nil {
 				r.written = map[string]string{}
 			}
 			r.written[id] = statement
+		}
+		if witnessed != "" {
+			// bd answers an update with the item as it holds it afterwards, and the
+			// client reads that answer back before it reports the write as applied —
+			// so the answer carries the note as well as the witness.
 			item := map[string]any{"id": id, "title": "t", "status": "open", "priority": 1, "issue_type": "task",
-				"metadata": map[string]any{"yoyodyne_goal_recorded": statement}}
+				"notes": r.appended[id], "metadata": map[string]any{"yoyodyne_goal_recorded": witnessed}}
 			encoded, err := json.Marshal([]map[string]any{item})
 			if err != nil {
 				return execution.ProcessResult{}, err

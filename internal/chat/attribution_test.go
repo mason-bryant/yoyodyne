@@ -86,6 +86,40 @@ func TestAdmittedWorkRecordsTheGoalItResolvedTo(t *testing.T) {
 	}
 }
 
+// The admission is where the item's attribution is written, so it is where
+// identity has to be recorded or it is recorded nowhere. The product manager
+// names the goal in the words they were reading; what goes onto the item is the
+// goal, named by the identifier that survives the next amendment to those words.
+func TestAdmittedWorkNamesItsGoalByIdentityAndSurvivesTheGoalBeingReworded(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting it.",
+			`{"action":"create","title":"Give a goal an identity","description":"Stop a re-wording orphaning the work.","goal":"`+recordedGoal+`","reason":"three amendments have broken attributions"}`)},
+		{SessionID: "session-1", FinalText: "Admitted."},
+	}})
+	options.Tracker = tracker
+	options.Goals = recordedGoalsWithIdentity("traceable-chain", recordedGoal)
+
+	if _, err := openTestSession(t, options).Send(context.Background(), "admit it"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(tracker.created) != 1 {
+		t.Fatalf("created = %#v", tracker.created)
+	}
+	if !strings.Contains(tracker.created[0].Notes, goal.Note("[traceable-chain] "+recordedGoal)) {
+		t.Fatalf("the admitted item does not name its goal by identity: %q", tracker.created[0].Notes)
+	}
+	// The operator directs a re-wording, and the same item still resolves — to the
+	// goal as it now reads, which is the whole of what the identity is for.
+	reworded := recordedGoalsWithIdentity("traceable-chain", recordedGoal+" Verification included.")
+	attribution := reworded.AttributionOf(tracker.created[0].Notes, goal.Witness{})
+	if !attribution.Resolved() || attribution.Identity != "traceable-chain" {
+		t.Fatalf("a re-wording orphaned the item it had just admitted: %#v", attribution)
+	}
+}
+
 func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
 	t.Parallel()
 
@@ -577,6 +611,15 @@ func TestApprovingAProposalWhoseGoalHasSinceGoneRefusesRatherThanCreating(t *tes
 
 // recordedGoals is a repository whose goals document states what a test names,
 // so a test about attribution says only that.
+// recordedGoalsWithIdentity is the same repository with the one goal carrying
+// the identity a goals document assigns it, which is what an attribution
+// resolves by and what a re-wording leaves alone.
+func recordedGoalsWithIdentity(identity, statement string) goal.Set {
+	set := recordedGoals(statement)
+	set.Goals[0].Identity = identity
+	return set
+}
+
 func recordedGoals(statements ...string) goal.Set {
 	set := goal.Set{Sources: []string{"v1-goals"}}
 	for _, statement := range statements {

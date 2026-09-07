@@ -96,6 +96,10 @@ var auditedDispositionReads = []dispositionSite{
 		Means: "goal attribution, not a directive: the goal a work item resolved to, or what is wrong with the attribution.",
 	},
 	{
+		File: "internal/cli/goals.go", Declaration: "recordGoalIdentities", Read: "Resolved()", Reads: 1,
+		Means: "goal attribution, not a directive: an item whose recorded goal matched nothing is reported and left alone rather than moved onto an identity, and one that already matched is skipped.",
+	},
+	{
 		File: "internal/conformance/conformance.go", Declaration: "(*Assessment) checkGoals", Read: "Resolved()", Reads: 1,
 		Means: "goal attribution, not a directive: how many admitted items serve a recorded goal, counted for the release-readiness report. What refuses a tag is Divergent, which is the other end of the same judgement and not liveness either.",
 	},
@@ -142,6 +146,14 @@ var auditedDispositionReads = []dispositionSite{
 	{
 		File: "internal/goal/goal.go", Declaration: "(Attribution) ApprovalGap", Read: "Resolved()", Reads: 1,
 		Means: "goal attribution, not a directive: an unresolved attribution has already said what is wrong with it.",
+	},
+	{
+		File: "internal/goal/goal.go", Declaration: "(Attribution) ResolvedByWording", Read: "Resolved()", Reads: 1,
+		Means: "goal attribution, not a directive: an attribution that matched a recorded goal, and matched it on the words rather than on the goal's identity.",
+	},
+	{
+		File: "internal/goal/goal.go", Declaration: "(Set) NoteFor", Read: "Resolved()", Reads: 1,
+		Means: "goal attribution, not a directive: only a name that matched a recorded goal is written down as that goal's identity, and anything else is written down as it was given.",
 	},
 	{
 		File: "internal/slack/feed.go", Declaration: "(*HarnessFeed) directiveDeliveries", Read: "Resolved()", Reads: 1,

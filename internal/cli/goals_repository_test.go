@@ -150,6 +150,27 @@ func TestEveryWrappedGoalInThisRepositoryIsReportedWithAPlaceToOpen(t *testing.T
 	}
 }
 
+// The same check for the same reason, over the identity two goals in force
+// cannot both carry. What is held to is the report rather than the documents: a
+// duplicated identity is fixed by editing one of them, and a report that does not
+// say which files state it sends the person who owns them looking.
+func TestEveryDuplicatedGoalIdentityInThisRepositoryIsReportedWithAPlaceToOpen(t *testing.T) {
+	t.Parallel()
+
+	for _, problem := range repositoryGoals(t).IdentityProblems {
+		if problem.Identity == "" || len(problem.Stated) < 2 {
+			t.Errorf("an identity two goals carry is reported without saying which: %#v", problem)
+			continue
+		}
+		for _, stating := range problem.Stated {
+			if !strings.Contains(stating, "(") {
+				t.Errorf("a duplicated identity names no file to open: %#v", problem)
+			}
+		}
+		t.Logf("goal identity stated twice: %s", problem)
+	}
+}
+
 // repositoryGoals collects the goals from this repository as the harness reads
 // them, through the configuration rather than a guessed set of artifact homes:
 // a test that hardcoded the directories would keep passing after the project

@@ -1336,7 +1336,13 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// the directive is, and one more: it is what the next admission citing
 			// that report is checked against, so a citation that lived only in the
 			// conversation would leave the guard nothing to read.
-			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal) + s.classNote(action.Class) + directiveNote(prompting) + reportNote(cited),
+			// What is written is the goal's identity where the one it names has one,
+			// rather than the words the action happened to use. The item then names
+			// the goal rather than a copy of its wording, and the next amendment to
+			// that wording leaves the attribution alone — which is the whole of what
+			// identity is for, and it has to be true of the moment the item is made
+			// or it is true of nothing.
+			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + s.options.Goals.NoteFor(action.Goal) + s.classNote(action.Class) + directiveNote(prompting) + reportNote(cited),
 			Parent: action.parent(),
 			// The executor is set as the item is admitted rather than after it,
 			// because the harness may choose an item the moment it is in the queue: a
@@ -1400,7 +1406,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// is.
 		attributed := strings.TrimSpace(action.Goal)
 		change := beads.WorkItemChange{
-			AppendNotes: s.trackerProvenance("Attributed to a goal", action.Reason) + "\n\n" + goal.Note(attributed),
+			AppendNotes: s.trackerProvenance("Attributed to a goal", action.Reason) + "\n\n" + s.options.Goals.NoteFor(attributed),
 		}
 		if _, err := s.options.Tracker.Update(ctx, id, change); err != nil {
 			outcome.fail(err)

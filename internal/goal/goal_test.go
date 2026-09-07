@@ -234,6 +234,219 @@ func TestWhatIsWrittenAsAnAttributionIsWhatIsReadBack(t *testing.T) {
 	}
 }
 
+// The whole of what identity buys, in one test: the goals document is reworded,
+// and the work attributed under the old wording is still attributed. Three
+// amendments broke this before identity existed — the last one refused four
+// admissions at intake, and the operator found out by watching them fail.
+func TestAGoalRewordedKeepsTheWorkAttributedToItAndTheAdmissionsNamingIt(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	write(t, root, "docs/product/goals/v1-goals.md",
+		goalsDocument("[configurability] Keep roles, policies, and provider selection configurable without making safety invariants optional."))
+	artifacts := setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md"))
+
+	// The item is attributed as the harness attributes it: by the goal's identity,
+	// with the words the document stated at the time carried along for reading.
+	before := Collect(root, artifacts)
+	note := before.NoteFor("Keep roles, policies, and provider selection configurable without making safety invariants optional.")
+	if !strings.Contains(note, "[configurability]") {
+		t.Fatalf("the attribution written does not name the goal's identity: %q", note)
+	}
+	named, records := NamedIn("Admitted by the product manager.\n\n" + note)
+	if !records {
+		t.Fatalf("NamedIn() found no attribution in %q", note)
+	}
+
+	// The operator directs a re-wording, and the product manager amends the
+	// sentence. The identity is untouched, because it is not part of the sentence.
+	write(t, root, "docs/product/goals/v1-goals.md",
+		goalsDocument("[configurability] Keep roles, policies, and provider selection configurable without making safety invariants optional, and support multiple providers behind one adapter contract."))
+	after := Collect(root, artifacts)
+
+	attribution := after.Attribute(named)
+	if !attribution.Resolved() {
+		t.Fatalf("a re-wording orphaned the item: %#v", attribution)
+	}
+	if attribution.Identity != "configurability" {
+		t.Fatalf("the attribution did not match on the identity: %#v", attribution)
+	}
+	// What the item resolves to is the goal as it now reads, so a reader is shown
+	// the current sentence rather than the copy the item happens to carry.
+	if !strings.Contains(attribution.Goal.Statement, "multiple providers") {
+		t.Fatalf("the resolved goal is not the goal as it now reads: %#v", attribution.Goal)
+	}
+	// The other half of the same failure: an admission quoting the goal as it now
+	// reads is not refused either, whichever wording the person naming it used.
+	for _, quoted := range []string{
+		"[configurability] Keep roles, policies, and provider selection configurable without making safety invariants optional, and support multiple providers behind one adapter contract.",
+		"[configurability]",
+		"[Configurability] whatever wording the caller happened to have",
+	} {
+		if admitted := after.Attribute(quoted); !admitted.Resolved() {
+			t.Fatalf("Attribute(%q) = %#v", quoted, admitted)
+		}
+	}
+}
+
+// An attribution that names an identity is judged on the identity and never on
+// the words beside it, and one that names no identity is judged on the words —
+// which is the older arrangement, still reachable, and still what a re-wording
+// breaks.
+func TestAnAttributionNamingAnIdentityIsJudgedOnItRatherThanOnTheWordsBesideIt(t *testing.T) {
+	t.Parallel()
+
+	set := setWithGoals(t, "[traceable-chain] Maintain a traceable chain from the brief through to verification.")
+
+	// The statement carries no identifier: it is the goal's words, and the
+	// identifier is a thing the goal has rather than something it says.
+	if set.Goals[0].Statement != "Maintain a traceable chain from the brief through to verification." {
+		t.Fatalf("the identifier was read as part of the goal: %#v", set.Goals[0])
+	}
+	if set.Goals[0].Identity != "traceable-chain" {
+		t.Fatalf("goal = %#v", set.Goals[0])
+	}
+	if reference := set.Goals[0].Reference(); reference != "[traceable-chain] Maintain a traceable chain from the brief through to verification." {
+		t.Fatalf("Reference() = %q", reference)
+	}
+
+	// Named by identity: resolved, and reported as having matched on it.
+	byIdentity := set.Attribute("[traceable-chain] a wording nobody ever wrote")
+	if !byIdentity.Resolved() || byIdentity.Identity != "traceable-chain" || byIdentity.ResolvedByWording() {
+		t.Fatalf("attribution = %#v", byIdentity)
+	}
+	// Named by the words alone: resolved too, and reported as the thing the next
+	// amendment orphans.
+	byWording := set.Attribute("Maintain a traceable chain from the brief through to verification.")
+	if !byWording.Resolved() || byWording.Identity != "" || !byWording.ResolvedByWording() {
+		t.Fatalf("attribution = %#v", byWording)
+	}
+	// An identity no document states is a claim that is wrong, and it is wrong
+	// about the identity rather than about the words: falling back to the wording
+	// would be the prose key coming back in through the failure path.
+	unknown := set.Attribute("[traceability] Maintain a traceable chain from the brief through to verification.")
+	if unknown.State != StateUnresolved {
+		t.Fatalf("attribution = %#v", unknown)
+	}
+	if !strings.Contains(unknown.Reason, "traceability") || !strings.Contains(unknown.Reason, "v1-goals") {
+		t.Fatalf("reason = %q", unknown.Reason)
+	}
+}
+
+// Square brackets are only an identifier where they hold one. Everything else a
+// goal might legitimately open with is prose, and reading it as an identifier
+// would make a goal unnameable by its own words.
+func TestBracketsThatHoldNoIdentifierAreReadAsTheProseTheyAre(t *testing.T) {
+	t.Parallel()
+
+	for _, opening := range []string{
+		"[not an identifier] the goal",
+		"[docs/product/brief.md] the goal",
+		"[] the goal",
+		"[" + strings.Repeat("a", MaxIdentityBytes+1) + "] the goal",
+	} {
+		if identity, statement := SplitIdentity(opening); identity != "" || statement != opening {
+			t.Fatalf("SplitIdentity(%q) = %q, %q", opening, identity, statement)
+		}
+	}
+	// Case is how it was typed rather than which goal is meant, and an item may
+	// name the identifier and nothing else.
+	if identity, statement := SplitIdentity("[Traceable-Chain]"); identity != "traceable-chain" || statement != "" {
+		t.Fatalf("SplitIdentity() = %q, %q", identity, statement)
+	}
+}
+
+// An identity is assigned once and never reused, so two goals in force carrying
+// one is a document defect. It is reported beside a set that still holds both
+// goals, and work naming it is refused rather than given to whichever document
+// the store happened to read first.
+func TestAnIdentityTwoGoalsInForceCarryIsReportedAndNamesNoGoal(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	write(t, root, "docs/product/goals/v1-goals.md", goalsDocument("[cost] The operator can see what the harness spends."))
+	write(t, root, "docs/product/goals/operations-goals.md", goalsDocument("[cost] A deploy happens only with the operator's approval."))
+	set := Collect(root, setOf(
+		recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md"),
+		recorded("operations-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/operations-goals.md"),
+	))
+
+	if len(set.Goals) != 2 {
+		t.Fatalf("a goal was dropped over an identity two documents state: %#v", set.Goals)
+	}
+	if len(set.IdentityProblems) != 1 || set.IdentityProblems[0].Identity != "cost" {
+		t.Fatalf("identity problems = %#v", set.IdentityProblems)
+	}
+	// What has to be fixed is a pair of files, so the report names both.
+	for _, document := range []string{"v1-goals", "operations-goals"} {
+		if !strings.Contains(set.IdentityProblems[0].Reason, document) {
+			t.Fatalf("reason = %q, want it to name %q", set.IdentityProblems[0].Reason, document)
+		}
+	}
+	attribution := set.Attribute("[cost] The operator can see what the harness spends.")
+	if attribution.State != StateUnresolved || !strings.Contains(attribution.Reason, "more than one goal") {
+		t.Fatalf("attribution = %#v", attribution)
+	}
+	// A goal stated twice by documents that have not both got the identity is not
+	// this: the same identity in a superseded document is a goal carried forward,
+	// and holding that against the goal in force would report every replacement.
+	replaced := Collect(root, setOf(
+		recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md"),
+		recorded("operations-goals", artifact.KindGoals, artifact.StatusSuperseded, "docs/product/goals/operations-goals.md"),
+	))
+	if len(replaced.IdentityProblems) != 0 {
+		t.Fatalf("identity problems = %#v", replaced.IdentityProblems)
+	}
+	if carried := replaced.Attribute("[cost] anything"); !carried.Resolved() || carried.Goal.ArtifactID != "v1-goals" {
+		t.Fatalf("attribution = %#v", carried)
+	}
+}
+
+// An identity stated only by a document that was replaced is told apart from one
+// nobody ever wrote, for the same reason the wording is: whoever attributed work
+// to it needs to know which.
+func TestAnIdentityOnlyAReplacedDocumentCarriesIsRefusedWithTheReasonNamed(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	write(t, root, "docs/product/goals/v0-goals.md", goalsDocument("[prototype] Ship the prototype by the end of the quarter."))
+	write(t, root, "docs/product/goals/v1-goals.md", goalsDocument("[traceable-chain] Maintain a traceable chain from the brief through to verification."))
+	set := Collect(root, setOf(
+		recorded("v0-goals", artifact.KindGoals, artifact.StatusSuperseded, "docs/product/goals/v0-goals.md"),
+		recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md"),
+	))
+
+	attribution := set.Attribute("[prototype] Ship the prototype by the end of the quarter.")
+	if attribution.State != StateUnresolved {
+		t.Fatalf("attribution = %#v", attribution)
+	}
+	if !strings.Contains(attribution.Reason, "v0-goals") || !strings.Contains(attribution.Reason, "no longer in force") {
+		t.Fatalf("reason = %q", attribution.Reason)
+	}
+}
+
+// What the harness writes onto an item is the goal named by the thing that does
+// not move. Nothing is invented: a name that resolves to nothing, and a goal
+// whose document states no identifier, are written down as they were given.
+func TestTheAttributionWrittenNamesTheIdentityWhereTheGoalHasOneAndTheWordsWhereItDoesNot(t *testing.T) {
+	t.Parallel()
+
+	set := setWithGoals(t,
+		"[traceable-chain] Maintain a traceable chain from the brief through to verification.",
+		"Isolate implementation tasks in harness-managed worktrees.",
+	)
+	for named, want := range map[string]string{
+		"Maintain a traceable chain from the brief through to verification.": Note("[traceable-chain] Maintain a traceable chain from the brief through to verification."),
+		"[traceable-chain]": Note("[traceable-chain] Maintain a traceable chain from the brief through to verification."),
+		"Isolate implementation tasks in harness-managed worktrees.": Note("Isolate implementation tasks in harness-managed worktrees."),
+		"A goal nobody wrote.": Note("A goal nobody wrote."),
+	} {
+		if got := set.NoteFor(named); got != want {
+			t.Fatalf("NoteFor(%q) = %q, want %q", named, got, want)
+		}
+	}
+}
+
 func TestADocumentThatStatesNoGoalsIsReportedRatherThanReadAsFewerGoals(t *testing.T) {
 	t.Parallel()
 
