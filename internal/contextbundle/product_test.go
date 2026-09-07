@@ -886,6 +886,36 @@ func TestAnAdoptingProjectIsNotShownTheHarnessOwnDocumentation(t *testing.T) {
 	}
 }
 
+// The scoping turns on one string, and a fixture that writes its own go.mod
+// passes whatever that string says -- so a typo in it, or a module renamed
+// later, would drop all eight documents from this repository's own product
+// manager with a green suite. That is the ifd.20 narrowing again, reached by a
+// spelling mistake, and it is the same failure the neighbouring test guards
+// against for paths. So the constant is checked against the repository it is a
+// claim about, the way that test checks the paths.
+func TestTheHarnessRecognizesThisRepository(t *testing.T) {
+	t.Parallel()
+
+	if !describesTheHarness("../..") {
+		declaration, err := os.ReadFile(filepath.Join("../..", "go.mod"))
+		if err != nil {
+			t.Fatalf("this repository was not recognized as the one the shipped set describes, and its go.mod could not be read: %v", err)
+		}
+		t.Fatalf("this repository was not recognized as the one the shipped set describes, so its product manager is shown none of it.\n"+
+			"harnessModulePath is %q, and go.mod opens:\n%s", harnessModulePath, firstLines(string(declaration), 3))
+	}
+}
+
+// firstLines is what a failure above quotes of go.mod, so the mismatch is read
+// beside the constant rather than looked up afterwards.
+func firstLines(content string, count int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > count {
+		lines = lines[:count]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // The harness's own set still describes the harness's own repository, so it is
 // carried there with nothing configured: narrowing this product manager's view
 // to the command help is the ifd.20 narrowing arrived at through a scoping fix.
@@ -939,6 +969,31 @@ func TestConfiguredDocumentationIsTheWholeOfWhatIsCarried(t *testing.T) {
 	}
 	if strings.Contains(bundle.Text, "### Shipped documentation: README.md") {
 		t.Fatalf("the harness's own set was carried beside the one this project named:\n%s", bundle.Text)
+	}
+}
+
+// Whitespace around a configured path is not part of the path, and reading it
+// as though it were loses the document in silence: the confinement rule is made
+// on the trimmed path, and resolving the untrimmed one finds no such file and
+// skips it, so a document configured and validated is simply never carried and
+// nothing anywhere says which one.
+func TestConfiguredDocumentationIsTrimmedBeforeItIsRead(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	writeProductFile(t, root, "docs/handbook.md", "# Handbook\n\nWhat this project ships.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    []string{"  docs/handbook.md  "},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(bundle.Text, "### Shipped documentation: docs/handbook.md") {
+		t.Fatalf("a configured path with surrounding whitespace was not carried:\n%s", bundle.Text)
 	}
 }
 

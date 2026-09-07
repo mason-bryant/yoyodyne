@@ -1126,6 +1126,10 @@ func validateRepositoryDirectory(setting, directory string) error {
 // repository names text nobody reviewed with the code. The Markdown part is what
 // the context bundle will actually read, so a project naming something else is
 // refused here rather than discovering it as a conversation that will not open.
+//
+// It judges the trimmed path, and the bundle reads the trimmed path too, so what
+// was validated is what is opened. A rule made on one and a read made on the
+// other is a document this refuses to fault and nothing then carries.
 func validateShippedDocument(documentPath string) error {
 	const setting = "product shipped documentation"
 	trimmed := strings.TrimSpace(documentPath)

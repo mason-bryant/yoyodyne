@@ -151,9 +151,18 @@ func describesTheHarness(root string) bool {
 // product ships. What the project configured is the whole of it; a project that
 // configured none is shown the harness's own set where this is the harness's own
 // repository, and nothing at all anywhere else.
+//
+// A configured path is trimmed, because whitespace around one is not part of the
+// path and nothing downstream would say so: the confinement check is made on the
+// trimmed path, while resolving the untrimmed one finds no such file and skips
+// it — a document configured, validated, and then silently not carried.
 func resolveShippedDocumentation(root string, configured []string) []string {
 	if len(configured) > 0 {
-		return configured
+		trimmed := make([]string, 0, len(configured))
+		for _, documentPath := range configured {
+			trimmed = append(trimmed, strings.TrimSpace(documentPath))
+		}
+		return trimmed
 	}
 	if describesTheHarness(root) {
 		return HarnessShippedDocumentation
