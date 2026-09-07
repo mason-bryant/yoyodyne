@@ -531,10 +531,16 @@ func (p PendingProposal) body() []string {
 // goal says that instead, and says which document. An item claiming an approval
 // nobody gave would be the record of the one thing this arrangement has to be
 // able to prove it did not do.
-func (p PendingProposal) provenanceNotes(authority string) string {
+//
+// The goals are a parameter for a duller reason: the attribution is written down
+// as the goal's identity where the goal it names carries one, and only the goals
+// the repository records say what that identity is. A proposal names the goal in
+// the words the product manager used, and those words are what the operator
+// approved; what the item records is the goal they picked out.
+func (p PendingProposal) provenanceNotes(authority string, goals goal.Set) string {
 	return fmt.Sprintf(
 		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and %s.\n\n%s\n\nRationale: %s",
-		p.ConversationID, p.Turn, p.ID, authority, goal.Note(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
+		p.ConversationID, p.Turn, p.ID, authority, goals.NoteFor(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
 	)
 }
 

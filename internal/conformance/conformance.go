@@ -389,6 +389,13 @@ func (a *Assessment) checkGoals() error {
 	for _, problem := range goals.WrapProblems {
 		notes = append(notes, "goal not written on one line: "+problem.String())
 	}
+	// An identity two goals in force share is reported here for the same reason
+	// and in the same place. Every attribution already made still resolves, so it
+	// refuses no release; what it costs is that work naming that identity from now
+	// on is refused, which is the owner of those documents' to fix.
+	for _, problem := range goals.IdentityProblems {
+		notes = append(notes, "goal identity stated twice: "+problem.String())
+	}
 
 	attributed := 0
 	for _, item := range a.sources.Admitted {

@@ -144,9 +144,13 @@ func goalsHome(directory string) Home {
 		Directory: directory,
 		Owner:     domain.RoleProductManager,
 		Purpose: "The goals derived from the product brief above, and the non-goals that bound " +
-			"them. Every statement under a goals document's `Goals` heading is a goal work " +
-			"can be attributed to, in the words that document states it in; `yoyo goals list` " +
-			"is what they resolve to.",
+			"them. Every entry under a goals document's `Goals` heading is a goal work can be " +
+			"attributed to, and an entry opening with an identifier in square brackets — " +
+			"`- [traceable-chain] Maintain a traceable chain ...` — carries that identifier as " +
+			"its stable identity. An attribution resolves by naming the identity, so re-wording " +
+			"a goal orphans no item that named it that way; a goal stating no identity is matched " +
+			"on its words instead, and both that goal and an attribution quoting an older wording " +
+			"are broken by a re-wording. `yoyo goals list` is what they resolve to.",
 		Ownership: ownershipParagraph(domain.RoleProductManager),
 		HandEdit:  handEditParagraph(domain.RoleProductManager),
 	}

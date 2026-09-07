@@ -1261,9 +1261,33 @@ names one of them and resolves to nothing.
 
 The chain's last link runs from a work item to a goal, and a work item is in the
 tracker rather than in an artifact home. So the goals themselves are read out of
-the goals artifacts: **every statement under a goals document's `Goals` heading
-is a goal work can be attributed to**, and an attribution resolves by naming one
-of them in the words that document states it in.
+the goals artifacts: **every entry under a goals document's `Goals` heading is a
+goal work can be attributed to**, and an attribution resolves by naming that
+goal's stable identity.
+
+**A goal's identity is written in square brackets at the start of its entry** —
+`- [traceable-chain] Maintain a traceable chain ...` — and is lower-case
+letters, digits, and single hyphens between them. It is assigned once, never
+reused, and unchanged by every re-wording of the sentence beside it. The words
+are what a reader reads and what a work item displays; they are not what the
+match depends on, so amending a goal orphans no item attributed by identity and
+refuses no admission that names the identity. Brackets holding anything else —
+a phrase with spaces, a path, a Markdown link — are prose, and an entry carrying
+them states no identity rather than a malformed one.
+
+**A goal that states no identity is matched on its words**, with case,
+surrounding and repeated whitespace, and trailing sentence punctuation folded.
+That is the older arrangement, it still resolves, and it is the one a re-wording
+breaks. So is an admission that quotes a goal's earlier wording and names no
+identity: the words are the whole of what it gave, and they match nothing.
+`yoyo goals list` says which goals carry no identity, `yoyo goals attribution`
+says which work items still match that way, and `yoyo goals reattribute` moves
+those items onto the identity where the goal has one.
+
+**An identity two goals in force carry picks out neither.** It is reported by
+`yoyo goals list` on stderr, carried into `yoyo release`'s goals check, and work
+naming it is refused until one of the documents is corrected — choosing between
+them would be exactly the guess identity exists to remove.
 
 Only a `goals` artifact is read this way. A brief or a design with a `Goals`
 heading of its own states no goals work may be attributed to — the goals are the
@@ -1322,16 +1346,24 @@ document is not one work can name.
 | `lost` | Names no goal, on an item the tracker witnesses one was written onto. | A record that was destroyed rather than never made. Reported and failed. Where the witness kept the words, they are quoted and putting them back is a restoration rather than a fresh judgement; where it kept only that a goal was written, the words have to be recovered from outside the tracker. |
 | `uncheckable` | The repository records no goal in force, or the goals could not be read. | Nothing was checked, and it is said so rather than reported either way. Admitting work without asking is refused here, because an attribution nobody could check is not one the operator agreed to; the work is proposed instead and they decide, which is how a repository with no goals yet files the work of writing them. |
 
-Wording is compared with case, surrounding and repeated whitespace, and trailing
-sentence punctuation folded. Nothing else is guessed at: a paraphrase is
-`unresolved` with the goals documents named, because deciding it was near enough
-is the inference a resolved attribution exists to replace.
+An identity that no goal in force carries is `unresolved` and says so about the
+identity, rather than falling back to the wording beside it: an item names one
+goal, and reading its words as a second opinion would be the prose key coming
+back in through the failure path. Where the match is on wording, nothing beyond
+the folding above is guessed at — a paraphrase is `unresolved` with the goals
+documents named, because deciding it was near enough is the inference a resolved
+attribution exists to replace.
 
 An attribution is written on the item as a `Goal served:` line — by the creation
 that admitted the work, or by an `attribute` action afterwards, appended to what
 the item already records rather than replacing it. The newest such line is the
 item's current claim, so the goal an item was admitted under is never rewritten
-and the record of how it came to be attributed survives.
+and the record of how it came to be attributed survives. The line names the
+goal's identity where the goal has one, and carries the words the document
+states beside it for reading:
+`Goal served: [traceable-chain] Maintain a traceable chain ...`. What the
+harness never does is invent an identity: a goal that carries none is written
+down in the words it was named by.
 
 Every write that puts a goal into an item's notes also records that goal in the
 tracker's own metadata for the item, under `yoyodyne_goal_recorded`. It exists
@@ -1374,6 +1406,18 @@ that said nothing about them. `--scope=queue` reads `open` and `blocked` alone
 for the narrower question, and either way the report opens with the statuses it
 read and the ones it did not.
 
+**`yoyo goals reattribute` moves an attribution off the wording.** An
+attribution recorded before goals carried identities names the words, and the
+words are what the next amendment changes. It resolves what each item recorded
+against the goals as they now stand and appends the same goal named by its
+identity, deciding nothing about what any work is for. An item whose recorded
+goal resolves to nothing, or whose goal carries no identity yet, is reported and
+left exactly as it was rather than guessed at — the first is a claim somebody has
+to correct and the second is a document somebody has to amend — and the command
+exits non-zero while any item is left behind. `--dry-run` reports the same thing
+and writes nothing, which is worth reading before a run over a live backlog. Like
+the sweep it walks every status the tracker holds.
+
 `yoyo goals guard` is the same loss stopped rather than reported. Wired as a
 `PreToolUse` hook on `Bash`, it reads the command an agent session is about to
 run and refuses `bd update <id> --notes`, which replaces an item's notes and
@@ -1389,9 +1433,10 @@ the provider rather than enforced by the harness, so where the hook does not fir
 the command runs as it did before and nothing reports that it did.
 
 ```sh
-yoyo goals list          # the goals work may be attributed to, and where each is stated
+yoyo goals list          # the goals work may be attributed to, their identities, and where each is stated
 yoyo goals attribution   # what each work item the tracker holds says it is for
 yoyo goals witness       # witness the goals already recorded on work items
+yoyo goals reattribute   # move an attribution off the wording and onto the goal's identity
 yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
