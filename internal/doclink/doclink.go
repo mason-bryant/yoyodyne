@@ -25,6 +25,19 @@
 // is somebody else's to keep working, and reaching for one would make the check
 // depend on the network.
 //
+// An absolute URL naming this repository's own forge home is not outside it. A
+// document that writes `https://github.com/owner/repo#getting-started` names a
+// heading in the README of this checkout, and that spelling is what a link has
+// to use when it is read somewhere other than in a checkout:
+// `.github/release-notes-preamble.md` is appended to every release's notes and
+// rendered on the forge, where a relative path leads nowhere. It is the same
+// argument the generated configuration below makes — published text this
+// repository cannot correct afterwards — and until yoyodyne-ifd.315 nothing
+// resolved it, so a README restructure could move that heading and break the
+// call to action in every release already out with no check to say so. The home
+// is derived from go.mod's module path, which is where this repository already
+// says what it is called.
+//
 // Source files are read for the same fragments, because prose is not the only
 // thing that cites a heading. `internal/config/scaffold.go` writes
 // `docs/configuration.md#checks` into every `.yoyodyne/config.yaml` `yoyo init`
@@ -100,9 +113,10 @@ func Check(root string) ([]Problem, error) {
 		contents[document] = content
 		headings[document] = anchorsIn(content)
 	}
+	home := forgeHome(root)
 	var problems []Problem
 	for _, document := range documents {
-		problems = append(problems, problemsIn(root, document, contents[document], headings)...)
+		problems = append(problems, problemsIn(root, home, document, contents[document], headings)...)
 	}
 	sources, err := Sources(root)
 	if err != nil {
@@ -220,7 +234,7 @@ var fencePattern = regexp.MustCompile("^(?:```|~~~)")
 var schemePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.\-]*:`)
 
 // problemsIn reports the links one document makes that resolve to nothing.
-func problemsIn(root, document, content string, headings map[string]map[string]bool) []Problem {
+func problemsIn(root, home, document, content string, headings map[string]map[string]bool) []Problem {
 	var problems []Problem
 	directory := path.Dir(document)
 	fenced := false
@@ -233,24 +247,102 @@ func problemsIn(root, document, content string, headings map[string]map[string]b
 			continue
 		}
 		for _, match := range linkPattern.FindAllStringSubmatch(codeSpanPattern.ReplaceAllString(raw, ""), -1) {
-			target := strings.TrimSpace(match[1])
-			target = strings.TrimSuffix(strings.TrimPrefix(target, "<"), ">")
-			if target == "" || schemePattern.MatchString(target) || strings.HasPrefix(target, "//") {
+			written := strings.TrimSpace(match[1])
+			written = strings.TrimSuffix(strings.TrimPrefix(written, "<"), ">")
+			if written == "" {
 				continue
 			}
-			if reason := resolve(root, document, directory, target, headings); reason != "" {
-				problems = append(problems, Problem{Path: document, Line: index + 1, Target: target, Reason: reason})
+			target := written
+			if schemePattern.MatchString(written) || strings.HasPrefix(written, "//") {
+				// A URL naming this repository is a link into this checkout however it
+				// is spelled; anything else absolute is somebody else's to keep working.
+				if target = repositoryTarget(home, written); target == "" {
+					continue
+				}
+			}
+			if reason := resolve(root, document, directory, target, written, headings); reason != "" {
+				problems = append(problems, Problem{Path: document, Line: index + 1, Target: written, Reason: reason})
 			}
 		}
 	}
 	return problems
 }
 
+// modulePattern matches the module path go.mod declares, which is where this
+// repository says what it is called.
+var modulePattern = regexp.MustCompile(`(?m)^module\s+(\S+)`)
+
+// forgeHome is the URL this repository is read at on its forge —
+// `github.com/mason-bryant/yoyodyne` in go.mod is
+// `https://github.com/mason-bryant/yoyodyne` — and the empty string for a root
+// that does not say. It is derived rather than configured because the module
+// path is already this repository's own name for itself, committed here, and a
+// second place to write it down is a second place for it to go stale.
+//
+// A root carrying no go.mod, or one whose module path is not a forge host and an
+// owner and a repository, has no home, and every absolute URL under it stays
+// somebody else's — which is the behaviour this package had before any of them
+// were resolved.
+func forgeHome(root string) string {
+	content, err := read(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	module := modulePattern.FindStringSubmatch(content)
+	if module == nil {
+		return ""
+	}
+	segments := strings.Split(module[1], "/")
+	if len(segments) != 3 || !strings.Contains(segments[0], ".") {
+		return ""
+	}
+	return "https://" + module[1]
+}
+
+// blobViewPattern matches what a forge puts in front of a repository-relative
+// path in its blob view, once the home has been taken off.
+var blobViewPattern = regexp.MustCompile(`^/blob/[^/]+/`)
+
+// repositoryTarget is the repository-relative target an absolute URL names when
+// it names this repository, and the empty string for a URL that names anything
+// else. Two spellings resolve, and they are the two this repository's own
+// documents and generated files write: a file in the forge's blob view, and the
+// repository root carrying a fragment, which is a link into the README because
+// the root is where the forge renders it.
+//
+// A root URL with no fragment names the repository rather than a heading in it,
+// so there is nothing here to resolve and it is left alone. So is everything
+// else under the home — a release, a pull request, an issue — which is the
+// forge's own furniture rather than a document this checkout has.
+func repositoryTarget(home, written string) string {
+	if home == "" || !strings.HasPrefix(written, home) {
+		return ""
+	}
+	rest, fragment, carried := strings.Cut(strings.TrimPrefix(written, home), "#")
+	if carried {
+		fragment = "#" + fragment
+	}
+	switch {
+	case rest == "" || rest == "/":
+		if !carried {
+			return ""
+		}
+		return "/README.md" + fragment
+	case blobViewPattern.MatchString(rest):
+		return "/" + blobViewPattern.ReplaceAllString(rest, "") + fragment
+	}
+	return ""
+}
+
 // resolve says why one target names nothing, and returns nothing for one that
 // resolves. The two halves are separate questions: whether the file is there,
 // and — for a Markdown file, which is the only kind whose headings are known —
 // whether it carries the heading the fragment names.
-func resolve(root, document, directory, target string, headings map[string]map[string]bool) string {
+//
+// The target is resolved and the written form is reported: a link spelled as a
+// URL into this repository resolves as the path it names, and what a reader has
+// to search the document for is what the document says.
+func resolve(root, document, directory, target, written string, headings map[string]map[string]bool) string {
 	reference, fragment, _ := strings.Cut(target, "#")
 	// A path is written as a URL, so what it says and what the filesystem holds
 	// differ wherever a character had to be escaped. A target that is not valid
@@ -276,11 +368,11 @@ func resolve(root, document, directory, target string, headings map[string]map[s
 			linked = path.Clean(path.Join(directory, reference))
 		}
 		if linked == ".." || strings.HasPrefix(linked, "../") {
-			return fmt.Sprintf("it links to %q, which leaves the repository, so nothing here can say whether it is there", target)
+			return fmt.Sprintf("it links to %q, which leaves the repository, so nothing here can say whether it is there", written)
 		}
 		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(linked)))
 		if err != nil {
-			return fmt.Sprintf("it links to %q, and %s is not in the repository", target, linked)
+			return fmt.Sprintf("it links to %q, and %s is not in the repository", written, linked)
 		}
 		if info.IsDir() {
 			// A link to a directory is a link to a place rather than to a heading, so
@@ -299,7 +391,7 @@ func resolve(root, document, directory, target string, headings map[string]map[s
 		return ""
 	}
 	if !anchors[slug(fragment)] {
-		return fmt.Sprintf("it links to %q, and %s carries no heading with that anchor", target, linked)
+		return fmt.Sprintf("it links to %q, and %s carries no heading with that anchor", written, linked)
 	}
 	return ""
 }

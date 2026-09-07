@@ -104,6 +104,101 @@ func TestALinkOutsideTheRepositoryIsNotResolvedAgainstTheFilesystem(t *testing.T
 	}
 }
 
+func TestALinkToThisRepositorysOwnForgeHomeIsResolvedAgainstTheReadme(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// The spelling a document has to use when it is read somewhere other than in
+	// a checkout: release notes are rendered on the forge, where a relative path
+	// leads nowhere. The URL is absolute and the heading it names is here, so the
+	// fragment is resolved rather than passed over as somebody else's.
+	write(t, root, "go.mod", "module github.com/an-owner/a-repository\n\ngo 1.24.0\n")
+	write(t, root, "README.md", "# Readme\n\n## Getting started\n")
+	write(t, root, ".github/notes.md", `# Notes
+
+See [the readme](https://github.com/an-owner/a-repository#getting-started), and
+[the same heading misspelled](https://github.com/an-owner/a-repository/#getting-startd).
+`)
+
+	problems := check(t, root)
+	if len(problems) != 1 {
+		t.Fatalf("problems = %v", problems)
+	}
+	if problems[0].Path != ".github/notes.md" || problems[0].Line != 4 {
+		t.Fatalf("problem = %#v", problems[0])
+	}
+	// The link is reported as the document writes it, because the URL is what
+	// somebody has to search the document for, and the reason names the README
+	// because that is where the heading has to be.
+	if problems[0].Target != "https://github.com/an-owner/a-repository/#getting-startd" {
+		t.Fatalf("target = %q", problems[0].Target)
+	}
+	if !strings.Contains(problems[0].Reason, "README.md carries no heading") {
+		t.Fatalf("reason = %q, want it to name the document the fragment misses", problems[0].Reason)
+	}
+}
+
+func TestALinkToThisRepositorysBlobViewIsResolvedAgainstTheFileItNames(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	write(t, root, "go.mod", "module github.com/an-owner/a-repository\n\ngo 1.24.0\n")
+	write(t, root, "docs/guide.md", "# Guide\n\n## Checks\n")
+	write(t, root, "docs/notes.md", `# Notes
+
+[The guide](https://github.com/an-owner/a-repository/blob/main/docs/guide.md#checks),
+[a heading it has not](https://github.com/an-owner/a-repository/blob/main/docs/guide.md#chekcs),
+and [a file this repository has not](https://github.com/an-owner/a-repository/blob/main/docs/gone.md).
+`)
+
+	problems := check(t, root)
+	if len(problems) != 2 {
+		t.Fatalf("problems = %v", problems)
+	}
+	if problems[0].Line != 4 || !strings.Contains(problems[0].Reason, "docs/guide.md carries no heading") {
+		t.Fatalf("problem = %#v", problems[0])
+	}
+	if problems[1].Line != 5 || !strings.Contains(problems[1].Reason, "docs/gone.md is not in the repository") {
+		t.Fatalf("problem = %#v", problems[1])
+	}
+}
+
+func TestAForgeURLThatIsNotADocumentInThisRepositoryIsNotResolved(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// Everything under the home that is not a file or the rendered root is the
+	// forge's own furniture, and another repository on the same forge is not ours
+	// at all. Resolving either would be this check guessing at what it cannot read.
+	write(t, root, "go.mod", "module github.com/an-owner/a-repository\n\ngo 1.24.0\n")
+	write(t, root, "README.md", `# Readme
+
+[The releases](https://github.com/an-owner/a-repository/releases),
+[a pull request](https://github.com/an-owner/a-repository/pull/53),
+[the repository itself](https://github.com/an-owner/a-repository),
+[a neighbour](https://github.com/an-owner/a-repository-two#getting-started), and
+[somebody else's](https://github.com/gastownhall/beads#install).
+`)
+
+	if problems := check(t, root); len(problems) != 0 {
+		t.Fatalf("problems = %v", problems)
+	}
+}
+
+func TestARepositoryThatDoesNotSayWhatItIsCalledResolvesNoAbsoluteURL(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// The home is derived from go.mod and from nothing else, so a root without one
+	// treats every absolute URL the way this package treated all of them before
+	// any were resolved: as somebody else's to keep working.
+	write(t, root, "README.md", "# Readme\n\n[A heading it has not](https://github.com/an-owner/a-repository#nowhere)\n")
+
+	if problems := check(t, root); len(problems) != 0 {
+		t.Fatalf("problems = %v", problems)
+	}
+}
+
 func TestALinkThatIsAnExampleOfALinkIsNotOneToResolve(t *testing.T) {
 	t.Parallel()
 

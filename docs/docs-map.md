@@ -127,7 +127,13 @@ anchor made from inside `docs/product/`, `docs/designs/`, `docs/decisions/`, or
     `docs/releases/<tag>.md`, and `.github/workflows/release.yml` passes the
     result to `gh release create --notes-file`. It is in the notes of every
     release already published, and published release notes cannot be corrected
-    by a change to this repository.
+    by a change to this repository. **This one is enforced rather than recorded.**
+    `internal/doclink` resolves a URL naming this repository's own forge home
+    against the checkout — the repo-root form against `README.md`, the blob form
+    against the file it names — so moving or renaming that heading fails
+    `make test` with the preamble's line named. `TestThePublishedReleaseNotesLinkIntoTheReadmeIsHeldByThisChecker`
+    holds the coverage itself, so the freeze cannot be lost by a change to the
+    checker either.
 - **Tracked work items.** The backlog is upstream: the product manager owns it,
   and no developer rewrites an item to chase a link. **The tracker mentions six
   configuration-guide anchors, and four of them are Tier 1 because of it** —
@@ -855,27 +861,33 @@ rather than costing a reviewer a paragraph saying they could not verify it. The
 policy above is enforced rather than asked for, and the remaining manual part is
 only the tables' *line numbers*, which the checker has no opinion about.
 
-**Two kinds of citation the checker cannot see**, established by
-yoyodyne-ifd.121.6's sweep and named here so no later run mistakes a green
-`make test` for a clean sweep:
+**One kind of citation the checker cannot see**, named here so no later run
+mistakes a green `make test` for a clean sweep:
 
-- **Anchors cited from files that are not Markdown.**
-  `.yoyodyne/workflows/delivery.yaml:8` cites
-  `docs/configuration.md#running-a-work-item-against-the-workflow-definition`,
-  and Go comments and struct literals cite `docs/configuration.md#checks` and
-  `#provider-accounts`. Breaking any of them fails nothing. The Go ones are at
-  least asserted by `internal/cli/init_test.go`; the YAML one is asserted by
-  nothing at all.
 - **Anchors cited from the tracker.** `.beads/issues.jsonl` carries citations in
   item descriptions and recorded review findings, and the export is not the
   store, so nothing a change to this repository does can repair one. Today
   yoyodyne-ifd.117.1 — open — cites `README.md#talking-to-the-other-agents`,
   which ifd.160 deleted.
 
-Both are why the sweep is still stated as a method rather than replaced by the
-test. Re-derive with `README.md#` and `configuration.md#` over the whole tree
-including `.beads/issues.jsonl`, and separately over the protected homes; the
-test covers the Markdown middle and neither end.
+yoyodyne-ifd.121.6's sweep named two others, and both are covered now:
+
+- **Anchors cited from files that are not Markdown** are read. Go, YAML, and
+  shell under the root are swept for a `path.md#anchor` citation, `.yoyodyne/`
+  included, so `.yoyodyne/workflows/delivery.yaml:8` citing
+  `docs/configuration.md#running-a-work-item-against-the-workflow-definition`,
+  and the Go comments and struct literals citing `docs/configuration.md#checks`
+  and `#provider-accounts`, each fail `make test` when the heading moves.
+- **A link written as a URL into this repository's own forge home** is resolved
+  against the checkout, which is how `.github/release-notes-preamble.md:28`
+  reaches `README.md#getting-started` and why that Tier 1 anchor is enforced
+  rather than only recorded (yoyodyne-ifd.315).
+
+The one that remains is why the sweep is still stated as a method rather than
+replaced by the test. Re-derive with `README.md#` and `configuration.md#` over
+the whole tree including `.beads/issues.jsonl`, and separately over the protected
+homes: the test says whether a citation resolves, never whether an anchor is
+frozen, and the tracker is past what any check here can reach.
 
 **And the walkthrough is a gate now too.** `.github/workflows/ci.yml` runs
 `make adoption` on every pull request, which executes the README's
