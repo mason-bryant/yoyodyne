@@ -207,6 +207,46 @@ func TestASideTurnWithNobodyToAskIsRefused(t *testing.T) {
 	}
 }
 
+// The per-agent knob decides whether there is a side thread at all, and it is
+// read here because this is where a side turn becomes a provider invocation. An
+// agent left at the default queues — which is what every agent did before the
+// knob existed — so the turn is refused before anything is spent, naming the
+// mode the project actually configured.
+//
+// What the knob never decides is what a side thread may do. That is the role's
+// own authority narrowed in Go, and `internal/chat` holds the test that no value
+// here reaches it.
+func TestASideTurnIsRefusedForAnAgentConfiguredToQueue(t *testing.T) {
+	t.Parallel()
+
+	queueing := answeringConfig()
+	architect := queueing.Agents["architect"]
+	architect.Conversations = config.ConversationQueue
+	queueing.Agents["architect"] = architect
+
+	provider := &capturingBackend{result: backend.RunResult{FinalText: "answered anyway"}}
+	voice := sideVoice{config: queueing, provider: provider, repository: t.TempDir(), productID: "yoyodyne"}
+	_, err := voice.Answer(context.Background(), testSideQuestion())
+	if err == nil || !strings.Contains(err.Error(), "holds no side threads") {
+		t.Fatalf("Answer() for a queueing agent error = %v, want it refused", err)
+	}
+	if !strings.Contains(err.Error(), string(config.ConversationQueue)) {
+		t.Errorf("the refusal = %v, want it to name the mode the project configured", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("a refused side turn still asked a provider %d time(s)", provider.calls)
+	}
+
+	// An agent that has written nothing at all is the same answer, because an
+	// unstated key is the default rather than an absent one.
+	architect.Conversations = ""
+	queueing.Agents["architect"] = architect
+	if _, err := (sideVoice{config: queueing, provider: provider, productID: "yoyodyne"}).Answer(context.Background(), testSideQuestion()); err == nil ||
+		!strings.Contains(err.Error(), "holds no side threads") {
+		t.Fatalf("Answer() for an agent that configured nothing error = %v, want it refused", err)
+	}
+}
+
 // An exhausted usage limit met on a side turn is written down where every
 // process outside a run writes one. A side turn has no run to park and the
 // conversation it is held beside is not its own to fail at somebody's terminal,

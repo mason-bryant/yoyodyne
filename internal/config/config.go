@@ -613,6 +613,13 @@ type AgentConfig struct {
 	// is the one alternate this agent names — see failover.go for why both halves
 	// are the agent's own rather than the harness's.
 	Failover Failover `yaml:"failover,omitempty" json:"failover,omitempty"`
+	// Conversations is what this agent does with a question that arrives while
+	// its main thread is busy: queue it, which is what every agent did before this
+	// key existed and what an agent naming nothing still does, or hold it on a
+	// side thread. It sits beside the persona because it is a choice about how
+	// this agent works rather than about what it may do — see sidethreads.go for
+	// why no value of it reaches a side thread's authority.
+	Conversations ConversationMode `yaml:"conversations,omitempty" json:"conversations,omitempty"`
 	// Capabilities is everything the harness may do on this agent's behalf,
 	// stated in the closed vocabulary rather than implied by the role's name. It
 	// is read from `internal/rolecapability` as the configuration resolves, so
@@ -886,6 +893,7 @@ func (c Config) Validate() error {
 		}
 		problems = append(problems, agent.Persona.problems(name)...)
 		problems = append(problems, agent.Failover.problems(name, agent.Model)...)
+		problems = append(problems, conversationModeProblems(name, agent.Conversations)...)
 		if agent.Role == domain.RoleDeveloper {
 			developers += agent.Instances
 		}

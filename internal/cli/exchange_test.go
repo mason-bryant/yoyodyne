@@ -308,16 +308,19 @@ func TestAnAnsweringRoundIsRefusedWhereThereIsNobodyToAsk(t *testing.T) {
 }
 
 // answeringConfig is a project with one architect to ask, which is the whole of
-// what the voice reads from the configuration.
+// what the voice reads from the configuration. The architect is configured to
+// hold side threads, because that is a project opting in rather than a default:
+// an agent that has not written the key queues, and the side voice refuses it.
 func answeringConfig() config.Config {
 	return config.Config{
 		Product: config.Product{ID: "yoyodyne", RepositoryID: "yoyodyne"},
 		Agents: map[string]config.AgentConfig{
 			"architect": {
-				Role:    domain.RoleArchitect,
-				Backend: domain.BackendClaudeCode,
-				Model:   "opus-architect",
-				Persona: config.Persona{Text: "house architect persona"},
+				Role:          domain.RoleArchitect,
+				Backend:       domain.BackendClaudeCode,
+				Model:         "opus-architect",
+				Persona:       config.Persona{Text: "house architect persona"},
+				Conversations: config.ConversationSideThreads,
 			},
 			"product-manager": {
 				Role:    domain.RoleProductManager,

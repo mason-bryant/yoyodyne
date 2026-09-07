@@ -502,6 +502,13 @@ func (r *resolution) applyAgent(name string, document agentDocument, applied lay
 		agent.config.Failover = failover
 		agent.origins["failover"] = applied.origin
 	}
+	if document.Conversations != nil {
+		// Stated empty removes an inherited choice rather than leaving it in place,
+		// so a layer can put an agent back to queueing without having to know which
+		// layer underneath gave it side threads.
+		agent.config.Conversations = ConversationMode(strings.TrimSpace(string(*document.Conversations)))
+		agent.origins["conversations"] = applied.origin
+	}
 	return nil
 }
 

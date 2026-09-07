@@ -2941,6 +2941,63 @@ allowed, however many exchanges it spreads them over. That bounds a reply
 opening thread after thread, which is a different question from how long one
 thread may run.
 
+## Queueing a question, or holding it on a side thread
+
+A conversation takes its turns one at a time. That is what stops two processes
+interleaving one transcript, and the price of it is that a busy thread queues
+everything behind whatever it is doing: a question worth a minute waits out a
+turn worth twenty, and the roles every other role waits on are the ones whose
+threads are busiest.
+
+An agent may therefore hold **side threads** — bounded conversations beside its
+main one, each with its own stream, its own lease, and its own transcript, so a
+question put to it while the main thread is busy is answered rather than queued.
+It is stated in the agent's own block, beside the persona and the model:
+
+```yaml
+agents:
+  architect:
+    role: architect
+    model: opus
+    conversations: side-threads
+```
+
+`conversations` is `queue` for every agent that does not write it, which is what
+every agent did before this key existed. Nothing acquires side threads by
+inheriting a bundle or by upgrading the executable — which roles are worth
+answering two questions at once is a judgement about the work, exactly as
+[failover](#serving-a-turn-from-a-permitted-alternate-model) is. Stating it empty
+in a later layer removes an inherited choice and puts the agent back to queueing.
+A value that is neither word is refused at load, naming the two that are.
+`yoyo agent list` says which agents hold side threads.
+
+**The knob selects behaviour and never authority.** A side thread judges,
+answers, and tentatively plans: it reads the tracker and the evidence its role
+was given, and every intent it forms is a draft. It admits no work, mutates no
+item, raises no proposal or concern, commissions no research, records no
+evaluation, and issues no directive — whatever the role may do on its main
+thread. That list is in the harness's own code rather than in any file, there is
+no configuration key that names a capability, and no value of `conversations`
+reaches it. Setting this key gives an agent a second thread; it gives that thread
+nothing to act with.
+
+**What a side thread promises is best effort until the main thread confirms it.**
+A side thread concludes by finishing or by spending its turn budget, and what it
+reached is written into the agent's own memory — budgeted, redacted, audited,
+citing the side stream rather than copying its transcript. The main thread's next
+turn reads that and ratifies or adjusts whatever the side thread drafted, through
+its own single-threaded path, which is the only path there is. So an answer that
+promised scheduling is tentative, and the surface carrying it says so.
+
+**The bounds are the harness's, not yours.** A side thread runs to a turn cap and
+an agent holds a limited number at once; both are the harness's defaults and
+neither is configurable here yet. A side turn is otherwise a provider invocation
+like any other: the spending pause and your holds gate it, it is priced from what
+the provider reported and listed beside the conversations in the cost surfaces,
+and it is served by the agent's [permitted alternate](#serving-a-turn-from-a-permitted-alternate-model)
+and [pinned version](#pinning-an-agent-to-a-model-version) exactly as a main turn
+is.
+
 ## Research sources
 
 The product manager can have the harness find something out for it, so an idea
