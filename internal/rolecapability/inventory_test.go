@@ -132,6 +132,16 @@ var expresses = map[string]expression{
 		asks:     []capability.Capability{capability.WorkTriage},
 		gap:      "holding triage does not say which run a decision may name; that is a scope over the subject, and scopes are the next step of this workstream",
 	},
+	"sidestream.no-action": {
+		question: "does a side thread hold the capability this block asks for?",
+		asks:     []capability.Capability{capability.WorkItemRead, capability.RepositoryRead},
+		gap:      "it is asked of the thread rather than of the role, which no bundle can answer: a bundle says what a role holds, and this says what any role holds less of while it is answering beside its main thread",
+	},
+	"conversation.side-stream-narrows": {
+		question: "which of the capabilities this role holds does a side thread hold too?",
+		asks:     []capability.Capability{capability.WorkItemRead, capability.RepositoryRead},
+		gap:      "the intersection is the answer and neither half of it is a bundle: the role's half is one, and the side thread's is the list above, which belongs to no role",
+	},
 	"exchange.ask-authority": {
 		question: "are both ends of the ask on the channel?",
 		asks:     []capability.Capability{capability.ExchangeAsk},
