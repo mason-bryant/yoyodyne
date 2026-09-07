@@ -415,7 +415,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	}
 	if !availability.Authenticated {
 		return nil, nil, fmt.Errorf("the %s backend is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
-			agent.Backend, account.Alias, accountLoginCommand(account), availability.AuthMethod)
+			agent.Backend, account.Alias, accountLoginCommand(cfg, agent.Backend, account), availability.AuthMethod)
 	}
 
 	store, err := runstate.NewConversationStore(parts.stateRoot, cfg.Product.ID)
@@ -618,7 +618,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 // agent's is the only alias that is true of the conversation. It is the same
 // resolution the answering half of an exchange makes for the same reason.
 func conversationAccount(cfg config.Config, stateRoot, agentName string) (config.AccountEndpoint, error) {
-	return cfg.Endpoint(stateRoot, cfg.AgentAccountAlias(agentName))
+	return cfg.AgentAccountEndpoint(stateRoot, agentName)
 }
 
 // conversationAgent picks the agent a conversation is actually held with, and

@@ -3773,7 +3773,11 @@ These are all errors, reported before any work is claimed:
   bytes, an agent whose `account` names an alias the mapping does not declare, a
   `pool` that is neither `active` nor `reserved`, a negative
   `weekly_budget_usd`, or a mapping whose every account is reserved — a pool
-  with an empty active half is one every run falls out of.
+  with an empty active half is one every run falls out of;
+- an `accounts` entry whose `provider` is not a provider this project names, and
+  an agent no configured account could authenticate — a project whose accounts
+  hold one provider's logins and whose developer runs on another is a project no
+  run can ever be served for.
 
 ## Provider accounts
 
@@ -3810,11 +3814,56 @@ still only a name for the record.
 
 **Under a pool, where an alias authenticates follows from the alias.** `default`
 stays the machine's own home. Every other alias has a provider home of its own,
-at `<state root>/accounts/<alias>`, which the harness sets `CLAUDE_CONFIG_DIR` to
-when it invokes under that account. That is one rule, and the harness,
-`yoyo doctor`, and `bin/yoyo-account` all read it the same way. It is a rule
-rather than a setting because this file is versioned with the repository, and a
-directory belonging to one machine has no business in it.
+at `<state root>/accounts/<alias>`, which the harness sets that provider's home
+variable to when it invokes under that account — `CLAUDE_CONFIG_DIR` for Claude
+Code, `CODEX_HOME` for Codex. That is one rule, and the harness, `yoyo doctor`,
+and `bin/yoyo-account` all read it the same way. It is a rule rather than a
+setting because this file is versioned with the repository, and a directory
+belonging to one machine has no business in it.
+
+**An account names the provider whose authentication its home holds.** A
+provider home is one provider's: an invocation pointed at another provider's home
+authenticates as nobody and is refused. So an account that is not Claude Code's
+says so:
+
+```yaml
+accounts:
+  default:
+    description: the Claude subscription this machine is signed in to
+  on-codex:
+    description: the ChatGPT subscription
+    provider: codex
+```
+
+`provider` is optional, and what leaving it out means depends on whether the
+account has a home of its own:
+
+- An account that authenticates **where the machine does** — a project's single
+  account, and the `default` alias under a pool — serves whichever provider is
+  asking, because each provider reads its own home there. This is every project
+  that pools nothing, and nothing about provider-scoped accounts reaches one.
+- An account with a **home of its own** under the state root is a Claude Code
+  home when it says nothing, because that is what every one of them is:
+  `bin/yoyo-account` makes them with `CLAUDE_CONFIG_DIR=… claude auth login`, and
+  so does the login `yoyo doctor` hands back. A pool of Codex accounts states
+  `provider: codex` on them.
+
+Two providers reached by one adapter — Claude Code and a [declared
+provider](provider-plugins.md) whose `adapter` is `claude-code` — authenticate in
+the same shape of home, so an account holding either serves both.
+
+**An account that cannot sign an agent's provider in is refused before anything
+is claimed.** A run is served by an account that holds its developer's provider,
+and a pool that holds none for it refuses at the point the account would have
+been chosen — before a work item is claimed and before a worktree is cut — naming
+what each account holds. The same project is refused when its configuration is
+read, so the ordinary way to meet this is an edit rather than a run. In a mixed
+pool the rotation simply skips the accounts of other providers, which is what
+lets one pool serve a Claude Code developer and a Codex one.
+
+`yoyo doctor` asks each account about its own provider: a Codex account is asked
+by `codex` whether it is signed in, in `CODEX_HOME`, and the login it hands back
+is that provider's own.
 
 The consequence worth knowing is at the moment you declare the second account,
 not before it. A project whose single account was aliased `work` was
@@ -3840,6 +3889,12 @@ accounts:
     pool: reserved
 ```
 
+- **`provider`** is whose authentication this account's home holds, and defaults
+  as [above](#provider-accounts): the machine's own home serves whichever
+  provider asks, and a home of its own is Claude Code's unless the entry says
+  otherwise. An account of another provider is skipped by the rotation for an
+  agent it could not sign in, rather than handed a run that would die
+  unauthenticated.
 - **`pool`** is `active` or `reserved`, and defaults to `active`. The active
   accounts are round-robined, one account per run; a reserved one is served from
   only when no active account can be. A mapping whose every account is reserved
@@ -3911,13 +3966,18 @@ rotation is what `pool: reserved` is for, and standing one down is what
 every account is over its weekly budget, the run is refused at the point the
 account would have been chosen — before a work item is claimed and before a
 worktree is cut — and the refusal names what each account has spent against what
-it was budgeted.
+it was budgeted. A pool holding no account for the developer's provider is
+refused in the same place and reads as the different fact it is: nothing is
+exhausted, and no amount of waiting makes one of those accounts able to sign this
+agent in.
 
 **Setting the second account up** is [in the
 README](../README.md#running-several-claude-accounts), and `bin/yoyo-account`
 asks the questions and runs the login. `yoyo doctor` then reports each configured
-alias by name — `account:second` — saying whether it is authenticated and which
-half of the pool it is in.
+alias by name — `account:second` — saying which provider's authentication it
+holds, whether it is authenticated, and which half of the pool it is in.
+`bin/yoyo-account` signs an account in with Claude Code; an account on another
+provider is signed in with that provider's own login, which the diagnosis prints.
 
 ## Operators
 

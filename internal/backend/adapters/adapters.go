@@ -58,3 +58,23 @@ func For(descriptor backend.Descriptor, named domain.Backend, runner execution.P
 		return nil, false
 	}
 }
+
+// HomeVariable is the environment variable one adapter reads a provider home
+// from, and reports false for an adapter this build does not ship. It is here
+// for the same reason For is: an operator is handed a login command for one
+// account's home, and a surface that spelled the variable for itself would be a
+// second answer that could name Claude Code's variable for a Codex home — which
+// is the whole of the failure a per-provider account exists to stop.
+//
+// Each adapter's own constant is what is read, so the variable a login command
+// names and the variable an invocation actually sets cannot drift apart.
+func HomeVariable(adapter domain.Backend) (string, bool) {
+	switch adapter {
+	case domain.BackendClaudeCode:
+		return claudecode.ProviderHomeVariable, true
+	case domain.BackendCodex:
+		return codex.ProviderHomeVariable, true
+	default:
+		return "", false
+	}
+}

@@ -738,8 +738,11 @@ func renderScaffoldAccounts(builder *strings.Builder, effective Config) {
 # A second entry pools the work: active accounts are round-robined a run at a
 # time, a reserved one is served from only when no active account can be, and
 # weekly_budget_usd stands an account down once the runs that named it have cost
-# that much over seven days. bin/yoyo-account signs a second account in and
-# prints the entry for it; docs/configuration.md#provider-accounts has the rest.
+# that much over seven days. A pooled account has a provider home of its own, so
+# an entry whose home is not a Claude Code login says whose it is with
+# provider: -- an agent is only ever served by an account that can sign its
+# provider in. bin/yoyo-account signs a second account in and prints the entry
+# for it; docs/configuration.md#provider-accounts has the rest.
 accounts:
 `)
 	for _, alias := range effective.AccountAliases() {

@@ -117,7 +117,7 @@ type Backend struct {
 	ConfigDir string
 }
 
-// providerHomeVariable is how Codex is told which provider home to read. It is
+// ProviderHomeVariable is how Codex is told which provider home to read. It is
 // the provider's own variable rather than anything the harness invented, which
 // is the whole of why an account is a directory here as it is for the other
 // adapter: the provider already keeps one account's authentication per home, so
@@ -131,7 +131,7 @@ type Backend struct {
 // `yoyo doctor` asks each account through this same variable, so a home the CLI
 // does not read shows up there as an account that will not authenticate rather
 // than as a run charged to somebody else's subscription.
-const providerHomeVariable = "CODEX_HOME"
+const ProviderHomeVariable = "CODEX_HOME"
 
 // environmentFor is what an account contributes to the environment one
 // invocation is made in. Naming no directory returns nil, which names no
@@ -141,7 +141,7 @@ func environmentFor(configDir string) []string {
 	if strings.TrimSpace(configDir) == "" {
 		return nil
 	}
-	return append(os.Environ(), providerHomeVariable+"="+configDir)
+	return append(os.Environ(), ProviderHomeVariable+"="+configDir)
 }
 
 // dialect is what reads this invocation's stream: whatever the caller resolved

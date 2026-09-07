@@ -705,6 +705,11 @@ names the exact login to run for one that is not:
 yoyo doctor
 ```
 
+A pooled account's home holds one provider's authentication, so an account that
+is not a Claude Code login says whose it is — `provider: codex` — and is signed
+in with that provider's own command, which `yoyo doctor` prints. An agent is only
+ever served by an account that can sign its provider in.
+
 The state directory is `$YOYODYNE_STATE_HOME`, `$XDG_STATE_HOME/yoyodyne`,
 `~/Library/Application Support/Yoyodyne/state` on macOS, or
 `~/.local/state/yoyodyne` on Linux — the same one `bin/yoyo-status` reads. See

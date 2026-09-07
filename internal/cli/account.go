@@ -21,12 +21,21 @@ import (
 )
 
 // accountLoginCommand is what an operator runs to sign one configured account
-// in. It is the diagnosis's own command rather than a second spelling of it:
-// `yoyo doctor` reports an account that is not authenticated and a conversation
-// refuses to open on one, and an operator who met that condition from either
-// direction has to be handed the same thing to run.
-func accountLoginCommand(account config.AccountEndpoint) string {
-	return doctor.AccountLoginCommand(account.Directory)
+// in, for the provider whose home it is. It is the diagnosis's own command
+// rather than a second spelling of it: `yoyo doctor` reports an account that is
+// not authenticated and a conversation refuses to open on one, and an operator
+// who met that condition from either direction has to be handed the same thing
+// to run.
+//
+// The provider is the account's own where it names one, and the agent's
+// otherwise — an account that names none authenticates where the machine does,
+// which is the home whichever provider is asking reads.
+func accountLoginCommand(cfg config.Config, named domain.Backend, account config.AccountEndpoint) string {
+	if held := cfg.AccountProvider(account.Alias); held != "" {
+		named = held
+	}
+	descriptor, _ := providerDescriptor(cfg, named)
+	return doctor.AccountLoginCommand(descriptor.Adapter, account.Directory)
 }
 
 // weeklyBudgetWindow is the seven days a weekly budget is measured over. It is a

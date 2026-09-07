@@ -46,6 +46,11 @@ Runs now rotate across the accounts, one account per run. Nothing else changes:
   have cost that much in the last seven days, and rejoins as the spend ages out.
 - Add `pool: reserved` to an account to hold it back until no active account
   can serve.
+- An account that is not a Claude Code login names its provider —
+  `provider: codex` — because a provider home holds one provider's
+  authentication. An account of the wrong provider is skipped by the rotation,
+  and a pool that holds none for an agent is refused before a run claims
+  anything.
 - Long-lived agent conversations stay on one account; only runs rotate.
 
 To check the pool at any time, `yoyo doctor` reports every account and its

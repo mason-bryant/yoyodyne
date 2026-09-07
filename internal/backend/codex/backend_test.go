@@ -123,7 +123,7 @@ func TestCheckAvailabilityAsksTheHomeThisValueWasBuiltFor(t *testing.T) {
 		t.Fatalf("CheckAvailability() error = %v", err)
 	}
 	for _, command := range runner.commands {
-		if !hasEnvironment(command.Env, providerHomeVariable+"=/homes/two") {
+		if !hasEnvironment(command.Env, ProviderHomeVariable+"=/homes/two") {
 			t.Fatalf("%v was asked outside the account's own provider home", command.Args)
 		}
 	}
@@ -455,7 +455,7 @@ func TestAnInvocationIsMadeUnderTheAccountItWasGiven(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
-			if !hasEnvironment(runner.commands[0].Env, providerHomeVariable+"="+test.want) {
+			if !hasEnvironment(runner.commands[0].Env, ProviderHomeVariable+"="+test.want) {
 				t.Fatalf("the invocation was not made in %q: %v", test.want, runner.commands[0].Env)
 			}
 			if !hasEnvironmentName(runner.commands[0].Env, "GOCACHE") {

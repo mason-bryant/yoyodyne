@@ -37,7 +37,6 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/backend/adapters"
-	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -637,11 +636,14 @@ func (d *diagnosis) checkProviders(ctx context.Context, resolved config.Resolved
 // home, which is the command `bin/yoyo-account` runs and the one the README
 // states.
 //
-// Which executable is asked is the developer's provider rather than this build's
-// own, because the pool exists to serve runs and a run is what the developer's
-// provider spends. A project that declared a fork of Claude Code is therefore
-// diagnosed with the binary its runs will really use, and a project that
-// declared nothing is diagnosed with `claude` exactly as before.
+// Each account is asked about its own provider, which is the provider it names
+// and — where it names none — the one the developer runs on if that provider's
+// homes are the shape a pooled home is, and Claude Code otherwise. So a project
+// that declared a fork of Claude Code is diagnosed with the binary its runs will
+// really use, a project that declared nothing is diagnosed with `claude` exactly
+// as before, and a pool holding a Codex account is asked by `codex` whether that
+// account is signed in rather than by whichever provider the developer happens
+// to be on.
 func (d *diagnosis) checkAccounts(ctx context.Context, resolved config.Resolved, registry *backend.Registry) []Finding {
 	if !resolved.Config.Pooled() {
 		return nil
@@ -653,11 +655,11 @@ func (d *diagnosis) checkAccounts(ctx context.Context, resolved config.Resolved,
 		// to say that would not be the same finding a second time.
 		return nil
 	}
-	descriptor := poolDescriptor(resolved.Config, registry)
 	aliases := resolved.Config.AccountAliases()
 	findings := make([]Finding, 0, len(aliases))
 	for _, alias := range aliases {
 		check := "account:" + alias
+		provider, descriptor := accountProvider(resolved.Config, registry, alias)
 		// Where the account authenticates is asked of the configuration rather
 		// than derived here, so a diagnosis can never probe one home while the
 		// harness invokes in another — which is the one failure this check could
@@ -675,24 +677,50 @@ func (d *diagnosis) checkAccounts(ctx context.Context, resolved config.Resolved,
 			})
 			continue
 		}
-		findings = append(findings, d.checkAccount(ctx, resolved.Config, descriptor, endpoint))
+		findings = append(findings, d.checkAccount(ctx, resolved.Config, provider, descriptor, endpoint, resolved.Path))
 	}
 	return findings
 }
 
-// poolDescriptor is the provider the pool's accounts are asked about: the one
-// the developer agent names, because that is the invocation a rotated account
-// serves. A project whose developer names a provider that does not run on the
-// Claude Code adapter — or names none at all — falls back to the built-in Claude
-// Code description.
+// accountProvider is the provider one pooled account is diagnosed as, and the
+// description this build holds of it.
+//
+// The account's own answer comes first, because a provider home holds one
+// provider's authentication and the account is the only thing that knows whose:
+// asking a Codex home whether `claude` is signed in there reports every account
+// as broken, and asking a Claude Code home whether `codex` is reports every one
+// of them as fine. An account that names nothing keeps the answer the diagnosis
+// has always given — the developer's provider where it runs on the pooled home's
+// own adapter, and the built-in Claude Code description otherwise.
+func accountProvider(cfg config.Config, registry *backend.Registry, alias string) (domain.Backend, backend.Descriptor) {
+	named := cfg.Accounts[alias].Provider
+	if strings.TrimSpace(string(named)) == "" {
+		descriptor := poolDescriptor(cfg, registry)
+		return descriptor.ID, descriptor
+	}
+	descriptor, known := registry.Lookup(named)
+	if !known {
+		// A provider the project does not name is refused where the configuration
+		// is read. Nothing here is in a position to say more about it, and the
+		// descriptor's own emptiness is what the finding then reports.
+		return named, backend.Descriptor{ID: named}
+	}
+	return named, descriptor
+}
+
+// poolDescriptor is the provider an account that names none is asked about: the
+// one the developer agent names, because that is the invocation a rotated
+// account serves. A project whose developer names a provider that does not run
+// on the Claude Code adapter — or names none at all — falls back to the built-in
+// Claude Code description.
 //
 // The gate is the Claude Code adapter rather than any adapter this build ships,
-// and that is a bound on the diagnosis rather than on the pool. The account pool
-// is Claude Code's throughout: the homes it names are that provider's, and
-// AccountLoginCommand below signs one in with that provider's command. A
-// developer on another provider's adapter has its accounts diagnosed by the
-// provider check instead, which asks where the machine is signed in. Diagnosing
-// a pooled account per provider is the work that would lift this.
+// and it is the same statement config.AccountProvider makes about an unstated
+// account: a pooled home nobody named a provider for is a Claude Code home,
+// because that is what `bin/yoyo-account` and the login this file hands back
+// have made every one of them. A developer on another adapter whose accounts are
+// really that provider's says so on the accounts, and is then diagnosed through
+// that provider's own adapter.
 func poolDescriptor(cfg config.Config, registry *backend.Registry) backend.Descriptor {
 	builtIn, _ := backend.BuiltInDescriptor(domain.BackendClaudeCode)
 	names := make([]string, 0, len(cfg.Agents))
@@ -713,30 +741,50 @@ func poolDescriptor(cfg config.Config, registry *backend.Registry) backend.Descr
 	return builtIn
 }
 
-func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, descriptor backend.Descriptor, endpoint config.AccountEndpoint) Finding {
+func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, named domain.Backend, descriptor backend.Descriptor, endpoint config.AccountEndpoint, configPath string) Finding {
 	alias := endpoint.Alias
 	check := "account:" + alias
 	membership := cfg.Accounts[alias].Membership()
 	directory := endpoint.Directory
-	login := AccountLoginCommand(directory)
-	availability, err := (claudecode.Backend{Runner: d.env.Runner, Binary: descriptor.Binary, ConfigDir: directory}).CheckAvailability(ctx)
+	login := AccountLoginCommand(descriptor.Adapter, directory)
+	binary := descriptor.Binary
+	if binary == "" {
+		binary = providerBinary(descriptor.Adapter)
+	}
+	// The account is asked through the adapter its own provider runs on, so what
+	// this reports about a home is what an invocation made there would meet. An
+	// account naming a provider nothing in this build can launch is said to be
+	// exactly that rather than asked with somebody else's executable, which would
+	// report every such account as unauthenticated.
+	provider, built := adapters.For(descriptor, named, d.env.Runner, directory)
+	if !built {
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("account %q is provider %q's, which this build has no adapter for, so nothing here can say whether it is signed in", alias, named),
+			Detail:  accountHomeDetail(directory),
+			Remedy:  fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(configPath)),
+		}
+	}
+	availability, err := provider.CheckAvailability(ctx)
 	switch {
 	case err != nil:
 		return Finding{
 			Check:   check,
 			Status:  StatusProblem,
-			Summary: fmt.Sprintf("claude would not say whether account %q is authenticated", alias),
+			Summary: fmt.Sprintf("%s would not say whether account %q is authenticated", binary, alias),
 			Detail:  err.Error(),
 			Remedy:  login,
 		}
 	case !availability.Installed:
-		// The provider check above has already said claude is not there, and
-		// saying it once per alias would bury that under the accounts it stopped
-		// this from answering. What is added here is which account went unasked.
+		// The provider check above has already said the executable is not there,
+		// and saying it once per alias would bury that under the accounts it
+		// stopped this from answering. What is added here is which account went
+		// unasked.
 		return Finding{
 			Check:   check,
 			Status:  StatusProblem,
-			Summary: fmt.Sprintf("account %q could not be asked, because claude did not run", alias),
+			Summary: fmt.Sprintf("account %q could not be asked, because %s did not run", alias, binary),
 			Detail:  accountHomeDetail(directory),
 			Remedy:  providerInstallCommand(descriptor.Adapter),
 		}
@@ -744,7 +792,7 @@ func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, descrip
 		return Finding{
 			Check:   check,
 			Status:  StatusProblem,
-			Summary: fmt.Sprintf("account %q is in the %s pool and is not authenticated, so every run the pool sends there would be refused", alias, membership),
+			Summary: fmt.Sprintf("account %q is provider %q's, is in the %s pool, and is not authenticated, so every run the pool sends there would be refused", alias, named, membership),
 			Detail:  accountHomeDetail(directory),
 			Remedy:  login,
 		}
@@ -752,28 +800,36 @@ func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, descrip
 	return Finding{
 		Check:   check,
 		Status:  StatusOK,
-		Summary: fmt.Sprintf("account %q is authenticated and in the %s pool", alias, membership),
+		Summary: fmt.Sprintf("account %q is authenticated with provider %q and is in the %s pool", alias, named, membership),
 		Detail:  strings.TrimSpace(accountHomeDetail(directory) + " " + availability.AuthMethod),
 	}
 }
 
-// AccountLoginCommand is what signs one account in. The default alias
-// authenticates where the machine already does, so its command is the
-// provider's own; every other alias names the home it is signing in to, and
-// creates it, because an alias that has never been signed in is exactly the case
-// this is a remedy for and its home does not exist yet.
+// AccountLoginCommand is what signs one account in, with the provider whose home
+// it is. The default alias authenticates where the machine already does, so its
+// command is the provider's own; every other alias names the home it is signing
+// in to, and creates it, because an alias that has never been signed in is
+// exactly the case this is a remedy for and its home does not exist yet.
+//
+// Which variable names that home is the adapter's own, read from the adapter
+// rather than spelled here: handing an operator `CLAUDE_CONFIG_DIR` for a Codex
+// account would sign them in where the invocation will not look, which is the
+// same mistake as pointing the invocation at the wrong home and costs a login to
+// find out.
 //
 // It is exported because it is the answer to a question two surfaces ask: this
 // diagnosis reports an account that is not authenticated, and a conversation
 // refuses to open on one. An operator who met the same condition twice and was
 // handed two different commands would have to work out which of them was the
 // real one, so there is one command and both read it from here.
-func AccountLoginCommand(directory string) string {
-	if strings.TrimSpace(directory) == "" {
-		return "claude auth login"
+func AccountLoginCommand(adapter domain.Backend, directory string) string {
+	login := providerLoginCommand(adapter)
+	variable, named := adapters.HomeVariable(adapter)
+	if strings.TrimSpace(directory) == "" || !named {
+		return login
 	}
-	return fmt.Sprintf("mkdir -p %s && CLAUDE_CONFIG_DIR=%s claude auth login",
-		shellQuote(directory), shellQuote(directory))
+	return fmt.Sprintf("mkdir -p %s && %s=%s %s",
+		shellQuote(directory), variable, shellQuote(directory), login)
 }
 
 // accountHomeDetail says where an account authenticates, which is the one thing
