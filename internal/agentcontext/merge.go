@@ -32,12 +32,20 @@ package agentcontext
 // with the stream's identifier attached — which is what makes the main thread's
 // context a summary somebody can trace rather than a second conversation replayed
 // into the first.
+//
+// Concluding is what performs the write, and Conclude below is that in one
+// operation rather than two a caller has to remember to pair. A side thread that
+// ended without merging is a thread whose whole substance is on a disk nothing
+// reads, and it looks exactly like a thread that found nothing out — so ending
+// one and writing what it found are the same call, and neither can be reached
+// without the other.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -93,6 +101,68 @@ type Conclusion struct {
 	Commitments []string
 }
 
+// Streams is the durable record of one product's side conversations, narrowed to
+// the one thing concluding does to it. It is satisfied by
+// *runstate.SideStreamStore.
+//
+// It is an interface rather than the store because this package writes memory and
+// nothing else: what it may do to a side stream's own record is revise it as
+// ended, and a narrowed interface is that sentence in Go. It is also what a
+// caller holding the stream's lease hands in, which is where the exclusion that
+// makes this safe actually lives.
+type Streams interface {
+	Save(stream sidestream.Stream) error
+}
+
+// Conclude ends one side conversation: it stamps the outcome and the moment on
+// the stream, merges the substance into the agent's memory, and records the
+// stream as ended. It answers the concluded record and the revision that was
+// stored.
+//
+// The merge happens before the record is saved, and the order is the whole of
+// what this decides. A stream saved as ended whose merge then failed is a thread
+// nothing will merge afterwards — it is no longer open, so no retry reaches it —
+// and its substance is lost with no trace but a record saying it concluded. The
+// other way round costs nothing that matters: the memory holds the merge while
+// the record still says open, and whoever holds the lease concludes it again,
+// which appends a second revision of the same memory rather than a second memory.
+//
+// It takes the outcome and the moment rather than reading them off the stream,
+// because a caller that could pass a stream it had already stamped could pass one
+// stamped as concluded that never was.
+func (c Conclusion) Conclude(ctx context.Context, streams Streams, store *runstate.MemoryStore, outcome sidestream.Outcome, at time.Time) (sidestream.Stream, runstate.MemoryRevision, error) {
+	if streams == nil {
+		return sidestream.Stream{}, runstate.MemoryRevision{}, errors.New("concluding a side stream has no record to write it to")
+	}
+	if !outcome.Valid() {
+		return sidestream.Stream{}, runstate.MemoryRevision{}, fmt.Errorf("outcome %q is not one a side stream ends with", outcome)
+	}
+	if !c.Stream.Open() {
+		return sidestream.Stream{}, runstate.MemoryRevision{}, fmt.Errorf("side stream %s ended already, as %q, and merged when it did", c.Stream.ID, c.Stream.Outcome)
+	}
+	if at.IsZero() {
+		return sidestream.Stream{}, runstate.MemoryRevision{}, errors.New("concluding a side stream records the moment it ended")
+	}
+	concluded := c
+	closed := at.UTC()
+	concluded.Stream.Outcome = outcome
+	concluded.Stream.ClosedAt = &closed
+	concluded.Stream.UpdatedAt = closed
+	recorded, err := concluded.merge(ctx, store)
+	if err != nil {
+		return sidestream.Stream{}, runstate.MemoryRevision{}, err
+	}
+	if err := streams.Save(concluded.Stream); err != nil {
+		// The merge is already durable, so the failure says so: what is wrong is a
+		// record that still reads as open, and the way out of it is to conclude the
+		// stream again rather than to go looking for the substance.
+		return concluded.Stream, recorded, fmt.Errorf(
+			"record side stream %s as ended, whose merge is already stored as revision %d: %w",
+			concluded.Stream.ID, recorded.Sequence, err)
+	}
+	return concluded.Stream, recorded, nil
+}
+
 // Merge writes the conclusion into the agent's memory and returns the revision as
 // it was stored.
 //
@@ -100,7 +170,7 @@ type Conclusion struct {
 // main thread's next turn reads that rather than anything the caller composed,
 // which is the difference between a merge that happened and one that was
 // attempted.
-func (c Conclusion) Merge(ctx context.Context, store *runstate.MemoryStore) (runstate.MemoryRevision, error) {
+func (c Conclusion) merge(ctx context.Context, store *runstate.MemoryStore) (runstate.MemoryRevision, error) {
 	revision, err := c.Revision()
 	if err != nil {
 		return runstate.MemoryRevision{}, err

@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -54,23 +55,31 @@ func TestASideConversationReachesTheMainThreadAsMemoryAndNotAsDialogue(t *testin
 		t.Fatalf("AppendEvent() error = %v", err)
 	}
 
-	// It concludes, and concluding is what merges it.
-	concluded := time.Date(2026, 9, 7, 12, 20, 0, 0, time.UTC)
+	// It concludes, through the one call that ends a side stream. Nothing here
+	// stamps the outcome or writes the memory on the production code's behalf: that
+	// is the step this test exists to prove, so it has to be the step under test.
 	stream.Turns = 3
 	stream.LastSequence = 1
-	stream.Outcome = sidestream.OutcomeConcluded
-	stream.UpdatedAt = concluded
-	stream.ClosedAt = &concluded
-	if err := streams.Save(stream); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-	recorded, err := agentcontext.Conclusion{
+	ended, recorded, err := agentcontext.Conclusion{
 		Stream:      stream,
 		Substance:   "The intake hold names work the harness chooses for itself, so an item the operator named is exempt from it.",
 		Commitments: []string{"tell the operator the hold does not cover work they named"},
-	}.Merge(context.Background(), memories)
+	}.Conclude(context.Background(), streams, memories,
+		sidestream.OutcomeConcluded, time.Date(2026, 9, 7, 12, 20, 0, 0, time.UTC))
 	if err != nil {
-		t.Fatalf("Merge() error = %v", err)
+		t.Fatalf("Conclude() error = %v", err)
+	}
+	// The record says the thread ended, and it says so on the disk rather than only
+	// in the value that came back.
+	if ended.Open() {
+		t.Errorf("Conclude() answered a stream still recorded as open")
+	}
+	reread, err := streams.Load(stream.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if reread.Outcome != sidestream.OutcomeConcluded || reread.ClosedAt == nil {
+		t.Errorf("the recorded stream is %q closed at %v, want it ended", reread.Outcome, reread.ClosedAt)
 	}
 
 	// The main thread's next turn.
@@ -135,17 +144,21 @@ func TestAMergeReachesOnlyTheThreadItWasOpenedBeside(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMemoryStore() error = %v", err)
 	}
+	streams, err := runstate.NewSideStreamStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewSideStreamStore() error = %v", err)
+	}
 	stream := testSideStream(t, "chat-ffffffffffffffffffffffffffffffff")
-	concluded := time.Date(2026, 9, 7, 12, 20, 0, 0, time.UTC)
 	stream.Turns = 2
-	stream.Outcome = sidestream.OutcomeConcluded
-	stream.UpdatedAt = concluded
-	stream.ClosedAt = &concluded
-	if _, err := (agentcontext.Conclusion{
+	if err := streams.Open(stream, sidestream.DefaultMaxPerAgent); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, _, err := (agentcontext.Conclusion{
 		Stream:    stream,
 		Substance: "something another conversation's side thread worked out",
-	}).Merge(context.Background(), memories); err != nil {
-		t.Fatalf("Merge() error = %v", err)
+	}).Conclude(context.Background(), streams, memories,
+		sidestream.OutcomeConcluded, time.Date(2026, 9, 7, 12, 20, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Conclude() error = %v", err)
 	}
 
 	provider := &fakeBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: "Noted."}}}
@@ -244,4 +257,65 @@ func sideEvent(t *testing.T, streamID string, sequence uint64) execution.Event {
 		t.Fatalf("NewEvent() error = %v", err)
 	}
 	return event
+}
+
+// An agent that holds side threads steadily accumulates merges, and every one of
+// them would otherwise enter every later turn. The block takes the most recent up
+// to its own bound and says how many it left, rather than growing the prompt until
+// somebody compacts the store.
+func TestOneTurnCarriesABoundedNumberOfMergesAndSaysWhatItLeft(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	memories, err := runstate.NewMemoryStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewMemoryStore() error = %v", err)
+	}
+	streams, err := runstate.NewSideStreamStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewSideStreamStore() error = %v", err)
+	}
+	provider := &fakeBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: "Noted."}}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Memories = memories
+	session := openTestSession(t, options)
+
+	// More side threads than one turn carries, concluded in order, so the newest is
+	// the last one merged.
+	held := maxCarriedMerges + 2
+	var newest string
+	for index := range held {
+		stream := testSideStream(t, session.state.ConversationID)
+		stream.Turns = 1
+		stream.Topic = fmt.Sprintf("question %d the operator asked", index)
+		// The per-agent bound is what an agent may hold *open*; each of these concludes
+		// before the next opens, so opening them one after another is the ordinary case
+		// rather than a bound being dodged.
+		if err := streams.Open(stream, sidestream.DefaultMaxPerAgent); err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if _, _, err := (agentcontext.Conclusion{
+			Stream:    stream,
+			Substance: fmt.Sprintf("what the side thread worked out about question %d", index),
+		}).Conclude(context.Background(), streams, memories, sidestream.OutcomeConcluded,
+			time.Date(2026, 9, 7, 12, index, 0, 0, time.UTC)); err != nil {
+			t.Fatalf("Conclude() error = %v", err)
+		}
+		newest = stream.ID
+	}
+
+	if _, err := session.Send(context.Background(), "What came back from beside this thread?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	prompt := provider.requests[0].Prompt
+	if carried := strings.Count(prompt, "Side stream side-"); carried != maxCarriedMerges {
+		t.Errorf("the turn carries %d merges, want %d", carried, maxCarriedMerges)
+	}
+	if !strings.Contains(prompt, newest) {
+		t.Errorf("the turn left out the most recent merge %s:\n%s", newest, prompt)
+	}
+	if want := fmt.Sprintf("%d older side conversation(s) are not listed here", held-maxCarriedMerges); !strings.Contains(prompt, want) {
+		t.Errorf("the turn does not say %q:\n%s", want, prompt)
+	}
 }

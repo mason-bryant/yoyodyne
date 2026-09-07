@@ -20,9 +20,9 @@ func TestAMergeLandsAsAnAuditedMemoryRevision(t *testing.T) {
 	t.Parallel()
 
 	store := newStore(t)
-	recorded, err := testConclusion().Merge(context.Background(), store)
+	recorded, err := testConclusion().merge(context.Background(), store)
 	if err != nil {
-		t.Fatalf("Merge() error = %v", err)
+		t.Fatalf("merge() error = %v", err)
 	}
 	if recorded.Sequence != 1 {
 		t.Errorf("Recorded is revision %d, want the first", recorded.Sequence)
@@ -133,9 +133,9 @@ func TestAMergeIsRedactedByTheStore(t *testing.T) {
 	}
 	conclusion := testConclusion()
 	conclusion.Substance = "the operator's key sk-live-secret was in the evidence"
-	recorded, err := conclusion.Merge(context.Background(), store)
+	recorded, err := conclusion.merge(context.Background(), store)
 	if err != nil {
-		t.Fatalf("Merge() error = %v", err)
+		t.Fatalf("merge() error = %v", err)
 	}
 	if strings.Contains(recorded.Text, "sk-live-secret") {
 		t.Errorf("the merge carried a redacted value onto the disk:\n%s", recorded.Text)
@@ -152,8 +152,8 @@ func TestAMergeByARoleThatKeepsNoMemoryIsRefused(t *testing.T) {
 	conclusion := testConclusion()
 	conclusion.Stream.Agent = "reviewer"
 	conclusion.Stream.Role = domain.RoleReviewer
-	if _, err := conclusion.Merge(context.Background(), store); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Merge() error = %v, want ErrUnauthorized", err)
+	if _, err := conclusion.merge(context.Background(), store); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("merge() error = %v, want ErrUnauthorized", err)
 	}
 	memories, _, err := store.Memories("reviewer")
 	if err != nil {
@@ -173,8 +173,8 @@ func TestAnOpenStreamHasNothingToMerge(t *testing.T) {
 	conclusion := testConclusion()
 	conclusion.Stream.Outcome = ""
 	conclusion.Stream.ClosedAt = nil
-	if _, err := conclusion.Merge(context.Background(), newStore(t)); !errors.Is(err, ErrNotConcluded) {
-		t.Fatalf("Merge() error = %v, want ErrNotConcluded", err)
+	if _, err := conclusion.merge(context.Background(), newStore(t)); !errors.Is(err, ErrNotConcluded) {
+		t.Fatalf("merge() error = %v, want ErrNotConcluded", err)
 	}
 }
 
@@ -199,8 +199,8 @@ func TestAMergeIsBoundedBeforeItIsComposed(t *testing.T) {
 
 			conclusion := testConclusion()
 			mutate(&conclusion)
-			if _, err := conclusion.Merge(context.Background(), newStore(t)); err == nil {
-				t.Fatalf("Merge() accepted %s", name)
+			if _, err := conclusion.merge(context.Background(), newStore(t)); err == nil {
+				t.Fatalf("merge() accepted %s", name)
 			}
 		})
 	}
@@ -297,4 +297,149 @@ func testConclusion() Conclusion {
 		Substance:   "The hold names work the harness chooses for itself, so an item the operator named is exempt from it.",
 		Commitments: []string{"tell the operator the hold does not cover work they named"},
 	}
+}
+
+// Concluding is what performs the write. It stamps the outcome and the moment,
+// merges, and records the stream as ended — one call, so a side thread cannot end
+// without its substance being written, which is the failure that would look
+// exactly like a thread that found nothing out.
+func TestConcludingASideStreamIsWhatWritesTheMerge(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t)
+	streams := &recordingStreams{}
+	conclusion := openTestConclusion()
+	at := time.Date(2026, 9, 7, 12, 20, 0, 0, time.UTC)
+
+	ended, recorded, err := conclusion.Conclude(context.Background(), streams, store, sidestream.OutcomeConcluded, at)
+	if err != nil {
+		t.Fatalf("Conclude() error = %v", err)
+	}
+	if ended.Outcome != sidestream.OutcomeConcluded || ended.ClosedAt == nil || !ended.ClosedAt.Equal(at) {
+		t.Errorf("the concluded stream is %q closed at %v, want it ended at the moment given", ended.Outcome, ended.ClosedAt)
+	}
+	if recorded.Sequence != 1 || recorded.Memory != conclusion.Stream.ID {
+		t.Errorf("the merge is revision %d of %q, want the first of the stream's own memory", recorded.Sequence, recorded.Memory)
+	}
+	// The record it saved is the ended one rather than the open one it was handed.
+	if len(streams.saved) != 1 {
+		t.Fatalf("Conclude() saved %d records, want the one", len(streams.saved))
+	}
+	if streams.saved[0].Open() || streams.saved[0].ID != conclusion.Stream.ID {
+		t.Errorf("the saved record is %+v, want this stream, ended", streams.saved[0])
+	}
+	// And the caller's own value is untouched, so a failed conclusion cannot leave a
+	// stream stamped as ended in the process that tried.
+	if !conclusion.Stream.Open() {
+		t.Error("Conclude() stamped the caller's own stream")
+	}
+	memories, _, err := store.Live("product-manager")
+	if err != nil {
+		t.Fatalf("Live() error = %v", err)
+	}
+	if len(memories) != 1 {
+		t.Errorf("Live() returned %d memories, want the one the conclusion wrote", len(memories))
+	}
+}
+
+// The merge is written before the record is saved, so a save that fails leaves a
+// stream still recorded open — which whoever holds the lease concludes again —
+// rather than one recorded as ended whose substance nothing will ever write.
+func TestAFailedRecordLeavesTheMergeWrittenAndTheStreamConcludable(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t)
+	streams := &recordingStreams{err: errors.New("the state root is read-only")}
+	conclusion := openTestConclusion()
+	at := time.Date(2026, 9, 7, 12, 20, 0, 0, time.UTC)
+
+	_, _, err := conclusion.Conclude(context.Background(), streams, store, sidestream.OutcomeConcluded, at)
+	if err == nil {
+		t.Fatal("Conclude() reported no failure when the record could not be saved")
+	}
+	if !strings.Contains(err.Error(), "already stored as revision 1") {
+		t.Errorf("Conclude() error = %v, want it to say the merge is already written", err)
+	}
+	memories, _, err := store.Live("product-manager")
+	if err != nil {
+		t.Fatalf("Live() error = %v", err)
+	}
+	if len(memories) != 1 {
+		t.Fatalf("the merge did not survive the failed record: %d memories", len(memories))
+	}
+	// Concluding again is the way out, and it appends a revision of the same memory
+	// rather than making a second one.
+	streams.err = nil
+	if _, _, err := conclusion.Conclude(context.Background(), streams, store, sidestream.OutcomeConcluded, at); err != nil {
+		t.Fatalf("Conclude() error = %v on the second attempt", err)
+	}
+	memories, _, err = store.Live("product-manager")
+	if err != nil {
+		t.Fatalf("Live() error = %v", err)
+	}
+	if len(memories) != 1 || len(memories[0].Revisions) != 2 {
+		t.Errorf("concluding again left %d memories, want the one with both revisions", len(memories))
+	}
+}
+
+// What Conclude refuses, each because accepting it would record something that did
+// not happen.
+func TestConcludeRefusesWhatWouldRecordSomethingThatDidNotHappen(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 7, 12, 20, 0, 0, time.UTC)
+	for name, attempt := range map[string]func(*recordingStreams) error{
+		"a stream that ended already": func(streams *recordingStreams) error {
+			_, _, err := testConclusion().Conclude(context.Background(), streams, newStore(t), sidestream.OutcomeConcluded, at)
+			return err
+		},
+		"an outcome a stream does not end with": func(streams *recordingStreams) error {
+			_, _, err := openTestConclusion().Conclude(context.Background(), streams, newStore(t), "abandoned", at)
+			return err
+		},
+		"no moment at all": func(streams *recordingStreams) error {
+			_, _, err := openTestConclusion().Conclude(context.Background(), streams, newStore(t), sidestream.OutcomeConcluded, time.Time{})
+			return err
+		},
+		"no record to write to": func(*recordingStreams) error {
+			_, _, err := openTestConclusion().Conclude(context.Background(), nil, newStore(t), sidestream.OutcomeConcluded, at)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			streams := &recordingStreams{}
+			if err := attempt(streams); err == nil {
+				t.Fatalf("Conclude() accepted %s", name)
+			}
+			if len(streams.saved) != 0 {
+				t.Errorf("a refused conclusion saved %d records", len(streams.saved))
+			}
+		})
+	}
+}
+
+// recordingStreams is the side stream record, narrowed to what concluding writes
+// to it, so a test can see what was saved and drive a save that fails.
+type recordingStreams struct {
+	saved []sidestream.Stream
+	err   error
+}
+
+func (r *recordingStreams) Save(stream sidestream.Stream) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.saved = append(r.saved, stream)
+	return nil
+}
+
+// openTestConclusion is the same side thread still being held, which is what a
+// caller actually has when it concludes one.
+func openTestConclusion() Conclusion {
+	conclusion := testConclusion()
+	conclusion.Stream.Outcome = ""
+	conclusion.Stream.ClosedAt = nil
+	return conclusion
 }

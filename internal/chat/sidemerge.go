@@ -24,6 +24,7 @@ package chat
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -62,7 +63,8 @@ func (s *Session) renderSideConversations() string {
 			". Do not read that as there having been none.\n\n"
 	}
 	merged := s.mergedSideStreams(memories)
-	if len(merged) == 0 && len(problems) == 0 {
+	carried, dropped := boundedMerges(merged)
+	if len(carried) == 0 && len(problems) == 0 {
 		return ""
 	}
 	var rendered strings.Builder
@@ -74,13 +76,61 @@ func (s *Session) renderSideConversations() string {
 	if len(problems) > 0 {
 		fmt.Fprintf(&rendered, "%d of your memory records could not be read, so this account may be missing a side conversation.\n\n", len(problems))
 	}
-	for _, memory := range merged {
+	// What was left out is said for the same reason, and the two are separate
+	// sentences because they are separate things: one is a record nobody can read,
+	// and the other is a record this turn had no room for and which is still there.
+	if dropped > 0 {
+		fmt.Fprintf(&rendered, "%d older side conversation(s) are not listed here; the most recent are. Ask about one by its stream identifier if you need it.\n\n", dropped)
+	}
+	for _, memory := range carried {
 		current := memory.Current()
 		fmt.Fprintf(&rendered, "## %s\n\n", current.Subject)
 		rendered.WriteString(strings.TrimSpace(current.Text))
 		rendered.WriteString("\n\n")
 	}
 	return rendered.String()
+}
+
+// What one turn carries of the merges, and what it says instead of the rest.
+//
+// Each merge is bounded on its own and the live memory budget bounds the store,
+// but neither bounds this block: an agent that holds side threads steadily
+// accumulates merges, and every one of them would otherwise enter every later turn
+// until somebody compacted or retired it. Memory competes for the same context as
+// the canonical artifacts and the operator's message, so the block takes the most
+// recent merges up to a bound of its own and says how many it left.
+// The byte bound is comfortably more than one merge can be, so the newest merge
+// is always carried whole: a block that dropped everything and said only that it
+// had is worse than no block, and it is the one case a byte bound alone can
+// produce.
+const (
+	maxCarriedMerges     = 4
+	maxCarriedMergeBytes = 12 << 10
+)
+
+// boundedMerges is what this turn carries and how many it left behind, newest
+// merge first.
+//
+// Newest first is the ordering that matters here rather than the store's own,
+// which is by topic: what a main thread most needs is the thread that just ended,
+// and a bound that dropped by topic would drop the newest merge because its label
+// sorted late.
+func boundedMerges(merged []runstate.Memory) ([]runstate.Memory, int) {
+	byRecency := append([]runstate.Memory(nil), merged...)
+	sort.SliceStable(byRecency, func(i, j int) bool {
+		return byRecency[i].Current().RecordedAt.After(byRecency[j].Current().RecordedAt)
+	})
+	carried := make([]runstate.Memory, 0, len(byRecency))
+	spent := 0
+	for _, memory := range byRecency {
+		text := len(memory.Current().Text)
+		if len(carried) >= maxCarriedMerges || (len(carried) > 0 && spent+text > maxCarriedMergeBytes) {
+			break
+		}
+		carried = append(carried, memory)
+		spent += text
+	}
+	return carried, len(byRecency) - len(carried)
 }
 
 // mergedSideStreams is the live memories this conversation's own side threads
