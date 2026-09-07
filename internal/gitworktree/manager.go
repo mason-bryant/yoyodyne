@@ -440,8 +440,14 @@ func New(options Options) (*Manager, error) {
 	if isFilesystemRoot(worktreeRoot) {
 		return nil, errors.New("worktree root cannot be a filesystem root")
 	}
+	// The message names both roots and what to do, because whoever reads it is
+	// usually standing in one of them: a verb run from inside a managed worktree
+	// resolves its repository to that worktree, and the answer there is to run it
+	// from the checkout the worktree was added from.
 	if containsPath(repositoryRoot, worktreeRoot) || containsPath(worktreeRoot, repositoryRoot) {
-		return nil, errors.New("repository and worktree roots must not contain one another")
+		return nil, fmt.Errorf("the repository %s and the worktree root %s must not contain one another;"+
+			" run yoyo from the checkout the worktrees were added from, or set execution.worktree_root to a directory outside the repository",
+			repositoryRoot, worktreeRoot)
 	}
 	binary := options.GitBinary
 	if binary == "" {
@@ -2233,6 +2239,32 @@ func branchName(workItemID, runID string) string {
 func worktreeDirectoryName(workItemID, runID string) string {
 	item := strings.ToLower(strings.ReplaceAll(workItemID, ".", "-"))
 	return item + "-" + strings.TrimPrefix(runID, "run-")[:8]
+}
+
+// WithinWorktreeRoot reports whether a path is the root the harness keeps its
+// worktrees under, or lies beneath it. It decides that exactly as the
+// containment check in New does — through both paths' symlinks, and tolerating a
+// worktree root nothing has created yet — so a caller that has to know whether
+// it is standing inside a managed worktree asks here rather than comparing the
+// strings itself, and gets the answer New would have refused it over.
+func WithinWorktreeRoot(worktreeRoot, path string) (bool, error) {
+	root, err := absoluteCanonicalPath(worktreeRoot)
+	if err != nil {
+		return false, fmt.Errorf("resolve worktree root: %w", err)
+	}
+	candidate, err := absoluteCanonicalPath(path)
+	if err != nil {
+		return false, fmt.Errorf("resolve %q: %w", path, err)
+	}
+	return containsPath(root, candidate), nil
+}
+
+func absoluteCanonicalPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return canonicalizeFuturePath(absolute)
 }
 
 func containsPath(parent, child string) bool {

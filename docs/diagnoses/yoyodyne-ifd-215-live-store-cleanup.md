@@ -71,6 +71,10 @@ Two boundaries, both working as designed:
 - **A worktree under the state home** cannot resolve a configuration whose
   repository root contains, or is contained by, the worktrees root — which is
   what the first refusal above is. It stops the command before the sandbox does.
+  That half no longer holds: yoyodyne-ifd.335 resolves a verb run from inside a
+  managed worktree to the checkout the worktree was added from, so the first
+  refusal above is not what such a command meets now. The sandbox is unchanged,
+  so the write still fails, one boundary later.
 
 Nothing was half-written. The store replaces a record by writing a temporary
 file and renaming it, and the refusal lands on creating that file, so all six

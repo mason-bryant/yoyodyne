@@ -289,7 +289,19 @@ right thing to the wrong project.
 Relative paths inside the configuration — `product.repository` and a non-`auto`
 `execution.worktree_root` — resolve against the project directory, which is the
 parent of `.yoyodyne`, not the `.yoyodyne` directory itself. `repository: .`
-therefore keeps meaning the project root. The artifact directories —
+therefore keeps meaning the project root.
+
+One case resolves further. A project whose `.yoyodyne` is checked in gives every
+worktree of it a copy, so a command run from inside a worktree the harness
+manages would otherwise resolve its repository to that worktree — a directory
+under `execution.worktree_root`, which no command can address, since the
+repository and the worktree root must not contain one another. Every command
+instead addresses the checkout the worktree was added from, which is what makes
+`yoyo cost`, `yoyo directive`, `yoyo pause`, `yoyo resume`, `yoyo reconcile`,
+`yoyo run`, `yoyo review`, and `yoyo chat` work from inside a preserved worktree
+— where inspection after a failed run happens — and from an agent's own. A
+repository that is under the worktree root and is *not* a worktree of a checkout
+outside it is still refused, and the refusal names both roots. The artifact directories —
 `product.specifications`, `product.invariants`, `product.designs`, and
 `product.decisions` — are the exceptions, and deliberately: each names a directory
 *inside the repository being worked on*, so all four resolve against

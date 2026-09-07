@@ -154,7 +154,6 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, fmt.Errorf("resolve product repository: %w", err)
 	}
-	cfg.Product.Repository = repository
 
 	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
 	if err != nil {
@@ -169,6 +168,20 @@ func buildComponents(configPath string) (components, error) {
 			return components{}, fmt.Errorf("resolve worktree root: %w", err)
 		}
 	}
+	// A verb run from inside one of those worktrees resolves its repository to the
+	// worktree itself — the project's configuration is checked in, so the nearest
+	// one is the copy the worktree carries — and a repository beneath the worktree
+	// root is what the containment check refuses. That is exactly where inspection
+	// and recovery happen: a preserved worktree after a failed run, and an agent
+	// running yoyo from its own. So the repository is resolved to the checkout the
+	// worktree was added from, which is what every command here means by "the
+	// repository" anyway, and is what `yoyo reports` gets for free by never
+	// building a worktree manager at all.
+	repository, err = primaryCheckout(repository, worktreeRoot)
+	if err != nil {
+		return components{}, err
+	}
+	cfg.Product.Repository = repository
 
 	processRunner := execution.OSProcessRunner{}
 	store, err := runstate.NewStore(stateRoot, cfg.Product.ID)
@@ -264,6 +277,43 @@ func buildComponents(configPath string) (components, error) {
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
+}
+
+// primaryCheckout is the repository a command addresses, given the one its
+// configuration resolved to and the root the harness keeps its worktrees under.
+// Ordinarily that is the repository itself. Where the repository is one of the
+// managed worktrees it is the checkout that worktree was added from, which is the
+// same resolution configuration discovery already makes when it looks for a
+// worktree's external configuration: a worktree is the project it came from
+// rather than a project of its own.
+func primaryCheckout(repository, worktreeRoot string) (string, error) {
+	managed, err := gitworktree.WithinWorktreeRoot(worktreeRoot, repository)
+	if err != nil {
+		return "", fmt.Errorf("compare the repository with the worktree root: %w", err)
+	}
+	if !managed {
+		return repository, nil
+	}
+	// What the refusal has to say is what to do instead, because whoever reads it
+	// is standing in the directory it is refusing.
+	unresolved := fmt.Errorf("the repository %s is inside the worktree root %s and is not a worktree of a checkout outside it;"+
+		" run yoyo from the checkout the worktrees were added from, or set execution.worktree_root to a directory outside the repository",
+		repository, worktreeRoot)
+	primary, err := config.RepositoryRoot(repository)
+	if err != nil {
+		return "", errors.Join(unresolved, err)
+	}
+	if primary == "" {
+		return "", unresolved
+	}
+	managed, err = gitworktree.WithinWorktreeRoot(worktreeRoot, primary)
+	if err != nil {
+		return "", fmt.Errorf("compare the checkout %s was added from with the worktree root: %w", repository, err)
+	}
+	if managed {
+		return "", unresolved
+	}
+	return primary, nil
 }
 
 func (c components) tracker() beads.Client {
