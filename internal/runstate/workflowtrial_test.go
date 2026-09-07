@@ -6,8 +6,9 @@ package runstate
 // almost nothing is refused here — a run that names no instance is the ordinary
 // run and stays valid forever. What is refused is a record that could not have
 // been written by an executor: an instance identifier nothing could be stored
-// under, and a divergence with no instance to have diverged from, which would
-// report an observation about a run nothing observed.
+// under, a divergence with no instance to have diverged from, which would report
+// an observation about a run nothing observed, and the same contradiction the
+// other way round — a reason a run has no instance, said beside one.
 
 import "testing"
 
@@ -39,6 +40,31 @@ func TestTheSummaryCarriesWhatTheTrialObserved(t *testing.T) {
 	}
 	if summary.WorkflowDivergence != observed.WorkflowDivergence {
 		t.Errorf("summary divergence = %q, want %q", summary.WorkflowDivergence, observed.WorkflowDivergence)
+	}
+}
+
+// The run nothing observed is on the summary for the same reason and with more
+// of it: a soak counted off divergences reads such a run as one that agreed with
+// the definition, because it has no divergence and never could have had one.
+func TestTheSummaryCarriesARunNothingObserved(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	unobserved := testState(t, StatusSucceeded)
+	unobserved.WorkflowUnobserved = "the instance this run would be observed through could not be created"
+	if err := store.Create(unobserved); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	history, err := store.History(RunQuery{WorkItemID: unobserved.WorkItemID})
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	if len(history.Runs) != 1 {
+		t.Fatalf("history selected %d runs, want the one that was recorded", len(history.Runs))
+	}
+	if got := history.Runs[0].WorkflowUnobserved; got != unobserved.WorkflowUnobserved {
+		t.Errorf("summary unobserved = %q, want %q", got, unobserved.WorkflowUnobserved)
 	}
 }
 
@@ -74,6 +100,10 @@ func TestAWorkflowObservationIsHeldToWhatCouldHaveBeenWritten(t *testing.T) {
 		},
 		"a divergence with no instance to have diverged from": func(s *State) {
 			s.WorkflowDivergence = "the definition and the run are no longer in the same place"
+		},
+		"a reason there is no instance, said beside one": func(s *State) {
+			s.WorkflowInstanceID = s.RunID + "-delivery"
+			s.WorkflowUnobserved = "the instance this run would be observed through could not be created"
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -286,6 +286,12 @@ func TestTheRollbackLeavesARunExecutingNothingDeclarative(t *testing.T) {
 	if state.WorkflowDivergence != "" {
 		t.Errorf("the run records the divergence %q and nothing was observing it", state.WorkflowDivergence)
 	}
+	// Nor is it recorded as a run that should have been observed and was not. That
+	// is the other way to carry no instance, and the rollback is the one case where
+	// carrying none is what the project asked for.
+	if state.WorkflowUnobserved != "" {
+		t.Errorf("the run records %q and its project had rolled back; a rollback is not a failed observation", state.WorkflowUnobserved)
+	}
 	if _, err := fixture.store.LoadWorkflowInstance(deliveryInstanceID(pipelineRunID)); err == nil {
 		t.Errorf("an instance was recorded for a run nothing observed")
 	}
@@ -717,5 +723,139 @@ func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
 	if settled.WorkflowInstanceID != "" || settled.WorkflowDivergence != "" {
 		t.Errorf("a run on the legacy path was settled carrying instance %q and divergence %q",
 			settled.WorkflowInstanceID, settled.WorkflowDivergence)
+	}
+}
+
+// blockObservation makes the next run this pipeline reserves unobservable, and
+// reports the refusal its trial will meet.
+//
+// An instance already stands under the identifier that run will be given, which
+// is what a process that died between creating one and recording it on the run
+// leaves behind. Which of the ways an observation can fail to start this is does
+// not matter to what is being measured — a trial that could not start is one
+// thing however it could not — and this is the one that needs nothing injected
+// into the store the run writes to.
+func blockObservation(t *testing.T, pipeline Pipeline) string {
+	t.Helper()
+	trial, err := pipeline.deliveryTrialOver(pipelineRunID)
+	if err != nil {
+		t.Fatalf("deliveryTrialOver() error = %v", err)
+	}
+	if _, err := trial.executor.Start(trial.instance); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	_, refused := trial.executor.Start(trial.instance)
+	if refused == nil {
+		t.Fatalf("a second instance was created under %s; this fixture does not stop an observation", trial.instance)
+	}
+	return refused.Error()
+}
+
+// unobservedRunFixture drives the automatic path with its trial unable to start,
+// and reports the refusal the run met. It is the ordinary promotion scenario in
+// every other respect, which is the point: what it produces differs from that
+// scenario's recorded trace by the observation and by nothing else.
+func unobservedRunFixture(t *testing.T) (*baselineFixture, string) {
+	t.Helper()
+	fixture := newBaselineFixture(t, baselineItem())
+	provider := roleBackend(baselineImplements, approveVerdict)
+	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
+	refused := blockObservation(t, pipeline)
+	fixture.invoke(t, "run", pipeline)
+	return fixture, refused
+}
+
+// TestATrialThatCouldNotStartIsRecordedAsUnobserved is the first half of the
+// shape that froze a bad baseline: a run whose observation could not begin used
+// to record nothing at all, so it was indistinguishable from a run whose project
+// had rolled back — the same absent instance, the same absent divergence, and
+// nothing anywhere saying which of the two it was.
+//
+// What it must be instead is loud. The run delivers exactly as it would have,
+// because an observation never decides anything about a run, and it says on its
+// own record that nothing was watching it and why.
+func TestATrialThatCouldNotStartIsRecordedAsUnobserved(t *testing.T) {
+	t.Parallel()
+
+	fixture, refused := unobservedRunFixture(t)
+	if status := fixture.steps[0].outcome.Status; status != runstate.StatusSucceeded {
+		t.Fatalf("the run ended in %s; an observation that could not start is never a reason delivery does not happen", status)
+	}
+
+	state, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.WorkflowInstanceID != "" {
+		t.Errorf("the run records the instance %q and its trial never started", state.WorkflowInstanceID)
+	}
+	if state.WorkflowUnobserved == "" {
+		t.Fatalf("the run records no reason it was unobserved, so it reads exactly like a run whose project rolled back")
+	}
+	if !strings.Contains(state.WorkflowUnobserved, refused) {
+		t.Errorf("the run records %q and the refusal its trial met was %q; the cause is what somebody reading this has to act on",
+			state.WorkflowUnobserved, refused)
+	}
+	// The two fields say different things and a record carrying both would be
+	// saying that an observation which never began disagreed with the run.
+	if state.WorkflowDivergence != "" {
+		t.Errorf("the run records the divergence %q and no instance ever observed it", state.WorkflowDivergence)
+	}
+}
+
+// TestTheBaselineRecorderRefusesToFreezeARunNothingObserved is the other half:
+// the recorder refuses the trace rather than freezing it.
+//
+// This is what actually cost something. A run nothing observed produces a trace
+// differing from the right one by a single absent field, which every other check
+// in the baseline passes, so `-update-baseline` froze one — and the frozen
+// document then agreed with three consecutive full checks and began failing when
+// the observation started working again. The refusal is scoped to a run that was
+// eligible for observation, so the two legitimate ways a trace carries no
+// instance — a project that rolled back, and a path that reserves no run at all
+// — are recorded exactly as before.
+func TestTheBaselineRecorderRefusesToFreezeARunNothingObserved(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []struct {
+		what    string
+		drive   func(t *testing.T) *baselineFixture
+		refused bool
+	}{
+		{
+			what: "a run whose trial could not start",
+			drive: func(t *testing.T) *baselineFixture {
+				fixture, _ := unobservedRunFixture(t)
+				return fixture
+			},
+			refused: true,
+		},
+		{
+			what:  "a run the definition observed",
+			drive: baselineAutomaticPromotion,
+		},
+		{
+			what: "a run whose project rolled back",
+			drive: func(t *testing.T) *baselineFixture {
+				fixture := newBaselineFixture(t, baselineItem())
+				provider := roleBackend(baselineImplements, approveVerdict)
+				fixture.invoke(t, "run", automatic(fixture.legacy(t, provider, []string{"test -f feature.txt"}), provider))
+				return fixture
+			},
+		},
+	} {
+		t.Run(path.what, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := path.drive(t)
+			trace := fixture.trace(t, baselineScenario{name: "unrecorded", freezes: "nothing; this trace is built to be judged rather than frozen"})
+			refusal := baselineObservationRefusal(fixture.observable, trace.Durable)
+			if path.refused && refusal == "" {
+				t.Errorf("the recorder would freeze a trace of a run nothing observed")
+			}
+			if !path.refused && refusal != "" {
+				t.Errorf("the recorder refused a trace it has to freeze: %s", refusal)
+			}
+		})
 	}
 }

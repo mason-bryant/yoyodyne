@@ -308,6 +308,40 @@ func TestStatusNamesADeclarativeDivergenceWithoutCallingItAFailure(t *testing.T)
 	}
 }
 
+// The run nothing observed is the one the same count reads as clean, because it
+// has no divergence and never could have had one. It is named here for that
+// reason and, like a divergence, is not one of the reasons a run ended.
+func TestStatusNamesARunNothingObserved(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{
+		Matched:  1,
+		Recorded: 1,
+		Runs: []runstate.RunSummary{{
+			RunID:       "run-0123456789abcdef0123456789abcdef",
+			WorkItemID:  "yoyodyne-ifd.209.28",
+			Status:      runstate.StatusSucceeded,
+			Outcome:     runstate.OutcomeSucceeded,
+			Phase:       runstate.PhaseComplete,
+			StartedAt:   completedAt,
+			CompletedAt: &completedAt,
+			Integrated:  true,
+			WorkflowUnobserved: "the instance this run would be observed through could not be created: " +
+				"create workflow instance: workflow instance already exists",
+			CostUSD: 1.5,
+		}},
+	}, "", false)
+	rendered := out.String()
+	if !strings.Contains(rendered, "workflow unobserved: the instance this run would be observed through could not be created") {
+		t.Fatalf("rendered = %q, want the run said to be unobserved, with the cause", rendered)
+	}
+	if strings.Contains(rendered, "reason:") {
+		t.Fatalf("an unobserved run was reported as the reason a run ended: %q", rendered)
+	}
+}
+
 // A run marked outstanding with nothing under it is the "go and read the run's
 // JSON" case this verb exists to remove, and the marker has two causes worth
 // telling apart: cleanup that never finished, and a merge the forge queued and
