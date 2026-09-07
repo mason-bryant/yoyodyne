@@ -1408,3 +1408,225 @@ func TestAnItemWithNothingUnmetIsNotDocketed(t *testing.T) {
 		t.Fatal("RecordUnreadyItem() routed a finding with no docket wired")
 	}
 }
+
+// diedBeforeItStarted is the yoyodyne-ifd.285 shape: a dispatch that died at the
+// claim. Nothing was taken, nothing was cut, and the item is exactly as the
+// scheduler found it — which is why every other rule on this docket reads it as
+// nothing having happened.
+func diedBeforeItStarted() runstate.State {
+	completed := docketedNow.Add(-time.Hour)
+	return runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         docketedRunID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    docketedItem,
+		WorkItemTitle: docketedTitle,
+		Backend:       "claude-code",
+		Status:        runstate.StatusFailed,
+		StartedAt:     completed.Add(-time.Second),
+		UpdatedAt:     completed,
+		CompletedAt:   &completed,
+		Failure:       "claim work item: bd update failed with status failed and exit code 1: Error claiming yoyodyne-task: issue not claimable: status blocked",
+	}
+}
+
+// The half of yoyodyne-ifd.338 the operator asked about directly: a run that
+// fails before claiming left no docket entry, so it existed in no surface the
+// development manager's sweep reads. Every other stoppage class dockets and this
+// one evaporated — yoyodyne-ifd.285 was dispatched twenty-nine times in twenty
+// hours and the harness's own next-mover line said only that nothing was
+// recorded for anybody to decide.
+func TestARunThatDiedBeforeItClaimedItsItemIsDocketed(t *testing.T) {
+	t.Parallel()
+
+	died := diedBeforeItStarted()
+	if err := died.Validate(); err != nil {
+		t.Fatalf("the death is not a state the harness could record: %v", err)
+	}
+	// The rules that carried every other stoppage say nothing about this one,
+	// which is the whole of why it needed a class.
+	if stoppedRun(died) || preservedDeath(died) {
+		t.Fatal("a pre-claim death now reads as a stoppage the older rules catch; this test no longer measures the gap")
+	}
+
+	docket := &memoryDocket{}
+	created, err := docketerOver(nil, docket).RecordUnstartedRun(died)
+	if err != nil || !created {
+		t.Fatalf("a death before the claim reached nobody: created = %t, error = %v", created, err)
+	}
+	entry := docket.entries[0]
+	if entry.Class != triage.ClassUnstartedRun || entry.Key != triage.Key(triage.ClassUnstartedRun, docketedRunID) {
+		t.Fatalf("entry = %#v, want the unstarted run keyed to it", entry)
+	}
+	// Keyed to the run and naming the item it tried to claim, which is the whole
+	// of what somebody has to go and look at.
+	if entry.RunID != docketedRunID || entry.WorkItemID != docketedItem || entry.WorkItemTitle != docketedTitle {
+		t.Fatalf("entry names %s/%s (%q), want the run and the item it tried to claim", entry.RunID, entry.WorkItemID, entry.WorkItemTitle)
+	}
+	if entry.Failure != died.Failure {
+		t.Fatalf("failure = %q, want the reason the run gave %q", entry.Failure, died.Failure)
+	}
+	if entry.Blocker != "" || entry.Check != nil || len(entry.Findings) != 0 {
+		t.Fatalf("entry = %#v, want nothing about a change that was never made", entry)
+	}
+	// The counters travel for the reason every other entry's do: what the item can
+	// still afford is the same question whether it stopped or never started.
+	if entry.Counters.ReviewRounds != 3 || entry.Counters.ReviewRoundsCap != docketedCaps.ReviewRounds {
+		t.Fatalf("counters = %#v, want the item's own record beside the caps", entry.Counters)
+	}
+	rendered := entry.Render()
+	if !strings.Contains(rendered, "died before it claimed") || !strings.Contains(rendered, died.Failure) {
+		t.Fatalf("the rendered entry does not say what happened:\n%s", rendered)
+	}
+	// And it must not read as the stoppage it is not. "Died holding its change" is
+	// exactly what did not happen here, and a development manager who read it
+	// would go looking for a branch nobody made.
+	if strings.Contains(rendered, "Died holding its change") {
+		t.Fatalf("the entry claims a change that was never made:\n%s", rendered)
+	}
+	// Docketing is one event however many times it is recorded.
+	again, err := docketerOver(nil, docket).RecordUnstartedRun(died)
+	if err != nil || again {
+		t.Fatalf("the same death was docketed twice: created = %t, error = %v", again, err)
+	}
+}
+
+// The runs this must not docket. A run that got as far as claiming is described
+// by the rules that were already there, and a run that never started must not be
+// re-derived from a history where the claim was not recorded at all.
+func TestADeathAfterTheClaimIsNotDocketedAsUnstarted(t *testing.T) {
+	t.Parallel()
+
+	claimed := docketedNow.Add(-2 * time.Hour)
+	for _, test := range []struct {
+		name  string
+		state runstate.State
+	}{
+		{
+			// It cut a worktree, so it claimed, whatever its record says about when.
+			name:  "it died holding its change",
+			state: diedHoldingItsChange(),
+		},
+		{
+			name: "it recorded the claim and then failed",
+			state: func() runstate.State {
+				died := diedBeforeItStarted()
+				died.WorkItemClaimedAt = &claimed
+				return died
+			}(),
+		},
+		{
+			// A deliberate cancellation is not a death, and nothing about it is a
+			// decision somebody has to take.
+			name: "the operator cancelled it before it claimed",
+			state: func() runstate.State {
+				died := diedBeforeItStarted()
+				died.Status = runstate.StatusCancelled
+				return died
+			}(),
+		},
+		{
+			// A death that said nothing about why is an entry nobody could act on.
+			name: "it recorded no reason for dying",
+			state: func() runstate.State {
+				died := diedBeforeItStarted()
+				died.Failure = ""
+				return died
+			}(),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			docket := &memoryDocket{}
+			created, err := docketerOver(nil, docket).RecordUnstartedRun(test.state)
+			if err != nil {
+				t.Fatalf("RecordUnstartedRun() error = %v", err)
+			}
+			if created || len(docket.entries) != 0 {
+				t.Fatalf("it was docketed as an unstarted run: %#v", docket.entries)
+			}
+		})
+	}
+}
+
+// The scan must not backfill these, for preservedDeath's reason and a sharper one
+// of its own: the claim time is a field yoyodyne-ifd.338 added, so every run
+// recorded before it reads as unclaimed however far it actually got. A build that
+// re-derived this would bury the entries the development manager is there to
+// decide about under a history of settled failures.
+func TestTheScanDoesNotBackfillPreClaimDeathsFromTheRecordedHistory(t *testing.T) {
+	t.Parallel()
+
+	docket := &memoryDocket{}
+	built, err := docketerOver([]runstate.State{diedBeforeItStarted()}, docket).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if built.Added != 0 {
+		t.Fatalf("the scan backfilled a pre-claim death from the history: %#v", docket.entries)
+	}
+}
+
+// The yoyodyne-ifd.285 shape replayed end to end: the harness dispatches an item
+// whose claim the tracker refuses, and what the development manager's docket
+// holds afterwards is a record of it.
+//
+// This is the acceptance yoyodyne-ifd.338 was admitted for. Before it, the run
+// recorded the failure and stopped there: no blocker was written, because the
+// item was never claimed, and no worktree was cut, so both rules that put a
+// stoppage on the docket read the run as nothing having happened. The scheduler
+// then pulled the same item again twenty-two minutes later, twenty-nine times
+// over twenty hours, and no surface said a word.
+func TestADispatchTheTrackerRefusesReachesTheDocket(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	refusal := errors.New("bd update failed with status failed and exit code 1: Error claiming yoyodyne-task: issue not claimable: status blocked")
+	tracker := &fakeTracker{
+		item:    beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "blocked"},
+		onClaim: func() error { return refusal },
+	}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewDocketStore() error = %v", err)
+	}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
+	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); !errors.Is(err, refusal) {
+		t.Fatalf("Run() error = %v, want the tracker's refusal", err)
+	}
+
+	// The durable record first: the run says it never claimed, which is what
+	// separates this from every stoppage that left work behind.
+	recorded, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.WorkItemClaimedAt != nil || recorded.WorktreePath != "" {
+		t.Fatalf("run = %#v, want a run that took nothing and cut nothing", recorded)
+	}
+
+	// And the docket, which is what the development manager's sweep reads. It is
+	// built from the store rather than taken from the write above, because what is
+	// being claimed is that somebody eventually looks.
+	built, err := docketerOverStore(docket, store, pipeline.Config).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(built.Entries) != 1 {
+		t.Fatalf("docket = %#v, want the refused dispatch on it", built.Entries)
+	}
+	entry := built.Entries[0]
+	if entry.Class != triage.ClassUnstartedRun || entry.RunID != pipelineRunID || entry.WorkItemID != tracker.item.ID {
+		t.Fatalf("entry = %#v, want the unstarted run keyed to the item it tried to claim", entry)
+	}
+	if !strings.Contains(entry.Failure, "not claimable: status blocked") {
+		t.Fatalf("entry failure = %q, want what the tracker refused with", entry.Failure)
+	}
+	if !strings.Contains(entry.Render(), "died before it claimed") {
+		t.Fatalf("the rendered entry does not say the dispatch never started:\n%s", entry.Render())
+	}
+}

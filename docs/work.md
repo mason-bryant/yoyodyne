@@ -468,6 +468,18 @@ forty-one items sat at `blocked` with every dependency they had already closed �
 two-thirds of the backlog, two p0 items among it — and the line was idle for a
 morning with nothing saying why.
 
+**The claim makes the same reading.** The tracker's own claim refuses a `blocked`
+item on the status field alone, so releasing those items made every one of them
+selectable and unclaimable at once: one of them was dispatched twenty-nine times
+between 2026-09-06 and 2026-09-07, each run dying at the claim before it took
+anything. So a claim the tracker refuses for the status re-reads the item, asks
+what it actually waits on, and — where that is nothing unfinished — clears the
+stale status and takes the item, recording in the item's notes that it did and
+what was refused. An item that really does wait on unfinished work is refused
+with that work named, so the run's record says which of the two it was. Re-reading
+under the claim also settles the case where the item's state genuinely moved after
+it was selected: what is judged is the state that is then claimed.
+
 What still holds a blocked item back is a **hold**, which is the harness's own
 durable record rather than a field: a run that stopped on the item and whose
 change is still on a branch, a stoppage put in front of the development

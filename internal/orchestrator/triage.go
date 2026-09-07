@@ -34,7 +34,15 @@ package orchestrator
 // where it costs a read, and it is the one entry on this docket with no run
 // behind it.
 //
-// A fourth is not a thing that stopped but somebody saying it should. A developer
+// A fourth stops before that: a dispatch that died before it could take its item.
+// It is the one failure that leaves nothing at all — no blocker on the item, no
+// worktree, no branch — so every rule above reads it as nothing having happened,
+// and until RecordUnstartedRun existed it reached no surface anybody looks at.
+// That is how one item was dispatched twenty-nine times in twenty hours, dying at
+// the claim each time, with the harness's next-mover line saying only that
+// nothing was recorded for anybody to decide.
+//
+// A fifth is not a thing that stopped but somebody saying it should. A developer
 // or a reviewer that finds the work item unmeetable as written escalates in the
 // round it reached, and RecordEscalation dockets that judgement the moment the
 // run ends on it. It is docketed rather than only recorded because what it needs
@@ -314,6 +322,32 @@ func (d Docketer) RecordStoppedRun(state runstate.State) (bool, error) {
 	return d.Docket.RecordOnce(entry)
 }
 
+// RecordUnstartedRun dockets one run that died before it claimed its work item,
+// at the moment it ended. It reports whether this call is what created the entry,
+// so a caller can tell docketing a death from finding it already docketed.
+//
+// It is separate from RecordStoppedRun because the two describe opposite
+// situations. A stopped run left a change on a branch and holds its item; this
+// one took nothing, cut nothing, and left the item exactly as it found it, so
+// what a development manager decides about it is about the dispatch. Deciding
+// them from one entry would mean an entry that says neither.
+//
+// A run that got as far as claiming dockets nothing here and is not an error,
+// which is nearly every run.
+func (d Docketer) RecordUnstartedRun(state runstate.State) (bool, error) {
+	if err := d.validate(); err != nil {
+		return false, err
+	}
+	if !unstartedRun(state) {
+		return false, nil
+	}
+	entry, err := d.unstartedRunEntry(state, d.now())
+	if err != nil {
+		return false, err
+	}
+	return d.Docket.RecordOnce(entry)
+}
+
 // RecordEscalation dockets one run that ended with a role saying the work item
 // cannot be met as it stands, at the moment it ended. It reports whether this
 // call is what created the entry, so a caller can tell docketing an escalation
@@ -532,6 +566,38 @@ func preservedDeath(state runstate.State) bool {
 		state.Artifacts().Preserved()
 }
 
+// unstartedRun reports a run that died before it took its work item.
+//
+// This was the one way a run could fail and reach nobody. Every other stoppage is
+// docketed off something the failure left behind — a durable blocker on the item,
+// or a change preserved on a branch — and a dispatch that dies at the claim has
+// neither: the item is untouched, so nothing wrote a blocker on it, and no
+// worktree was cut, so preservedDeath's artifacts test is false. The run's own
+// record said what happened and no surface the development manager reads did.
+// yoyodyne-ifd.285 was dispatched twenty-nine times between 2026-09-06 18:43 and
+// 2026-09-07 14:44 that way, each run dying on the same three words.
+//
+// What narrows it is the record's own reading of the same fact, which is asked
+// rather than derived again here: the two rules that say the claim was never
+// made, the status that says the run died rather than being stopped, and the
+// failure without which an entry says nothing anybody can act on. See
+// runstate.State.DiedBeforeClaiming.
+//
+// # Why only where the death happens
+//
+// This is asked as a run ends and never by the scan that walks the recorded
+// history, for preservedDeath's reason and for a sharper one of its own. The
+// claim time is a field yoyodyne-ifd.338 added, so every run recorded before it
+// reads as unclaimed however far it actually got; a scan that re-derived this
+// would docket a decade of settled failures in one build and bury the entries the
+// development manager is there to decide about. What that costs is the same trade
+// preservedDeath makes: a death whose docket write fails is reported by the run
+// that could not write it, and nothing about the item is lost, because there was
+// never anything to lose.
+func unstartedRun(state runstate.State) bool {
+	return state.DiedBeforeClaiming()
+}
+
 // stuckPublication reports an approved publication that did not finish and is
 // not going to without somebody looking at it. There are two kinds, and they
 // are one class because they need the same thing from the same reader.
@@ -625,6 +691,44 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 	}
 	if err := entry.Validate(); err != nil {
 		return triage.Entry{}, fmt.Errorf("docket the stoppage of run %s: %w", state.RunID, err)
+	}
+	return entry, nil
+}
+
+// unstartedRunEntry is one dispatch that died before it took its item, as the
+// development manager reads it.
+//
+// It carries none of the change evidence a stopped run carries, and that is the
+// entry rather than an omission: nothing was claimed, cut, written, reviewed or
+// checked, so a findings list or an artifacts block on it would send somebody
+// after a change that was never made. What it carries is the failure — the whole
+// of what there is to decide from — and the counters, which say what the item can
+// still afford once somebody works out why the dispatch could not start.
+func (d Docketer) unstartedRunEntry(state runstate.State, now time.Time) (triage.Entry, error) {
+	counters, err := d.recordedCounters(state)
+	if err != nil {
+		return triage.Entry{}, err
+	}
+	entry := triage.Entry{
+		SchemaVersion: triage.SchemaVersion,
+		Key:           triage.Key(triage.ClassUnstartedRun, state.RunID),
+		Class:         triage.ClassUnstartedRun,
+		ProductID:     state.ProductID,
+		RunID:         state.RunID,
+		WorkItemID:    state.WorkItemID,
+		// The title is what makes the entry readable, and it is the one thing a run
+		// that never claimed still has: it is written onto the record when the run is
+		// reserved, off the item the dispatch was made for.
+		WorkItemTitle: state.WorkItemTitle,
+		RecordedAt:    now.UTC(),
+		// Bounded to what an entry may carry, for the reason a preserved death's
+		// failure is: an entry refused for its length is a failure the development
+		// manager never hears about, which is the silence this class exists to end.
+		Failure:  runstate.RecordFailure(state.Failure),
+		Counters: counters,
+	}
+	if err := entry.Validate(); err != nil {
+		return triage.Entry{}, fmt.Errorf("docket the death of run %s before it claimed %s: %w", state.RunID, state.WorkItemID, err)
 	}
 	return entry, nil
 }

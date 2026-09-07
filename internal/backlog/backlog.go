@@ -42,11 +42,6 @@ const (
 	statusBlocked = "blocked"
 )
 
-// blocksDependency is the Beads dependency type that makes one item wait for
-// another. It is the same relation the pipeline refuses to run an item under, so
-// what the backlog calls ready is what the harness will actually accept.
-const blocksDependency = "blocks"
-
 // maxRenderedEntries bounds how many entries a rendered backlog lists. What an
 // operator needs from it is what happens next, not an export of the tracker, so
 // the list is cut while the counts stay exact.
@@ -427,19 +422,13 @@ func (e Entry) Hold() string {
 // the item has left this backlog, which is exactly what a blocker somebody is
 // running right now looks like from here. Believing only the closed half would
 // call an item startable that the pipeline then refuses at the door.
+//
+// The reading itself is the item's own, and is deliberately not a second copy of
+// it here. What the queue calls startable and what the claim will accept have to
+// be one answer: they were two, and the twenty-nine dispatches of
+// yoyodyne-ifd.285 that died at the claim in twenty hours are what that cost.
 func waitingOn(item beads.WorkItem, unfinished map[string]struct{}) []string {
-	var waiting []string
-	for _, dependency := range item.Dependencies {
-		if dependency.Type != blocksDependency || dependency.Status == "closed" {
-			continue
-		}
-		_, queued := unfinished[dependency.ID]
-		if queued || dependency.Status != "" {
-			waiting = append(waiting, dependency.ID)
-		}
-	}
-	sort.Strings(waiting)
-	return waiting
+	return item.WaitingOn(unfinished)
 }
 
 // singleLine folds a value into one bounded line, so tracker prose stays a list

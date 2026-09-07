@@ -57,17 +57,34 @@ const CapCleared = math.MaxInt
 // written once and never revised.
 const SchemaVersion = 1
 
-// Class is what stopped. The four are kept apart because they are found
+// Class is what stopped. The five are kept apart because they are found
 // differently and read differently: a stopped run is an event the harness was
 // present for, a stuck publication is a thing that has not happened, which
 // nothing can be present for and only a scan can notice, an unready item is
-// work that never started because the tree does not meet what it asks for, and
-// an escalation is a role saying out loud that the item cannot be met at all.
+// work that never started because the tree does not meet what it asks for, an
+// unstarted run is a dispatch that died before it could take its item, and an
+// escalation is a role saying out loud that the item cannot be met at all.
 type Class string
 
 const (
 	// ClassStoppedRun is a run that ended on a durable blocker.
 	ClassStoppedRun Class = "stopped_run"
+	// ClassUnstartedRun is a run that died before it claimed its work item.
+	//
+	// It is apart from the stopped run for the reason the two shapes inside that
+	// class are together: what makes them one fact is that the work is still there
+	// and nothing is going to pick it up, and here there is no work — the item was
+	// never taken, no worktree was cut, and nothing was preserved. What a
+	// development manager decides about it is about the dispatch rather than about
+	// a change, because there is no change.
+	//
+	// It exists because this was the one way a run could fail and reach nobody.
+	// Every other stoppage carries either a blocker on the item or artifacts on
+	// disk, and each of those is what a docket entry is derived from; a dispatch
+	// that died at the claim has neither, so it was recorded on the run and then
+	// in no surface anybody reads. yoyodyne-ifd.285 was dispatched twenty-nine
+	// times in twenty hours that way.
+	ClassUnstartedRun Class = "unstarted_run"
 	// ClassEscalation is a developer or a reviewer having said, in the round it
 	// reached, that the work item cannot be met as it stands. It is the one class
 	// that is a judgement rather than an observation, and it is here because the
@@ -94,7 +111,7 @@ const (
 
 func (c Class) Valid() bool {
 	switch c {
-	case ClassStoppedRun, ClassEscalation, ClassPublication, ClassUnreadyItem:
+	case ClassStoppedRun, ClassUnstartedRun, ClassEscalation, ClassPublication, ClassUnreadyItem:
 		return true
 	default:
 		return false
@@ -106,6 +123,8 @@ func (c Class) Title() string {
 	switch c {
 	case ClassStoppedRun:
 		return "stopped run"
+	case ClassUnstartedRun:
+		return "run that died before it started"
 	case ClassEscalation:
 		return "item raised as unmeetable"
 	case ClassPublication:
@@ -592,8 +611,8 @@ func (e Entry) Validate() error {
 		problems = append(problems, fmt.Errorf("schema_version must be %d", SchemaVersion))
 	}
 	if !e.Class.Valid() {
-		problems = append(problems, fmt.Errorf("class %q must be %q, %q, %q or %q",
-			e.Class, ClassStoppedRun, ClassEscalation, ClassPublication, ClassUnreadyItem))
+		problems = append(problems, fmt.Errorf("class %q must be %q, %q, %q, %q or %q",
+			e.Class, ClassStoppedRun, ClassUnstartedRun, ClassEscalation, ClassPublication, ClassUnreadyItem))
 	}
 	switch key := strings.TrimSpace(e.Key); {
 	case key == "":
@@ -684,6 +703,21 @@ func (e Entry) Validate() error {
 		}
 		if e.Publication != nil {
 			problems = append(problems, errors.New("a stopped run entry describes a run rather than a publication"))
+		}
+	case ClassUnstartedRun:
+		// The failure is the whole of the entry. There is no blocker because the
+		// item was never claimed and nothing could write one on it, and there are
+		// no findings, no check, and no publication because the run reached none of
+		// them — an entry carrying any of those would be describing a different
+		// run.
+		if strings.TrimSpace(e.Failure) == "" {
+			problems = append(problems, errors.New("an unstarted run entry carries the failure that stopped it before it claimed its item"))
+		}
+		if strings.TrimSpace(e.Blocker) != "" {
+			problems = append(problems, errors.New("an unstarted run entry names no blocker: the item was never claimed, so nothing recorded one on it"))
+		}
+		if e.Publication != nil || len(e.Findings) > 0 || e.Check != nil {
+			problems = append(problems, errors.New("an unstarted run entry describes a run that reached no change: there is nothing reviewed, checked or published to carry"))
 		}
 	case ClassEscalation:
 		// The judgement is the whole of the entry, so an entry that cannot carry it
@@ -785,6 +819,7 @@ func (e Entry) Render() string {
 	}
 	rendered.WriteString(e.renderUnready())
 	rendered.WriteString(e.renderEscalation())
+	rendered.WriteString(e.renderUnstarted())
 	if e.Blocker != "" {
 		rendered.WriteString(indented("Blocker", e.Blocker))
 	}
@@ -793,7 +828,10 @@ func (e Entry) Render() string {
 	// "blocker" would go to the item for words nobody wrote there; and the same
 	// reason printed twice beside a blocker that already says it would be noise on
 	// every ordinary stoppage.
-	if e.Blocker == "" && e.Failure != "" {
+	//
+	// The unstarted run says the same field in its own words above, because "died
+	// holding its change" is exactly what did not happen to it.
+	if e.Blocker == "" && e.Failure != "" && e.Class != ClassUnstartedRun {
 		rendered.WriteString(indented("Died holding its change; the work item carries no blocker for it", e.Failure))
 	}
 	if e.Summary != "" {
@@ -872,6 +910,23 @@ func (e Entry) renderEscalation() string {
 	fmt.Fprintf(&rendered, "      Nothing was integrated: the %s judged this item cannot be met as it stands, in the round it reached, and raised it for your decision — replan, park, resequence, or redirect.\n",
 		raised.RaisedBy.Title())
 	rendered.WriteString(indented("Why the "+raised.RaisedBy.Title()+" says it cannot be met", raised.Reason))
+	return rendered.String()
+}
+
+// renderUnstarted says the run never got as far as taking its item, and what
+// stopped it. It says what that means for the item in the same breath, because
+// that is the half a reader would otherwise supply from every other entry on this
+// docket: those are all work sitting on a branch somebody has to decide about,
+// and this one left the item exactly as it found it.
+//
+// It is silent on every entry that is not one, which is nearly all of them.
+func (e Entry) renderUnstarted() string {
+	if e.Class != ClassUnstartedRun {
+		return ""
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      Nothing was started: this run died before it claimed %s, so the item is untouched, no worktree was cut and nothing was preserved.\n", e.WorkItemID)
+	rendered.WriteString(indented("Why it never started", e.Failure))
 	return rendered.String()
 }
 

@@ -9,9 +9,11 @@ import (
 	"io"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -229,6 +231,51 @@ func (w WorkItem) DecomposedFrom() string {
 		}
 	}
 	return ""
+}
+
+// BlocksDependency is the Beads dependency type that makes one item wait for
+// another. It is the only edge that decides anything about starting work: a
+// parent-child edge is decomposition, and an item is not held back by having
+// been broken out of something.
+//
+// It is exported because more than one place has to name the same edge, and a
+// second spelling of it is a second answer to whether an item may be started.
+const BlocksDependency = "blocks"
+
+// The tracker statuses admitted work that is not finished can be in. They are
+// what the claim reads to judge a status it was refused on, and they are the
+// same two the backlog assembles the order from.
+const (
+	statusOpen    = "open"
+	statusBlocked = "blocked"
+)
+
+// WaitingOn names the unfinished work this item waits for, given the admitted
+// work that is still unfinished. It is what says whether the item can be started
+// at all, and it is here — beside the item — because two readings of it are two
+// answers: the backlog decides what to pull from it, and the claim decides
+// whether a status of blocked is stale, and those two disagreeing is what burned
+// twenty-nine dispatches of yoyodyne-ifd.285 in twenty hours.
+//
+// It asks the listing in both directions, because neither half is reliable
+// alone. A listing may record only that a dependency exists, reading the same
+// after the blocker closed as before, so a dependency is named when the
+// depended-on item is itself still unfinished. A listing that does carry a
+// status is believed on it, so work the tracker reports as unfinished is named
+// whether or not the caller knew it was still queued.
+func (w WorkItem) WaitingOn(unfinished map[string]struct{}) []string {
+	var waiting []string
+	for _, dependency := range w.Dependencies {
+		if dependency.Type != BlocksDependency || dependency.Status == "closed" {
+			continue
+		}
+		_, queued := unfinished[dependency.ID]
+		if queued || dependency.Status != "" {
+			waiting = append(waiting, dependency.ID)
+		}
+	}
+	sort.Strings(waiting)
+	return waiting
 }
 
 // NewWorkItem is a work item to create. It is deliberately narrow: the harness
@@ -607,16 +654,150 @@ func normalizeText(text string) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
+// staleBlockedRefusal is how bd refuses a claim on an item whose status field
+// says blocked. It is matched on rather than parsed because it is the whole of
+// what bd says: there is no exit code or JSON field that distinguishes this
+// refusal from any other, so the recovery below is entered on the message and on
+// nothing else, and a bd that reworded it would simply stop recovering.
+var staleBlockedRefusal = regexp.MustCompile(`(?i)not claimable: status blocked`)
+
+// Claim takes a work item for a run.
+//
+// It re-reads what the item actually waits on when bd refuses the claim for a
+// status of blocked, and claims anyway when the answer is nothing. That is not a
+// workaround of bd's gate; it is the harness's two readings of "blocked" being
+// made one, which they were not.
+//
+// The backlog computes a blocked item's readiness from its blocking dependencies
+// rather than from its status, because the status is written when work stops and
+// never rewritten when what stopped it clears — on 2026-09-04 that read
+// two-thirds of this backlog as unpullable, and yoyodyne-ifd.277 released it. bd's
+// claim gate reads the status field and nothing else, so from that release
+// onwards every item in the released set was selectable and unclaimable at once.
+// yoyodyne-ifd.285 was dispatched twenty-nine times between 2026-09-06 18:43 and
+// 2026-09-07 14:44, each run dying here, each leaving nothing anybody could read.
+//
+// So the stale status is corrected where it is found rather than routed around.
+// The item is re-read under the claim, which also closes the race the same
+// symptom would have if the item's state had genuinely moved between selection
+// and here: what is judged is the state that is then claimed. An item that really
+// does wait on unfinished work is refused with that work named, so the record
+// says which of the two it was.
+//
+// What this deliberately does not ask is the other half of the backlog's answer:
+// a governance hold — a stoppage whose change is still on a branch, an escalation
+// nobody has decided. A hold is the harness's own durable record rather than
+// anything the tracker holds, so it is read where work is selected and cannot be
+// read from here. That is the right seam and not a gap: every caller of this has
+// already answered it. The scheduler consults the holds before it chooses; a
+// re-run is a decision the development manager recorded about that exact
+// stoppage; and an operator naming an item is the operator deciding.
 func (c Client) Claim(ctx context.Context, id string) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {
 		return WorkItem{}, err
 	}
+	item, err := c.claim(ctx, id)
+	if err == nil || !staleBlockedRefusal.MatchString(err.Error()) {
+		return item, err
+	}
+	return c.claimPastStaleBlock(ctx, id, err)
+}
+
+func (c Client) claim(ctx context.Context, id string) (WorkItem, error) {
 	data, err := c.run(ctx, "update", id, "--claim", "--json")
 	if err != nil {
 		return WorkItem{}, err
 	}
 	return decodeSingleWorkItem(data)
 }
+
+// claimPastStaleBlock decides whether the status bd refused on is stale, and
+// claims the item where it is.
+//
+// The reading is the item's own — the same WaitingOn the backlog orders the queue
+// by — over the admitted work as it stands right now rather than as the caller
+// last saw it. Anything that cannot be read leaves the original refusal standing:
+// this widens what may be claimed, so a reading that failed must not be what
+// widens it.
+//
+// The correction is written to the tracker, not held in this process. A status
+// this call left as it found it would be refused again by the next claim, and the
+// item would read as blocked to everything that opens it; and the harness owns
+// tracker writes, so recording what it corrected — in the notes, appended — is the
+// account of a change nobody else made.
+func (c Client) claimPastStaleBlock(ctx context.Context, id string, refusal error) (WorkItem, error) {
+	item, err := c.Show(ctx, id)
+	if err != nil {
+		return WorkItem{}, errors.Join(refusal, fmt.Errorf("re-read %s to judge whether its blocked status is stale: %w", id, err))
+	}
+	// Only the status bd refused on is corrected. A re-read that finds the item
+	// somewhere else is the race rather than the disagreement — most sharply where
+	// it now reads as claimed, which would be another run holding it — and
+	// reopening that item is taking work off whoever has it.
+	if item.Status != statusBlocked {
+		return WorkItem{}, fmt.Errorf(
+			"%s is at status %q when re-read under the claim, not blocked as bd refused it, so nothing here is a stale status to correct: %w",
+			id, item.Status, refusal)
+	}
+	unfinished, err := c.unfinished(ctx)
+	if err != nil {
+		return WorkItem{}, errors.Join(refusal, err)
+	}
+	if waiting := item.WaitingOn(unfinished); len(waiting) > 0 {
+		return WorkItem{}, fmt.Errorf(
+			"%s is blocked and waits on unfinished work (%s), so its status is not stale and the claim stands refused: %w",
+			id, strings.Join(waiting, ", "), refusal)
+	}
+	corrected := fmt.Sprintf(
+		"The harness cleared this item's blocked status as it claimed it: nothing unfinished blocks it, and the status was left over from whatever did. %s",
+		singleLineNote(refusal.Error()))
+	if _, err := c.run(ctx, "update", id, "--status=open", "--append-notes="+corrected, "--json"); err != nil {
+		return WorkItem{}, errors.Join(refusal, fmt.Errorf("clear the stale blocked status on %s: %w", id, err))
+	}
+	claimed, err := c.claim(ctx, id)
+	if err != nil {
+		return WorkItem{}, errors.Join(refusal, fmt.Errorf("claim %s after clearing its stale blocked status: %w", id, err))
+	}
+	return claimed, nil
+}
+
+// unfinished is the admitted work that is not finished, which is what says
+// whether a dependency an item records is still somebody's wait. It is the same
+// pair of slices the backlog is assembled from; a dependency on work that is in
+// neither has been closed or pulled, and is nobody's wait.
+func (c Client) unfinished(ctx context.Context) (map[string]struct{}, error) {
+	admitted := make(map[string]struct{})
+	for _, status := range []string{statusOpen, statusBlocked} {
+		items, err := c.List(ctx, status)
+		if err != nil {
+			return nil, fmt.Errorf("list %s work items to judge what is still unfinished: %w", status, err)
+		}
+		for _, item := range items {
+			admitted[item.ID] = struct{}{}
+		}
+	}
+	return admitted, nil
+}
+
+// singleLineNote folds a bd message into one line for the note that records it.
+// bd's refusals are short, so this is a no-op over what it says today; it is here
+// because the note must not depend on that, and a note carrying a provider's
+// whole output is one nobody reads.
+func singleLineNote(message string) string {
+	folded := strings.Join(strings.Fields(message), " ")
+	if len(folded) > maxCorrectionNoteBytes {
+		// Cut on a rune boundary: a note truncated mid-rune is not text.
+		cut := maxCorrectionNoteBytes
+		for cut > 0 && !utf8.RuneStart(folded[cut]) {
+			cut--
+		}
+		folded = strings.TrimSpace(folded[:cut]) + "..."
+	}
+	return "bd refused the claim: " + folded
+}
+
+// maxCorrectionNoteBytes bounds what the correction note quotes of bd's refusal.
+const maxCorrectionNoteBytes = 512
 
 func (c Client) RecordOutcome(ctx context.Context, id, notes string) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {

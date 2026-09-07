@@ -1099,6 +1099,11 @@ func (a *activeRun) claim(ctx context.Context) error {
 		return fmt.Errorf("claim work item: %w", err)
 	}
 	a.claimed = true
+	// Dated on the record as well as flagged on this process, because which side
+	// of the claim a run died on is what says whether its failure left anything
+	// behind — and the process that knows is gone by the time anybody asks.
+	claimedAt := a.pipeline.clock().Now()
+	a.state.WorkItemClaimedAt = &claimedAt
 	a.item = item
 	if err := validateClaimedItem(item, a.state.WorkItemID); err != nil {
 		return fmt.Errorf("validate claimed work item: %w", err)
@@ -4669,6 +4674,14 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	if a.pipeline.Docket != nil {
 		if _, err := a.pipeline.Docket.RecordStoppedRun(a.state); err != nil {
 			cause = errors.Join(cause, fmt.Errorf("docket the stopped run: %w", err))
+		}
+		// And the one failure that leaves nothing at all behind. A run that died
+		// before it claimed its item has no blocker and no branch, so every other
+		// rule that decides a failure is worth somebody's attention reads it as
+		// nothing having happened — which is how twenty-nine dispatches of one item
+		// died in twenty hours with no surface saying so.
+		if _, err := a.pipeline.Docket.RecordUnstartedRun(a.state); err != nil {
+			cause = errors.Join(cause, fmt.Errorf("docket the run that died before it started: %w", err))
 		}
 	}
 	// A failed attempt spent real money, so it is priced exactly as a successful

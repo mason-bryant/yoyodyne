@@ -1300,3 +1300,164 @@ func workItemJSON(status, notes string) string {
   "dependencies":[{"id":"yoyodyne-parent","dependency_type":"parent-child","status":"closed"}]
 }]`, notes, status)
 }
+
+// The disagreement yoyodyne-ifd.338 was admitted for. The backlog computes a
+// blocked item's readiness from what it actually waits on, because the status
+// field is written when work stops and never rewritten when what stopped it
+// clears; bd's claim gate reads that status and nothing else. So from the moment
+// yoyodyne-ifd.277 released the stale-status items, every one of them was
+// selectable and unclaimable at once — yoyodyne-ifd.285 was dispatched
+// twenty-nine times in twenty hours and died here each time.
+//
+// The claim re-reads the item under the refusal, finds nothing unfinished
+// waiting, corrects the status, and takes the item.
+func TestClientClaimsPastAStaleBlockedStatus(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		results: []execution.ProcessResult{{
+			Status:   execution.ProcessFailed,
+			ExitCode: 1,
+			Stderr:   "Error claiming yoyodyne-1: issue not claimable: status blocked",
+		}},
+		responses: []string{
+			"",
+			blockedItemJSON(nil),
+			`[]`,
+			blockedItemJSON(nil),
+			workItemJSON("open", ""),
+			workItemJSON("in_progress", ""),
+		},
+	}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	item, err := client.Claim(context.Background(), "yoyodyne-1")
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if item.Status != "in_progress" {
+		t.Fatalf("Claim() status = %q, want in_progress", item.Status)
+	}
+	if len(runner.args) != 6 {
+		t.Fatalf("bd was called %d time(s): %#v", len(runner.args), runner.args)
+	}
+	// The correction is written to the tracker rather than held in this process:
+	// a status left as it was found is refused again by the next claim, and reads
+	// as blocked to everybody who opens the item.
+	corrected := runner.args[4]
+	if corrected[0] != "update" || corrected[1] != "yoyodyne-1" || corrected[2] != "--status=open" {
+		t.Fatalf("the stale status was not corrected: %#v", corrected)
+	}
+	// Appended rather than replaced. Notes written over are how this project has
+	// lost goal attribution twice.
+	if !strings.HasPrefix(corrected[3], "--append-notes=") {
+		t.Fatalf("the correction did not append its account: %#v", corrected)
+	}
+	if !strings.Contains(corrected[3], "not claimable: status blocked") {
+		t.Fatalf("the correction does not say what bd refused: %q", corrected[3])
+	}
+	if !reflect.DeepEqual(runner.args[5], []string{"update", "yoyodyne-1", "--claim", "--json"}) {
+		t.Fatalf("the item was not claimed after the correction: %#v", runner.args[5])
+	}
+}
+
+// An item that really does wait on unfinished work is refused, and the refusal
+// names the work. The point of correcting a stale status is that it is stale; a
+// correction that could not tell the two apart would start runs over items whose
+// blockers are still open, which is the failure the status field exists to
+// prevent.
+func TestClientRefusesToClaimAnItemWaitingOnUnfinishedWork(t *testing.T) {
+	t.Parallel()
+
+	waiting := []Dependency{{ID: "yoyodyne-2", Type: BlocksDependency}}
+	runner := &fakeRunner{
+		results: []execution.ProcessResult{{
+			Status:   execution.ProcessFailed,
+			ExitCode: 1,
+			Stderr:   "Error claiming yoyodyne-1: issue not claimable: status blocked",
+		}},
+		responses: []string{
+			"",
+			blockedItemJSON(waiting),
+			`[{"id":"yoyodyne-2","title":"The blocker","status":"open","priority":1,"issue_type":"task"}]`,
+			`[]`,
+		},
+	}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	_, err := client.Claim(context.Background(), "yoyodyne-1")
+	if err == nil {
+		t.Fatal("Claim() error = nil, want the refusal to stand")
+	}
+	if !strings.Contains(err.Error(), "yoyodyne-2") {
+		t.Fatalf("Claim() error = %v, want it to name the unfinished work", err)
+	}
+	if len(runner.args) != 4 {
+		t.Fatalf("bd was called %d time(s), want the refusal to write nothing: %#v", len(runner.args), runner.args)
+	}
+}
+
+// A refusal that is not about a stale status is returned as it came. The
+// recovery is for one disagreement and must not become a retry of everything.
+func TestClientReturnsAClaimRefusalItCannotJudge(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		results: []execution.ProcessResult{{
+			Status:   execution.ProcessFailed,
+			ExitCode: 1,
+			Stderr:   "Error claiming yoyodyne-1: issue not found",
+		}},
+		responses: []string{""},
+	}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	if _, err := client.Claim(context.Background(), "yoyodyne-1"); err == nil || !strings.Contains(err.Error(), "issue not found") {
+		t.Fatalf("Claim() error = %v, want bd's own refusal", err)
+	}
+	if len(runner.args) != 1 {
+		t.Fatalf("bd was called %d time(s), want one: %#v", len(runner.args), runner.args)
+	}
+}
+
+// blockedItemJSON is the yoyodyne-ifd.285 shape: an item whose status says
+// blocked, carrying whatever dependencies the case is about. With none of them a
+// "blocks" edge on unfinished work, nothing is actually waiting.
+func blockedItemJSON(dependencies []Dependency) string {
+	encoded := make([]string, 0, len(dependencies)+1)
+	encoded = append(encoded, `{"id":"yoyodyne-parent","dependency_type":"parent-child"}`)
+	for _, dependency := range dependencies {
+		encoded = append(encoded, fmt.Sprintf(`{"id":%q,"dependency_type":%q,"status":%q}`,
+			dependency.ID, dependency.Type, dependency.Status))
+	}
+	return fmt.Sprintf(`[{
+  "id":"yoyodyne-1",
+  "title":"Implement feature",
+  "status":"blocked",
+  "priority":1,
+  "issue_type":"task",
+  "dependencies":[%s]
+}]`, strings.Join(encoded, ","))
+}
+
+// The race rather than the disagreement. An item that reads as something other
+// than blocked when it is re-read under the claim has moved since bd refused it,
+// and the sharpest case is an item another run now holds: reopening that one
+// takes work off whoever has it. Only the status bd refused on is corrected.
+func TestClientDoesNotReopenAnItemThatHasMovedSinceTheRefusal(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		results: []execution.ProcessResult{{
+			Status:   execution.ProcessFailed,
+			ExitCode: 1,
+			Stderr:   "Error claiming yoyodyne-1: issue not claimable: status blocked",
+		}},
+		responses: []string{"", workItemJSON("in_progress", "")},
+	}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	_, err := client.Claim(context.Background(), "yoyodyne-1")
+	if err == nil || !strings.Contains(err.Error(), "in_progress") {
+		t.Fatalf("Claim() error = %v, want the refusal to stand and name what it found", err)
+	}
+	if len(runner.args) != 2 {
+		t.Fatalf("bd was called %d time(s), want the claim and the re-read only: %#v", len(runner.args), runner.args)
+	}
+}

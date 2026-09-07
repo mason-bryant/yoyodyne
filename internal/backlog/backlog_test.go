@@ -53,7 +53,7 @@ func TestOnlyAdmittedUnfinishedWorkIsInTheBacklog(t *testing.T) {
 		{ID: "yoyodyne-3", Title: "Admitted and waiting", Status: statusOpen, Priority: 3},
 		{
 			ID: "yoyodyne-4", Title: "Admitted and blocked", Status: statusBlocked, Priority: 1,
-			Dependencies: []beads.Dependency{{ID: "yoyodyne-3", Type: blocksDependency, Status: statusOpen}},
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-3", Type: beads.BlocksDependency, Status: statusOpen}},
 		},
 		// A tracker that reports a claimed or closed item as ready cannot put it
 		// back in the queue: what has left the backlog has left it.
@@ -93,7 +93,7 @@ func TestABlockedStatusWithEveryBlockerClosedDoesNotHideTheWork(t *testing.T) {
 			Status: statusBlocked, Priority: 0,
 			// The blocker is closed, so it is not in the backlog any more. The
 			// dependency to it is still listed, exactly as Beads lists it.
-			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: blocksDependency}},
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: beads.BlocksDependency}},
 		},
 		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 1},
 		// The tracker offers only the open one, because its ready list is computed
@@ -125,7 +125,7 @@ func TestAGovernanceHoldIsNotReleasedByADependencyThatCleared(t *testing.T) {
 	queue := Order([]beads.WorkItem{
 		{
 			ID: "yoyodyne-ifd.153", Title: "Guard the notes writer", Status: statusBlocked, Priority: 1,
-			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: blocksDependency}},
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: beads.BlocksDependency}},
 		},
 		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 2},
 	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]string{"yoyodyne-ifd.153": stoppage}))
@@ -191,12 +191,12 @@ func TestAnItemWaitingOnUnfinishedWorkKeepsItsPlaceButIsNotPulled(t *testing.T) 
 			ID: "yoyodyne-ifd.4", Title: "The development manager that pulls",
 			Status: statusOpen, Priority: 0,
 			Dependencies: []beads.Dependency{
-				{ID: "yoyodyne-ifd.18", Type: blocksDependency},
+				{ID: "yoyodyne-ifd.18", Type: beads.BlocksDependency},
 				// A dependency whose item has left the backlog is finished work,
 				// and a Beads listing says that nowhere on the dependency itself:
 				// it reads exactly the same after the blocker is closed. What says
 				// so is that nothing in the queue is that item any more.
-				{ID: "yoyodyne-ifd.2", Type: blocksDependency},
+				{ID: "yoyodyne-ifd.2", Type: beads.BlocksDependency},
 				// Only the blocking relation makes an item wait; a parent does not.
 				{ID: "yoyodyne-ifd.1", Type: "parent-child"},
 			},
@@ -230,7 +230,7 @@ func TestADependencyOnFinishedWorkHoldsNothingBack(t *testing.T) {
 		Status: statusOpen, Priority: 0,
 		// The blocker is closed, so it is not in the backlog any more. The
 		// dependency to it is still listed, exactly as Beads lists it.
-		Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: blocksDependency}},
+		Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: beads.BlocksDependency}},
 	}}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil))
 
 	entry := queue.Entries[0]
@@ -413,7 +413,7 @@ func TestRenderSaysTheOrderWhatIsHeldBackAndWhatIsNext(t *testing.T) {
 
 	queue := Order([]beads.WorkItem{
 		{ID: "yoyodyne-ifd.3", Title: "The scheduler that runs it", Status: statusOpen, Priority: 0,
-			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.4", Type: blocksDependency, Status: statusOpen}}},
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.4", Type: beads.BlocksDependency, Status: statusOpen}}},
 		{ID: "yoyodyne-ifd.4", Title: "The development manager that pulls", Status: statusOpen, Priority: 1},
 		{ID: "yoyodyne-ifd.9", Title: "A run that failed and was blocked", Status: statusBlocked, Priority: 2},
 		// The tracker offers the one item nothing is holding: the first waits for

@@ -900,6 +900,23 @@ type State struct {
 	// that run should say however the item is renamed later. Absent means nothing
 	// recorded a title, which is what every run written before this did.
 	WorkItemTitle string `json:"work_item_title,omitempty"`
+	// WorkItemClaimedAt is when this run took its work item, and is absent on a
+	// run that never got that far.
+	//
+	// It is here because the claim is the first thing a run changes outside
+	// itself, and until yoyodyne-ifd.338 nothing recorded which side of it a run
+	// died on. A run that fails after claiming leaves a branch, a worktree, and an
+	// item it holds; a run that fails before claiming leaves none of those, so
+	// every rule the harness uses to decide that a failure is worth somebody's
+	// attention — a durable blocker, a preserved change — reads it as nothing
+	// having happened. Twenty-nine dispatches of yoyodyne-ifd.285 died at the
+	// claim in twenty hours and not one of them reached a surface anybody reads.
+	//
+	// Absent means nothing recorded a claim, which is what every run written
+	// before this did as well as every run that really never claimed. That
+	// ambiguity is why it is only ever asked where the death happens, and never by
+	// the scan that walks the recorded history; see orchestrator.unstartedRun.
+	WorkItemClaimedAt *time.Time `json:"work_item_claimed_at,omitempty"`
 	// Selection is why the harness is running this item: who chose it and on
 	// what grounds. It is written when the run is reserved and never rewritten.
 	// Absent means nothing accounted for the choice, which is not the same as a
@@ -2010,6 +2027,31 @@ func (s State) AwaitingForge() bool {
 // say it.
 func (s State) Discharges() bool {
 	return s.LandingDischarges() && s.ApprovalDischarges() && !s.Escalated()
+}
+
+// DiedBeforeClaiming reports a run that failed before it took its work item.
+//
+// It is the one failure that leaves nothing at all behind: no blocker, because
+// the item was never taken and nothing could write one on it, and no branch or
+// checkout, because the worktree is cut immediately after the claim. Everything
+// that decides whether a failure is worth somebody's attention reads one of those
+// two, so without this the whole class reads as nothing having happened — which
+// is how yoyodyne-ifd.285 was dispatched twenty-nine times in twenty hours and
+// reached no surface anybody looks at.
+//
+// The worktree is asked as well as the claim time because the claim time is a
+// field yoyodyne-ifd.338 added: every record written before it carries none
+// however far the run actually got, and a run with a checkout got past the claim
+// whatever its record lost.
+//
+// It is here rather than beside either caller because two of them ask it — what
+// the docket records, and whose move a reader is told follows — and two
+// derivations of one fact are two answers about the same run.
+func (s State) DiedBeforeClaiming() bool {
+	return s.Status == StatusFailed &&
+		s.WorkItemClaimedAt == nil &&
+		strings.TrimSpace(s.WorktreePath) == "" &&
+		strings.TrimSpace(s.Failure) != ""
 }
 
 // Escalated reports a run either role ended by saying the work item cannot be
