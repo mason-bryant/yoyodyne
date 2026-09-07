@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
 
@@ -59,8 +60,12 @@ func (DetachedLauncher) Launch(spec Launch) (int, error) {
 	command := exec.Command(spec.Program, spec.Args...)
 	command.Dir = spec.Dir
 	// The environment the caller constructed, and nothing this process happens
-	// to be holding: the tokens in it are for this product's sink alone.
-	command.Env = spec.Env
+	// to be holding: the tokens in it are for this product's sink alone. The
+	// Git maintenance fence goes on top of it, because the sink outlives what
+	// started it and everything it spawns inherits this environment — a sink
+	// exempt from the fence is a long-lived source of exactly the prune the
+	// fence exists to stop.
+	command.Env = execution.WithGitMaintenanceFence(spec.Env)
 	command.Stdin = nil
 	command.Stdout = log
 	command.Stderr = log

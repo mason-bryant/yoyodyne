@@ -272,6 +272,111 @@ func TestManagerCreatesConcurrentWorktreesWithoutLosingAny(t *testing.T) {
 	}
 }
 
+// The `-c` options above fence the Git commands this package composes and
+// nothing else. Every worktree the harness cuts shares the repository's common
+// Git directory, so a Git command an agent or a project's build tooling runs
+// inside one hands the same repository to the same automatic maintenance — and a
+// prune reaching a registration `git worktree add` has not finished writing
+// deletes it out from under the add, losing the run to nothing but timing.
+//
+// So the neighbour here is a Git command nobody in this package composed,
+// launched the way the harness launches an agent and a check, doing the writes
+// that Git follows with maintenance, in a repository whose own config asks for
+// it — while eight creations are in flight. What holds it off is the fence in
+// the launched process's environment, which is asserted directly as well: the
+// prune's window is microseconds wide, so a machine that happens not to hit it
+// would otherwise pass this test with nothing fencing anything at all.
+func TestConcurrentCreationSurvivesAGitCommandTheHarnessDidNotCompose(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	// Restored before the cleanup newRepository registered, which runs Git
+	// commands of its own outside the fence.
+	t.Cleanup(func() { disableBackgroundMaintenance(t, repository) })
+	runGit(t, repository, "config", "gc.auto", "1")
+	runGit(t, repository, "config", "maintenance.auto", "true")
+
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	if value := neighbourGitConfig(t, repository, "gc.auto"); value != "0" {
+		t.Fatalf("a neighbouring Git command reads gc.auto = %q, want the harness's fence at %q", value, "0")
+	}
+	if value := neighbourGitConfig(t, repository, "maintenance.auto"); value != "false" {
+		t.Fatalf("a neighbouring Git command reads maintenance.auto = %q, want the harness's fence at %q", value, "false")
+	}
+
+	const concurrent = 8
+	start := make(chan struct{})
+	worktrees := make([]Worktree, concurrent)
+	failures := make([]error, concurrent)
+	var running sync.WaitGroup
+	for index := range concurrent {
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			<-start
+			worktrees[index], failures[index] = manager.Create(context.Background(), CreateRequest{
+				RunID:      fmt.Sprintf("run-%08x%s", index, strings.Repeat("0", 24)),
+				WorkItemID: fmt.Sprintf("yoyodyne-neighboured-%d", index),
+				BaseRef:    "HEAD",
+			})
+		}()
+	}
+	running.Add(1)
+	go func() {
+		defer running.Done()
+		<-start
+		// The maintenance a write command asks for, asked for directly. It is
+		// the same two settings being read by the same tasks, and it takes none
+		// of the locks a write would, so what this test observes is the prune
+		// rather than two commands queueing over an index.
+		for round := range concurrent {
+			for _, args := range [][]string{
+				{"-C", repository, "gc", "--auto"},
+				{"-C", repository, "maintenance", "run", "--auto"},
+			} {
+				result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
+					Name:    "git",
+					Args:    args,
+					Timeout: 30 * time.Second,
+				}, nil)
+				if err != nil || result.Status != execution.ProcessSucceeded {
+					t.Errorf("the neighbouring git %v in round %d = %v (%v): %s", args, round, result.Status, err, result.Stderr)
+					return
+				}
+			}
+		}
+	}()
+	close(start)
+	running.Wait()
+
+	registered := gitOutput(t, repository, "worktree", "list", "--porcelain")
+	for index := range concurrent {
+		if failures[index] != nil {
+			t.Fatalf("Create(%d) error = %v", index, failures[index])
+		}
+		if !strings.Contains(registered, worktrees[index].Path) {
+			t.Fatalf("worktree %d at %s is not registered:\n%s", index, worktrees[index].Path, registered)
+		}
+	}
+}
+
+// neighbourGitConfig asks the repository for one setting from inside a process
+// the harness launched, which is where the fence exists and the only place the
+// answer means anything: the repository's own config says the opposite.
+func neighbourGitConfig(t *testing.T, repository, setting string) string {
+	t.Helper()
+
+	result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
+		Name:    "git",
+		Args:    []string{"-C", repository, "config", "--get", setting},
+		Timeout: 30 * time.Second,
+	}, nil)
+	if err != nil || result.Status != execution.ProcessSucceeded {
+		t.Fatalf("git config --get %s = %v (%v): %s", setting, result.Status, err, result.Stderr)
+	}
+	return strings.TrimSpace(result.Stdout)
+}
+
 // What two runs race over is the repository's bookkeeping rather than the
 // configuration that points at it, so creations queue across managers and not
 // only within one. Two products aimed at one repository have separate worktree

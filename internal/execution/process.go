@@ -182,9 +182,14 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	configureProcessTree(process)
 	process.Dir = command.Dir
 	process.Stdin = command.Stdin
-	if command.Env != nil {
-		process.Env = command.Env
-	}
+	// Every process this runner starts carries the Git maintenance fence, and no
+	// caller opts out of it. What the fence is for is the Git commands the
+	// harness never composes -- an agent's, a project's build tooling's -- and
+	// those arrive as descendants of whatever was launched here rather than as
+	// commands anybody could add options to. A caller that named no environment
+	// still gets this process's own beside the fence, which is what it would
+	// have inherited.
+	process.Env = WithGitMaintenanceFence(command.Env)
 	stdout, err := process.StdoutPipe()
 	if err != nil {
 		return ProcessResult{}, fmt.Errorf("create stdout pipe: %w", err)

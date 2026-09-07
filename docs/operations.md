@@ -753,6 +753,52 @@ directive](conversation.md#directives-and-the-work-they-pause), or one parked on
 [operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
 for that command to pick up.
 
+## Git maintenance, and the one prune that is still yours
+
+Git prunes worktree registrations as part of its automatic maintenance, and it
+judges one stale by whether its administrative files are there — which is
+exactly what a `git worktree add` has not written yet while it is still filling
+the entry in. A prune reaching that window deletes the registration out from
+under the add, the add fails with
+
+```text
+fatal: could not open '.git/worktrees/yoyodyne-ifd-334-0db8dc56/locked' for writing
+```
+
+and the run is lost to nothing but timing. Every worktree the harness cuts
+shares the repository's common Git directory, so the prune does not have to
+start anywhere near the run it takes down.
+
+The harness holds this off in the two places it can. It never asks for
+maintenance in the Git commands it composes itself, and every process it
+launches — the agent, each configured check, and anything those go on to
+start — carries `gc.auto=0` and `maintenance.auto=false` in its environment. So
+a Git command an agent runs, or one a project's own build tooling runs inside a
+worktree, cannot start a maintenance run either, without either of them having
+to know that.
+
+Nothing is written into your repository's config for this. The repository is
+yours, its maintenance is yours to configure, and object GC turned off for good
+in a repository that keeps growing is a cost the harness would be imposing on
+your machine rather than on a run. The fence lasts exactly as long as the
+process it was given to.
+
+What that leaves is a Git command nobody here launched: `git gc` or
+`git maintenance run` typed in the checkout, or a tool you started yourself.
+That one is yours. Run it when nothing is in flight — `yoyo status` says what is
+running — and a run cannot be caught mid-creation by it.
+
+If runs are still being lost this way, the full fence is available and is one
+command in the managed repository:
+
+```sh
+git config maintenance.auto false
+git config gc.auto 0
+```
+
+That closes the residual for every command in the repository, at the price of
+packing and pruning objects becoming something you run by hand.
+
 ## Unwedging a target branch that diverged from the forge
 
 Every catch-up and every promotion here is fast-forward-or-nothing, so a local
