@@ -588,6 +588,37 @@ func TestAnOversizedFailureIsCutRatherThanLosingTheEntry(t *testing.T) {
 	}
 }
 
+// A reviewer summary long enough to exceed what an entry may carry is cut rather
+// than refused, for the reason the failure beside it is: the entry is the whole
+// of what the development manager is told about a stopped run, and one refused
+// for its length is a stoppage she never hears about. It was the summary the
+// entry refused on rather than the failure, because the record bounded the one
+// and not the other.
+//
+// The record now bounds this too, at the write that makes it, so nothing the
+// harness records reaches here oversized. The cut stays all the same: the entry
+// must not depend on a bound somebody else was supposed to have applied, and a
+// record written before that bound existed still dockets.
+func TestAnOversizedReviewSummaryIsCutRatherThanLosingTheEntry(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	stopped.ReviewSummary = "the change misses the acceptance criteria: " + strings.Repeat("x", triage.MaxMessageBytes*2)
+	docket := &memoryDocket{}
+	created, err := docketerOver(nil, docket).RecordStoppedRun(stopped)
+	if err != nil || !created {
+		t.Fatalf("a verbose review reached nobody: created = %t, error = %v", created, err)
+	}
+	entry := docket.entries[0]
+	if len(entry.Summary) > triage.MaxMessageBytes {
+		t.Fatalf("summary is %d bytes, which the entry's own bound refuses", len(entry.Summary))
+	}
+	if !strings.HasPrefix(entry.Summary, "the change misses the acceptance criteria: ") ||
+		!strings.Contains(entry.Summary, "the rest of this summary was not recorded") {
+		t.Fatalf("a cut summary lost its head or did not say it was cut: %q", entry.Summary[len(entry.Summary)-120:])
+	}
+}
+
 func TestAPublicationIsDocketedOnceItIsStuckAndNotBefore(t *testing.T) {
 	t.Parallel()
 

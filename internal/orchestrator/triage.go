@@ -616,7 +616,7 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 		// in the words the work item carries, and printing the failure beside it
 		// would be the same fact twice on every ordinary stoppage.
 		Failure:       docketFailure(state),
-		Summary:       state.ReviewSummary,
+		Summary:       docketSummary(state),
 		Findings:      docketFindings(state.ReviewFindingDetails),
 		Check:         docketCheck(state.CheckFailure),
 		Artifacts:     docketArtifacts(state),
@@ -688,7 +688,7 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 		WorkItemID:    state.WorkItemID,
 		WorkItemTitle: state.WorkItemTitle,
 		RecordedAt:    now.UTC(),
-		Summary:       state.ReviewSummary,
+		Summary:       docketSummary(state),
 		Findings:      docketFindings(state.ReviewFindingDetails),
 		Artifacts:     docketArtifacts(state),
 		Publication: &triage.Publication{
@@ -869,6 +869,16 @@ func docketFailure(state runstate.State) string {
 		return ""
 	}
 	return runstate.RecordFailure(state.Failure)
+}
+
+// docketSummary is what the reviewer said about the change, bounded to what an
+// entry may carry. The run record is bounded to the same size at the write that
+// makes it, so this is a no-op over anything the harness records today; it stays
+// for the reason the failure's cut does — the entry must not depend on a bound
+// somebody else was supposed to have applied, and an entry refused for its
+// length is a stopped run the development manager never hears about.
+func docketSummary(state runstate.State) string {
+	return runstate.RecordReviewSummary(state.ReviewSummary)
 }
 
 func docketCheck(failure *runstate.CheckFailure) *triage.Check {
