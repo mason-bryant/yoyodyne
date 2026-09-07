@@ -213,7 +213,7 @@ agents:
     # The judgment model, per the operator's decision 2026-08-19: the
     # architect's decisions bind everything downstream, which is where
     # judgment pays. Same rule as the product and development managers.
-    model: fable
+    model: opus  # temporarily opus 2026-09-07: fable capacity exhausted while opus is free; revert to fable when the window reopens
     instances: 1
     persona:
       version: v1
@@ -234,7 +234,7 @@ agents:
     # The judgment model, per the operator's decision when the hierarchy was
     # planned: the decision-owning roles run on Fable. Same reasoning as the
     # product manager below.
-    model: fable
+    model: opus  # temporarily opus 2026-09-07: fable capacity exhausted while opus is free; revert to fable when the window reopens
     instances: 1
     persona:
       version: v1
@@ -245,7 +245,7 @@ agents:
     # The judgment model for the decision-owning role: one bad ordering or
     # decomposition costs more than a session of conversation turns. The
     # family alias floats; run evidence records what the provider served.
-    model: fable
+    model: opus  # temporarily opus 2026-09-07: fable capacity exhausted while opus is free; revert to fable when the window reopens
     instances: 1
     persona:
       version: v1
