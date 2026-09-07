@@ -203,6 +203,33 @@ type TransientFailure struct {
 	Detail string
 }
 
+// ModelUnavailable is a provider's report that it has not got the model the
+// attempt asked for. Like UsageLimit and ServerOverload it says the work was
+// never judged, and unlike either of them what it asks for is neither a wait nor
+// another attempt at the same thing: the selector is what was refused, so the
+// answer is to ask for a model the provider does have.
+//
+// For yoyodyne-ifd.32, which turns this package into a plugin contract.
+//
+// A model the provider has not got is a seventh answer that contract has to name.
+// It is not a usage limit, because nothing about the account is exhausted and no
+// reset time is ever quoted; not an overload, because no condition is named that
+// will lift; not a transient death, because relaunching the identical request
+// earns the identical answer however many attempts there are; and folding it
+// into a refusal that stands would throw away the one thing that makes it
+// actionable — that a different selector is not the same request.
+//
+// It is what makes an optional pinned model version safe to name. An agent
+// pinned to an exact provider identifier is pinned to something the provider can
+// retire, and a pin the provider has stopped serving must fall back to the
+// family it belongs to rather than stop the agent. That fallback needs to know
+// which failure was about the model, which is this answer and nothing else.
+type ModelUnavailable struct {
+	// Detail is the provider's own words about the model it would not serve,
+	// carried as evidence rather than interpreted by the harness.
+	Detail string
+}
+
 // RunResult is what one provider invocation is worth: the invocation's own
 // terminal, and nothing nested inside it.
 //
@@ -257,6 +284,13 @@ type RunResult struct {
 	// reported both would leave which answer a run took depending on the order
 	// the caller read them.
 	TransientFailure *TransientFailure
+	// ModelUnavailable is set when the provider refused the attempt because it
+	// has not got the model the request named. It travels beside IsError like the
+	// two above, and it is separate from them because it is the one refusal the
+	// caller can answer by changing the request rather than by waiting: a pinned
+	// version the provider has retired falls back to its family on this and on
+	// nothing else.
+	ModelUnavailable *ModelUnavailable
 }
 
 // maxFailureDetailBytes bounds the provider's own words in a described failure.

@@ -564,6 +564,11 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// somebody leaves open for days is worth stamping.
 		Build: buildinfo.Commit(),
 		Model: agent.Model,
+		// The exact version of that family this agent's turns ask for, empty for
+		// every agent that pins none — which leaves the alias above floating, as it
+		// always has. A version the provider has not got is served by the alias and
+		// the substitution is recorded, so a pin never stops the agent.
+		ModelVersion: cfg.AgentModelVersion(name),
 		// The one alternate this agent's turn may be served by while the model above
 		// has no capacity, empty for every agent that has not enabled failover. It
 		// is read from the agent's own block for the reason its account is: which

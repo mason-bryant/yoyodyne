@@ -250,6 +250,15 @@ type Options struct {
 	// invocation, and evidence produced by whatever model the provider happened
 	// to default to is not auditable.
 	Model string
+	// ModelVersion is the exact version of that family this conversation's turns
+	// ask for, and empty for every agent that pins none — which is every agent
+	// until one does, and which leaves the turn exactly as it was: one invocation,
+	// under the floating alias above. Where it is named and the provider has not
+	// got it, the alias serves the turn and the substitution is recorded.
+	//
+	// It is supplied rather than read here for the reason the alternate below is:
+	// the conversation is handed its configuration rather than loading one.
+	ModelVersion string
 	// FailoverModel is the permitted alternate this conversation's turn may be
 	// served by while the model above has no capacity. It is empty for every
 	// agent that has not enabled failover, which is every agent until one says
@@ -530,12 +539,12 @@ type Evidence struct {
 	Role           string `json:"role"`
 	Resumed        bool   `json:"resumed"`
 	RequestedModel string `json:"requested_model"`
-	// ServedModel is the permitted alternate that answered the last turn, and is
-	// absent whenever the configured model did — which is every turn until one is
-	// refused for want of capacity. It is separate from the selector above
-	// because the two answer different questions: that one is the model this
-	// conversation is configured for, and this one is the model that actually
-	// took the turn.
+	// ServedModel is the model that answered the last turn where it was not the
+	// one asked for, and is absent whenever the selector above took it — which is
+	// every turn until one is refused for want of capacity or asks for a version
+	// this provider has not got. It is separate from the selector above because
+	// the two answer different questions: that one is what the configuration says
+	// to ask for, and this one is what actually took the turn.
 	ServedModel   string `json:"served_model,omitempty"`
 	ResolvedModel string `json:"resolved_model,omitempty"`
 	SessionID     string `json:"session_id,omitempty"`
@@ -792,10 +801,15 @@ func (s *Session) Evidence() Evidence {
 		ConversationID: s.state.ConversationID,
 		Role:           string(s.state.Role),
 		Resumed:        s.resumed,
-		RequestedModel: s.options.Model,
-		// The record keeps the model that served rather than the one configured, so
-		// a conversation whose last turn was served by the alternate says so here
-		// and a conversation whose window has since reopened stops saying it.
+		// What the configuration says to ask for, which is the pinned version where
+		// the agent named one: a conversation pinned to a version and reporting the
+		// family alias as its requested selector would say the pin was never asked
+		// for.
+		RequestedModel: s.requestedModel(),
+		// The record keeps the model that served rather than the one asked for, so
+		// a conversation whose last turn was moved off it says so here and one whose
+		// window has since reopened — or whose version the provider has since got —
+		// stops saying it.
 		ServedModel:   s.servedByAlternate(),
 		ResolvedModel: s.state.ProviderResolvedModel,
 		SessionID:     s.state.ProviderSessionID,
@@ -803,11 +817,20 @@ func (s *Session) Evidence() Evidence {
 	}
 }
 
+// requestedModel is the selector this conversation's turns ask for: the pinned
+// version where the agent named one, and the configured family alias otherwise.
+func (s *Session) requestedModel() string {
+	if version := strings.TrimSpace(s.options.ModelVersion); version != "" {
+		return version
+	}
+	return s.options.Model
+}
+
 // servedByAlternate is the model that answered the last turn where it was not
-// the configured one, and nothing where it was.
+// the one asked for, and nothing where it was.
 func (s *Session) servedByAlternate() string {
 	served := strings.TrimSpace(s.state.ProviderModel)
-	if served == "" || served == strings.TrimSpace(s.options.Model) {
+	if served == "" || served == strings.TrimSpace(s.requestedModel()) {
 		return ""
 	}
 	return served

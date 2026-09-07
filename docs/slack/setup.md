@@ -439,14 +439,17 @@ Into the work item's thread, as they happen:
   means hours in which nothing will happen for a reason nobody chose; the other
   three are ordinary facts, since an overload lifts in seconds and a hold or a
   directive is waiting on the person reading the channel
-- a turn served by an agent's permitted alternate model while the model it is
-  configured for has no capacity, said as a `note`: nothing stopped, which is the
-  point of it, and it is said because an agent answering on a different model is
-  a change to what the work was produced by. It names the model with no capacity
-  and the one serving, and it is said once per window rather than again while one
-  stands — where a window is the provider's own reset time, or, for a refusal the
-  provider never dated, `execution.usage_limit_unknown_reset_pause`. See
+- a turn served by a model other than the one it asked for, said as a `note`:
+  nothing stopped, which is the point of it, and it is said because an agent
+  answering on a different model is a change to what the work was produced by. It
+  names the model that would not serve, the one serving instead, and — in the
+  cause — which of the two reasons it was: the configured model's capacity window
+  being closed, or a pinned version this provider has not got. It is said once
+  per window rather than again while one stands, where a window is the provider's
+  own reset time or, for a refusal the provider never dated and for every missing
+  version, `execution.usage_limit_unknown_reset_pause`. See
   [serving a turn from a permitted alternate model](../configuration.md#serving-a-turn-from-a-permitted-alternate-model)
+  and [pinning an agent to a model version](../configuration.md#pinning-an-agent-to-a-model-version)
 - the blocker that stopped a run, if one did, said as `critical`
 - the run ending any other way — failed, cancelled, timed out — said in that word
   rather than in one word for all of them. A run the harness could not carry and

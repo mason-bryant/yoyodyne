@@ -84,6 +84,49 @@ type UsageLimitExhaustion struct {
 	// stoppage: the same refusal happened either way, and what an operator needs
 	// to know is whether the work carried on.
 	ServedBy string `json:"served_by,omitempty"`
+	// Substitution is why the turn was moved off the model above. It is empty on
+	// every entry that is not a substitution at all, and empty on one written
+	// before there was more than one reason — which reads back as capacity,
+	// because an exhausted window was the only reason a turn moved until a pinned
+	// version could be one the provider has not got.
+	//
+	// It is here rather than inferred from the other fields because the two
+	// reasons are told apart by nothing else on the record and they must not be
+	// read as each other: a window closes and reopens on the provider's clock, and
+	// a model the provider has not got is not waiting for anything. Whoever reads
+	// this log back to decide what to ask for next turn reads this field to know
+	// which question the entry answers.
+	Substitution SubstitutionReason `json:"substitution,omitempty"`
+}
+
+// SubstitutionReason is why a turn was served by a model other than the one it
+// asked for. The set is closed: a record naming anything else is refused where
+// it is written rather than met later as an entry nothing knows what to do with.
+type SubstitutionReason string
+
+const (
+	// SubstitutedForCapacity is the model's usage window closed, which is what
+	// failover answers. It is what an entry with no reason recorded means.
+	SubstitutedForCapacity SubstitutionReason = "capacity"
+	// SubstitutedForAvailability is the provider not having the model at all,
+	// which is what a pinned version falling back to its family answers. Nothing
+	// about the account is exhausted and nothing is waiting for a window.
+	SubstitutedForAvailability SubstitutionReason = "availability"
+)
+
+// SubstitutionReasons is every reason a substitution may name, for a refusal
+// that shows the choices.
+var SubstitutionReasons = []SubstitutionReason{SubstitutedForCapacity, SubstitutedForAvailability}
+
+// Reason is why this entry's turn moved, with an entry that names none reading
+// as capacity — the only reason there was when such an entry could be written.
+// It answers the empty reason for every caller so none of them has to remember
+// which vintage of the log it is reading.
+func (e UsageLimitExhaustion) Reason() SubstitutionReason {
+	if e.Substitution == "" {
+		return SubstitutedForCapacity
+	}
+	return e.Substitution
 }
 
 func (e UsageLimitExhaustion) Validate() error {
@@ -115,7 +158,41 @@ func (e UsageLimitExhaustion) Validate() error {
 	if strings.TrimSpace(e.ServedBy) != "" && strings.TrimSpace(e.ServedBy) == strings.TrimSpace(e.Model) {
 		problems = append(problems, errors.New("served_by and model name the same model; a substitution is a turn served by the model that was not refused"))
 	}
+	// A reason belongs to a substitution and to nothing else: an entry that names
+	// why a turn moved without naming what moved it is a reason for something
+	// that did not happen.
+	if e.Substitution != "" && strings.TrimSpace(e.ServedBy) == "" {
+		problems = append(problems, fmt.Errorf("substitution %q names why a turn was moved and served_by names nothing that took it", e.Substitution))
+	}
+	if e.Substitution != "" && !e.Substitution.known() {
+		problems = append(problems, fmt.Errorf("substitution %q is not one of %s", e.Substitution, describeSubstitutionReasons()))
+	}
+	// An availability substitution is the provider not having a model rather than
+	// a window that will lift, so a reset time on one describes a wait that is not
+	// happening. It is refused rather than ignored, because a reader that took it
+	// at its word would hold a pinned version unasked-for until a moment nothing
+	// was ever going to change at.
+	if e.Substitution == SubstitutedForAvailability && e.ResetsAt != nil {
+		problems = append(problems, errors.New("an availability substitution names a reset time; a model the provider has not got is not waiting for a window"))
+	}
 	return errors.Join(problems...)
+}
+
+func (r SubstitutionReason) known() bool {
+	for _, named := range SubstitutionReasons {
+		if r == named {
+			return true
+		}
+	}
+	return false
+}
+
+func describeSubstitutionReasons() string {
+	named := make([]string, 0, len(SubstitutionReasons))
+	for _, reason := range SubstitutionReasons {
+		named = append(named, string(reason))
+	}
+	return strings.Join(named, ", ")
 }
 
 // Substituted reports a refusal a permitted alternate served through. It is the
@@ -141,6 +218,12 @@ func (e UsageLimitExhaustion) Substituted() bool {
 // A caller with no interval to offer passes zero, and then only a named reset
 // time can make a refusal stand — which is the honest answer for a caller that
 // has no polling discipline of its own to apply.
+//
+// An availability substitution never names a reset time, so it always stands for
+// the caller's interval and no longer. That is the same answer for the same
+// reason: a provider that has not got a model has quoted no deadline for getting
+// it, and a version that arrives — or comes back — is one the harness finds by
+// asking again rather than by being told when.
 func (e UsageLimitExhaustion) WindowClosed(at time.Time, unknownResetPause time.Duration) bool {
 	standsUntil := e.At.Add(unknownResetPause)
 	if e.ResetsAt != nil && e.ResetsAt.After(e.At) {
@@ -153,7 +236,15 @@ func (e UsageLimitExhaustion) WindowClosed(at time.Time, unknownResetPause time.
 // same sentence a paused run's cause is written in, taken from there rather than
 // restated, so one exhausted limit does not read two ways depending on which
 // process met it.
+//
+// An availability substitution is the exception, and it is a different sentence
+// because it is a different fact: nothing is being waited out, so describing it
+// as an exhausted limit would tell an operator to expect a window that is never
+// going to lift.
 func (e UsageLimitExhaustion) Describe() string {
+	if e.Substituted() && e.Reason() == SubstitutedForAvailability {
+		return "a model version this provider has not got"
+	}
 	described := DescribePause(PauseUsageLimit, e.Kind)
 	if e.ResetsAt != nil {
 		described += ", until " + e.ResetsAt.UTC().Format(time.RFC3339)

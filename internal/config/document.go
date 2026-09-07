@@ -156,6 +156,14 @@ type agentDocument struct {
 	Role    *domain.AgentRole `yaml:"role"`
 	Backend *domain.Backend   `yaml:"backend"`
 	Model   *string           `yaml:"model"`
+	// ModelVersion is the exact version this agent's turns ask for. It overrides
+	// on its own rather than with the model, because the two are separate answers:
+	// a layer pinning a version over an inherited family alias is saying which
+	// version of that same family to ask for, and a layer that had to restate the
+	// alias to say it would be re-choosing the family by accident. Stating it
+	// empty removes an inherited pin, which is how an alias is put back to
+	// floating.
+	ModelVersion *string `yaml:"model_version"`
 	// Account is absent from most files. A layer that does not supply it leaves
 	// the agent assigned to the project's single account, which is a derivation
 	// rather than an inherited value: it follows whatever account the effective
@@ -181,8 +189,8 @@ type agentDocument struct {
 // disabled, which is how a contradictory "remove it and also configure it"
 // entry is detected.
 func (d agentDocument) overridesFields() bool {
-	return d.Role != nil || d.Backend != nil || d.Model != nil || d.Account != nil || d.Instances != nil ||
-		d.Persona != nil || d.Failover != nil
+	return d.Role != nil || d.Backend != nil || d.Model != nil || d.ModelVersion != nil || d.Account != nil ||
+		d.Instances != nil || d.Persona != nil || d.Failover != nil
 }
 
 type personaDocument struct {

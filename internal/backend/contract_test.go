@@ -139,3 +139,28 @@ func TestEveryAnswerIsValidAndNothingElseIs(t *testing.T) {
 		}
 	}
 }
+
+// A model the provider has not got is recorded as its own answer rather than as
+// one of the three refusals it is not. It clears the transient readings the way
+// a refusal that stands does, because relaunching the identical request earns
+// the identical answer — what makes it different is that a different selector is
+// not the identical request.
+func TestAModelTheProviderHasNotGotIsItsOwnAnswer(t *testing.T) {
+	t.Parallel()
+
+	result := RunResult{IsError: true, TransientFailure: &TransientFailure{Detail: "connection closed"}}
+	Observation{Answer: AnswerModelUnavailable, Detail: "no such model"}.Record(&result)
+	if result.ModelUnavailable == nil || result.ModelUnavailable.Detail != "no such model" {
+		t.Fatalf("ModelUnavailable = %#v, want the provider's own words about the model it would not serve", result.ModelUnavailable)
+	}
+	if result.TransientFailure != nil || result.ServerOverload != nil {
+		t.Fatalf("result = %#v, want the transient readings cleared by a refusal that stands for this selector", result)
+	}
+	// And a limit reported beside it is left alone, exactly as a refusal that
+	// stands leaves one: that is the refusal a caller waits on.
+	limited := RunResult{IsError: true, UsageLimit: &UsageLimit{Kind: "five_hour"}}
+	Observation{Answer: AnswerModelUnavailable, Detail: "no such model"}.Record(&limited)
+	if limited.UsageLimit == nil {
+		t.Fatal("a limit reported beside a missing model was cleared, and it is what the caller waits on")
+	}
+}

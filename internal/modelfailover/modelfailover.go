@@ -34,6 +34,39 @@ package modelfailover
 //   - Affinity is the named model's. The moment the provider's own reset time
 //     passes, the next turn asks the named model again — so a substitution lasts
 //     a window rather than becoming a quiet permanent move to another model.
+//
+// A second mechanism moves a turn off the model it named, and it is here rather
+// than beside here. An agent may pin an exact model version, and a pin the
+// provider has not got falls back to the family alias the agent already names —
+// availability rather than capacity, within a family rather than between two.
+// What makes it the same mechanism is what it leaves behind: a turn served by a
+// model other than the one it asked for, which has to be recorded and said. One
+// record answers "which model served this turn, and why" whichever of the two
+// chose it, because a reader who had to consult two logs to answer that would
+// get two answers to it.
+//
+// The two compose rather than sit beside each other, and the composition is the
+// part worth stating: whichever selector a turn is asking for at the moment it is
+// refused, that selector's refusal is answered. So the pinned version is asked
+// through the capacity path rather than in front of it — an agent that pinned a
+// version and permitted an alternate keeps both, and a pin the provider has but
+// has no capacity for is a closed window like any other, answered by the
+// alternate.
+//
+// Which of the two answers a refusal is decided by the refusal and not by an
+// order fixed here:
+//
+//   - No capacity at the pinned version is failover's, and the alternate answers
+//     it. Falling back to the family alias there would buy nothing, because the
+//     alias floats over the same family and is therefore inside the same window.
+//   - The provider not having the pinned version is the fallback's, and the
+//     family alias answers it — the alias is the family's latest by definition,
+//     so it is the version that exists. That attempt is then subject to failover
+//     exactly as it would have been had nothing been pinned.
+//
+// Each hop is recorded as itself — refused for availability, refused for
+// capacity — because a single entry collapsing two would name a model that
+// refused a turn nobody asked it.
 
 import (
 	"context"
@@ -73,6 +106,13 @@ type Policy struct {
 	// configuration. Empty is failover off and is the whole of the switch: this
 	// package never reads a configuration and never chooses a model nobody named.
 	Alternate string
+	// Version is the exact model version the agent pinned, from that same
+	// configuration. Empty is no pin, which is every agent until one names one,
+	// and then the request's own selector is asked for and nothing here does
+	// anything at all. Where it is named it is asked for instead, and the
+	// request's selector — the family alias, which is the family's latest by
+	// definition — is what answers when the provider has not got the version.
+	Version string
 	// Windows is where a substitution is recorded and where a window still open
 	// against the named model is read from. A policy without one still fails over
 	// — the turn is what matters — but pays a refused invocation each turn and
@@ -115,8 +155,10 @@ type Policy struct {
 	RecordFailure func(error)
 }
 
-// Enabled reports a policy that may substitute anything.
-func (p Policy) Enabled() bool { return strings.TrimSpace(p.Alternate) != "" }
+// Enabled reports a policy that may substitute anything, by either mechanism.
+func (p Policy) Enabled() bool {
+	return strings.TrimSpace(p.Alternate) != "" || strings.TrimSpace(p.Version) != ""
+}
 
 func (p Policy) now() time.Time {
 	if p.Now == nil {
@@ -132,36 +174,116 @@ func (p Policy) now() time.Time {
 type Served struct {
 	// Model is the selector this turn was actually asked for under.
 	Model string
-	// Refused is the named model the alternate stood in for, and empty where the
-	// named model served. It is separate from Model because a record that says
+	// Refused is the model that was moved off, and empty where the model the turn
+	// asked for served it. It is separate from Model because a record that says
 	// only what served cannot say that anything was moved.
 	Refused string
+	// Why is which mechanism moved it, meaningful only where Refused names
+	// something. Where both moved one turn — a pinned version the provider had not
+	// got, falling back to an alias that then had no capacity — this is the last
+	// hop, which is the one that decided Model. Each hop is recorded separately
+	// in the log, which is where the whole of what happened is kept.
+	Why runstate.SubstitutionReason
 }
 
-// Substituted reports a turn the alternate served.
+// Substituted reports a turn served by a model other than the one it asked for.
 func (s Served) Substituted() bool { return strings.TrimSpace(s.Refused) != "" }
 
-// Serve makes one provider invocation, serving it from the permitted alternate
-// where the named model will not take it.
+// Serve makes one provider invocation, under the version the agent pinned where
+// it named one the provider has, and served by the permitted alternate where the
+// model that would take it has no capacity.
 //
-// The named model is asked unless the log already says its window is open no
-// longer, in which case the alternate is asked directly — an invocation refused
-// for a window the harness watched close is a round trip that buys nothing. A
-// refusal met at the named model is failed over once, and only once: the
-// alternate either serves the turn or the caller is handed the refusal it would
-// have been handed anyway, because a third model to try after the second is
-// routing rather than fallback.
+// The pinned version is asked through the capacity path rather than in front of
+// it, so an agent that pinned a version and permitted an alternate keeps both:
+// a pin with no capacity is answered by the alternate, exactly as the family
+// alias would have been had nothing been pinned. Only the provider saying it has
+// not got the version falls back to the alias, and that attempt is then subject
+// to failover in its turn.
 //
 // Everything else passes through untouched. A turn that failed for any other
 // reason is that failure, with the model that was asked, and nothing about it is
 // retried here.
 func Serve(ctx context.Context, provider Invoker, request backend.RunRequest, policy Policy) (backend.RunResult, Served, error) {
+	family := strings.TrimSpace(request.Model)
+	version := strings.TrimSpace(policy.Version)
+	if version == "" || version == family {
+		return serveWithCapacity(ctx, provider, request, policy, Served{})
+	}
+
+	// A version the log already says this provider has not got goes unasked for as
+	// long as that stands, the way a closed window does: an invocation refused for
+	// something the harness has already been told is a round trip that buys
+	// nothing. Nothing is recorded here, because the entry that made this skip
+	// possible has already said it.
+	fellBack := Served{Model: family, Refused: version, Why: runstate.SubstitutedForAvailability}
+	if missing, err := versionMissing(policy, version); err != nil {
+		policy.report(err)
+	} else if missing {
+		return serveWithCapacity(ctx, provider, request, policy, fellBack)
+	}
+
+	request.Model = version
+	result, served, err := serveWithCapacity(ctx, provider, request, policy, Served{})
+	// Only a refusal met at the pinned attempt itself is the provider saying it has
+	// not got that version, and only that is worth falling back from. One met after
+	// the alternate had already taken the turn is about the alternate — a model
+	// nobody pinned — and the family alias is no answer to it. A substitution
+	// having happened is what tells the two apart, because the pinned attempt is
+	// the only one made before there is one.
+	if result.ModelUnavailable == nil || served.Substituted() || (err == nil && !result.IsError) {
+		return result, served, err
+	}
+
+	// The refused attempt emitted events of its own before it was declined, so the
+	// substituted one starts after them rather than numbering over them.
+	advanceSequence(&request, result)
+	request.Model = family
+	substituted, servedByFamily, substitutedErr := serveWithCapacity(ctx, provider, request, policy, fellBack)
+	// The fallback is written down only where the turn was served, for the reason a
+	// capacity substitution is: a turn nothing could take is the failure the caller
+	// already handles, and an entry claiming the work carried on would be the log
+	// contradicting it.
+	if refusal(substituted, substitutedErr) != nil || substituted.ModelUnavailable != nil {
+		return substituted, servedByFamily, substitutedErr
+	}
+	// What is recorded is the hop the pin made — the version refused, and the alias
+	// that stood in for it — rather than whatever eventually answered. Where
+	// failover then moved the alias too, that hop recorded itself, and two true
+	// entries are what let the next turn skip both invocations rather than one.
+	if err := recordUnavailable(policy, version, family, result.ModelUnavailable.Detail); err != nil {
+		if policy.RecordFailure == nil {
+			return substituted, servedByFamily, errors.Join(substitutedErr, err)
+		}
+		policy.RecordFailure(err)
+	}
+	return substituted, servedByFamily, substitutedErr
+}
+
+// serveWithCapacity makes the invocation the caller built, serving it from the
+// permitted alternate where the model it names will not take it.
+//
+// The model in the request is asked unless the log already says its window is
+// open no longer, in which case the alternate is asked directly — an invocation
+// refused for a window the harness watched close is a round trip that buys
+// nothing. A refusal met there is failed over once, and only once: the alternate
+// either serves the turn or the caller is handed the refusal it would have been
+// handed anyway, because a third model to try after the second is routing rather
+// than fallback.
+//
+// fellBack is what the caller already knows about how this turn got here — a
+// pinned version the provider had not got, or nothing at all — and it is what is
+// reported where nothing further moves the turn. It never carries a model to
+// ask: request.Model is that, whichever way it was arrived at.
+func serveWithCapacity(ctx context.Context, provider Invoker, request backend.RunRequest, policy Policy, fellBack Served) (backend.RunResult, Served, error) {
 	named := strings.TrimSpace(request.Model)
 	alternate := strings.TrimSpace(policy.Alternate)
+	stood := fellBack
+	stood.Model = request.Model
 	if alternate == "" || alternate == named {
 		result, err := provider.Run(ctx, request)
-		return result, Served{Model: request.Model}, err
+		return result, stood, err
 	}
+	moved := Served{Model: alternate, Refused: named, Why: runstate.SubstitutedForCapacity}
 
 	// A window the provider said has not lifted is taken at its word for as long
 	// as it stands, and for no longer: the comparison is against the clock at the
@@ -171,37 +293,35 @@ func Serve(ctx context.Context, provider Invoker, request backend.RunRequest, po
 		policy.report(err)
 	} else if closed {
 		result, err := runWith(ctx, provider, request, alternate)
-		return result, Served{Model: alternate, Refused: named}, err
+		return result, moved, err
 	}
 
 	result, err := provider.Run(ctx, request)
 	refused := refusal(result, err)
 	if refused == nil {
-		return result, Served{Model: request.Model}, err
+		return result, stood, err
 	}
 
 	// The refused attempt emitted events of its own before it was declined, so the
 	// substituted one starts after them rather than numbering over them. Both
 	// attempts write to one event log, and a sequence used twice is a log whose
 	// numbering no longer says what order anything happened in.
-	if result.LastEvent > request.LastSequence {
-		request.LastSequence = result.LastEvent
-	}
+	advanceSequence(&request, result)
 	substituted, substitutedErr := runWith(ctx, provider, request, alternate)
 	// The substitution is written down only where it served. A turn the alternate
 	// could not take either is the refusal the caller already handles, and
 	// recording it here would put the same stoppage in the log twice — once as a
 	// substitution that did not happen, and once by whoever fails the turn.
 	if refusal(substituted, substitutedErr) != nil {
-		return substituted, Served{Model: alternate, Refused: named}, substitutedErr
+		return substituted, moved, substitutedErr
 	}
 	if err := record(policy, named, alternate, *refused); err != nil {
 		if policy.RecordFailure == nil {
-			return substituted, Served{Model: alternate, Refused: named}, errors.Join(substitutedErr, err)
+			return substituted, moved, errors.Join(substitutedErr, err)
 		}
 		policy.RecordFailure(err)
 	}
-	return substituted, Served{Model: alternate, Refused: named}, substitutedErr
+	return substituted, moved, substitutedErr
 }
 
 // runWith makes the same invocation under another model. Everything else about
@@ -210,6 +330,15 @@ func Serve(ctx context.Context, provider Invoker, request backend.RunRequest, po
 func runWith(ctx context.Context, provider Invoker, request backend.RunRequest, model string) (backend.RunResult, error) {
 	request.Model = model
 	return provider.Run(ctx, request)
+}
+
+// advanceSequence moves the next attempt past the events the refused one already
+// emitted, so two attempts at one turn write one log whose numbering still says
+// what order things happened in.
+func advanceSequence(request *backend.RunRequest, result backend.RunResult) {
+	if result.LastEvent > request.LastSequence {
+		request.LastSequence = result.LastEvent
+	}
 }
 
 // windowClosed reports the named model still inside a window the last refusal
@@ -239,6 +368,45 @@ func windowClosed(policy Policy, model string) (bool, error) {
 		if strings.TrimSpace(exhaustion.Model) != strings.TrimSpace(model) {
 			continue
 		}
+		// An availability substitution names the same field and means something
+		// else: the provider has not got that selector, which is not a window and
+		// must not be read as one. Skipping it here is what keeps one agent's pinned
+		// version from reading as another agent's closed window.
+		if exhaustion.Substituted() && exhaustion.Reason() == runstate.SubstitutedForAvailability {
+			continue
+		}
+		if exhaustion.WindowClosed(at, policy.UnknownResetPause) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// versionMissing reports a pinned version this provider was already found not to
+// have, inside the interval the harness rechecks on. There is no reset time to
+// read: a provider that has not got a model quotes no deadline for getting one,
+// so what stands in is UnknownResetPause — the same interval an unknown-reset
+// limit is probed on, so the harness has one polling discipline rather than two.
+//
+// Rechecking at all is the point. A version can arrive, and a version withdrawn
+// in error can come back, and a pin that was skipped once and then forever would
+// be a floating alias the operator thinks is a pin.
+func versionMissing(policy Policy, version string) (bool, error) {
+	if policy.Windows == nil || strings.TrimSpace(version) == "" {
+		return false, nil
+	}
+	exhaustions, err := policy.Windows.List()
+	if err != nil {
+		return false, fmt.Errorf("read which models the provider has refused: %w", err)
+	}
+	at := policy.now()
+	for _, exhaustion := range exhaustions {
+		if !exhaustion.Substituted() || exhaustion.Reason() != runstate.SubstitutedForAvailability {
+			continue
+		}
+		if strings.TrimSpace(exhaustion.Model) != strings.TrimSpace(version) {
+			continue
+		}
 		if exhaustion.WindowClosed(at, policy.UnknownResetPause) {
 			return true, nil
 		}
@@ -262,6 +430,7 @@ func record(policy Policy, named, alternate string, refused backend.UsageLimit) 
 		WorkItemID:     policy.WorkItemID,
 		Model:          named,
 		ServedBy:       alternate,
+		Substitution:   runstate.SubstitutedForCapacity,
 	}
 	if !refused.ResetsAt.IsZero() {
 		resetsAt := refused.ResetsAt.UTC()
@@ -271,6 +440,50 @@ func record(policy Policy, named, alternate string, refused backend.UsageLimit) 
 		return fmt.Errorf("record the turn %s served while %s had no capacity: %w", alternate, named, err)
 	}
 	return nil
+}
+
+// recordUnavailable writes down a pinned version the provider has not got, in
+// the same log and the same shape a capacity substitution is written in. It
+// names no kind and no reset time, because neither exists: nothing about the
+// account was exhausted and no condition was said to lift. The provider's own
+// words about the model it would not serve are what the entry says was waiting
+// on it, joined to the caller's sentence, so a reader has the evidence rather
+// than only the category.
+func recordUnavailable(policy Policy, version, family, detail string) error {
+	if policy.Windows == nil {
+		return nil
+	}
+	exhaustion := runstate.UsageLimitExhaustion{
+		SchemaVersion:  runstate.UsageLimitSchemaVersion,
+		ProductID:      policy.ProductID,
+		At:             policy.now(),
+		Waiting:        waitingWithDetail(policy.Waiting, detail),
+		ConversationID: policy.ConversationID,
+		WorkItemID:     policy.WorkItemID,
+		Model:          version,
+		ServedBy:       family,
+		Substitution:   runstate.SubstitutedForAvailability,
+	}
+	if err := policy.Windows.Record(exhaustion); err != nil {
+		return fmt.Errorf("record the turn %s served because the provider has not got %s: %w", family, version, err)
+	}
+	return nil
+}
+
+// waitingWithDetail joins the provider's own account of the model it would not
+// serve onto the caller's sentence, bounded so the pair stays a phrase somebody
+// reads rather than a record they study. A provider that said nothing leaves the
+// sentence exactly as the caller wrote it.
+func waitingWithDetail(waiting, detail string) string {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		return waiting
+	}
+	joined := waiting + " (" + trimmed + ")"
+	if len(joined) > runstate.MaxUsageLimitWaitingBytes {
+		return waiting
+	}
+	return joined
 }
 
 func (p Policy) report(err error) {

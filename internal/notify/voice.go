@@ -182,7 +182,7 @@ var harnessVoice = voice{
 		KindBlockerRecorded:          "{item} is blocked, and {remains}: {text}",
 		KindRunEnded:                 "The run on {item} {ending}, and {remains}: {text}",
 		KindUsageLimitExhausted:      "The provider refused {waiting}: {cause}.",
-		KindModelSubstituted:         "{waiting} is being served by {servedby} while {model} has no capacity: {cause}. Nothing has stopped; the model behind the work has changed.",
+		KindModelSubstituted:         "{waiting} is being served by {servedby} rather than {model}: {cause}. Nothing has stopped; the model behind the work has changed.",
 		KindReportFiled:              "Reported on {item}: {text}",
 		KindProposalRaised:           "A change to {artifact} is proposed: {text}",
 		KindExchangeTurn:             "{exchange}, {rounds}: {text}",
@@ -242,7 +242,7 @@ var developerVoice = voice{
 		KindBlockerRecorded:          "I could not finish {item}, and {remains}: {text}",
 		KindRunEnded:                 "My attempt at {item} {ending} rather than stopping on anything anybody has to decide, and {remains}: {text}",
 		KindUsageLimitExhausted:      "The provider has nothing left for {waiting}: {cause}. None of my work moves until it lifts.",
-		KindModelSubstituted:         "{waiting} carries on under {servedby} while {model} has no capacity: {cause}. My work keeps moving, and what produced it while it did is written down.",
+		KindModelSubstituted:         "{waiting} carries on under {servedby} rather than {model}: {cause}. My work keeps moving, and what produced it while it did is written down.",
 		KindReportFiled:              "Noticed while working on {item}: {text}",
 		KindProposalRaised:           "{artifact} isn't mine to edit, so I'm proposing the change instead: {text}",
 		KindExchangeTurn:             "On {exchange}, {rounds}: {text}",
@@ -302,7 +302,7 @@ var reviewerVoice = voice{
 		KindBlockerRecorded:          "{item} is blocked and there is no change to judge, though {remains}: {text}",
 		KindRunEnded:                 "The run on {item} {ending} before I was given anything to judge, and {remains}: {text}",
 		KindUsageLimitExhausted:      "{waiting} was refused for want of provider capacity: {cause}. Nothing arrives for a verdict until it lifts.",
-		KindModelSubstituted:         "{waiting} is answering on {servedby} rather than {model}, which has no capacity: {cause}. What reaches me for a verdict was produced by a different model, and I judge it the same way.",
+		KindModelSubstituted:         "{waiting} is answering on {servedby} rather than {model}: {cause}. What reaches me for a verdict was produced by a different model, and I judge it the same way.",
 		KindReportFiled:              "Noticed while reviewing {item}: {text}",
 		KindProposalRaised:           "{artifact} is not mine to change, so this is an argument about it: {text}",
 		KindExchangeTurn:             "In {exchange}, at {rounds}: {text}",
@@ -361,7 +361,7 @@ var developmentManagerVoice = voice{
 		KindBlockerRecorded:          "{item} is blocked, and recorded as blocked rather than left implicit, with {remains}: {text}",
 		KindRunEnded:                 "The run on {item} {ending} with nothing recorded for anybody to decide, and {remains}: {text}",
 		KindUsageLimitExhausted:      "{waiting} is stopped by the provider rather than by the queue: {cause}. Nothing moves until it lifts.",
-		KindModelSubstituted:         "{waiting} is served by {servedby} while {model} has no capacity: {cause}. My order stands and the queue keeps being pulled from.",
+		KindModelSubstituted:         "{waiting} is served by {servedby} rather than {model}: {cause}. My order stands and the queue keeps being pulled from.",
 		KindReportFiled:              "Noticed while planning {item}: {text}",
 		KindProposalRaised:           "{artifact} isn't mine to change, so here is the case for changing it: {text}",
 		KindExchangeTurn:             "{exchange} is at {rounds} and the item waits on it: {text}",
@@ -421,7 +421,7 @@ var productManagerVoice = voice{
 		KindBlockerRecorded:          "{item} is blocked and stays in the backlog until somebody decides otherwise, with {remains}: {text}",
 		KindRunEnded:                 "The attempt on {item} {ending}, which is no verdict on what the item is for, and {remains}: {text}",
 		KindUsageLimitExhausted:      "Nothing is being spent, because the provider refused {waiting}: {cause}. What is admitted keeps its place.",
-		KindModelSubstituted:         "{waiting} is being served by {servedby} while {model} has no capacity: {cause}. The work carries on and is priced against the model that served it.",
+		KindModelSubstituted:         "{waiting} is being served by {servedby} rather than {model}: {cause}. The work carries on and is priced against the model that served it.",
 		KindReportFiled:              "Noticed about {item}: {text}",
 		KindProposalRaised:           "A change to {artifact} is proposed, and I decide it only where the document is mine: {text}",
 		KindExchangeTurn:             "The operator is being asked something, in {exchange} at {rounds}: {text}",
@@ -481,7 +481,7 @@ var architectVoice = voice{
 		KindBlockerRecorded:          "{item} is blocked, which is a fact about the system rather than about the attempt, and {remains}: {text}",
 		KindRunEnded:                 "The run on {item} {ending}, which is a fact about the attempt rather than about the work, and {remains}: {text}",
 		KindUsageLimitExhausted:      "{waiting} met the account's own ceiling rather than a defect: {cause}. Capacity is a boundary condition, and a design that treats it as a failure is the wrong design.",
-		KindModelSubstituted:         "{waiting} fell back from {model} to {servedby}, which is the permitted alternate rather than a degradation: {cause}. The substitution is recorded per turn, and affinity returns when the window reopens.",
+		KindModelSubstituted:         "{waiting} fell back from {model} to {servedby}, which is a stated alternative rather than a degradation: {cause}. The substitution is recorded per turn, and affinity returns to {model} as soon as it can be asked for again.",
 		KindReportFiled:              "Noticed about the design of {item}: {text}",
 		KindProposalRaised:           "{artifact} should change, and this is the case: {text}",
 		KindExchangeTurn:             "{exchange}, {rounds}, on what the design left open: {text}",
@@ -614,7 +614,7 @@ var nextMoves = map[Kind]string{
 	// saying without interrupting anybody: the work carried on, and the clause
 	// says so rather than sending a reader to look at a window that is lifting on
 	// the provider's clock either way.
-	KindModelSubstituted: "nobody's — the turn was served, and the configured model is asked again when its window reopens.",
+	KindModelSubstituted: "nobody's — the turn was served, and the model it asked for is asked for again as soon as it can be.",
 	// What an agent said in its own words. A report asks for nothing by design and
 	// says so; the other three are all waiting on the operator.
 	KindReportFiled:    "nobody's — the work carried on.",
