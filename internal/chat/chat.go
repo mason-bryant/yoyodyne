@@ -225,6 +225,13 @@ type Options struct {
 	// one refuses the block plainly and says so in the turn, rather than leaving
 	// the role to answer from memory believing it had checked.
 	Research Research
+	// Memories is what this agent knows, read for the side conversations it held
+	// beside this one: each concluded side thread merges its substance into the
+	// agent's memory, and this turn is where that revision is read. It is optional
+	// like the rest, and a conversation without one carries no merges rather than
+	// reporting that there were none — an agent that holds no side threads is
+	// every agent until one is configured for them.
+	Memories Memories
 	// Evaluations is where a durable recommendation about an operator's idea is
 	// kept. It is optional like the rest: a conversation without one still
 	// discusses the idea and still says what it thinks, and an evaluation then
@@ -2605,6 +2612,10 @@ func (s *Session) turnPrompt(message string) string {
 	// carrying one in, which is what a report channel with no standing reader
 	// otherwise depends on.
 	prompt.WriteString(s.renderUnhandledReports())
+	// What this agent's own side threads concluded, as memory rather than as their
+	// dialogue: the two transcripts never meet, and a commitment one of them
+	// drafted is ratified here or nowhere.
+	prompt.WriteString(s.renderSideConversations())
 	// What the role may ask the harness to find out for it. It is delivered with
 	// the turn rather than stated in the contract because which sources exist is
 	// this project's own, and it moves.
