@@ -181,6 +181,17 @@ func (m Metered) line(request backend.RunRequest, result backend.RunResult, err 
 	if result.Backend != "" {
 		line.Backend = result.Backend
 	}
+	// The adapter that reached the provider completes the endpoint identity this
+	// line already carries in the account, the backend, and the model. The
+	// adapter's own word is preferred for the reason the backend's is — it is what
+	// actually ran — and an invocation that died before it could say anything
+	// falls back to what this build knows of the backend it was configured for. A
+	// provider the project declared has no built-in description, so that line
+	// names the provider and no adapter rather than a version nobody established.
+	line.AdapterVersion = result.AdapterVersion
+	if line.AdapterVersion == "" {
+		line.AdapterVersion = backend.AdapterVersionFor(line.Backend)
+	}
 	if result.CostReported {
 		line.Classification = runstate.SpendKnown
 		line.AmountUSD = result.CostUSD

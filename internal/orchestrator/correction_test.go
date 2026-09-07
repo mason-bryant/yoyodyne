@@ -11,6 +11,7 @@ import (
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -574,6 +575,7 @@ func correctionChat(t *testing.T, store *runstate.ConversationStore, tracker cha
 		Model:        "opus",
 		Persona:      "You are the product manager.",
 		Provider:     domain.BackendClaudeCode,
+		AccountAlias: config.DefaultAccountAlias,
 		Repository:   t.TempDir(),
 		ProductID:    "yoyodyne",
 		RepositoryID: "yoyodyne",

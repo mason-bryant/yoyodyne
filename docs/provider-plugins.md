@@ -175,6 +175,22 @@ to prevent. So `codex` is refused for a `reviewer` agent, with the refusal namin
 the posture rather than the role, and the way to make that claim true again is an
 adapter that achieves the property rather than a line that asserts it.
 
+The same check stands behind a substitution. When a turn is moved off the model
+it asked for — because that model's capacity window closed — the endpoint it
+would be moved onto is checked against the posture the role requires, and a move
+onto a provider that cannot hold it is refused with the posture named. The turn
+then takes the refusal it would have taken anyway rather than being served
+somewhere the configuration would never have permitted. Configuration validation
+answers for the configuration as written; this answers for the endpoint an
+invocation is actually about to be made on.
+
+An endpoint is the provider, the version of the adapter that reaches it, the
+account alias, and the model, and every cost line records all four. A declared
+provider's records therefore name your provider *and* the adapter version this
+build read its stream with, which is what lets a later reader tell two harness
+builds reading one provider differently apart. You do not write the adapter
+version: it follows from the adapter your declaration names.
+
 The posture is also what decides the session mode an invocation is made in, and
 the invocation the harness asks for carries none: nothing above the adapter names
 a mode, so which one a role gets follows from which role it is. That matters most

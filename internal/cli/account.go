@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/doctor"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -72,6 +74,13 @@ type accountPool struct {
 //
 // The choice still happens before anything is claimed, so a pool with nothing
 // left refuses without taking a work item.
+//
+// The pool it rotates is a pool of endpoints rather than of accounts alone. The
+// endpoints are the developer's, because the developer's invocations are what a
+// run exists to make and the account chosen here is the run's: what the pool
+// therefore skips is an endpoint the developer role may not be served on, named
+// as such, rather than an account that would have been chosen and refused
+// somewhere further in.
 func (p accountPool) ChooseAccount() (config.AccountEndpoint, error) {
 	lastServed, err := p.runs.LastAccountAlias()
 	if err != nil {
@@ -84,7 +93,29 @@ func (p accountPool) ChooseAccount() (config.AccountEndpoint, error) {
 			return config.AccountEndpoint{}, fmt.Errorf("read what each account has spent this week: %w", err)
 		}
 	}
-	return p.config.ChooseAccount(p.stateRoot, lastServed, spent)
+	developer := agentNameForRole(p.config, domain.RoleDeveloper)
+	if developer == "" {
+		// A project with no developer agent has no run to serve, so there is no
+		// endpoint to choose one for. Configuration validation refuses such a
+		// project; answering with the account rotation alone keeps this the join it
+		// is rather than a second place that decides a configuration is unusable.
+		return p.config.ChooseAccount(p.stateRoot, lastServed, spent)
+	}
+	providers, err := p.config.ProviderRegistry()
+	if err != nil {
+		return config.AccountEndpoint{}, fmt.Errorf("read which providers this project may name: %w", err)
+	}
+	// A run record keeps the alias it was served by and not yet the whole endpoint,
+	// so the cursor is that alias read into the endpoint family the pool is
+	// choosing over. That is the rotation the pool has always made; the day a run
+	// records its endpoint, the cursor is that record rather than this assembly.
+	agent := agentForRole(p.config, domain.RoleDeveloper)
+	cursor := backend.Endpoint{Provider: agent.Backend, Model: agent.Model, AccountAlias: lastServed}
+	choice, err := p.config.ChooseEndpoint(providers, p.stateRoot, developer, cursor, spent)
+	if err != nil {
+		return config.AccountEndpoint{}, err
+	}
+	return choice.Account, nil
 }
 
 // clock reads the field, and falls back rather than panicking on a pool nothing

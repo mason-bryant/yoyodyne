@@ -190,12 +190,16 @@ to make the same judgement out loud instead of the question never being asked.
 | --- | --- | --- |
 | `internal/artifact/ownership.go` | `authority` | Names the capability a kind of document belongs to. It refuses nothing: the lookup that turns it into an owner is `artifact.owner` and the refusal made on it is `artifact.authorize`. |
 | `internal/artifact/references.go` | `ProblemUnauthorizedRevision` | The name of the problem kind `UnauthorizedRevisions` reports; the check is that row. |
+| `internal/backend/endpoint.go` | `(*Registry).EligibleFor` | Names an endpoint in `Serves`'s answer, and decides nothing `Serves` did not. |
+| `internal/backend/endpoint.go` | `(*Registry).Serves` | Reads a provider's declaration to say whether it can serve a role at all — the roles it declares, the tool posture that role requires, and whether this build can launch it. Which provider serves a role is selection and capability, not what the role may do, exactly as `DescriptorFor` below. |
+| `internal/backend/endpoint.go` | `(*Registry).Substitutable` | Refuses a substitution that would move a role onto an endpoint whose sandbox cannot hold its tool posture. It decides where a role may run rather than what it may do once there: the second is `conversation.authority-table` and the run's own contracts, and neither is widened or narrowed by this. |
 | `internal/backend/registry.go` | `DescriptorFor` | Validates a provider plugin declaration, the roles it serves included. Which provider serves a role is selection, not what the role may do. |
 | `internal/capability/capability.go` | `PromotionLease` | The name an action declares the promotion lease by. The lease itself is `promotion.lease`. |
 | `internal/chat/admission.go` | `(*Session).admissionAuthority` | Records what let an item into the queue. It refuses nothing; the refusal is `conversation.admission-gate`. |
 | `internal/chat/role.go` | `(*Session).authority` | Reads this session's row out of the table. |
 | `internal/chat/role.go` | `Authority` | The shape of a row in `conversation.authority-table`. |
 | `internal/chat/role.go` | `AuthorityError` | How a conversation reports a refusal, rather than a refusal of its own. |
+| `internal/cli/account.go` | `(accountPool).ChooseAccount` | Chooses which endpoint the next run is served on, reading the developer role because the developer's endpoints are the pool it rotates. Which endpoint serves a run is capacity and selection; what the role may do once it is running is decided nowhere near here. |
 | `internal/cli/agent.go` | `resolveAgent` | Resolves a configured agent name to its role. A name nothing configures is a configuration error, not refused authority. |
 | `internal/cli/amendment.go` | `listAmendments` | Lists proposals by owning role for an operator to read. |
 | `internal/cli/chat.go` | `conversationAgent` | Picks the configured agent for a role and refuses one filling a different role. That is which agent, not what the role may do. |

@@ -311,6 +311,14 @@ func TestADeclaredDialectReadsTheStreamInsteadOfThisProvidersOwn(t *testing.T) {
 	if result.Backend != "my-harness" {
 		t.Fatalf("Backend = %q, want the provider the agent named", result.Backend)
 	}
+	// And it says which adapter did launch it, beside rather than instead: the
+	// provider is the project's declaration, and the adapter version is this
+	// build's code that read the stream with the declared dialect. A record
+	// carrying only the first could not say which harness classified the refusal
+	// above.
+	if result.AdapterVersion != backend.ClaudeCodeAdapterVersion {
+		t.Fatalf("AdapterVersion = %q, want the compiled adapter that read the stream", result.AdapterVersion)
+	}
 	if len(events) == 0 {
 		t.Fatal("the invocation recorded nothing")
 	}

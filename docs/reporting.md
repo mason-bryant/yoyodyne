@@ -260,18 +260,29 @@ Each line carries the role and the configured agent that spent it, the phase, th
 amount and its classification, the account alias and the configuration revision
 in force, the revision the harness binary that made the call was built from, the
 one thing the invocation belonged to — and the work item, where the invocation was
-made for one — the backend, the requested and resolved models, and when it
-happened.
+made for one — the backend, the adapter version that reached it, the requested and
+resolved models, and when it happened.
 
-That last pin is the build, and it is taken by the metering itself rather than
+The backend, the adapter version, the account alias, and the requested model are
+one identity rather than four facts: they are the execution endpoint the turn was
+served by. The adapter version is the one of the four that is not obvious. A
+provider a project declared for itself is reached by an adapter this build ships,
+so "which provider" and "which harness code read what it said" are separate
+questions, and a line carrying only the first cannot answer the second. It is the
+adapter's version rather than the provider CLI's: what a record has to be able to
+tell apart is two harness builds reading one provider differently.
+
+The last pin is the build, and it is taken by the metering itself rather than
 supplied by whatever is invoking: a build a call site could pass in is one a call
 site could forget, and the line would then say whose account paid for an
-invocation without saying what code made it. It is the only pin that can be
-absent on a line the harness wrote — the harness always knows the account and the
-revision, and a binary installed from the module cache carries no revision of its
-own. An absence is recorded as one rather than guessed at from the version,
-because a comparison nobody can make is an answer and a comparison made against
-the wrong commit is not.
+invocation without saying what code made it. The harness always knows the account
+and the revision, so the build and the adapter version are the two pins that can
+be absent on a line the harness wrote: a binary installed from the module cache
+carries no revision of its own, and an invocation that died before its adapter
+could say anything on a provider this build has no description of leaves nothing
+to name. Each absence is recorded as one rather than guessed at, because a
+comparison nobody can make is an answer and a comparison made against the wrong
+thing is not.
 
 That one thing is a run, a conversation, an exchange, or a branch review, and a
 line names exactly one of the four. A branch review has a field of its own rather

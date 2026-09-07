@@ -98,6 +98,22 @@ type Windows interface {
 	List() ([]runstate.UsageLimitExhaustion, error)
 }
 
+// Eligibility says whether one endpoint may stand in for another for a role. It
+// is satisfied by *backend.Registry, which derives the answer from what each
+// provider declared about the roles it serves and the tool postures it can be
+// held to.
+//
+// A substitution is the one moment a role's endpoint changes without anybody
+// having configured the change, so it is the moment the posture has to be asked
+// about again. Configuration validation held every configured agent to the
+// posture its role requires; nothing about that reaches an endpoint arrived at
+// because a window closed. This is where the two meet, and it never widens
+// anything: an endpoint it permits is one the configuration would have
+// permitted, and a refusal here leaves the turn exactly where it was.
+type Eligibility interface {
+	Substitutable(from, to backend.Endpoint, role domain.AgentRole) error
+}
+
 // Policy is what one agent's turn may be served by, and where the substitution
 // is written down. Its zero value is failover off, which is what every caller
 // that has not been configured for it passes.
@@ -118,6 +134,19 @@ type Policy struct {
 	// — the turn is what matters — but pays a refused invocation each turn and
 	// tells nobody, so the harness always wires it.
 	Windows Windows
+	// Endpoint is where this turn is being served: the provider, the adapter that
+	// reaches it, the account, and the model the request names. Role is the
+	// contract the turn is taken under. Together they are what a substitution is
+	// checked against, so what a candidate endpoint has to hold is the posture
+	// this role requires rather than whatever the endpoint it replaced happened to
+	// hold.
+	Endpoint backend.Endpoint
+	Role     domain.AgentRole
+	// Eligibility is asked before any substitution is made. A policy without one
+	// substitutes unchecked, which is what every caller did before the check
+	// existed; the harness wires it everywhere, so an unwired one is a test that
+	// does not care rather than a path a running harness takes.
+	Eligibility Eligibility
 	// Now is the clock the reset times are compared against. Nil is time.Now.
 	Now func() time.Time
 	// UnknownResetPause is how long a refusal that named no usable reset time
@@ -280,6 +309,16 @@ func serveWithCapacity(ctx context.Context, provider Invoker, request backend.Ru
 	stood := fellBack
 	stood.Model = request.Model
 	if alternate == "" || alternate == named {
+		result, err := provider.Run(ctx, request)
+		return result, stood, err
+	}
+	// An alternate the role may not be served on is not an alternate. It is asked
+	// once, before either path below can take it, so a turn is never moved onto an
+	// endpoint whose sandbox cannot hold this role's tool posture — and the refusal
+	// says which posture and which endpoint rather than leaving the turn to fail
+	// somewhere else.
+	if err := policy.permitSubstitution(alternate); err != nil {
+		policy.report(err)
 		result, err := provider.Run(ctx, request)
 		return result, stood, err
 	}
@@ -484,6 +523,29 @@ func waitingWithDetail(waiting, detail string) string {
 		return waiting
 	}
 	return joined
+}
+
+// permitSubstitution reports whether this turn may be moved onto the endpoint
+// that would serve it under another model, and says why not where it may not.
+//
+// The candidate is this turn's own endpoint with the model replaced, because
+// that is what a substitution actually produces: the same provider, reached by
+// the same adapter, under the same account, asking something else. The check is
+// written over the whole endpoint rather than over the model alone so that it
+// still holds the day an alternate names one — an alternate on a provider whose
+// sandbox cannot express this role's posture is refused by the same line, with
+// nothing here needing to learn about it.
+//
+// A policy that names no endpoint or no eligibility has nothing to ask and
+// permits the substitution, which is what every caller did before the check
+// existed.
+func (p Policy) permitSubstitution(model string) error {
+	if p.Eligibility == nil || p.Endpoint.Provider == "" {
+		return nil
+	}
+	candidate := p.Endpoint
+	candidate.Model = strings.TrimSpace(model)
+	return p.Eligibility.Substitutable(p.Endpoint, candidate, p.Role)
 }
 
 func (p Policy) report(err error) {

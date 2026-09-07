@@ -257,3 +257,66 @@ func (l *recordingLog) Append(line runstate.Spend) error {
 type fixedClock struct{}
 
 func (fixedClock) Now() time.Time { return time.Date(2026, 8, 23, 9, 30, 0, 0, time.UTC) }
+
+// A line says which endpoint served the turn and not only which provider was
+// named: the account, the model, and the backend were already there, and the
+// adapter that reached the provider is what completes the identity. The
+// adapter's own word is preferred, because it is what actually read the stream.
+func TestALineSaysWhichEndpointServedTheTurn(t *testing.T) {
+	t.Parallel()
+
+	log := &recordingLog{}
+	metered := testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{
+			Backend:        "my-harness",
+			AdapterVersion: backend.ClaudeCodeAdapterVersion,
+			CostUSD:        1,
+			CostReported:   true,
+		}, nil
+	})
+	if _, err := metered.Run(context.Background(), testRequest()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	line := log.lines[0]
+	if line.Backend != "my-harness" || line.AdapterVersion != backend.ClaudeCodeAdapterVersion {
+		t.Fatalf("the endpoint was not recorded: %#v", line)
+	}
+	if line.AccountAlias != "default" || line.Model != "opus" {
+		t.Fatalf("the rest of the endpoint identity was not carried: %#v", line)
+	}
+	if err := line.Validate(); err != nil {
+		t.Fatalf("the recorded line does not satisfy the durable contract: %v", err)
+	}
+}
+
+// An invocation that died before its adapter could say anything still names the
+// adapter, where the harness knows one: the provider it was configured for is a
+// backend this build ships and therefore has an adapter version of its own.
+// Nothing is guessed — a provider this build has no description of records the
+// provider and no adapter rather than a version nobody established.
+func TestADeadInvocationStillNamesTheAdapterThisBuildKnows(t *testing.T) {
+	t.Parallel()
+
+	log := &recordingLog{}
+	metered := testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{}, errors.New("the provider went away")
+	})
+	if _, err := metered.Run(context.Background(), testRequest()); err == nil {
+		t.Fatal("Run() reported no failure, want the provider's own")
+	}
+	if version := log.lines[0].AdapterVersion; version != backend.ClaudeCodeAdapterVersion {
+		t.Fatalf("adapter version = %q, want the one this build ships for the configured backend", version)
+	}
+
+	declared := &recordingLog{}
+	unknown := testMetered(declared, func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{}, errors.New("the provider went away")
+	})
+	unknown.Attribution.Backend = "my-harness"
+	if _, err := unknown.Run(context.Background(), testRequest()); err == nil {
+		t.Fatal("Run() reported no failure, want the provider's own")
+	}
+	if version := declared.lines[0].AdapterVersion; version != "" {
+		t.Fatalf("adapter version = %q, want nothing for a provider this build has no description of", version)
+	}
+}

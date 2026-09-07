@@ -226,6 +226,16 @@ func (b Backend) provider() domain.Backend {
 	return b.Provider
 }
 
+// adapterVersion is the compiled adapter a result is recorded as having been
+// read by, taken from the one description of this backend the harness holds
+// rather than restated here. A provider a project declared is served by this
+// adapter too, so its results say this version beside the provider's own name —
+// which is the pair a record needs to say which harness code read what.
+func adapterVersion() string {
+	descriptor, _ := backend.BuiltInDescriptor(domain.BackendClaudeCode)
+	return descriptor.AdapterVersion
+}
+
 func (b Backend) CheckAvailability(ctx context.Context) (backend.Availability, error) {
 	if b.Runner == nil {
 		return backend.Availability{}, errors.New("Claude Code process runner is required")
@@ -444,6 +454,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	processResult.Stdout = ""
 	result := parser.Result()
 	result.Backend = b.provider()
+	result.AdapterVersion = adapterVersion()
 	result.Process = processResult
 	if processResult.Status == execution.ProcessCancelled || processResult.Status == execution.ProcessTimedOut || processResult.Status == execution.ProcessStalled {
 		result.IsError = true

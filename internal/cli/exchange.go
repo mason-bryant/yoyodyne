@@ -211,13 +211,20 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 			question.Role, name, agent.Backend)
 	}
 	prompt := execution.NewRedactor(v.redactValues...).Redact(renderQuestion(question))
-	// The round is answered under the account the answering agent is configured
-	// for, which is the account its conversation is held under: an exchange is
-	// that role speaking, and what it costs belongs on that role's subscription.
-	account, err := v.config.Endpoint(v.stateRoot, v.config.AgentAccountAlias(name))
+	// The round is answered on the endpoint the answering agent is configured for,
+	// under the account its conversation is held under: an exchange is that role
+	// speaking, and what it costs belongs on that role's subscription. The
+	// endpoint names the provider, the adapter that reaches it, and the model
+	// beside that account, which is what a substitution is checked against below.
+	providers, err := v.config.ProviderRegistry()
 	if err != nil {
-		return exchange.Spoken{}, fmt.Errorf("resolve the account the %s agent %s answers under: %w", question.Role, name, err)
+		return exchange.Spoken{}, fmt.Errorf("resolve the providers the %s agent %s may be served by: %w", question.Role, name, err)
 	}
+	choice, err := v.config.AgentEndpoint(providers, v.stateRoot, name)
+	if err != nil {
+		return exchange.Spoken{}, fmt.Errorf("resolve the endpoint the %s agent %s answers on: %w", question.Role, name, err)
+	}
+	account := choice.Account
 	// The round goes through the meter, so what it spends is one line in the cost
 	// log beside every other provider invocation the harness makes, charged to
 	// the exchange because that is the only record it belongs to.
@@ -263,7 +270,7 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 		RedactValues:     v.redactValues,
 		AccountAlias:     account.Alias,
 		AccountConfigDir: account.Directory,
-	}, v.failoverPolicy(question, name))
+	}, v.failoverPolicy(question, name, choice.Endpoint, providers))
 	// What served the round travels back with what it cost, so the exchange record
 	// pins the invocation to a backend, a model, an account, a configuration, and
 	// the harness that made the call rather than to a provider session that
@@ -335,7 +342,11 @@ func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend
 // is written down. An agent that has pinned no version and enabled no failover
 // produces the zero policy, which is both mechanisms off: one invocation, under
 // the configured model, exactly as before.
-func (v exchangeVoice) failoverPolicy(question exchange.Question, name string) modelfailover.Policy {
+//
+// The endpoint the round is on and the providers this project names travel with
+// it, so a substitution is checked against the role's tool posture before it is
+// made rather than after the round has already moved.
+func (v exchangeVoice) failoverPolicy(question exchange.Question, name string, endpoint backend.Endpoint, providers *backend.Registry) modelfailover.Policy {
 	alternate := v.config.AgentFailoverModel(name)
 	version := v.config.AgentModelVersion(name)
 	if alternate == "" && version == "" {
@@ -364,6 +375,9 @@ func (v exchangeVoice) failoverPolicy(question exchange.Question, name string) m
 		// product line, which is where a reader of either already looks.
 		Waiting: fmt.Sprintf("the %s answering exchange %s, asked by the %s",
 			chat.RoleTitle(question.Role), question.ExchangeID, chat.RoleTitle(question.Asker)),
+		Endpoint:    endpoint,
+		Role:        question.Role,
+		Eligibility: providers,
 	}
 	if v.usageLimits != nil {
 		policy.Windows = v.usageLimits

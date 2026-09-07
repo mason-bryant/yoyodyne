@@ -94,10 +94,17 @@ type Descriptor struct {
 	// Binary is the executable the adapter runs, and is empty for the adapter's
 	// own default. It is what makes a fork or a proxy of a provider this build
 	// already speaks reachable without a second adapter.
-	Binary       string
-	Capabilities Capabilities
-	Roles        []domain.AgentRole
-	Postures     []Posture
+	Binary string
+	// AdapterVersion is the version of the compiled adapter named above, and is
+	// empty for a provider nothing in this build can launch. It is what an
+	// endpoint carries and what a record says read the provider's stream, so a
+	// declared provider inherits the version of the adapter it runs on rather
+	// than stating one of its own: the declaration supplies a dialect, and the
+	// code that reads the stream with it is this build's.
+	AdapterVersion string
+	Capabilities   Capabilities
+	Roles          []domain.AgentRole
+	Postures       []Posture
 	// Dialect is how this provider's operational vocabulary is read. It is set
 	// for a user-supplied provider, whose dialect is data, and the adapter that
 	// runs the provider is handed it in place of its own. A built-in leaves it
@@ -138,8 +145,11 @@ func (d Descriptor) SupportsPosture(posture Posture) bool {
 // BuiltInDescriptors are the providers this build ships. Claude Code serves
 // every role and is the one this build has an adapter for; Codex is documented
 // as not matching every Claude Code feature, serves the two roles inside a run,
-// and has no adapter yet — which is the same statement that used to live as a
-// switch on the backend identifier and is now the one place it is made.
+// and has no adapter in this build — which is the same statement that used to
+// live as a switch on the backend identifier and is now the one place it is
+// made. The Codex entry says where its adapter actually is, because "has no
+// adapter" and "nobody wrote one" are different facts and only the first is
+// true.
 //
 // A descriptor states what its provider can be held to and not what would be
 // convenient, because everything downstream is derived from it: a posture
@@ -147,8 +157,9 @@ func (d Descriptor) SupportsPosture(posture Posture) bool {
 func BuiltInDescriptors() []Descriptor {
 	return []Descriptor{
 		{
-			ID:      domain.BackendClaudeCode,
-			Adapter: domain.BackendClaudeCode,
+			ID:             domain.BackendClaudeCode,
+			Adapter:        domain.BackendClaudeCode,
+			AdapterVersion: ClaudeCodeAdapterVersion,
 			Capabilities: Capabilities{
 				StructuredEvents:  true,
 				SessionResumption: true,
@@ -162,9 +173,27 @@ func BuiltInDescriptors() []Descriptor {
 		},
 		{
 			ID: domain.BackendCodex,
-			// No adapter: the vocabulary has the name and this build has nothing
-			// that can launch it, which is why a run configured for it is refused
-			// rather than started.
+			// No adapter, and no adapter version with it: the vocabulary has the
+			// name and this build has nothing that can launch it, which is why a run
+			// configured for it is refused rather than started.
+			//
+			// That is a statement about this build and not about whether the work was
+			// done. A Codex adapter was written under yoyodyne-ifd.6 — backend,
+			// dialect, and parser, with tests — and it is on branch
+			// yoyodyne/yoyodyne-ifd-6/a0a8ab63, whose tip is 41b0ec7 and which is not
+			// an ancestor of this commit. Nothing merged it, so nothing here can run
+			// Codex, and a descriptor that named an adapter version anyway would be
+			// this build claiming code it does not contain.
+			//
+			// What the endpoint model asks of that adapter when it does land is one
+			// line each: a CodexAdapterVersion constant named here beside the adapter
+			// it identifies, and `result.AdapterVersion` set from this descriptor
+			// where the adapter builds its result, exactly as the Claude Code adapter
+			// does. Everything downstream — eligibility, the pool, the substitution
+			// check, and what a cost line records — is derived from the descriptor
+			// and needs no further change. Codex's capability half is already
+			// expressed below and is unaffected by the adapter's absence: it serves
+			// the developer and not the reviewer, by posture.
 			Capabilities: Capabilities{
 				StructuredEvents:  true,
 				SessionResumption: true,
@@ -183,11 +212,11 @@ func BuiltInDescriptors() []Descriptor {
 			// configuration loads, naming the posture, rather than run under a
 			// sandbox that does not hold it.
 			//
-			// This is a statement about Codex's sandbox rather than about the parked
-			// adapter (yoyodyne-ifd.6). An adapter that later achieves the posture's
-			// actual property — no filesystem read outside the evidence it was
-			// handed — is what would make this line true again, and it is the same
-			// line either way.
+			// This is a statement about Codex's sandbox rather than about the
+			// unmerged adapter (yoyodyne-ifd.6) described above. An adapter that
+			// later achieves the posture's actual property — no filesystem read
+			// outside the evidence it was handed — is what would make this line true
+			// again, and it is the same line either way.
 			Postures: []Posture{PostureWorktreeWrite},
 			BuiltIn:  true,
 		},
@@ -336,13 +365,18 @@ func DescriptorFor(id domain.Backend, plugin ProviderPlugin) (Descriptor, error)
 		return Descriptor{}, fmt.Errorf("provider %q %s", id, strings.Join(problems, "; "))
 	}
 	return Descriptor{
-		ID:           id,
-		Adapter:      plugin.Adapter,
-		Binary:       strings.TrimSpace(plugin.Binary),
-		Capabilities: plugin.Capabilities,
-		Roles:        append([]domain.AgentRole(nil), plugin.Roles...),
-		Postures:     append([]Posture(nil), plugin.Postures...),
-		Dialect:      dialect,
+		ID:      id,
+		Adapter: plugin.Adapter,
+		// The adapter that runs this provider is the one whose version its
+		// endpoints carry: what a record has to be able to tell apart is two
+		// harness builds reading one provider differently, and that is this
+		// build's adapter rather than the declaration.
+		AdapterVersion: adapter.AdapterVersion,
+		Binary:         strings.TrimSpace(plugin.Binary),
+		Capabilities:   plugin.Capabilities,
+		Roles:          append([]domain.AgentRole(nil), plugin.Roles...),
+		Postures:       append([]Posture(nil), plugin.Postures...),
+		Dialect:        dialect,
 	}, nil
 }
 
