@@ -142,6 +142,18 @@ var expresses = map[string]expression{
 		asks:     []capability.Capability{capability.WorkItemRead, capability.RepositoryRead},
 		gap:      "the intersection is the answer and neither half of it is a bundle: the role's half is one, and the side thread's is the list above, which belongs to no role",
 	},
+	"sidestream.side-thread-contract": {
+		question: "none: what a side thread is told it may do is invocation assembly",
+		gap:      "the contract describes the same narrowing the list above holds, and what enforces it is that list rather than the words a role was sent",
+	},
+	"sidestream.reply-carries-no-authority": {
+		question: "none: this refuses a shape of reply",
+		gap:      "a harness block inside a side thread's answer is refused whichever role sent it, so no bundle expresses it",
+	},
+	"sidestream.side-prompt": {
+		question: "none: which prompt is assembled for a side turn is invocation assembly",
+		gap:      "what a role is sent is outside what a role may do, the same way the conversation contract is",
+	},
 	"exchange.ask-authority": {
 		question: "are both ends of the ask on the channel?",
 		asks:     []capability.Capability{capability.ExchangeAsk},

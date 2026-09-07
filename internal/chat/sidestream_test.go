@@ -2,6 +2,7 @@ package chat
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -91,5 +92,54 @@ func TestASideThreadNeverWidensARoleThatHoldsLess(t *testing.T) {
 	}
 	if aside.Proposals || aside.Concerns || aside.Research || aside.Evaluations || aside.Asks {
 		t.Fatalf("OnSideStream() of a role holding nothing = %#v, want it holding nothing", aside)
+	}
+}
+
+// The prompt a side turn is taken under is the side thread's contract and never
+// the role's own. The role's contract describes a thread that admits work,
+// raises proposals, and issues directives; sending it here would leave the role
+// to work out which half it was under on the one turn where getting that wrong is
+// an action nobody ratified.
+func TestASideTurnIsTakenUnderTheSideThreadsContract(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range ConversationalRoles() {
+		authority, known := AuthorityFor(role)
+		if !known {
+			t.Fatalf("AuthorityFor(%s) is not known", role)
+		}
+		prompt := SidePrompt(role, "")
+		if !strings.Contains(prompt, sidestream.SideThreadContract) {
+			t.Errorf("the %s side prompt does not carry the side thread's contract", role)
+		}
+		if strings.Contains(prompt, authority.Contract) {
+			t.Errorf("the %s side prompt carries the role's own contract, which describes a thread that acts", role)
+		}
+		// It is still that role, said in the role's own words: the narrowing takes
+		// authority away and leaves what a role is called and is answerable for.
+		if !strings.Contains(prompt, authority.Title) || !strings.Contains(prompt, authority.Owns) {
+			t.Errorf("the %s side prompt does not say which role is answering or what it owns", role)
+		}
+		// And a persona is placed after it and told it widens nothing, exactly as
+		// every other prompt here places one.
+		withPersona := SidePrompt(role, "  Answer in one paragraph.  ")
+		if !strings.HasPrefix(withPersona, prompt) || !strings.HasSuffix(withPersona, "Answer in one paragraph.") {
+			t.Errorf("the %s side prompt with a persona = %q, want the persona after the contract", role, withPersona)
+		}
+	}
+}
+
+// A role the harness holds no contract for gets no side thread contract either:
+// it is told it has nothing to answer with rather than being sent a prompt with
+// no authority statement in it at all.
+func TestASideTurnForARoleWithNoContractSaysSo(t *testing.T) {
+	t.Parallel()
+
+	prompt := SidePrompt("auditor", "")
+	if !strings.Contains(prompt, "holds no contract for this role") {
+		t.Fatalf("SidePrompt() for an unknown role = %q, want it to say there is no contract", prompt)
+	}
+	if strings.Contains(prompt, sidestream.SideThreadContract) {
+		t.Fatal("a role the harness knows nothing about was sent a side thread's contract")
 	}
 }
