@@ -66,6 +66,10 @@ revisions:
       by: architect
       at: 2026-09-05T17:40:00Z
       reason: backfill of approved amendment edbbd603 (yoyodyne-ifd.100.1, decided 2026-08-23) which never reached this document - the publishing section now states the typed artifact write's publish shape a reviewer can verify from the repository; published under yoyodyne-ifd.280 after three reviewer reports and three spent runs measured the cost of its absence
+    - action: amended
+      by: architect
+      at: 2026-09-07T20:00:00Z
+      reason: yoyodyne-ifd.348 - the Agent Model points at the configurable-workflows authority-model section as the owner of the management bundles' contents
 approvals:
     - revision: 0
       by: operator
@@ -75,10 +79,6 @@ approvals:
       by: operator
       at: 2026-08-19T03:48:10Z
       reason: 'Approved by the operator in conversation on 2026-08-18: the layout section now names the three homes the harness reads instead of claiming docs/product is the only one.'
-    - action: amended
-      by: architect
-      at: 2026-09-07T20:00:00Z
-      reason: yoyodyne-ifd.348 - the Agent Model points at the configurable-workflows authority-model section as the owner of the management bundles' contents
 ---
 
 # Yoyodyne V1 Harness Design
