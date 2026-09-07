@@ -138,7 +138,7 @@ func (d declarativeDialect) Observe(event ProviderEvent) (Observation, bool) {
 		case AnswerLimitReached:
 			observation.Kind = rule.limitKind(event)
 			observation.ResetsAt = rule.resetsAt(event)
-		case AnswerUnavailable, AnswerInterrupted, AnswerRefused:
+		case AnswerUnavailable, AnswerInterrupted, AnswerModelUnavailable, AnswerRefused:
 			// The provider's own account of the ending, bounded. The category
 			// alone does not say what happened, and the message beside it is the
 			// difference between a record somebody can act on and three runs

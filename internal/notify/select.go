@@ -255,12 +255,13 @@ func FromReport(reported report.Report) (Notification, error) {
 // silence that look exactly like a healthy quiet queue. The speaker is the
 // harness, because a provider running out of capacity is not any persona's act
 // and no role should be made to narrate one.
-// A refusal a permitted alternate served through is the same record read the
-// other way round, and is said as one: nothing stopped, so it is a note rather
-// than a warning, and what it carries is which model has no capacity and which
-// one the work is being produced by while it has none. Silence would be the
-// wrong answer to it — an agent answering on a model the operator did not
-// configure it for is a change to the evidence, whatever it saved.
+// A refusal something else served through is the same record read the other way
+// round, and is said as one: nothing stopped, so it is a note rather than a
+// warning, and what it carries is which model was moved off, which one the work
+// is being produced by instead, and — in the cause — why. Both reasons are said
+// the same way because they are the same news to a reader: the model behind the
+// work is not the one the configuration names. Silence would be the wrong answer
+// to either, whatever it saved.
 func FromUsageLimit(exhaustion runstate.UsageLimitExhaustion) (Notification, error) {
 	topic, err := topicForItem(exhaustion.WorkItemID)
 	if err != nil {

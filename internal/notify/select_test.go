@@ -1540,3 +1540,54 @@ func TestReportingWithNowhereToReportIsNotAFailure(t *testing.T) {
 		t.Fatalf("discarding a notification failed: %v", err)
 	}
 }
+
+// A pinned version the provider has not got is the same news said the same way:
+// the model behind the work is not the one the configuration names. What
+// separates it from a closed window is the cause, which every persona's line
+// carries, so nobody reads a catalogue as a capacity outage that is about to
+// lift.
+func TestAVersionFallbackIsSaidAsASubstitutionAndNamesWhy(t *testing.T) {
+	fellBack := runstate.UsageLimitExhaustion{
+		SchemaVersion:  runstate.UsageLimitSchemaVersion,
+		ProductID:      "yoyodyne",
+		At:             moment,
+		Waiting:        "the architect conversation chat-91253e0e",
+		ConversationID: "chat-91253e0e",
+		Model:          "claude-opus-5-20260401",
+		ServedBy:       "opus",
+		Substitution:   runstate.SubstitutedForAvailability,
+	}
+	notification, err := FromUsageLimit(fellBack)
+	if err != nil {
+		t.Fatalf("select from a version fallback: %v", err)
+	}
+	if notification.Event.Kind != KindModelSubstituted {
+		t.Fatalf("a version fallback is said as %q, want %q", notification.Event.Kind, KindModelSubstituted)
+	}
+	if notification.Event.Severity != report.SeverityNote {
+		t.Fatalf("a version fallback is said at %q, want %q", notification.Event.Severity, report.SeverityNote)
+	}
+	for _, speaker := range []Speaker{
+		Harness(),
+		Persona(domain.RoleDeveloper, ""),
+		Persona(domain.RoleReviewer, ""),
+		Persona(domain.RoleDevelopmentManager, ""),
+		Persona(domain.RoleProductManager, ""),
+		Persona(domain.RoleArchitect, ""),
+	} {
+		message, err := Render(notification.Topic, speaker, notification.Event)
+		if err != nil {
+			t.Fatalf("the %s cannot say a version fallback: %v", speaker.Key(), err)
+		}
+		for _, want := range []string{"claude-opus-5-20260401", "opus", "has not got"} {
+			if !strings.Contains(message.Body, want) {
+				t.Fatalf("the %s said %q, which does not name %q", speaker.Key(), message.Body, want)
+			}
+		}
+		// And it does not claim an exhausted account, which is a window an
+		// operator would otherwise sit and wait out.
+		if strings.Contains(message.Body, "no capacity") || strings.Contains(message.Body, "usage limit") {
+			t.Fatalf("the %s said %q, which reads a missing model as an exhausted limit", speaker.Key(), message.Body)
+		}
+	}
+}

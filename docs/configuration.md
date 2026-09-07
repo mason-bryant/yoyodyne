@@ -2652,6 +2652,76 @@ their window out on the settings above; what this covers is the turns an agent
 takes — the conversations, where a decision nobody can make stops everything
 downstream of it.
 
+### Pinning an agent to a model version
+
+A model selector is a family alias by default — `opus`, `fable` — and an alias
+floats: it follows the provider's current best for that family without anybody
+editing a file, and the run evidence records the exact identifier the provider
+reported serving. That is the right default and it stays the default.
+
+What an alias cannot do is hold a version still. Comparing two weeks of work,
+reproducing something a particular version did, or running a persona tuned
+against one release all need the selector to stop moving, and the alias's whole
+virtue is that it does not. So an agent may name a version as well, in the same
+block as the model, the account, the persona binding, and the failover
+alternate:
+
+```yaml
+agents:
+  architect:
+    role: architect
+    model: opus
+    model_version: claude-opus-5-20260401
+```
+
+`model_version` is absent for every agent that does not write it, and an agent
+without one behaves exactly as it did before this existed. Naming it is the whole
+of the switch — there is no `enabled` beside it, because unlike failover there is
+no judgement worth keeping while it is off. Stating it empty in a later layer
+removes an inherited pin and puts the alias back to floating. A version that is
+the alias itself is refused: it pins nothing, and the thing it would fall back to
+is itself. So is one that is also the agent's `failover.model` — the model a turn
+moves to when a family has no capacity is not the version that family was pinned
+to.
+
+**The pin is a preference, not a requirement.** Versions get retired, and an
+agent whose pin the provider has stopped serving would simply stop taking turns —
+the same stall failover exists to prevent, reached from the other direction. So:
+
+- The pinned version is asked for. If the provider serves it, that is the whole
+  of it: one invocation, and nothing is recorded or said.
+- If the provider answers that it has not got that model, the same invocation is
+  made once more under `model` — the family alias, which is by definition the
+  family's latest — and the answer that comes back is the answer. There is no
+  table here mapping versions to families, and nothing to keep up to date when a
+  family gains one.
+- Each attempt is priced against the model that attempt actually asked for.
+- The fallback is recorded in the same per-product usage-limit log a failover
+  substitution is, carrying the version that was refused, the model that served,
+  and `substitution: availability` — so one record answers "which model served
+  this turn, and why" whichever mechanism chose it. The conversation's own record
+  and `yoyo chat` say which model served.
+- While that stands, the next turn goes straight to the alias rather than paying
+  a refused invocation to be told the same thing again. It stands for
+  `execution.usage_limit_unknown_reset_pause` and no longer: a provider that has
+  not got a model quotes no deadline for getting one, so the pin is asked for
+  again at the top of each interval. A version that was skipped once and then
+  forever would be an alias the operator believes is a pin.
+- The fallback reaches the operator's channel as a note, said once per interval
+  rather than once per turn, exactly as a capacity substitution is. A pin
+  silently not being honored is the one outcome that would make the evidence
+  false.
+
+The two mechanisms compose in one order. The pin is settled first — which version
+to ask for — and the alias it falls back to is then subject to failover exactly as
+it would have been had nothing been pinned. Each hop records itself, because one
+entry naming both would name a model that refused a turn nobody asked it.
+
+A pin covers the same invocations failover does: the turns an agent takes as
+itself, its conversation and the rounds where another role asks it something. A
+run's developer and reviewer invocations ask for `model`. `yoyo agent list` says
+so for every pinned agent rather than leaving it to be assumed.
+
 ## Relaunching a run the provider killed
 
 Not every way a provider ends an invocation is a refusal it names in advance.

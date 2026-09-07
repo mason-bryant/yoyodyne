@@ -28,7 +28,7 @@ how one is written.
 
 Not very much, and deliberately so. A provider says a great many things while a
 run is going; almost all of it is prose, tool calls, and accounting, and yoyo
-acts on none of it. What it has to know is which of six things just happened.
+acts on none of it. What it has to know is which of seven things just happened.
 
 | Answer | What it means |
 |---|---|
@@ -37,9 +37,10 @@ acts on none of it. What it has to know is which of six things just happened.
 | `limit-reached` | A usage limit is refusing work and will lift — with, if the provider said so, when |
 | `unavailable` | The provider's own servers could not serve the attempt, transiently |
 | `interrupted` | The attempt died of something that judged nothing about the work |
+| `model-unavailable` | The provider has not got the model this attempt asked for |
 | `refused` | A refusal that stands; the same request earns the same answer |
 
-Those six are the contract. Everything yoyo does about a provider refusing work
+Those seven are the contract. Everything yoyo does about a provider refusing work
 — parking a run, recording the deadline, probing, blocking when the wait no
 longer fits — is driven by them and by nothing provider-specific.
 
@@ -56,6 +57,14 @@ run that went wrong without it:
 - `interrupted` is not `refused`. A connection that went away mid-reply says
   nothing about the request. Reading it as a judgement of the work fails a whole
   run on weather.
+- `model-unavailable` is not `refused`, though it is a refusal that stands.
+  What separates it is that the caller has an answer to it: a different selector
+  is not the same request. It is what makes an optional pinned model version safe
+  to name — a pin the provider has retired falls back to the family alias the
+  agent already names rather than stopping the agent — and folding it into the
+  answer above would throw away the one thing that makes it actionable. Nothing
+  about the account is exhausted and no reset time is ever quoted, so it is not a
+  limit either.
 
 ## Reset times: the two cases the contract owns
 
@@ -238,6 +247,13 @@ providers:
           failed: true
           match: '(?i)connection reset'
 
+        # A model this provider has not got. Narrower than the refusal below,
+        # so it goes in front of it.
+        - answer: model-unavailable
+          terminal: true
+          failed: true
+          match: '(?i)unknown model'
+
         # Anything else that ended badly is a refusal that stands.
         - answer: refused
           terminal: true
@@ -265,7 +281,7 @@ agents:
 
 | Field | Meaning |
 |---|---|
-| `answer` | Required. One of the six answers above. |
+| `answer` | Required. One of the seven answers above. |
 | `type`, `subtype` | The provider's own names for the event, matched exactly. |
 | `terminal`, `failed` | Whether the event ends the invocation, and whether it ended badly. |
 | `match` | A regular expression the event's prose must contain. |

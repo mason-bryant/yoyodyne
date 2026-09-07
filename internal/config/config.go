@@ -590,6 +590,13 @@ type AgentConfig struct {
 	// "opus" intentionally floats to the backend's current default for that
 	// family, while an exact provider identifier pins a version.
 	Model string `yaml:"model" json:"model"`
+	// ModelVersion is the exact version of that family this agent's turns ask
+	// for, and empty for every agent that pins none — which is the floating alias
+	// above behaving exactly as it always has. Where it is named and the provider
+	// has not got it, the turn is served by the alias, which is the family's
+	// latest by definition; see modelversion.go for why a pin is a preference
+	// rather than a requirement.
+	ModelVersion string `yaml:"model_version,omitempty" json:"model_version,omitempty"`
 	// Account is the alias of the provider account this agent runs under, from
 	// the top-level accounts mapping. The assignment is the operator's and it is
 	// fixed: an agent runs where the configuration says it runs, and nothing
@@ -873,6 +880,7 @@ func (c Config) Validate() error {
 		if err := validateModelSelector(agent.Model); err != nil {
 			problems = append(problems, fmt.Sprintf("agent %q %s", name, err))
 		}
+		problems = append(problems, modelVersionProblems(name, agent.ModelVersion, agent.Model, agent.Failover.Model)...)
 		if agent.Instances < 1 {
 			problems = append(problems, fmt.Sprintf("agent %q instances must be at least 1", name))
 		}

@@ -462,6 +462,13 @@ func (r *resolution) applyAgent(name string, document agentDocument, applied lay
 		agent.config.Model = strings.TrimSpace(*document.Model)
 		agent.origins["model"] = applied.origin
 	}
+	if document.ModelVersion != nil {
+		// Stated empty removes an inherited pin rather than leaving it in place, so
+		// a layer can put an alias back to floating without having to know which
+		// layer underneath pinned it.
+		agent.config.ModelVersion = strings.TrimSpace(*document.ModelVersion)
+		agent.origins["model_version"] = applied.origin
+	}
 	if document.Account != nil {
 		agent.config.Account = strings.TrimSpace(*document.Account)
 		agent.origins["account"] = applied.origin

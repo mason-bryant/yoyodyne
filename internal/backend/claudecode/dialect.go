@@ -42,6 +42,40 @@ const terminalAPIError = "api_error"
 // transiently unable to serve a request at all.
 const overloadedStatus = "529"
 
+// notFoundStatus is the HTTP status the provider's API answers with when the
+// request names something it has not got. On a message request there is exactly
+// one such thing — the model — so a not-found here is a selector this provider
+// will not serve rather than a missing endpoint or a bad path.
+//
+// Provenance, stated because it is weaker than the overload's. No recorded run
+// carries one: a model this account cannot reach has never been asked for, since
+// every configured selector until now has been a family alias the provider
+// always resolves. What it is read from instead is the API's own not-found
+// answer, whose body names the model — `{"type":"error","error":{"type":
+// "not_found_error","message":"model: …"}}` — and which the CLI puts on its
+// terminal API-error message the same way it puts the overload's.
+//
+// The match is narrow in both halves for that reason: the status has to be the
+// not-found one and the message has to name a model. A message this version does
+// not recognize is left where it was — a refusal that stands, failing the turn
+// exactly as it does today — rather than becoming a silent move to another
+// model. The first real occurrence recorded is the evidence that should replace
+// this comment.
+//
+// What this cannot reach is a CLI that refuses the selector before it calls the
+// API at all. That ends the process without a terminal envelope, so no event
+// reaches a dialect and the invocation is answered as a process failure — which
+// is today's behaviour and not a regression, but it does mean a pinned version
+// rejected up front fails the turn rather than falling back. Reading it would
+// mean handing the dialect the process's stderr, which is a wider surface than
+// one unobserved case justifies; the case for it is a recorded occurrence.
+const notFoundStatus = "404"
+
+// modelNotFound is the API's own name for the not-found it answers with, and the
+// prefix its body puts in front of the selector. Either is enough: the CLI may
+// carry the body whole or quote only its message, and both name the model.
+var modelNotFound = regexp.MustCompile(`(?i)not_found_error|\bmodel:`)
+
 // clientErrorPrefix marks the API statuses that describe the request rather than
 // the server's ability to serve it. A relaunch would put the identical request in
 // front of the provider again and earn the identical refusal, so nothing in this
@@ -186,10 +220,16 @@ func observeRateLimit(payload json.RawMessage) (backend.Observation, bool) {
 	}, true
 }
 
-// observeFailedTerminal tells the three ways this provider can end an invocation
-// badly apart. A server overload is a wait; a status describing the request is a
-// refusal that stands; everything else left in the API-error category is a death
-// that judged nothing about the work.
+// observeFailedTerminal tells the four ways this provider can end an invocation
+// badly apart. A server overload is a wait; a not-found naming a model is a
+// refusal about the selector, which the caller can answer by asking for another
+// one; any other status describing the request is a refusal that stands; and
+// everything else left in the API-error category is a death that judged nothing
+// about the work.
+//
+// The model case is read ahead of the general client-error one it is a member
+// of, because it is the narrower reading of the same status and the general one
+// would otherwise swallow it.
 //
 // The two are matched from opposite directions on purpose. The overload turns a
 // failure into a wait, so a message this version does not recognize has to keep
@@ -212,6 +252,8 @@ func observeFailedTerminal(event backend.ProviderEvent) (backend.Observation, bo
 		// it is the only evidence of an overload, and it is short by
 		// construction.
 		return backend.Observation{Answer: backend.AnswerUnavailable, Detail: event.Text}, true
+	case status != nil && status[1] == notFoundStatus && modelNotFound.MatchString(event.Text):
+		return backend.Observation{Answer: backend.AnswerModelUnavailable, Detail: described}, true
 	case status != nil && strings.HasPrefix(status[1], clientErrorPrefix):
 		return backend.Observation{Answer: backend.AnswerRefused, Detail: described}, true
 	default:

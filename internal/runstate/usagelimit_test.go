@@ -212,3 +212,69 @@ func TestARefusalStandsUntilItsResetOrThePauseThatStandsInForOne(t *testing.T) {
 		t.Fatal("a refusal stands past the interval offered for it, so the model would never be asked again")
 	}
 }
+
+// A substitution says why the turn moved, and an entry from before there was
+// more than one reason reads as the reason there was. Whoever reads this log
+// back to decide what to ask for next turn tells the two apart by nothing else.
+func TestASubstitutionSaysWhyTheTurnMoved(t *testing.T) {
+	t.Parallel()
+
+	capacity := testUsageLimitExhaustion("the development manager conversation", nil)
+	capacity.Model = "fable"
+	capacity.ServedBy = "opus"
+	if reason := capacity.Reason(); reason != SubstitutedForCapacity {
+		t.Fatalf("Reason() = %q, want an entry naming none to read as the only reason there was", reason)
+	}
+
+	availability := capacity
+	availability.Substitution = SubstitutedForAvailability
+	if err := availability.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want an availability substitution accepted", err)
+	}
+	// And it is described as what it is. Calling it an exhausted limit would tell
+	// an operator to expect a window that is never going to lift.
+	if described := availability.Describe(); strings.Contains(described, "usage limit") {
+		t.Fatalf("Describe() = %q, want a model the provider has not got said as itself", described)
+	}
+
+	orphaned := testUsageLimitExhaustion("the development manager conversation", nil)
+	orphaned.Substitution = SubstitutedForAvailability
+	if err := orphaned.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want a reason with nothing that took the turn refused")
+	}
+
+	unknown := availability
+	unknown.Substitution = "whatever"
+	if err := unknown.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want a reason outside the closed set refused")
+	}
+
+	// A model the provider has not got is not waiting for a window, so a reset
+	// time on one describes a wait that is not happening.
+	reset := time.Date(2026, 9, 7, 11, 0, 0, 0, time.UTC)
+	dated := availability
+	dated.ResetsAt = &reset
+	if err := dated.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want an availability substitution with a reset time refused")
+	}
+}
+
+// An availability substitution stands for the caller's probe interval and no
+// longer, so a version that arrives — or one withdrawn in error that comes back
+// — is found by asking again rather than never asked for at all.
+func TestAnAvailabilitySubstitutionStandsForTheProbeIntervalOnly(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 7, 6, 0, 0, 0, time.UTC)
+	missing := testUsageLimitExhaustion("the architect conversation", nil)
+	missing.Model = "claude-opus-5-20260401"
+	missing.ServedBy = "opus"
+	missing.Substitution = SubstitutedForAvailability
+	missing.At = at.Add(-time.Minute)
+	if !missing.WindowClosed(at, time.Hour) {
+		t.Fatal("a version found missing a minute ago is asked for again immediately, which costs an invocation per turn")
+	}
+	if missing.WindowClosed(at.Add(2*time.Hour), time.Hour) {
+		t.Fatal("a version found missing stays missing forever, so a pin would become an alias the operator thinks is a pin")
+	}
+}

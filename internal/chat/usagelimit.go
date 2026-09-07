@@ -70,22 +70,25 @@ func (s *Session) noteUsageLimit(result backend.RunResult, err error) error {
 }
 
 // failoverPolicy is what this conversation's turn may be served by when the
-// configured model will not take it, and where the substitution is written
-// down. A conversation whose agent has not enabled failover produces the zero
-// policy, which is failover off: the turn is one invocation under the
-// configured model, exactly as it was.
+// model it would ask for will not take it — the pinned version the provider has
+// not got, or the configured model whose window is closed — and where either
+// substitution is written down. A conversation whose agent has pinned no version
+// and enabled no failover produces the zero policy, which is both mechanisms
+// off: the turn is one invocation under the configured model, exactly as it was.
 //
 // The substitution is recorded in the same log a refusal is, for the same
-// reason a refusal is recorded there at all — a window closing is a fact about
-// the product rather than about this conversation, and the process that meets it
-// is rarely the process that takes the next turn.
+// reason a refusal is recorded there at all — what a provider will and will not
+// serve is a fact about the product rather than about this conversation, and the
+// process that meets it is rarely the process that takes the next turn.
 func (s *Session) failoverPolicy() modelfailover.Policy {
 	alternate := strings.TrimSpace(s.options.FailoverModel)
-	if alternate == "" {
+	version := strings.TrimSpace(s.options.ModelVersion)
+	if alternate == "" && version == "" {
 		return modelfailover.Policy{}
 	}
 	policy := modelfailover.Policy{
 		Alternate:         alternate,
+		Version:           version,
 		Now:               s.options.clock().Now,
 		UnknownResetPause: s.options.UsageLimitUnknownResetPause,
 		ProductID:         s.options.ProductID,

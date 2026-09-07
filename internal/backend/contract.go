@@ -13,8 +13,8 @@ package backend
 //
 // So the contract is the answers rather than a way to reach in and parse.
 // Whatever a provider said, in whatever shape it said it, what the harness needs
-// from a dialect is which of six things happened, and -- for the one answer where
-// it makes sense -- when the provider said the condition lifts. A dialect
+// from a dialect is which of seven things happened, and -- for the one answer
+// where it makes sense -- when the provider said the condition lifts. A dialect
 // describes; it never decides. There is deliberately no duration anywhere in
 // what a dialect returns: how long to wait, whether to wait at all, and against
 // which budget are the harness's, because that is what the operator's
@@ -38,7 +38,13 @@ import (
 // Answer is what a provider said about one attempt, in the only terms the
 // harness acts on. The set is closed on purpose: a dialect that cannot say which
 // of these happened is describing something the harness has no response to, and
-// saying nothing is the honest answer for that rather than inventing a seventh.
+// saying nothing is the honest answer for that rather than inventing an eighth.
+//
+// It grows only when the harness gains a response, which is what admitted the
+// seventh: a pinned model version needs a refusal it can answer by asking for a
+// different selector, and none of the other six is that. An answer nothing does
+// anything differently about does not belong here — it is evidence, and the
+// event log already keeps it.
 type Answer string
 
 const (
@@ -67,6 +73,14 @@ const (
 	// condition that will lift, so what it asks for is another attempt against a
 	// budget the harness keeps rather than a wait on a clock nobody has.
 	AnswerInterrupted Answer = "interrupted"
+	// AnswerModelUnavailable is the provider saying it has not got the model
+	// this attempt asked for. It is a refusal that stands for that selector and
+	// says nothing about any other, which is exactly what separates it from the
+	// answer below: the identical request under a different model may well be
+	// served, so the harness has somewhere to go rather than nothing to wait for.
+	// Nothing about the account is exhausted and no reset time is ever quoted,
+	// because a catalogue is not a window.
+	AnswerModelUnavailable Answer = "model-unavailable"
 	// AnswerRefused is a refusal that stands. The same request put in front of
 	// the same provider earns the same answer, so there is nothing to wait for
 	// and nothing to relaunch into.
@@ -80,6 +94,7 @@ var Answers = []Answer{
 	AnswerLimitReached,
 	AnswerUnavailable,
 	AnswerInterrupted,
+	AnswerModelUnavailable,
 	AnswerRefused,
 }
 
@@ -243,6 +258,15 @@ func (o Observation) Record(result *RunResult) {
 		if result.ServerOverload == nil {
 			result.TransientFailure = &TransientFailure{Detail: o.Detail}
 		}
+	case AnswerModelUnavailable:
+		// A model the provider has not got is a refusal about the selector rather
+		// than about the request, so it clears the two transient readings the way
+		// a refusal that stands does and leaves any limit alone. What makes it
+		// worth its own field is that the caller has an answer to it: ask for a
+		// model the provider does have.
+		result.ModelUnavailable = &ModelUnavailable{Detail: o.Detail}
+		result.ServerOverload = nil
+		result.TransientFailure = nil
 	case AnswerRefused:
 		// A refusal that stands is the ordinary failure the result already
 		// carries. It clears the two transient readings so that a dialect

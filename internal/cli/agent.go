@@ -33,6 +33,12 @@ type agentReport struct {
 	Role    domain.AgentRole `json:"role"`
 	Backend domain.Backend   `json:"backend"`
 	Model   string           `json:"model"`
+	// ModelVersion is the exact version of that family this agent's turns ask
+	// for, and absent for every agent that pins none — which is the alias above
+	// floating to the family's current best. It is read here beside the model
+	// because an operator asking what an agent is has to be able to tell a pinned
+	// agent from a floating one without opening the configuration.
+	ModelVersion string `json:"model_version,omitempty"`
 	// Account is the provider account this agent runs under. Which role runs
 	// where is the operator's and it is fixed, so it is read here beside the
 	// model rather than reconstructed from the configuration by hand.
@@ -311,6 +317,7 @@ func readAgents(parts components) ([]agentReport, error) {
 			Role:           agent.Role,
 			Backend:        agent.Backend,
 			Model:          agent.Model,
+			ModelVersion:   parts.config.AgentModelVersion(name),
 			Account:        agent.Account,
 			FailoverModel:  parts.config.AgentFailoverModel(name),
 			Instances:      agent.Instances,
@@ -415,6 +422,15 @@ func renderAgent(report agentReport) string {
 	fmt.Fprintf(&rendered, "%s (%s) %s, model %s, account %s, %d instance(s)\n",
 		report.Name, report.Role, report.Backend, report.Model,
 		recorded(report.Account, "none the configuration names"), report.Instances)
+	if report.ModelVersion != "" {
+		// The scope is named for the reason the alternate's below is: a pin covers
+		// the turns this agent takes and not the invocations a run makes on its
+		// behalf, which ask for the family alias. And the fallback is said out loud,
+		// because a pin an operator reads as a guarantee is one they would take a
+		// version they never saw served as evidence against.
+		fmt.Fprintf(&rendered, "  turns and exchange rounds pinned to %s, falling back to %s where the provider has not got it; run invocations ask for %s\n",
+			report.ModelVersion, report.Model, report.Model)
+	}
 	if report.FailoverModel != "" {
 		// The scope is named rather than left to be assumed. Failover covers the
 		// turns this agent takes — its conversation and the rounds where another

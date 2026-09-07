@@ -826,7 +826,7 @@ a bundle, and migration from `.yoyodyne.yaml`.
   reference: layout, discovery, precedence, checks, publishing, personas,
   inheritance, and inspection.
 - [Provider plugins](docs/provider-plugins.md) — declaring a provider of your
-  own: the six answers a provider has to give, the rule format for describing one
+  own: the seven answers a provider has to give, the rule format for describing one
   in configuration, which compiled adapter runs it, and why a plugin never
   decides how long to wait.
 - [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture,

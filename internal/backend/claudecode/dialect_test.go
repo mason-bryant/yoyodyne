@@ -96,6 +96,36 @@ func TestTheClaudeDialectAnswersInTheContractsTerms(t *testing.T) {
 			},
 		},
 		{
+			// The one refusal the caller can answer by changing the request rather
+			// than by waiting: a selector this provider will not serve, which a
+			// pinned version falls back to its family on.
+			name: "a not-found naming a model is the model being unavailable",
+			event: backend.ProviderEvent{
+				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
+				Text: `API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-opus-5-20260401"}}`,
+			},
+			said: true,
+			want: backend.Observation{
+				Answer: backend.AnswerModelUnavailable,
+				Detail: `api_error: API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-opus-5-20260401"}}`,
+			},
+		},
+		{
+			// The match is narrow in both halves on purpose: a not-found this
+			// version does not recognize keeps failing the turn rather than
+			// becoming a silent move to another model.
+			name: "a not-found that names no model is a refusal that stands",
+			event: backend.ProviderEvent{
+				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
+				Text: "API Error: 404 Not Found",
+			},
+			said: true,
+			want: backend.Observation{
+				Answer: backend.AnswerRefused,
+				Detail: "api_error: API Error: 404 Not Found",
+			},
+		},
+		{
 			// A relaunch would put the identical request in front of the provider
 			// again and earn the identical refusal.
 			name: "a status describing the request is a refusal that stands",

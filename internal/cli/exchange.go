@@ -329,19 +329,26 @@ func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend
 	return nil
 }
 
-// failoverPolicy is what an answering round may be served by when the model the
-// answering agent is configured for will not take it, and where the substitution
-// is written down. An agent that has not enabled failover produces the zero
-// policy, which is failover off: one invocation, under the configured model,
-// exactly as before.
+// failoverPolicy is what an answering round may be served by when the model it
+// would ask for will not take it — the pinned version the provider has not got,
+// or the configured model whose window is closed — and where either substitution
+// is written down. An agent that has pinned no version and enabled no failover
+// produces the zero policy, which is both mechanisms off: one invocation, under
+// the configured model, exactly as before.
 func (v exchangeVoice) failoverPolicy(question exchange.Question, name string) modelfailover.Policy {
 	alternate := v.config.AgentFailoverModel(name)
-	if alternate == "" {
+	version := v.config.AgentModelVersion(name)
+	if alternate == "" && version == "" {
 		return modelfailover.Policy{}
 	}
 	policy := modelfailover.Policy{
 		Alternate: alternate,
-		Now:       v.now,
+		// The exact version this agent's rounds ask for, empty for every agent that
+		// pins none. An exchange is that role speaking, so a round is answered by the
+		// same version its conversation is held on rather than by whatever the family
+		// alias floats to at the moment somebody asks it something.
+		Version: version,
+		Now:     v.now,
 		// How long a refusal that named no reset time stands before the answering
 		// agent's own model is asked again, which is the same interval a run probes
 		// one on. Without it every round would re-ask an exhausted model and
