@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // EndpointChoice is one endpoint the pool holds, with the account it
@@ -38,8 +39,9 @@ type EndpointChoice struct {
 // EndpointFor is the endpoint one configured agent's invocation is made on when
 // the account is already settled — a run that reserved one, or an agent assigned
 // to one. It refuses an agent this configuration does not name, a provider this
-// project does not name, and an endpoint the agent's role may not be served on,
-// each with the reason named.
+// project does not name, an account that holds another provider's
+// authentication, and an endpoint the agent's role may not be served on, each
+// with the reason named.
 //
 // The role check is here as well as at configuration load deliberately. Loading
 // validates the configuration as it stands; this answers for the endpoint an
@@ -57,6 +59,9 @@ func (c Config) EndpointFor(providers *backend.Registry, stateRoot, agentName, a
 	if err != nil {
 		return EndpointChoice{}, err
 	}
+	if err := c.accountServes(providers, account.Alias, agent.Backend); err != nil {
+		return EndpointChoice{}, fmt.Errorf("agent %q cannot be served: %w", agentName, err)
+	}
 	endpoint, err := providers.Endpoint(agent.Backend, account.Alias, agent.Model)
 	if err != nil {
 		return EndpointChoice{}, fmt.Errorf("resolve the endpoint agent %q runs on: %w", agentName, err)
@@ -73,12 +78,68 @@ func (c Config) EndpointFor(providers *backend.Registry, stateRoot, agentName, a
 // and an exchange round last longer than a run, and an agent moved between
 // accounts each turn would have no provider session left to resume.
 func (c Config) AgentEndpoint(providers *backend.Registry, stateRoot, agentName string) (EndpointChoice, error) {
-	return c.EndpointFor(providers, stateRoot, agentName, c.AgentAccountAlias(agentName))
+	return c.EndpointFor(providers, stateRoot, agentName, c.agentAccountAlias(providers, agentName))
+}
+
+// AgentAccountEndpoint is where one agent's own invocations authenticate: the
+// account that agent is assigned to, or — where it is assigned to none — the
+// first account in the pool that can sign its provider in.
+//
+// It answers for the callers that need the account without the rest of the
+// endpoint: a conversation and a branch review, each of which belongs to its
+// agent rather than to a run. They ask this rather than AgentAccountAlias
+// directly, because an alias chosen without regard to the provider is how a
+// conversation on one provider comes to be pointed at another provider's home.
+func (c Config) AgentAccountEndpoint(stateRoot, agentName string) (AccountEndpoint, error) {
+	providers, err := c.ProviderRegistry()
+	if err != nil {
+		// A configuration whose declared providers will not build is refused where
+		// it is loaded. The alias is still answerable without them, so this answers
+		// rather than becoming a second place that decides a configuration is
+		// unusable.
+		return c.Endpoint(stateRoot, c.AgentAccountAlias(agentName))
+	}
+	return c.Endpoint(stateRoot, c.agentAccountAlias(providers, agentName))
+}
+
+// agentAccountAlias is AgentAccountAlias with the pool's providers in hand: an
+// agent that named no account is served by the first active account that can
+// sign its provider in, rather than by the first active account full stop. That
+// is the same stable choice — the pool's own order, read from the top — narrowed
+// to the accounts the agent could actually authenticate as.
+//
+// An agent that named an account is answered with that account whether or not it
+// holds the right provider, because an operator's statement is not something to
+// route around: what it earns is the refusal naming the mismatch. A pool with
+// nothing that serves falls through to the answer AgentAccountAlias gives, for
+// the same reason — a refusal that names a real account is worth more than one
+// that names none.
+func (c Config) agentAccountAlias(providers *backend.Registry, agentName string) string {
+	name := strings.TrimSpace(agentName)
+	if alias := strings.TrimSpace(c.Agents[name].Account); alias != "" {
+		return alias
+	}
+	if alias := c.AccountAlias(); alias != "" {
+		return alias
+	}
+	for _, alias := range c.ActiveAccountAliases() {
+		if c.accountServes(providers, alias, c.Agents[name].Backend) == nil {
+			return alias
+		}
+	}
+	return c.AgentAccountAlias(name)
 }
 
 // ChooseEndpoint picks the endpoint the next invocation of one agent is served
 // by: the pool rotated past the endpoint last served, the weekly budgets
-// honoured, and an endpoint the agent's role may not be served on left out.
+// honoured, an account holding another provider's authentication left out, and
+// an endpoint the agent's role may not be served on left out.
+//
+// A pool that holds nothing this agent's provider can sign in to refuses here,
+// which for a run is before the work item is claimed. That is the whole of what
+// the refusal is worth: the alternative is a run that claimed an item, cut a
+// worktree, and then died unauthenticated because it was handed another
+// provider's home.
 //
 // The cursor is an endpoint rather than an account, which is what keying the
 // pool on endpoints buys: a cursor left by an invocation on some other endpoint
@@ -107,12 +168,141 @@ func (c Config) ChooseEndpoint(providers *backend.Registry, stateRoot, agentName
 	if lastServed.Provider == agent.Backend && strings.TrimSpace(lastServed.Model) == strings.TrimSpace(agent.Model) {
 		cursor = lastServed.AccountAlias
 	}
+	// An account holding another provider's authentication is left out of the
+	// order rather than chosen and then refused, because a mixed pool is the
+	// shape this is for: a project with a Claude Code account and a Codex account
+	// serves each agent from the one its provider signs in to. What is left is
+	// the pool as this agent can actually be served from, and the budgets are read
+	// over that — an account this agent could never use has no budget to report.
 	order := c.rotatedAliases(cursor)
+	eligible := make([]string, 0, len(order))
 	for _, alias := range order {
+		if err := c.accountServes(providers, alias, agent.Backend); err != nil {
+			continue
+		}
+		eligible = append(eligible, alias)
+	}
+	if len(eligible) == 0 {
+		return EndpointChoice{}, c.noAccountForProvider(order, agentName, agent.Backend)
+	}
+	for _, alias := range eligible {
 		if !c.withinBudget(alias, spentUSD) {
 			continue
 		}
 		return c.EndpointFor(providers, stateRoot, agentName, alias)
 	}
-	return EndpointChoice{}, c.noAccountLeft(order, spentUSD)
+	return EndpointChoice{}, c.noAccountLeft(eligible, spentUSD)
+}
+
+// accountServes reports whether one account can authenticate an invocation on a
+// provider, and says why not where it cannot.
+//
+// What has to agree is the adapter rather than the provider's name. A provider
+// home is a directory one adapter reads through one variable, so two providers
+// on one adapter — Claude Code and a fork or proxy of it a project declared —
+// authenticate in the same shape of home, and refusing that pairing would refuse
+// a configuration that works. Two providers on different adapters read different
+// variables and different files, which is exactly the invocation that dies
+// unauthenticated.
+//
+// An account that authenticates where the machine does names no provider and
+// serves every one of them: each adapter reads its own home there, so there is
+// nothing to disagree about.
+func (c Config) accountServes(providers *backend.Registry, alias string, asking domain.Backend) error {
+	held := c.AccountProvider(alias)
+	if held == "" || held == asking {
+		return nil
+	}
+	account, accountKnown := providers.Lookup(held)
+	agent, agentKnown := providers.Lookup(asking)
+	if accountKnown && agentKnown && account.Adapter != "" && account.Adapter == agent.Adapter {
+		return nil
+	}
+	return fmt.Errorf("account %q holds provider %q's authentication, and provider %q reads a provider home of its own; an invocation made there would authenticate as nobody",
+		alias, held, asking)
+}
+
+// noAccountForProvider says why no account in the pool could serve an agent's
+// provider, naming what each account holds. It is a different fact from a pool
+// that has spent its budgets and reads as a different sentence: nothing here is
+// exhausted, and no amount of waiting makes one of these accounts able to sign
+// this agent in.
+func (c Config) noAccountForProvider(order []string, agentName string, asking domain.Backend) error {
+	// Every alias here failed accountServes, so every one of them names a provider
+	// of its own; an account with no provider serves whoever asks and never
+	// reaches this.
+	held := make([]string, 0, len(order))
+	for _, alias := range order {
+		held = append(held, fmt.Sprintf("%s holds %q", alias, c.AccountProvider(alias)))
+	}
+	if len(held) == 0 {
+		return fmt.Errorf("no provider account is configured to run agent %q on provider %q", agentName, asking)
+	}
+	return fmt.Errorf("no configured account holds provider %q's authentication, which agent %q runs on: %s",
+		asking, agentName, strings.Join(held, "; "))
+}
+
+// accountProviderProblems reports an account naming a provider this project does
+// not name, and an agent no account can sign in.
+//
+// The second half is asked here rather than left to the pool, so that the pool
+// goes on refusing nothing the loader accepted: a project whose every account
+// holds one provider's authentication and whose developer runs on another is a
+// project no run can ever be served for, and hearing that when the file is read
+// costs an edit, while hearing it at the moment a run is started costs the run.
+// The pool asks the same question again anyway, because a mapping can be edited
+// under a harness that is already running.
+func (c Config) accountProviderProblems(providers *backend.Registry) []string {
+	var problems []string
+	for _, alias := range c.AccountAliases() {
+		provider := domain.Backend(strings.TrimSpace(string(c.Accounts[alias].Provider)))
+		if provider == "" {
+			continue
+		}
+		if _, known := providers.Lookup(provider); !known {
+			problems = append(problems, fmt.Sprintf("accounts.%s.provider is %q, which is not a provider this project names", alias, provider))
+		}
+	}
+	for _, name := range sortedNames(c.Agents) {
+		agent := c.Agents[name]
+		// A backend this project does not name is reported where the agent is
+		// validated, and asking which account could sign in a provider nobody
+		// declared would be the same complaint a second time.
+		if _, known := providers.Lookup(agent.Backend); !known {
+			continue
+		}
+		// The account an agent names serves its own invocations — a conversation, an
+		// exchange round, a branch review — and an alias the mapping does not
+		// declare is already reported by accountProblems.
+		if alias := strings.TrimSpace(agent.Account); alias != "" {
+			if _, declared := c.Accounts[alias]; declared {
+				if err := c.accountServes(providers, alias, agent.Backend); err != nil {
+					problems = append(problems, fmt.Sprintf("agent %q cannot be served: %v", name, err))
+				}
+			}
+		}
+		// And the pool serves the runs, whichever account the agent named.
+		if !c.anyAccountServes(providers, agent.Backend) {
+			problems = append(problems, fmt.Sprintf("agent %q runs on provider %q and no configured account holds that provider's authentication; an account that authenticates there says so with accounts.<alias>.provider",
+				name, agent.Backend))
+		}
+	}
+	return problems
+}
+
+// anyAccountServes reports a pool that holds somewhere an agent on this provider
+// could be signed in.
+func (c Config) anyAccountServes(providers *backend.Registry, asking domain.Backend) bool {
+	aliases := c.AccountAliases()
+	if len(aliases) == 0 {
+		// A project that declares no account still has one, and it authenticates
+		// where the machine does — which is every provider's own home.
+		return true
+	}
+	for _, alias := range aliases {
+		if c.accountServes(providers, alias, asking) == nil {
+			return true
+		}
+	}
+	return false
 }

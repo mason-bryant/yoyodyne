@@ -55,6 +55,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -144,6 +145,16 @@ type Sessions interface {
 	List() ([]runstate.WatchTransition, error)
 }
 
+// Reports is the pile every role files what it noticed into, and what became of
+// the ones somebody has decided. It is read for one derived fact — how deep the
+// pile is and how old the oldest undecided report in it is — because that is the
+// only way an operator can tell a channel that is being worked through from one
+// that is quietly filling up. It is satisfied by *runstate.ReportStore.
+type Reports interface {
+	List() ([]report.Report, error)
+	Handlings() ([]report.Handling, error)
+}
+
 // Sources are the durable records one standing reading is assembled from, and
 // the two configured numbers it is read against. Every store is an interface so
 // that this derivation can be exercised without a state directory, which is the
@@ -163,6 +174,11 @@ type Sources struct {
 	OperatorHolds OperatorHolds
 	IntakeHolds   IntakeHolds
 	Sessions      Sessions
+	// Reports is the collected pile. It is optional, and a reading without one
+	// says nothing about the pile rather than reporting it empty: "nobody has
+	// reported anything" and "nothing was wired to read what anybody reported" are
+	// opposite answers, and only one of them means there is nothing to do.
+	Reports Reports
 	// Capacity is execution.max_concurrent_developers as the caller read it. It is
 	// what turns "nothing is starting" into "there is no slot", which are opposite
 	// things for an operator to do about.
@@ -258,7 +274,33 @@ type Standing struct {
 
 	NeedsHuman        []Attention `json:"needs_human"`
 	NeedsHumanProblem string      `json:"needs_human_problem,omitempty"`
+
+	// Reports is how the collected pile stands. It is not a fifth line and is not
+	// rendered as one: the four are a contract the operator ratified, and this is
+	// carried for the surfaces that read the model rather than its lines — the
+	// JSON a script or a dashboard reads, and the arithmetic behind the attention
+	// entry below. Whether the pile is draining is a question about a week rather
+	// than a moment, and it is answerable only if each reading says how deep the
+	// pile is and how old the oldest undecided report in it was.
+	Reports report.Pile `json:"reports"`
+	// ReportsProblem is a pile that could not be read. It is stated rather than
+	// reported as an empty pile, for the reason every other line here states its
+	// own failure: a reader told nothing concludes there is nothing.
+	ReportsProblem string `json:"reports_problem,omitempty"`
 }
+
+// maxUndecidedReportAge is how long the oldest report nobody has decided about
+// may go unanswered before the pile is something waiting on a person rather
+// than something a schedule is working through.
+//
+// A pile is meant to drain on its own: every role files into it, the product
+// manager decides about what it is shown, and a recurring task works it on a
+// cadence so that neither depends on an operator being at a terminal. The
+// failure this catches is that machinery not running or not keeping up, which is
+// invisible in any one reading — the pile looks the same the day it stops
+// draining as it did the day before — and shows only as the oldest report's age
+// climbing past anything a working cadence would leave.
+const maxUndecidedReportAge = 7 * 24 * time.Hour
 
 // ReadStanding assembles the four lines from the durable records. It never
 // fails as a whole: a source that cannot be read costs its own line and leaves
@@ -296,7 +338,20 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 		standing.Paused = stall.Says
 	}
 
+	standing.Reports, standing.ReportsProblem = readReports(sources, now)
+
 	needs, needsProblem := readNeedsHuman(sources, switches)
+	// A pile whose oldest undecided report has been waiting longer than any
+	// working cadence would leave it is waiting on a person, whatever else is
+	// running. Nothing else says so: the pile is not work, so no queue holds it,
+	// and the reports themselves are filed and forgotten by the roles that filed
+	// them.
+	if standing.Reports.OldestAge > maxUndecidedReportAge {
+		needs = append(needs, Attention{
+			What:  standing.Reports.Describe(),
+			Whose: "the product manager's — reports are decided in conversation, and a pile this old says the cadence that works it is not keeping up",
+		})
+	}
 	// A stall that is holding admitted work back and is nobody else's line to
 	// carry is attention in its own right. Nothing else reports it: a live session
 	// choosing nothing over a ready queue is a state no record announces, and the
@@ -309,7 +364,11 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// to open the conversation. A reader looking for what waits on a person must
 	// not have to read the queue to find the longest wait there is.
 	standing.NeedsHuman = append(needs, HandedOff(queue)...)
-	standing.NeedsHumanProblem = needsProblem
+	// A pile that could not be read is said on the line the pile would have been
+	// said on, as well as in its own field. The field is what a script reads and
+	// the line is what a person reads, and a failure only the script can see is
+	// one nobody sees.
+	standing.NeedsHumanProblem = joinProblems(needsProblem, standing.ReportsProblem)
 	return standing
 }
 
@@ -660,6 +719,29 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 		}
 	}
 	return backlog.Order(admitted, pullable, held), nil
+}
+
+// readReports is how the collected pile stands. A pile that could not be read
+// says so and reports no counts at all: a zero here would read as a channel
+// nobody has filed into, which is the one thing a broken read of it must never
+// look like.
+func readReports(sources Sources, now time.Time) (report.Pile, string) {
+	if sources.Reports == nil {
+		return report.Pile{}, "nothing was wired to read what the roles have reported"
+	}
+	reports, err := sources.Reports.List()
+	if err != nil {
+		return report.Pile{}, fmt.Sprintf("the collected reports could not be read: %v", err)
+	}
+	handlings, err := sources.Reports.Handlings()
+	if err != nil {
+		// The pile is readable and what became of it is not, so every report would
+		// count as undecided. That overstates the backlog in the direction that
+		// sends somebody to work on something already done, so no counts are given
+		// at all and the gap is named.
+		return report.Pile{}, fmt.Sprintf("what became of the collected reports could not be read, so how many are still waiting cannot be said: %v", err)
+	}
+	return report.Summarize(reports, handlings, now), ""
 }
 
 // readNeedsHuman is everything waiting on a person, with whose move it is.

@@ -388,6 +388,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		OperatorHolds:  holds,
 		IntakeHolds:    intake,
 		Sessions:       watch,
+		Reports:        reports,
 		Capacity:       resolved.Config.Execution.MaxConcurrentDevelopers,
 		TrackerTimeout: chatTrackerTimeout,
 	}

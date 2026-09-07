@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -135,6 +136,33 @@ type fakeSessions struct {
 
 func (f fakeSessions) List() ([]runstate.WatchTransition, error) { return f.transitions, f.fail }
 
+type fakeReports struct {
+	reports   []report.Report
+	handlings []report.Handling
+	fail      error
+	handleErr error
+}
+
+func (f fakeReports) List() ([]report.Report, error) { return f.reports, f.fail }
+
+func (f fakeReports) Handlings() ([]report.Handling, error) { return f.handlings, f.handleErr }
+
+// filedReport is one report in the pile, distinguished only by when it was filed
+// and how loudly it asks to be read.
+func filedReport(id string, severity report.Severity, filed time.Time) report.Report {
+	return report.Report{
+		SchemaVersion: report.SchemaVersion,
+		ID:            id,
+		Role:          domain.RoleDeveloper,
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Severity:      severity,
+		Message:       "something was noticed",
+		RecordedAt:    filed,
+	}
+}
+
 // quietSources is a harness with nothing wrong with it and nothing happening:
 // one session choosing work, no holds, an empty queue. Each test moves one
 // thing, so what a line says is attributable to the one record that changed.
@@ -151,8 +179,88 @@ func quietSources() Sources {
 		Sessions: fakeSessions{transitions: []runstate.WatchTransition{
 			{SessionID: "watch-1", State: runstate.WatchWatching, At: moment.Add(-time.Hour)},
 		}},
+		Reports:  fakeReports{},
 		Capacity: 2,
 		Now:      func() time.Time { return moment },
+	}
+}
+
+// A pile that is being worked through says nothing on any line: it is not
+// waiting on a person, and a status that named it every reading would be a
+// status with a permanent entry nobody can clear.
+func TestAPileBeingWorkedThroughWaitsOnNobody(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Reports = fakeReports{reports: []report.Report{
+		filedReport("report-00000000000000000000000000000001", report.SeverityCritical, moment.Add(-2*time.Hour)),
+		filedReport("report-00000000000000000000000000000002", report.SeverityNote, moment.Add(-30*time.Minute)),
+	}}
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.NeedsHuman) != 0 {
+		t.Fatalf("NeedsHuman = %#v, want a fresh pile to wait on nobody", standing.NeedsHuman)
+	}
+	// The counts are still carried, because whether the pile is draining is a
+	// question about a week of readings rather than about this one.
+	if standing.Reports.Unhandled != 2 || standing.Reports.Collected != 2 {
+		t.Fatalf("Reports = %#v", standing.Reports)
+	}
+	if standing.Reports.Worst != report.SeverityCritical {
+		t.Fatalf("Worst = %q, want the pile's worst severity", standing.Reports.Worst)
+	}
+}
+
+// The failure the whole report channel has: reports arriving faster than
+// anything decides about them, which is invisible in any one reading and shows
+// only as the oldest undecided report's age climbing.
+func TestAPileNothingIsDrainingWaitsOnTheProductManager(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Reports = fakeReports{
+		reports: []report.Report{
+			filedReport("report-00000000000000000000000000000001", report.SeverityWarning, moment.Add(-22*24*time.Hour)),
+			filedReport("report-00000000000000000000000000000002", report.SeverityNote, moment.Add(-time.Hour)),
+		},
+		handlings: []report.Handling{{ReportID: "report-00000000000000000000000000000002"}},
+	}
+	standing := ReadStanding(context.Background(), sources)
+	if standing.Reports.Unhandled != 1 || standing.Reports.OldestAge != 22*24*time.Hour {
+		t.Fatalf("Reports = %#v", standing.Reports)
+	}
+	rendered := standing.Render()
+	for _, want := range []string{"1 of 2 collected report(s) are unhandled", "22d ago", "the product manager's"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered is missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// A pile that could not be read is never reported as an empty one: "nobody has
+// reported anything" and "nothing could read what anybody reported" send an
+// operator in opposite directions.
+func TestAPileThatCouldNotBeReadIsNotReportedAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Reports = fakeReports{fail: errors.New("the pile is unreadable")}
+	standing := ReadStanding(context.Background(), sources)
+	if standing.Reports.Collected != 0 || standing.ReportsProblem == "" {
+		t.Fatalf("Reports = %#v, problem = %q", standing.Reports, standing.ReportsProblem)
+	}
+	if !strings.Contains(standing.Render(), "the pile is unreadable") {
+		t.Fatalf("the failure never reached a line:\n%s", standing.Render())
+	}
+	// What became of the pile failing on its own is the same refusal: every report
+	// would otherwise count as undecided, which overstates the backlog in the
+	// direction that sends somebody to work on something already done.
+	sources.Reports = fakeReports{
+		reports:   []report.Report{filedReport("report-00000000000000000000000000000001", report.SeverityNote, moment)},
+		handleErr: errors.New("the handling log is unreadable"),
+	}
+	standing = ReadStanding(context.Background(), sources)
+	if standing.Reports.Unhandled != 0 || standing.ReportsProblem == "" {
+		t.Fatalf("Reports = %#v, problem = %q", standing.Reports, standing.ReportsProblem)
 	}
 }
 

@@ -1016,10 +1016,14 @@ Needs a human (1):
 - **Needs a human** is always present, and says either `nothing` or the list with
   whose move each one is: the operator's two switches, an unresolved directive, a
   proposed change nobody has decided, a run that ended still owing a step, work
-  marked for a conversation rather than for a run, and a queue nothing is pulling
+  marked for a conversation rather than for a run, a queue nothing is pulling
   from — a session sitting idle over it, or no session at all — while admitted
-  work waits behind that. A stall over an empty queue is not listed: it is a
-  state of the machine rather than something waiting on you.
+  work waits behind that, and a
+  [pile of collected reports](reporting.md#whether-the-pile-is-draining) whose
+  oldest undecided entry has been waiting more than a week. A stall over an empty
+  queue is not listed: it is a state of the machine rather than something waiting
+  on you, and neither is a report pile that is being worked through — what is
+  listed is one that is not.
 
 A line with nothing in it says `nothing` in words, and a line whose records could
 not be read says that instead — never `nothing`, which would be a confident

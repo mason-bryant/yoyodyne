@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -120,9 +119,9 @@ func (s Severity) Prefix() string {
 }
 
 // rank orders the severities by how much attention each asks for. It is what
-// lets a pile be read worst-first: a reader working through what nobody has
-// dealt with yet wants the thing already costing somebody before the thing that
-// asks for nothing.
+// lets a pile be read worst-first where something has to be: the worst of what
+// nobody has decided about is what a status line names, and what jumps the walk
+// through the pile is what ranks above everything else here.
 func (s Severity) rank() int {
 	switch s {
 	case SeverityCritical:
@@ -474,26 +473,6 @@ func Unhandled(reports []Report, handlings []Handling) []Report {
 		open = append(open, reported)
 	}
 	return open
-}
-
-// BySeverity orders reports worst first, and the most recent first within one
-// severity. It copies rather than sorting in place, because the pile's own order
-// is the order it was reported in and nothing that reads it may disturb that.
-//
-// Recency inside a severity is what makes a bounded listing cut the right end: a
-// critical report from this morning outranks a note from last week whichever way
-// the bound falls, and among criticals the one nobody has got to yet is the
-// newest.
-func BySeverity(reports []Report) []Report {
-	ordered := make([]Report, len(reports))
-	copy(ordered, reports)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].Severity != ordered[j].Severity {
-			return ordered[i].Severity.rank() < ordered[j].Severity.rank()
-		}
-		return ordered[i].RecordedAt.After(ordered[j].RecordedAt)
-	})
-	return ordered
 }
 
 // Worst is the severity of the most attention-seeking report in a set, and the
