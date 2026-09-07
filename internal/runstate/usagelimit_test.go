@@ -135,3 +135,53 @@ func testUsageLimitExhaustion(waiting string, resetsAt *time.Time) UsageLimitExh
 		ResetsAt:      resetsAt,
 	}
 }
+
+// A substitution says both halves or it says nothing worth reading: which model
+// was refused, and which one served instead. A record naming only the alternate
+// is a turn moved off nothing, and one naming the same model twice is not a
+// substitution at all.
+func TestASubstitutionNamesBothTheRefusedModelAndTheOneThatServed(t *testing.T) {
+	t.Parallel()
+
+	refusal := testUsageLimitExhaustion("the development manager conversation chat-91253e0e", nil)
+	refusal.Model = "fable"
+	refusal.ServedBy = "opus"
+	if err := refusal.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want a substitution that names both models accepted", err)
+	}
+	if !refusal.Substituted() {
+		t.Fatal("the record does not read as a substitution, so nothing would say the work carried on")
+	}
+
+	orphaned := refusal
+	orphaned.Model = ""
+	if err := orphaned.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want an alternate named beside no refused model refused")
+	}
+
+	same := refusal
+	same.ServedBy = same.Model
+	if err := same.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want a substitution onto the model that was refused refused")
+	}
+}
+
+// A refusal that named a reset time is a window until that moment and no
+// further. One that named none never reads as a closed window at all: the
+// harness was not told when it lifts, so it asks again rather than assuming.
+func TestOnlyARefusalWithAResetTimeDescribesAClosedWindow(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 7, 6, 0, 0, 0, time.UTC)
+	reset := at.Add(time.Hour)
+	timed := testUsageLimitExhaustion("the development manager conversation", &reset)
+	if !timed.WindowClosed(at) {
+		t.Fatal("a refusal that lifts in an hour reads as open, so the next turn would be refused again")
+	}
+	if timed.WindowClosed(reset.Add(time.Minute)) {
+		t.Fatal("a refusal reads as closed past its own reset time, so affinity would never return")
+	}
+	if testUsageLimitExhaustion("the development manager conversation", nil).WindowClosed(at) {
+		t.Fatal("a refusal that named no reset reads as a closed window, which is a wait nobody was told about")
+	}
+}

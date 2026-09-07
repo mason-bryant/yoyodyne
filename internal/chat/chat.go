@@ -26,6 +26,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
+	"github.com/mason-bryant/yoyodyne/internal/modelfailover"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/research"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -249,6 +250,18 @@ type Options struct {
 	// invocation, and evidence produced by whatever model the provider happened
 	// to default to is not auditable.
 	Model string
+	// FailoverModel is the permitted alternate this conversation's turn may be
+	// served by while the model above has no capacity. It is empty for every
+	// agent that has not enabled failover, which is every agent until one says
+	// so, and an empty one leaves the turn exactly as it was: one invocation,
+	// under the configured model, failing on a refusal rather than asking
+	// anything else.
+	//
+	// It is supplied rather than read here for the reason the account and the
+	// revision are: the conversation is handed its configuration rather than
+	// loading one, and which models an agent is interchangeable across is the
+	// operator's answer rather than this package's.
+	FailoverModel string
 	// Persona is the effective product-manager persona from configuration. It
 	// may specialize how the product manager works; it is placed after the
 	// immutable contract and can never replace or weaken it.
@@ -410,6 +423,12 @@ type Session struct {
 	// taken. It is per-invocation like the cost beside it and is cleared as each
 	// one starts, so what a round reports is that round's own.
 	spendProblem string
+	// failoverProblem is what went wrong with the record behind serving a turn
+	// from the permitted alternate. It is per-invocation and cleared with the one
+	// above for the same reason, and it never fails the turn: the alternate has
+	// already answered, and throwing that away to report that the log missed
+	// would cost the operator the answer as well as the record.
+	failoverProblem string
 	// lastInvocationCostUSD is what the provider charged for the invocation just
 	// taken, kept apart from both totals because an exchange is charged per
 	// invocation rather than per message: the round that carried an answer back
@@ -505,9 +524,16 @@ type Evidence struct {
 	Role           string `json:"role"`
 	Resumed        bool   `json:"resumed"`
 	RequestedModel string `json:"requested_model"`
-	ResolvedModel  string `json:"resolved_model,omitempty"`
-	SessionID      string `json:"session_id,omitempty"`
-	Turns          int    `json:"turns"`
+	// ServedModel is the permitted alternate that answered the last turn, and is
+	// absent whenever the configured model did — which is every turn until one is
+	// refused for want of capacity. It is separate from the selector above
+	// because the two answer different questions: that one is the model this
+	// conversation is configured for, and this one is the model that actually
+	// took the turn.
+	ServedModel   string `json:"served_model,omitempty"`
+	ResolvedModel string `json:"resolved_model,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
+	Turns         int    `json:"turns"`
 }
 
 // Reply is one answer from the product manager, with anything it proposed and
@@ -567,6 +593,14 @@ type Reply struct {
 	// the bookkeeping missed would cost the operator both. So the answer comes
 	// back and this says what is missing from the log beside it.
 	SpendProblem string `json:"spend_problem,omitempty"`
+	// FailoverProblem names what went wrong writing down that this answer was
+	// served by the permitted alternate rather than by the configured model. The
+	// turn is not failed over it, for the reason the line above is not: the
+	// alternate answered, and the answer is worth more than the record of how it
+	// was reached. What it costs is that the next turn asks the configured model
+	// again rather than going straight to the alternate, which is one refused
+	// invocation rather than a silence.
+	FailoverProblem string `json:"failover_problem,omitempty"`
 	// Exchanges are the rounds of asking another role this reply conducted, in
 	// the order they happened. Like the actions they already happened, so they
 	// are reported to the operator rather than put to them — and reported at all
@@ -753,10 +787,24 @@ func (s *Session) Evidence() Evidence {
 		Role:           string(s.state.Role),
 		Resumed:        s.resumed,
 		RequestedModel: s.options.Model,
-		ResolvedModel:  s.state.ProviderResolvedModel,
-		SessionID:      s.state.ProviderSessionID,
-		Turns:          s.state.Turns,
+		// The record keeps the model that served rather than the one configured, so
+		// a conversation whose last turn was served by the alternate says so here
+		// and a conversation whose window has since reopened stops saying it.
+		ServedModel:   s.servedByAlternate(),
+		ResolvedModel: s.state.ProviderResolvedModel,
+		SessionID:     s.state.ProviderSessionID,
+		Turns:         s.state.Turns,
 	}
+}
+
+// servedByAlternate is the model that answered the last turn where it was not
+// the configured one, and nothing where it was.
+func (s *Session) servedByAlternate() string {
+	served := strings.TrimSpace(s.state.ProviderModel)
+	if served == "" || served == strings.TrimSpace(s.options.Model) {
+		return ""
+	}
+	return served
 }
 
 // Send answers one thing the operator said. It is usually one turn, and it is
@@ -805,6 +853,7 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// turn went, and accumulated across the rounds of one message the way a
 		// lost report is: a second round's loss must not overwrite the first's.
 		reply.SpendProblem = appendProblem(reply.SpendProblem, s.spendProblem)
+		reply.FailoverProblem = appendProblem(reply.FailoverProblem, s.failoverProblem)
 		reply.Evidence = s.Evidence()
 		if err != nil {
 			reply.Text = appendProse(reply.Text, answer)
@@ -1048,6 +1097,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// the cost log whichever way the turn went — a turn the provider failed was
 	// charged for exactly as one that answered.
 	s.spendProblem = ""
+	s.failoverProblem = ""
 	provider := spend.Metered{
 		Provider:    s.options.Backend,
 		Log:         s.options.Spend,
@@ -1055,12 +1105,18 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		Clock:       s.options.Clock,
 		// A turn the provider has already answered is not thrown away because the
 		// cost log would not take the line. The answer comes back and what is
-		// missing from the log is named on the reply instead.
+		// missing from the log is named on the reply instead. It accumulates
+		// because one turn can be two invocations — a refused one and the one the
+		// alternate served — and the second's loss must not overwrite the first's.
 		RecordFailure: func(err error) {
-			s.spendProblem = singleLine(err.Error(), maxTrackerFailureBytes)
+			s.spendProblem = appendProblem(s.spendProblem, singleLine(err.Error(), maxTrackerFailureBytes))
 		},
 	}
-	result, err := provider.Run(ctx, backend.RunRequest{
+	// The failover goes outside the meter rather than inside it, so each attempt
+	// is one line in the cost log naming the model that attempt actually asked
+	// for. Wrapped the other way round, a turn the alternate served would be
+	// priced against the model that refused it.
+	result, served, err := modelfailover.Serve(ctx, provider, backend.RunRequest{
 		RunID:            s.state.ConversationID,
 		Role:             s.state.Role,
 		WorkingDirectory: s.options.Repository,
@@ -1084,7 +1140,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		// recorded before it arrives here, so nothing about what is recorded
 		// depends on whether anybody was.
 		ReplySink: s.stream.write,
-	})
+	}, s.failoverPolicy())
 	// Whatever happened, the event log advanced, and the record has to agree
 	// with it or the next turn would renumber events that already exist.
 	s.state.LastSequence = lastSequence
@@ -1141,7 +1197,11 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	if result.SessionID != "" {
 		s.state.ProviderSessionID = result.SessionID
 	}
-	s.state.ProviderModel = s.options.Model
+	// The model this turn was actually asked for under, which is the configured
+	// one unless the alternate served it. Recording the configured selector here
+	// would leave the record saying a conversation was held on a model that
+	// refused every turn of it.
+	s.state.ProviderModel = served.Model
 	s.state.ProviderResolvedModel = result.ResolvedModel
 	// And what served it besides the model: the account the turn was answered on
 	// and the configuration in force while it was. They are rewritten with the

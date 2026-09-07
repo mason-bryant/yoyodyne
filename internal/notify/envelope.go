@@ -116,6 +116,15 @@ const (
 	// and this is the same news from every other process — hours in which nothing
 	// will happen, with a cause and, where the provider named one, an end.
 	KindUsageLimitExhausted Kind = "usage-limit.exhausted"
+	// The same refusal with the opposite outcome: the model an agent is configured
+	// for had no capacity, and the alternate the operator permitted took the turn
+	// instead. It is a note rather than a warning because nothing stopped — that
+	// is the entire point of it — and it is said at all because an agent quietly
+	// answering on a different model is a change to what the work was produced by,
+	// which the operator has to be able to see without going looking. It is said
+	// once per window rather than again while it stands, because the second
+	// message would be a reason to mute the channel that carries the first.
+	KindModelSubstituted Kind = "model.substituted"
 	// What an agent said in its own words: a report at its severity, a proposed
 	// change to a document it does not own, a turn of an ask exchange, and the
 	// exchange closing — including closing unresolved at its round cap, which
@@ -274,6 +283,7 @@ func Kinds() []Kind {
 		KindBlockerRecorded,
 		KindRunEnded,
 		KindUsageLimitExhausted,
+		KindModelSubstituted,
 		KindReportFiled,
 		KindProposalRaised,
 		KindExchangeTurn,
@@ -313,6 +323,7 @@ func (k Kind) Valid() bool {
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindRunEnded, KindUsageLimitExhausted,
+		KindModelSubstituted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
@@ -653,6 +664,14 @@ type Detail struct {
 	// is not one: which conversation, which review. It is what turns "the
 	// provider is out of capacity" into news somebody can act on.
 	Waiting string `json:"waiting,omitempty"`
+	// Model and ServedBy are the model a provider refused and the permitted
+	// alternate that took the turn instead, read by KindModelSubstituted. They are
+	// two fields rather than one sentence because they answer opposite halves of
+	// the question a substitution raises — what has no capacity, and what the work
+	// is being produced by while it has none — and a reader given only the second
+	// cannot tell a failover from a configuration they do not remember making.
+	Model    string `json:"model,omitempty"`
+	ServedBy string `json:"served_by,omitempty"`
 	// Round and Rounds are where an ask exchange has got to against its cap, read
 	// by KindExchangeTurn and KindExchangeClosed.
 	Round  int `json:"round,omitempty"`

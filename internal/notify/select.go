@@ -255,25 +255,37 @@ func FromReport(reported report.Report) (Notification, error) {
 // silence that look exactly like a healthy quiet queue. The speaker is the
 // harness, because a provider running out of capacity is not any persona's act
 // and no role should be made to narrate one.
+// A refusal a permitted alternate served through is the same record read the
+// other way round, and is said as one: nothing stopped, so it is a note rather
+// than a warning, and what it carries is which model has no capacity and which
+// one the work is being produced by while it has none. Silence would be the
+// wrong answer to it — an agent answering on a model the operator did not
+// configure it for is a change to the evidence, whatever it saved.
 func FromUsageLimit(exhaustion runstate.UsageLimitExhaustion) (Notification, error) {
 	topic, err := topicForItem(exhaustion.WorkItemID)
 	if err != nil {
 		return Notification{}, fmt.Errorf("address usage limit refusal at %s: %w", exhaustion.At.UTC().Format(time.RFC3339), err)
 	}
+	kind, severity := KindUsageLimitExhausted, report.SeverityWarning
+	if exhaustion.Substituted() {
+		kind, severity = KindModelSubstituted, report.SeverityNote
+	}
 	return Notification{
 		Topic:   topic,
 		Speaker: Harness(),
 		Event: Event{
-			Kind:     KindUsageLimitExhausted,
+			Kind:     kind,
 			At:       exhaustion.At,
-			Severity: report.SeverityWarning,
+			Severity: severity,
 			Refs: Refs{
 				WorkItemID:     exhaustion.WorkItemID,
 				ConversationID: exhaustion.ConversationID,
 			},
 			Detail: Detail{
-				Waiting: exhaustion.Waiting,
-				Cause:   exhaustion.Describe(),
+				Waiting:  exhaustion.Waiting,
+				Cause:    exhaustion.Describe(),
+				Model:    exhaustion.Model,
+				ServedBy: exhaustion.ServedBy,
 			},
 		},
 	}, nil

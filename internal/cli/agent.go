@@ -36,7 +36,13 @@ type agentReport struct {
 	// Account is the provider account this agent runs under. Which role runs
 	// where is the operator's and it is fixed, so it is read here beside the
 	// model rather than reconstructed from the configuration by hand.
-	Account        string `json:"account,omitempty"`
+	Account string `json:"account,omitempty"`
+	// FailoverModel is the permitted alternate this agent's turn may be served by
+	// while the model above has no capacity, and is absent for every agent that
+	// has not enabled failover. It is read here beside the model for the reason
+	// the account is: what an agent is includes what answers for it when its own
+	// model will not.
+	FailoverModel  string `json:"failover_model,omitempty"`
 	Instances      int    `json:"instances"`
 	PersonaPath    string `json:"persona_path,omitempty"`
 	PersonaVersion string `json:"persona_version,omitempty"`
@@ -300,6 +306,7 @@ func readAgents(parts components) ([]agentReport, error) {
 			Backend:        agent.Backend,
 			Model:          agent.Model,
 			Account:        agent.Account,
+			FailoverModel:  parts.config.AgentFailoverModel(name),
 			Instances:      agent.Instances,
 			PersonaPath:    agent.Persona.Path,
 			PersonaVersion: agent.Persona.Version,
@@ -402,6 +409,9 @@ func renderAgent(report agentReport) string {
 	fmt.Fprintf(&rendered, "%s (%s) %s, model %s, account %s, %d instance(s)\n",
 		report.Name, report.Role, report.Backend, report.Model,
 		recorded(report.Account, "none the configuration names"), report.Instances)
+	if report.FailoverModel != "" {
+		fmt.Fprintf(&rendered, "  served by %s while %s has no capacity\n", report.FailoverModel, report.Model)
+	}
 	if report.Owns != "" {
 		fmt.Fprintf(&rendered, "  owns %s\n", report.Owns)
 	}

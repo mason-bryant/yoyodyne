@@ -562,16 +562,22 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// And which harness is holding it, read once here because a process does not
 		// change binary while it lives — which is the whole reason a conversation
 		// somebody leaves open for days is worth stamping.
-		Build:        buildinfo.Commit(),
-		Model:        agent.Model,
-		Persona:      agent.Persona.Text,
-		Agent:        name,
-		Provider:     agent.Backend,
-		Providers:    providerRegistry(cfg),
-		Repository:   repository,
-		ProductID:    cfg.Product.ID,
-		RepositoryID: string(cfg.Product.RepositoryID),
-		Briefing:     briefing,
+		Build: buildinfo.Commit(),
+		Model: agent.Model,
+		// The one alternate this agent's turn may be served by while the model above
+		// has no capacity, empty for every agent that has not enabled failover. It
+		// is read from the agent's own block for the reason its account is: which
+		// models a persona is interchangeable across is the operator's judgement,
+		// stated per agent rather than derived from the role.
+		FailoverModel: cfg.AgentFailoverModel(name),
+		Persona:       agent.Persona.Text,
+		Agent:         name,
+		Provider:      agent.Backend,
+		Providers:     providerRegistry(cfg),
+		Repository:    repository,
+		ProductID:     cfg.Product.ID,
+		RepositoryID:  string(cfg.Product.RepositoryID),
+		Briefing:      briefing,
 		// The repository and the tracker are kept reachable so the conversation
 		// can say how old its picture is and take a new one when the operator
 		// asks. The product manager reaches neither: this is the harness's hand,
@@ -987,11 +993,20 @@ func printChatEvidence(writer io.Writer, evidence chat.Evidence) {
 // renderChatModel reports the requested selector alongside what the provider
 // resolved it to, because a floating alias only becomes evidence once the
 // served model is named.
+//
+// A turn the permitted alternate served says so first, because the configured
+// selector alone would read as a conversation being held on a model that in fact
+// refused it. What the operator is told is the model that answered and the model
+// it stood in for, in that order.
 func renderChatModel(evidence chat.Evidence) string {
-	if evidence.ResolvedModel == "" || evidence.ResolvedModel == evidence.RequestedModel {
-		return evidence.RequestedModel
+	requested := evidence.RequestedModel
+	if evidence.ServedModel != "" {
+		requested = evidence.ServedModel + " (failed over from " + evidence.RequestedModel + ")"
 	}
-	return evidence.RequestedModel + " (resolved: " + evidence.ResolvedModel + ")"
+	if evidence.ResolvedModel == "" || evidence.ResolvedModel == evidence.RequestedModel || evidence.ResolvedModel == evidence.ServedModel {
+		return requested
+	}
+	return requested + " (resolved: " + evidence.ResolvedModel + ")"
 }
 
 func printChatUsage(writer io.Writer) {

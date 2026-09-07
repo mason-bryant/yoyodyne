@@ -601,6 +601,11 @@ type AgentConfig struct {
 	// may specialize how an agent works; it can never remove a harness
 	// invariant, which is why the immutable contracts stay in Go.
 	Persona Persona `yaml:"persona,omitempty" json:"persona,omitempty"`
+	// Failover is what serves this agent's turn while the model above has no
+	// capacity. It is off unless this agent says otherwise, and what it may reach
+	// is the one alternate this agent names — see failover.go for why both halves
+	// are the agent's own rather than the harness's.
+	Failover Failover `yaml:"failover,omitempty" json:"failover,omitempty"`
 	// Capabilities is everything the harness may do on this agent's behalf,
 	// stated in the closed vocabulary rather than implied by the role's name. It
 	// is read from `internal/rolecapability` as the configuration resolves, so
@@ -872,6 +877,7 @@ func (c Config) Validate() error {
 			problems = append(problems, fmt.Sprintf("agent %q instances must be at least 1", name))
 		}
 		problems = append(problems, agent.Persona.problems(name)...)
+		problems = append(problems, agent.Failover.problems(name, agent.Model)...)
 		if agent.Role == domain.RoleDeveloper {
 			developers += agent.Instances
 		}

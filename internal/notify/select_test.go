@@ -790,6 +790,66 @@ func TestARefusalOutsideARunIsSaidAtWarningAndNamesWhatIsWaiting(t *testing.T) {
 	}
 }
 
+// A refusal a permitted alternate served through is the same record read the
+// other way round: nothing stopped, so it is a note rather than a warning, and
+// it names both the model that has no capacity and the one the work is being
+// produced by while it has none. Silence would be the wrong answer to it — an
+// agent answering on a model the operator did not configure it for is a change
+// to the evidence, whatever it saved.
+func TestASubstitutedTurnIsSaidAtNoteAndNamesBothModels(t *testing.T) {
+	reset := moment.Add(3 * time.Hour)
+	substituted := runstate.UsageLimitExhaustion{
+		SchemaVersion:  runstate.UsageLimitSchemaVersion,
+		ProductID:      "yoyodyne",
+		At:             moment,
+		Waiting:        "the development manager conversation chat-91253e0e",
+		Kind:           "five-hour",
+		ResetsAt:       &reset,
+		ConversationID: "chat-91253e0e",
+		Model:          "fable",
+		ServedBy:       "opus",
+	}
+	notification, err := FromUsageLimit(substituted)
+	if err != nil {
+		t.Fatalf("select from a substitution: %v", err)
+	}
+	if notification.Event.Kind != KindModelSubstituted {
+		t.Fatalf("a substitution is said as %q, want %q", notification.Event.Kind, KindModelSubstituted)
+	}
+	if notification.Event.Severity != report.SeverityNote {
+		t.Fatalf("a substitution is said at %q, want %q", notification.Event.Severity, report.SeverityNote)
+	}
+	if !notification.Speaker.IsHarness() {
+		t.Fatalf("a substitution is spoken by %v", notification.Speaker)
+	}
+	// It reaches the channel rather than only a thread, because an agent
+	// answering on a different model is something the operator has to be able to
+	// see without going looking.
+	if reach := notification.Reach(); reach != ReachChannel {
+		t.Fatalf("a substitution reaches %q, want %q", reach, ReachChannel)
+	}
+	// Every persona has a line for it, and every line says which model has no
+	// capacity and which one is serving.
+	for _, speaker := range []Speaker{
+		Harness(),
+		Persona(domain.RoleDeveloper, ""),
+		Persona(domain.RoleReviewer, ""),
+		Persona(domain.RoleDevelopmentManager, ""),
+		Persona(domain.RoleProductManager, ""),
+		Persona(domain.RoleArchitect, ""),
+	} {
+		message, err := Render(notification.Topic, speaker, notification.Event)
+		if err != nil {
+			t.Fatalf("the %s cannot say a substitution: %v", speaker.Key(), err)
+		}
+		for _, want := range []string{"fable", "opus"} {
+			if !strings.Contains(message.Body, want) {
+				t.Fatalf("the %s says %q, which does not name %q", speaker.Key(), message.Body, want)
+			}
+		}
+	}
+}
+
 func TestARunThatStoppedAndStayedStoppedIsSaidAsCritical(t *testing.T) {
 	before := running()
 	after := endedRun(before, runstate.StatusFailed)

@@ -2574,6 +2574,75 @@ worktree, and its developer session. If the provider still refuses, the run
 records the new report and waits again, so a premature release costs one refused
 request. See the README for the whole of that behavior.
 
+### Serving a turn from a permitted alternate model
+
+Waiting is the right answer for a run and the wrong one for a decision. On
+2026-09-07 at 06:00 the model the management roles were configured for closed its
+capacity window while the model the developers and reviewers run on still had
+one: the deciders stopped, the doers did not, and every item held for a
+development manager decision sat behind a role that could not take a turn until
+somebody hand-edited three agents onto the other model.
+
+An agent may therefore name one alternate model and be served by it while its own
+model has no capacity. It is stated in the agent's own block, beside the model
+and the account, and it is off unless the agent says otherwise:
+
+```yaml
+agents:
+  development-manager:
+    role: development-manager
+    model: fable
+    failover:
+      enabled: true
+      model: opus
+```
+
+`enabled` is `false` for every agent that does not write it, so nothing acquires
+this by inheriting a bundle or by upgrading the executable — which agents are
+worth serving from a second model is a judgement about the work, and a management
+role that has to keep deciding and a developer whose work can wait out a window
+are different answers to the same question. Setting `enabled: false` while
+leaving `model` in place switches the behaviour off without losing the choice, so
+turning it back on is one word. The two keys are read together: a layer that
+supplies a `failover` block replaces whatever it inherited whole, rather than
+switching failover on over an alternate some other layer named.
+
+There is exactly one alternate. A list would be a routing policy; this is a
+fallback, so the second model either has capacity or the turn waits as it did
+before. An agent that enables failover and names no alternate is refused, as is
+one that names its own model — a failover to the model whose window just closed
+is a second refusal rather than an alternate.
+
+What happens on a refused turn:
+
+- The configured model is asked first. If the provider declines the turn for
+  want of capacity, the same invocation is made once more under the alternate,
+  and the answer that comes back is the answer.
+- Each attempt is priced against the model that attempt actually asked for, so
+  the cost log says what was spent where rather than billing the alternate's turn
+  to the model that refused it.
+- The substitution is recorded in the same per-product usage-limit log every
+  refusal outside a run is recorded in, carrying the model that was refused and
+  the alternate that served. The conversation's own record keeps the model that
+  served each turn, and `yoyo chat` says so at the prompt.
+- Where the provider named a reset time, the next turn goes straight to the
+  alternate rather than paying a refused invocation to rediscover a window the
+  harness has already watched close. Affinity is the configured model's: the
+  first turn after that reset time asks it again, so a substitution lasts a
+  window rather than becoming a quiet permanent move.
+- The substitution reaches the operator's channel as a note. Nothing stopped —
+  that is the whole point of it — but an agent answering on a model the operator
+  did not configure it for is a change to what the work was produced by, and it
+  is said once per window rather than again while it stands.
+
+An agent that has not enabled failover behaves exactly as it did before: one
+invocation, under the model it named, and a refused turn that fails and is
+recorded as the stoppage it is. So does an agent whose alternate is refused too.
+A run's developer and reviewer invocations are not covered by this and still wait
+their window out on the settings above; what this covers is the turns an agent
+takes — the conversations, where a decision nobody can make stops everything
+downstream of it.
+
 ## Relaunching a run the provider killed
 
 Not every way a provider ends an invocation is a refusal it names in advance.

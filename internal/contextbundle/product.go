@@ -33,10 +33,21 @@ import (
 // enough that the shipped set has room to grow and the rest of the context is
 // not competing with it for the last few kilobytes.
 //
-// It is still a bound and still deliberately finite. What it does not answer is
-// whether eight whole documents is the right thing to carry in full at all,
-// which is a product question rather than a constant.
-const defaultMaxProductBytes = 640 << 10
+// It was not far enough, and this is the second move. At 640 KiB the shipped set
+// had grown to within 11 bytes, which is the same wall in the same place: the
+// work item that documented model failover found it by adding a section to
+// docs/configuration.md and failing the gate on the sentence that described the
+// key it had just added. Two moves for one reason is the reason itself becoming
+// worth naming — the set grows with every behaviour the product acquires, and a
+// constant chased upward by that growth is not bounding anything it was meant
+// to bound.
+//
+// It is still a bound and still deliberately finite. What it does not answer,
+// and what the recurrence now argues somebody should, is whether eight whole
+// documents is the right thing to carry in full at all — a product question
+// rather than a constant, and the one this figure keeps being raised instead of
+// answering.
+const defaultMaxProductBytes = 768 << 10
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.
