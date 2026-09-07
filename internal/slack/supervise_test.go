@@ -419,21 +419,63 @@ func TestAStartedSinkOutlivesThePassAndWritesToItsOwnLog(t *testing.T) {
 		t.Fatalf("Launch() = %d, want the process it started", pid)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	var written []byte
-	for time.Now().Before(deadline) {
-		written, _ = os.ReadFile(log)
-		if strings.TrimSpace(string(written)) != "" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if got := strings.TrimSpace(string(written)); got != "yoyodyne" {
+	if got := startedSinkWrote(t, log, 1); got != "yoyodyne" {
 		t.Fatalf("the started process recorded %q, want the namespace it was launched with", got)
 	}
 	if info, err := os.Stat(log); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("the sink log is mode %v (%v), want it readable only by its owner", info.Mode().Perm(), err)
 	}
+}
+
+// The sink outlives the pass that started it and everything it runs inherits
+// the environment it was started with, so a sink outside the Git maintenance
+// fence is a long-lived source of exactly the prune that fence exists to stop —
+// one that deletes a worktree registration another run is still creating.
+func TestAStartedSinkCarriesTheGitMaintenanceFence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the launcher is exercised on the Unix hosts Yoyodyne supports")
+	}
+	t.Parallel()
+
+	root := t.TempDir()
+	relative := "products/yoyodyne/slack/" + sinkLogFile
+	// The constructed environment carries no Git configuration of its own, so
+	// the fence is the whole of what the sink was given: two settings, first.
+	_, err := DetachedLauncher{}.Launch(Launch{
+		Program: "/bin/sh",
+		Args:    []string{"-c", "printenv GIT_CONFIG_COUNT; printenv GIT_CONFIG_KEY_0; printenv GIT_CONFIG_KEY_1"},
+		Dir:     t.TempDir(),
+		Env:     Environment(nil, "yoyodyne", botToken, appToken),
+		LogRoot: root,
+		Log:     relative,
+	})
+	if err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+
+	want := "2\ngc.auto\nmaintenance.auto"
+	if got := startedSinkWrote(t, filepath.Join(root, filepath.FromSlash(relative)), 3); got != want {
+		t.Fatalf("the started process recorded %q, want %q", got, want)
+	}
+}
+
+// startedSinkWrote reads back the lines a launched sink said, waiting for all of
+// them: the launcher returns without the process having run, which is the point
+// of it, and a log read while it is still writing is a partial answer rather
+// than a wrong one.
+func startedSinkWrote(t *testing.T, log string, lines int) string {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var written []byte
+	for time.Now().Before(deadline) {
+		written, _ = os.ReadFile(log)
+		if said := strings.TrimSpace(string(written)); said != "" && len(strings.Split(said, "\n")) >= lines {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return strings.TrimSpace(string(written))
 }
 
 // A sink's log is a write like any other the harness owns, and the one thing

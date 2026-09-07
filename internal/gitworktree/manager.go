@@ -56,10 +56,13 @@ const (
 //
 // They are passed per command rather than written into the repository's config,
 // because the repository belongs to whoever is developing in it and its
-// maintenance is theirs to configure. That leaves a prune the harness did not
-// start — a person's `git gc`, or another tool's write command in the same
-// repository — able to hit the same window, which is a thing to know about a
-// repository under a harness rather than something this can fence.
+// maintenance is theirs to configure. A Git command the harness did not compose
+// is fenced all the same, one layer down: every process the harness launches
+// carries the same two settings in its environment, so an agent's Git command
+// and a project's build tooling inside a worktree inherit them — see
+// execution.WithGitMaintenanceFence. What is left is a prune nobody here
+// started, a person's own `git gc` in the checkout, which is the operator's and
+// is written down as theirs in `docs/operations.md`.
 var maintenanceOptions = []string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}
 
 type Manager struct {
