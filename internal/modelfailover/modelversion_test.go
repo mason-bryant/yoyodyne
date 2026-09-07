@@ -259,10 +259,150 @@ func TestAClosedCapacityWindowIsNotReadAsAMissingVersion(t *testing.T) {
 	}
 }
 
-// The two mechanisms compose in one order: the pin falls back to the family
-// alias, and the alias then fails over on capacity exactly as it would have had
-// nothing been pinned. Each hop records itself, because one entry collapsing
-// both would name a model that refused a turn nobody asked it.
+// A pin the provider has but has no capacity for is failover's refusal, not the
+// fallback's: the permitted alternate answers it, exactly as it would have had
+// nothing been pinned. Falling back to the family alias would buy nothing — the
+// alias floats over the same family, so it is inside the same window — and
+// returning the refusal would be an agent losing failover by pinning a version,
+// which is the ordinary reason failover exists.
+func TestAPinnedVersionWithNoCapacityIsServedByThePermittedAlternate(t *testing.T) {
+	t.Parallel()
+
+	resetsAt := fixedNow().Add(time.Hour)
+	provider := &fakeProvider{results: []backend.RunResult{
+		refused("five_hour", resetsAt),
+		{SessionID: "session-1", FinalText: "decided"},
+	}}
+	windows := newTestWindows(t)
+	result, served, err := Serve(context.Background(), provider, backend.RunRequest{Model: "opus"}, Policy{
+		Version:   "claude-opus-5-20260401",
+		Alternate: "fable",
+		Windows:   windows,
+		Now:       fixedNow,
+		ProductID: "yoyodyne",
+		Waiting:   "the architect conversation",
+	})
+	if err != nil {
+		t.Fatalf("Serve() error = %v, want the turn served by the alternate", err)
+	}
+	if result.FinalText != "decided" {
+		t.Fatalf("final text = %q, want the answer the alternate gave", result.FinalText)
+	}
+	if served.Model != "fable" || served.Refused != "claude-opus-5-20260401" {
+		t.Fatalf("served = %#v, want the alternate serving for the pinned version", served)
+	}
+	if served.Why != runstate.SubstitutedForCapacity {
+		t.Fatalf("why = %q, want capacity; the provider had the version and no room for it", served.Why)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("invocations = %d, want the refused version and the alternate that served", len(provider.requests))
+	}
+	// The family alias is never asked. It floats over the family whose window just
+	// closed, so an attempt at it is one more refusal on the operator's money.
+	if provider.requests[0].Model != "claude-opus-5-20260401" || provider.requests[1].Model != "fable" {
+		t.Fatalf("models asked = %q then %q, want the pin first and the alternate second",
+			provider.requests[0].Model, provider.requests[1].Model)
+	}
+
+	recorded, err := windows.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("List() = %#v, want the substitution recorded once", recorded)
+	}
+	entry := recorded[0]
+	if entry.Model != "claude-opus-5-20260401" || entry.ServedBy != "fable" {
+		t.Fatalf("recorded = %#v, want the selector that was refused and the one that served", entry)
+	}
+	if entry.Reason() != runstate.SubstitutedForCapacity {
+		t.Fatalf("recorded reason = %q, want capacity", entry.Reason())
+	}
+	if entry.ResetsAt == nil || !entry.ResetsAt.Equal(resetsAt) {
+		t.Fatalf("resets at = %v, want the provider's own reset time", entry.ResetsAt)
+	}
+}
+
+// And the window that opened over the pinned selector is read back, so the next
+// turn goes straight to the alternate rather than paying a refused invocation to
+// rediscover a window the harness watched close.
+func TestAClosedWindowOverThePinnedVersionSendsTheNextTurnStraightToTheAlternate(t *testing.T) {
+	t.Parallel()
+
+	windows := newTestWindows(t)
+	recordWindow(t, windows, runstate.UsageLimitExhaustion{
+		Model:    "claude-opus-5-20260401",
+		ServedBy: "fable",
+		ResetsAt: pointerTo(fixedNow().Add(time.Hour)),
+	})
+	provider := &fakeProvider{results: []backend.RunResult{{FinalText: "decided"}}}
+	_, served, err := Serve(context.Background(), provider, backend.RunRequest{Model: "opus"}, Policy{
+		Version:   "claude-opus-5-20260401",
+		Alternate: "fable",
+		Windows:   windows,
+		Now:       fixedNow,
+		ProductID: "yoyodyne",
+		Waiting:   "the architect conversation",
+	})
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if served.Model != "fable" || served.Why != runstate.SubstitutedForCapacity {
+		t.Fatalf("served = %#v, want the alternate the standing window points at", served)
+	}
+	if len(provider.requests) != 1 || provider.requests[0].Model != "fable" {
+		t.Fatalf("invocations = %#v, want one, straight to the alternate", provider.requests)
+	}
+}
+
+// A refusal met at the alternate after it had already taken the turn is about
+// the alternate, which is a model nobody pinned. The family alias is no answer
+// to it, so it is handed back rather than fallen back from.
+func TestAMissingModelAtTheAlternateIsNotFallenBackFromAsThePin(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{results: []backend.RunResult{
+		refused("five_hour", fixedNow().Add(time.Hour)),
+		missingModel("model: fable"),
+	}}
+	windows := newTestWindows(t)
+	_, served, err := Serve(context.Background(), provider, backend.RunRequest{Model: "opus"}, Policy{
+		Version:   "claude-opus-5-20260401",
+		Alternate: "fable",
+		Windows:   windows,
+		Now:       fixedNow,
+		ProductID: "yoyodyne",
+		Waiting:   "the architect conversation",
+	})
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("invocations = %d, want the refused version and the alternate, and no third", len(provider.requests))
+	}
+	if served.Model != "fable" || served.Why != runstate.SubstitutedForCapacity {
+		t.Fatalf("served = %#v, want the alternate's own refusal handed back", served)
+	}
+	// The capacity hop records itself, as it does for any turn the alternate was
+	// reached for and did not itself run out of capacity on. What must not be
+	// there is an availability entry: nothing said the pinned version was missing,
+	// and one written here would stop the next turn asking for it.
+	recorded, err := windows.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, entry := range recorded {
+		if entry.Reason() == runstate.SubstitutedForAvailability {
+			t.Fatalf("recorded = %#v, want the alternate's missing model not written down as the pin's", entry)
+		}
+	}
+}
+
+// The two mechanisms compose in one order where both fire: the pin falls back to
+// the family alias because the provider has not got it, and the alias then fails
+// over on capacity exactly as it would have had nothing been pinned. Each hop
+// records itself, because one entry collapsing both would name a model that
+// refused a turn nobody asked it.
 func TestAPinnedVersionFallsBackAndThenFailsOverOnCapacity(t *testing.T) {
 	t.Parallel()
 

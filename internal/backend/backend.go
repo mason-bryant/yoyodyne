@@ -211,7 +211,7 @@ type TransientFailure struct {
 //
 // For yoyodyne-ifd.32, which turns this package into a plugin contract.
 //
-// A model the provider has not got is a sixth answer that contract has to name.
+// A model the provider has not got is a seventh answer that contract has to name.
 // It is not a usage limit, because nothing about the account is exhausted and no
 // reset time is ever quoted; not an overload, because no condition is named that
 // will lift; not a transient death, because relaunching the identical request

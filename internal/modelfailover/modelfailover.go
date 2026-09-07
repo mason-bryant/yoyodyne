@@ -45,12 +45,28 @@ package modelfailover
 // chose it, because a reader who had to consult two logs to answer that would
 // get two answers to it.
 //
-// The two compose in one order and only one. The pin is asked first, because
-// which version to ask for is settled before whether that model has capacity;
-// the family alias it falls back to is then subject to failover exactly as it
-// would have been had nothing been pinned. Each hop is recorded as itself — pin
-// refused for availability, alias refused for capacity — because a single entry
-// collapsing both would name a model that refused a turn nobody asked it.
+// The two compose rather than sit beside each other, and the composition is the
+// part worth stating: whichever selector a turn is asking for at the moment it is
+// refused, that selector's refusal is answered. So the pinned version is asked
+// through the capacity path rather than in front of it — an agent that pinned a
+// version and permitted an alternate keeps both, and a pin the provider has but
+// has no capacity for is a closed window like any other, answered by the
+// alternate.
+//
+// Which of the two answers a refusal is decided by the refusal and not by an
+// order fixed here:
+//
+//   - No capacity at the pinned version is failover's, and the alternate answers
+//     it. Falling back to the family alias there would buy nothing, because the
+//     alias floats over the same family and is therefore inside the same window.
+//   - The provider not having the pinned version is the fallback's, and the
+//     family alias answers it — the alias is the family's latest by definition,
+//     so it is the version that exists. That attempt is then subject to failover
+//     exactly as it would have been had nothing been pinned.
+//
+// Each hop is recorded as itself — refused for availability, refused for
+// capacity — because a single entry collapsing two would name a model that
+// refused a turn nobody asked it.
 
 import (
 	"context"
@@ -177,9 +193,12 @@ func (s Served) Substituted() bool { return strings.TrimSpace(s.Refused) != "" }
 // it named one the provider has, and served by the permitted alternate where the
 // model that would take it has no capacity.
 //
-// The pin goes first, because which version to ask for is settled before whether
-// that model has capacity, and the family alias it falls back to is then subject
-// to failover exactly as it would have been had nothing been pinned.
+// The pinned version is asked through the capacity path rather than in front of
+// it, so an agent that pinned a version and permitted an alternate keeps both:
+// a pin with no capacity is answered by the alternate, exactly as the family
+// alias would have been had nothing been pinned. Only the provider saying it has
+// not got the version falls back to the alias, and that attempt is then subject
+// to failover in its turn.
 //
 // Everything else passes through untouched. A turn that failed for any other
 // reason is that failure, with the model that was asked, and nothing about it is
@@ -204,25 +223,28 @@ func Serve(ctx context.Context, provider Invoker, request backend.RunRequest, po
 	}
 
 	request.Model = version
-	result, err := provider.Run(ctx, request)
-	if result.ModelUnavailable == nil || (err == nil && !result.IsError) {
-		// The pin was served, or it failed for something that is not the provider
-		// lacking it — which is that failure, under the version that was asked, and
-		// not a reason to quietly ask a different model instead.
-		return result, Served{Model: version}, err
+	result, served, err := serveWithCapacity(ctx, provider, request, policy, Served{})
+	// Only a refusal met at the pinned attempt itself is the provider saying it has
+	// not got that version, and only that is worth falling back from. One met after
+	// the alternate had already taken the turn is about the alternate — a model
+	// nobody pinned — and the family alias is no answer to it. A substitution
+	// having happened is what tells the two apart, because the pinned attempt is
+	// the only one made before there is one.
+	if result.ModelUnavailable == nil || served.Substituted() || (err == nil && !result.IsError) {
+		return result, served, err
 	}
 
 	// The refused attempt emitted events of its own before it was declined, so the
 	// substituted one starts after them rather than numbering over them.
 	advanceSequence(&request, result)
 	request.Model = family
-	substituted, served, substitutedErr := serveWithCapacity(ctx, provider, request, policy, fellBack)
+	substituted, servedByFamily, substitutedErr := serveWithCapacity(ctx, provider, request, policy, fellBack)
 	// The fallback is written down only where the turn was served, for the reason a
 	// capacity substitution is: a turn nothing could take is the failure the caller
 	// already handles, and an entry claiming the work carried on would be the log
 	// contradicting it.
 	if refusal(substituted, substitutedErr) != nil || substituted.ModelUnavailable != nil {
-		return substituted, served, substitutedErr
+		return substituted, servedByFamily, substitutedErr
 	}
 	// What is recorded is the hop the pin made — the version refused, and the alias
 	// that stood in for it — rather than whatever eventually answered. Where
@@ -230,11 +252,11 @@ func Serve(ctx context.Context, provider Invoker, request backend.RunRequest, po
 	// entries are what let the next turn skip both invocations rather than one.
 	if err := recordUnavailable(policy, version, family, result.ModelUnavailable.Detail); err != nil {
 		if policy.RecordFailure == nil {
-			return substituted, served, errors.Join(substitutedErr, err)
+			return substituted, servedByFamily, errors.Join(substitutedErr, err)
 		}
 		policy.RecordFailure(err)
 	}
-	return substituted, served, substitutedErr
+	return substituted, servedByFamily, substitutedErr
 }
 
 // serveWithCapacity makes the invocation the caller built, serving it from the

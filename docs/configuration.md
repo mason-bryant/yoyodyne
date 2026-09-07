@@ -2694,7 +2694,10 @@ the same stall failover exists to prevent, reached from the other direction. So:
   made once more under `model` — the family alias, which is by definition the
   family's latest — and the answer that comes back is the answer. There is no
   table here mapping versions to families, and nothing to keep up to date when a
-  family gains one.
+  family gains one. A refusal that is *not* the provider lacking the model is
+  handled where it belongs rather than here: no capacity goes to `failover.model`
+  if the agent named one, and anything else fails the turn under the version that
+  asked, as it would have under the alias.
 - Each attempt is priced against the model that attempt actually asked for.
 - The fallback is recorded in the same per-product usage-limit log a failover
   substitution is, carrying the version that was refused, the model that served,
@@ -2712,10 +2715,23 @@ the same stall failover exists to prevent, reached from the other direction. So:
   silently not being honored is the one outcome that would make the evidence
   false.
 
-The two mechanisms compose in one order. The pin is settled first — which version
-to ask for — and the alias it falls back to is then subject to failover exactly as
-it would have been had nothing been pinned. Each hop records itself, because one
-entry naming both would name a model that refused a turn nobody asked it.
+**Pinning an agent never costs it failover.** The pinned version is asked for
+through the same path the family alias would have been, so which mechanism
+answers a refusal is decided by the refusal rather than by an order fixed in
+advance:
+
+- The provider having no capacity for the pinned version is failover's, and
+  `failover.model` answers it — exactly as it would have had nothing been pinned.
+  Falling back to `model` there would buy nothing, because the alias floats over
+  the same family and is therefore inside the same window. The closed window is
+  recorded against the pinned selector, so the next turn inside it goes straight
+  to the alternate.
+- The provider not having the pinned version is the fallback's, and `model`
+  answers it. That attempt is then subject to failover in its turn, so a version
+  the provider has retired during a capacity outage still reaches the alternate.
+
+Each hop records itself, because one entry naming both would name a model that
+refused a turn nobody asked it.
 
 A pin covers the same invocations failover does: the turns an agent takes as
 itself, its conversation and the rounds where another role asks it something. A
