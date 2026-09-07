@@ -267,7 +267,11 @@ func TestSurveyNamesThePartsItCouldNotReadInsteadOfFailing(t *testing.T) {
 func TestDirectRecordsOperatorDirectionWithoutChangingStatus(t *testing.T) {
 	t.Parallel()
 
-	runner := &recordingRunner{stdout: `[{"id":"yoyodyne-9","title":"Pause on a usage limit","status":"open","issue_type":"task"}]`}
+	// The answer carries the direction, which is what bd's own answer to an append
+	// does: a direction reported as recorded and not on the item is refused rather
+	// than reported, so a fixture that dropped it would be a tracker that lost it.
+	runner := &recordingRunner{stdout: `[{"id":"yoyodyne-9","title":"Pause on a usage limit","status":"open",` +
+		`"issue_type":"task","notes":"prefer the smaller change"}]`}
 	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
 	if err := work.Direct(context.Background(), "yoyodyne-9", "prefer the smaller change"); err != nil {
 		t.Fatalf("Direct() error = %v", err)
