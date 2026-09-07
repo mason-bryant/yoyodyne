@@ -94,6 +94,17 @@ func (v sideVoice) Answer(ctx context.Context, question sidestream.Question) (si
 	if !configured {
 		return sidestream.Spoken{}, fmt.Errorf("no agent named %s is configured, so %s names nobody", name, question.StreamID)
 	}
+	// Whether this agent holds side threads at all is the per-agent knob, and it
+	// is read here because this is where a side turn becomes a provider
+	// invocation. An agent left at the default queues, which is what every agent
+	// did before the knob existed, so a project acquires side threads by writing
+	// the key rather than by upgrading. What the knob never decides is what the
+	// answer may do: that is `sidestream.Permitted` and the role's own authority
+	// narrowed by it, neither of which reads configuration.
+	if !v.config.AgentHoldsSideThreads(name) {
+		return sidestream.Spoken{}, fmt.Errorf("the %s agent %s is configured for %q conversations, so it holds no side threads; %s has nobody to answer it",
+			question.Role, name, v.config.AgentConversationMode(name), question.StreamID)
+	}
 	if agent.Backend != domain.BackendClaudeCode {
 		return sidestream.Spoken{}, fmt.Errorf("a side thread requires a claude-code agent, and the %s agent %s is configured for %q",
 			question.Role, name, agent.Backend)

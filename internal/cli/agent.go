@@ -54,10 +54,18 @@ type agentReport struct {
 	// their window out. The rendering says so, because a developer agent with an
 	// alternate named and a run that parks anyway is exactly the pair somebody
 	// would otherwise read as broken.
-	FailoverModel  string `json:"failover_model,omitempty"`
-	Instances      int    `json:"instances"`
-	PersonaPath    string `json:"persona_path,omitempty"`
-	PersonaVersion string `json:"persona_version,omitempty"`
+	FailoverModel string `json:"failover_model,omitempty"`
+	// Conversations is what this agent does with a question that arrives while
+	// its main thread is busy — queueing it, or holding it on a side thread. It is
+	// read here for the reason the alternate is: an operator asking what an agent
+	// is cannot otherwise tell which of the two a question will get, and the
+	// answer is a fact about the agent rather than about any one question. It says
+	// nothing about what a side thread may do, which is the role's own authority
+	// narrowed in Go and is not this key's to move.
+	Conversations  config.ConversationMode `json:"conversations"`
+	Instances      int                     `json:"instances"`
+	PersonaPath    string                  `json:"persona_path,omitempty"`
+	PersonaVersion string                  `json:"persona_version,omitempty"`
 	// Owns is what this role decides, from the authority table rather than from
 	// the persona: a project can rewrite the persona and cannot rewrite this.
 	Owns string `json:"owns,omitempty"`
@@ -320,6 +328,7 @@ func readAgents(parts components) ([]agentReport, error) {
 			ModelVersion:   parts.config.AgentModelVersion(name),
 			Account:        agent.Account,
 			FailoverModel:  parts.config.AgentFailoverModel(name),
+			Conversations:  parts.config.AgentConversationMode(name),
 			Instances:      agent.Instances,
 			PersonaPath:    agent.Persona.Path,
 			PersonaVersion: agent.Persona.Version,
@@ -440,6 +449,14 @@ func renderAgent(report agentReport) string {
 		// keep, for a developer or reviewer agent most of all.
 		fmt.Fprintf(&rendered, "  turns and exchange rounds served by %s while %s has no capacity; run invocations wait it out\n",
 			report.FailoverModel, report.Model)
+	}
+	if report.Conversations == config.ConversationSideThreads {
+		// Said only for an agent that holds them, because queueing is what every
+		// agent does until one says otherwise and a line on every agent saying so
+		// would be a listing describing the default five times. What a side thread
+		// may do is named rather than left to be assumed: it is the role's own
+		// authority narrowed, and the main thread ratifies whatever it drafts.
+		fmt.Fprintln(&rendered, "  holds side threads beside its conversation; each judges and drafts, and the main thread ratifies")
 	}
 	if report.Owns != "" {
 		fmt.Fprintf(&rendered, "  owns %s\n", report.Owns)

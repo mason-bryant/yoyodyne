@@ -180,6 +180,12 @@ type agentDocument struct {
 	// layer that switched failover on over an alternate some layer underneath
 	// named would be serving this agent's turns from a model nobody chose for it.
 	Failover *failoverDocument `yaml:"failover"`
+	// Conversations is whether this agent queues a question its main thread
+	// cannot take yet or holds it on a side thread. It overrides on its own, like
+	// the model version and unlike the failover block, because it is one value
+	// rather than an answer in two halves. Stating it empty removes an inherited
+	// choice and puts the agent back to queueing.
+	Conversations *ConversationMode `yaml:"conversations"`
 	// Disabled removes an inherited agent. It is explicit so a project never
 	// loses an agent by accidentally omitting it.
 	Disabled *bool `yaml:"disabled"`
@@ -190,7 +196,7 @@ type agentDocument struct {
 // entry is detected.
 func (d agentDocument) overridesFields() bool {
 	return d.Role != nil || d.Backend != nil || d.Model != nil || d.ModelVersion != nil || d.Account != nil ||
-		d.Instances != nil || d.Persona != nil || d.Failover != nil
+		d.Instances != nil || d.Persona != nil || d.Failover != nil || d.Conversations != nil
 }
 
 type personaDocument struct {
