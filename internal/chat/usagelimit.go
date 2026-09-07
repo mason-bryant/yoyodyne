@@ -110,14 +110,26 @@ func (s *Session) failoverPolicy() modelfailover.Policy {
 	}
 	// The endpoint this conversation is held on, and the providers it may name,
 	// so the substitution is checked against this role's tool posture before the
-	// turn is moved. Both are only wired where there are both: a conversation
-	// whose endpoint could not be resolved substitutes as it did before the check
-	// existed rather than refusing a turn over a check it could not make.
-	if endpoint, resolved := s.options.endpoint(); resolved {
-		policy.Endpoint = endpoint
-		policy.Role = s.options.Role
-		policy.Eligibility = s.options.providers()
+	// turn is moved.
+	//
+	// A conversation whose endpoint will not resolve substitutes as it did before
+	// the check existed, and says so rather than doing it quietly. Refusing the
+	// turn instead would trade an answer the operator wants for a check that
+	// today can only fail on the provider — the alternate is another model on the
+	// same provider — and a skip nobody is told about is the one path where the
+	// guarantee silently does not hold. Every conversation the harness opens
+	// resolves its endpoint, which is what TestAnOpenedConversationAlwaysResolves-
+	// ItsEndpoint holds, so this is a path a running harness does not take.
+	endpoint, resolved := s.options.endpoint()
+	if !resolved {
+		s.failoverProblem = appendProblem(s.failoverProblem, singleLine(fmt.Sprintf(
+			"the substitution check was not made: this conversation's endpoint could not be resolved from provider %q, account %q, and model %q",
+			s.options.Provider, s.options.AccountAlias, s.options.Model), maxTrackerFailureBytes))
+		return policy
 	}
+	policy.Endpoint = endpoint
+	policy.Role = s.options.Role
+	policy.Eligibility = s.options.providers()
 	return policy
 }
 

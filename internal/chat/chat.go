@@ -2722,11 +2722,15 @@ func (o Options) providers() *backend.Registry {
 
 // endpoint is where this conversation's turns are served: the provider, the
 // adapter that reaches it, the account it is held under, and the model it asks
-// for. It reports false where the four cannot be assembled — a provider this
-// project does not name, or an account or model the conversation was opened
-// without — because a check made against half an endpoint is worse than one not
-// made: it would refuse a substitution for want of information rather than for
-// want of a posture.
+// for.
+//
+// It reports false where the four cannot be assembled, which for an opened
+// conversation is nothing: validate refuses a provider this project does not
+// name, an account alias that is not one, and a model that is not a selector,
+// which is the whole of what assembling an endpoint needs. The guard stays
+// because this is called on a value rather than on an opened session, and what a
+// caller does about a false is say so — a check quietly not made is worse than
+// one that failed.
 func (o Options) endpoint() (backend.Endpoint, bool) {
 	providers := o.providers()
 	if providers == nil {
@@ -2764,6 +2768,19 @@ func (o Options) validate() error {
 	}
 	if _, known := o.providers().Lookup(o.Provider); !known {
 		problems = append(problems, fmt.Errorf("unsupported backend %q", o.Provider))
+	}
+	// The account is required because two things this conversation must be able
+	// to do need it. Every turn's cost line names the account it was spent on and
+	// the store refuses one that does not, so a conversation opened without an
+	// alias is one whose spend cannot be recorded; and the endpoint a turn is
+	// served on is the provider, the adapter, the account, and the model
+	// together, so a conversation with no alias could not say which endpoint
+	// served it or check a substitution against the one it is on. Every caller
+	// resolves an alias already — a project that declares no account still has
+	// one — so what this refuses is a caller that forgot rather than a
+	// configuration nobody wrote.
+	if err := domain.ValidateIdentifier("account alias", o.AccountAlias); err != nil {
+		problems = append(problems, err)
 	}
 	if strings.TrimSpace(o.Repository) == "" {
 		problems = append(problems, errors.New("repository is required"))

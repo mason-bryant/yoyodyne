@@ -13,6 +13,7 @@ import (
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -1324,12 +1325,16 @@ func testOptions(t *testing.T, provider Backend) Options {
 		// Every generated configuration names an agent for its role, which is the
 		// shape these tests are written in; the two differ only where a project
 		// configures more than one agent for a role.
-		Agent:        string(domain.RoleProductManager),
-		Backend:      provider,
-		Store:        newTestStore(t, t.TempDir()),
-		Model:        "opus",
-		Persona:      hostilePersona,
-		Provider:     domain.BackendClaudeCode,
+		Agent:    string(domain.RoleProductManager),
+		Backend:  provider,
+		Store:    newTestStore(t, t.TempDir()),
+		Model:    "opus",
+		Persona:  hostilePersona,
+		Provider: domain.BackendClaudeCode,
+		// The account every project has whether or not it wrote one down. It is
+		// required because a turn's cost line names it and the endpoint a turn is
+		// served on is not an endpoint without it.
+		AccountAlias: config.DefaultAccountAlias,
 		Repository:   t.TempDir(),
 		ProductID:    "yoyodyne",
 		RepositoryID: "yoyodyne",

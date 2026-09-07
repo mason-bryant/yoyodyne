@@ -24,6 +24,7 @@ import (
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -244,6 +245,7 @@ func developmentManagerSession(t *testing.T, parts components, provider chat.Bac
 		Stoppages:    conversationStoppages(parts, domain.RoleDevelopmentManager),
 		Model:        "opus",
 		Provider:     domain.BackendClaudeCode,
+		AccountAlias: config.DefaultAccountAlias,
 		Repository:   filepath.Join(root, "repository"),
 		ProductID:    "yoyodyne",
 		RepositoryID: "yoyodyne",

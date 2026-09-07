@@ -185,10 +185,18 @@ func (r *Registry) Endpoint(provider domain.Backend, accountAlias, model string)
 	return endpoint, nil
 }
 
-// Serves reports whether a provider may serve a role at all, and says why not
-// where it may not. Everything it decides comes from the provider's own
-// declaration: which roles it serves, which postures it can be held to, and
-// whether this build ships an adapter that could launch it.
+// Serves reports whether a provider may serve a role, and says why not where it
+// may not. What it decides is the provider's own declaration — the roles it
+// serves and the tool postures it can be held to — and nothing else, which is
+// deliberately the same question configuration validation asks and the same
+// derivation it reads. A configuration the loader accepted is therefore never
+// refused here.
+//
+// Whether this build ships an adapter that could launch the provider is a
+// separate question and is not asked here. It is refused where a run is
+// dispatched, before anything is claimed, and asking it again in the pool would
+// turn a configuration this loader accepts into a failure at work-claim time.
+// EligibleFor is where it is asked of a concrete endpoint.
 //
 // It answers before an account or a model is chosen, because none of what it
 // decides varies by either. A pool that asked this of each endpoint in turn
@@ -205,22 +213,29 @@ func (r *Registry) Serves(provider domain.Backend, role domain.AgentRole) error 
 	if refusal := descriptor.RoleRefusal(role); refusal != "" {
 		return errors.New(refusal)
 	}
-	// A provider nothing here can launch serves no role, whatever it declares.
-	// The adapter and its version are set together — a descriptor that names one
-	// names both — so this is the same fact the endpoint's own Runnable reports.
-	if !descriptor.Runnable() {
-		return fmt.Errorf("this build ships no adapter for provider %q, so nothing here could serve role %q on it",
-			provider, role)
-	}
 	return nil
 }
 
-// EligibleFor reports whether a role may be served on an endpoint, and names the
-// endpoint in the refusal. What it decides is Serves's answer: eligibility is
-// the provider's declaration and never the endpoint's account or model.
+// EligibleFor reports whether a role may be served on an endpoint: the
+// provider's declaration as Serves reads it, and — because an endpoint is a
+// place an invocation is actually made rather than a configuration being checked
+// — that something in this build can launch it.
+//
+// That second half is what separates it from Serves. It is asked where a new
+// endpoint is being chosen at run time rather than where a configuration is
+// validated, which today is the substitution behind a closed capacity window:
+// moving a turn onto an endpoint nothing here could launch would be answering a
+// refusal with something that cannot run at all.
 func (r *Registry) EligibleFor(endpoint Endpoint, role domain.AgentRole) error {
 	if err := r.Serves(endpoint.Provider, role); err != nil {
 		return fmt.Errorf("%s cannot serve role %q: %w", endpoint, role, err)
+	}
+	// The adapter and its version are set together — a descriptor that names one
+	// names both — so an endpoint carrying no version is one this build ships no
+	// adapter for, which is what Runnable reports off the endpoint alone.
+	if !endpoint.Runnable() {
+		return fmt.Errorf("%s cannot serve role %q: this build ships no adapter for provider %q",
+			endpoint, role, endpoint.Provider)
 	}
 	return nil
 }

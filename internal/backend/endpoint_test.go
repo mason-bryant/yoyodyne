@@ -10,7 +10,15 @@ import (
 // Both of the providers this build's vocabulary names are expressed as
 // endpoints, and the two are expressed differently because they are different:
 // one is reached by a compiled adapter and says which, and one is a provider
-// nothing here can launch and says that instead of pretending to an adapter.
+// this build ships no adapter for and says that instead of pretending to one.
+//
+// The Codex half of this is a statement about this build rather than about
+// whether the adapter was written. It was, under yoyodyne-ifd.6, and it is on
+// branch yoyodyne/yoyodyne-ifd-6/a0a8ab63 (tip 41b0ec7), which is not an
+// ancestor of this commit — so there is no Codex code here to launch, and this
+// asserts what is true of the build rather than what is true of that branch.
+// What Codex can be held to by capability is the test below, and that half is
+// expressed in full.
 func TestBothBuiltInProvidersAreExpressedAsEndpoints(t *testing.T) {
 	t.Parallel()
 
@@ -44,11 +52,62 @@ func TestBothBuiltInProvidersAreExpressedAsEndpoints(t *testing.T) {
 	if reviewer == nil || !strings.Contains(reviewer.Error(), `cannot hold the "read-only" tool posture`) {
 		t.Fatalf("the reviewer on Codex = %v, want a refusal naming the posture", reviewer)
 	}
-	// The developer's posture Codex can hold, so what refuses it is the other
-	// thing that is true of it and nothing else: this build has no adapter.
+	// The developer's posture Codex can hold, so what refuses that endpoint is the
+	// other thing that is true of it and nothing else: this build has no adapter.
+	// The two refusals are separate answers because they are answered in different
+	// places — the posture at configuration load, the adapter at dispatch.
 	developer := registry.EligibleFor(codex, domain.RoleDeveloper)
 	if developer == nil || !strings.Contains(developer.Error(), "no adapter") {
 		t.Fatalf("the developer on Codex = %v, want a refusal naming the missing adapter", developer)
+	}
+}
+
+// Codex is developer-only by capability, and that half of it is expressed in
+// full whatever this build can launch. Serves is what configuration validation
+// reads, and it says the developer may be served on Codex and the reviewer may
+// not — so the day the adapter that was written under yoyodyne-ifd.6 lands, a
+// Codex developer endpoint is eligible with nothing here changed but the
+// descriptor naming its adapter.
+func TestCodexIsDeveloperOnlyByCapabilityWhateverThisBuildCanLaunch(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := registry.Serves(domain.BackendCodex, domain.RoleDeveloper); err != nil {
+		t.Fatalf("Serves(codex, developer) = %v, want the role Codex's sandbox can be held to", err)
+	}
+	refusal := registry.Serves(domain.BackendCodex, domain.RoleReviewer)
+	if refusal == nil || !strings.Contains(refusal.Error(), `cannot hold the "read-only" tool posture`) {
+		t.Fatalf("Serves(codex, reviewer) = %v, want a refusal naming the posture", refusal)
+	}
+
+	// What is missing is the adapter and only the adapter. A descriptor that named
+	// one produces an endpoint eligible for the developer with no other change,
+	// which is what makes landing that adapter the whole of the remaining work.
+	landed := Descriptor{
+		ID:             domain.BackendCodex,
+		Adapter:        domain.BackendCodex,
+		AdapterVersion: "codex/1",
+		Roles:          []domain.AgentRole{domain.RoleDeveloper, domain.RoleReviewer},
+		Postures:       []Posture{PostureWorktreeWrite},
+		BuiltIn:        true,
+	}
+	endpoint := Endpoint{
+		Provider:       landed.ID,
+		AdapterVersion: landed.AdapterVersion,
+		AccountAlias:   "default",
+		Model:          "gpt-5",
+	}
+	if !endpoint.Runnable() {
+		t.Fatalf("a Codex endpoint carrying an adapter version = %#v, want one this build could launch", endpoint)
+	}
+	if refusal := landed.RoleRefusal(domain.RoleDeveloper); refusal != "" {
+		t.Fatalf("RoleRefusal(developer) = %q, want the role Codex serves", refusal)
+	}
+	if refusal := landed.RoleRefusal(domain.RoleReviewer); refusal == "" {
+		t.Fatal("RoleRefusal(reviewer) permitted the reviewer on a worktree-write-only provider")
 	}
 }
 

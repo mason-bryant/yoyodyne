@@ -873,7 +873,12 @@ func (c Config) Validate() error {
 		// Why a provider may not serve a role is the descriptor's own answer
 		// rather than a second reading of its declaration taken here, so what
 		// refuses a configuration and what refuses a substitution at the moment a
-		// window closes are one derivation.
+		// window closes are one derivation. It is eligibility that is shared —
+		// the roles a provider declares and the postures it can be held to.
+		// Whether this build ships an adapter that could launch the provider is
+		// not asked here and never has been: a project may name a backend the
+		// vocabulary has and this build cannot run, and what refuses it is the
+		// dispatch of a run, before anything is claimed.
 		descriptor, known := providers.Lookup(agent.Backend)
 		switch {
 		case !known:

@@ -44,7 +44,10 @@ type EndpointChoice struct {
 // The role check is here as well as at configuration load deliberately. Loading
 // validates the configuration as it stands; this answers for the endpoint an
 // invocation is actually about to be made on, which is the same question asked
-// where it can still be refused.
+// where it can still be refused. It is the same question in the strict sense —
+// Registry.Serves and configuration validation read one derivation — so nothing
+// the loader accepted is refused here. Whether this build ships an adapter for
+// the provider is a different question, refused where a run is dispatched.
 func (c Config) EndpointFor(providers *backend.Registry, stateRoot, agentName, alias string) (EndpointChoice, error) {
 	agent, named := c.Agents[strings.TrimSpace(agentName)]
 	if !named {
@@ -58,7 +61,7 @@ func (c Config) EndpointFor(providers *backend.Registry, stateRoot, agentName, a
 	if err != nil {
 		return EndpointChoice{}, fmt.Errorf("resolve the endpoint agent %q runs on: %w", agentName, err)
 	}
-	if err := providers.EligibleFor(endpoint, agent.Role); err != nil {
+	if err := providers.Serves(agent.Backend, agent.Role); err != nil {
 		return EndpointChoice{}, fmt.Errorf("agent %q cannot be served: %w", agentName, err)
 	}
 	return EndpointChoice{Endpoint: endpoint, Account: account}, nil

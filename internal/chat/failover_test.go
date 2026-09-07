@@ -211,3 +211,61 @@ func TestTheConversationRecordSaysWhichModelServed(t *testing.T) {
 		t.Fatalf("recorded model = %q, want the model that actually served the turn", recorded.ProviderModel)
 	}
 }
+
+// The substitution check applies to every conversation the harness opens,
+// because every one of them resolves the endpoint it is held on. That is what
+// Open's own refusals amount to: a provider this project names, an account
+// alias that is one, and a model selector are the whole of what an endpoint
+// needs, and each is refused where the conversation is opened.
+func TestAnOpenedConversationAlwaysResolvesItsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t, &fakeBackend{})
+	options.Model = "fable"
+	options.FailoverModel = "opus"
+	session := openTestSession(t, options)
+
+	endpoint, resolved := session.options.endpoint()
+	if !resolved {
+		t.Fatal("an opened conversation could not say which endpoint it is held on")
+	}
+	if endpoint.Provider != options.Provider || endpoint.AccountAlias != options.AccountAlias || endpoint.Model != "fable" {
+		t.Fatalf("endpoint = %s, want the provider, account, and model the conversation was opened on", endpoint)
+	}
+	policy := session.failoverPolicy()
+	if policy.Eligibility == nil || !policy.Endpoint.Same(endpoint) || policy.Role != options.Role {
+		t.Fatalf("policy = %#v, want the substitution checked against this conversation's endpoint and role", policy)
+	}
+	if session.failoverProblem != "" {
+		t.Fatalf("failover problem = %q, want none for a conversation whose endpoint resolved", session.failoverProblem)
+	}
+}
+
+// A conversation that cannot say which endpoint it is on substitutes as it did
+// before the check existed, and says so. Refusing the turn instead would trade
+// an answer the operator wants for a check that can only fail on the provider,
+// and a check quietly not made is the one path where the guarantee silently
+// does not hold — so the skip is on the reply rather than in nobody's hands.
+func TestAConversationThatCannotResolveItsEndpointSaysTheCheckWasNotMade(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t, &fakeBackend{})
+	options.Model = "fable"
+	options.FailoverModel = "opus"
+	session := openTestSession(t, options)
+	// The one field an opened conversation cannot lose by itself, taken away
+	// afterwards: what is under test is what the policy does when the four cannot
+	// be assembled, not a conversation the harness could open this way.
+	session.options.AccountAlias = ""
+
+	policy := session.failoverPolicy()
+	if policy.Eligibility != nil || policy.Endpoint.Provider != "" {
+		t.Fatalf("policy = %#v, want no endpoint to check against", policy)
+	}
+	if policy.Alternate != "opus" {
+		t.Fatalf("policy alternate = %q, want the turn still served as it was before the check existed", policy.Alternate)
+	}
+	if session.failoverProblem == "" {
+		t.Fatal("the substitution check was skipped and nothing said so")
+	}
+}
