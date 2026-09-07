@@ -169,7 +169,11 @@ func TestClientAppliesOnlyTheEditItWasGiven(t *testing.T) {
 	parent := "yoyodyne-ifd.12"
 	detached := ""
 	runner := &fakeRunner{responses: []string{
-		`[{"id":"yoyodyne-1","title":"Readable conversations","status":"open","priority":2,"issue_type":"task"}]`,
+		// The notes bd answers with carry what was appended, which is what makes the
+		// confirmation this update reports a confirmation of anything.
+		`[{"id":"yoyodyne-1","title":"Readable conversations","description":"Say who is speaking.",` +
+			`"status":"open","priority":2,"issue_type":"task",` +
+			`"notes":"Admitted long ago.\n\nRenamed by the product manager."}]`,
 		`[{"id":"yoyodyne-1","title":"Implement feature","status":"open","priority":0,"issue_type":"task"}]`,
 		workItemJSON("open", ""),
 		`{"issue_id":"yoyodyne-1","depends_on_id":"yoyodyne-blocker","status":"removed"}`,
@@ -762,9 +766,12 @@ func TestAWrittenGoalIsWitnessedWhereReplacingTheNotesCannotReachIt(t *testing.T
 	// An item that acquires its goal later is witnessed by the same write that
 	// appends it, so an attribution made after the fact is no less protected than
 	// one made at creation.
-	attributed := &fakeRunner{responses: []string{`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_goal_recorded":"` + autonomy + `"}}]`}}
+	attribution := "Attributed to a goal.\n\n" + goal.Note(autonomy)
+	attributed := &fakeRunner{responses: []string{fmt.Sprintf(
+		`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task","notes":%q,`+
+			`"metadata":{"yoyodyne_goal_recorded":%q}}]`, attribution, autonomy)}}
 	if _, err := (Client{Runner: attributed}).Update(context.Background(), "yoyodyne-4", WorkItemChange{
-		AppendNotes: "Attributed to a goal.\n\n" + goal.Note(autonomy),
+		AppendNotes: attribution,
 	}); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
@@ -776,7 +783,9 @@ func TestAWrittenGoalIsWitnessedWhereReplacingTheNotesCannotReachIt(t *testing.T
 	// words rather than stored cut in half: half a goal is not the goal, and it
 	// would be put back as though it were.
 	long := strings.Repeat("a", goal.MaxStatementBytes+1)
-	oversized := &fakeRunner{responses: []string{`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_goal_recorded":1}}]`}}
+	oversized := &fakeRunner{responses: []string{fmt.Sprintf(
+		`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task","notes":%q,`+
+			`"metadata":{"yoyodyne_goal_recorded":1}}]`, goal.Note(long))}}
 	witnessed, err := (Client{Runner: oversized}).Update(context.Background(), "yoyodyne-4", WorkItemChange{AppendNotes: goal.Note(long)})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
@@ -791,7 +800,9 @@ func TestAWrittenGoalIsWitnessedWhereReplacingTheNotesCannotReachIt(t *testing.T
 	// A write that records no goal witnesses none. The witness says a goal was
 	// written, and an item that got a note about anything else must not read
 	// afterwards as one whose attribution was destroyed.
-	plain := &fakeRunner{responses: []string{`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task"}]`}}
+	plain := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task",` +
+			`"notes":"Noted: the reviewer asked for evidence."}]`}}
 	updated, err := (Client{Runner: plain}).Update(context.Background(), "yoyodyne-4", WorkItemChange{AppendNotes: "Noted: the reviewer asked for evidence."})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
@@ -1114,6 +1125,133 @@ func TestReleasingAParkingIsAChangeAnUpdateAccepts(t *testing.T) {
 	}
 	if err := (WorkItemChange{}).validate(); err == nil {
 		t.Fatal("an update changing nothing was accepted")
+	}
+}
+
+// A note reported as written has to be on the item. The confirmation is what the
+// product manager tells the operator a decision was recorded, and a write path
+// that reports success without checking makes every one of those untrustworthy —
+// which is the whole of yoyodyne-ifd.336.
+func TestClientRefusesANoteItCannotFindOnTheItem(t *testing.T) {
+	t.Parallel()
+
+	const note = "FORGE HYGIENE joins the sweep's findings, operator-directed."
+
+	// bd answered the update, and neither its answer nor the item itself carries
+	// the note. That is a false confirmation, and the caller is told so.
+	lost := &fakeRunner{responses: []string{
+		workItemJSON("open", "Admitted to the backlog by the product manager."),
+		workItemJSON("open", "Admitted to the backlog by the product manager."),
+	}}
+	_, err := (Client{Runner: lost}).Update(context.Background(), "yoyodyne-1", WorkItemChange{AppendNotes: note})
+	if err == nil || !strings.Contains(err.Error(), "does not carry the note") {
+		t.Fatalf("Update() with a lost note error = %v, want the false confirmation refused", err)
+	}
+	// It asked the tracker again before concluding anything: the update's own
+	// answer is not the only thing a loss is judged on.
+	wantArgs := [][]string{
+		{"update", "yoyodyne-1", "--append-notes=" + note, "--json"},
+		{"show", "yoyodyne-1", "--json"},
+	}
+	if !reflect.DeepEqual(lost.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", lost.args, wantArgs)
+	}
+
+	// The other direction, and the one that must not be reported as a failure: the
+	// write landed and bd's answer to it did not say so. A durable write reported
+	// as lost is the mirror of this defect, not a fix for it.
+	echoed := &fakeRunner{responses: []string{
+		workItemJSON("open", "Admitted to the backlog by the product manager."),
+		workItemJSON("open", "Admitted to the backlog by the product manager.\n\n"+note),
+	}}
+	item, err := (Client{Runner: echoed}).Update(context.Background(), "yoyodyne-1", WorkItemChange{AppendNotes: note})
+	if err != nil {
+		t.Fatalf("Update() with a durable note error = %v, want the read-back to settle it", err)
+	}
+	if !strings.Contains(item.Notes, note) {
+		t.Fatalf("Update() = %#v, want the item as the tracker actually holds it", item)
+	}
+
+	// A read-back that cannot run says which of the two it is. An append nobody
+	// could confirm is not an append that failed, and a caller about to tell
+	// somebody the note is recorded must not be told that it is.
+	unreadable := &fakeRunner{
+		results: []execution.ProcessResult{
+			{Status: execution.ProcessSucceeded, Stdout: workItemJSON("open", "Admitted to the backlog by the product manager.")},
+			{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "failed to open database"},
+		},
+	}
+	if _, err := (Client{Runner: unreadable}).Update(context.Background(), "yoyodyne-1", WorkItemChange{AppendNotes: note}); err == nil ||
+		!strings.Contains(err.Error(), "reading it back") {
+		t.Fatalf("Update() with an unreadable item error = %v, want the append reported as unconfirmed", err)
+	}
+
+	// The ordinary case costs nothing beyond the write: bd's own answer carries
+	// the note, so nothing is read back.
+	confirmed := &fakeRunner{responses: []string{workItemJSON("open", "Admitted long ago.\n\n"+note)}}
+	if _, err := (Client{Runner: confirmed}).Update(context.Background(), "yoyodyne-1", WorkItemChange{AppendNotes: note}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if len(confirmed.args) != 1 {
+		t.Fatalf("bd args = %#v, want the write alone", confirmed.args)
+	}
+
+	// The description is confirmed the same way, and is where a scope addition
+	// belongs: an item's standing text says what the work is, and a replacement
+	// reported as applied and not stored leaves everybody reading the old scope.
+	const replaced = "The sweep reads the forge as well as the tracker."
+	unwritten := &fakeRunner{responses: []string{workItemJSON("open", ""), workItemJSON("open", "")}}
+	if _, err := (Client{Runner: unwritten}).Update(context.Background(), "yoyodyne-1", WorkItemChange{Description: replaced}); err == nil ||
+		!strings.Contains(err.Error(), "does not carry the description") {
+		t.Fatalf("Update() with a lost description error = %v, want the false confirmation refused", err)
+	}
+}
+
+// Every path that appends to an item's notes confirms them, not only the edit the
+// product manager makes: an outcome, a blocker's reason, and the account a run
+// leaves when it reopens an item are all things somebody is told were recorded.
+func TestClientConfirmsEveryPathThatAppendsNotes(t *testing.T) {
+	t.Parallel()
+
+	const note = "the checks failed after every permitted attempt"
+	stale := "Admitted to the backlog by the product manager."
+
+	if _, err := (Client{Runner: &fakeRunner{responses: []string{
+		workItemJSON("in_progress", stale), workItemJSON("in_progress", stale),
+	}}}).RecordOutcome(context.Background(), "yoyodyne-1", note); err == nil ||
+		!strings.Contains(err.Error(), "does not carry the note") {
+		t.Fatalf("RecordOutcome() with a lost note error = %v, want it refused", err)
+	}
+	if _, err := (Client{Runner: &fakeRunner{responses: []string{
+		workItemJSON("blocked", stale), workItemJSON("blocked", stale),
+	}}}).Block(context.Background(), "yoyodyne-1", note); err == nil ||
+		!strings.Contains(err.Error(), "does not carry the note") {
+		t.Fatalf("Block() with a lost note error = %v, want it refused", err)
+	}
+	parking := domain.WorkItemParking("parked by run-1, which found the design it needs has not landed")
+	if _, err := (Client{Runner: &fakeRunner{responses: []string{
+		reopenedItemJSON("open", stale, string(parking)), reopenedItemJSON("open", stale, string(parking)),
+	}}}).Reopen(context.Background(), "yoyodyne-1", note, parking); err == nil ||
+		!strings.Contains(err.Error(), "does not carry the note") {
+		t.Fatalf("Reopen() with a lost note error = %v, want it refused", err)
+	}
+}
+
+// What the confirmation compares as equal, and what it does not. A tracker is
+// free to settle line endings and trailing space; a note it stored cut short is
+// the loss this exists to find.
+func TestTextCarriedIgnoresOnlyWhatATrackerMayRewrite(t *testing.T) {
+	t.Parallel()
+
+	const note = "Scope addition, operator-directed:\nthe sweep reads the forge as well as the tracker."
+	if !textCarried("Admitted long ago.\r\n\r\nScope addition, operator-directed:   \r\nthe sweep reads the forge as well as the tracker.", note) {
+		t.Fatal("a note stored with the tracker's own line endings read as missing")
+	}
+	if textCarried("Admitted long ago.\n\nScope addition, operator-directed:", note) {
+		t.Fatal("a note stored cut short read as recorded")
+	}
+	if textCarried("Admitted long ago.\n\nScope addition, operator directed:\nthe sweep reads the forge as well as the tracker.", note) {
+		t.Fatal("a note stored with words changed read as recorded")
 	}
 }
 

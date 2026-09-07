@@ -63,6 +63,13 @@ const maxTrackerRounds = 4
 // needs it, and an item that outgrows this is cut with the cut declared.
 const maxTrackerItemBytes = 8 << 10
 
+// minTrackerNotesBytes is what an item's notes are guaranteed of that budget,
+// however long everything else about the item is. The notes are where every
+// later decision about an item is written, so an item with a long description is
+// not one whose recent notes read as absent: what is cut to make room is the
+// item's own standing text, which is stable and can be read again.
+const minTrackerNotesBytes = maxTrackerItemBytes / 2
+
 // maxPendingResultBytes bounds the results carried into the next turn. They are
 // written into the conversation's durable record, so they are kept well below
 // what that record may hold rather than growing with whatever was read.
@@ -2038,14 +2045,31 @@ func renderWorkItemEvidence(item beads.WorkItem, goals goal.Set) string {
 		{"description", item.Description},
 		{"design", item.Design},
 		{"acceptance criteria", item.AcceptanceCriteria},
-		{"notes", item.Notes},
 	} {
 		if strings.TrimSpace(section.text) == "" {
 			continue
 		}
 		fmt.Fprintf(&rendered, "\n%s:\n%s\n", section.label, strings.TrimSpace(section.text))
 	}
-	return boundText(rendered.String(), maxTrackerItemBytes)
+	notes := strings.TrimSpace(item.Notes)
+	if notes == "" {
+		return boundText(rendered.String(), maxTrackerItemBytes)
+	}
+	// The notes are rendered last and cut from the front, and everything else about
+	// the item is cut so that they always have room. Notes are only ever appended
+	// to, so their end is what was written most recently and their beginning is
+	// what the item has said since it was admitted: a cut taken the other way
+	// answers every question about a note just written by showing the admission
+	// lines, which is how two operator directions recorded on yoyodyne-ifd.283 came
+	// to be read as writes that never landed. The writes were durable, and this
+	// rendering — the one the product manager's read and the operator's `/show`
+	// both use — was what said otherwise.
+	head := boundText(rendered.String(), maxTrackerItemBytes-minTrackerNotesBytes)
+	budget := maxTrackerItemBytes - len(head)
+	if budget < minTrackerNotesBytes {
+		budget = minTrackerNotesBytes
+	}
+	return head + fmt.Sprintf("\nnotes:\n%s\n", boundTextTail(notes, budget))
 }
 
 // describeAttribution says in one line what an item's goal amounts to. The five
@@ -2088,4 +2112,20 @@ func boundText(text string, limit int) string {
 		cut--
 	}
 	return strings.TrimSpace(text[:cut]) + fmt.Sprintf("\n\n[cut at %d bytes; treat the rest as unread rather than absent]", limit)
+}
+
+// boundTextTail cuts text to a budget from the front rather than the back,
+// keeping its end and saying what was dropped. It is for text that is appended
+// to, where the end is the recent writing and the front is what has been there
+// all along: a reader checking whether something was just recorded is asking
+// about the end, and the ordinary cut answers by showing the beginning.
+func boundTextTail(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	cut := len(text) - limit
+	for cut < len(text) && !utf8.RuneStart(text[cut]) {
+		cut++
+	}
+	return fmt.Sprintf("[the first %d bytes are cut; treat them as unread rather than absent]\n\n", cut) + strings.TrimSpace(text[cut:])
 }
