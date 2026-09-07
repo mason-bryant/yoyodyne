@@ -300,9 +300,9 @@ func testConclusion() Conclusion {
 }
 
 // Concluding is what performs the write. It stamps the outcome and the moment,
-// merges, and records the stream as ended — one call, so a side thread cannot end
-// without its substance being written, which is the failure that would look
-// exactly like a thread that found nothing out.
+// merges, and records the stream as ended, in that order — so a caller that ends a
+// side thread through it cannot end one without its substance being written, which
+// is the failure that would look exactly like a thread that found nothing out.
 func TestConcludingASideStreamIsWhatWritesTheMerge(t *testing.T) {
 	t.Parallel()
 

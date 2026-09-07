@@ -36,9 +36,16 @@ package agentcontext
 // Concluding is what performs the write, and Conclude below is that in one
 // operation rather than two a caller has to remember to pair. A side thread that
 // ended without merging is a thread whose whole substance is on a disk nothing
-// reads, and it looks exactly like a thread that found nothing out — so ending
-// one and writing what it found are the same call, and neither can be reached
-// without the other.
+// reads, and it looks exactly like a thread that found nothing out.
+//
+// It is one call rather than a boundary, and the difference is worth stating
+// because the two read alike. The side stream's own record is written by
+// `runstate.SideStreamStore`, which stays reachable on its own, so nothing here
+// stops a caller saving a stream as ended and never merging it. Making that
+// impossible would need the merge to live inside the store, and the store cannot
+// reach this package — it is the one this package writes through. So what Conclude
+// offers is the pairing done correctly and in the right order for whoever ends a
+// side thread; what would catch a caller that went around it is a reviewer.
 
 import (
 	"context"

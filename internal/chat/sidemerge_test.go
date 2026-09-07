@@ -55,9 +55,9 @@ func TestASideConversationReachesTheMainThreadAsMemoryAndNotAsDialogue(t *testin
 		t.Fatalf("AppendEvent() error = %v", err)
 	}
 
-	// It concludes, through the one call that ends a side stream. Nothing here
-	// stamps the outcome or writes the memory on the production code's behalf: that
-	// is the step this test exists to prove, so it has to be the step under test.
+	// It concludes, through the call that ends a side stream. Nothing here stamps
+	// the outcome or writes the memory on the production code's behalf: that is the
+	// step this test exists to prove, so it has to be the step under test.
 	stream.Turns = 3
 	stream.LastSequence = 1
 	ended, recorded, err := agentcontext.Conclusion{
