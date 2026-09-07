@@ -396,13 +396,18 @@ that document leaves the item naming words nothing states. None of them is a
 decision anybody owes, and every one of them used to wait for somebody to notice.
 
 `repair` corrects one of the three, and `state` says which: `status` clears a
-blocked status with nothing unfinished behind it, `dependency` retires a link on
-work the tracker holds as closed, and `attribution` re-attributes an item whose
-recorded goal no longer resolves. The staleness is the harness's judgement rather
-than the product manager's assertion — it reads the item, the admitted queue, and
-the goals as the act runs, and refuses the correction where they still say the
-old state is right, so a repair asked for over a listing that has moved changes
-nothing. Each act records on the item what was changed, what made the old state
+blocked status where every link the item records is one the tracker says is
+finished, `dependency` retires a link on work the tracker holds as closed, and
+`attribution` re-attributes an item whose recorded goal no longer resolves. The
+staleness is the harness's judgement rather than the product manager's assertion
+— it reads the item, the admitted queue, the goals, and the work behind any link
+the queue does not account for, all as the act runs, and refuses the correction
+where they still say the old state is right, so a repair asked for over a listing
+that has moved changes nothing. Absence is never the evidence: the admitted work
+is what is open and what is blocked, so a blocker a run is working on right now
+is in neither listing, and a status is not cleared because a link's item could
+not be found. A goal a re-attribution names is resolved against the goals before
+anything is written, exactly as an admission's is. Each act records on the item what was changed, what made the old state
 stale, and the reason given, and a survey lists what is stale alongside the queue
 so the pass that corrects it is the pass that was already looking.
 
@@ -411,8 +416,12 @@ decision: work that should leave is closed or retired in the open, exactly as
 before.
 
 Work somebody still has to release is never repaired, however stale its state
-looks — a stoppage nobody has decided about, a change that exists only on a
-preserved branch, a directive in force that pauses the work it affects. Such an
+looks — an escalation waiting on a decision, a change that exists only on a
+preserved branch, a publication that never finished, a directive in force that
+pauses the work it affects. The escalation is the one that most needs saying:
+triage blocks an item in order to escalate it and leaves no dependency behind, so
+an escalated item reads as a blocked status with nothing at all standing behind
+it, and the hold is the whole of what separates the two. Such an
 item is reported with the reason it is held, every pass, and left exactly as it
 is: clearing its status would start a fresh run on top of work that is still
 there. Holds the harness could not read hold every item, for the same reason

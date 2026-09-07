@@ -206,13 +206,19 @@ type Options struct {
 	// conversation without one records a decision unchecked, and decomposes
 	// ungated, rather than appearing to have done either.
 	Stoppages Stoppages
-	// Held is what the harness is holding for a person: the stoppages nobody has
-	// decided about and the changes that exist only on a preserved branch. It is
-	// read where backlog state is corrected, and only to refuse: an item somebody
-	// still has to release has its state reported and left alone, however stale
-	// that state looks. It is optional like the rest, and a conversation without
-	// one corrects nothing rather than correcting everything it cannot see a hold
-	// on.
+	// Held is what the harness is holding for a person: an escalation waiting on
+	// a decision, a change that exists only on a preserved branch, a publication
+	// that never finished. It is read where backlog state is corrected, and only
+	// to refuse: an item somebody still has to release has its state reported and
+	// left alone, however stale that state looks.
+	//
+	// The escalation is why this is required rather than a refinement. Triage
+	// blocks an item in order to escalate it and leaves no dependency behind, so
+	// an escalated item reads as a blocked status with nothing whatever standing
+	// behind it — which from the tracker alone is indistinguishable from the stale
+	// status a repair corrects. It is optional like the rest, and a conversation
+	// without one corrects nothing rather than correcting everything it cannot see
+	// a hold on.
 	Held HeldWork
 	// Exchanges is the inter-role ask channel: how a question this role cannot
 	// answer itself reaches the role that can, without the operator relaying it

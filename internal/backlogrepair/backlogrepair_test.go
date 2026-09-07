@@ -229,6 +229,42 @@ func TestJudgeNamesTheDeadLinkAndNoOther(t *testing.T) {
 	}
 }
 
+// A status is cleared on evidence about every link the item records, and the
+// admitted work is the open and the blocked — so a blocker somebody is running
+// right now is in neither listing, and its absence from them says nothing. This
+// is the same refusal the dependency class makes, applied to the write that
+// would otherwise be made on it.
+func TestAStatusIsNotClearedOnALinkNothingSettles(t *testing.T) {
+	t.Parallel()
+
+	item := blockedItem("yoyodyne-ifd.44", "Waiting on work the listings do not carry", unstatedLink("yoyodyne-ifd.45"))
+	records := Records{
+		Admitted: []beads.WorkItem{item},
+		Held:     backlog.ReadHolds(nil),
+		Goals:    recordedGoals("Run development nearly autonomously"),
+	}
+
+	if report := Survey(records); len(report.Repairs) != 0 {
+		t.Fatalf("repairs = %#v, want none while nothing says what became of the work it waits for", report.Repairs)
+	}
+	_, err := Judge(item, ClassStatus, "", records)
+	if err == nil {
+		t.Fatal("Judge() cleared a status on a link nothing read says is finished")
+	}
+	for _, want := range []string{"nothing read here says what became of", "yoyodyne-ifd.45"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Judge() refused with %q, want it to say %q", err, want)
+		}
+	}
+
+	// The caller reading that item and finding it closed is what settles it, and
+	// is the same evidence a dependency repair rests on.
+	records.Finished = map[string]struct{}{"yoyodyne-ifd.45": {}}
+	if _, err := Judge(item, ClassStatus, "", records); err != nil {
+		t.Fatalf("Judge() error = %v after the tracker reported the blocker closed", err)
+	}
+}
+
 func TestJudgeRefusesAStateItDoesNotRecognize(t *testing.T) {
 	t.Parallel()
 

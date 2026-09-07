@@ -119,7 +119,7 @@ func (s *Session) carryOutRepair(ctx context.Context, outcome *TrackerOutcome) {
 		outcome.fail(fmt.Errorf("read %s to judge whether the state named is stale: %w", id, err))
 		return
 	}
-	records, err := s.repairRecords(ctx, action)
+	records, err := s.repairRecords(ctx, action, item)
 	if err != nil {
 		outcome.fail(err)
 		return
@@ -191,7 +191,7 @@ func repairedWhat(repair backlogrepair.Repair) string {
 // these records can only refuse a repair or leave it standing, so a failure that
 // carried on would be the one thing that must not happen here — an act allowed
 // because the record that would have refused it could not be read.
-func (s *Session) repairRecords(ctx context.Context, action TrackerAction) (backlogrepair.Records, error) {
+func (s *Session) repairRecords(ctx context.Context, action TrackerAction, item beads.WorkItem) (backlogrepair.Records, error) {
 	records := backlogrepair.Records{Goals: s.options.Goals}
 	admitted, err := s.admittedWork(ctx)
 	if err != nil {
@@ -215,7 +215,8 @@ func (s *Session) repairRecords(ctx context.Context, action TrackerAction) (back
 	// finished, and the item is read for it rather than inferred from being
 	// absent: an identifier the queue does not carry may be closed, or claimed, or
 	// a name nothing answers to, and only one of those is a dead link.
-	if action.State == backlogrepair.ClassDependency {
+	switch action.State {
+	case backlogrepair.ClassDependency:
 		dependsOn := strings.TrimSpace(action.DependsOn)
 		blocker, err := s.options.Tracker.Show(ctx, dependsOn)
 		if err != nil {
@@ -224,8 +225,48 @@ func (s *Session) repairRecords(ctx context.Context, action TrackerAction) (back
 		if strings.TrimSpace(blocker.Status) == closedWorkItemStatus {
 			records.Finished = map[string]struct{}{blocker.ID: {}}
 		}
+	case backlogrepair.ClassStatus:
+		// And a status is cleared on the same evidence about every link the item
+		// records, for the same reason: the listings above are the open work and
+		// the blocked work, so a blocker somebody is running right now is in
+		// neither, and reading its absence as "finished" would clear a status that
+		// is telling the truth.
+		finished, err := s.finishedBlockers(ctx, item)
+		if err != nil {
+			return backlogrepair.Records{}, err
+		}
+		records.Finished = finished
 	}
 	return records, nil
+}
+
+// finishedBlockers reads the work behind each link the item's own listing does
+// not settle, and reports those the tracker holds as closed.
+//
+// Only the unsettled links are read. A link the listing already calls closed
+// needs no read, and one whose item is still in the admitted queue is a wait the
+// judgement refuses on without this — so what this costs is one tracker call per
+// link whose fate nothing else says, which is the only case where reading it
+// decides anything.
+func (s *Session) finishedBlockers(ctx context.Context, item beads.WorkItem) (map[string]struct{}, error) {
+	finished := map[string]struct{}{}
+	for _, dependency := range item.Dependencies {
+		if dependency.Type != beads.BlocksDependency {
+			continue
+		}
+		id := strings.TrimSpace(dependency.ID)
+		if id == "" || strings.TrimSpace(dependency.Status) != "" {
+			continue
+		}
+		blocker, err := s.options.Tracker.Show(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("read %s to judge whether it still blocks %s: %w", id, item.ID, err)
+		}
+		if strings.TrimSpace(blocker.Status) == closedWorkItemStatus {
+			finished[id] = struct{}{}
+		}
+	}
+	return finished, nil
 }
 
 // admittedWork is the queue as the tracker holds it now: the open work and the

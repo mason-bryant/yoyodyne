@@ -11,6 +11,8 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backlogrepair"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // A status left over from a stoppage that ended is corrected without anybody
@@ -170,6 +172,156 @@ func TestARepairOfHeldWorkChangesNothing(t *testing.T) {
 	}
 	if len(tracker.unblocked) != 0 || len(tracker.updates) != 0 {
 		t.Fatalf("a held item was written to: cleared %#v, updated %#v", tracker.unblocked, tracker.updates)
+	}
+}
+
+// The sharpest hold of the three, wired the way the harness wires it. Triage
+// blocks an item in order to escalate it and leaves no dependency behind, so an
+// escalated item reads as a blocked status with nothing at all standing behind
+// it — which is exactly what a stale status looks like. What separates them is
+// the hold, and this holds the real derivation over a real escalation record
+// rather than a hold reason a test wrote out.
+func TestAnItemAwaitingADecisionOnItsEscalationIsReportedAndLeftAlone(t *testing.T) {
+	t.Parallel()
+
+	escalated := beads.WorkItem{ID: "yoyodyne-ifd.72", Title: "Its stoppage is waiting on a decision", Status: "blocked"}
+	tracker := &fakeTracker{
+		items:        map[string]beads.WorkItem{escalated.ID: escalated},
+		blockedItems: []beads.WorkItem{escalated},
+	}
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	if _, err := store.Escalations().Attempt(context.Background(), runstate.Escalation{
+		DocketKey:  "stopped-run:run-13",
+		RunID:      "run-13",
+		WorkItemID: escalated.ID,
+	}); err != nil {
+		t.Fatalf("Attempt() error = %v", err)
+	}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Nothing unfinished blocks it and it has no links at all.",
+			`{"action":"repair","id":"yoyodyne-ifd.72","state":"status","reason":"the queue has been passing it over for days"}`)},
+		{SessionID: "session-1", FinalText: "It is waiting on a decision; I left it."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Held = heldFromRunRecords{store: store}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Tidy the queue.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the repair refused", reply.Actions)
+	}
+	if !strings.Contains(reply.Actions[0].Failure, "stoppage") {
+		t.Fatalf("failure = %q, want it to restate that the stoppage is waiting on a decision", reply.Actions[0].Failure)
+	}
+	if len(tracker.unblocked) != 0 || len(tracker.updates) != 0 {
+		t.Fatalf("an escalated item was written to: cleared %#v, updated %#v", tracker.unblocked, tracker.updates)
+	}
+
+	// And the survey says the same thing about it, since a pass that reported it
+	// as correctable is a pass that would go on asking.
+	surveyProvider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Surveying.", `{"action":"survey"}`)},
+		{SessionID: "session-1", FinalText: "One item held."},
+	}}
+	surveyOptions := testOptions(t, surveyProvider)
+	surveyOptions.Tracker = tracker
+	surveyOptions.Held = heldFromRunRecords{store: store}
+	surveyed := openTestSession(t, surveyOptions)
+	surveyReply, err := surveyed.Send(context.Background(), "What is stale?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	detail := surveyReply.Actions[0].Detail
+	if strings.Contains(detail, "State the records have made stale, which \"repair\" corrects") {
+		t.Fatalf("the survey offers an escalated item as correctable: %q", detail)
+	}
+	for _, want := range []string{"Held for a person", "yoyodyne-ifd.72 [status]"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the survey says %q, want it to carry %q", detail, want)
+		}
+	}
+}
+
+// A status is cleared on evidence about every link the item records. The
+// admitted work is the open and the blocked, so an item a run is working on
+// right now is in neither listing — and the harness reads it rather than reading
+// its absence as work that finished.
+func TestAStatusIsNotClearedWhileABlockerIsBeingWorkedOn(t *testing.T) {
+	t.Parallel()
+
+	waiting := beads.WorkItem{ID: "yoyodyne-ifd.73", Title: "Its blocker is being worked on", Status: "blocked",
+		// A listing that records the relation and says nothing about what became of
+		// the work, which is what a Beads export frequently carries.
+		Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.74", Type: beads.BlocksDependency}}}
+	claimed := beads.WorkItem{ID: "yoyodyne-ifd.74", Title: "A run has it right now", Status: "in_progress"}
+	tracker := &fakeTracker{
+		items:        map[string]beads.WorkItem{waiting.ID: waiting, claimed.ID: claimed},
+		blockedItems: []beads.WorkItem{waiting},
+	}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Its blocker is in neither listing, so I read it as finished.",
+			`{"action":"repair","id":"yoyodyne-ifd.73","state":"status","reason":"nothing in the queue blocks it"}`)},
+		{SessionID: "session-1", FinalText: "The blocker is in progress; the status stands."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Held = readHolds(nil)
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Tidy the queue.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the repair refused", reply.Actions)
+	}
+	if !strings.Contains(reply.Actions[0].Failure, "yoyodyne-ifd.74") {
+		t.Fatalf("failure = %q, want it to name the work nothing said was finished", reply.Actions[0].Failure)
+	}
+	if len(tracker.unblocked) != 0 {
+		t.Fatalf("a status was cleared over a blocker a run is working on: %#v", tracker.unblocked)
+	}
+}
+
+// A re-attribution names a goal like any other action that names one, and the
+// same refusal covers it: a goal the goals do not state changes nothing, which
+// is what stops a repair minting the orphan the next survey would report.
+func TestARepairNamingAGoalTheGoalsDoNotStateWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	item := beads.WorkItem{ID: "yoyodyne-ifd.75", Title: "Named a goal that was reworded", Status: "open",
+		Notes: "Goal served: Run development almost without a person."}
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{item.ID: item}, open: []beads.WorkItem{item}}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Re-attributing it to what I think the goal says now.",
+			`{"action":"repair","id":"yoyodyne-ifd.75","state":"attribution","goal":"Run development with no people at all","reason":"the amendment reworded it"}`)},
+		{SessionID: "session-1", FinalText: "The goals do not state that."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Held = readHolds(nil)
+	options.Goals = recordedGoals("Run development nearly autonomously")
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Tidy the queue.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the repair refused", reply.Actions)
+	}
+	if !strings.Contains(reply.Actions[0].Failure, "Run development with no people at all") {
+		t.Fatalf("failure = %q, want it to name the goal nothing states", reply.Actions[0].Failure)
+	}
+	if len(tracker.updates) != 0 {
+		t.Fatalf("an item was re-attributed to a goal the goals do not state: %#v", tracker.updates)
 	}
 }
 
@@ -414,6 +566,19 @@ func readHolds(reasons map[string]string) HeldWork {
 type fakeHeldWork struct {
 	holds backlog.Holds
 	err   error
+}
+
+// heldFromRunRecords is the wiring the harness itself uses: the shared read-model
+// derivation over the harness's own record of stopped work. It is here rather
+// than a hold reason written out by hand because what has to be established is
+// that an escalation reaches this refusal at all, which a written-out reason
+// would assume rather than show.
+type heldFromRunRecords struct {
+	store *runstate.Store
+}
+
+func (h heldFromRunRecords) HeldForAPerson(context.Context) (backlog.Holds, error) {
+	return readmodel.HeldForAPerson(h.store)
 }
 
 func (f fakeHeldWork) HeldForAPerson(context.Context) (backlog.Holds, error) {

@@ -22,9 +22,13 @@
 //
 // # A governance hold is reported and never repaired
 //
-// Some of this work is held for a person: a stoppage nobody has decided about,
-// a change that exists only on a preserved branch, a directive in force over the
-// item. Such an item can look exactly as stale as any other — a blocked status
+// Some of this work is held for a person: an escalation waiting on a decision,
+// a change that exists only on a preserved branch, a publication that never
+// finished, a directive in force over the item. The first is the sharpest of
+// them, because the harness's own triage blocks an item in order to escalate it
+// and leaves no dependency behind — so an escalated item reads as a status with
+// nothing at all standing behind it, and what stops it being cleared is the hold
+// and nothing else. Such an item can look exactly as stale as any other — a blocked status
 // with nothing unfinished behind it is what a preserved stoppage leaves — and
 // correcting it would release work that somebody still has to decide about. So a
 // held item is reported with the reason restated and is never among the repairs,
@@ -92,6 +96,14 @@ func (c Class) String() string { return string(c) }
 // admitted work does not carry may be closed, claimed, or a name nothing
 // answers to, and removing a link on the strength of not having found something
 // would retire the dependency of an item somebody is working on right now.
+//
+// The status class rests on the same evidence, which is what stops the two
+// classes in this file disagreeing about what absence means. Admitted is the
+// open and blocked work, so a blocker somebody is running right now is in
+// neither — and a status cleared because its blocker was not in a listing that
+// never carried it is a durable write made on nothing. So a status is corrected
+// only where every link it records is one the tracker's own listing calls
+// closed or the caller went and read.
 type Records struct {
 	Admitted   []beads.WorkItem
 	Held       backlog.Holds
@@ -162,6 +174,12 @@ func (e *HoldError) Error() string {
 // Nothing here fails. A reading whose holds could not be read reports every item
 // it would otherwise have offered as held, which is the whole of what a failed
 // reading changes about the answer.
+//
+// A survey reads no work outside the listings it was given, so a blocked item
+// with a link nothing in those listings settles is not offered here. That is the
+// safe direction and not a gap: the act reads that link itself, so what a survey
+// under-reports an act can still establish, and what a survey over-reported
+// would be a correction proposed on nothing.
 func Survey(records Records) Report {
 	var report Report
 	for _, item := range records.Admitted {
@@ -237,11 +255,22 @@ func judgements(item beads.WorkItem, class Class, records Records) []Repair {
 	}
 }
 
-// staleStatus is a status of blocked with nothing unfinished behind it. It is
-// the same reading the backlog orders the queue by and the claim corrects a
-// refusal on, asked here so a pass can correct it before a run meets it.
+// staleStatus is a status of blocked that every record says nothing stands
+// behind. It asks two questions rather than one, and both have to answer.
+//
+// The first is the reading the backlog orders the queue by and the claim
+// corrects a refusal on: does this item wait on work that is still unfinished.
+// The second is what makes this a durable write rather than a selection: is
+// every link it records one something actually says is finished. They differ
+// exactly where a listing carries a link and says nothing about what became of
+// it, and the item it names is in no listing the caller read — which is what a
+// blocker somebody is running right now looks like from here, since the admitted
+// work is the open and the blocked and a claimed item is neither.
 func staleStatus(item beads.WorkItem, records Records) []Repair {
-	if !blocked(item) || len(item.WaitingOn(unfinished(records))) > 0 {
+	if !blocked(item) {
+		return nil
+	}
+	if len(item.WaitingOn(unfinished(records))) > 0 || len(unsettledLinks(item, records)) > 0 {
 		return nil
 	}
 	return []Repair{{
@@ -250,6 +279,30 @@ func staleStatus(item beads.WorkItem, records Records) []Repair {
 		Class:      ClassStatus,
 		Stale:      "its status says blocked and nothing unfinished blocks it; a status is written when work stops and is never rewritten when what stopped it clears",
 	}}
+}
+
+// unsettledLinks is every blocking link this item records that nothing the
+// caller read calls finished. A link the listing itself calls closed is settled,
+// and so is one whose item the caller went and read; anything else is a link
+// whose fate this does not know, which is not the same thing as a link to work
+// that is done.
+func unsettledLinks(item beads.WorkItem, records Records) []string {
+	var unsettled []string
+	for _, dependency := range item.Dependencies {
+		if dependency.Type != beads.BlocksDependency {
+			continue
+		}
+		id := strings.TrimSpace(dependency.ID)
+		if id == "" || dependency.Status == closedStatus {
+			continue
+		}
+		if _, read := records.Finished[id]; read {
+			continue
+		}
+		unsettled = append(unsettled, id)
+	}
+	sort.Strings(unsettled)
+	return unsettled
 }
 
 // deadDependencies is every blocking link this item records on work the tracker
@@ -322,7 +375,11 @@ func why(item beads.WorkItem, class Class, records Records) string {
 		if !blocked(item) {
 			return fmt.Sprintf("the tracker holds it at %q rather than blocked, so there is no blocked status to clear", item.Status)
 		}
-		return fmt.Sprintf("it is blocked and waits on unfinished work: %s", strings.Join(item.WaitingOn(unfinished(records)), ", "))
+		if waiting := item.WaitingOn(unfinished(records)); len(waiting) > 0 {
+			return fmt.Sprintf("it is blocked and waits on unfinished work: %s", strings.Join(waiting, ", "))
+		}
+		return fmt.Sprintf("nothing read here says what became of the work it waits for (%s), and an identifier the admitted work does not carry may be closed, claimed, or a name nothing answers to",
+			strings.Join(unsettledLinks(item, records), ", "))
 	case ClassDependency:
 		return "it records no dependency the tracker says is finished"
 	case ClassAttribution:
