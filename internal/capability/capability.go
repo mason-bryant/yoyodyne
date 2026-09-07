@@ -109,6 +109,19 @@ const (
 	// in the same breath as admission and is still its own name, because a role
 	// that may reorder without admitting is a coherent thing to write down.
 	BacklogOrder Capability = "backlog.order"
+	// WorkItemRepairState is correcting backlog state the records have made
+	// stale: a blocked status left over from a stoppage that ended, a dependency
+	// on work that closed, an attribution orphaned by an amendment to the goals.
+	// It is the product manager's over her own backlog, granted by the
+	// configurable-workflows design's authority-model section.
+	//
+	// It is apart from WorkItemMutate because its subject is not what an item
+	// says but whether what the tracker records about it is still true, and apart
+	// from BacklogAdmit because it is state hygiene rather than a decision about
+	// scope: nothing held under it closes work, retires it, or takes it out of
+	// the order, and an act under it is refused where the records do not say the
+	// old state is stale.
+	WorkItemRepairState Capability = "work-item.repair-state"
 	// WorkDecompose is creating work underneath something already admitted. It is
 	// the development manager's whole tracker authority beyond annotation, and it is
 	// deliberately not BacklogAdmit: decomposition underneath an admitted parent is
@@ -195,6 +208,7 @@ var declared = []Capability{
 	RunStateMutate,
 	BacklogAdmit,
 	BacklogOrder,
+	WorkItemRepairState,
 	WorkDecompose,
 	WorkTriage,
 	ArtifactProductMutate,

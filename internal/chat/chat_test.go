@@ -1443,7 +1443,15 @@ type fakeTracker struct {
 	// which is what makes "an escalation lands on the item" an assertion rather
 	// than a claim about prose.
 	blocked [][2]string
-	err     error
+	// blockedItems is what a listing of the blocked status answers with, which
+	// is the half of the admitted work a listing of the open queue never carries
+	// — and the half a status left over from a stoppage that ended is in.
+	blockedItems []beads.WorkItem
+	// unblocked is every item it was asked to clear a blocked status on and the
+	// note each carried, which is what makes "a repair records what it corrected
+	// and why" an assertion rather than a claim about prose.
+	unblocked [][2]string
+	err       error
 	// linkErr fails a link and nothing else, which is what a tracker that will
 	// not record a dependency looks like from here: the item was created, and the
 	// thing that would hold it back was refused.
@@ -1482,10 +1490,14 @@ func (f *fakeTracker) List(_ context.Context, status string) ([]beads.WorkItem, 
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	if strings.TrimSpace(status) == "" {
+	switch strings.TrimSpace(status) {
+	case "":
 		return f.all, nil
+	case "blocked":
+		return f.blockedItems, nil
+	default:
+		return f.open, nil
 	}
-	return f.open, nil
 }
 
 func (f *fakeTracker) Create(_ context.Context, item beads.NewWorkItem) (beads.WorkItem, error) {
@@ -1530,6 +1542,26 @@ func (f *fakeTracker) Block(_ context.Context, id, reason string) (beads.WorkIte
 		return beads.WorkItem{}, f.durableErr
 	}
 	return beads.WorkItem{ID: id, Status: "blocked"}, nil
+}
+
+func (f *fakeTracker) Unblock(_ context.Context, id, note string) (beads.WorkItem, error) {
+	if f.err != nil {
+		return beads.WorkItem{}, f.err
+	}
+	f.unblocked = append(f.unblocked, [2]string{id, note})
+	if f.durableErr != nil {
+		// Clearing a status is one bd invocation that sets the status and appends
+		// the note, so a write the store kept leaves both behind.
+		item := f.items[id]
+		item.Status = "open"
+		f.items[id] = item
+		f.append(id, note)
+		return beads.WorkItem{}, f.durableErr
+	}
+	item := f.items[id]
+	item.Status = "open"
+	f.items[id] = item
+	return beads.WorkItem{ID: id, Status: "open"}, nil
 }
 
 // append adds to what an item's notes say, so a write the fake took and then

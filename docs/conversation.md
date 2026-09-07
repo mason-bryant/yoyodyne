@@ -103,7 +103,7 @@ capabilities the harness performs on its behalf. The first is the work tracker,
 through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, reparent, reprioritize, park and unpark, link and unlink a
-dependency, close, and
+dependency, repair state the records have made stale, close, and
 retire. One further operation is about none of that: `handle` records
 what became of a report another role filed, which is how the pile it is shown
 [stops being asked about](reporting.md#who-reads-them-and-what-became-of-each-one). Every
@@ -383,6 +383,60 @@ was admitted under is never rewritten. An item that names no goal and one whose
 goal your goals do not state are reported apart, because the first is work to
 attribute and the second is a claim to correct. [`yoyo goals`](artifacts.md#goals-and-what-work-serves-them)
 reads both from outside the conversation.
+
+### Backlog state that has stopped being true
+
+Three things about admitted work go stale on their own, and correcting them is
+the product manager's rather than a person's. A status is written when work stops
+and is never rewritten when what stopped it clears, so an item whose blocker
+landed reads as blocked forever. A dependency records that one item waits for
+another and goes on recording it after that other item closes. And an attribution
+stops resolving: an item that recorded its goal in the document's words rather
+than by [the goal's identity](artifacts.md#goals-and-what-work-serves-them) names
+words nobody states once the document is reworded, an item whose goal was retired
+or removed names a goal that is not in force whichever way it named it, and an
+item whose notes were replaced carries nothing where the tracker witnesses that
+it once did. Re-wording a goal an item named by its identity is deliberately not
+among them — leaving that item attributed is what the identity is for — so what
+is corrected here is the attribution the goals cannot resolve rather than every
+item an amendment touched. None of them is a decision anybody owes, and every one
+of them used to wait for somebody to notice.
+
+`repair` corrects one of the three, and `state` says which: `status` clears a
+blocked status where every link the item records is one the tracker says is
+finished, `dependency` retires a link on work the tracker holds as closed, and
+`attribution` re-attributes an item whose recorded goal no longer resolves. The
+staleness is the harness's judgement rather than the product manager's assertion
+— it reads the item, the admitted queue, the goals, and the work behind any link
+the queue does not account for, all as the act runs, and refuses the correction
+where they still say the old state is right, so a repair asked for over a listing
+that has moved changes nothing. Absence is never the evidence: the admitted work
+is what is open and what is blocked, so a blocker a run is working on right now
+is in neither listing, and a status is not cleared because a link's item could
+not be found. A goal a re-attribution names is resolved against the goals before
+anything is written, exactly as an admission's is. Each act records on the item what was changed, what made the old state
+stale, and the reason given, and a survey lists what is stale alongside the queue
+so the pass that corrects it is the pass that was already looking.
+
+None of this takes work out of the backlog. A repair is state hygiene and never a
+decision: work that should leave is closed or retired in the open, exactly as
+before.
+
+Work somebody still has to release is never repaired, however stale its state
+looks — an escalation waiting on a decision, a change that exists only on a
+preserved branch, a publication that never finished, a directive in force that
+pauses the work it affects. The escalation is the one that most needs saying:
+triage blocks an item in order to escalate it and leaves no dependency behind, so
+an escalated item reads as a blocked status with nothing at all standing behind
+it, and the hold is the whole of what separates the two. Such an
+item is reported with the reason it is held, every pass, and left exactly as it
+is: clearing its status would start a fresh run on top of work that is still
+there. Both records behind a hold fail the same way: a conversation that cannot
+read what the harness is holding, or cannot read the directives, corrects nothing
+rather than deciding that nothing is held — for the same reason
+[the queue holds every blocked item it cannot read a hold for](work.md#letting-the-harness-choose-the-work),
+since a reader that cannot tell a stale status from a stoppage must not clear
+either.
 
 An item also says what carries it, where that is not a developer run, and whose
 conversation that is. Work whose execution is a conversation with a role —

@@ -497,6 +497,14 @@ held, and it becomes pullable without anybody having edited its status. A pass
 that cannot read those records holds every blocked item rather than releasing
 work whose hold it could not see.
 
+The claim clearing a stale status is the harness meeting one; the product
+manager corrects them deliberately, in her own pass over the queue, along with
+dependencies on work that closed and attributions the goals no longer state. She
+is refused by the same holds and reads them from the same records, so an item
+held for a person is reported with its reason and left alone there too. What that
+looks like from the conversation is
+[backlog state that has stopped being true](conversation.md#backlog-state-that-has-stopped-being-true).
+
 Capacity is enforced where a run is reserved rather than by the scheduler, so two
 of these, or one of these and a `yoyo run` beside it, share one limit rather than
 getting one each. A run that loses the race for the last free slot is reported as

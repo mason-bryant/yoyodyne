@@ -842,6 +842,37 @@ func (c Client) Block(ctx context.Context, id, reason string) (WorkItem, error) 
 	return c.confirmWritten(ctx, item, appendedNote(reason))
 }
 
+// Unblock clears a status of blocked, carrying the account of why it was stale
+// into the item's notes. It is the deliberate half of what the claim does for
+// itself when bd refuses a claim on a status nothing maintains: the same write,
+// made because somebody judged the status stale rather than because a run
+// happened to meet it.
+//
+// It says nothing about whether the status was actually stale, which is the
+// caller's judgement over the dependency graph and the holds. What it does hold
+// to is that the write landed: a status still reading blocked afterwards would
+// leave the item unclaimable and the note claiming it had been released.
+func (c Client) Unblock(ctx context.Context, id, note string) (WorkItem, error) {
+	if err := validateIssueID(id); err != nil {
+		return WorkItem{}, err
+	}
+	if strings.TrimSpace(note) == "" {
+		return WorkItem{}, errors.New("a note saying what made the blocked status stale is required")
+	}
+	data, err := c.run(ctx, "update", id, "--status=open", "--append-notes="+note, "--json")
+	if err != nil {
+		return WorkItem{}, err
+	}
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if item.Status != statusOpen {
+		return WorkItem{}, fmt.Errorf("work item %s status is %q after its blocked status was cleared, want open", item.ID, item.Status)
+	}
+	return c.confirmWritten(ctx, item, appendedNote(note))
+}
+
 func (c Client) AddBlocker(ctx context.Context, id, blockerID string) error {
 	return c.changeBlocker(ctx, "add", "added", id, blockerID)
 }

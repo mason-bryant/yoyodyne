@@ -521,6 +521,11 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// change is, so work carved out of a stoppage waits for the change it was
 		// written against rather than reading as ready without it.
 		Stoppages: conversationStoppages(parts, role),
+		// What the harness is holding for a person, which is what a repair of stale
+		// backlog state is refused by. It is the same derivation the scheduler and
+		// every operator surface read, so an item this conversation reports as held
+		// is the item the queue is holding back.
+		Held: conversationHeldWork(parts),
 		// The changes other roles have proposed to the documents this one owns.
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.
