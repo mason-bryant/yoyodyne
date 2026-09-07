@@ -231,6 +231,14 @@ func buildComponents(configPath string) (components, error) {
 		// checkout's copy rather than the one its base commit carried. The
 		// interactions export is not here because nothing in a run reads it.
 		CurrentExports: []string{".beads/issues.jsonl"},
+		// A listing that described this repository without a registration another
+		// run had not finished writing is the one thing the manager works around,
+		// and nothing else would ever say so. It goes to standard error rather than
+		// into a command's answer, which is on standard output and which a command
+		// asked for JSON has to keep parseable.
+		Note: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, format+"\n", args...)
+		},
 	})
 	if err != nil {
 		return components{}, err
