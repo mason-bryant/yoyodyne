@@ -2137,16 +2137,21 @@ below. `yoyo config show --effective` prints the value in force and
 `--origins` names the file it came from, so a rollback is something you can
 confirm rather than assume.
 
-Two fields on the run say what happened:
+Three fields on the run say what happened:
 
 - `workflow_instance_id` names the instance, and a run carrying one is a run
   executing the definition. It is written when the run is created and never
   afterwards.
+- `workflow_unobserved` is why a run has none although its project asked for
+  one: the definition could not be built, or the instance could not be created.
+  The run delivers as it would have and what is lost is the watching. Without
+  it, such a run reads like a rolled-back one and is counted as one the
+  definition agreed with.
 - `workflow_divergence` is why the run stopped being observed: the definition
   sent it somewhere it did not go, refused an outcome it produced, could not be
   stepped at all, or had no outcome for the way the run ended. A run carrying one
   is a run to read before the definition is trusted with anything, which is still
-  ahead of it: nothing about the work changes either way.
+  ahead of it.
 
   That last case is what keeps the record honest. A run can end by a route no
   definition expresses — a review that ended without a verdict and without the
@@ -2155,18 +2160,15 @@ Two fields on the run say what happened:
   naming the nearest outcome would record the run ending somewhere it did not. So
   the instance is left standing where the two last agreed, and a run that reaches
   a terminal status with its instance still mid-graph records the gap itself as
-  the divergence, naming the state it stopped in. Without that, the runs least
-  entitled to read as clean would be exactly the ones that did.
+  the divergence, naming the state it stopped in.
 
   That holds however the run reaches its terminal. A run its own process ends
   records it there; a run whose process died and is settled by `yoyo reconcile`
-  afterwards has the same gap recorded by the sweep, in the same words, whether
-  the settlement closes it as completed, blocks it, or fails it. The completed
-  case is the one worth naming: the work lands and the item closes, so a run
-  whose observation stopped halfway would otherwise read exactly like one that
-  walked the definition to the end. Processes die — to the network, to the
-  provider, and to the machine — so a record that only spoke for the runs that
-  ended tidily would be a record of the wrong runs.
+  has the same gap recorded by the sweep, in the same words, whether the
+  settlement completes it, blocks it, or fails it. The completed case is the one
+  worth naming: the work lands and the item closes, so a run whose observation
+  stopped halfway would otherwise read exactly like one that walked the
+  definition to the end.
 
   **What is recorded is the gap, not the settlement.** A process that died can
   still have left its instance on a terminal — an ending the definition has an
@@ -2180,10 +2182,10 @@ Two fields on the run say what happened:
   having missed it, which is why it is measured rather than left to be read off
   an absent field.
 
-Both are on the run's summary, so `yoyo status <beads-id>` and its `--json` carry
-them like every other fact about a run, and a divergence is named on its own line
-there. It is printed beside the reasons a run ended without being one of them: the
-run delivered exactly as it would have, and what diverged is the observation.
+All three are on the run's summary, so `yoyo status <beads-id>` and its `--json`
+carry them like every other fact about a run, and a divergence and an unobserved
+run each get a line there. Neither is a reason a run ended: the run delivered
+exactly as it would have, and what diverged or went unwatched is the observation.
 
 Two divergences are already known and expected, and both are interrupted
 processes rather than anything about the work. A run interrupted while its

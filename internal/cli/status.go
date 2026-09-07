@@ -702,6 +702,14 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		fmt.Fprintf(writer, "  workflow divergence: %s\n", singleLine(run.WorkflowDivergence))
 		printed = true
 	}
+	// A run nothing observed is printed for the same reason and more loudly than
+	// the field's absence would be: it is not a reason the run ended either, and
+	// it is the one shape that reads as an agreeing run to anybody counting
+	// divergences, because it has none and never could have had one.
+	if run.WorkflowUnobserved != "" {
+		fmt.Fprintf(writer, "  workflow unobserved: %s\n", singleLine(run.WorkflowUnobserved))
+		printed = true
+	}
 	return printed
 }
 

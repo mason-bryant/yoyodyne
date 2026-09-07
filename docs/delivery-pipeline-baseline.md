@@ -544,6 +544,12 @@ is unmeasured. Most of these are asserted somewhere in
   than the behavior.
 - `completion_recording_failure`, which is a succeeded run whose final record
   arrived late.
+- `workflow_unobserved`, which is why a run that was to be observed has no
+  instance. No trace here holds it and none ever can: a trace whose run was
+  eligible for observation and carries it is refused rather than recorded, which
+  is the point of the field. `internal/orchestrator/declarative_test.go` asserts
+  both halves — the run recording it and delivering anyway, and the recorder
+  refusing the trace.
 - The environmental classification of a refused round, and the budgets it hands
   back.
 - `usage_limit_paused_seconds` reaching `execution.usage_limit_max_pause`, and
@@ -625,7 +631,23 @@ them.
   takes any more. Each one that reserves a run therefore carries the
   `workflow_instance_id` its observation was recorded under, and the delivery
   they record is otherwise unmoved by the flip — the whole of what changed when
-  the default moved is that one line per trace. One trace carries a
+  the default moved is that one line per trace.
+
+  That is enforced rather than asserted: a scenario driven on the default whose
+  run reserved no instance is refused, on a re-record and on an ordinary
+  comparison alike, so a run nothing observed is never what a path is frozen as.
+  It is enforced because it was broken.
+  `recoverable-death-carries-on-past-the-relaunch-budget` was once recorded from
+  a run whose observation never started, which differs from the right trace by
+  one absent field and passes every other check here; the frozen document then
+  agreed with three consecutive full checks and began failing when the
+  observation started working again — a document failing for a reason unrelated
+  to the change that had to fix it, and, until then, a run counted as one the
+  definition agreed with. A run whose project rolled back and a path that
+  reserves no run at all are unaffected: carrying no instance is what both of
+  them are.
+
+  One trace carries a
   `workflow_divergence` as well:
   `reconciliation-completes-a-run-interrupted-inside-integration`, where a
   process killed inside integration is settled as succeeded with its instance

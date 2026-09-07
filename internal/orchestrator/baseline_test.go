@@ -63,6 +63,9 @@ func TestDeliveryPipelineBaseline(t *testing.T) {
 			t.Parallel()
 			fixture := scenario.drive(t)
 			trace := fixture.trace(t, scenario)
+			if refusal := baselineObservationRefusal(fixture.observable, trace.Durable); refusal != "" {
+				t.Fatalf("this path was driven on the declarative default and %s.\nA trace of a run nothing observed is not this path's baseline, so it is neither compared nor recorded: fix what stopped the observation first.", refusal)
+			}
 			compareBaselineTrace(t, scenario.name, trace)
 		})
 	}
@@ -370,6 +373,14 @@ type baselineFixture struct {
 	providers    []*fakeBackend
 	steps        []baselineStep
 	reconciled   []Reconciliation
+	// reserved says a run record exists, and observable says the invocation that
+	// reserved it was one the declarative path observes. Both are read off what
+	// the scenario actually drove rather than assumed of every scenario, because
+	// the two that matter here are told apart by nothing else: a rolled-back run
+	// carries no instance legitimately, and a run that was to be observed and
+	// carries none is a run nothing watched.
+	reserved   bool
+	observable bool
 	// masked are values a scenario mints at random -- a directive identifier and
 	// nothing else so far -- which are replaced by a stable placeholder so the
 	// trace is the behavior rather than the identifier.
@@ -452,7 +463,26 @@ func (f *baselineFixture) invoke(t *testing.T, name string, pipeline Pipeline) O
 	t.Helper()
 	outcome, err := pipeline.Run(context.Background(), f.tracker.item.ID)
 	f.steps = append(f.steps, baselineStep{name: name, outcome: outcome, err: err})
+	f.noteObservable(pipeline)
 	return outcome
+}
+
+// noteObservable remembers whether the invocation that reserved this scenario's
+// run was one the declarative path observes.
+//
+// It is the reserving invocation that decides, and not the last one: whether a
+// run is observed is settled once, when the run is created, so a scenario whose
+// later invocations are configured differently is still a run of whatever the
+// first of them was.
+func (f *baselineFixture) noteObservable(pipeline Pipeline) {
+	if f.reserved {
+		return
+	}
+	if _, err := f.store.Load(pipelineRunID); err != nil {
+		return
+	}
+	f.reserved = true
+	f.observable = pipeline.Config.Execution.DeclarativeDelivery && pipeline.Instances != nil
 }
 
 // mask replaces a value the scenario could not choose with a stable placeholder.
@@ -1224,6 +1254,40 @@ func (n *baselineNormalizer) commit(value string) string {
 //
 // Comparison.
 //
+
+// baselineObservationRefusal is why a trace must not be frozen, and "" when
+// there is no reason it must not be.
+//
+// A scenario driven on the declarative default and reserving a run has to record
+// the instance that observed it. The delivery is unchanged either way — an
+// observation never decides anything about a run — which is exactly why this has
+// to be refused mechanically rather than noticed: a run nothing watched produces
+// a trace that differs from the right one by one absent field, passes every
+// other check in this file, and is then the recorded baseline of the path.
+//
+// That is not a hypothetical.
+// `recoverable-death-carries-on-past-the-relaunch-budget` was recorded with no
+// instance, agreed with three consecutive full checks, and began failing only
+// when the same code reliably produced one — so the frozen document failed for a
+// reason that had nothing to do with the change that had to fix it, and until
+// then the run it froze counted as one the definition agreed with.
+//
+// It refuses on a comparison as well as on a re-record. Recording is where the
+// damage is done, but a run that stops being observed between two recordings is
+// a defect at the moment it happens rather than at the next `-update-baseline`,
+// and there is no reason to hold the report until somebody re-records.
+func baselineObservationRefusal(observable bool, durable map[string]any) string {
+	if !observable || durable == nil {
+		return ""
+	}
+	if instance, _ := durable["workflow_instance_id"].(string); instance != "" {
+		return ""
+	}
+	if unobserved, _ := durable["workflow_unobserved"].(string); unobserved != "" {
+		return fmt.Sprintf("the run it reserved was not observed: %s", unobserved)
+	}
+	return "the run it reserved records no workflow_instance_id, so nothing observed it and nothing said why"
+}
 
 func compareBaselineTrace(t *testing.T, name string, trace baselineTrace) {
 	t.Helper()

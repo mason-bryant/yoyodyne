@@ -969,6 +969,23 @@ type State struct {
 	// is trusted to decide anything, which is still ahead of it. Absent means the
 	// instance and the run agreed at every boundary the run reached.
 	WorkflowDivergence string `json:"workflow_divergence,omitempty"`
+	// WorkflowUnobserved is why this run has no instance although its project
+	// asked for one: the definition could not be read, or the instance could not
+	// be created. It is the other way a run comes to carry no
+	// WorkflowInstanceID, and the two are told apart here because they are not
+	// the same fact. A project that rolled back records neither and is a legacy
+	// run; a run that was to be observed and is not carries this, and is a run
+	// nothing watched.
+	//
+	// Without it the two are one absent field, and the silence is read as the
+	// harmless one. That is not hypothetical: a run whose trial failed to start
+	// was recorded as the baseline of a delivery path, agreed with three
+	// consecutive full checks, and began failing only when the same code
+	// reliably produced an instance. It says nothing about the work — a run
+	// nothing observed delivers exactly as it would have — but a count of runs
+	// the definition agreed with must not include it, and a count reading an
+	// absent divergence is exactly what would.
+	WorkflowUnobserved string `json:"workflow_unobserved,omitempty"`
 	// ProviderSessionID is the developer session. The reviewer's session is
 	// recorded separately because the two are always distinct invocations.
 	ProviderSessionID string `json:"provider_session_id,omitempty"`
@@ -1496,6 +1513,12 @@ func (s State) Validate() error {
 	}
 	if s.WorkflowDivergence != "" && s.WorkflowInstanceID == "" {
 		problems = append(problems, errors.New("workflow_divergence requires the workflow_instance_id it was observed on"))
+	}
+	// And the same contradiction from the other side: a run naming an instance was
+	// observed, so a reason it is not observed said beside one is a record that
+	// disagrees with itself about which of the two a reader should believe.
+	if s.WorkflowUnobserved != "" && s.WorkflowInstanceID != "" {
+		problems = append(problems, errors.New("workflow_unobserved is why a run has no instance, and this run names workflow_instance_id"))
 	}
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))

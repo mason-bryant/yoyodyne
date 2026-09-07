@@ -270,8 +270,16 @@ type RunSummary struct {
 	// definition is what a run executes by default, so where it sent a run is a
 	// fact about that run. One nobody can read without opening the state
 	// directory is one nobody reads.
+	//
+	// WorkflowUnobserved is the third of them and is why there was no watching at
+	// all: a run whose project asked to be observed and whose instance could not
+	// be created. It is on the summary for the same reason the other two are, and
+	// with more of it: an unobserved run is the one that reads as a clean run to
+	// anything counting divergences, so it is exactly the run that has to be
+	// visible without opening the state directory.
 	WorkflowInstanceID string `json:"workflow_instance_id,omitempty"`
 	WorkflowDivergence string `json:"workflow_divergence,omitempty"`
+	WorkflowUnobserved string `json:"workflow_unobserved,omitempty"`
 	// Selection is why the harness was running this item: who chose it and on
 	// what grounds. It matters most for the runs nobody typed an identifier for,
 	// which is why its absence is worth reporting rather than omitting — a run
@@ -424,6 +432,7 @@ func (s *Store) summarize(state State) RunSummary {
 
 		WorkflowInstanceID: state.WorkflowInstanceID,
 		WorkflowDivergence: state.WorkflowDivergence,
+		WorkflowUnobserved: state.WorkflowUnobserved,
 
 		CompletionRecordingFailure: state.CompletionRecordingFailure,
 	}

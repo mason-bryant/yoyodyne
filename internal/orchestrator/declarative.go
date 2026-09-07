@@ -118,18 +118,22 @@ func deliveryInstanceID(runID string) string {
 // unless the project rolled back to the legacy path or this process has nowhere
 // to record one.
 //
-// Almost everything it can refuse leaves the run exactly as it was, with no
-// instance and nothing recorded: this is an observation of delivery and is never
-// a reason delivery does not happen. The refusals are silent for that reason —
-// there is no run yet for a divergence to be recorded on, and a project that
-// rolled back is one that asked for exactly this rather than something to
-// report.
+// Everything it can refuse leaves the run exactly as it was, with no instance:
+// this is an observation of delivery and is never a reason delivery does not
+// happen. The refusals are not interchangeable, though they were recorded as
+// though they were. A project that rolled back asked for a run with no instance
+// and there is nothing to say about it; a run that was to be observed and could
+// not be is a run nothing is watching, and both left the same absent field
+// behind. Anything counting the runs the definition agreed with reads that
+// absence as the first case, so it counts the second as clean — the run it is
+// least entitled to pass. The second says so on the run instead, with the cause.
 //
-// The one exception is a definition the project wrote itself, and it is returned
-// rather than swallowed. A project that keeps its own file asked for that
-// sequence; a defect in it is somebody's to fix, and this is the last moment
-// where saying so is free — before the item is claimed, before a worktree
-// exists, and before a provider has been paid for anything.
+// It is recorded rather than returned because the run is not what is broken. The
+// one exception is a definition the project wrote itself, which is returned and
+// stops the run: a project that keeps its own file asked for that sequence, a
+// defect in it is somebody's to fix, and this is the last moment where saying so
+// is free — before the item is claimed, before a worktree exists, and before a
+// provider has been paid for anything.
 func (a *activeRun) beginDeliveryTrial() error {
 	p := a.pipeline
 	if !p.Config.Execution.DeclarativeDelivery || p.Instances == nil {
@@ -141,9 +145,11 @@ func (a *activeRun) beginDeliveryTrial() error {
 		if errors.As(err, &refused) {
 			return err
 		}
+		a.noteUnobserved(fmt.Errorf("the delivery definition this run would be observed against could not be built: %w", err))
 		return nil
 	}
 	if _, err := trial.executor.Start(trial.instance); err != nil {
+		a.noteUnobserved(fmt.Errorf("the instance this run would be observed through could not be created: %w", err))
 		return nil
 	}
 	a.trial = trial
@@ -364,6 +370,24 @@ func (a *activeRun) noteDivergence(cause error) bool {
 	a.trial.stopped = cause.Error()
 	a.state.WorkflowDivergence = cause.Error()
 	return true
+}
+
+// noteUnobserved puts on the run why it is not observed although its project
+// asked for it to be.
+//
+// It is not a divergence and is kept in its own field rather than in that one. A
+// divergence is what an instance and a run disagreed about, so it is only ever
+// said of a run there was an instance for; this is said of a run there is not,
+// which is why the record refuses to carry a divergence beside it and why a
+// reader counting divergences would otherwise never see this at all.
+//
+// It notes rather than saves, as the divergence does: this is written before the
+// item is claimed, and every path onwards from there writes the run's record.
+func (a *activeRun) noteUnobserved(cause error) {
+	if a.state.WorkflowUnobserved != "" {
+		return
+	}
+	a.state.WorkflowUnobserved = cause.Error()
 }
 
 // observeUnfinished records, on a run that is ending terminally, that its
