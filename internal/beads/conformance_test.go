@@ -300,6 +300,100 @@ func TestGoalWitnessConformance(t *testing.T) {
 	}
 }
 
+// TestAppendedNoteDurabilityConformance replays the shape yoyodyne-ifd.283 was
+// in when two operator directions were reported written to it and read back as
+// absent: an item whose notes are already tens of kilobytes, appended to twice in
+// a row, in the state that item was actually in.
+//
+// It is here rather than only against the fake because the fake replays whatever
+// it was handed, so every scripted check of the read-back passes identically
+// against a bd that drops a long append, drops one onto an item whose notes are
+// already large, or keeps only the last of two. What that would cost is the whole
+// of what this item is about: notes are where the reasoning behind a decision is
+// recorded, and one silently dropped is reasoning nobody knows is gone.
+//
+// The 283 notes were 64 kilobytes when the directions were written, so the size
+// here is that order rather than a token one, and the append is the operator's
+// own paragraph rather than a word.
+func TestAppendedNoteDurabilityConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	// An item carrying the accumulated record of a long-lived piece of work: the
+	// admission and the goal at the front, and every run's outcome after it.
+	var history strings.Builder
+	history.WriteString("Admitted to the backlog by the product manager in conversation chat-2f0.\n\n")
+	history.WriteString(goal.Note("Run development nearly autonomously, with the product manager as the human's routine interface."))
+	for len(history.String()) < 64<<10 {
+		fmt.Fprintf(&history, "\nYoyodyne stopped this item: a configured check still failed after every permitted attempt.\n"+
+			"Repair attempts: 2 of 2 permitted\nRun: run-%030d\n", history.Len())
+	}
+	created, err := client.Create(ctx, NewWorkItem{
+		Title:       "The development manager's hourly sweep",
+		Description: "Every hour the harness wakes the development manager to look for unresolved issues.",
+		Type:        "task",
+		Notes:       history.String(),
+	})
+	if err != nil {
+		t.Fatalf("Create() with a long history error = %v", err)
+	}
+
+	const first = "Scope addition, operator-directed 2026-09-07: FORGE HYGIENE joins the sweep's findings. The sweep reads the " +
+		"tracker but not the forge today, which is why 30 open pull requests accumulated unnoticed - most superseded by later " +
+		"runs that landed their items. The development manager's hourly sweep reports open pull requests whose items are " +
+		"closed, or whose branches are already contained in the target branch, as findings; the closing machinery is " +
+		"yoyodyne-ifd.69. The operator's division: the sweep does the noticing, 69 does the closing."
+	const second = "Noted by the product manager, after turn 479.\n\nReason: The operator directed this twice and it is not on " +
+		"the item; re-issued and verified by reading rather than by trusting the confirmation line."
+
+	// Twice in a row, which is how it was actually written, and each write is the
+	// one the caller was told had landed.
+	for _, note := range []string{first, second} {
+		updated, err := client.Update(ctx, created.ID, WorkItemChange{AppendNotes: note})
+		if err != nil {
+			t.Fatalf("Update() appending to a long history error = %v; a note reported as written must be on the item", err)
+		}
+		if !strings.Contains(updated.Notes, note) {
+			t.Fatalf("Update() answered with notes that do not carry what it appended; bd must echo the notes it stored")
+		}
+	}
+
+	// The description is confirmed off the same answer, so what bd echoes for it is
+	// pinned here too: a bd that stopped carrying the field would send every
+	// description edit through a second read rather than failing, and this is what
+	// would say so.
+	const scope = "Every hour the harness wakes the development manager, and the sweep reads the forge as well as the tracker."
+	rewritten, err := client.Update(ctx, created.ID, WorkItemChange{Description: scope})
+	if err != nil {
+		t.Fatalf("Update() replacing the description error = %v; a description reported as written must be on the item", err)
+	}
+	if rewritten.Description != scope {
+		t.Fatalf("Update() description = %q, want bd to echo the description it stored", rewritten.Description)
+	}
+
+	// Read back separately, which is what the product manager and the operator both
+	// do when they check a write rather than trusting the confirmation.
+	shown, err := client.Show(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	for _, note := range []string{first, second} {
+		if !strings.Contains(shown.Notes, note) {
+			t.Fatalf("the item does not carry a note that was reported applied, so a confirmed note write is not durable:\n%s",
+				shown.Notes[max(0, len(shown.Notes)-2000):])
+		}
+	}
+	// What the item said before is still there. An append that replaced the history
+	// would be the attribution loss this project already has a guard for, arriving
+	// through the path that guard does not cover.
+	if named, records := goal.NamedIn(shown.Notes); !records || !strings.Contains(shown.Notes, "chat-2f0") {
+		t.Fatalf("appending to the notes took the item's own record with it: goal recorded = %v, named %q", records, named)
+	}
+}
+
 // TestDecompositionEdgeConformance pins the direction bd states decomposition
 // in, which until now was pinned only by a payload captured by hand: a scripted
 // runner replays the direction it was written with, so it agrees with itself

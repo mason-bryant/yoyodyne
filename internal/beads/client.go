@@ -520,7 +520,91 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 		}
 		return WorkItem{}, fmt.Errorf("work item %s is still parked %q after being released", item.ID, item.Parking)
 	}
-	return item, nil
+	return c.confirmWritten(ctx, item, appendedNote(change.AppendNotes),
+		writtenText{field: "description", want: change.Description, stored: func(w WorkItem) string { return w.Description }})
+}
+
+// writtenText is one piece of prose a write was told to put on an item: what it
+// was, and where the item carries it afterwards.
+type writtenText struct {
+	field  string
+	want   string
+	stored func(WorkItem) string
+}
+
+// appendedNote is the one every write that records something on an item shares:
+// the text it added to the notes.
+func appendedNote(note string) writtenText {
+	return writtenText{field: "note", want: note, stored: func(w WorkItem) string { return w.Notes }}
+}
+
+// confirmWritten answers with the item only where every text a write was told to
+// put on it is actually there, so a caller told the write was applied is told
+// something that was checked rather than assumed.
+//
+// The prose fields are checked here rather than beside the title and the priority
+// above because they are the ones a confirmation is worth least without: a title
+// that did not take is visible in the next listing, and a decision recorded in a
+// note that did not take is reasoning nobody knows is gone.
+//
+// bd answers an update with the item as it holds it afterwards, so the ordinary
+// confirmation costs nothing beyond the write. Where that answer does not carry
+// the text the item is read back separately before anything is concluded, and the
+// two outcomes are kept apart deliberately: a write that landed and was echoed
+// badly is not a failure, and reporting one would be the mirror of the loss this
+// guards — a durable write reported as lost, which yoyodyne-ifd.327 is the record
+// of. What is refused is only the case where the tracker itself, asked again,
+// does not hold what was written.
+//
+// A read-back that cannot run refuses too, and says which of the two it is: an
+// unconfirmed write is not a write that failed, and a caller that was going to
+// tell somebody the note is recorded must not be told it is.
+func (c Client) confirmWritten(ctx context.Context, item WorkItem, written ...writtenText) (WorkItem, error) {
+	missing := unconfirmed(item, written)
+	if len(missing) == 0 {
+		return item, nil
+	}
+	reread, err := c.Show(ctx, item.ID)
+	if err != nil {
+		return WorkItem{}, fmt.Errorf("work item %s was reported updated and did not answer with the %s it was given, "+
+			"and reading it back to say whether the write landed failed: %w", item.ID, strings.Join(missing, " or the "), err)
+	}
+	if still := unconfirmed(reread, written); len(still) > 0 {
+		return WorkItem{}, fmt.Errorf("work item %s does not carry the %s it was reported to have been given, "+
+			"so the write was confirmed and nothing was recorded", item.ID, strings.Join(still, " or the "))
+	}
+	return reread, nil
+}
+
+// unconfirmed names the texts a write was told to put on an item that the item
+// does not carry. Text the write was not given is not missing from anything.
+func unconfirmed(item WorkItem, written []writtenText) []string {
+	var missing []string
+	for _, text := range written {
+		if wanted := strings.TrimSpace(text.want); wanted != "" && !textCarried(text.stored(item), wanted) {
+			missing = append(missing, text.field)
+		}
+	}
+	return missing
+}
+
+// textCarried reports whether a field holds text a write put there.
+//
+// It compares what a tracker is free to have rewritten as equal: line endings
+// and trailing space on a line are not the text going missing, and refusing a
+// write over one would make the guard the reason a durable note reads as lost.
+// Anything else is compared verbatim, because text stored cut short or reflowed
+// is exactly the loss this exists to find.
+func textCarried(stored, written string) bool {
+	return strings.Contains(normalizeText(stored), normalizeText(written))
+}
+
+func normalizeText(text string) string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		lines[index] = strings.TrimRight(line, " \t")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func (c Client) Claim(ctx context.Context, id string) (WorkItem, error) {
@@ -545,7 +629,11 @@ func (c Client) RecordOutcome(ctx context.Context, id, notes string) (WorkItem, 
 	if err != nil {
 		return WorkItem{}, err
 	}
-	return decodeSingleWorkItem(data)
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	return c.confirmWritten(ctx, item, appendedNote(notes))
 }
 
 // Block records a durable blocker on a work item the harness could not finish,
@@ -570,7 +658,7 @@ func (c Client) Block(ctx context.Context, id, reason string) (WorkItem, error) 
 	if item.Status != "blocked" {
 		return WorkItem{}, fmt.Errorf("work item %s status is %q after being blocked, want blocked", item.ID, item.Status)
 	}
-	return item, nil
+	return c.confirmWritten(ctx, item, appendedNote(reason))
 }
 
 func (c Client) AddBlocker(ctx context.Context, id, blockerID string) error {
@@ -752,7 +840,7 @@ func (c Client) Reopen(ctx context.Context, id, reason string, parking domain.Wo
 		}
 		return WorkItem{}, fmt.Errorf("work item %s is still parked %q after being reopened unparked", item.ID, item.Parking)
 	}
-	return item, nil
+	return c.confirmWritten(ctx, item, appendedNote(reason))
 }
 
 func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {

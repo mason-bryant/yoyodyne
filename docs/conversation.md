@@ -621,6 +621,15 @@ what the agent discussing it could see, which is the point: the two of you are
 reading the same item rather than two accounts of it. Beneath the item it prints
 what the item cost, broken down by the runs it took.
 
+An item too long to carry whole is cut, and the cut is declared where it falls.
+The notes are cut from their beginning rather than their end, and are guaranteed
+room whatever else the item carries: notes are only appended to, so their end is
+what was written most recently, and a reader checking whether something was just
+recorded is asking about that end. Cutting the other way is how two operator
+directions written onto `yoyodyne-ifd.283` came to read as writes that never
+landed — both were durable, and both were outside the window this rendering
+showed.
+
 ## Directives, and the work they pause
 
 A redirection is about one item. A directive is about the product: it is

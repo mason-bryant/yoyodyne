@@ -292,6 +292,60 @@ func TestReadingAnItemReturnsItInFull(t *testing.T) {
 	}
 }
 
+// The shape yoyodyne-ifd.283 was in when two operator directions were written
+// onto it and read back as missing: a long description, sixty kilobytes of notes
+// accumulated over a fortnight, and the thing just written at the very end of
+// them.
+//
+// The writes were durable. What said otherwise was this rendering, which is what
+// both readers of an item use — the product manager's own read and the operator's
+// `/show` — and which cut the notes from the front, answering "was this just
+// recorded?" with the admission lines from a fortnight earlier. So the notes are
+// cut from the other end: the recent writing survives, and what is dropped is the
+// standing text a reader can ask for again.
+func TestReadingAnItemKeepsTheNotesJustWrittenRatherThanTheOldest(t *testing.T) {
+	t.Parallel()
+
+	const admitted = "Admitted to the backlog by the product manager in conversation chat-91253e0e."
+	const direction = "FORGE HYGIENE joins the sweep's findings, operator-directed 2026-09-07."
+	var notes strings.Builder
+	notes.WriteString(admitted + "\n\n")
+	for notes.Len() < 8*maxTrackerItemBytes {
+		notes.WriteString("Yoyodyne stopped this item: a configured check still failed after every permitted attempt.\n")
+	}
+	notes.WriteString("\n" + direction)
+
+	rendered := renderWorkItemEvidence(beads.WorkItem{
+		ID:          "yoyodyne-ifd.283",
+		Title:       "The development manager's hourly sweep",
+		Description: strings.Repeat("the sweep reports what it finds and files root-cause work. ", 60),
+		Notes:       notes.String(),
+		Status:      "open",
+		Priority:    1,
+		IssueType:   "task",
+	}, goal.Set{})
+
+	if !strings.Contains(rendered, direction) {
+		t.Fatalf("the note just written is not in what a reader is shown, so a durable write reads as lost:\n%s", rendered)
+	}
+	// The cut is declared at the end that was cut, so what is missing reads as
+	// unread rather than as absent.
+	if !strings.Contains(rendered, "are cut; treat them as unread rather than absent") {
+		t.Fatalf("the rendering dropped the front of the notes without saying so:\n%s", rendered)
+	}
+	// The item is still bounded: keeping the recent notes is not licence to carry a
+	// sixty-kilobyte item into a turn.
+	if len(rendered) > maxTrackerItemBytes+maxTrackerFailureBytes {
+		t.Fatalf("the rendered item is %d bytes, want it bounded", len(rendered))
+	}
+	// What an item says about itself is still shown, and the guarantee is which one
+	// gives way: the notes keep their floor, and the standing text is what is cut
+	// to make room.
+	if !strings.Contains(rendered, "id: yoyodyne-ifd.283") || !strings.Contains(rendered, "the sweep reports what it finds") {
+		t.Fatalf("the rendering lost the item itself:\n%s", rendered)
+	}
+}
+
 func TestRetiringWorkIsRecordedAsWithdrawnRatherThanFinished(t *testing.T) {
 	t.Parallel()
 
