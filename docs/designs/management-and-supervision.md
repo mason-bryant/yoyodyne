@@ -26,6 +26,10 @@ revisions:
       by: architect
       at: 2026-09-06T17:30:00Z
       reason: approved amendment 97e14527 from yoyodyne-ifd.290 - liveness detection is non-model machinery immune to usage windows, and restarts belong to bounded exits and the supervisor, never to noticing surfaces; constraint named by the operator 2026-09-05 after a late page
+    - action: amended
+      by: architect
+      at: 2026-09-07T05:30:00Z
+      reason: yoyodyne-ifd.330 - side conversations designed, judgment-and-read side streams with their own leases that never take the main thread's, the merge as a budgeted redacted audited memory write the main thread's next turn ratifies, best-effort commitments per the operator's product decision, and the per-agent queue-versus-side-threads knob beside persona and memory selecting behavior never authority
 ---
 
 # Management and supervision: the typed request contract and process residency
@@ -49,6 +53,18 @@ When relevant work arrives — a request lands in an inbox, a docket entry is cr
 ## Conversation concurrency
 
 Different durable conversations progress independently. One conversation serializes its turns and exposes queueing rather than interleaving transcript mutation — the conversation lease, per agent, single holder, is the primitive, and it is also the reattachment primitive: a returning client attaches by acquiring it. Artifact and backlog mutations use optimistic concurrency across conversations: every mutation checks the current revision and either commits atomically or is rejected as stale with enough current state to refresh and replan.
+
+### Side conversations
+
+An agent configured for side threads can hold bounded side conversations concurrent with its main thread. Each is its own durable stream under the agent — its own provider session, its own lease, a recorded topic and the main conversation it belongs to — and transcripts never interleave: the main conversation's serialization rule is untouched, because **the main thread's lease is what the single-holder rule governs, and a side thread never takes it**. One holder per side stream; a bounded number of side streams per agent, from configuration.
+
+**What a side thread may do:** judge, answer, and tentatively plan, with full read access to the tracker (read and survey) and to the evidence its role is given. It takes no action: no work-item mutation, no admission, no proposal raised, no directive — every intent it forms is a draft. Its commitments are **best effort by product decision**: an answer it gives that promises scheduling is tentative until the main thread confirms it, and the surface that carries the answer says so.
+
+**The merge is a memory write.** When a side thread concludes — by finishing, or by exhausting its turn or cost budget — it writes its substance into the agent's context through the agent-memory machinery: budgeted, redacted, audited, revisioned, referencing the side stream rather than copying its transcript, with drafted commitments marked as tentative. The main thread's next turn reads that revision as evidence, framed with an account of where it came from, and **ratifies or adjusts anything the side thread promised by acting through its own ordinary single-threaded path** — which is the only path there is. An adjustment is visible in the main thread, and the ratification outcome is reportable back to wherever the side thread's answer went.
+
+**The knob.** Per-agent configuration chooses `queue` — today's behavior, the default — or `side-threads`, in the same block as persona and memory settings. The knob selects behavior and never authority: no configuration can grant a side thread mutations, per `configuration-never-grants-authority`.
+
+**Everything else is inherited, not new.** A side thread is a provider invocation like any other: the spending pause and operator holds gate it, budgets are committed before spend, it is priced from provider-reported cost and listed beside conversations in the cost surfaces, and account failover serves it exactly as it serves a main turn. This design attacks the deciders-stop shape from the thread side as conversation failover attacks it from the account side; the two compose without touching each other.
 
 ## Advisory readiness
 
