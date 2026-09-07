@@ -136,16 +136,16 @@ func TestStoreReserveEnforcesCapacityAtomicallyAcrossInstances(t *testing.T) {
 	}
 }
 
-// The size guard is asked with the review summary rather than the failure, which
-// the schema now bounds itself: a field the schema refuses never reaches the
-// encoder, and what is being measured here is the encoder rather than the
-// schema.
+// The size guard is asked with the cleanup failure rather than the failure or
+// the review summary, which the schema now bounds itself: a field the schema
+// refuses never reaches the encoder, and what is being measured here is the
+// encoder rather than the schema.
 func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	state := testState(t, StatusRunning)
-	state.ReviewSummary = strings.Repeat("x", maxEncodedStateBytes)
+	state.CleanupFailure = strings.Repeat("x", maxEncodedStateBytes)
 	if err := store.Create(state); err == nil || !strings.Contains(err.Error(), "encoded run state is") {
 		t.Fatalf("Create() oversized state error = %v", err)
 	}
@@ -157,11 +157,11 @@ func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 		t.Fatalf("oversized create left a state file: %v", err)
 	}
 
-	state.ReviewSummary = ""
+	state.CleanupFailure = ""
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() valid state error = %v", err)
 	}
-	state.ReviewSummary = strings.Repeat("x", maxEncodedStateBytes)
+	state.CleanupFailure = strings.Repeat("x", maxEncodedStateBytes)
 	if err := store.Save(state); err == nil || !strings.Contains(err.Error(), "encoded run state is") {
 		t.Fatalf("Save() oversized state error = %v", err)
 	}
@@ -169,8 +169,8 @@ func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() original state error = %v", err)
 	}
-	if loaded.ReviewSummary != "" {
-		t.Fatalf("oversized save replaced original state: review summary bytes = %d", len(loaded.ReviewSummary))
+	if loaded.CleanupFailure != "" {
+		t.Fatalf("oversized save replaced original state: cleanup failure bytes = %d", len(loaded.CleanupFailure))
 	}
 }
 
@@ -196,6 +196,95 @@ func TestAnOversizedFailureIsRefusedBySchemaAndCutAtTheWrite(t *testing.T) {
 	if !strings.HasPrefix(state.Failure, "the provider failed: ") ||
 		!strings.HasSuffix(state.Failure, "the rest of this failure was not recorded]") {
 		t.Fatalf("a cut failure lost its head or did not say it was cut: %q", state.Failure)
+	}
+}
+
+// The reviewer's summary is bounded on the record for the reason the failure is:
+// a reviewer writes at whatever length it likes, the docket entry that tells the
+// development manager about a stopped run cannot carry an unbounded one, and an
+// entry refused for its length is a stoppage she never hears about.
+func TestAnOversizedReviewSummaryIsRefusedBySchemaAndCutAtTheWrite(t *testing.T) {
+	t.Parallel()
+
+	state := testState(t, StatusFailed)
+	state.ReviewSummary = strings.Repeat("x", MaxReviewSummaryBytes+1)
+	err := state.Validate()
+	if err == nil || !strings.Contains(err.Error(), "review_summary is") {
+		t.Fatalf("Validate() oversized review summary error = %v, want the summary named", err)
+	}
+	// Written the way the harness writes it, the same summary validates and still
+	// says what the reviewer thought of the change.
+	state.ReviewSummary = RecordReviewSummary("the change misses the acceptance criteria: " + strings.Repeat("x", MaxReviewSummaryBytes))
+	if err := state.Validate(); err != nil {
+		t.Fatalf("a recorded review summary does not validate: %v", err)
+	}
+	if !strings.HasPrefix(state.ReviewSummary, "the change misses the acceptance criteria: ") ||
+		!strings.HasSuffix(state.ReviewSummary, "the rest of this summary was not recorded]") {
+		t.Fatalf("a cut summary lost its head or did not say it was cut: %q", state.ReviewSummary)
+	}
+}
+
+// A record written before these bounds existed can hold a field longer than the
+// schema now accepts, and it still loads: bound on write, tolerate on read. The
+// over-long field renders truncated rather than costing the record, because the
+// loader is walked by every scan over the store — one old record refused there is
+// a whole history nobody can list.
+func TestAPreBoundEraRecordLoadsWithItsOverlongFieldsCut(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusFailed)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// What a harness writing before these bounds left on disk. It goes to the file
+	// directly because every write the store offers refuses it, which is the whole
+	// of what makes this record historical rather than one anybody can make today.
+	state.ReviewSummary = "the change misses the acceptance criteria: " + strings.Repeat("x", MaxReviewSummaryBytes)
+	state.Failure = "the provider failed: " + strings.Repeat("y", MaxBlockerBytes)
+	state.Blocker = "nobody can decide this: " + strings.Repeat("z", MaxBlockerBytes)
+	path, err := store.statePath(state.RunID)
+	if err != nil {
+		t.Fatalf("statePath() error = %v", err)
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() pre-bound-era record error = %v", err)
+	}
+	if len(loaded.ReviewSummary) > MaxReviewSummaryBytes || len(loaded.Failure) > MaxBlockerBytes || len(loaded.Blocker) > MaxBlockerBytes {
+		t.Fatalf("a loaded historical record still exceeds the bounds: summary %d, failure %d, blocker %d",
+			len(loaded.ReviewSummary), len(loaded.Failure), len(loaded.Blocker))
+	}
+	// Truncated rather than dropped: what the reviewer, the provider, and the
+	// blocker said is still readable, and each says it was cut.
+	if !strings.HasPrefix(loaded.ReviewSummary, "the change misses the acceptance criteria: ") ||
+		!strings.HasSuffix(loaded.ReviewSummary, "the rest of this summary was not recorded]") {
+		t.Fatalf("the loaded summary lost its head or did not say it was cut: %q", loaded.ReviewSummary)
+	}
+	if !strings.HasPrefix(loaded.Failure, "the provider failed: ") ||
+		!strings.HasSuffix(loaded.Failure, "the rest of this failure was not recorded]") {
+		t.Fatalf("the loaded failure lost its head or did not say it was cut: %q", loaded.Failure)
+	}
+	if !strings.HasPrefix(loaded.Blocker, "nobody can decide this: ") ||
+		!strings.HasSuffix(loaded.Blocker, "carries the whole of this blocker]") {
+		t.Fatalf("the loaded blocker lost its head or did not say it was cut: %q", loaded.Blocker)
+	}
+	// And the scan the read model is built from walks the record rather than
+	// failing on it, which is the history this tolerance is here to keep.
+	recorded, err := store.Recorded()
+	if err != nil {
+		t.Fatalf("Recorded() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].RunID != state.RunID {
+		t.Fatalf("the scan does not carry the historical record: %#v", recorded)
 	}
 }
 

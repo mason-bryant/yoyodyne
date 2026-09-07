@@ -580,6 +580,28 @@ func RecordEscalationReason(reason string) string {
 
 const escalationCutNote = "\n[cut; the run's own record carries the whole of this reason]"
 
+// MaxReviewSummaryBytes bounds the reviewer's summary a run carries. It is the
+// docket's own bound on a summary, shared rather than restated for the reason
+// the blocker's is: a docket entry carries the summary in the reviewer's words,
+// and two bounds that could drift would be a summary the harness recorded and
+// the docket then refused.
+const MaxReviewSummaryBytes = triage.MaxMessageBytes
+
+// RecordReviewSummary makes a bounded record of what the reviewer said about the
+// change. It is how State.ReviewSummary is written, because a reviewer writes at
+// whatever length it likes and the summary is carried onward by readers that
+// cannot take an unbounded one — the docket entry a stoppage produces is bounded
+// to 4 KiB, and an entry refused for its length is a stopped run the development
+// manager never hears about.
+func RecordReviewSummary(summary string) string {
+	return boundRecordedText(summary, MaxReviewSummaryBytes, reviewSummaryCutNote)
+}
+
+// The note promises nothing about where the rest went, as the failure's does not:
+// this is the first cut rather than a second one, so the record a reader would be
+// sent to is the copy they are already reading.
+const reviewSummaryCutNote = "\n[cut; the rest of this summary was not recorded]"
+
 // boundRecordedText cuts one recorded reason to its bound and says that it was
 // cut, so nobody reads a clamped account as a complete one. The cut lands on a
 // rune boundary, because a record ending mid-character is one a later reader
@@ -597,6 +619,30 @@ func boundRecordedText(text string, limit int, cutNote string) string {
 		cut--
 	}
 	return strings.TrimRight(trimmed[:cut], "\n") + cutNote
+}
+
+// boundHistoricalText cuts the recorded reasons on a record that has just been
+// read to the bounds the schema holds them to now. It is the read half of the
+// rule the write halves above are the other side of — bound on write, tolerate
+// on read: a record written before one of these bounds existed can hold a field
+// longer than Validate accepts, and refusing it on the way in would make that
+// run unreadable rather than rendering the one field truncated. It is worse than
+// one lost record: every scan over the store walks every file, so one old record
+// the loader refuses is the whole history nobody can list.
+//
+// It touches only a field that is actually over its bound, so it is a no-op over
+// everything the harness writes today and over every record that was already
+// within the bound when it was written.
+func (s *State) boundHistoricalText() {
+	if len(s.Failure) > MaxBlockerBytes {
+		s.Failure = RecordFailure(s.Failure)
+	}
+	if len(s.Blocker) > MaxBlockerBytes {
+		s.Blocker = RecordBlocker(s.Blocker)
+	}
+	if len(s.ReviewSummary) > MaxReviewSummaryBytes {
+		s.ReviewSummary = RecordReviewSummary(s.ReviewSummary)
+	}
 }
 
 // DirectivePause is the user directive a run stopped short for. It is recorded
@@ -1032,6 +1078,13 @@ type State struct {
 	// process that read the verdict — and it is empty on a repair, which closes
 	// nothing, and on every run recorded before an approval said which it was.
 	ReviewApproves string `json:"review_approves,omitempty"`
+	// ReviewSummary is what the reviewer said about the change, in its own words,
+	// and it is what every surface prints where it answers "what did the review
+	// say". It is bounded like every other recorded reason, and RecordReviewSummary
+	// is how it is written: a reviewer writes at whatever length it likes, and a
+	// summary nothing downstream can carry is a stopped run that validates here and
+	// is then refused by the docket entry that would have told the development
+	// manager about it.
 	ReviewSummary  string `json:"review_summary,omitempty"`
 	ReviewFindings int    `json:"review_findings,omitempty"`
 	// LandingOutcome is what the developer claimed its change does to the work
@@ -1554,6 +1607,9 @@ func (s State) Validate() error {
 	}
 	if len(s.Failure) > MaxBlockerBytes {
 		problems = append(problems, fmt.Errorf("failure is %d bytes, which exceeds the %d byte bound", len(s.Failure), MaxBlockerBytes))
+	}
+	if len(s.ReviewSummary) > MaxReviewSummaryBytes {
+		problems = append(problems, fmt.Errorf("review_summary is %d bytes, which exceeds the %d byte bound", len(s.ReviewSummary), MaxReviewSummaryBytes))
 	}
 	if len(s.Blocker) > MaxBlockerBytes {
 		problems = append(problems, fmt.Errorf("blocker is %d bytes, which exceeds the %d byte bound", len(s.Blocker), MaxBlockerBytes))

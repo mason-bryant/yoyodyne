@@ -446,6 +446,12 @@ func (s *Store) Load(runID string) (State, error) {
 	if state.RunID != runID {
 		return State{}, fmt.Errorf("run state file %s belongs to run %s", runID, state.RunID)
 	}
+	// A record written before one of the schema's text bounds existed can hold a
+	// field longer than Validate now accepts. It is cut here rather than refused
+	// below, because a bound the harness added is not a reason for a run somebody
+	// recorded to stop being readable — and the loader is walked by every scan, so
+	// refusing one old file is a whole history nobody can list.
+	state.boundHistoricalText()
 	if err := s.validateState(state); err != nil {
 		return State{}, err
 	}

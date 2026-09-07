@@ -5225,10 +5225,16 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	a.outcome.ReviewModel = result.RequestedModel
 	a.outcome.ReviewResolvedModel = result.ResolvedModel
 	if result.Verdict.Summary != "" {
-		a.state.ReviewSummary = result.Verdict.Summary
+		// Cut to the record's own bound as it is taken rather than as it is stored:
+		// a reviewer writes at whatever length it likes, and a summary the docket
+		// entry cannot carry is a stopped run the development manager never hears
+		// about. The outcome carries the same words the record does, so what the run
+		// reports and what it recorded say the same thing about the review.
+		summary := runstate.RecordReviewSummary(result.Verdict.Summary)
+		a.state.ReviewSummary = summary
 		a.state.ReviewFindings = len(result.Verdict.Findings)
 		a.state.ReviewFindingDetails = durableFindings(result.Verdict.Findings)
-		a.outcome.ReviewSummary = result.Verdict.Summary
+		a.outcome.ReviewSummary = summary
 		a.outcome.ReviewFindings = result.Verdict.Findings
 	}
 	if result.Decision.Valid() {

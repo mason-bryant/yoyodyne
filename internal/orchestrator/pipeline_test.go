@@ -24,6 +24,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 const (
@@ -470,6 +471,64 @@ func TestAnOversizedFailureIsCutSoTheRecordStoresAndCarries(t *testing.T) {
 	}
 	if len(history.Runs) != 1 || history.Runs[0].Failure != state.Failure {
 		t.Fatalf("the run history does not carry the recorded reason: %#v", history.Runs)
+	}
+}
+
+// What the reviewer said is cut to the record's own bound as it is written, for
+// the reason the failure beside it is: a reviewer writes at whatever length it
+// likes, and the docket entry that tells the development manager a run stopped
+// bounds its summary to 4 KiB. Unbounded on the record, that entry was refused
+// for its length and the stopped run reached nobody.
+func TestAnOversizedReviewSummaryIsCutSoTheRecordStoresAndDockets(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	verbose := fmt.Sprintf(`{"decision":"repair","summary":%q,"findings":[{"severity":"blocker","message":"add the missing file","location":{"file":"feature.txt","line":1}}]}`,
+		"the change misses the acceptance criteria: "+strings.Repeat("x", runstate.MaxReviewSummaryBytes*2))
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, verbose)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	// No repair is permitted, so the first verdict is already the end of the
+	// budget and the run stops with the reviewer's words on its record.
+	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
+	docket := &memoryDocket{}
+	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "independent review requires repair") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The store validated this record on the way in, so a bound it broke would
+	// have cost the run its ending rather than the tail of one summary. Asked
+	// again here, because that is the claim the bound is here to make.
+	if err := state.Validate(); err != nil {
+		t.Fatalf("the record of a verbose review does not validate: %v", err)
+	}
+	if len(state.ReviewSummary) > runstate.MaxReviewSummaryBytes {
+		t.Fatalf("review summary is %d bytes, which the record's own bound refuses", len(state.ReviewSummary))
+	}
+	if !strings.HasPrefix(state.ReviewSummary, "the change misses the acceptance criteria: ") ||
+		!strings.HasSuffix(state.ReviewSummary, "the rest of this summary was not recorded]") {
+		t.Fatalf("a cut summary lost what the reviewer said or did not say it was cut: %q", state.ReviewSummary)
+	}
+	// What the run reported and what it recorded are the same words, so nothing
+	// reading the outcome sees a summary the record cannot hold.
+	if outcome.ReviewSummary != state.ReviewSummary {
+		t.Fatalf("the reported summary and the recorded one differ: %d bytes against %d", len(outcome.ReviewSummary), len(state.ReviewSummary))
+	}
+	// The docket is the reader that found this: an entry refused for its length is
+	// a stopped run the development manager never hears about.
+	if len(docket.entries) != 1 {
+		t.Fatalf("the stoppage of a verbosely reviewed run reached nobody: %#v", docket.entries)
+	}
+	if entry := docket.entries[0]; strings.TrimSpace(entry.Summary) == "" || len(entry.Summary) > triage.MaxMessageBytes {
+		t.Fatalf("the entry carries no usable review summary: %d bytes", len(entry.Summary))
 	}
 }
 
