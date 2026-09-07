@@ -184,6 +184,24 @@ type Product struct {
 	// repository for the same reason the others are.
 	Designs   string `yaml:"designs" json:"designs"`
 	Decisions string `yaml:"decisions" json:"decisions"`
+	// ShippedDocumentation is the operator-facing documentation this project
+	// ships, as repository-relative file paths. It is what the product manager
+	// is given as a description of what the product ships today, labeled as
+	// description and never as authority about intent.
+	//
+	// It is a named list rather than a directory for the reason the harness's own
+	// set is: a walk would sweep in the design document and the decision records,
+	// which say how the product is built and are what made description reachable
+	// as intent in the first place. Each entry is confined to the repository like
+	// every other product path, and a path naming nothing is simply not carried.
+	//
+	// A project that names none is shown none, and told so. The harness ships a
+	// set of its own for the repository it describes — see
+	// contextbundle.HarnessShippedDocumentation — and that set is deliberately
+	// not a default for anybody else: it is eight generic paths, and feeding an
+	// adopting project's unrelated docs/work.md to its product manager labeled
+	// "what the product ships" is exactly the mistake a default would make.
+	ShippedDocumentation []string `yaml:"shipped_documentation,omitempty" json:"shipped_documentation,omitempty"`
 }
 
 type Execution struct {
@@ -655,6 +673,11 @@ func (c Config) Validate() error {
 	if err := validateRepositoryDirectory("product decisions", c.Product.Decisions); err != nil {
 		problems = append(problems, err.Error())
 	}
+	for _, documentPath := range c.Product.ShippedDocumentation {
+		if err := validateShippedDocument(documentPath); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
 	if c.Execution.MaxConcurrentDevelopers < 1 {
 		problems = append(problems, "max_concurrent_developers must be at least 1")
 	}
@@ -1093,6 +1116,28 @@ func validateRepositoryDirectory(setting, directory string) error {
 	clean := filepath.Clean(trimmed)
 	if filepath.IsAbs(trimmed) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("%s %q must be a directory inside the repository", setting, directory)
+	}
+	return nil
+}
+
+// validateShippedDocument holds one configured document inside the repository,
+// and holds it to being Markdown. The confinement is validateRepositoryDirectory's
+// rule said of a file, and for the same reason: a path that climbs out of the
+// repository names text nobody reviewed with the code. The Markdown part is what
+// the context bundle will actually read, so a project naming something else is
+// refused here rather than discovering it as a conversation that will not open.
+func validateShippedDocument(documentPath string) error {
+	const setting = "product shipped documentation"
+	trimmed := strings.TrimSpace(documentPath)
+	if trimmed == "" {
+		return fmt.Errorf("%s cannot name an empty path", setting)
+	}
+	clean := filepath.Clean(trimmed)
+	if filepath.IsAbs(trimmed) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s %q must be a file inside the repository", setting, documentPath)
+	}
+	if !strings.EqualFold(filepath.Ext(clean), ".md") {
+		return fmt.Errorf("%s %q must be a Markdown file", setting, documentPath)
 	}
 	return nil
 }

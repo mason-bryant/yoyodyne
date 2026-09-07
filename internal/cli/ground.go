@@ -50,6 +50,12 @@ type conversationGround struct {
 	runner         execution.ProcessRunner
 	repository     string
 	specifications string
+	// shippedDocumentation is the operator-facing documentation this project
+	// says it ships, from product.shipped_documentation. It comes from the
+	// configuration rather than from a set the harness holds, because the
+	// harness's own set names this repository's documents and would describe an
+	// adopting project with paths that are only coincidentally there.
+	shippedDocumentation []string
 	// roleDocuments are the directories this role reads beyond the
 	// specifications. The product manager has none by design, and every other
 	// role is answering for documents it would otherwise have to be told the
@@ -68,14 +74,15 @@ type conversationGround struct {
 
 func newConversationGround(parts components, role domain.AgentRole) conversationGround {
 	return conversationGround{
-		runner:         parts.runner,
-		repository:     parts.repository,
-		specifications: parts.config.Product.Specifications,
-		roleDocuments:  roleDocumentSets(role, parts.config.Product),
-		docket:         conversationDocket(parts, role),
-		gitBinary:      "git",
-		clock:          execution.RealClock{},
-		timeout:        chatTrackerTimeout,
+		runner:               parts.runner,
+		repository:           parts.repository,
+		specifications:       parts.config.Product.Specifications,
+		shippedDocumentation: parts.config.Product.ShippedDocumentation,
+		roleDocuments:        roleDocumentSets(role, parts.config.Product),
+		docket:               conversationDocket(parts, role),
+		gitBinary:            "git",
+		clock:                execution.RealClock{},
+		timeout:              chatTrackerTimeout,
 	}
 }
 
@@ -262,6 +269,7 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 	bundle, err := contextbundle.AssembleProduct(contextbundle.ProductRequest{
 		RepositoryRoot:          g.repository,
 		SpecificationsDirectory: g.specifications,
+		ShippedDocumentation:    g.shippedDocumentation,
 		RoleDocuments:           g.roleDocuments,
 		WorkItems:               items,
 		WorkItemsUnavailable:    unavailable,

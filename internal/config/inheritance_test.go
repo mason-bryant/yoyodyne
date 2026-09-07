@@ -841,6 +841,42 @@ func TestSpecificationsDirectoryIsConfinedToTheRepository(t *testing.T) {
 	}
 }
 
+// What the product ships is the project's own answer and nothing is filled in
+// for it, because the alternative is a set of generic paths applied to whatever
+// repository the harness runs in — an adopting project's unrelated docs/work.md
+// arriving at its product manager labeled as what its product ships.
+func TestShippedDocumentationIsTheProjectsOwnAndHasNoDefault(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil).Config
+	if len(inherited.Product.ShippedDocumentation) != 0 {
+		t.Fatalf("shipped documentation = %v, want nothing supplied for a project that named none", inherited.Product.ShippedDocumentation)
+	}
+
+	named := loadProject(t, minimalProjectConfig+"  shipped_documentation:\n    - docs/handbook.md\n    - docs/operating.md\n", nil)
+	want := []string{"docs/handbook.md", "docs/operating.md"}
+	if got := named.Config.Product.ShippedDocumentation; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("shipped documentation = %v, want %v", got, want)
+	}
+	if origin := named.Origins["product.shipped_documentation"]; origin == OriginDefault {
+		t.Errorf("shipped documentation origin = %q, want the project file", origin)
+	}
+}
+
+// Every entry is read into the product manager's context, so a path that leaves
+// the repository, or one the reader could not read as a document, is refused
+// before anything opens a conversation against it.
+func TestShippedDocumentationIsConfinedAndMarkdown(t *testing.T) {
+	t.Parallel()
+
+	for _, documentPath := range []string{"\"\"", "\"   \"", "..", "../elsewhere.md", "/etc/passwd.md", "docs/../../elsewhere.md", "docs/handbook.txt"} {
+		_, err := loadProjectError(t, minimalProjectConfig+"  shipped_documentation:\n    - "+documentPath+"\n", nil)
+		if err == nil || !strings.Contains(err.Error(), "shipped documentation") {
+			t.Errorf("LoadResolved() shipped_documentation %q error = %v", documentPath, err)
+		}
+	}
+}
+
 // A remote name reaches a Git command line, so anything that could read as an
 // option is refused before it gets there.
 func TestRemoteMustBeAPlainRemoteName(t *testing.T) {

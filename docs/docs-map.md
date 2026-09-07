@@ -798,10 +798,17 @@ Moved to [`configuration/artifacts.md`](configuration/artifacts.md#product-speci
 ## What the split breaks that neither item mentions
 
 **The product manager stops being given the content that moves.**
-`internal/contextbundle/product.go` carries the shipped documentation as a
-hardcoded set — at drafting `[]string{"README.md", "docs/configuration.md"}` —
-deliberately a named set rather than a walk, so that a walk does not sweep the
-design document in. After this split those two files are an index and a landing
+`internal/contextbundle/product.go` carries this repository's own shipped
+documentation as a named set — at drafting
+`[]string{"README.md", "docs/configuration.md"}`, and now
+`HarnessShippedDocumentation` — deliberately a named set rather than a walk, so
+that a walk does not sweep the design document in. yoyodyne-ifd.312 scoped it to
+this repository and made every other project's set
+`product.shipped_documentation` in its own configuration, because the eight
+paths are generic enough that an adopting project holds files at them meaning
+something else; nothing about what this repository is given changed with it, and
+the paragraphs below still describe the set this repository carries. After this
+split those two files are an index and a landing
 page, and everything the product manager reads them *for* lives in thirteen
 documents that set did not name. The README half of that has happened:
 yoyodyne-ifd.160 trimmed the README and grew the set to eight in the same
@@ -814,7 +821,7 @@ narrowed the product manager's view, and the cost came due when it drafted a
 work item that mis-assumed which surfaces existed. Doing it again by accident,
 through a documentation restructure, would be worse than doing it on purpose.
 
-So: **`shippedDocumentation` grows to name every document in this map's table**,
+So: **`HarnessShippedDocumentation` grows to name every document in this map's table**,
 and that is part of the execution work rather than a follow-up. The run that
 lands the last split document lands the list. **The six README-split documents
 are now named**: yoyodyne-ifd.160 added `conversation.md`, `work.md`,
@@ -832,7 +839,7 @@ conversation.
 the seven.** [`docs/provider-plugins.md`](provider-plugins.md) has a row in
 [what each document is for](#what-each-document-is-for), is linked from the
 README's index, and describes a surface the product ships — declaring a provider
-of your own — but `shippedDocumentation` does not name it, and did not before the
+of your own — but `HarnessShippedDocumentation` does not name it, and did not before the
 split either. Read strictly, "grows to name every document in this map's table"
 says it should. yoyodyne-ifd.121.6 found this and did not act on it: what the
 product manager is shown is a change to the product's behaviour rather than to
@@ -926,7 +933,7 @@ when somebody remembered.
    `docs/configuration.md` acceptable**, or should the split targets be flat
    `docs/configuration-runs.md` and so on? The directory is proposed; the
    coexistence is admittedly odd to look at.
-5. **Does `shippedDocumentation` growing to fifteen entries change what the
+5. **Does `HarnessShippedDocumentation` growing to fifteen entries change what the
    product manager should be given at all**, or is the enumeration the right
    answer to keep?
 
