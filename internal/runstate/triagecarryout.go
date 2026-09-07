@@ -50,7 +50,7 @@ const (
 	// TriageGateDirective is an unresolved directive standing over the item.
 	TriageGateDirective = "an unresolved directive"
 	// TriageGateCapacity is every developer slot being occupied. It is the one gate
-	// that clears without anybody doing anything.
+	// nobody has to open at all: it clears as a run ends.
 	TriageGateCapacity = "developer capacity"
 	// TriageGateBudget is the item's own triage budget: a cap reached, or a
 	// decision the harness has already carried out as far as it goes.
@@ -96,7 +96,8 @@ const MaxTriageCarryOuts = MaxTriageDecisions
 // this pass's one carry-out spent on it every time — which starves every other
 // decided stoppage behind it.
 //
-// It does not pace the gates that clear on their own. See Cooling.
+// It does not pace the gates that are shut for every decision at once. See
+// Cooling, which is where that distinction is spent.
 const TriageCarryOutRetryDelay = 15 * time.Minute
 
 // TriageCarryOut is the harness's last attempt to carry one recorded decision
@@ -127,11 +128,22 @@ type TriageCarryOut struct {
 	// whole of what a reader can act on: a finding that says only "refused" is the
 	// silence worded rather than ended.
 	Clears string `json:"clears"`
-	// Waiting marks a gate that clears without anybody doing anything — a pause
-	// somebody will lift, a slot that will free. It is not a refusal of the
-	// decision and must not be read as one: nothing was spent, the decision still
-	// stands, and the next pass carries it out. It is also what keeps this record
-	// from pacing a retry that needs no pacing; see Cooling.
+	// Waiting marks a gate that stops everything the harness would do rather than
+	// this decision in particular — the operator's pause, the intake hold, a full
+	// harness. It is not a refusal of the decision and must not be read as one:
+	// nothing was spent, the decision still stands, and the next pass carries it
+	// out.
+	//
+	// What decides it is who the gate is shut for rather than who opens it. All
+	// three above are opened by somebody, and they are the waiting kind because
+	// they are shut for every recorded decision at once: asking again at the next
+	// pass starves nothing, since every decision behind this one is standing at the
+	// same switch, and pacing them would leave a lifted hold unnoticed for the
+	// whole delay. A gate shut for this item alone is the other kind however
+	// promptly it will be opened — a directive that pauses it, work it waits on, a
+	// worktree somebody has been in — because an unpaced retry of one of those
+	// takes the pass's single carry-out on every poll and starves every decision
+	// behind it. See Cooling, which is where that distinction is spent.
 	Waiting bool `json:"waiting,omitempty"`
 	// Attempts is how many times the harness has tried to carry this decision out
 	// and been stopped. It is what tells a gate that is about to clear from one
@@ -178,11 +190,13 @@ func (t TriageCarryOut) Validate() error {
 
 // Cooling reports an attempt made too recently to be worth repeating yet.
 //
-// It is asked only of the gates that need something to change. A pause, an
-// intake hold, and a full harness all clear without anybody answering this
-// finding, and pacing a retry against them would leave a decision uncarried for
-// a quarter of an hour after the switch was already open — which is the latency
-// this whole mechanism exists to remove.
+// It is asked only of the gates that are shut for this decision in particular.
+// The operator's pause, the intake hold, and a full harness are shut for every
+// recorded decision at once, so retrying one of them starves nothing and pacing
+// it would leave a decision uncarried for a quarter of an hour after the switch
+// was already open — which is the latency this whole mechanism exists to remove.
+// Every other gate is paced, because the pass carries one decision out per pull
+// and an unpaced retry of a decision that cannot fire spends every one of them.
 func (t TriageCarryOut) Cooling(now time.Time) bool {
 	if t.Waiting {
 		return false

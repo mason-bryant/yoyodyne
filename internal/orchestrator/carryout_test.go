@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -852,5 +853,109 @@ func TestAFiredDecisionDoesNotEraseAReadingThatFailed(t *testing.T) {
 	}
 	if schedule.CarryOutProblem != "" {
 		t.Fatalf("problem = %q, want nothing said about a gate, since none stopped the attempt", schedule.CarryOutProblem)
+	}
+}
+
+// A gate is the waiting kind when it is shut for every recorded decision at once
+// and the other kind when it is shut for one item, whoever opens either. Getting
+// that backwards is not cosmetic: the waiting kind is unpaced, so a per-item gate
+// classified as waiting takes the pass's single carry-out on every poll for as
+// long as it stands.
+func TestOnlyThePausesShutForEveryDecisionAreTheWaitingKind(t *testing.T) {
+	t.Parallel()
+
+	for name, met := range map[string]struct {
+		outcome Outcome
+		gate    string
+		waiting bool
+	}{
+		"the operator paused everything the harness spends": {
+			Outcome{PausedByOperator: &runstate.OperatorHold{HeldAt: docketedNow}}, runstate.TriageGateSpendingPause, true,
+		},
+		"the operator held what the harness chooses": {
+			Outcome{PausedByIntake: &runstate.IntakeHold{HeldAt: docketedNow}}, runstate.TriageGateIntakeHold, true,
+		},
+		"a directive pauses this item": {
+			Outcome{PausedByDirective: &directive.Directive{ID: "dir-0123456789abcdef"}}, runstate.TriageGateDirective, false,
+		},
+		"this item waits on other work": {
+			Outcome{PausedByDependency: &runstate.DependencyPause{}}, runstate.TriageGateWorkItem, false,
+		},
+	} {
+		gate, clears, waiting := pausedGate(met.outcome)
+		if gate != met.gate {
+			t.Fatalf("%s: gate = %q, want %q", name, gate, met.gate)
+		}
+		if waiting != met.waiting {
+			t.Fatalf("%s: waiting = %t, want %t — a gate shut for one item has to be paced, and one shut for everything must not be",
+				name, waiting, met.waiting)
+		}
+		if strings.TrimSpace(clears) == "" {
+			t.Fatalf("%s: nothing says what would clear it", name)
+		}
+	}
+}
+
+// The starvation this classification exists to stop. A directive pauses one item,
+// so a decision about it can never fire until somebody resolves the directive —
+// and the pass carries one decision out per pull. Left unpaced it would take every
+// pull's carry-out for ever and no other decided stoppage would ever be reached,
+// which is the standing backlog never clearing.
+func TestADecisionADirectivePausesDoesNotPinThePass(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	// A second decided stoppage, of a different item, waiting behind the first.
+	behind := stoppedState()
+	behind.RunID = "run-dddd4444eeee5555ffff666600007777"
+	behind.WorkItemID = "yoyodyne-ifd.347"
+	if err := harness.runs.Create(behind); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := docketerOver(nil, harness.docket).RecordStoppedRun(behind); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+	recordRerunDecision(t, harness.runs, behind.WorkItemID, behind.RunID)
+
+	// The fresh run of the first item meets the directive where it would have
+	// started, so nothing is reserved and the claim is given back.
+	harness.outcome = Outcome{Paused: true, PausedByDirective: &directive.Directive{ID: "dir-0123456789abcdef"}}
+	carrying := harness.carryOut()
+	outstanding, err := carrying.Outstanding()
+	if err != nil {
+		t.Fatalf("Outstanding() error = %v", err)
+	}
+	if len(outstanding) != 2 || outstanding[0].WorkItemID != docketedItem {
+		t.Fatalf("outstanding = %#v, want both decisions offered, oldest first", outstanding)
+	}
+	carried, _, err := carrying.Carry(context.Background(), outstanding[0])
+	if err != nil {
+		t.Fatalf("Carry() error = %v, want the directive reported rather than a failure", err)
+	}
+	if carried.Carried {
+		t.Fatalf("carried = %#v, want nothing started while a directive pauses the item", carried)
+	}
+	if carried.Gate != runstate.TriageGateDirective || carried.Waiting {
+		t.Fatalf("gate = %q, waiting = %t, want the directive named as a gate somebody has to open", carried.Gate, carried.Waiting)
+	}
+
+	// The next pull is offered the decision behind it rather than the same one
+	// again: that is the whole of what the pacing buys, since the pass carries one
+	// decision out per pull.
+	next, err := carrying.Outstanding()
+	if err != nil {
+		t.Fatalf("Outstanding() error = %v", err)
+	}
+	if len(next) != 1 || next[0].WorkItemID != behind.WorkItemID {
+		t.Fatalf("outstanding = %#v, want only the decision behind the paused one", next)
+	}
+	// And the paused one is not abandoned: it comes back once its pacing has passed,
+	// so resolving the directive is carried out without anybody asking.
+	later, err := harness.carryOutAt(runstate.TriageCarryOutRetryDelay + time.Minute).Outstanding()
+	if err != nil {
+		t.Fatalf("Outstanding() error = %v", err)
+	}
+	if len(later) != 2 {
+		t.Fatalf("outstanding = %#v, want the paused decision offered again once its pacing has passed", later)
 	}
 }

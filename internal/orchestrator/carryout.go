@@ -51,13 +51,16 @@ package orchestrator
 // work from being crowded out by a backlog of decided stoppages, and the next
 // pass takes the next.
 //
-// A refusal that needs something to change is paced. The pass reads the docket
-// every poll interval, so an unpaced retry would spend this pass's one carry-out
-// on the same refused decision several times a minute and starve every decided
-// stoppage behind it. A gate that clears on its own — a pause, a hold, a full
-// harness — is not paced, because pacing it would leave a decision uncarried for
-// a quarter of an hour after the switch was already open, which is the latency
-// this exists to remove.
+// A refusal is paced, and what decides that is who the gate is shut for. The
+// pass reads the docket every poll interval and carries one decision out per
+// pull, so an unpaced retry of a gate shut for one item — a directive pausing it,
+// work it waits on, a worktree somebody has been in — would take that single
+// carry-out several times a minute for as long as the gate stood, and starve
+// every other decided stoppage behind it. A gate shut for everything at once —
+// the operator's pause, the intake hold, a full harness — is not paced, because
+// nothing is behind it to starve and pacing it would leave a decision uncarried
+// for a quarter of an hour after the switch was already open, which is the
+// latency this exists to remove.
 
 import (
 	"context"
@@ -453,8 +456,8 @@ func (c CarryOut) rerun(ctx context.Context, task CarryOutTask, carried CarriedO
 			fmt.Sprintf("every developer slot is occupied: %d active, limit %d", result.CapacityFull.Active, result.CapacityFull.Limit),
 			"a developer slot freeing, which needs nobody; nothing was claimed, so the stoppage keeps its re-run"), Outcome{}, nil
 	case result.PausedBeforeStarting != nil:
-		gate, clears := pausedGate(*result.PausedBeforeStarting)
-		return c.stopped(ctx, task, carried, gate, true,
+		gate, clears, waiting := pausedGate(*result.PausedBeforeStarting)
+		return c.stopped(ctx, task, carried, gate, waiting,
 			fmt.Sprintf("the fresh run met %s where it would have started", pauseMet(*result.PausedBeforeStarting)), clears), Outcome{}, nil
 	case !result.Started:
 		gate, clears := carryOutGate(runErr)
@@ -498,19 +501,34 @@ func (c CarryOut) repair(ctx context.Context, task CarryOutTask, carried Carried
 	return carried, result.Outcome, runErr
 }
 
-// pausedGate names the pause a fresh run met and what lifts it. Each of the four
-// is lifted by a different person doing a different thing, so which one it was is
-// the whole of what the finding is worth.
-func pausedGate(outcome Outcome) (gate, clears string) {
+// pausedGate names the pause a fresh run met, what lifts it, and whether it is
+// one this decision waits on rather than one somebody has to open for it. Each of
+// the four is lifted by a different person doing a different thing, so which one
+// it was is the whole of what the finding is worth — and the four are not one kind
+// of gate.
+//
+// The operator's pause and the intake hold stop everything the harness would do.
+// They clear for every recorded decision at once, and asking again at the next
+// pull starves nothing, because every decision behind this one is standing at the
+// same switch. So they are the waiting kind, and the pass notices the moment
+// either is lifted.
+//
+// A directive and a dependency stop this item and no other. Left as waiting they
+// would be unpaced, and an unpaced refusal on a directive-paused item takes the
+// pass's one carry-out on every poll for as long as the directive stands — which
+// is every other decided stoppage starved by one that cannot fire, and the
+// standing backlog never clearing. They are refusals somebody has to open, and
+// they cool like every other one.
+func pausedGate(outcome Outcome) (gate, clears string, waiting bool) {
 	switch {
 	case outcome.PausedByOperator != nil:
-		return runstate.TriageGateSpendingPause, "`yoyo resume` lifting the pause; nothing was reserved, so the stoppage keeps its re-run"
+		return runstate.TriageGateSpendingPause, "`yoyo resume` lifting the pause; nothing was reserved, so the stoppage keeps its re-run", true
 	case outcome.PausedByIntake != nil:
-		return runstate.TriageGateIntakeHold, "`yoyo release` lifting the hold; nothing was reserved, so the stoppage keeps its re-run"
+		return runstate.TriageGateIntakeHold, "`yoyo release` lifting the hold; nothing was reserved, so the stoppage keeps its re-run", true
 	case outcome.PausedByDirective != nil:
-		return runstate.TriageGateDirective, "the operator resolving the directive that pauses this item; nothing was reserved, so the stoppage keeps its re-run"
+		return runstate.TriageGateDirective, "the operator resolving the directive that pauses this item; nothing was reserved, so the stoppage keeps its re-run", false
 	default:
-		return runstate.TriageGateWorkItem, "the work this item waits on finishing; nothing was reserved, so the stoppage keeps its re-run"
+		return runstate.TriageGateWorkItem, "the work this item waits on finishing; nothing was reserved, so the stoppage keeps its re-run", false
 	}
 }
 
