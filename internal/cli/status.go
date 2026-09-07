@@ -321,6 +321,9 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewWatchStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Sessions = store
 	}
+	if store, err := runstate.NewReportStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Reports = store
+	}
 	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
 	if err != nil {
 		sources.Tracker = unreadableTracker{fmt.Errorf("resolve product repository: %w", err)}

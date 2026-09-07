@@ -4231,6 +4231,50 @@ Every firing ends in a durable report, read with
 [`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found). The reports
 outlive the session that produced them and are written once and never revised.
 
+### Working the report pile on a cadence
+
+The other standing loop worth configuring is the one that drains the
+[collected reports](reporting.md#who-reads-them-and-what-became-of-each-one).
+Every role files what it noticed into one pile, the product manager is the only
+role that can record what became of a report, and until something wakes it for
+that the pile is worked only when you happen to open a conversation. Reports
+arrive at twenty to forty-five a day in this project, which is more than that
+reaches:
+
+```yaml
+recurring_tasks:
+  report-triage:
+    role: product-manager
+    every: 1h
+    enabled: true
+    max_turns: 4
+    prompt: |
+      Work the collected reports. The unhandled ones are carried into this turn
+      already, oldest first with anything critical ahead of them; decide about
+      every one you are shown and record each decision with the "handle"
+      action, whether that decision is work to admit, a proposal to make, a
+      question to raise, or that it needs nothing. Check anything you would
+      admit against the work already admitted first. Say in your pass's summary
+      how many you decided and how many are still behind them, and keep the
+      findings for what was worth more than a handling; a pass that has more of
+      the pile to work than one turn holds says so and takes another.
+```
+
+Every decision is on the record twice, which is why the prompt does not ask for
+one finding per report: the `handle` action writes what became of each report
+beside the pile, and the pass's own account in `yoyo sweeps` is the summary of
+the pass — bounded at twenty findings a turn, which a pass working forty reports
+would otherwise spend on bookkeeping.
+
+Nothing about that turn is special, which is the point: the same persona, the
+same authority, and the same bounded delivery a conversation you open yourself
+gets. What makes the loop converge is the delivery being a walk with a durable
+position rather than a listing — see
+[the walk](reporting.md#who-reads-them-and-what-became-of-each-one) — so each
+firing takes the next slice of the pile instead of the same worst one. Whether
+it is keeping up is answered by the count and the oldest undecided report's age
+that every listing of the pile now leads with.
+
 ## Personas
 
 A persona is a Markdown file describing how an agent works. Personas specialize

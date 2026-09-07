@@ -428,13 +428,33 @@ its evidence is the specifications, Beads state, and the documentation of what
 ships, and the pile is none of those.
 
 So the reports nobody has decided about are carried into its conversation, the
-way changes proposed to its documents already are. They arrive worst first —
-`critical`, then `warning`, then `note`, and the most recent first inside each —
-each naming itself, the role and agent that filed it, the work item where there
-was one, and the run or conversation it came out of. That is enough to act on
-without going and fetching anything. They are bounded: at most ten in one turn,
-with the rest counted and offered later, because a pile nobody has worked through
-must not become the whole of a turn.
+way changes proposed to its documents already are. Each names itself, the role
+and agent that filed it, the work item where there was one, and the run or
+conversation it came out of, which is enough to act on without going and
+fetching anything.
+
+They arrive as a walk through the pile rather than as its worst slice. The
+conversation carries a durable position in the order the pile was filed; a turn
+is offered what that position has not passed, oldest first, and the position
+advances over what was actually shown, so the next turn resumes rather than
+starting over. Anything filed at `critical` jumps the walk, because something
+already costing somebody has to be read today rather than when the walk reaches
+it.
+
+That ordering is the difference between a bound and a bottleneck, and this
+project learned it the expensive way. Delivering the worst ten of a worst-first
+listing takes the same ten every turn until somebody decides about one of them,
+so everything filed behind them is invisible however long it waits: 564 of 1313
+reports sat unhandled with the oldest three weeks old, while every turn showed a
+full listing and a reviewer's report of a real defect aged in the pile with it.
+
+The bound itself is still a bound — a pile nobody has worked through must not
+become the whole of a turn — but it scales with the pile. A turn carries ten
+while the pile is shallow and forty while it is deeper than fifty, and either
+way it is cut to a fixed number of bytes, so what a turn actually holds is
+limited by size rather than by a count. Whatever is not carried is counted, and
+the count is of the whole unhandled pile: a role told the pile is five hundred
+deep works at it differently from one told it is twelve.
 
 Deciding what becomes of one is a product decision and it is the product
 manager's: work to admit, a proposal to put to you, a concern to raise, or
@@ -465,6 +485,31 @@ That is what `/reports` and `yoyo reports` are showing you when they count the
 unhandled ones and print what was decided under the rest. It is also the honest
 limit of it: the harness carries reports to the role that decides, and nothing
 here judges whether it decided well.
+
+### Whether the pile is draining
+
+Neither the walk nor the bound is worth anything if nobody talks to the product
+manager, so the pile is worked on a cadence like the development manager's
+sweep: a [recurring task](configuration.md#recurring-tasks) wakes the product
+manager every so often with the pile as its whole job, and it decides about what
+it is shown. Nothing about that turn is special — the same persona, the same
+authority, the same `handle` action — and what it decided is on the record twice
+over, as a handling beside each report and as the pass's own durable account in
+`yoyo sweeps`.
+
+Whether that is keeping up is a question about a week rather than about a
+moment, so every listing of the pile leads with the two numbers that answer it:
+
+```text
+reports: 564 of 1313 collected report(s) are unhandled, the oldest filed 22d ago, worst critical
+```
+
+Both numbers come from one derivation, so the terminal and the channel cannot
+disagree about them. A pile that is draining says nothing anywhere else; one
+whose oldest undecided report has been waiting more than a week is named on
+`yoyo status`'s "needs a human" line as the product manager's, because a cadence
+that has stopped keeping up looks exactly like one that is working in any single
+reading.
 
 ## What agents propose changing, and who decides
 
