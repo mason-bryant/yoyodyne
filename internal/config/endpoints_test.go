@@ -191,10 +191,9 @@ func TestAnAgentsOwnEndpointIsTheAccountItIsAssignedTo(t *testing.T) {
 // loader accepted is refused when a run comes to be served. Codex is the case
 // that makes the difference visible: a project may name it for a developer
 // agent, validation accepts that because Codex's sandbox holds the developer's
-// posture, and what refuses the run is this build having no adapter for it —
-// which is the dispatch's refusal, made before anything is claimed, and not the
-// pool's. A pool that asked the second question too would turn a configuration
-// error into a failure at work-claim time.
+// posture, and the pool answers with the endpoint that provider's own adapter
+// reaches rather than asking a second question of its own. A pool that asked one
+// would turn a configuration error into a failure at work-claim time.
 func TestThePoolRefusesNothingConfigurationValidationAccepted(t *testing.T) {
 	t.Parallel()
 
@@ -212,10 +211,9 @@ func TestThePoolRefusesNothingConfigurationValidationAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChooseEndpoint() error = %v, want the pool to answer for what the loader accepted", err)
 	}
-	// The endpoint says what is true of it: a provider this build ships no
-	// adapter for, expressed rather than hidden, and refused where a run is
-	// dispatched instead.
-	if choice.Endpoint.Provider != domain.BackendCodex || choice.Endpoint.Runnable() {
-		t.Fatalf("ChooseEndpoint() = %s, want the Codex endpoint with no adapter version", choice.Endpoint)
+	// The endpoint says what is true of it: the provider the agent named, and the
+	// compiled adapter that reaches it.
+	if choice.Endpoint.Provider != domain.BackendCodex || choice.Endpoint.AdapterVersion != backend.CodexAdapterVersion {
+		t.Fatalf("ChooseEndpoint() = %s, want the Codex endpoint carrying its adapter's version", choice.Endpoint)
 	}
 }
