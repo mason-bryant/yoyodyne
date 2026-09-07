@@ -115,8 +115,8 @@ resolves by. It is written in square brackets at the start of the entry:
 The identifier is assigned once, never reused, and unchanged by every re-wording
 of the sentence beside it. The words are what you read and what a work item
 displays; they are not what the match depends on, so amending a goal is editing
-a sentence rather than renaming a thing — no admission quoting the old wording
-is refused, and no item attributed to it is orphaned. That was not true until
+a sentence rather than renaming a thing — no item attributed by identity is
+orphaned, and no admission naming that identity is refused. That was not true until
 yoyodyne-ifd.344: attribution matched on the exact prose, and three amendments
 in three weeks orphaned items or refused admissions, the last of them found
 because four admissions failed at intake in front of the operator.
@@ -126,6 +126,12 @@ arrangement and the one a re-wording breaks. `yoyo goals list` says which goals
 those are, and `yoyo goals attribution` says which work items still match that
 way.
 
+One thing identity does not reach: an admission that quotes a goal's *earlier*
+wording and carries no identifier still resolves against nothing, because the
+words are the whole of what it gave. What closes that is naming the goal by its
+identity, which is what the roles are asked for and what the harness records on
+the item.
+
 ```sh
 ./bin/yoyo goals list          # the goals work can be attributed to, their identities, and where each is stated
 ./bin/yoyo goals attribution   # what each work item the tracker holds says it is for
@@ -134,10 +140,12 @@ way.
 ./bin/yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
-Nothing there writes an attribution, for the same reason nothing writes an
-artifact: what a piece of work is for is a product judgement, made by the
-product manager in the conversation where you can see it. What the harness owns
-is resolving the claim. An item that names no goal at all and one that names a
+No command there decides what a piece of work is for, for the same reason
+nothing writes an artifact: that judgement is a product one, made by the product
+manager in the conversation where you can see it. What the harness owns is
+resolving the claim. Two of those commands do write — `witness` and
+`reattribute` — and neither writes a judgement: each records the goal an item
+already names, one into the tracker's metadata and one by the goal's identity. An item that names no goal at all and one that names a
 goal your goals do not state are reported apart and treated differently, because
 they are not the same thing to do: the first predates the check, is somebody's
 to attribute, and never stops the work running; the second is a claim that is

@@ -148,8 +148,9 @@ func goalsHome(directory string) Home {
 			"attributed to, and an entry opening with an identifier in square brackets — " +
 			"`- [traceable-chain] Maintain a traceable chain ...` — carries that identifier as " +
 			"its stable identity. An attribution resolves by naming the identity, so re-wording " +
-			"a goal orphans nothing; a goal stating no identity is matched on its words instead, " +
-			"and is orphaned by a re-wording. `yoyo goals list` is what they resolve to.",
+			"a goal orphans no item that named it that way; a goal stating no identity is matched " +
+			"on its words instead, and both that goal and an attribution quoting an older wording " +
+			"are broken by a re-wording. `yoyo goals list` is what they resolve to.",
 		Ownership: ownershipParagraph(domain.RoleProductManager),
 		HandEdit:  handEditParagraph(domain.RoleProductManager),
 	}

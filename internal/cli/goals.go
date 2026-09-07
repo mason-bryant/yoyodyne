@@ -2,18 +2,21 @@ package cli
 
 // The goals a repository records, and what the admitted work says it is for.
 //
-// There is no command here that attributes anything, and that is the same
-// decision the artifact commands make about writing artifacts: what a piece of
-// work is for is a product judgement, owned by the product manager and made in
-// the conversation where the operator can see it. What the harness owns is
-// reading the goals, resolving what an item names against them, and saying
-// which items are attributed to what — which is what this reports.
+// No command here decides what a piece of work is for, and that is the same
+// decision the artifact commands make about writing artifacts: that judgement is
+// the product manager's, made in the conversation where the operator can see it.
+// What the harness owns is reading the goals, resolving what an item names
+// against them, and saying which items are attributed to what — which is what
+// this reports.
 //
-// One command here does write, and it is the same boundary rather than an
-// exception to it: witnessing copies the goal an item's own notes already state
-// into the tracker's metadata, where replacing those notes cannot reach it. It
-// decides nothing about any work, which is precisely why it can run over a
-// backlog somebody else attributed.
+// Two commands here write, and both are that boundary rather than an exception
+// to it. Witnessing copies the goal an item's own notes already state into the
+// tracker's metadata, where replacing those notes cannot reach it.
+// Re-attributing appends the goal an item already named, named by that goal's
+// identity instead of by its wording, so the next amendment to the wording
+// leaves the item attributed. Neither decides anything about any work — each
+// records a goal somebody else chose — which is precisely why either can run
+// over a backlog somebody else attributed.
 //
 // One command here refuses, and it is the same boundary again seen from in
 // front: guarding reads a shell command an agent session is about to run and
@@ -1027,13 +1030,21 @@ attributed to. An entry opening with an identifier in square brackets — as in
 `+"`- [traceable-chain] Maintain a traceable chain ...`"+` — carries that identifier
 as its stable identity, and an attribution resolves by naming it. The goal's
 words are what a person reads and what a work item displays; they are not what
-the match depends on, so re-wording a goal refuses no admission and orphans no
-item. A goal stating no identifier is matched on its words alone, which is the
-older arrangement and the one a re-wording breaks.
+the match depends on, so re-wording a goal orphans no item attributed by
+identity and refuses no admission that names the identity.
 
-Nothing here writes an attribution. What a piece of work is for is the product
-manager's judgement, made in the conversation where the operator can see it;
+A goal stating no identifier is matched on its words alone, which is the older
+arrangement and the one a re-wording breaks. So is an admission that quotes a
+goal's earlier wording and carries no identifier: the words are the whole of
+what it gave, and they now match nothing. Naming the identity is what closes
+that, which is what the roles are asked for and what the harness records.
+
+No command here decides what a piece of work is for. That is the product
+manager's judgement, made in the conversation where the operator can see it, and
 what the harness owns is resolving what an item names and saying what it found.
+Two commands do write, and neither writes a judgement: "witness" copies the goal
+an item's notes already state into the tracker's metadata, and "reattribute"
+appends the goal an item already named, named by that goal's identity.
 
   list          the goals work may be attributed to, their identities, and where
                 each is stated

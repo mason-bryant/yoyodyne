@@ -897,6 +897,16 @@ func (s Set) attributeByIdentity(identity, statement string) Attribution {
 // what a goal whose document states no identifier is reachable by at all; an
 // attribution that resolves here is one the next re-wording of that goal
 // orphans, which is what ResolvedByWording says and what reattribution moves.
+//
+// What identity does not reach is a name arriving here that quotes a goal's
+// earlier wording: the words are the whole of what it gave, they match nothing,
+// and it is refused exactly as it was before identity existed. That is a
+// residual rather than the class this closes — an admission naming the identity,
+// or the wording as the document now states it, resolves — and it is left as a
+// refusal deliberately, because the alternative is guessing which goal a
+// sentence nothing states was meant to name. What removes it is naming the
+// identity, which is what the roles are asked for and what the harness writes
+// onto every item it attributes.
 func (s Set) attributeByWording(statement string) Attribution {
 	folded := fold(statement)
 	var replaced *Goal

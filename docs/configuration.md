@@ -1270,17 +1270,19 @@ goal's stable identity.
 letters, digits, and single hyphens between them. It is assigned once, never
 reused, and unchanged by every re-wording of the sentence beside it. The words
 are what a reader reads and what a work item displays; they are not what the
-match depends on, so amending a goal refuses no admission quoting the old
-wording and orphans no item attributed to it. Brackets holding anything else —
+match depends on, so amending a goal orphans no item attributed by identity and
+refuses no admission that names the identity. Brackets holding anything else —
 a phrase with spaces, a path, a Markdown link — are prose, and an entry carrying
 them states no identity rather than a malformed one.
 
 **A goal that states no identity is matched on its words**, with case,
 surrounding and repeated whitespace, and trailing sentence punctuation folded.
 That is the older arrangement, it still resolves, and it is the one a re-wording
-breaks: `yoyo goals list` says which goals carry no identity, `yoyo goals
-attribution` says which work items still match that way, and `yoyo goals
-reattribute` moves those items onto the identity where the goal has one.
+breaks. So is an admission that quotes a goal's earlier wording and names no
+identity: the words are the whole of what it gave, and they match nothing.
+`yoyo goals list` says which goals carry no identity, `yoyo goals attribution`
+says which work items still match that way, and `yoyo goals reattribute` moves
+those items onto the identity where the goal has one.
 
 **An identity two goals in force carry picks out neither.** It is reported by
 `yoyo goals list` on stderr, carried into `yoyo release`'s goals check, and work
