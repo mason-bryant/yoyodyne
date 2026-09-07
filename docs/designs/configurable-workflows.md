@@ -26,6 +26,10 @@ revisions:
       by: architect
       at: 2026-09-05T17:40:00Z
       reason: yoyodyne-ifd.282 - agent memory recorded as the existing agent-context mechanism with the deltas decided, no fourth store, db-backed with bolt as an option at implementation, agent-authored writes budgeted, redacted, and audited through owned typed actions
+    - action: amended
+      by: architect
+      at: 2026-09-07T20:00:00Z
+      reason: yoyodyne-ifd.348 - the operator's direction that the management roles act rather than only record, stated as capability additions to the shipped default bundles enforced in Go per the authority-by-capability parity guard; scopes, durable counters incremented before the act, and the excluded capabilities named
 ---
 
 # Configurable workflows: a declarative runtime over trusted actions
@@ -57,6 +61,8 @@ One durable transition at a time: load the instance and its pinned definition; t
 ## The authority model
 
 Sequenced as the brief's authority workstream, with its guard binding: the authority inventory and the capability registry land before anything is configurable; the five roles are expressed as shipped default bundles that reproduce current behavior exactly, checked against the inventory; authorization call sites convert from role names to capability-and-scope checks, with separation policy (reviewer independence, no self-approval, no evidence self-minting) as runtime rules a static bundle cannot prove; only then do protected operator-defined bundles load; and the closed role-name type is removed last, with compatibility decoding for durable records. Every invocation pins the role-contract revision and digest that authorized it; **authority changes never apply to an in-flight step attempt** — new invocations only, no exceptions, no migration of authority ever.
+
+The shipped default bundles for the management roles carry acting authority, not merely recording authority. The development manager holds `run.cause`, `run.repair-continue`, `publication.merge-repeat`, and a bounded `budget.cross-cap`, each scoped to work it may act on, each gated by the intake hold and the spending pause, each bounded by durable per-item counters incremented before the act, and each recording what was done and why. The product manager holds `work-item.repair-state` over her own backlog — terminal-run blockers, dead dependency links, attributions — which is state hygiene and never a substitute for closing or retiring. Neither bundle carries gate-evidence minting, approval of work it caused, integration, or writes to protected role definitions; the separation policy and the integration evidence rule refuse those whatever a bundle says. Broad authority is visible authority: every act is recorded and reported under the communication rule.
 
 Role definitions may live in the repository under `.yoyodyne/roles/` with two hard properties: the protected-path gate refuses any grant naming that directory — an absolute exception to the grant mechanism, with no decided-change override — and no definition is effective until operator-authorized activation records its digest, so the *activated digest* is the authority and a file changed by anyone is inert until a person activates it. Audit history is a CLI surface, never an agent one.
 
