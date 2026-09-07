@@ -125,16 +125,20 @@ type conversationTriageBudgets struct {
 	clock  execution.Clock
 }
 
-func (b conversationTriageBudgets) GrantRepair(ctx context.Context, workItemID string) (runstate.RepairGrant, error) {
-	return b.store.GrantRepair(ctx, workItemID, b.rounds, b.clock.Now(), b.caps)
+func (b conversationTriageBudgets) GrantRepair(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.RepairGrant, error) {
+	return b.store.GrantRepair(ctx, workItemID, decision, b.rounds, b.clock.Now(), b.caps)
 }
 
-func (b conversationTriageBudgets) RecordRerun(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
-	return b.store.RecordRerun(ctx, workItemID, b.clock.Now(), b.caps)
+func (b conversationTriageBudgets) RecordRerun(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
+	return b.store.RecordRerun(ctx, workItemID, decision, b.clock.Now(), b.caps)
 }
 
-func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
-	return b.store.RecordMergeRearm(ctx, workItemID, b.clock.Now(), b.caps)
+func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
+	return b.store.RecordMergeRearm(ctx, workItemID, decision, b.clock.Now(), b.caps)
+}
+
+func (b conversationTriageBudgets) RecordDecision(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
+	return b.store.RecordDecision(ctx, workItemID, decision, b.clock.Now())
 }
 
 // conversationStoppages wires the durable run records a triage decision is

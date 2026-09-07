@@ -820,13 +820,13 @@ func TestARecordedDecisionTheGuardWouldRefuseAgainShowsOnTheDocket(t *testing.T)
 
 	// The development manager decides a re-run, which spends the item's re-run
 	// budget as it is recorded and before anything acts on it.
-	if _, err := decisions.RecordRerun(context.Background(), docketedItem, docketedNow, docketedCaps); err != nil {
+	if _, err := decisions.RecordRerun(context.Background(), docketedItem, triageDecided(runstate.TriageDecisionRerun, decidedRunID), docketedNow, docketedCaps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	// The resubmission the development manager made is refused by the guard, and
 	// the refusal is the proof the decision is really recorded.
 	var refused runstate.TriageCapError
-	_, err = decisions.RecordRerun(context.Background(), docketedItem, docketedNow, docketedCaps)
+	_, err = decisions.RecordRerun(context.Background(), docketedItem, triageDecided(runstate.TriageDecisionRerun, decidedRunID), docketedNow, docketedCaps)
 	if !errors.As(err, &refused) {
 		t.Fatalf("second RecordRerun() error = %v, want a cap refusal", err)
 	}
@@ -894,7 +894,7 @@ func TestAGrantTheRoundCapCutShowsOnTheDocketWithWhatARepeatWouldMeet(t *testing
 	// The development manager decides a repair. The configured grant is two
 	// rounds and the cap has room for one, so the harness records the cut and
 	// says so — which is the sentence the next docket contradicted.
-	granted, err := decisions.GrantRepair(context.Background(), docketedItem,
+	granted, err := decisions.GrantRepair(context.Background(), docketedItem, triageDecided(runstate.TriageDecisionRepair, decidedRunID),
 		TriageRepairGrantRounds(docketedTriage), docketedNow, docketedCaps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
@@ -905,7 +905,7 @@ func TestAGrantTheRoundCapCutShowsOnTheDocketWithWhatARepeatWouldMeet(t *testing
 	// The resubmission is refused by the guard, which is the proof the decision is
 	// really recorded and the round-trip the docket is meant to save.
 	var refused runstate.TriageCapError
-	_, err = decisions.GrantRepair(context.Background(), docketedItem,
+	_, err = decisions.GrantRepair(context.Background(), docketedItem, triageDecided(runstate.TriageDecisionRepair, decidedRunID),
 		TriageRepairGrantRounds(docketedTriage), docketedNow, docketedCaps)
 	if !errors.As(err, &refused) {
 		t.Fatalf("second GrantRepair() error = %v, want a cap refusal", err)

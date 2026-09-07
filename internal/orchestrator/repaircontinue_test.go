@@ -165,7 +165,7 @@ func newUndecidedHarness(t *testing.T, state runstate.State) *continueHarness {
 // acts on the decision.
 func recordRepairDecision(t *testing.T, runs *runstate.Store, workItemID string) runstate.RepairGrant {
 	t.Helper()
-	granted, err := runs.Triage().GrantRepair(context.Background(), workItemID, continueGrantRounds, docketedNow, continueCaps)
+	granted, err := runs.Triage().GrantRepair(context.Background(), workItemID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), continueGrantRounds, docketedNow, continueCaps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -393,7 +393,7 @@ func TestASecondRepairOfOneItemIsRefusedOnceTheGrantIsCarriedOut(t *testing.T) {
 	}
 	// And deciding a second is what the cap makes a person's decision rather than
 	// this action's.
-	if _, err := harness.runs.Triage().GrantRepair(context.Background(), docketedItem, continueGrantRounds, docketedNow, continueCaps); !errors.Is(err, runstate.ErrTriageCapReached) {
+	if _, err := harness.runs.Triage().GrantRepair(context.Background(), docketedItem, triageDecided(runstate.TriageDecisionRepair, decidedRunID), continueGrantRounds, docketedNow, continueCaps); !errors.Is(err, runstate.ErrTriageCapReached) {
 		t.Fatalf("GrantRepair() error = %v, want a second grant of one item refused", err)
 	}
 }
@@ -414,7 +414,7 @@ func TestARepairIsRefusedOnceTheRoundCapHasNoRoomLeft(t *testing.T) {
 	}
 	// The development manager's own decision is what the cap refuses, and it
 	// refuses it by the round budget rather than by the grant's own.
-	_, grantErr := harness.runs.Triage().GrantRepair(context.Background(), docketedItem, continueGrantRounds, docketedNow, continueCaps)
+	_, grantErr := harness.runs.Triage().GrantRepair(context.Background(), docketedItem, triageDecided(runstate.TriageDecisionRepair, decidedRunID), continueGrantRounds, docketedNow, continueCaps)
 	var capped runstate.TriageCapError
 	if !errors.As(grantErr, &capped) {
 		t.Fatalf("GrantRepair() error = %v, want a cap refusal", grantErr)
@@ -847,7 +847,7 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 	// The development manager's decision, recorded exactly as the conversation
 	// records one: it spends the item's repair grant, and the three rounds the
 	// stopped run cost leave the cap room for one of the two it asks for.
-	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID,
+	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID),
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage))
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)

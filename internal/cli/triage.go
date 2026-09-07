@@ -9,11 +9,17 @@ package cli
 // which continues the run that stopped on the change it already has.
 //
 // The decision is not made here and cannot be. What each takes is the run the
-// docket entry names and the reasoning the development manager recorded, and
-// what it does with them is the harness's own work — reading the intake hold,
-// proving the stoppage is over, and then either claiming the one re-run that
-// stoppage gets and starting a fresh run, or spending the item's repair grant,
-// superseding the blocker, and continuing the run that stopped.
+// docket entry names, and what it does with it is the harness's own work —
+// reading the intake hold, proving the stoppage is over, and then either
+// claiming the one re-run that stoppage gets and starting a fresh run, or
+// spending the item's repair grant, superseding the blocker, and continuing the
+// run that stopped.
+//
+// A re-run takes nothing else. The reasoning it records as why the fresh run
+// exists is read from the decision the development manager's conversation wrote
+// to the item's durable triage record, so the attribution the run carries names
+// a role that really wrote those words and cites where. A reason this command
+// took as a flag was one anybody at a terminal could put in that role's mouth.
 
 // The third verb here is not one of those and carries nothing out. Both of them
 // require a decision recorded against the item's durable triage budget, and the
@@ -82,7 +88,6 @@ func rerunStoppage(ctx context.Context, args []string, stdout, stderr io.Writer)
 	flags := flag.NewFlagSet("triage rerun", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
-	reason := flags.String("reason", "", "the development manager's recorded reasoning for deciding a re-run")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	positional, err := parseArguments(flags, args)
 	if err != nil {
@@ -98,7 +103,11 @@ func rerunStoppage(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err != nil {
 		return reportRerun(stdout, stderr, *jsonOutput, orchestrator.RerunResult{}, err)
 	}
-	result, err := rerunner.Rerun(ctx, orchestrator.RerunRequest{Run: positional[0], Reason: *reason})
+	// The run and nothing else. The reasoning is read from the decision the
+	// development manager recorded rather than typed here: a reason this command
+	// accepted would be recorded as that role's, and nothing would have checked it
+	// against anything they wrote.
+	result, err := rerunner.Rerun(ctx, orchestrator.RerunRequest{Run: positional[0]})
 	return reportRerun(stdout, stderr, *jsonOutput, result, err)
 }
 
@@ -453,6 +462,13 @@ Everything that refuses is asked before anything is claimed or granted, so a
 refusal costs nothing and asking again once it no longer applies carries out the
 same decision.
 
+A re-run takes the run and nothing else. What it records as why the fresh run
+exists -- the decision, who recorded it, in which conversation and on which turn,
+and the reasoning it was recorded with -- is read from the item's durable triage
+record, where the development manager's own conversation wrote it. A stoppage
+with no such decision standing is refused naming the record that is missing, and
+so is one whose standing decision is something other than a re-run.
+
 A re-run is claimed once per docketed stoppage, and the item has to be one a run
 may start on, which for a run that stopped on a blocker means putting the item
 back first. A repair needs no such reopening: it supersedes the blocker itself,
@@ -489,8 +505,9 @@ spending it are two decisions and stay two.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
-  --reason <text>   rerun/repair: the development manager's recorded reasoning
-                    (required); override: why the cap is being crossed (required)
+  --reason <text>   repair: the development manager's recorded reasoning
+                    (required); override: why the cap is being crossed (required).
+                    "rerun" takes none: it reads the recorded decision instead
   --budget <name>   override: which cap to cross -- "review round" (the default),
                     "repair grant", "re-run", or "merge re-arm"
   --cap <n>         override: the ceiling to raise that budget to

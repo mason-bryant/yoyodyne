@@ -1091,6 +1091,13 @@ what was refused as out of scope, `rearm` repeats a merge the forge dropped,
 lands in the item's notes, so the next reader of a run that stopped finds the
 reasoning beside the evidence rather than deciding it a second time.
 
+**It also lands as a record the harness reads**: the decision, the stoppage it
+settles, the reasoning verbatim, and where it was recorded, on the item's durable
+triage record. That is what the verbs below carry out, and why a decision
+requires its `reason`: before it existed, `yoyo triage rerun` took the reasoning
+as a `--reason` flag and recorded it as the development manager's — an
+attribution nobody in that role wrote.
+
 **The run a decision names has to be that item's own stopped work.** The harness
 reads the run's record and refuses a decision whose run was made for a different
 item, before any budget is spent and before anything is written down. That is
@@ -1160,14 +1167,13 @@ action that does. They are the two opposite answers to a run that stopped:
 `yoyo triage rerun` starts the item over, and `yoyo triage repair` continues the
 run that stopped on the change it already has.
 
-`yoyo triage rerun <run-id> --reason "<what the development
-manager decided>"` starts a fresh run of the item whose stopped run the docket
-entry names — the case where the ground moved under a change that was never
-wrong. The run records the development manager as having chosen the work and the
-reasoning the harness was given as why it exists, so a re-run accounts for
-itself the way every other chosen run does; **your hold on intake applies to
-it**, because the harness is the one choosing here and the exemption for an item
-named by hand is yours rather than the development manager's.
+`yoyo triage rerun <run-id>` starts a fresh run of the item whose stopped run the
+docket entry names — the case where the ground moved under a change that was
+never wrong. It takes the run and nothing else: why the run exists is read from
+the recorded decision and cites it, so the account is one you can check.
+**Your hold on intake applies to it**,
+because the harness is the one choosing here and the exemption for an item named
+by hand is yours rather than the development manager's.
 
 Four things refuse it. The stopped run has to be really over — terminal, and
 still standing on whichever of the two put it on the docket: its blocker, or, for
@@ -1178,11 +1184,13 @@ may start on — open or blocked, with nothing it depends on outstanding. Blocke
 counts because stopping the run is what blocked it, so re-entry supersedes that
 blocker rather than waiting for somebody to remember to reopen the item; what
 still refuses is unfinished work the item waits for. And a decision of the
-development manager's has to be there to carry out: deciding a re-run spends the
-item's re-run budget as it is decided, and each decision authorizes one re-run,
-so the harness reads what it has already carried out for the item back against
-what was decided. An item nobody decided this about is refused, and so is one
-whose decision has already been acted on — a second stoppage of an item that was
+development manager's has to be there to carry out: a re-run decision recorded
+about *this* stoppage, which the harness finds on the durable record or refuses
+naming what is missing. Deciding one spends the item's re-run budget in the same
+write, and each decision authorizes one re-run, so what has already been carried
+out is read back against what was decided. A stoppage nobody decided this about
+is refused, so is one decided otherwise, and so is one whose decision has already
+been acted on — a second stoppage of an item that was
 already run again needs somebody to decide about *that* stoppage, which past the
 once-per-item cap means an escalation rather than a bigger budget. The harness
 will not start a run attributed to a decision that does not exist, or to one that

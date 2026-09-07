@@ -1,0 +1,254 @@
+package runstate
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+)
+
+// The second stoppage the tests below decide about, where one is not enough.
+const secondDecidedRunID = "run-8888777766665555444433332222aaaa"
+
+// The whole point of the record: a spend and the decision that authorized it are
+// one write, so an item's record can never say a budget went without saying what
+// was decided, by whom, and about which stoppage.
+func TestARerunSpendCarriesTheDecisionThatAuthorizedIt(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	decision := triageDecided(TriageDecisionRerun, decidedRunID)
+	counters, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.311", decision, time.Now(), TriageCaps{
+		ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2,
+	})
+	if err != nil {
+		t.Fatalf("RecordRerun() error = %v", err)
+	}
+	if counters.Reruns != 1 {
+		t.Fatalf("reruns = %d, want the decision's spend", counters.Reruns)
+	}
+	// Read back from the record rather than from what was returned, because the
+	// record is what a carry-out reads.
+	reread, err := store.Counters("yoyodyne-ifd.311")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	recorded, found := reread.DecisionOf(decidedRunID)
+	if !found {
+		t.Fatalf("counters = %#v, want the decision standing about the stoppage it was made about", reread)
+	}
+	if recorded.Decision != TriageDecisionRerun || recorded.Reason != decision.Reason {
+		t.Fatalf("decision = %#v, want the re-run and the reasoning it was recorded with", recorded)
+	}
+	if recorded.DecidedBy != decision.DecidedBy || recorded.Conversation != decision.Conversation || recorded.Turn != decision.Turn {
+		t.Fatalf("decision = %#v, want the role and the turn it was recorded on", recorded)
+	}
+	if recorded.DecidedAt.IsZero() {
+		t.Fatalf("decision = %#v, want the moment it was recorded", recorded)
+	}
+	// The citation is what an attribution built from this points at, so it has to
+	// name all three.
+	for _, want := range []string{decision.DecidedBy, decision.Conversation, "after turn 3"} {
+		if !strings.Contains(recorded.Cite(), want) {
+			t.Fatalf("citation %q is missing %q", recorded.Cite(), want)
+		}
+	}
+}
+
+// A decision names its own stoppage, so a decision about one run says nothing
+// about another — which is the whole reason a spent counter cannot stand in for
+// one. An item that stopped twice carries a decision about each.
+func TestDecisionsStandPerStoppageAndTheLatestOneAboutARunSupersedes(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	caps := TriageCaps{ReviewRounds: 8, RepairGrants: 2, Reruns: 2, MergeRearms: 2}
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.311", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); err != nil {
+		t.Fatalf("RecordRerun() error = %v", err)
+	}
+	second := triageDecided(TriageDecisionRerun, secondDecidedRunID)
+	second.Reason = "the second stoppage was a backend death rather than anything about the change"
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.311", second, time.Now(), caps); err != nil {
+		t.Fatalf("RecordRerun() error = %v", err)
+	}
+	counters, err := store.Counters("yoyodyne-ifd.311")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if len(counters.Decisions) != 2 {
+		t.Fatalf("decisions = %#v, want one standing about each stoppage", counters.Decisions)
+	}
+	if decided, _ := counters.DecisionOf(secondDecidedRunID); decided.Reason != second.Reason {
+		t.Fatalf("decision = %#v, want the one recorded about that stoppage", decided)
+	}
+
+	// The development manager came back to the first stoppage and decided to wait
+	// instead. That is one decision about one run rather than two, so it replaces
+	// what was standing rather than leaving a carry-out to choose.
+	waited := triageDecided(TriageDecisionWait, decidedRunID)
+	waited.Reason = "the forge still has the merge, so nothing is to be done about this one yet"
+	if _, err := store.RecordDecision(context.Background(), "yoyodyne-ifd.311", waited, time.Now()); err != nil {
+		t.Fatalf("RecordDecision() error = %v", err)
+	}
+	counters, err = store.Counters("yoyodyne-ifd.311")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if len(counters.Decisions) != 2 {
+		t.Fatalf("decisions = %#v, want the later decision in place of the earlier one", counters.Decisions)
+	}
+	standing, _ := counters.DecisionOf(decidedRunID)
+	if standing.Decision != TriageDecisionWait {
+		t.Fatalf("decision = %#v, want the decision that holds now", standing)
+	}
+	// Superseding a decision does not give a budget back: what was spent was
+	// spent, and the counters say so.
+	if counters.Reruns != 2 {
+		t.Fatalf("reruns = %d, want both spends still recorded", counters.Reruns)
+	}
+}
+
+// A decision that buys another attempt is recorded by the operation that spends
+// its budget, and by nothing else. Recording one on its own would be a decision
+// the guards never saw.
+func TestADecisionThatSpendsIsRefusedByTheOperationThatRecordsNoSpend(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	for _, decision := range []string{TriageDecisionRepair, TriageDecisionRerun, TriageDecisionRearm} {
+		if _, err := store.RecordDecision(context.Background(), "yoyodyne-ifd.311", triageDecided(decision, decidedRunID), time.Now()); err == nil {
+			t.Fatalf("RecordDecision() recorded a %q, which spends a budget it never asked for", decision)
+		}
+	}
+	counters, err := store.Counters("yoyodyne-ifd.311")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if len(counters.Decisions) != 0 || counters.Passes() != 0 {
+		t.Fatalf("counters = %#v, want nothing recorded and nothing spent", counters)
+	}
+}
+
+// The word and the budget have to agree. An operation that took whatever
+// decision it was handed would let a wait pay for a re-run, which is the
+// attribution the record exists to make impossible.
+func TestASpendIsRefusedWhenTheDecisionIsNotTheOneItSpends(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.311", triageDecided(TriageDecisionWait, decidedRunID), time.Now(), caps); err == nil {
+		t.Fatal("RecordRerun() spent a re-run on a decision to wait")
+	}
+	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.311", triageDecided(TriageDecisionRerun, decidedRunID), 2, time.Now(), caps); err == nil {
+		t.Fatal("GrantRepair() granted a repair on a decision to re-run")
+	}
+	counters, err := store.Counters("yoyodyne-ifd.311")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.Passes() != 0 || len(counters.Decisions) != 0 {
+		t.Fatalf("counters = %#v, want nothing spent and nothing recorded", counters)
+	}
+}
+
+// Every field of a decision is required, because a decision nobody is named for
+// and one that names no stoppage are exactly the prose this replaces. A spend
+// asked for with one is refused before anything is written.
+func TestAnIncompleteDecisionSpendsNothing(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	for name, spoil := range map[string]func(*TriageDecision){
+		"no reasoning":    func(d *TriageDecision) { d.Reason = "" },
+		"nobody deciding": func(d *TriageDecision) { d.DecidedBy = "" },
+		"no conversation": func(d *TriageDecision) { d.Conversation = "" },
+		"no stoppage":     func(d *TriageDecision) { d.RunID = "" },
+		"not a run":       func(d *TriageDecision) { d.RunID = "the last one" },
+	} {
+		decision := triageDecided(TriageDecisionRerun, decidedRunID)
+		spoil(&decision)
+		if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.311", decision, time.Now(), caps); err == nil {
+			t.Fatalf("RecordRerun() with %s recorded a decision anyway", name)
+		}
+	}
+	counters, err := store.Counters("yoyodyne-ifd.311")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.Reruns != 0 {
+		t.Fatalf("reruns = %d, want nothing spent on a decision the record would not hold", counters.Reruns)
+	}
+}
+
+// A cap refuses the decision and the spend together, because they are one write.
+// A record left carrying a decision the guard refused would be a decision the
+// carry-out then acted on.
+func TestADecisionRefusedByACapIsNotRecorded(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 0, MergeRearms: 2}
+	_, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.311", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps)
+	if !errors.Is(err, ErrTriageCapReached) {
+		t.Fatalf("RecordRerun() error = %v, want the cap refusing", err)
+	}
+	counters, err := store.Counters("yoyodyne-ifd.311")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if len(counters.Decisions) != 0 {
+		t.Fatalf("decisions = %#v, want none recorded past a cap", counters.Decisions)
+	}
+}
+
+// The record is read back by another process, so it has to survive the file it
+// is written to.
+func TestARecordedDecisionSurvivesBeingReadBack(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewTriageStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+	if _, err := store.RecordDecision(context.Background(), "yoyodyne-ifd.311",
+		triageDecided(TriageDecisionEscalate, decidedRunID), time.Now()); err != nil {
+		t.Fatalf("RecordDecision() error = %v", err)
+	}
+	reopened, err := NewTriageStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+	counters, err := reopened.Counters("yoyodyne-ifd.311")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	decided, found := counters.DecisionOf(decidedRunID)
+	if !found || decided.Decision != TriageDecisionEscalate {
+		t.Fatalf("counters = %#v, want the escalation another process wrote", counters)
+	}
+}
+
+// Two decisions standing about one stoppage describe a record the only thing
+// that writes them could not have written, and a carry-out reading it would have
+// to choose between them.
+func TestARecordWithTwoDecisionsAboutOneStoppageIsRefused(t *testing.T) {
+	t.Parallel()
+
+	decision := triageDecided(TriageDecisionRerun, decidedRunID)
+	decision.DecidedAt = time.Now().UTC()
+	counters := TriageCounters{
+		SchemaVersion: TriageCountersSchemaVersion,
+		ProductID:     "yoyodyne",
+		WorkItemID:    "yoyodyne-ifd.311",
+		Reruns:        2,
+		Decisions:     []TriageDecision{decision, decision},
+		UpdatedAt:     time.Now().UTC(),
+	}
+	if err := counters.Validate(); err == nil {
+		t.Fatal("Validate() accepted two decisions about one stoppage")
+	}
+}

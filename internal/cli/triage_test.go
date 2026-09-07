@@ -51,7 +51,7 @@ func TestTriageRerunReportsARefusalAsJSON(t *testing.T) {
 	path := writeConfig(t, "version: 3\n")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Run([]string{"triage", "rerun", "--config", path, "--reason", "the ground moved", "--json",
+	code := Run([]string{"triage", "rerun", "--config", path, "--json",
 		"run-0123456789abcdef0123456789abcdef"}, &stdout, &stderr, "test")
 	if code != 1 {
 		t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr.String())

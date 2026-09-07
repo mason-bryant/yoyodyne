@@ -2898,22 +2898,24 @@ decisions have an action for the second. They are the two opposite answers to a
 run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
 repair` continues the run that stopped on the change it already has.
 
-`yoyo triage rerun <run-id> --reason "<the recorded decision>"` starts a fresh
-run of the item whose stopped run the docket entry names. It is refused unless that run is terminally recorded and
+`yoyo triage rerun <run-id>` starts a fresh run of the item whose stopped run the
+docket entry names. It takes the run and nothing else: the decision it carries
+out and the reasoning it records come from the item's durable triage record
+rather than from a flag. It is refused unless that run is terminally recorded and
 still standing on whichever of the two docketed it — its blocker, or, for a run
 that died before anything recorded one, the change it left behind — read from the
 run's own record rather than from the
 docket entry — and one docketed stoppage is re-run once, whatever the item's
-budget still says. It is also refused unless a decision of the development
-manager's is there to carry out: the decision spends the item's re-run budget as
-it is made, and each one authorizes exactly one re-run, so what has already been
-claimed for the item is read back against what was decided. An item whose budget
-carries no re-run is one nobody decided this about; an item whose decisions have
-all been carried out is refused too, because that counter is a total nothing
-clears and reading it alone would let a second stoppage of an already re-run item
-start on the strength of a decision that was about the first. A second stoppage
-needs a second decision, which past the once-per-item cap is an escalation rather
-than a larger budget. It is refused, finally, unless the work item itself is one
+budget still says. It is also refused unless a re-run decision about this
+stoppage stands on that record, and names what is missing when none does. The
+decision spends the item's re-run budget in the same write and authorizes exactly
+one re-run, so what has already been claimed is read back against what was
+decided. A stoppage nothing was decided about is refused, and so is one decided
+otherwise; an item whose decisions have all been carried out is refused too. A
+second stoppage needs a second decision — the counter is a total nothing clears,
+so neither it nor a decision about the first stoppage says anything about this
+one — which past the once-per-item cap is an escalation rather than a larger
+budget. It is refused, finally, unless the work item itself is one
 a run may start on — open or blocked, with nothing it depends on outstanding.
 Blocked is deliberately among them: stopping the run blocked the item, and a
 status written when work stops and never rewritten when what stopped it clears is
@@ -2923,9 +2925,10 @@ still refuses is unfinished work the item waits for, and an item that has left
 the backlog. The intake hold applies too, because the harness is the one
 choosing the work; a re-run under a hold starts nothing and claims nothing, so the
 stoppage keeps its re-run for after the hold is lifted. The fresh run records
-the development manager as having chosen it and the reasoning the harness was
-given as why, which is what the `selected-work-passes-intake-and-records-why`
-invariant requires of anything the harness chooses for itself.
+the development manager as having chosen it, cites the decision it read that from
+— whose, which conversation, which turn — and carries the reasoning recorded with
+it, which is what `selected-work-passes-intake-and-records-why` asks of anything
+the harness chooses, made checkable.
 
 **Every one of those refusals is made before the stoppage's re-run is claimed**,
 and the claim is what spends it. A condition asked after the claim would spend
@@ -3239,7 +3242,12 @@ ground moved — which is the race charged to the item after all.
 **Each counter is written before the action it counts takes effect**, so a
 process that dies between the two has recorded a grant it did not give rather
 than given one it did not record — an unspent attempt rather than a duplicated
-one. Concurrent updates are serialized per item, so no increment is lost, and a
+one. **The decision that authorized the spend is written in the same
+update** — the word, the stoppage, the reasoning verbatim, and where it was
+recorded — so a record cannot say a budget went without saying what was decided.
+That is what the actions carrying a decision out read, rather than words from
+whoever ran the command. Decisions that spend nothing are recorded too, and one
+stands per stopped run. Concurrent updates are serialized per item, so no increment is lost, and a
 record that cannot be read is a refusal rather than an empty budget: an
 unreadable budget read as empty is every cap in it stopping to mean anything.
 Recovery from one is a decision, not a repair: the record is one JSON file per
@@ -3257,7 +3265,7 @@ Which threshold refuses which action:
 | Action | Refused by |
 | --- | --- |
 | another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for — one precondition among several: the decision recorded here spends the budget, and `yoyo triage repair` re-enters the stopped run's repair loop on it, which is a claim the harness makes rather than the operator, so `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the run is continued and the reasoning recorded in the run's durable state. That action is bounded again by what the grant has already bought, read back from the continuations the item's runs record, and it refuses a preserved worktree that is not as the harness left it |
-| another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget; `yoyo triage rerun` starts the run and carries both, is bounded again by one re-run per docketed stoppage, and reads this counter back — against the re-runs already claimed for the item — as the proof that a decision is there to carry out |
+| another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget and is written beside it, naming the stoppage and where it was recorded; `yoyo triage rerun` starts the run, is bounded again by one re-run per docketed stoppage, and reads that decision back — with this counter, against the re-runs already claimed — as the proof that one is there to carry out and as the words its attribution is built from |
 | re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the re-arm action (unbuilt today), which must repeat only the identical already-authorized forge request under the harness's own lease. The decision recorded here spends the per-item integration-retry budget as shipped; the design's once-per-publication counter arrives with the re-arm action, and performing the re-arm is that action's |
 
 The first two buy review rounds, so the round cap bounds them, and a grant is

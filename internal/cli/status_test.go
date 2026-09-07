@@ -893,14 +893,14 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	}
 	// Two attempts asked for against the one round the cap has left, which is the
 	// truncation the listing then reports.
-	granted, err := triage.GrantRepair(context.Background(), "yoyodyne-ifd.2.7", 2, time.Now(), caps)
+	granted, err := triage.GrantRepair(context.Background(), "yoyodyne-ifd.2.7", triageDecided(runstate.TriageDecisionRepair, decidedRunID), 2, time.Now(), caps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	if granted.Rounds != 1 || !granted.Truncated {
 		t.Fatalf("GrantRepair() = %+v, want one round of the two asked for", granted)
 	}
-	if _, err := triage.RecordMergeRearm(context.Background(), "yoyodyne-ifd.2.7", time.Now(), caps); err != nil {
+	if _, err := triage.RecordMergeRearm(context.Background(), "yoyodyne-ifd.2.7", triageDecided(runstate.TriageDecisionRearm, decidedRunID), time.Now(), caps); err != nil {
 		t.Fatalf("RecordMergeRearm() error = %v", err)
 	}
 

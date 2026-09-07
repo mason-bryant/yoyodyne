@@ -23,6 +23,23 @@ import (
 // through this, which is a compile-time fact worth stating where it is built.
 var _ chat.Ground = conversationGround{}
 
+// decidedRunID is the stoppage the triage decisions below are about, and
+// triageDecided is one such decision as the durable record requires it. Every
+// spend is authorized by one, and these tests are about the wiring and the
+// figures rather than about which stoppage was decided.
+const decidedRunID = "run-11112222333344445555666677778888"
+
+func triageDecided(decision, runID string) runstate.TriageDecision {
+	return runstate.TriageDecision{
+		Decision:     decision,
+		RunID:        runID,
+		Reason:       "the reasoning the development manager recorded for this decision",
+		DecidedBy:    "development manager",
+		Conversation: "chat-0123456789abcdef",
+		Turn:         3,
+	}
+}
+
 // What has moved is two cheap questions: what the repository holds that the
 // picture did not, and what the tracker wrote down after it was taken.
 func TestMovementCountsCommitsAgainstTheRecordedCommitAndTrackerChangesAfterTheMoment(t *testing.T) {
@@ -398,17 +415,17 @@ func TestTheDevelopmentManagerIsWiredTheProductsTriageBudget(t *testing.T) {
 	// Spending through it is what says it is wired to something usable: the
 	// right store, caps that permit the decision, and a grant of the configured
 	// size rather than of zero.
-	granted, err := budgets.GrantRepair(context.Background(), "yoyodyne-ifd.90")
+	granted, err := budgets.GrantRepair(context.Background(), "yoyodyne-ifd.90", triageDecided(runstate.TriageDecisionRepair, decidedRunID))
 	if err != nil {
 		t.Fatalf("GrantRepair() through the wired budget error = %v", err)
 	}
 	if granted.Rounds != orchestrator.TriageRepairGrantRounds(parts.config.Triage) || granted.Truncated {
 		t.Fatalf("granted = %+v, want the configured grant in full", granted)
 	}
-	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); err != nil {
+	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90", triageDecided(runstate.TriageDecisionRerun, decidedRunID)); err != nil {
 		t.Fatalf("RecordRerun() through the wired budget error = %v", err)
 	}
-	if _, err := budgets.RecordMergeRearm(context.Background(), "yoyodyne-ifd.90"); err != nil {
+	if _, err := budgets.RecordMergeRearm(context.Background(), "yoyodyne-ifd.90", triageDecided(runstate.TriageDecisionRearm, decidedRunID)); err != nil {
 		t.Fatalf("RecordMergeRearm() through the wired budget error = %v", err)
 	}
 
@@ -424,10 +441,10 @@ func TestTheDevelopmentManagerIsWiredTheProductsTriageBudget(t *testing.T) {
 	}
 	// And the caps it enforces are the assembled ones, so the second of each is
 	// refused rather than counted.
-	if _, err := budgets.GrantRepair(context.Background(), "yoyodyne-ifd.90"); !errors.Is(err, runstate.ErrTriageCapReached) {
+	if _, err := budgets.GrantRepair(context.Background(), "yoyodyne-ifd.90", triageDecided(runstate.TriageDecisionRepair, decidedRunID)); !errors.Is(err, runstate.ErrTriageCapReached) {
 		t.Fatalf("a second grant through the wired budget error = %v, want a cap refusal", err)
 	}
-	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); !errors.Is(err, runstate.ErrTriageCapReached) {
+	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90", triageDecided(runstate.TriageDecisionRerun, decidedRunID)); !errors.Is(err, runstate.ErrTriageCapReached) {
 		t.Fatalf("a second re-run through the wired budget error = %v, want a cap refusal", err)
 	}
 }
@@ -448,7 +465,7 @@ func TestTheDocketReportsWhatTheWiredBudgetSpent(t *testing.T) {
 	}
 
 	budgets := conversationTriage(parts, domain.RoleDevelopmentManager)
-	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); err != nil {
+	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90", triageDecided(runstate.TriageDecisionRerun, decidedRunID)); err != nil {
 		t.Fatalf("RecordRerun() through the wired budget error = %v", err)
 	}
 
@@ -468,7 +485,7 @@ func TestTheDocketReportsWhatTheWiredBudgetSpent(t *testing.T) {
 	}
 	// The guard refuses a second against the same record the entry just showed,
 	// which is the whole of what makes what it showed worth reading.
-	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); !errors.Is(err, runstate.ErrTriageCapReached) {
+	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90", triageDecided(runstate.TriageDecisionRerun, decidedRunID)); !errors.Is(err, runstate.ErrTriageCapReached) {
 		t.Fatalf("a second re-run through the wired budget error = %v, want a cap refusal", err)
 	}
 }

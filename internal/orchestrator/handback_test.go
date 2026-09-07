@@ -61,7 +61,7 @@ func TestARepairHandbackCarriesThePreservedChange(t *testing.T) {
 
 	// The development manager's decision, which spends the item's repair budget
 	// before anything acts on it.
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, 2, docketedNow, handbackCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), 2, docketedNow, handbackCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 
