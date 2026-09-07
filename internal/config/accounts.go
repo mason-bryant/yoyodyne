@@ -318,17 +318,33 @@ func (c Config) ChooseAccount(stateRoot, lastServed string, spentUSD map[string]
 	// The order is built once and then read twice — for the choice and for the
 	// refusal that names why there was none — so what a refusal describes is the
 	// order the choice was actually made over.
-	order := append([]string(nil), c.rotate(c.ActiveAccountAliases(), lastServed)...)
-	order = append(order, c.ReservedAccountAliases()...)
+	order := c.rotatedAliases(lastServed)
 	for _, alias := range order {
 		if c.withinBudget(alias, spentUSD) {
 			return c.Endpoint(stateRoot, alias)
 		}
 	}
+	return AccountEndpoint{}, c.noAccountLeft(order, spentUSD)
+}
+
+// rotatedAliases is the pool in the order a choice reads it: the active half
+// rotated past the account last served, then the reserved half. It is shared by
+// the two things that choose — an account for a run, and an endpoint for an
+// agent's invocation — so a pool keyed on endpoints rotates and reserves exactly
+// as the accounts underneath it always did.
+func (c Config) rotatedAliases(lastServed string) []string {
+	order := append([]string(nil), c.rotate(c.ActiveAccountAliases(), lastServed)...)
+	return append(order, c.ReservedAccountAliases()...)
+}
+
+// noAccountLeft says why nothing in the pool could serve, over the same order
+// the choice was made in. A pool with nothing in it and a pool whose every
+// account is spent are different facts and read as different sentences.
+func (c Config) noAccountLeft(order []string, spentUSD map[string]float64) error {
 	if len(order) == 0 {
-		return AccountEndpoint{}, errors.New("no provider account is configured to run work under")
+		return errors.New("no provider account is configured to run work under")
 	}
-	return AccountEndpoint{}, fmt.Errorf("every configured account has spent its weekly budget: %s",
+	return fmt.Errorf("every configured account has spent its weekly budget: %s",
 		c.describeBudgets(order, spentUSD))
 }
 

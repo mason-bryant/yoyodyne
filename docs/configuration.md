@@ -2633,6 +2633,15 @@ What happens on a refused turn:
 - Each attempt is priced against the model that attempt actually asked for, so
   the cost log says what was spent where rather than billing the alternate's turn
   to the model that refused it.
+- The endpoint the turn would move onto is checked against the tool posture the
+  role requires before it is moved. A substitution can never put a role on a
+  provider whose sandbox cannot hold that posture — a reviewer needs a provider
+  that can refuse every tool, and a developer one that can scope writes to a
+  worktree — and a substitution that would is refused with the posture named,
+  leaving the turn to take the refusal it would have taken anyway. Today's
+  alternate is another model on the same provider, so this refuses nothing a
+  valid configuration asks for; it is what keeps that true as an alternate comes
+  to mean more than a model.
 - The substitution is recorded in the same per-product usage-limit log every
   refusal outside a run is recorded in, carrying the model that was refused and
   the alternate that served. The conversation's own record keeps the model that

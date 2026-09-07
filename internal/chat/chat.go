@@ -2720,6 +2720,25 @@ func (o Options) providers() *backend.Registry {
 	return registry
 }
 
+// endpoint is where this conversation's turns are served: the provider, the
+// adapter that reaches it, the account it is held under, and the model it asks
+// for. It reports false where the four cannot be assembled — a provider this
+// project does not name, or an account or model the conversation was opened
+// without — because a check made against half an endpoint is worse than one not
+// made: it would refuse a substitution for want of information rather than for
+// want of a posture.
+func (o Options) endpoint() (backend.Endpoint, bool) {
+	providers := o.providers()
+	if providers == nil {
+		return backend.Endpoint{}, false
+	}
+	endpoint, err := providers.Endpoint(o.Provider, o.AccountAlias, o.Model)
+	if err != nil {
+		return backend.Endpoint{}, false
+	}
+	return endpoint, true
+}
+
 func (o Options) validate() error {
 	var problems []error
 	// The role is checked first and by name. A conversation opened for a role

@@ -246,8 +246,19 @@ type ModelUnavailable struct {
 // invocation's, and the contract has to make that answerable rather than assume
 // exactly one result arrives.
 type RunResult struct {
-	Backend   domain.Backend
-	SessionID string
+	Backend domain.Backend
+	// AdapterVersion is the compiled adapter that reached the provider, said by
+	// that adapter rather than assumed of the backend name beside it. The two are
+	// separate facts: a provider a project declared is reached by an adapter this
+	// build ships, so the backend says which provider and this says which harness
+	// code read what it said. Together with the account and the model it is the
+	// endpoint identity a record keeps -- see Endpoint.
+	//
+	// It is empty on a result no adapter got far enough to build, which is the
+	// same absence ResolvedModel carries and means the same thing: nobody is
+	// guessing on the record's behalf.
+	AdapterVersion string
+	SessionID      string
 	// ResolvedModel is the model the provider reported actually serving the
 	// invocation. A requested selector may be a floating family alias, so the
 	// resolved identifier is the only durable evidence of what really ran.

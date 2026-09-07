@@ -110,13 +110,20 @@ func (v sideVoice) Answer(ctx context.Context, question sidestream.Question) (si
 			question.Role, name, agent.Backend)
 	}
 	prompt := execution.NewRedactor(v.redactValues...).Redact(renderSideQuestion(question))
-	// The turn is answered under the account the agent is configured for, which is
-	// the account its main conversation is held under: a side thread is that role
-	// speaking, and what it costs belongs on that role's subscription.
-	account, err := v.config.Endpoint(v.stateRoot, v.config.AgentAccountAlias(name))
+	// The turn is answered on the endpoint the agent is configured for, under the
+	// account its main conversation is held under: a side thread is that role
+	// speaking, and what it costs belongs on that role's subscription. The
+	// endpoint names the provider, the adapter that reaches it, and the model
+	// beside that account, which is what a substitution is checked against below.
+	providers, err := v.config.ProviderRegistry()
 	if err != nil {
-		return sidestream.Spoken{}, fmt.Errorf("resolve the account the %s agent %s answers under: %w", question.Role, name, err)
+		return sidestream.Spoken{}, fmt.Errorf("resolve the providers the %s agent %s may be served by: %w", question.Role, name, err)
 	}
+	choice, err := v.config.AgentEndpoint(providers, v.stateRoot, name)
+	if err != nil {
+		return sidestream.Spoken{}, fmt.Errorf("resolve the endpoint the %s agent %s answers on: %w", question.Role, name, err)
+	}
+	account := choice.Account
 	// The turn goes through the meter, so what it spends is one line in the cost
 	// log beside every other provider invocation the harness makes, charged to the
 	// side stream because that is the record it belongs to. The phase is the
@@ -160,7 +167,7 @@ func (v sideVoice) Answer(ctx context.Context, question sidestream.Question) (si
 		EventSink:        question.Events,
 		AccountAlias:     account.Alias,
 		AccountConfigDir: account.Directory,
-	}, v.failoverPolicy(question, name))
+	}, v.failoverPolicy(question, name, choice.Endpoint, providers))
 	// What served the turn travels back whether or not there was an answer,
 	// because it is a fact about the invocation rather than about what came back,
 	// and the stream is pinned to it either way. The build is this process's own:
@@ -224,7 +231,11 @@ func (v sideVoice) noteSideUsageLimit(question sidestream.Question, result backe
 // is configured for will not take it, and where the substitution is written
 // down. An agent that has not enabled failover produces the zero policy, which
 // is failover off: one invocation, under the configured model.
-func (v sideVoice) failoverPolicy(question sidestream.Question, name string) modelfailover.Policy {
+//
+// The endpoint the turn is on and the providers this project names travel with
+// it, so a substitution is checked against the role's tool posture before it is
+// made rather than after the turn has already moved.
+func (v sideVoice) failoverPolicy(question sidestream.Question, name string, endpoint backend.Endpoint, providers *backend.Registry) modelfailover.Policy {
 	alternate := v.config.AgentFailoverModel(name)
 	if alternate == "" {
 		return modelfailover.Policy{}
@@ -237,6 +248,9 @@ func (v sideVoice) failoverPolicy(question sidestream.Question, name string) mod
 		UnknownResetPause: v.config.Execution.UsageLimitUnknownResetPause.Duration(),
 		ProductID:         v.productID,
 		Waiting:           v.waitingOn(question),
+		Endpoint:          endpoint,
+		Role:              question.Role,
+		Eligibility:       providers,
 	}
 	if v.usageLimits != nil {
 		policy.Windows = v.usageLimits

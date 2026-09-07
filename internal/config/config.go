@@ -869,6 +869,11 @@ func (c Config) Validate() error {
 		// project declared is refused for an unsupported role or an unsupported
 		// tool posture exactly as a backend this build ships is, and both are
 		// refused here, before any work is assigned to an agent that names one.
+		//
+		// Why a provider may not serve a role is the descriptor's own answer
+		// rather than a second reading of its declaration taken here, so what
+		// refuses a configuration and what refuses a substitution at the moment a
+		// window closes are one derivation.
 		descriptor, known := providers.Lookup(agent.Backend)
 		switch {
 		case !known:
@@ -876,11 +881,10 @@ func (c Config) Validate() error {
 		case !roleKnown:
 			// The role is already reported above, and a backend cannot be said to
 			// support or refuse a name that is not a role at all.
-		case !descriptor.SupportsRole(agent.Role):
-			problems = append(problems, fmt.Sprintf("backend %q does not support role %q for agent %q", agent.Backend, agent.Role, name))
-		case !descriptor.SupportsPosture(backend.PostureFor(agent.Role)):
-			problems = append(problems, fmt.Sprintf("backend %q cannot hold the %q tool posture that role %q requires, for agent %q",
-				agent.Backend, backend.PostureFor(agent.Role), agent.Role, name))
+		default:
+			if refusal := descriptor.RoleRefusal(agent.Role); refusal != "" {
+				problems = append(problems, fmt.Sprintf("%s, for agent %q", refusal, name))
+			}
 		}
 		// Every executable agent declares its own selector; the harness never
 		// falls back to a provider default nobody chose or recorded.

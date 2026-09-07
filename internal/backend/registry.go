@@ -94,10 +94,17 @@ type Descriptor struct {
 	// Binary is the executable the adapter runs, and is empty for the adapter's
 	// own default. It is what makes a fork or a proxy of a provider this build
 	// already speaks reachable without a second adapter.
-	Binary       string
-	Capabilities Capabilities
-	Roles        []domain.AgentRole
-	Postures     []Posture
+	Binary string
+	// AdapterVersion is the version of the compiled adapter named above, and is
+	// empty for a provider nothing in this build can launch. It is what an
+	// endpoint carries and what a record says read the provider's stream, so a
+	// declared provider inherits the version of the adapter it runs on rather
+	// than stating one of its own: the declaration supplies a dialect, and the
+	// code that reads the stream with it is this build's.
+	AdapterVersion string
+	Capabilities   Capabilities
+	Roles          []domain.AgentRole
+	Postures       []Posture
 	// Dialect is how this provider's operational vocabulary is read. It is set
 	// for a user-supplied provider, whose dialect is data, and the adapter that
 	// runs the provider is handed it in place of its own. A built-in leaves it
@@ -147,8 +154,9 @@ func (d Descriptor) SupportsPosture(posture Posture) bool {
 func BuiltInDescriptors() []Descriptor {
 	return []Descriptor{
 		{
-			ID:      domain.BackendClaudeCode,
-			Adapter: domain.BackendClaudeCode,
+			ID:             domain.BackendClaudeCode,
+			Adapter:        domain.BackendClaudeCode,
+			AdapterVersion: ClaudeCodeAdapterVersion,
 			Capabilities: Capabilities{
 				StructuredEvents:  true,
 				SessionResumption: true,
@@ -336,13 +344,18 @@ func DescriptorFor(id domain.Backend, plugin ProviderPlugin) (Descriptor, error)
 		return Descriptor{}, fmt.Errorf("provider %q %s", id, strings.Join(problems, "; "))
 	}
 	return Descriptor{
-		ID:           id,
-		Adapter:      plugin.Adapter,
-		Binary:       strings.TrimSpace(plugin.Binary),
-		Capabilities: plugin.Capabilities,
-		Roles:        append([]domain.AgentRole(nil), plugin.Roles...),
-		Postures:     append([]Posture(nil), plugin.Postures...),
-		Dialect:      dialect,
+		ID:      id,
+		Adapter: plugin.Adapter,
+		// The adapter that runs this provider is the one whose version its
+		// endpoints carry: what a record has to be able to tell apart is two
+		// harness builds reading one provider differently, and that is this
+		// build's adapter rather than the declaration.
+		AdapterVersion: adapter.AdapterVersion,
+		Binary:         strings.TrimSpace(plugin.Binary),
+		Capabilities:   plugin.Capabilities,
+		Roles:          append([]domain.AgentRole(nil), plugin.Roles...),
+		Postures:       append([]Posture(nil), plugin.Postures...),
+		Dialect:        dialect,
 	}, nil
 }
 

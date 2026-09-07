@@ -17,6 +17,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/doctor"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -127,7 +128,10 @@ func TestAProjectWithOneAccountIsAnsweredWithoutPricingAnything(t *testing.T) {
 		t.Fatalf("NewStore() error = %v", err)
 	}
 	pool := accountPool{
-		config:    config.Config{Accounts: map[string]config.Account{"work": {}}},
+		config: config.Config{
+			Accounts: map[string]config.Account{"work": {}},
+			Agents:   map[string]config.AgentConfig{"developers": pooledDeveloper()},
+		},
 		stateRoot: stateRoot,
 		runs:      store,
 		now:       func() time.Time { return poolClock },
@@ -169,8 +173,25 @@ func TestTheLoginRemedyIsTheOneTheDiagnosisPrints(t *testing.T) {
 
 // twoAccounts is the smallest pooled configuration: two accounts named so their
 // stable order is one then two, which is the order the rotation reads them in.
+// It names a developer agent because the pool rotates that agent's endpoints,
+// and because a project without one is a project no run could be served for.
 func twoAccounts(one, two config.Account) config.Config {
-	return config.Config{Accounts: map[string]config.Account{"one": one, "two": two}}
+	return config.Config{
+		Accounts: map[string]config.Account{"one": one, "two": two},
+		Agents:   map[string]config.AgentConfig{"developers": pooledDeveloper()},
+	}
+}
+
+// pooledDeveloper is the agent whose endpoints these pools choose between: the
+// backend this build ships an adapter for, and a model, which is what an
+// endpoint needs to be one.
+func pooledDeveloper() config.AgentConfig {
+	return config.AgentConfig{
+		Role:      domain.RoleDeveloper,
+		Backend:   domain.BackendClaudeCode,
+		Model:     "sonnet",
+		Instances: 1,
+	}
 }
 
 // budgetOf states a weekly budget, which is a pointer so that a budget of

@@ -108,6 +108,16 @@ func (s *Session) failoverPolicy() modelfailover.Policy {
 	if s.options.UsageLimits != nil {
 		policy.Windows = s.options.UsageLimits
 	}
+	// The endpoint this conversation is held on, and the providers it may name,
+	// so the substitution is checked against this role's tool posture before the
+	// turn is moved. Both are only wired where there are both: a conversation
+	// whose endpoint could not be resolved substitutes as it did before the check
+	// existed rather than refusing a turn over a check it could not make.
+	if endpoint, resolved := s.options.endpoint(); resolved {
+		policy.Endpoint = endpoint
+		policy.Role = s.options.Role
+		policy.Eligibility = s.options.providers()
+	}
 	return policy
 }
 

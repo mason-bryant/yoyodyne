@@ -3,10 +3,12 @@ package modelfailover
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -489,3 +491,99 @@ func refused(kind string, resetsAt time.Time) backend.RunResult {
 func fixedNow() time.Time { return time.Date(2026, 9, 7, 6, 0, 0, 0, time.UTC) }
 
 func pointerTo(at time.Time) *time.Time { return &at }
+
+// A substitution can never move a role onto an endpoint whose sandbox cannot
+// hold that role's tool posture. The check is the point at which an endpoint
+// changes without anybody having configured the change, so this is where the
+// posture is asked about again — and a refusal here leaves the turn exactly
+// where it was rather than moving it.
+func TestASubstitutionOntoAnIneligibleEndpointIsRefusedWithTheReasonNamed(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{results: []backend.RunResult{refused("five_hour", time.Time{})}}
+	windows := newTestWindows(t)
+	var reported []error
+	_, served, err := Serve(context.Background(), provider, backend.RunRequest{Model: "fable"}, Policy{
+		Alternate:     "opus",
+		Windows:       windows,
+		Now:           fixedNow,
+		ProductID:     "yoyodyne",
+		Waiting:       "the reviewer",
+		Endpoint:      backend.Endpoint{Provider: "writes-only", AdapterVersion: "claude-code/1", AccountAlias: "default", Model: "fable"},
+		Role:          domain.RoleReviewer,
+		Eligibility:   writesOnlyRegistry(t),
+		RecordFailure: func(err error) { reported = append(reported, err) },
+	})
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	// One invocation, under the model the turn named: the refusal is handed back
+	// exactly as it would have been with failover off.
+	if len(provider.requests) != 1 || provider.requests[0].Model != "fable" {
+		t.Fatalf("invocations = %#v, want the one attempt on the configured model", provider.requests)
+	}
+	if served.Substituted() {
+		t.Fatalf("served = %#v, want the turn left on the endpoint it was already on", served)
+	}
+	if len(reported) != 1 || !strings.Contains(reported[0].Error(), `cannot hold the "read-only" tool posture`) {
+		t.Fatalf("reported = %v, want the posture that could not be held named", reported)
+	}
+	// Nothing is written down: no substitution happened, so a record of one would
+	// be the log saying a turn moved that never did.
+	if recorded, err := windows.List(); err != nil || len(recorded) != 0 {
+		t.Fatalf("List() = %#v, error %v, want nothing recorded for a substitution that was refused", recorded, err)
+	}
+}
+
+// The same policy, for the role that endpoint can hold, substitutes exactly as
+// it did before the check existed. What the check refuses is the posture and
+// never the substitution itself.
+func TestTheEligibleSubstitutionIsMadeAsItAlwaysWas(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeProvider{results: []backend.RunResult{
+		refused("five_hour", time.Time{}),
+		{SessionID: "session-1", FinalText: "written"},
+	}}
+	_, served, err := Serve(context.Background(), provider, backend.RunRequest{Model: "fable"}, Policy{
+		Alternate:   "opus",
+		Windows:     newTestWindows(t),
+		Now:         fixedNow,
+		ProductID:   "yoyodyne",
+		Waiting:     "the developer",
+		Endpoint:    backend.Endpoint{Provider: "writes-only", AdapterVersion: "claude-code/1", AccountAlias: "default", Model: "fable"},
+		Role:        domain.RoleDeveloper,
+		Eligibility: writesOnlyRegistry(t),
+	})
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if served.Model != "opus" || served.Refused != "fable" {
+		t.Fatalf("served = %#v, want the alternate serving for the model with no capacity", served)
+	}
+}
+
+// writesOnlyRegistry is a project naming one provider that scopes writes to a
+// worktree and cannot express no tools at all — which is the shape of a real
+// provider rather than an invented one, and the shape the reviewer's posture
+// exists to refuse.
+func writesOnlyRegistry(t *testing.T) *backend.Registry {
+	t.Helper()
+
+	registry, err := backend.NewRegistry(map[domain.Backend]backend.ProviderPlugin{
+		"writes-only": {
+			Adapter:  domain.BackendClaudeCode,
+			Roles:    []domain.AgentRole{domain.RoleDeveloper, domain.RoleReviewer},
+			Postures: []backend.Posture{backend.PostureWorktreeWrite},
+			Dialect: backend.DialectSpec{Rules: []backend.DialectRule{
+				{Answer: backend.AnswerRefused, Terminal: truth(true), Failed: truth(true)},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	return registry
+}
+
+func truth(value bool) *bool { return &value }

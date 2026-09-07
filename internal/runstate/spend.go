@@ -169,6 +169,21 @@ type Spend struct {
 	Backend       domain.Backend `json:"backend"`
 	Model         string         `json:"model,omitempty"`
 	ResolvedModel string         `json:"resolved_model,omitempty"`
+	// AdapterVersion is the compiled adapter that reached the provider. With the
+	// backend, the account alias, and the model above it, it is the whole of the
+	// endpoint identity this line was served by — see backend.Endpoint — which is
+	// what lets a reader say which endpoint served a turn rather than only which
+	// provider was named.
+	//
+	// It is what a record needs beyond the provider's own name because the two are
+	// separate facts: a provider a project declared is reached by an adapter this
+	// build ships, and two harness builds reading one provider differently is
+	// exactly the difference a record has to be able to tell apart.
+	//
+	// Absent means nobody said. That is every line written before this was
+	// carried, and a line for an invocation that died before its adapter could
+	// report anything on a provider the harness has no built-in description of.
+	AdapterVersion string `json:"adapter_version,omitempty"`
 	// SessionID is the provider session the invocation ran in, where it reported
 	// one. It is evidence about the invocation and never the record of it: what
 	// this line says survives the session being gone.
