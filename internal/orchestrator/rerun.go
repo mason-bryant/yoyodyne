@@ -565,6 +565,13 @@ func unspentRefusal(err error) error {
 	return fmt.Errorf("%w; nothing was claimed, so the stoppage keeps its re-run — asking again once that is no longer so carries out the same decision", err)
 }
 
+// ErrItemNotStartable is what a triage carry-out refused for the work item's own
+// state unwraps to, so a caller can tell "somebody has to put the item back" from
+// a tracker that would not answer without matching on the words of either. It is
+// shared by both carry-outs because it is one condition: a blocked item is
+// neither one a fresh run may start on nor one a stopped run may be resumed on.
+var ErrItemNotStartable = errors.New("the work item is not in a state a run may start or resume on")
+
 // itemCanBeRun reports the work item being in a state a fresh run may start on,
 // which for a docketed stoppage ordinarily means somebody has put it back: a run
 // that stopped on a durable blocker blocked its item, and a blocked item is not
@@ -581,7 +588,8 @@ func (r Rerunner) itemCanBeRun(ctx context.Context, workItemID string) error {
 		return fmt.Errorf("read the work item the stoppage is about: %w", err)
 	}
 	if err := validateReadyItem(item, workItemID); err != nil {
-		return fmt.Errorf("%w, which is what a fresh run of it would start from; nothing was claimed, so the stoppage keeps its re-run — put the item back in a state a run may start on and ask again to carry out the same decision", err)
+		return fmt.Errorf("%w: %w, which is what a fresh run of it would start from; nothing was claimed, so the stoppage keeps its re-run — put the item back in a state a run may start on and ask again to carry out the same decision",
+			ErrItemNotStartable, err)
 	}
 	return nil
 }

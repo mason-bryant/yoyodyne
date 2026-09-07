@@ -20,12 +20,8 @@ package chat
 // nothing was ever going to stop is stopped by the cap rather than by whoever
 // happens to be reading.
 //
-// The durable half is what an action carrying a decision out reads. Until it
-// existed, the reasoning lived only in the item's notes, so the verb that starts
-// a fresh run had to be handed it again as words on a command line and recorded
-// them as the development manager's — an attribution anybody at a terminal could
-// write, on the one record `selected-work-passes-intake-and-records-why` exists
-// to make trustworthy.
+// The durable half is what an action carrying a decision out reads, and what the
+// scheduling pass finds when it goes looking for decisions nobody has acted on.
 //
 // Escalation is the one decision that reaches the operator, and it is
 // deliberately more than prose: a durable blocker on the item, so the item
@@ -35,14 +31,25 @@ package chat
 // workflow exists to replace were found in the first place — late, and by
 // accident.
 //
-// What the harness does not do is carry the decision out. Nothing here starts a
-// run, hands a developer a grant, or asks a forge for anything: causing work is
-// the harness's own hand on the operator's instruction, and this is a role
-// deciding. The record and the budget are what a later hand acts on, and there
-// are two of those, opposite to each other: `yoyo triage rerun` starts the item
-// over and records this decision as why the fresh run exists, and `yoyo triage
-// repair` re-enters the stopped run's own repair loop on the grant recorded
-// here. Both read the intake hold and prove the stoppage is over first.
+// What this package does not do is carry the decision out. Nothing here starts a
+// run, hands a developer a grant, or asks a forge for anything: this is a role
+// deciding, and causing work is the harness's own hand. The record and the budget
+// are what that hand acts on, and there are two acts, opposite to each other: a
+// re-run starts the item over and records this decision as why the fresh run
+// exists, and a repair re-enters the stopped run's own repair loop on the grant
+// recorded here. Both read the intake hold and prove the stoppage is over first.
+//
+// The hand is no longer a person's. Recording the decision is what causes it: the
+// scheduling pass reads this record, fires one decision per pass under every gate
+// either act already asks, and writes onto the item any gate that stopped it — so
+// a decision that cannot be carried out says so on the docket rather than
+// silently. `yoyo triage rerun` and `yoyo triage repair` are unchanged and are
+// what an operator uses to fire one now rather than at the next pass. What made
+// that possible is the durable half below: until it existed, the verb had to be
+// handed the reasoning again as words on a command line and recorded them as the
+// development manager's — an attribution anybody at a terminal could write, on the
+// one record `selected-work-passes-intake-and-records-why` exists to make
+// trustworthy.
 
 import (
 	"context"

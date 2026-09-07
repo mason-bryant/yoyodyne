@@ -219,6 +219,15 @@ type TriageCounters struct {
 	// carry-out that read them from two places could act on a decision the spend
 	// beside it never authorized. See triagedecision.go.
 	Decisions []TriageDecision `json:"decisions,omitempty"`
+	// CarryOuts are what became of the harness's own attempts to carry those
+	// decisions out, one standing per stoppage that a gate stopped. They are kept
+	// here for the reason the decisions are, and for the half the decisions cannot
+	// answer: a decision recorded and a decision carried out look identical from
+	// this record until something says which, and an item whose decision a gate has
+	// been refusing for days is exactly the silence that put thirty-three of them
+	// here. An item nothing has refused carries none, which is nearly every item.
+	// See triagecarryout.go.
+	CarryOuts []TriageCarryOut `json:"carry_outs,omitempty"`
 	UpdatedAt time.Time        `json:"updated_at"`
 }
 
@@ -279,6 +288,7 @@ func (c TriageCounters) Validate() error {
 	}
 	problems = append(problems, validateTriageOverrides(c.Overrides)...)
 	problems = append(problems, validateTriageDecisions(c.Decisions)...)
+	problems = append(problems, validateTriageCarryOuts(c.CarryOuts)...)
 	if c.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("updated at is required"))
 	}

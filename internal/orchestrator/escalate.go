@@ -15,10 +15,9 @@ package orchestrator
 // So the harness delivers it. What that changes is the courier and nothing else:
 // the evidence is the docket entry she would have read anyway, the decision is
 // hers and is recorded where every triage decision is recorded, the caps still
-// refuse what they refused, and nothing here carries a decision out. The verbs
-// that act on one — `yoyo triage repair`, `yoyo triage rerun` — are unchanged
-// and still read the intake hold and prove the stoppage is over before they
-// spend anything.
+// refuse what they refused, and nothing here carries a decision out. What carries
+// one out is the same pull, a step later and under every gate the verbs already
+// ask; see carryout.go, which is the other end of this loop.
 //
 // # What is delivered, and what is not
 //
@@ -127,9 +126,10 @@ type EscalationRecords interface {
 // can read.
 //
 // Deciding and carrying out are two acts with a gap between them, and that gap
-// is where this matters. A repair grant is recorded the moment she decides, and
-// the stopped run's blocker is not cleared until `yoyo triage repair` acts on
-// it, so a stoppage she settled an hour ago still looks exactly like one nobody
+// is where this matters, and the gap is a scheduling interval rather than a
+// person now without being any narrower. A repair grant is recorded the moment
+// she decides, and the stopped run's blocker is not cleared until a carry-out
+// acts on it, so a stoppage she settled an hour ago still looks exactly like one nobody
 // has seen — to anything that reads the run alone. Delivering it again is the
 // same evidence in front of her twice under two decisions, which is the harm
 // this whole record exists to prevent, and it is the state every stoppage
@@ -510,9 +510,8 @@ func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, runstate.
 //
 // Three states say she has, and the item's own durable triage record is where
 // all three live. A repair grant recorded and not yet spent is a decision
-// standing: she gave the item another round, and until `yoyo triage repair`
-// takes it the stopped run still carries the blocker that makes it look
-// untouched. A re-run recorded and not yet claimed is the same fact for the
+// standing: she gave the item another round, and until a carry-out takes it the
+// stopped run still carries the blocker that makes it look untouched. A re-run recorded and not yet claimed is the same fact for the
 // other carry-out. And a re-run already claimed against this entry is her
 // decision acted on, which the run's record cannot say either, because a re-run
 // starts a fresh run and leaves the stopped one exactly as it was.

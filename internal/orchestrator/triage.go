@@ -257,8 +257,37 @@ func (d Docketer) joinDecisions(entries []triage.Entry) []error {
 		// answers the escalation this entry produced, so it is always made after the
 		// entry exists.
 		entry.Overrides = docketedOverrides(decisions.counters.Overrides)
+		// And what became of the harness's own attempt to carry this entry's
+		// decision out, where a gate stopped it. Joined here for the sharpest
+		// version of the reason the two above are: the attempt is made after the
+		// decision, which is made after the entry, so one frozen into the entry
+		// could only ever be absent — and an absent one reads as a decision the
+		// harness is about to act on, which is precisely what a refused carry-out
+		// is not.
+		entry.CarryOut = docketedCarryOut(*entry, decisions.counters)
 	}
 	return problems
+}
+
+// docketedCarryOut is the carry-out finding standing about one entry's own
+// stoppage, in the shape the entry carries it. It is matched on the run rather
+// than on the item, because an item with several stoppages has a decision and an
+// attempt for each of them and a finding shown against the wrong one is a finding
+// about a change the reader cannot see.
+func docketedCarryOut(entry triage.Entry, counters runstate.TriageCounters) *triage.CarryOut {
+	recorded, found := counters.CarryOutOf(entry.RunID)
+	if !found {
+		return nil
+	}
+	return &triage.CarryOut{
+		Decision:  recorded.Decision,
+		Gate:      recorded.Gate,
+		Refusal:   recorded.Refusal,
+		Clears:    recorded.Clears,
+		Waiting:   recorded.Waiting,
+		Attempts:  recorded.Attempts,
+		RefusedAt: recorded.RefusedAt,
+	}
 }
 
 // itemDecisions is one work item's triage record as the guards read it: what has

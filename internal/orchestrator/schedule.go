@@ -62,6 +62,20 @@ package orchestrator
 // unmeetable prerequisite and cost a full run each to establish it; see the
 // readiness package for which four and what the two readings are.
 //
+// # Work the queue never offers
+//
+// One kind of work reaches a developer through this loop without ever being in
+// the queue: a stoppage the development manager has already decided about. Her
+// decision is durable and spends the item's budget as she records it, and until
+// yoyodyne-ifd.346 the only thing that acted on one was a person typing `yoyo
+// triage repair` — which left thirty-three items decided and unfired, some for
+// days. So the pull fires one per pass, against the same capacity everything else
+// is chosen against and before the queue is read, because a stoppage already
+// judged is work this harness has spent a run on and the queue's own entries have
+// not been. Every gate that refused a carry-out typed by hand refuses this one,
+// and every refusal is written onto the item where the development manager reads
+// it. See carryout.go.
+//
 // # A pull re-reads the configuration
 //
 // The scheduler is the first thing in the harness that holds a configuration
@@ -387,6 +401,24 @@ type ScheduleEscalations interface {
 	Escalate(ctx context.Context) (EscalationSweep, error)
 }
 
+// ScheduleCarryOut fires the triage decisions the development manager recorded
+// and nobody has acted on, at most one per pass. It is satisfied by CarryOut.
+//
+// It is optional, and a pull wired without one pulls exactly the same work: what
+// is lost is the firing, so a recorded decision waits on somebody typing `yoyo
+// triage repair` or `yoyo triage rerun`, which is what every one of them waited
+// on before this existed — thirty-three of them at once, for days.
+//
+// It is split in two because a carry-out is a run rather than a turn. The pass
+// asks what is outstanding, which reads records and starts nothing, and then
+// starts the one it chose in a goroutine against a developer slot, exactly as it
+// starts an item the queue offered. A sweep that did both inside the pull would
+// hold the queue closed for the length of a whole run.
+type ScheduleCarryOut interface {
+	Outstanding() ([]CarryOutTask, error)
+	Carry(ctx context.Context, task CarryOutTask) (CarriedOut, Outcome, error)
+}
+
 // ScheduleRecurring fires the configured recurring tasks, at most one per pass.
 // It is satisfied by Trigger.
 //
@@ -456,6 +488,11 @@ type Pull struct {
 	// Escalations delivers stopped work to the development manager. Optional; see
 	// ScheduleEscalations.
 	Escalations ScheduleEscalations
+	// CarryOut fires the decisions she recorded about it. Optional; see
+	// ScheduleCarryOut. It is re-read at every pull like everything else here, so a
+	// decision recorded at any hour is fired at the next interval rather than at
+	// the next time somebody looks.
+	CarryOut ScheduleCarryOut
 	// Tree is the repository an item's stated prerequisites are read against, and
 	// Triage is where an item that does not meet them is routed. Both optional;
 	// see ScheduleTree and ScheduleTriage. They are re-read at every pull like
@@ -587,6 +624,12 @@ type Started struct {
 	// item went to another process between this pull and the reservation. It is
 	// not a failure: the scheduler asked for something that had just stopped
 	// being available, which is the ordinary outcome of two schedulers running.
+	//
+	// A triage decision the harness fired and a gate stopped is recorded here too,
+	// and for the same reason rather than by analogy: nothing was reserved, claimed
+	// or spent, so what happened is a start that never became a run. What the gate
+	// said is the whole of the text, and the same account is on the item's own
+	// triage record where it outlives this pass.
 	Declined string `json:"declined,omitempty"`
 	Failure  string `json:"failure,omitempty"`
 }
@@ -676,6 +719,19 @@ type Schedule struct {
 	// stopping it — but never left unsaid, because stopped work nobody was told
 	// about is exactly what the delivery exists to prevent.
 	EscalationProblem string `json:"escalation_problem,omitempty"`
+	// CarriedOut is the decisions of hers this pass fired. Each is a run as well,
+	// and appears among the started runs above like any other: this is the account
+	// of why that run exists, which the queue-level report cannot give because the
+	// item was never in the queue.
+	CarriedOut []CarriedOut `json:"carried_out,omitempty"`
+	// CarryOutProblem names a decision the harness tried to fire and a gate
+	// stopped, or a reading of the decisions that failed. It costs the pass nothing
+	// it was doing, so it is reported beside the pull rather than stopping it — and
+	// it is never left unsaid, because a decision that quietly fails to fire is the
+	// exact condition this pass exists to end. The same account is on the item's own
+	// triage record and on the docket entry the development manager reads, which is
+	// where it survives the session.
+	CarryOutProblem string `json:"carry_out_problem,omitempty"`
 	// Fired is the recurring tasks this pass woke a role for, and what came back.
 	// It is on the schedule for the reason the escalations are: a pass that woke a
 	// role and spent turns doing it is a pass that did something, and an operator
@@ -842,6 +898,14 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// cost, and what it does to the storm the brake is counting.
 	settle := func(done completed) {
 		started := &schedule.Started[done.index]
+		// A carry-out of the development manager's decision accounts for itself
+		// before anything else is decided about it, because whether it is a run at
+		// all is what it answers. One that fired is a run like any other from here
+		// on; one a gate stopped started nothing, so it is neither priced, nor
+		// counted toward the failure storm, nor reported as a run that failed.
+		if carried := done.carriedOut; carried != nil && !s.settleCarryOut(&schedule, started, *carried) {
+			return
+		}
 		started.record(done)
 		// What the provider said, taken from the run that was told it. A later
 		// refusal replaces an earlier one rather than being merged with it: the
@@ -1148,6 +1212,39 @@ pulling:
 			continue
 		}
 
+		// A decision the development manager recorded is fired here, against the same
+		// capacity the queue's own work is chosen against and before any of it: a
+		// stoppage she has already judged is work that was chosen once and stopped,
+		// and leaving it behind the queue would be the harness preferring fresh work
+		// to work it has already spent a run on.
+		//
+		// It takes a slot and is waited out exactly as a chosen item is. What it is
+		// not is a queue entry: the item is blocked or claimed rather than pullable,
+		// so nothing below would ever have reached it, and the started entry it
+		// leaves is what accounts for the run.
+		carrying := false
+		if free > 0 {
+			if task, found := s.nextCarryOut(&schedule, pull, occupied); found {
+				index := len(schedule.Started)
+				schedule.Started = append(schedule.Started, Started{
+					WorkItemID: task.WorkItemID,
+					Reason:     carryingOutReason(task),
+				})
+				// Both, for the two different questions below: occupied is what stops the
+				// queue scan choosing the same item beside this, and mine is what stops the
+				// next pull counting the slot free before the run has reserved it.
+				occupied[task.WorkItemID] = struct{}{}
+				mine[task.WorkItemID] = index
+				running++
+				free--
+				carrying = true
+				go func(task CarryOutTask) {
+					carried, outcome, err := pull.CarryOut.Carry(ctx, task)
+					completions <- completed{index: index, outcome: outcome, err: err, carriedOut: &carried}
+				}(task)
+			}
+		}
+
 		read, err := pull.queue(ctx)
 		if err != nil {
 			if !unreadable(err) {
@@ -1341,12 +1438,21 @@ pulling:
 				completions <- completed{index: index, outcome: outcome, err: err}
 			}(entry.ID)
 		}
-		if started > 0 {
+		if started > 0 || carrying {
 			// A run the provider accepted is the provider serving again, whatever
 			// deadline it last named. Keeping the window would have the session go on
 			// reporting itself held while it works, which is the false half of the same
 			// misreading this exists to end.
 			window = providerWindow{}
+			// A pass that started nothing from the queue and fired a decision is a pass
+			// that started work, and it says which: the item it took is not in the
+			// backlog counts beside it, so a line about the queue alone would report a
+			// session that pulled nothing while a run of its own was starting.
+			if started == 0 {
+				session.resume(fmt.Sprintf("a triage decision the development manager recorded was carried out; nothing was pulled from a backlog of %d admitted, %d of them ready",
+					len(queue.Entries), queue.Ready()))
+				continue
+			}
 			session.resume(fmt.Sprintf("%d item(s) pulled from a backlog of %d admitted, %d of them ready", started, len(queue.Entries), queue.Ready()))
 			continue
 		}
@@ -1668,6 +1774,106 @@ func (s Scheduler) correct(ctx context.Context, schedule *Schedule, pull Pull) {
 	case woken:
 		schedule.CorrectionProblem = ""
 	}
+}
+
+// nextCarryOut is the one decision of the development manager's this pull fires,
+// and whether there is one.
+//
+// One per pass, for the reason the delivery and the firing beside it are bounded
+// the same way and for one more of its own: a carry-out takes a developer slot,
+// so a pass that fired every outstanding decision at once would spend the whole
+// harness on stopped work and leave the queue untouched. The next pass takes the
+// next, and on a poll loop that is an interval later.
+//
+// The oldest goes first, which is the docket's own order: a decision recorded
+// days ago is the one that has been waiting longest, and it is exactly the
+// backlog of those that this exists to clear.
+//
+// A reading that failed is reported and starts nothing. That is the same
+// direction every other optional part of a pull fails in: the queue's own work is
+// untouched, and a decision fired on a record nobody could read would be the one
+// thing worse than one that waits.
+//
+// An item this pass has already started is passed over, exactly as the queue scan
+// passes one over. The reading behind the outstanding decisions is of the durable
+// records, and a run does not appear in those until it reserves — several steps
+// after the pass started it — so a pull that did not ask this would fire the same
+// decision again on the very next pull and put two developers on one item.
+func (s Scheduler) nextCarryOut(schedule *Schedule, pull Pull, occupied map[string]struct{}) (CarryOutTask, bool) {
+	if pull.CarryOut == nil {
+		return CarryOutTask{}, false
+	}
+	outstanding, err := pull.CarryOut.Outstanding()
+	if err != nil {
+		schedule.CarryOutProblem = fmt.Sprintf(
+			"what the development manager has decided and the harness has not carried out could not be read in full, so a decision may be waiting that nothing here fired: %v", err)
+	}
+	for _, task := range outstanding {
+		if _, busy := occupied[task.WorkItemID]; busy {
+			continue
+		}
+		return task, true
+	}
+	return CarryOutTask{}, false
+}
+
+// carryingOutReason is what the started entry says about a run the harness fired
+// from a recorded decision, before the action itself has said anything.
+//
+// It is replaced by the action's own reason the moment the run starts, and that
+// is the one the record keeps: the run's selection reason cites the decision, who
+// recorded it, in which conversation and on which turn, and none of that is this
+// package's to assert. What this is for is the pass that never gets that far — a
+// gate stopped it, or the process died — where a started entry with no reason at
+// all would be the only thing in the report that could not say what it was doing.
+func carryingOutReason(task CarryOutTask) string {
+	return fmt.Sprintf("the development manager recorded a %q about the stoppage of run %s and the harness is carrying it out",
+		task.Decision, task.RunID)
+}
+
+// settleCarryOut takes one fired decision into the schedule and reports whether
+// what came back is a run to settle like any other.
+//
+// An attempt a gate stopped is not. Nothing was reserved, nothing was claimed and
+// nothing was spent, so it is recorded as a start that never became a run — which
+// is what Declined already means — rather than as a run that failed: counting it
+// toward the failure storm would have the brake hold intake because a decision was
+// waiting on the intake hold, and pricing it would charge the session for a run
+// that does not exist.
+//
+// The account is kept whichever way it went, and the pass-level problem is
+// cleared only by an attempt that fired, for the reason the sweeps beside it keep
+// theirs: a pass that found nothing to fire is not evidence that the gate that
+// refused the last one has opened.
+func (s Scheduler) settleCarryOut(schedule *Schedule, started *Started, carried CarriedOut) bool {
+	problems := make([]string, 0, 2)
+	if !carried.Carried {
+		problems = append(problems, carried.Problem)
+	}
+	if carried.RecordProblem != "" {
+		problems = append(problems, carried.RecordProblem)
+	}
+	switch {
+	case len(problems) > 0:
+		schedule.CarryOutProblem = strings.Join(problems, "; ")
+	case carried.Carried:
+		schedule.CarryOutProblem = ""
+	}
+	if !carried.Carried {
+		if carried.Problem == "" {
+			// A carry-out that neither fired nor said what stopped it is not a gate
+			// this can report, and it must not be swallowed as one: what the action
+			// returned is left to be recorded as the failure it is.
+			return true
+		}
+		started.Declined = carried.Problem
+		return false
+	}
+	schedule.CarriedOut = append(schedule.CarriedOut, carried)
+	if reason := strings.TrimSpace(carried.Reason); reason != "" {
+		started.Reason = reason
+	}
+	return true
 }
 
 // priceRun is what one finished run cost, from the recorded evidence. A run that
@@ -2113,6 +2319,11 @@ type completed struct {
 	index   int
 	outcome Outcome
 	err     error
+	// carriedOut is the account of a triage decision this entry was the harness
+	// firing, where it was one. It is a pointer because its absence is the answer
+	// for every ordinary run: the queue chose those, and there is no decision behind
+	// them to account for.
+	carriedOut *CarriedOut
 }
 
 // record takes a finished run into its schedule entry. A refusal that means the
@@ -2364,6 +2575,15 @@ func (s Schedule) Render() string {
 	rendered.WriteString(EscalationSweep{Escalated: s.Escalated}.Render())
 	if s.EscalationProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.EscalationProblem)
+	}
+	// And what the pass fired of what she has already decided, said beside what it
+	// put to her: the two are the same loop seen at its two ends, and a decision
+	// that could not be fired is the half nobody used to be told about at all.
+	for _, carried := range s.CarriedOut {
+		rendered.WriteString(carried.Render())
+	}
+	if s.CarryOutProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.CarryOutProblem)
 	}
 	// And what the pass woke on a cadence, said beside both: a session that spent
 	// turns on a sweep is a session that did something, and the whole account of

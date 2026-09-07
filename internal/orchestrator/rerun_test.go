@@ -66,6 +66,10 @@ type rerunHarness struct {
 	runs   *runstate.Store
 	intake *runstate.IntakeHoldStore
 	reruns *runstate.RerunStore
+	// holds is the operator's pause over everything the harness spends. A re-run
+	// asked for by hand never reads it — the pipeline does — and a carry-out the
+	// harness fires itself does, which is why it is built here beside the rest.
+	holds *runstate.OperatorHoldStore
 	// item is the work item as the tracker has it, which is what says whether a
 	// fresh run may start on it, and itemErr a tracker that could not be asked.
 	item    beads.WorkItem
@@ -132,6 +136,10 @@ func newRerunHarness(t *testing.T, state runstate.State) *rerunHarness {
 	if err != nil {
 		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
 	}
+	holds, err := runstate.NewOperatorHoldStore(root)
+	if err != nil {
+		t.Fatalf("runstate.NewOperatorHoldStore() error = %v", err)
+	}
 	docket := &memoryDocket{}
 	if _, err := docketerOver(nil, docket).RecordStoppedRun(state); err != nil {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
@@ -145,6 +153,7 @@ func newRerunHarness(t *testing.T, state runstate.State) *rerunHarness {
 		docket: docket,
 		runs:   runs,
 		intake: intake,
+		holds:  holds,
 		reruns: runs.Reruns(),
 		// The item has been put back to something a run may start on, which is
 		// what a development manager deciding a re-run of a blocked item does

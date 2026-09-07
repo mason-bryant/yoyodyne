@@ -417,6 +417,39 @@ type Rerun struct {
 	RunID     string    `json:"run_id,omitempty"`
 }
 
+// CarryOut is the harness's own last attempt to carry this entry's standing
+// decision out, and the gate that stopped it. It is declared here rather than
+// imported from the durable record for the reason Finding is: what reaches a
+// development manager must not change shape because the harness's own schema was
+// refactored.
+//
+// It exists on an entry only where an attempt failed, which is the whole of what
+// makes it worth reading. A decision the harness carried out clears it as it goes,
+// so an entry carrying one is a decision that is not going to happen until
+// something changes — and saying which thing is the difference between this and
+// the thirty-three decided items that sat unfired with nothing anywhere saying so.
+type CarryOut struct {
+	// Decision is the word from the triage vocabulary that was being carried out.
+	Decision string `json:"decision"`
+	// Gate is which gate stopped it, in the closed vocabulary the durable record
+	// names them by, and Refusal is what that gate said in its own words.
+	Gate    string `json:"gate"`
+	Refusal string `json:"refusal"`
+	// Clears is what would make the same carry-out succeed. It is the half a
+	// refusal alone does not always carry, and it is the whole of what a
+	// development manager reading this can act on.
+	Clears string `json:"clears"`
+	// Waiting marks a gate that clears without anybody doing anything, which is not
+	// a refusal of the decision and must not be read as one: nothing was spent, the
+	// decision stands, and the next pass carries it out.
+	Waiting bool `json:"waiting,omitempty"`
+	// Attempts is how many times the harness has been stopped carrying this
+	// decision out, which is what tells a gate about to open from one that has been
+	// shut for days.
+	Attempts  int       `json:"attempts,omitempty"`
+	RefusedAt time.Time `json:"refused_at"`
+}
+
 // Committed is the round figure the budget is measured against: what this item
 // has cost, or what a recorded grant has promised it, whichever is greater. The
 // two are not added, for the reason the record that keeps them does not add
@@ -535,6 +568,12 @@ type Entry struct {
 	// reason: an override answers the escalation this entry produced, so one frozen
 	// into the entry could only ever be absent.
 	Overrides []Override `json:"overrides,omitempty"`
+	// CarryOut is the harness's own last attempt to carry this entry's standing
+	// decision out, where a gate stopped it. Like the re-run and the overrides
+	// beside it, it is joined where the docket is read rather than written into the
+	// log, and for the sharpest version of the same reason: the attempt is made
+	// after the decision, which is made after the entry.
+	CarryOut *CarryOut `json:"carry_out,omitempty"`
 	// CountersProblem is why the item's durable triage record could not be read
 	// for this entry. It is stated rather than left to zeros, which would read as
 	// an item nothing has been decided about — the one reading that turns an
@@ -946,6 +985,7 @@ func (e Entry) renderDecisions() string {
 		e.Counters.Reruns, capFigure(e.Counters.RerunsCap), e.Counters.RerunsCarriedOut,
 		e.Counters.MergeRearms, capFigure(e.Counters.MergeRearmsCap))
 	rendered.WriteString(e.renderOverrides())
+	rendered.WriteString(e.renderCarryOut())
 	rendered.WriteString(e.renderGrantStanding())
 	rendered.WriteString(e.renderRerunStanding())
 	rendered.WriteString(e.renderRearmStanding())
@@ -993,6 +1033,50 @@ func (e Entry) renderOverrides() string {
 		fmt.Fprintf(&rendered, "      Operator override: %s\n", override.Describe())
 	}
 	return rendered.String()
+}
+
+// renderCarryOut says that the harness tried to carry this entry's decision out
+// and was stopped, which gate stopped it, and what would clear that gate.
+//
+// It is silent on every entry the harness has not been stopped on, which is
+// nearly all of them: a carry-out that succeeded clears the finding as it goes,
+// and one nothing has reached yet has nothing to report. So a line here is always
+// a decision that is not going to happen on its own, which is exactly the state
+// that used to be reported nowhere at all.
+//
+// A gate that clears without anybody doing anything is worded as waiting rather
+// than as a refusal. The difference is the whole of what a development manager
+// does about it: a full harness and a pause somebody will lift need no decision
+// from her, and reading either as a refusal is how a decision gets made twice.
+func (e Entry) renderCarryOut() string {
+	stopped := e.CarryOut
+	if stopped == nil {
+		return ""
+	}
+	var rendered strings.Builder
+	if stopped.Waiting {
+		fmt.Fprintf(&rendered, "      The harness is carrying out the %q you decided and is waiting on %s (%s, last at %s): %s\n",
+			stopped.Decision, stopped.Gate, plural(stopped.Attempts, "attempt", "attempts"),
+			stopped.RefusedAt.UTC().Format(time.RFC3339), strings.TrimSpace(stopped.Refusal))
+		rendered.WriteString(indented("What it is waiting for", stopped.Clears))
+		rendered.WriteString("      Nothing was spent and the decision still stands, so the pass that finds it open carries out the same one.\n")
+		return rendered.String()
+	}
+	fmt.Fprintf(&rendered, "      The harness tried to carry out the %q you decided and %s refused it (%s, last at %s): %s\n",
+		stopped.Decision, stopped.Gate, plural(stopped.Attempts, "attempt", "attempts"),
+		stopped.RefusedAt.UTC().Format(time.RFC3339), strings.TrimSpace(stopped.Refusal))
+	rendered.WriteString(indented("What would clear it", stopped.Clears))
+	rendered.WriteString("      Nothing was spent, so this decision is carried out by the first pass after that is no longer so; until then the harness keeps trying it at a paced interval rather than every pass.\n")
+	return rendered.String()
+}
+
+// plural says a count with the noun it counts, so a line reads as a sentence
+// rather than as a figure with a bracketed suffix.
+func plural(count int, singular, many string) string {
+	if count == 1 {
+		return fmt.Sprintf("%d %s", count, singular)
+	}
+	return fmt.Sprintf("%d %s", count, many)
 }
 
 // capFigure is one ceiling as a reader reads it. A cleared cap stands at a number

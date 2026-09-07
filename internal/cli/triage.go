@@ -8,6 +8,11 @@ package cli
 // re-run, which is what a correct change whose ground moved needs, and a repair,
 // which continues the run that stopped on the change it already has.
 //
+// Neither of them waits on being typed. The scheduling pass fires a recorded
+// decision itself, one per pull, through exactly these two actions — see
+// orchestrator/carryout.go — so what these verbs are for is firing one now rather
+// than at the next pass, and for a harness where nothing is watching the queue.
+//
 // The decision is not made here and cannot be. What each takes is the run the
 // docket entry names, and what it does with it is the harness's own work —
 // reading the intake hold, proving the stoppage is over, and then either
@@ -141,10 +146,10 @@ func repairStoppage(ctx context.Context, args []string, stdout, stderr io.Writer
 // It carries nothing out and starts nothing, which is deliberate and is what
 // keeps the caps meaning what they say. What it changes is what the guards will
 // permit next: the development manager can then record the decision their
-// escalation was about, and `yoyo triage rerun` or `yoyo triage repair` carries
-// that decision out under every condition either of them already asks. An
-// operator who wanted a run started still has to say so afterwards, which is one
-// more step and the right one -- crossing a cap and spending it are two decisions.
+// escalation was about, and the carry-out -- the scheduling pass, or either verb
+// beside this one -- acts on that decision under every condition it already asks.
+// The development manager still has to record it, which is one more step and the
+// right one: crossing a cap and spending it are two decisions.
 func overrideTriageCap(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("triage override", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -244,7 +249,7 @@ func reportTriageOverride(stdout, stderr io.Writer, jsonOutput bool, result tria
 	fmt.Fprintf(stdout, "recorded an operator override on %s: %s\n", result.WorkItemID, result.Recorded.Describe())
 	printItemTriage(stdout, result.Counters, result.Caps)
 	fmt.Fprintln(stdout, "nothing was started, granted, or spent: an override changes what the guards permit, not what has happened")
-	fmt.Fprintln(stdout, "the development manager can now record the decision the escalation was about, and `yoyo triage rerun` or `yoyo triage repair` carries it out under every condition it already asks")
+	fmt.Fprintln(stdout, "the development manager can now record the decision the escalation was about, and a watching `yoyo work` session carries it out on its next pull under every condition it already asks; `yoyo triage rerun` or `yoyo triage repair` fires it now instead")
 	return 0
 }
 
@@ -257,6 +262,14 @@ func buildRepairContinuer(configPath string) (orchestrator.RepairContinuer, erro
 	if err != nil {
 		return orchestrator.RepairContinuer{}, err
 	}
+	return repairContinuerFrom(parts), nil
+}
+
+// repairContinuerFrom is the same wiring over parts somebody else built, which is
+// what the scheduling pass needs: a pull assembles its parts once from one
+// reading of the configuration, and a carry-out that built its own would act on a
+// configuration this pull never read.
+func repairContinuerFrom(parts components) orchestrator.RepairContinuer {
 	return orchestrator.RepairContinuer{
 		Docket: parts.docket,
 		Runs:   parts.store,
@@ -289,7 +302,7 @@ func buildRepairContinuer(configPath string) (orchestrator.RepairContinuer, erro
 			// going again is on the run and the item already.
 			return pipelineFrom(parts).Continue(ctx, workItemID, runID)
 		},
-	}, nil
+	}
 }
 
 // reportRepair describes what the action did. A refusal before anything was
@@ -347,6 +360,12 @@ func buildRerunner(configPath string) (orchestrator.Rerunner, error) {
 	if err != nil {
 		return orchestrator.Rerunner{}, err
 	}
+	return rerunnerFrom(parts), nil
+}
+
+// rerunnerFrom is the same wiring over parts somebody else built; see
+// repairContinuerFrom for why the scheduling pass needs it that way round.
+func rerunnerFrom(parts components) orchestrator.Rerunner {
 	return orchestrator.Rerunner{
 		Docket: parts.docket,
 		Runs:   parts.store,
@@ -376,7 +395,37 @@ func buildRerunner(configPath string) (orchestrator.Rerunner, error) {
 			pipeline.Selection = selection
 			return pipeline.Run(ctx, workItemID)
 		},
-	}, nil
+	}
+}
+
+// carryOutFrom wires the firing of what the development manager decided over
+// parts that are already built, so the docket it reads, the record it reads her
+// decisions from, and the two actions it fires them through are the ones the rest
+// of the harness uses.
+//
+// Both actions are wired, because both halves of her vocabulary are hers to
+// decide and neither is anybody's to type. Nothing else is added: every gate this
+// is held to is the gate one of those actions already asks, and the pause it reads
+// itself is the same switch every provider invocation reads.
+func carryOutFrom(parts components) *orchestrator.CarryOut {
+	return &orchestrator.CarryOut{
+		Docket: parts.docket,
+		// The same per-item record her conversation writes the decision to, so what
+		// authorizes the firing and what is read to fire it are one record.
+		Decisions: parts.store.Triage(),
+		// What has already been carried out of those decisions, in the two shapes it
+		// takes: a claimed re-run, and a continuation recorded on one of the item's
+		// own runs.
+		Reruns:   parts.store.Reruns(),
+		Runs:     parts.store,
+		Rerunner: rerunnerFrom(parts),
+		Repairer: repairContinuerFrom(parts),
+		// The same pause every run and every turn reads. A carry-out spends on a
+		// provider, so `yoyo pause` covers it exactly as it covers them — and it is
+		// read here rather than left to the pipeline because a repair writes to the
+		// item before it starts anything.
+		Holds: parts.holds,
+	}
 }
 
 // reportRerun describes what the action did. A re-run that was refused before
@@ -452,6 +501,12 @@ a docketed stoppage. "override" is yours rather than theirs: it crosses one of a
 work item's triage caps so that a decision they could not record becomes one they
 can.
 
+A watching "yoyo work" session fires a recorded decision itself, one per pull,
+through these same two actions and under every condition each of them asks -- so
+neither of the first two is a step anybody owes a decision. What they are for is
+firing one now rather than at the next pull, and for a harness with nothing
+watching the queue.
+
 The first two are opposites. "rerun" starts a fresh run of the item, which
 is what a correct change whose ground moved needs. "repair" continues the run
 that stopped -- same branch, same worktree, same developer session, the
@@ -499,9 +554,9 @@ that is made.
 
 It carries nothing out. Recording it changes what the guards permit and nothing
 else: the development manager then records the decision the escalation was about,
-which spends the item's budget as it always did, and "rerun" or "repair" carries
-that decision out under every condition either already asks. Crossing a cap and
-spending it are two decisions and stay two.
+which spends the item's budget as it always did, and the carry-out acts on that
+decision under every condition it already asks. Crossing a cap and spending it
+are two decisions and stay two.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
