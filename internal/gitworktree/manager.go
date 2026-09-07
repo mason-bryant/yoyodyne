@@ -35,6 +35,15 @@ const (
 	// listing that waited for the lease would wait for itself. What a reader can
 	// do is read again: the half-written instant is the time Git takes to write a
 	// handful of small files, and it never comes back for the same entry.
+	//
+	// Reading again is not the whole answer, because the entry is not always
+	// half-written for an instant. An add whose process died between creating a
+	// registration file and filling it in leaves the entry half-written for good,
+	// and no prune clears it: `git worktree prune` judges an entry by its gitdir
+	// file, which such an entry has. That one entry would otherwise fail every
+	// listing on the repository from then on. So a refusal that survives the
+	// attempts is checked against the bookkeeping rather than believed — see
+	// listWorktrees.
 	worktreeListAttempts  = 3
 	worktreeListRetryWait = 50 * time.Millisecond
 )
@@ -75,6 +84,7 @@ type Manager struct {
 	allowedPrimaryChanges map[string]struct{}
 	currentExports        []string
 	timeout               time.Duration
+	note                  func(format string, args ...any)
 }
 
 type Options struct {
@@ -104,6 +114,12 @@ type Options struct {
 	// change the run makes.
 	CurrentExports []string
 	Timeout        time.Duration
+	// Note is where the manager says what it worked around. There is one such
+	// thing and it is worth a line: a listing that described this repository
+	// without a worktree another run had not finished registering, which nothing
+	// else would ever tell a reader about. It is optional, and a manager
+	// assembled without one steps over the same entry silently.
+	Note func(format string, args ...any)
 }
 
 type CreateRequest struct {
@@ -473,7 +489,19 @@ func New(options Options) (*Manager, error) {
 		allowedPrimaryChanges: allowedPrimaryChanges,
 		currentExports:        currentExports,
 		timeout:               timeout,
+		note:                  options.Note,
 	}, nil
+}
+
+// recordNote says what the manager worked around, where a caller asked to be
+// told. A caller that asked for nothing is not a failure: the work still
+// happened, and the note is what somebody reads afterwards rather than
+// something the work depends on.
+func (m *Manager) recordNote(format string, args ...any) {
+	if m.note == nil {
+		return
+	}
+	m.note(format, args...)
 }
 
 func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, error) {
@@ -1863,15 +1891,27 @@ type worktreeEntry struct {
 // listWorktrees reads the shared worktree bookkeeping. A refusal is re-read
 // rather than believed the first time, because the one refusal this command has
 // on a repository with parallel development is a registration another run is
-// still writing — see worktreeListAttempts. A listing that keeps failing is
-// reported with what Git said, exactly as one failing once used to be: the
-// retry is for the instant that passes, and nothing else about a failure
-// changes.
+// still writing — see worktreeListAttempts. A refusal that survives the re-reads
+// is checked against that bookkeeping rather than believed either: where an
+// entry is registered and not filled in, the listing is answered from the
+// registrations with that entry left out and a note saying so. A refusal nothing
+// in the bookkeeping accounts for is reported with what Git said, exactly as one
+// failing once used to be.
 func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
 	result, err := m.readWorktreeListing(ctx)
 	if err != nil {
-		return nil, err
+		var refused listingRefused
+		if !errors.As(err, &refused) {
+			return nil, err
+		}
+		return m.readRegistrations(ctx, refused)
 	}
+	return parseWorktreeListing(result.Stdout), nil
+}
+
+// parseWorktreeListing takes the path and the branch of each checkout Git
+// described, which is everything this package asks a listing for.
+func parseWorktreeListing(listing string) []worktreeEntry {
 	var entries []worktreeEntry
 	var current worktreeEntry
 	flush := func() {
@@ -1880,7 +1920,7 @@ func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
 		}
 		current = worktreeEntry{}
 	}
-	for _, line := range strings.Split(result.Stdout, "\n") {
+	for _, line := range strings.Split(listing, "\n") {
 		switch {
 		case strings.HasPrefix(line, "worktree "):
 			flush()
@@ -1890,7 +1930,7 @@ func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
 		}
 	}
 	flush()
-	return entries, nil
+	return entries
 }
 
 // readWorktreeListing runs the listing until Git answers or the attempts are
@@ -1908,8 +1948,11 @@ func (m *Manager) readWorktreeListing(ctx context.Context) (execution.ProcessRes
 		if result.Status == execution.ProcessSucceeded {
 			return result, nil
 		}
-		if result.Status != execution.ProcessFailed || attempt >= worktreeListAttempts {
+		if result.Status != execution.ProcessFailed {
 			return execution.ProcessResult{}, fmt.Errorf("list worktrees failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+		}
+		if attempt >= worktreeListAttempts {
+			return execution.ProcessResult{}, listingRefused{exitCode: result.ExitCode, stderr: strings.TrimSpace(result.Stderr)}
 		}
 		select {
 		case <-ctx.Done():
@@ -1917,6 +1960,132 @@ func (m *Manager) readWorktreeListing(ctx context.Context) (execution.ProcessRes
 		case <-time.After(worktreeListRetryWait):
 		}
 	}
+}
+
+// listingRefused is a Git that ran, refused the listing, and went on refusing it
+// for every attempt. It says exactly what a refusal has always said, so nothing
+// that only reads the message sees a change; it is a type so that the one
+// refusal worth checking against the bookkeeping — a Git that ran and would not
+// describe the repository — can be told from a Git that never ran or never
+// answered.
+type listingRefused struct {
+	exitCode int
+	stderr   string
+}
+
+func (r listingRefused) Error() string {
+	return fmt.Sprintf("list worktrees failed with exit code %d: %s", r.exitCode, r.stderr)
+}
+
+// worktreeRegistrations is the directory under the common Git directory where
+// Git keeps one entry per linked worktree.
+const worktreeRegistrations = "worktrees"
+
+// readRegistrations answers a listing from the bookkeeping Git was reading when
+// it refused, leaving out every entry that is registered and not filled in.
+//
+// This is the other half of tolerating a creation happening beside this run. The
+// re-read above covers the instant: `git worktree add` writes an entry's files
+// one after another, and a listing crossing that instant reads a file that has
+// been created and not yet written, which Git treats as a repository it cannot
+// describe at all rather than as one entry to skip. What a re-read cannot cover
+// is the entry that stays that way — an add whose process was killed between the
+// two writes leaves one, `git worktree prune` judges an entry by its gitdir file
+// and so leaves it alone, and from then on every listing on the repository fails
+// over it.
+//
+// So a refusal that survived the re-reads is checked rather than believed. Where
+// the bookkeeping holds at least one entry that is demonstrably unfinished, that
+// entry is what Git refused over and the listing is answered without it. Where it
+// holds none, nothing here accounts for what Git said and the refusal is returned
+// as it was: a repository Git cannot describe must not be reported as an empty
+// one.
+func (m *Manager) readRegistrations(ctx context.Context, refused listingRefused) ([]worktreeEntry, error) {
+	directory, err := m.commonGitDirectory(ctx)
+	if err != nil {
+		return nil, refused
+	}
+	// The primary checkout has no registration of its own: its HEAD is the common
+	// directory's, and a listing names it first.
+	primary, ok := checkoutEntry(m.repositoryRoot, filepath.Join(directory, "HEAD"))
+	if !ok {
+		return nil, refused
+	}
+	registrations, err := os.ReadDir(filepath.Join(directory, worktreeRegistrations))
+	if err != nil {
+		return nil, refused
+	}
+	entries := []worktreeEntry{primary}
+	var unfinished []string
+	for _, registration := range registrations {
+		if !registration.IsDir() {
+			continue
+		}
+		entry, ok := registeredEntry(filepath.Join(directory, worktreeRegistrations, registration.Name()))
+		if !ok {
+			unfinished = append(unfinished, registration.Name())
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if len(unfinished) == 0 {
+		return nil, refused
+	}
+	m.recordNote("the worktree listing left out %s, registered and not yet filled in, which Git refused the whole listing over: %s",
+		strings.Join(unfinished, ", "), refused.Error())
+	return entries, nil
+}
+
+// registeredEntry reads one worktree registration, and reports whether it is one
+// a listing can describe. Every file the listing depends on has to be there and
+// to have been written: Git creates them one at a time, so a file that exists and
+// is empty is an add still in flight — or one that died mid-flight — rather than
+// a checkout to name.
+func registeredEntry(directory string) (worktreeEntry, bool) {
+	// commondir is the file Git itself refuses over, so an entry missing it is
+	// exactly the one being stepped over here.
+	if _, ok := readWritten(filepath.Join(directory, "commondir")); !ok {
+		return worktreeEntry{}, false
+	}
+	gitdir, ok := readWritten(filepath.Join(directory, "gitdir"))
+	if !ok {
+		return worktreeEntry{}, false
+	}
+	// gitdir names the checkout's own .git file, so the checkout is the directory
+	// holding it. A relative one is read against the entry, which is how Git reads
+	// it too.
+	path := filepath.Dir(gitdir)
+	if !filepath.IsAbs(path) {
+		path = filepath.Clean(filepath.Join(directory, path))
+	}
+	return checkoutEntry(path, filepath.Join(directory, "HEAD"))
+}
+
+// checkoutEntry pairs a checkout with the branch its HEAD names. A detached HEAD
+// carries no branch, which is what a listing says of one as well.
+func checkoutEntry(path, headPath string) (worktreeEntry, bool) {
+	head, ok := readWritten(headPath)
+	if !ok {
+		return worktreeEntry{}, false
+	}
+	entry := worktreeEntry{path: path}
+	if branch, onBranch := strings.CutPrefix(head, "ref: refs/heads/"); onBranch {
+		entry.branch = branch
+	}
+	return entry, true
+}
+
+// readWritten reads a file Git writes while registering a worktree, and reports
+// whether it has been written yet. Absent and empty are one answer here: an add
+// creates each of these and then fills it in, so both are an entry that is not
+// finished rather than one that is malformed.
+func readWritten(path string) (string, bool) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	written := strings.TrimSpace(string(content))
+	return written, written != ""
 }
 
 func (m *Manager) registeredWorktree(ctx context.Context, path string) (bool, string, error) {

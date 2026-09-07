@@ -800,6 +800,46 @@ git config gc.auto 0
 That closes the residual for every command in the repository, at the price of
 packing and pruning objects becoming something you run by hand.
 
+## A registration a run never finished writing
+
+`git worktree add` registers an entry under the common Git directory's
+`worktrees/` and then fills it in, one file at a time. Anything that reads the
+bookkeeping in between — which is every `git worktree list`, and so every
+inspection, cleanup and sweep the harness makes — reads a file that has been
+created and not yet written, and Git refuses to describe the repository at all
+rather than skipping the one entry:
+
+```text
+fatal: failed to read .git/worktrees/yoyodyne-ifd-334-0db8dc56/commondir: Result too large
+```
+
+The harness reads the listing again when that happens, because the instant
+passes in the time Git takes to write a handful of small files. What a re-read
+cannot cover is the entry that stays that way: an add whose process was killed
+between two of those writes leaves one, and `git worktree prune` judges an entry
+by its `gitdir` file, which such an entry has — so nothing clears it. So the
+harness checks a refusal against the bookkeeping instead of believing it, and
+where the entry really is unfinished it describes the repository without that
+one, saying so on standard error:
+
+```text
+the worktree listing left out yoyodyne-ifd-334-0db8dc56, registered and not yet filled in, which Git refused the whole listing over: list worktrees failed with exit code 128: fatal: failed to read .git/worktrees/yoyodyne-ifd-334-0db8dc56/commondir: Result too large
+```
+
+That line means runs are no longer being lost to the entry, not that the entry
+has gone. It is still there, and `git worktree add` reads the same bookkeeping
+the listing does, so **no new worktree can be created in that repository until
+the entry is removed** — every run stops at its own creation with the message
+above. Nothing here removes it, because an entry that looks unfinished is also
+what an add still in flight looks like, and deleting one of those loses the
+worktree being created. Removing it is yours, when nothing is in flight —
+`yoyo status` says what is running:
+
+```sh
+rm -r .git/worktrees/yoyodyne-ifd-334-0db8dc56
+git worktree list --porcelain   # describes the repository again
+```
+
 ## Unwedging a target branch that diverged from the forge
 
 Every catch-up and every promotion here is fast-forward-or-nothing, so a local

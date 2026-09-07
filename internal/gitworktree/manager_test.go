@@ -512,9 +512,110 @@ func TestManagerReadsTheWorktreeListingAgainWhenItCrossesACreation(t *testing.T)
 	}
 }
 
+// The re-read covers the instant a creation is half-written and nothing else.
+// An add whose process died between creating one of the entry's files and
+// writing it leaves the entry that way for good — which is what the run-scoped
+// reaping produces when it kills the group an agent's own `git worktree add` is
+// in — and `git worktree prune` judges an entry by its gitdir file, so it leaves
+// that one alone. Every listing on the repository then fails over it, and every
+// run on the repository is lost to a neighbour that started and died. So the
+// entry is stepped over instead: the listing describes the repository without
+// it, and says so.
+func TestManagerListsAroundARegistrationAnotherRunNeverFinishedWriting(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	var notes []string
+	manager, err := New(Options{
+		Runner:         execution.OSProcessRunner{},
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Note:           func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	mine, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-beside",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	neighbour := halfWriteRegistration(t, repository, "yoyodyne-other-2113a23c")
+
+	// The failure being tolerated is Git's own rather than a described one: if a
+	// later Git stops refusing over this entry, this test is asserting nothing and
+	// must be told so rather than passing quietly.
+	if listing, err := attemptGit(repository, "worktree", "list", "--porcelain"); err == nil {
+		t.Fatalf("git described the repository with a half-written registration present, so the failure this tolerates is gone:\n%s", listing)
+	}
+
+	entries, err := manager.listWorktrees(context.Background())
+	if err != nil {
+		t.Fatalf("listWorktrees() error = %v, want the unfinished registration to have been stepped over", err)
+	}
+	// Compared the way this package compares checkout paths, because a listing
+	// names the path Git resolved rather than the one a test happened to write.
+	described := func(path string) (string, bool) {
+		for _, entry := range entries {
+			if samePath(entry.path, path) {
+				return entry.branch, true
+			}
+		}
+		return "", false
+	}
+	if branch, listed := described(mine.Path); !listed || branch != mine.Branch {
+		t.Fatalf("listWorktrees() = %v, want %s on %s", entries, mine.Path, mine.Branch)
+	}
+	if branch, listed := described(repository); !listed || branch != "main" {
+		t.Fatalf("listWorktrees() = %v, want the primary checkout at %s on main", entries, repository)
+	}
+	if _, listed := described(neighbour); listed {
+		t.Fatalf("listWorktrees() = %v, want the unfinished registration at %s left out", entries, neighbour)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], filepath.Base(neighbour)) {
+		t.Fatalf("notes = %v, want one naming the registration that was left out", notes)
+	}
+
+	// The run this is really about is one doing nothing but reading its own
+	// checkout while a neighbour starts beside it.
+	if _, err := manager.Inspect(context.Background(), mine); err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+}
+
+// halfWriteRegistration leaves the repository holding the entry `git worktree
+// add` has registered and not yet filled in: the files are created one at a
+// time, so one of them exists and is empty. commondir is the one Git refuses the
+// whole listing over. The entry is finished again before the test's own cleanup
+// reads the repository, because that cleanup lists the worktrees too.
+func halfWriteRegistration(t *testing.T, repository, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	runGit(t, repository, "worktree", "add", "--quiet", "-b", name, path)
+	commondir := filepath.Join(repository, ".git", "worktrees", name, "commondir")
+	written, err := os.ReadFile(commondir)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", commondir, err)
+	}
+	if err := os.WriteFile(commondir, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", commondir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.WriteFile(commondir, written, 0o600); err != nil {
+			t.Errorf("cleanup could not finish the registration at %s: %v", commondir, err)
+		}
+	})
+	return path
+}
+
 // A listing that keeps failing is still a failure, reported with what Git said.
 // The retry is for the instant that passes; a repository Git cannot describe at
-// all must not be waited on forever or reported as empty.
+// all must not be waited on forever or reported as empty. The bookkeeping is
+// what decides between the two: this repository holds no unfinished
+// registration, so nothing accounts for the refusal and it stands.
 func TestManagerReportsAWorktreeListingThatKeepsFailing(t *testing.T) {
 	t.Parallel()
 
