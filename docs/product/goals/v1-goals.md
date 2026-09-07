@@ -30,6 +30,10 @@ revisions:
       by: product-manager
       at: 2026-08-31T01:36:05Z
       reason: the legibility goal gains the plain-language clause the operator directed on 2026-08-31 - user-facing language chooses the ordinary, literal word over metaphor, coinage, or term of art; drafted by the product manager, approved by the operator as drafted
+    - action: amended
+      by: product-manager
+      at: 2026-09-07T18:00:00Z
+      reason: the configurability goal gains the multi-provider clause the operator directed on 2026-09-07 - the harness supports multiple providers behind one adapter contract, with the safety-invariants qualifier unchanged and capability validation as how a new provider is admitted safely; drafted by the product manager, approved by the operator as drafted
 approvals:
     - revision: 2
       by: operator
@@ -47,6 +51,10 @@ approvals:
       by: operator
       at: 2026-08-31T01:36:12.363441Z
       reason: 'Approved by the operator on 2026-08-31 - ''I''ll approve that'': the legibility goal''s plain-language clause as the product manager drafted it, one added clause, nothing else changed.'
+    - revision: 6
+      by: operator
+      at: 2026-09-07T13:02:41.413629Z
+      reason: 'Operator approved the multi-provider clause as the product manager drafted it, 2026-09-07: the harness supports multiple providers behind one adapter contract, safety-invariants qualifier unchanged'
 ---
 
 # V1 goals
@@ -101,7 +109,7 @@ milestone rather than an outcome, it was reached, and it is recorded as such.
   *Supports: nothing lands unreviewed by someone other than its author.*
 - Publish that work as pull requests the harness opens, and has the forge merge, on the roles' behalf, for projects that enable it, without letting any agent push or merge.
   *Supports: safety invariants hold whatever the configuration says.*
-- Keep roles, policies, and provider selection configurable without making safety invariants optional.
+- Keep roles, policies, and provider selection configurable without making safety invariants optional, and support multiple providers behind one adapter contract.
   *Supports: safety invariants hold whatever the configuration says.*
 - Run development nearly autonomously. The human's routine interface is the product manager: they state intent, approve the brief and goals, and answer questions the product manager escalates. Directing the architect, development manager, developer, or reviewer individually is available for inspection, recovery, and override, but is not part of the normal loop.
   *Supports: the human's attention goes only where it is needed.*
