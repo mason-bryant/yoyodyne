@@ -390,10 +390,17 @@ Three things about admitted work go stale on their own, and correcting them is
 the product manager's rather than a person's. A status is written when work stops
 and is never rewritten when what stopped it clears, so an item whose blocker
 landed reads as blocked forever. A dependency records that one item waits for
-another and goes on recording it after that other item closes. An attribution
-names a goal in the words the goals document stated it in, and an amendment to
-that document leaves the item naming words nothing states. None of them is a
-decision anybody owes, and every one of them used to wait for somebody to notice.
+another and goes on recording it after that other item closes. And an attribution
+stops resolving: an item that recorded its goal in the document's words rather
+than by [the goal's identity](artifacts.md#goals-and-what-work-serves-them) names
+words nobody states once the document is reworded, an item whose goal was retired
+or removed names a goal that is not in force whichever way it named it, and an
+item whose notes were replaced carries nothing where the tracker witnesses that
+it once did. Re-wording a goal an item named by its identity is deliberately not
+among them — leaving that item attributed is what the identity is for — so what
+is corrected here is the attribution the goals cannot resolve rather than every
+item an amendment touched. None of them is a decision anybody owes, and every one
+of them used to wait for somebody to notice.
 
 `repair` corrects one of the three, and `state` says which: `status` clears a
 blocked status where every link the item records is one the tracker says is
@@ -424,9 +431,12 @@ an escalated item reads as a blocked status with nothing at all standing behind
 it, and the hold is the whole of what separates the two. Such an
 item is reported with the reason it is held, every pass, and left exactly as it
 is: clearing its status would start a fresh run on top of work that is still
-there. Holds the harness could not read hold every item, for the same reason
-[the queue holds every blocked one](work.md#letting-the-harness-choose-the-work):
-a reader that cannot tell a stale status from a stoppage must not clear either.
+there. Both records behind a hold fail the same way: a conversation that cannot
+read what the harness is holding, or cannot read the directives, corrects nothing
+rather than deciding that nothing is held — for the same reason
+[the queue holds every blocked item it cannot read a hold for](work.md#letting-the-harness-choose-the-work),
+since a reader that cannot tell a stale status from a stoppage must not clear
+either.
 
 An item also says what carries it, where that is not a developer run, and whose
 conversation that is. Work whose execution is a conversation with a role —

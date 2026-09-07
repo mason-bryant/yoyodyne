@@ -5,11 +5,17 @@
 // changed them. A status is written when work stops and is never rewritten when
 // what stopped it clears, so an item whose blocking run ended reads as blocked
 // forever. A dependency records that one item waits for another and goes on
-// recording it after that other item closes. An attribution names a goal in the
-// words the goals document stated it in, and an amendment to that document
-// leaves the item naming words nothing states. None of the three is a decision
-// anybody owes: the records already say what is true, and the tracker is simply
-// still saying something else.
+// recording it after that other item closes. And an attribution stops resolving:
+// an item that recorded its goal in the document's words rather than by the
+// goal's identity names words nobody states once the document is reworded, an
+// item that named a goal since retired or removed names a goal that is not in
+// force whichever way it named it, and an item whose notes were replaced carries
+// nothing at all where the tracker witnesses that it once did. Re-wording a goal
+// an item named by identity is deliberately not among them — that is what the
+// identity is for — so what this acts on is the attribution the goals cannot
+// resolve rather than every item an amendment touched. None of the three is a
+// decision anybody owes: the records already say what is true, and the tracker
+// is simply still saying something else.
 //
 // # Nothing here decides, and nothing here acts
 //
@@ -60,8 +66,9 @@ const (
 	ClassStatus Class = "status"
 	// ClassDependency is a recorded dependency on work that closed.
 	ClassDependency Class = "dependency"
-	// ClassAttribution is a goal an item names that the goals no longer state,
-	// and a goal the tracker witnessed on an item whose notes no longer carry it.
+	// ClassAttribution is an attribution the goals cannot resolve: a goal an item
+	// names that they do not state, and a goal the tracker witnessed on an item
+	// whose notes no longer carry it.
 	ClassAttribution Class = "attribution"
 )
 
@@ -340,9 +347,14 @@ func deadDependencies(item beads.WorkItem, records Records) []Repair {
 }
 
 // orphanedAttribution is an item whose recorded goal no longer resolves: one
-// naming words the goals do not state, which is what an amendment to a goal's
-// wording leaves behind, and one the tracker witnessed a goal on whose notes no
-// longer carry it.
+// naming something the goals do not state, and one the tracker witnessed a goal
+// on whose notes no longer carry it.
+//
+// Whether it resolves is the goals' answer and not this one, which is what keeps
+// this correct as that answer gets better. An attribution recorded by identity
+// survives a rewording and an attribution recorded in words does not; both stop
+// resolving when the goal itself leaves. Asking here would be a second reading of
+// the same question, and the two would come apart the first time either changed.
 //
 // Work that never named a goal is deliberately not here. Nothing about it has
 // gone stale — it was admitted before goals were checked — and attributing it is

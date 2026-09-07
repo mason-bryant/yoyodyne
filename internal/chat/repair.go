@@ -285,13 +285,19 @@ func (s *Session) admittedWork(ctx context.Context) ([]beads.WorkItem, error) {
 	return admitted, nil
 }
 
-// recordedDirectives is the directives as the record holds them, and none at all
-// where the conversation has no record to read. The second is not a silent
-// omission: a conversation wired without directives is one nothing could have
-// recorded a directive through either, so there is no pause it is failing to see.
+// recordedDirectives is the directives as the record holds them.
+//
+// A conversation with no record to read them from corrects nothing, exactly as
+// one that cannot read the holds does. A directive in force is one of the three
+// governance holds, and the two halves of a hold must fail the same way: an
+// unwired directive record that answered "none in force" would be the hold
+// reading deciding from what it could not see, which is the one thing this
+// boundary must never do. A conversation nothing could have recorded a directive
+// through is still one where a directive recorded elsewhere reaches the same
+// product, so an empty answer is not derivable from the wiring either.
 func (s *Session) recordedDirectives(ctx context.Context) ([]directive.Directive, error) {
 	if s.options.Directives == nil {
-		return nil, nil
+		return nil, errors.New("this conversation cannot read the recorded directives, so it cannot tell an item nothing is holding from one a directive pauses; nothing was corrected")
 	}
 	recorded, err := s.options.Directives.List(ctx)
 	if err != nil {

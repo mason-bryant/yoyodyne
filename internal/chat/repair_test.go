@@ -36,6 +36,7 @@ func TestClearingAStaleStatusRecordsWhatItCorrectedAndWhy(t *testing.T) {
 	options := testOptions(t, provider)
 	options.Tracker = tracker
 	options.Held = readHolds(nil)
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "Tidy the queue.")
@@ -84,6 +85,7 @@ func TestTheOtherTwoKindsOfStaleStateAreCorrectedAgainstTheirOwnRecords(t *testi
 		options := testOptions(t, provider)
 		options.Tracker = tracker
 		options.Held = readHolds(nil)
+		options.Directives = &fakeDirectives{}
 		session := openTestSession(t, options)
 
 		reply, err := session.Send(context.Background(), "Tidy the queue.")
@@ -115,6 +117,7 @@ func TestTheOtherTwoKindsOfStaleStateAreCorrectedAgainstTheirOwnRecords(t *testi
 		options := testOptions(t, provider)
 		options.Tracker = tracker
 		options.Held = readHolds(nil)
+		options.Directives = &fakeDirectives{}
 		options.Goals = recordedGoals("Run development nearly autonomously")
 		session := openTestSession(t, options)
 
@@ -158,6 +161,7 @@ func TestARepairOfHeldWorkChangesNothing(t *testing.T) {
 	options.Held = readHolds(map[string]string{
 		stopped.ID: "run run-9 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there",
 	})
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "Tidy the queue.")
@@ -208,6 +212,7 @@ func TestAnItemAwaitingADecisionOnItsEscalationIsReportedAndLeftAlone(t *testing
 	options := testOptions(t, provider)
 	options.Tracker = tracker
 	options.Held = heldFromRunRecords{store: store}
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "Tidy the queue.")
@@ -233,6 +238,7 @@ func TestAnItemAwaitingADecisionOnItsEscalationIsReportedAndLeftAlone(t *testing
 	surveyOptions := testOptions(t, surveyProvider)
 	surveyOptions.Tracker = tracker
 	surveyOptions.Held = heldFromRunRecords{store: store}
+	surveyOptions.Directives = &fakeDirectives{}
 	surveyed := openTestSession(t, surveyOptions)
 	surveyReply, err := surveyed.Send(context.Background(), "What is stale?")
 	if err != nil {
@@ -273,6 +279,7 @@ func TestAStatusIsNotClearedWhileABlockerIsBeingWorkedOn(t *testing.T) {
 	options := testOptions(t, provider)
 	options.Tracker = tracker
 	options.Held = readHolds(nil)
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "Tidy the queue.")
@@ -307,6 +314,7 @@ func TestARepairNamingAGoalTheGoalsDoNotStateWritesNothing(t *testing.T) {
 	options := testOptions(t, provider)
 	options.Tracker = tracker
 	options.Held = readHolds(nil)
+	options.Directives = &fakeDirectives{}
 	options.Goals = recordedGoals("Run development nearly autonomously")
 	session := openTestSession(t, options)
 
@@ -342,6 +350,7 @@ func TestARepairWithNothingToReadTheHoldsFromChangesNothing(t *testing.T) {
 	}}
 	options := testOptions(t, provider)
 	options.Tracker = tracker
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "Tidy the queue.")
@@ -351,8 +360,48 @@ func TestARepairWithNothingToReadTheHoldsFromChangesNothing(t *testing.T) {
 	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
 		t.Fatalf("actions = %#v, want the repair refused", reply.Actions)
 	}
+	if !strings.Contains(reply.Actions[0].Failure, "holding for a person") {
+		t.Fatalf("failure = %q, want it to name the reading that did not happen", reply.Actions[0].Failure)
+	}
 	if len(tracker.unblocked) != 0 {
 		t.Fatalf("a status was cleared with nothing to read the holds from: %#v", tracker.unblocked)
+	}
+}
+
+// A directive in force is one of the three governance holds, so the record it is
+// read from fails the way the holds do: a conversation with no directives to read
+// corrects nothing rather than deciding that none is in force. The two halves of
+// one hold failing in opposite directions is a hold with a hole in it.
+func TestARepairWithNothingToReadTheDirectivesFromChangesNothing(t *testing.T) {
+	t.Parallel()
+
+	stale := beads.WorkItem{ID: "yoyodyne-ifd.76", Title: "Blocked by nothing", Status: "blocked"}
+	tracker := &fakeTracker{
+		items:        map[string]beads.WorkItem{stale.ID: stale},
+		blockedItems: []beads.WorkItem{stale},
+	}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Clearing it.",
+			`{"action":"repair","id":"yoyodyne-ifd.76","state":"status","reason":"nothing unfinished is behind it"}`)},
+		{SessionID: "session-1", FinalText: "It could not be judged."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Held = readHolds(nil)
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Tidy the queue.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the repair refused", reply.Actions)
+	}
+	if !strings.Contains(reply.Actions[0].Failure, "recorded directives") {
+		t.Fatalf("failure = %q, want it to name the reading that did not happen", reply.Actions[0].Failure)
+	}
+	if len(tracker.unblocked) != 0 {
+		t.Fatalf("a status was cleared with nothing to read the directives from: %#v", tracker.unblocked)
 	}
 }
 
@@ -377,6 +426,7 @@ func TestARepairTheRecordsDoNotSupportChangesNothing(t *testing.T) {
 	options := testOptions(t, provider)
 	options.Tracker = tracker
 	options.Held = readHolds(nil)
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "Tidy the queue.")
@@ -417,6 +467,7 @@ func TestASurveyListsTheStaleStateAndWhatIsHeld(t *testing.T) {
 	options.Held = readHolds(map[string]string{
 		held.ID: "run run-11 stopped on it and its change is preserved",
 	})
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "What is stale?")
@@ -458,6 +509,7 @@ func TestASurveyByARoleThatMayNotRepairSaysNothingAboutStaleState(t *testing.T) 
 	options.Agent = string(domain.RoleDevelopmentManager)
 	options.Tracker = tracker
 	options.Held = readHolds(nil)
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "What is open?")
@@ -486,6 +538,7 @@ func TestOnlyARoleHoldingTheCapabilityMayRepair(t *testing.T) {
 	options.Agent = string(domain.RoleDevelopmentManager)
 	options.Tracker = tracker
 	options.Held = readHolds(nil)
+	options.Directives = &fakeDirectives{}
 	session := openTestSession(t, options)
 
 	_, err := session.Send(context.Background(), "Tidy the queue.")
