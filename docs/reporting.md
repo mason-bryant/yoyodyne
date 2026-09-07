@@ -489,16 +489,26 @@ here judges whether it decided well.
 ### Whether the pile is draining
 
 Neither the walk nor the bound is worth anything if nobody talks to the product
-manager, so the pile is worked on a cadence like the development manager's
-sweep: a [recurring task](configuration.md#recurring-tasks) wakes the product
-manager every so often with the pile as its whole job, and it decides about what
-it is shown. Nothing about that turn is special — the same persona, the same
-authority, the same `handle` action — and what it decided is on the record twice
-over, as a handling beside each report and as the pass's own durable account in
-`yoyo sweeps`.
+manager, and nothing in the harness talks to it on your behalf unless you have
+said it should. **The pile is worked on a cadence only once you configure a
+recurring task to do it**, the way the development manager's sweep is
+configured; the harness ships the task as a commented example in the file `yoyo
+init` writes and enables nothing by itself, because which roles are woken and
+how often is a project's judgement rather than a release's.
+[Working the report pile on a cadence](configuration.md#working-the-report-pile-on-a-cadence)
+is the entry and what it should say. A project that has not added it works the
+pile only when somebody opens a conversation with the product manager, which for
+a pile of hundreds is not often enough — that is the state this project was in
+when 564 of 1313 reports were unhandled with the oldest three weeks old.
 
-Whether that is keeping up is a question about a week rather than about a
-moment, so every listing of the pile leads with the two numbers that answer it:
+Once the task is configured, nothing about the turns it takes is special — the
+same persona, the same authority, the same `handle` action — and what each pass
+decided is on the record twice over, as a handling beside each report and as the
+pass's own durable account in `yoyo sweeps`.
+
+Whether it is keeping up, or whether there is no cadence at all, is a question
+about a week rather than about a moment, so every listing of the pile leads with
+the two numbers that answer it:
 
 ```text
 reports: 564 of 1313 collected report(s) are unhandled, the oldest filed 22d ago, worst critical
@@ -507,9 +517,9 @@ reports: 564 of 1313 collected report(s) are unhandled, the oldest filed 22d ago
 Both numbers come from one derivation, so the terminal and the channel cannot
 disagree about them. A pile that is draining says nothing anywhere else; one
 whose oldest undecided report has been waiting more than a week is named on
-`yoyo status`'s "needs a human" line as the product manager's, because a cadence
-that has stopped keeping up looks exactly like one that is working in any single
-reading.
+`yoyo status`'s "needs a human" line as the product manager's. That line is what
+catches both failures a single reading cannot tell apart: a cadence that has
+stopped keeping up, and no cadence configured at all.
 
 ## What agents propose changing, and who decides
 

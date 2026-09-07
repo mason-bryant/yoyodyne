@@ -4239,7 +4239,15 @@ Every role files what it noticed into one pile, the product manager is the only
 role that can record what became of a report, and until something wakes it for
 that the pile is worked only when you happen to open a conversation. Reports
 arrive at twenty to forty-five a day in this project, which is more than that
-reaches:
+reaches.
+
+`yoyo init` writes this entry into the generated configuration, commented out and
+beside the development manager's sweep, so a new project has it to uncomment
+rather than to compose. **A project that has not uncommented it has no cadence
+over the pile**,
+and no part of the harness supplies one on its behalf — the schedule is where a
+project says which roles are woken and how often, and a task nobody wrote is a
+task that does not fire:
 
 ```yaml
 recurring_tasks:
