@@ -381,7 +381,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// whether the backend the agent named resolves to one — which a provider the
 	// project declared does, and a backend nothing can launch does not.
 	if !providerRuns(cfg, agent.Backend) {
-		return nil, nil, fmt.Errorf("a conversation requires a claude-code agent, and the %s agent %s is configured for %q", role, name, agent.Backend)
+		return nil, nil, fmt.Errorf("a conversation requires an agent on a backend this build can launch, and the %s agent %s is configured for %q", role, name, agent.Backend)
 	}
 	if err := config.ValidateModelSelector(agent.Model); err != nil {
 		return nil, nil, fmt.Errorf("%s agent %s %s", role, name, err)
@@ -400,18 +400,22 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// executable, and its dialect — and then pointed at the account's own
 	// provider home. The two are separate decisions: which provider runs the
 	// agent is the project's, and which login it runs under is this machine's.
-	provider := providerBackend(cfg, agent.Backend, processRunner)
-	provider.ConfigDir = account.Directory
+	provider := providerBackendIn(cfg, agent.Backend, processRunner, account.Directory)
 	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
+	// The refusals name the backend the agent is configured for rather than one
+	// provider for all of them. The login they hand back is Claude Code's, and
+	// that is not a gap: the three roles a conversation is held with are the
+	// management roles, and Codex serves neither of them, so every agent that
+	// reaches here runs on the Claude Code adapter.
 	if !availability.Installed {
-		return nil, nil, errors.New("Claude Code is not installed")
+		return nil, nil, fmt.Errorf("the %s backend is not installed", agent.Backend)
 	}
 	if !availability.Authenticated {
-		return nil, nil, fmt.Errorf("Claude Code is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
-			account.Alias, accountLoginCommand(account), availability.AuthMethod)
+		return nil, nil, fmt.Errorf("the %s backend is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
+			agent.Backend, account.Alias, accountLoginCommand(account), availability.AuthMethod)
 	}
 
 	store, err := runstate.NewConversationStore(parts.stateRoot, cfg.Product.ID)
