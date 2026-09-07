@@ -1071,7 +1071,10 @@ re-runs, and merge re-arms recorded beside the caps that refuse the next one,
 what a grant came to and whether the round cap cut it down, what the item now
 stands committed to, and which of those decisions the harness has carried out.
 Where a further decision would be refused, the entry says so and says which
-budget refuses it. That is what stops a decision already recorded from reading
+budget refuses it. Where the harness tried to carry a decision out and a gate
+stopped it, the entry says that too — which gate, what it said, and what would
+clear it — so a decision recorded days ago and still not fired is visible on the
+entry rather than only in the silence. That is what stops a decision already recorded from reading
 as an entry nobody has looked at — the reading that had one authorized recovery
 decided a second time, and then paid for by a round-trip on every docket after
 it.
@@ -1171,10 +1174,21 @@ while its spend had already landed, and what stopped the same decision being
 asked for a second time was the cap refusing it rather than anything anybody was
 told.
 
-Recording a decision is not carrying it out, and two of the six now have an
-action that does. They are the two opposite answers to a run that stopped:
+Recording a decision is not carrying it out, and two of the six have an action
+that does. They are the two opposite answers to a run that stopped:
 `yoyo triage rerun` starts the item over, and `yoyo triage repair` continues the
 run that stopped on the change it already has.
+
+Neither of them waits on being typed. A watching `yoyo work` session fires a
+recorded decision itself, one per pull, oldest first, through these same two
+actions and under every condition each of them asks — so recording the decision
+is what causes it, and the verbs are what fires one *now* rather than at the next
+pull. Every refusal is written onto the item's own triage record and shown on the
+docket entry the development manager reads, naming which gate refused and what
+would clear it, so a decision that cannot be carried out says so where she is
+already looking. Before that existed, thirty-three items stood decided and
+unfired, some for days, because the only executor was somebody typing one of these
+two commands.
 
 `yoyo triage rerun <run-id>` starts a fresh run of the item whose stopped run the
 docket entry names — the case where the ground moved under a change that was

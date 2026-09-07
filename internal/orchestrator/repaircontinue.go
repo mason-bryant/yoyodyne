@@ -563,12 +563,13 @@ func continuableItem(item beads.WorkItem, workItemID string) error {
 	switch item.Status {
 	case "open", "in_progress", "blocked":
 	default:
-		return fmt.Errorf("work item %s status is %q, so it is not one a stopped run may be continued on; nothing was spent, so the same decision is carried out by asking again once it is", item.ID, item.Status)
+		return fmt.Errorf("%w: work item %s status is %q, so it is not one a stopped run may be continued on; nothing was spent, so the same decision is carried out by asking again once it is",
+			ErrItemNotStartable, item.ID, item.Status)
 	}
 	blockers := blockingDependencies(item)
 	if len(blockers) > 0 {
-		return fmt.Errorf("work item %s is blocked by: %s; nothing was spent, so the same decision is carried out by asking again once they are closed",
-			item.ID, strings.Join(blockers, ", "))
+		return fmt.Errorf("%w: work item %s is blocked by: %s; nothing was spent, so the same decision is carried out by asking again once they are closed",
+			ErrItemNotStartable, item.ID, strings.Join(blockers, ", "))
 	}
 	return nil
 }

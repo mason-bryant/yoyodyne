@@ -878,3 +878,63 @@ func TestAnUnstartedRunReadsAsADispatchRatherThanAStoppage(t *testing.T) {
 		t.Fatalf("the entry claims a change that was never made:\n%s", rendered)
 	}
 }
+
+// Silence is the one outcome forbidden here. A decision the harness tried to
+// carry out and a gate stopped has to say so on the entry the development
+// manager reads, naming the gate and what would clear it — otherwise a decision
+// recorded days ago and never fired looks exactly like one nothing has reached.
+func TestARenderedEntrySaysWhichGateStoppedTheCarryOut(t *testing.T) {
+	t.Parallel()
+
+	refused := stoppedRunEntry()
+	refused.CarryOut = &CarryOut{
+		Decision:  "repair",
+		Gate:      "the work the stopped run preserved",
+		Refusal:   "the worktree is not as the harness left it",
+		Clears:    "somebody saying what became of the worktree the stopped run preserved",
+		Attempts:  3,
+		RefusedAt: time.Date(2026, 8, 19, 13, 0, 0, 0, time.UTC),
+	}
+	rendered := refused.Render()
+	for _, want := range []string{
+		`tried to carry out the "repair" you decided`,
+		"the work the stopped run preserved refused it",
+		"3 attempts",
+		"the worktree is not as the harness left it",
+		"What would clear it: somebody saying what became of the worktree",
+		"Nothing was spent",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered entry is missing %q:\n%s", want, rendered)
+		}
+	}
+
+	// A gate that clears without anybody doing anything is worded as waiting, and
+	// that difference is the whole of what she does about it: reading a full
+	// harness as a refusal is how one decision gets made twice.
+	waiting := refused
+	waiting.CarryOut = &CarryOut{
+		Decision:  "rerun",
+		Gate:      "developer capacity",
+		Refusal:   "every developer slot is occupied: 2 active, limit 2",
+		Clears:    "a developer slot freeing, which needs nobody",
+		Waiting:   true,
+		Attempts:  1,
+		RefusedAt: time.Date(2026, 8, 19, 13, 0, 0, 0, time.UTC),
+	}
+	rendered = waiting.Render()
+	for _, want := range []string{"is waiting on developer capacity", "1 attempt", "What it is waiting for"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered entry is missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "refused it") {
+		t.Fatalf("a gate that clears on its own was rendered as a refusal:\n%s", rendered)
+	}
+
+	// And the ordinary entry says nothing at all: a decision the harness has not
+	// been stopped on has nothing to report, so a line here always means something.
+	if rendered := stoppedRunEntry().Render(); strings.Contains(rendered, "carry out the") {
+		t.Fatalf("an entry nothing was stopped on reports a carry-out:\n%s", rendered)
+	}
+}

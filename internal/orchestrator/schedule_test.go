@@ -2324,6 +2324,13 @@ type scheduleHarness struct {
 	// every project until one opts in.
 	firings int
 	fire    func(*scheduleHarness, int) (RecurringSweep, error)
+	// outstanding stands in for the decisions the development manager recorded
+	// and nobody has acted on, and carry for what firing one comes to. A pull is
+	// wired with them only where a test asks, so every other test's pass carries
+	// nothing out — which is what every pass did before this existed.
+	carried     []CarryOutTask
+	outstanding func(*scheduleHarness) ([]CarryOutTask, error)
+	carry       func(*scheduleHarness, CarryOutTask) (CarriedOut, Outcome, error)
 
 	pulls      int
 	order      []string
@@ -2429,6 +2436,10 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	if h.fire != nil {
 		recurring = h
 	}
+	var carryOut ScheduleCarryOut
+	if h.outstanding != nil {
+		carryOut = h
+	}
 	h.mu.Unlock()
 	h.mu.Lock()
 	tree := h.tree
@@ -2440,7 +2451,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h, Stoppages: stoppages,
 		Capacity: capacity, Start: h.start, Escalations: escalations,
-		Tree: tree, Triage: docket, Recurring: recurring,
+		Tree: tree, Triage: docket, Recurring: recurring, CarryOut: carryOut,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.

@@ -36,6 +36,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backend/adapters"
 	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -681,9 +682,17 @@ func (d *diagnosis) checkAccounts(ctx context.Context, resolved config.Resolved,
 
 // poolDescriptor is the provider the pool's accounts are asked about: the one
 // the developer agent names, because that is the invocation a rotated account
-// serves. A project whose developer names a provider this build cannot launch —
-// or names none at all — falls back to the built-in Claude Code description,
-// which is the only adapter that can be pointed at a provider home and asked.
+// serves. A project whose developer names a provider that does not run on the
+// Claude Code adapter — or names none at all — falls back to the built-in Claude
+// Code description.
+//
+// The gate is the Claude Code adapter rather than any adapter this build ships,
+// and that is a bound on the diagnosis rather than on the pool. The account pool
+// is Claude Code's throughout: the homes it names are that provider's, and
+// AccountLoginCommand below signs one in with that provider's command. A
+// developer on another provider's adapter has its accounts diagnosed by the
+// provider check instead, which asks where the machine is signed in. Diagnosing
+// a pooled account per provider is the work that would lift this.
 func poolDescriptor(cfg config.Config, registry *backend.Registry) backend.Descriptor {
 	builtIn, _ := backend.BuiltInDescriptor(domain.BackendClaudeCode)
 	names := make([]string, 0, len(cfg.Agents))
@@ -805,17 +814,16 @@ func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, des
 			Remedy:  providerInstallCommand(descriptor.Adapter),
 		}
 	}
-	if descriptor.Adapter != domain.BackendClaudeCode {
-		// Only Claude Code has an adapter that can be asked about its own
-		// authentication. Saying so is better than reporting an unauthenticated
-		// provider as healthy because nothing here could tell -- and the remedy
-		// is the login rather than a second diagnostic, because what an operator
-		// can act on here is making the answer yes, not asking again.
-		//
-		// Nothing reaches this today, because Claude Code's is the only adapter
-		// this build ships and a provider that runs on no adapter was answered
-		// above. It stands for the second one, whose availability check is its
-		// own to write.
+	// The provider is asked about its own authentication through the same adapter
+	// that would run it, so a project that declared a provider is diagnosed by
+	// whatever reads that provider's answers rather than by whatever this
+	// function happens to know. A descriptor that named no adapter this build
+	// ships was answered above, so nothing reaches the refusal below; it stands
+	// for the day this build grows an adapter with no availability check of its
+	// own, because reporting a provider nothing could ask as healthy is the one
+	// answer that would be worse than saying so.
+	provider, built := adapters.For(descriptor, named, d.env.Runner, "")
+	if !built {
 		return Finding{
 			Check:   check,
 			Status:  StatusWarning,
@@ -824,7 +832,7 @@ func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, des
 			Remedy:  providerLoginCommand(descriptor.Adapter),
 		}
 	}
-	availability, err := (claudecode.Backend{Runner: d.env.Runner, Binary: descriptor.Binary}).CheckAvailability(ctx)
+	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
 		return Finding{
 			Check:   check,
