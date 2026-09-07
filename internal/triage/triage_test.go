@@ -780,3 +780,101 @@ func TestAnEscalationRendersAsADecisionAboutTheItem(t *testing.T) {
 		}
 	}
 }
+
+// unstartedRunEntry is a dispatch that died before it claimed its item: the
+// yoyodyne-ifd.285 shape. The failure is the whole of it, because there is
+// nothing else — no item claimed, no worktree, no branch, no review.
+func unstartedRunEntry() Entry {
+	return Entry{
+		SchemaVersion: SchemaVersion,
+		Key:           Key(ClassUnstartedRun, "run-0123456789abcdef0123456789abcdef"),
+		Class:         ClassUnstartedRun,
+		ProductID:     "yoyodyne",
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:    "yoyodyne-task",
+		WorkItemTitle: "Two claim-path bd behaviors are pinned against the real store",
+		RecordedAt:    time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
+		Failure:       "claim work item: Error claiming yoyodyne-task: issue not claimable: status blocked",
+		Counters:      Counters{ReviewRounds: 0, ReviewRoundsCap: 4, RepairGrantAttempts: 2},
+	}
+}
+
+// The entry made about a dispatch that never started. It is held to the evidence
+// that makes it what it claims to be, exactly as every other class is: an entry
+// that cannot say why the run never started is one nobody can act on, and one
+// carrying evidence about a change describes a run that did not happen.
+func TestAnUnstartedRunEntryIsHeldToWhatMakesItOne(t *testing.T) {
+	t.Parallel()
+
+	if err := unstartedRunEntry().Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want the entry accepted", err)
+	}
+	for _, test := range []struct {
+		name  string
+		entry func() Entry
+		want  string
+	}{
+		{
+			name: "it does not say why the run never started",
+			entry: func() Entry {
+				entry := unstartedRunEntry()
+				entry.Failure = ""
+				return entry
+			},
+			want: "carries the failure that stopped it before it claimed",
+		},
+		{
+			// The item was never claimed, so nothing wrote a blocker on it. An entry
+			// claiming one would send a reader to the item for words nobody put there.
+			name: "it claims a blocker on an item nothing touched",
+			entry: func() Entry {
+				entry := unstartedRunEntry()
+				entry.Blocker = "Yoyodyne stopped this item."
+				return entry
+			},
+			want: "names no blocker",
+		},
+		{
+			name: "it carries evidence about a change that was never made",
+			entry: func() Entry {
+				entry := unstartedRunEntry()
+				entry.Findings = []Finding{{Severity: "blocker", Message: "add the missing file"}}
+				return entry
+			},
+			want: "reached no change",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := test.entry().Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want it to name %q", err, test.want)
+			}
+		})
+	}
+}
+
+// What the development manager reads. She is deciding about a dispatch rather
+// than about a change, so the entry has to say that the item is untouched — the
+// rest of this docket is work sitting on a branch, and a reader who carried that
+// assumption here would go looking for something nobody made.
+func TestAnUnstartedRunReadsAsADispatchRatherThanAStoppage(t *testing.T) {
+	t.Parallel()
+
+	entry := unstartedRunEntry()
+	rendered := entry.Render()
+	for _, want := range []string{
+		"run that died before it started",
+		"yoyodyne-task",
+		"Nothing was started",
+		"Why it never started",
+		entry.Failure,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the rendered entry does not say %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Died holding its change") {
+		t.Fatalf("the entry claims a change that was never made:\n%s", rendered)
+	}
+}

@@ -552,7 +552,18 @@ ends rather than by this sweep: the sweep re-derives blockers from the whole
 recorded history, and every terminal failed run with a surviving branch has the
 shape of a death, so re-deriving those would put months of settled work on the
 docket at once. A death from before this existed is therefore not on the docket
-and will not appear on one. A run whose work reached
+and will not appear on one. **A run that died before it claimed its item** — a
+dispatch the tracker refused, anything that failed before the first thing a run
+changes outside itself — is docketed the same way and for the same reason, as a
+*run that died before it started*. It is the one failure that leaves nothing at
+all: no blocker on the item, because the item was never taken, and no branch,
+because no worktree was cut. Every other rule here reads that as nothing having
+happened, which is exactly how one item was dispatched twenty-nine times in
+twenty hours with no surface saying a word. Its entry names the run and the item
+it tried to claim, says the item is untouched, and carries the failure. Like the
+death above it is recorded where it happens and never re-derived by the sweep,
+so a pre-claim death from before this existed is not on the docket either. A run
+whose work reached
 the target branch is closed and its worktree and branch removed, including when
 the run died before it could record the promotion. A run stopped anywhere
 earlier becomes a durable blocker naming the branch and worktree that were

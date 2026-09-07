@@ -184,6 +184,15 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, endingReason(after))
 		} else {
 			remains.Ending = string(outcome)
+			// A run that died before it claimed anything is the one ending here that
+			// does leave somebody a decision: it is docketed as it dies, so the fixed
+			// clause's "nothing was recorded for anybody to decide" is false of exactly
+			// this run and true of the others. It is derived from the record beside the
+			// line rather than worded again by the sink, for the reason the stall's
+			// clause is.
+			if after.DiedBeforeClaiming() {
+				remains.Mover = unstartedMove
+			}
 			sayWith(KindRunEnded, endingSeverity(outcome), Harness(), remains, endingReason(after))
 		}
 	}

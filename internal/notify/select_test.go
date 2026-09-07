@@ -1591,3 +1591,51 @@ func TestAVersionFallbackIsSaidAsASubstitutionAndNamesWhy(t *testing.T) {
 		}
 	}
 }
+
+// The line the operator actually read on 2026-09-07, twenty-nine times: a run
+// that died at the claim was said as an ending with nothing recorded for anybody
+// to decide. That was true, and it was the defect — the class left no docket
+// entry, so it existed in no surface the development manager's sweep reads. Now
+// it is docketed as it dies, and the clause has to say so or it sends the reader
+// away from the one entry that was made for them.
+func TestARunThatDiedBeforeClaimingIsSaidAsSomebodysMove(t *testing.T) {
+	before := running()
+	before.Status = runstate.StatusPending
+	before.Phase = ""
+
+	// The run took nothing and cut nothing, which is what a claim the tracker
+	// refused leaves behind.
+	completed := moment.Add(time.Second)
+	after := before
+	after.Status = runstate.StatusFailed
+	after.CompletedAt = &completed
+	after.Failure = "claim work item: Error claiming yoyodyne-ifd.68.2: issue not claimable: status blocked"
+
+	_, notifications := crossed(t, before, after)
+	said := only(t, notifications, KindRunEnded)
+	message, err := Render(said.Topic, said.Speaker, said.Event)
+	if err != nil {
+		t.Fatalf("render the ending: %v", err)
+	}
+	if !strings.Contains(message.Body, "development manager") || !strings.Contains(message.Body, "docket") {
+		t.Fatalf("the ending does not send the reader to the entry made for them:\n%s", message.Body)
+	}
+	if strings.Contains(message.Body, "nothing was recorded for anybody to decide") {
+		t.Fatalf("the ending still says nothing was recorded, which is the defect:\n%s", message.Body)
+	}
+
+	// A run that got as far as claiming keeps the clause it always had: nothing
+	// about it was docketed, and sending a reader to triage over it would be the
+	// guessing the fixed clause exists to avoid.
+	claimed := endedRun(running(), runstate.StatusFailed)
+	claimed.WorkItemClaimedAt = &moment
+	claimed.Failure = "the process was killed mid-change"
+	_, alsoSaid := crossed(t, running(), claimed)
+	ordinary, err := Render(alsoSaid[0].Topic, alsoSaid[0].Speaker, only(t, alsoSaid, KindRunEnded).Event)
+	if err != nil {
+		t.Fatalf("render the ordinary ending: %v", err)
+	}
+	if !strings.Contains(ordinary.Body, "nothing was recorded for anybody to decide") {
+		t.Fatalf("an ordinary ending lost the clause it had:\n%s", ordinary.Body)
+	}
+}

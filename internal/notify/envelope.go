@@ -660,6 +660,12 @@ type Detail struct {
 	// cause: a queue held for triage decisions and a queue carried in conversation
 	// are one kind of message and two different people to go to. A stall with no
 	// poll to read a cause from carries neither, and the table answers.
+	//
+	// KindRunEnded reads it for the same reason and without a Cause beside it. A
+	// run that died before it claiming anything is docketed as it dies, where every
+	// other ending under that kind recorded nothing for anybody to decide — one
+	// kind of message, two different people again. A run that got as far as
+	// claiming carries none, and the table answers.
 	Cause string `json:"cause,omitempty"`
 	Mover string `json:"mover,omitempty"`
 	// Waiting is what a provider's refusal stopped, read by

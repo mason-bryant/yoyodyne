@@ -690,6 +690,17 @@ var nextMoves = map[Kind]string{
 // acknowledgment reads worst as.
 const directiveInForceMove = "the harness's — the work carries on under it."
 
+// unstartedMove is whose move follows a run that died before it claimed
+// anything. The table's answer for a run that ended is that nothing was recorded
+// for anybody to decide, and this is the one ending where something was: the
+// death is docketed as it happens, so the item is where it always was and the
+// dispatch is a decision waiting on the development manager.
+//
+// That clause is the whole reason this class was worth recording. The message an
+// operator read on 2026-09-07, twenty-nine times over, said nothing was recorded
+// for anybody to decide — which was true, and was the defect.
+const unstartedMove = "the development manager's, in triage — the run took nothing, and the dispatch that could not start it is on the docket."
+
 // nextMove is whose move follows one event, and says whether anything does. A
 // kind nothing answers for is a kind added to the vocabulary without anybody
 // deciding what a reader is supposed to do about it, which is a mistake in this
@@ -720,10 +731,17 @@ func nextMove(event Event) (string, bool) {
 	}
 	// A stall over a queue whose last poll said what was holding it is waiting on
 	// whoever releases that, rather than on somebody restarting a chooser that is
-	// running and doing exactly what it should. The clause is the read model's,
-	// derived beside the cause the message states, so the two cannot disagree.
-	if event.Kind == KindStallNoticed && strings.TrimSpace(event.Detail.Mover) != "" {
-		return ended(strings.TrimSpace(event.Detail.Mover)), true
+	// running and doing exactly what it should. A run that died before it claimed
+	// anything is docketed as it dies, where every other ending under that kind
+	// recorded nothing for anybody to decide. Both are one kind of message
+	// covering two situations that send a reader to different people, so the
+	// clause is the read model's — derived beside the fact the message states, so
+	// the two cannot disagree.
+	if strings.TrimSpace(event.Detail.Mover) != "" {
+		switch event.Kind {
+		case KindStallNoticed, KindRunEnded:
+			return ended(strings.TrimSpace(event.Detail.Mover)), true
+		}
 	}
 	move, ok := nextMoves[event.Kind]
 	return move, ok
