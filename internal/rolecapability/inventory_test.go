@@ -337,6 +337,11 @@ var expresses = map[string]expression{
 		asks:     []capability.Capability{capability.WorktreeMutate},
 		gap:      "the correspondence is not the rule: what tools a role gets is decided from its posture, and a bundle that happened to line up with it proves nothing",
 	},
+	"backend.codex-sandbox-for-role": {
+		question: "the one role that edits a worktree is the one given a sandbox it can write in",
+		asks:     []capability.Capability{capability.WorktreeMutate},
+		gap:      "the same gap the row above it has, and for the same reason: the sandbox a role gets is decided from its tool posture, and posture is the second axis the design settles as a typed scope on a capability. A bundle that happened to line up with the mapping would prove nothing about it",
+	},
 	"promotion.lease": {
 		question: "no role holds it; the registry records it as the harness's own, with the reason",
 		asks:     []capability.Capability{capability.PromotionLease},
