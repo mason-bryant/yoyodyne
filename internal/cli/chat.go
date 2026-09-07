@@ -570,14 +570,19 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// models a persona is interchangeable across is the operator's judgement,
 		// stated per agent rather than derived from the role.
 		FailoverModel: cfg.AgentFailoverModel(name),
-		Persona:       agent.Persona.Text,
-		Agent:         name,
-		Provider:      agent.Backend,
-		Providers:     providerRegistry(cfg),
-		Repository:    repository,
-		ProductID:     cfg.Product.ID,
-		RepositoryID:  string(cfg.Product.RepositoryID),
-		Briefing:      briefing,
+		// And how long a refusal that named no reset time stands before the
+		// configured model is asked again, which is the same interval a run probes
+		// one on. Without it the conversation would re-ask an exhausted model every
+		// turn and announce the substitution every turn with it.
+		UsageLimitUnknownResetPause: cfg.Execution.UsageLimitUnknownResetPause.Duration(),
+		Persona:                     agent.Persona.Text,
+		Agent:                       name,
+		Provider:                    agent.Backend,
+		Providers:                   providerRegistry(cfg),
+		Repository:                  repository,
+		ProductID:                   cfg.Product.ID,
+		RepositoryID:                string(cfg.Product.RepositoryID),
+		Briefing:                    briefing,
 		// The repository and the tracker are kept reachable so the conversation
 		// can say how old its picture is and take a new one when the operator
 		// asks. The product manager reaches neither: this is the harness's hand,

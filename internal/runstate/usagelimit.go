@@ -126,12 +126,27 @@ func (e UsageLimitExhaustion) Substituted() bool {
 	return strings.TrimSpace(e.ServedBy) != ""
 }
 
-// WindowClosed reports a refusal whose window the provider said has not lifted
-// by the given moment. A refusal that named no reset time never answers yes: the
-// harness was not told when it lifts, so what it does is ask again rather than
-// assume the window is still shut.
-func (e UsageLimitExhaustion) WindowClosed(at time.Time) bool {
-	return e.ResetsAt != nil && e.ResetsAt.After(at)
+// WindowClosed reports a refusal still standing at the given moment.
+//
+// A reset time the provider named and that is in the future is the window, and
+// the refusal stands until it. Where the provider named none — and where it
+// named one that was already past when it refused, which describes no wait at
+// all — what stands in for it is unknownResetPause, the caller's configured
+// interval between probes. That is the same substitution the run path makes for
+// the same case: a limit reported without a reset is not the absence of
+// capacity, it is capacity nobody was given a deadline for, so the harness waits
+// its configured interval and asks again rather than either guessing a deadline
+// or asking on every turn.
+//
+// A caller with no interval to offer passes zero, and then only a named reset
+// time can make a refusal stand — which is the honest answer for a caller that
+// has no polling discipline of its own to apply.
+func (e UsageLimitExhaustion) WindowClosed(at time.Time, unknownResetPause time.Duration) bool {
+	standsUntil := e.At.Add(unknownResetPause)
+	if e.ResetsAt != nil && e.ResetsAt.After(e.At) {
+		standsUntil = *e.ResetsAt
+	}
+	return standsUntil.After(at)
 }
 
 // Describe says what the refusal was, as the object of "waiting out". It is the

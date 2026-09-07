@@ -166,22 +166,49 @@ func TestASubstitutionNamesBothTheRefusedModelAndTheOneThatServed(t *testing.T) 
 	}
 }
 
-// A refusal that named a reset time is a window until that moment and no
-// further. One that named none never reads as a closed window at all: the
-// harness was not told when it lifts, so it asks again rather than assuming.
-func TestOnlyARefusalWithAResetTimeDescribesAClosedWindow(t *testing.T) {
+// A refusal that named a reset time stands until that moment and no further.
+// One that named none stands for the caller's own probe interval instead — a
+// limit reported without a deadline is a wait of unknown length rather than of
+// no length, and a caller with no interval to offer is told nothing stands.
+func TestARefusalStandsUntilItsResetOrThePauseThatStandsInForOne(t *testing.T) {
 	t.Parallel()
 
 	at := time.Date(2026, 9, 7, 6, 0, 0, 0, time.UTC)
+	recordedAt := at.Add(-time.Minute)
 	reset := at.Add(time.Hour)
 	timed := testUsageLimitExhaustion("the development manager conversation", &reset)
-	if !timed.WindowClosed(at) {
-		t.Fatal("a refusal that lifts in an hour reads as open, so the next turn would be refused again")
+	timed.At = recordedAt
+	if !timed.WindowClosed(at, 0) {
+		t.Fatal("a refusal that lifts in an hour reads as lifted, so the next turn would be refused again")
 	}
-	if timed.WindowClosed(reset.Add(time.Minute)) {
-		t.Fatal("a refusal reads as closed past its own reset time, so affinity would never return")
+	if timed.WindowClosed(reset.Add(time.Minute), 0) {
+		t.Fatal("a refusal still stands past its own reset time, so affinity would never return")
 	}
-	if testUsageLimitExhaustion("the development manager conversation", nil).WindowClosed(at) {
-		t.Fatal("a refusal that named no reset reads as a closed window, which is a wait nobody was told about")
+
+	// A reset already past when the provider refused describes no wait at all, so
+	// it is read as though the provider named none rather than as a window that
+	// closed before it opened.
+	past := reset.Add(-2 * time.Hour)
+	malformed := testUsageLimitExhaustion("the development manager conversation", &past)
+	malformed.At = recordedAt
+	if malformed.WindowClosed(at, 0) {
+		t.Fatal("a reset already past when the limit refused reads as a standing window")
+	}
+	if !malformed.WindowClosed(at, time.Hour) {
+		t.Fatal("a reset that describes no wait does not fall back to the probe interval")
+	}
+
+	// And the undated refusal itself: nothing stands where the caller offers no
+	// interval, and the interval is what stands where it does.
+	undated := testUsageLimitExhaustion("the development manager conversation", nil)
+	undated.At = recordedAt
+	if undated.WindowClosed(at, 0) {
+		t.Fatal("a refusal that named no reset stands forever for a caller with no interval to apply")
+	}
+	if !undated.WindowClosed(at, time.Hour) {
+		t.Fatal("a refusal that named no reset does not stand for the interval offered for it")
+	}
+	if undated.WindowClosed(recordedAt.Add(time.Hour), time.Hour) {
+		t.Fatal("a refusal stands past the interval offered for it, so the model would never be asked again")
 	}
 }

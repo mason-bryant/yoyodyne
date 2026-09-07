@@ -185,6 +185,19 @@ type exchangeVoice struct {
 	// gets.
 	stateRoot    string
 	redactValues []string
+	// clock is what the round reads the time from: when a refusal happened, and
+	// whether a window an earlier refusal described still stands. It is a field
+	// rather than a call to time.Now so the failover seam is testable on a fixed
+	// clock, which is how the rest of this behaviour is tested. A voice built
+	// without one reads the wall clock.
+	clock func() time.Time
+}
+
+func (v exchangeVoice) now() time.Time {
+	if v.clock == nil {
+		return time.Now().UTC()
+	}
+	return v.clock().UTC()
 }
 
 func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (exchange.Spoken, error) {
@@ -301,7 +314,7 @@ func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend
 	exhaustion := runstate.UsageLimitExhaustion{
 		SchemaVersion: runstate.UsageLimitSchemaVersion,
 		ProductID:     v.productID,
-		At:            time.Now().UTC(),
+		At:            v.now(),
 		Waiting: fmt.Sprintf("the %s answering exchange %s, asked by the %s",
 			chat.RoleTitle(question.Role), question.ExchangeID, chat.RoleTitle(question.Asker)),
 		Kind: result.UsageLimit.Kind,
@@ -328,10 +341,20 @@ func (v exchangeVoice) failoverPolicy(question exchange.Question, name string) m
 	}
 	policy := modelfailover.Policy{
 		Alternate: alternate,
-		ProductID: v.productID,
+		Now:       v.now,
+		// How long a refusal that named no reset time stands before the answering
+		// agent's own model is asked again, which is the same interval a run probes
+		// one on. Without it every round would re-ask an exhausted model and
+		// announce the substitution again with it.
+		UnknownResetPause: v.config.Execution.UsageLimitUnknownResetPause.Duration(),
+		ProductID:         v.productID,
 		// The same sentence a refusal here writes, because it is the same thing
 		// that would have stopped — and what makes this the other half of that fact
-		// is that something served it anyway.
+		// is that something served it anyway. It carries no work item and no
+		// conversation for the reason the refusal beside it carries none: an
+		// answering round belongs to an exchange, and an exchange is not one of the
+		// two references this record holds. Both are therefore addressed to the
+		// product line, which is where a reader of either already looks.
 		Waiting: fmt.Sprintf("the %s answering exchange %s, asked by the %s",
 			chat.RoleTitle(question.Role), question.ExchangeID, chat.RoleTitle(question.Asker)),
 	}

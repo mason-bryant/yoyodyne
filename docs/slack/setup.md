@@ -443,8 +443,9 @@ Into the work item's thread, as they happen:
   configured for has no capacity, said as a `note`: nothing stopped, which is the
   point of it, and it is said because an agent answering on a different model is
   a change to what the work was produced by. It names the model with no capacity
-  and the one serving, and it is said once per window rather than again while it
-  stands. See
+  and the one serving, and it is said once per window rather than again while one
+  stands — where a window is the provider's own reset time, or, for a refusal the
+  provider never dated, `execution.usage_limit_unknown_reset_pause`. See
   [serving a turn from a permitted alternate model](../configuration.md#serving-a-turn-from-a-permitted-alternate-model)
 - the blocker that stopped a run, if one did, said as `critical`
 - the run ending any other way — failed, cancelled, timed out — said in that word

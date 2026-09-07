@@ -262,6 +262,12 @@ type Options struct {
 	// loading one, and which models an agent is interchangeable across is the
 	// operator's answer rather than this package's.
 	FailoverModel string
+	// UsageLimitUnknownResetPause is the project's interval between probes of a
+	// refusal that named no reset time, and it bounds how long a substitution
+	// stands before the configured model is asked again. It is the same setting a
+	// run probes an unknown-reset limit on, so a conversation and a run agree
+	// about how long an undated refusal is worth believing.
+	UsageLimitUnknownResetPause time.Duration
 	// Persona is the effective product-manager persona from configuration. It
 	// may specialize how the product manager works; it is placed after the
 	// immutable contract and can never replace or weaken it.

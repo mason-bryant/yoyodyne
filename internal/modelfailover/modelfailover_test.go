@@ -165,27 +165,104 @@ func TestAffinityReturnsWhenTheWindowReopens(t *testing.T) {
 	}
 }
 
-// A limit the provider reported with no reset time is a wait of unknown length.
-// The harness finds out it lifted by asking rather than by guessing, so the
-// configured model is asked again on the next turn.
-func TestARefusalWithNoResetTimeIsNotARememberedWindow(t *testing.T) {
+// A limit the provider reported with no reset time is a wait of unknown length
+// rather than of no length. It stands for the configured probe interval and the
+// alternate serves through it without saying so again — which is what makes the
+// substitution said once per window rather than once per turn, for the refusal
+// that carries no window of its own.
+func TestARefusalWithNoResetTimeStandsForTheProbeInterval(t *testing.T) {
 	t.Parallel()
 
 	windows := newTestWindows(t)
 	recordWindow(t, windows, runstate.UsageLimitExhaustion{Model: "fable", ServedBy: "opus"})
 	provider := &fakeProvider{results: []backend.RunResult{{FinalText: "decided"}}}
 	_, served, err := Serve(context.Background(), provider, backend.RunRequest{Model: "fable"}, Policy{
-		Alternate: "opus",
-		Windows:   windows,
-		Now:       fixedNow,
-		ProductID: "yoyodyne",
-		Waiting:   "the development manager conversation",
+		Alternate:         "opus",
+		Windows:           windows,
+		Now:               fixedNow,
+		UnknownResetPause: 30 * time.Minute,
+		ProductID:         "yoyodyne",
+		Waiting:           "the development manager conversation",
 	})
 	if err != nil {
 		t.Fatalf("Serve() error = %v", err)
 	}
-	if served.Model != "fable" {
-		t.Fatalf("served = %#v, want the configured model asked rather than a window guessed at", served)
+	if served.Model != "opus" || served.Refused != "fable" {
+		t.Fatalf("served = %#v, want the alternate for as long as the undated refusal stands", served)
+	}
+	if len(provider.requests) != 1 || provider.requests[0].Model != "opus" {
+		t.Fatalf("invocations = %#v, want one, straight to the alternate", provider.requests)
+	}
+	if recorded, _ := windows.List(); len(recorded) != 1 {
+		t.Fatalf("List() = %#v, want the substitution said once rather than again on this turn", recorded)
+	}
+}
+
+// And it stands for that interval and no longer: the harness was never told when
+// the limit lifts, so it asks again rather than settling on the alternate.
+func TestAnUndatedRefusalStopsStandingWhenTheProbeIntervalIsUp(t *testing.T) {
+	t.Parallel()
+
+	windows := newTestWindows(t)
+	recordWindow(t, windows, runstate.UsageLimitExhaustion{Model: "fable", ServedBy: "opus"})
+	provider := &fakeProvider{results: []backend.RunResult{{FinalText: "decided"}}}
+	_, served, err := Serve(context.Background(), provider, backend.RunRequest{Model: "fable"}, Policy{
+		Alternate:         "opus",
+		Windows:           windows,
+		Now:               func() time.Time { return fixedNow().Add(31 * time.Minute) },
+		UnknownResetPause: 30 * time.Minute,
+		ProductID:         "yoyodyne",
+		Waiting:           "the development manager conversation",
+	})
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if served.Model != "fable" || served.Substituted() {
+		t.Fatalf("served = %#v, want the configured model asked again once the interval was up", served)
+	}
+}
+
+// The whole of what the once-per-window promise is worth, over an outage the
+// provider never dated: several turns, one substitution record, and therefore
+// one thing said to the operator.
+func TestAnUndatedOutageIsSaidOncePerIntervalRatherThanOncePerTurn(t *testing.T) {
+	t.Parallel()
+
+	windows := newTestWindows(t)
+	provider := &fakeProvider{results: []backend.RunResult{
+		refused("five_hour", time.Time{}),
+		{FinalText: "first"},
+		{FinalText: "second"},
+		{FinalText: "third"},
+	}}
+	at := fixedNow()
+	policy := Policy{
+		Alternate:         "opus",
+		Windows:           windows,
+		Now:               func() time.Time { return at },
+		UnknownResetPause: 30 * time.Minute,
+		ProductID:         "yoyodyne",
+		Waiting:           "the development manager conversation",
+	}
+	for turn := 0; turn < 3; turn++ {
+		if _, served, err := Serve(context.Background(), provider, backend.RunRequest{Model: "fable"}, policy); err != nil {
+			t.Fatalf("turn %d: Serve() error = %v", turn+1, err)
+		} else if served.Model != "opus" {
+			t.Fatalf("turn %d: served = %#v, want the alternate", turn+1, served)
+		}
+		at = at.Add(5 * time.Minute)
+	}
+	// Four invocations: the one refusal that opened the window, and one served
+	// turn each. Nothing re-asks the exhausted model inside its own interval.
+	if len(provider.requests) != 4 {
+		t.Fatalf("invocations = %d, want the refused one and one served turn each", len(provider.requests))
+	}
+	recorded, err := windows.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("List() = %#v, want one substitution across the interval rather than one per turn", recorded)
 	}
 }
 

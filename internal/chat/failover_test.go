@@ -71,6 +71,57 @@ func TestATurnRefusedForCapacityIsServedByThePermittedAlternate(t *testing.T) {
 	}
 }
 
+// Each attempt is priced against the model that attempt actually asked for. That
+// is what putting the failover outside the cost meter buys, and it is the whole
+// of the claim docs/configuration.md makes about what a substitution costs: a
+// turn the alternate served must not be billed to the model that refused it.
+func TestEachAttemptIsPricedAgainstTheModelItAskedFor(t *testing.T) {
+	t.Parallel()
+
+	log := &collectingSpend{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{
+			IsError:    true,
+			StopReason: "usage_limit",
+			UsageLimit: &backendapi.UsageLimit{Kind: "five_hour"},
+		},
+		{SessionID: "session-1", FinalText: "Repair it once more.", CostUSD: 0.25, CostReported: true},
+	}})
+	options.Model = "fable"
+	options.FailoverModel = "opus"
+	options.UsageLimits = newTestUsageLimits(t)
+	options.Spend = log
+	if _, err := openTestSession(t, options).Send(context.Background(), "what is next?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// Two lines rather than one: the refused attempt was charged for exactly as
+	// the one that answered was, and each says which model it asked.
+	if len(log.lines) != 2 {
+		t.Fatalf("cost lines = %#v, want one for the refused attempt and one for the served turn", log.lines)
+	}
+	if log.lines[0].Model != "fable" {
+		t.Fatalf("the refused attempt is priced against %q, want the configured model that refused it", log.lines[0].Model)
+	}
+	if log.lines[1].Model != "opus" {
+		t.Fatalf("the served turn is priced against %q, want the alternate that actually answered it", log.lines[1].Model)
+	}
+	if reply := log.lines[1]; reply.AmountUSD != 0.25 {
+		t.Fatalf("the served turn cost %v, want what the provider reported for the invocation the alternate made", reply.AmountUSD)
+	}
+}
+
+// collectingSpend is the cost log as an assertion: every line the turn wrote, in
+// the order it wrote them.
+type collectingSpend struct {
+	lines []runstate.Spend
+}
+
+func (c *collectingSpend) Append(line runstate.Spend) error {
+	c.lines = append(c.lines, line)
+	return nil
+}
+
 // An agent that has not enabled failover behaves exactly as it did before: the
 // refused turn fails, the refusal is recorded as a stoppage, and nothing asks a
 // second model on the operator's money.

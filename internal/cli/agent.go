@@ -42,6 +42,12 @@ type agentReport struct {
 	// has not enabled failover. It is read here beside the model for the reason
 	// the account is: what an agent is includes what answers for it when its own
 	// model will not.
+	//
+	// What it covers is the turns the agent takes rather than every invocation
+	// made on its behalf: a run's developer and reviewer invocations still wait
+	// their window out. The rendering says so, because a developer agent with an
+	// alternate named and a run that parks anyway is exactly the pair somebody
+	// would otherwise read as broken.
 	FailoverModel  string `json:"failover_model,omitempty"`
 	Instances      int    `json:"instances"`
 	PersonaPath    string `json:"persona_path,omitempty"`
@@ -410,7 +416,14 @@ func renderAgent(report agentReport) string {
 		report.Name, report.Role, report.Backend, report.Model,
 		recorded(report.Account, "none the configuration names"), report.Instances)
 	if report.FailoverModel != "" {
-		fmt.Fprintf(&rendered, "  served by %s while %s has no capacity\n", report.FailoverModel, report.Model)
+		// The scope is named rather than left to be assumed. Failover covers the
+		// turns this agent takes — its conversation and the rounds where another
+		// role asks it something — and not the invocations a run makes on its
+		// behalf, which wait their window out on execution's usage-limit settings.
+		// An unqualified line here would read as a promise the run path does not
+		// keep, for a developer or reviewer agent most of all.
+		fmt.Fprintf(&rendered, "  turns and exchange rounds served by %s while %s has no capacity; run invocations wait it out\n",
+			report.FailoverModel, report.Model)
 	}
 	if report.Owns != "" {
 		fmt.Fprintf(&rendered, "  owns %s\n", report.Owns)

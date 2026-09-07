@@ -80,6 +80,18 @@ type Policy struct {
 	Windows Windows
 	// Now is the clock the reset times are compared against. Nil is time.Now.
 	Now func() time.Time
+	// UnknownResetPause is how long a refusal that named no usable reset time
+	// stands before the configured model is asked again. It is the project's
+	// `execution.usage_limit_unknown_reset_pause`, which is the same interval a
+	// run probes an unknown-reset limit on, so the harness has one polling
+	// discipline rather than two that could disagree about the same account.
+	//
+	// Without it every turn re-asks a model that is still exhausted, substitutes
+	// again, and writes another substitution down — so the operator is told once
+	// per turn for as long as the outage lasts, which is the channel-muting
+	// outcome saying it once per window exists to avoid. Zero restores exactly
+	// that, and is why the harness always passes the configured value.
+	UnknownResetPause time.Duration
 	// ProductID, Waiting, ConversationID and WorkItemID are what the recorded
 	// substitution says about itself: whose product it happened on, what would
 	// have stopped in words, and what it can be read back to. Waiting is required
@@ -200,10 +212,12 @@ func runWith(ctx context.Context, provider Invoker, request backend.RunRequest, 
 	return provider.Run(ctx, request)
 }
 
-// windowClosed reports the named model still inside a window the provider said
-// has not lifted. Only a refusal that named a reset time can answer yes: a limit
-// reported without one is a wait of unknown length, and the harness finds out it
-// has lifted by asking rather than by guessing.
+// windowClosed reports the named model still inside a window the last refusal
+// of it describes: the provider's own reset time where it named a usable one,
+// and the configured probe interval where it did not. A limit reported without a
+// reset is a wait of unknown length rather than of no length, so the harness
+// waits its interval and asks again — which is what makes a substitution said
+// once per window rather than once per turn.
 //
 // The log is the product's rather than one account's, so under a pool a window
 // met on one account is read as closed for an agent held on another. That errs
@@ -225,7 +239,7 @@ func windowClosed(policy Policy, model string) (bool, error) {
 		if strings.TrimSpace(exhaustion.Model) != strings.TrimSpace(model) {
 			continue
 		}
-		if exhaustion.WindowClosed(at) {
+		if exhaustion.WindowClosed(at, policy.UnknownResetPause) {
 			return true, nil
 		}
 	}

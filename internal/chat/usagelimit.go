@@ -85,9 +85,10 @@ func (s *Session) failoverPolicy() modelfailover.Policy {
 		return modelfailover.Policy{}
 	}
 	policy := modelfailover.Policy{
-		Alternate: alternate,
-		Now:       s.options.clock().Now,
-		ProductID: s.options.ProductID,
+		Alternate:         alternate,
+		Now:               s.options.clock().Now,
+		UnknownResetPause: s.options.UsageLimitUnknownResetPause,
+		ProductID:         s.options.ProductID,
 		// The same sentence a refusal here writes, because it is the same thing
 		// that would have stopped — and what makes this entry the other half of
 		// that fact is that something served it anyway.

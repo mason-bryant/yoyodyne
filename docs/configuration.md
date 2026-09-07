@@ -2625,15 +2625,24 @@ What happens on a refused turn:
   refusal outside a run is recorded in, carrying the model that was refused and
   the alternate that served. The conversation's own record keeps the model that
   served each turn, and `yoyo chat` says so at the prompt.
-- Where the provider named a reset time, the next turn goes straight to the
-  alternate rather than paying a refused invocation to rediscover a window the
-  harness has already watched close. Affinity is the configured model's: the
-  first turn after that reset time asks it again, so a substitution lasts a
-  window rather than becoming a quiet permanent move.
+- While that refusal stands, the next turn goes straight to the alternate rather
+  than paying a refused invocation to rediscover a window the harness has already
+  watched close. Affinity is the configured model's: the first turn after it
+  stops standing asks it again, so a substitution lasts a window rather than
+  becoming a quiet permanent move.
+- How long it stands is the provider's reset time where the provider named a
+  usable one. Where it named none — or named one already in the past, which
+  describes no wait at all — what stands in for it is
+  `execution.usage_limit_unknown_reset_pause`, the same interval a run waits
+  before probing an undated limit. So an undated outage is a sequence of windows
+  one probe interval long rather than one window of unknown length, and the
+  configured model is asked again at the top of each.
 - The substitution reaches the operator's channel as a note. Nothing stopped —
   that is the whole point of it — but an agent answering on a model the operator
-  did not configure it for is a change to what the work was produced by, and it
-  is said once per window rather than again while it stands.
+  did not configure it for is a change to what the work was produced by. It is
+  said once per window rather than again while one stands, which for an undated
+  refusal means once per probe interval: a six-hour outage the provider never
+  dated is said around twelve times at the `30m` default, not once per turn.
 
 An agent that has not enabled failover behaves exactly as it did before: one
 invocation, under the model it named, and a refused turn that fails and is
