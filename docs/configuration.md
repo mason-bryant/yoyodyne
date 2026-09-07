@@ -523,26 +523,59 @@ any other part of the persona.
 ### What the product manager sees besides them, and what it does not
 
 **The specifications directory, the tracker, and a description of what the
-product ships today.** That last part is eight documents and the help every
-command prints: `README.md`; the six operator documents the README split put
-beside it — [the conversation](conversation.md), [how work flows](work.md),
-[what comes back to you](reporting.md),
-[artifacts, goals, and invariants](artifacts.md),
-[operations and recovery](operations.md), and
-[working on yoyo itself](developing-yoyo.md) — and this file. They are carried
-in a section of their own, labeled as description of the implementation as built
-and never as authority about intent. No source, no design document, and no way
-to run a command.
+product ships today.** That last part is the documentation your project names,
+and the help every command prints. It is carried in a section of its own,
+labeled as description of the implementation as built and never as authority
+about intent. No source, no design document, and no way to run a command.
 
-**The eight are named rather than derived**, in `shippedDocumentation` in
-`internal/contextbundle/product.go`, and the set is deliberately narrower than
-the README's [further-reading index](../README.md#further-reading): the
-provider-plugin format, the coined-term register, the Slack setup, the release
-notes, the setup skill, and the design are all reachable from there and none of
-them is carried here. So adding a document to that index does not thereby show
-it to the product manager — the set has to name it, and a test holds the set to
-documents this repository actually has, because a path that stops resolving is a
-surface the product manager silently stops being given.
+**Which documents those are is `product.shipped_documentation`**, a list of
+Markdown files relative to the repository:
+
+```yaml
+product:
+  id: example
+  repository: .
+  shipped_documentation:
+    - README.md
+    - docs/handbook.md
+    - docs/operating.md
+```
+
+It is a named list rather than a directory for the same reason the set is
+narrow at all: a walk would sweep in the design document and the decision
+records, which say how the product is built and are the half of `docs/` that
+made description reachable as intent in the first place. Each entry is confined
+to the repository like every other product path and must be Markdown; a path
+naming nothing is simply not carried, and the section says which of them it
+found. The list is replaced wholesale rather than merged, as `checks` is.
+
+**There is no default, and that is the point.** A project that names none is
+shown none, and the section says so — that what the product ships is not
+written down here, rather than that the repository holds no documentation.
+Yoyodyne's own documentation layout is eight generic paths (`docs/work.md`,
+`docs/reporting.md`, `docs/operations.md`, and five more), and a repository
+that happens to hold a file at one of them means something else by it. Handing
+those to an adopting project's product manager labeled "what the product
+ships" is a stranger's prose arriving as description of your product, so the
+harness does not do it: **that set applies only to Yoyodyne's own repository**,
+which it identifies by the Go module that repository declares, and every other
+project is shown what it names and nothing else.
+
+**What Yoyodyne itself carries**, from that set, is `README.md`; the six
+operator documents the README split put beside it — [the
+conversation](conversation.md), [how work flows](work.md), [what comes back to
+you](reporting.md), [artifacts, goals, and invariants](artifacts.md),
+[operations and recovery](operations.md), and [working on yoyo
+itself](developing-yoyo.md) — and this file. It lives in
+`HarnessShippedDocumentation` in `internal/contextbundle/product.go`, and it is
+deliberately narrower than the README's [further-reading
+index](../README.md#further-reading): the provider-plugin format, the
+coined-term register, the Slack setup, the release notes, the setup skill, and
+the design are all reachable from there and none of them is carried here. So
+adding a document to that index does not thereby show it to the product
+manager — the set has to name it, and a test holds the set to documents this
+repository actually has, because a path that stops resolving is a surface the
+product manager silently stops being given.
 
 The label is the whole of the arrangement, so it is worth reading twice. The
 specifications are the only statement of what the product is for; nothing in the
@@ -577,8 +610,10 @@ the confinement rule is the only limit on where it points.
 The documentation is read **after** the specifications have taken what they need
 of the context budget, so a repository too large for both keeps the half that is
 authoritative and the section names what did not fit. A repository that holds
-none of this documentation is told so rather than getting a section that quietly
-carries less than it says it does.
+none of the documentation it named is told so rather than getting a section that
+quietly carries less than it says it does — and a project that named none is
+told *that*, in different words, because a setting nobody wrote and a document
+nobody wrote are two different things to go and do something about.
 
 ## Artifact identity and metadata
 
@@ -3404,6 +3439,9 @@ These are all errors, reported before any work is claimed:
   same four are checked again against the filesystem when something writes into
   them, which is where a symlink out of the repository is caught, and which is a
   refusal at the point of the write rather than at load;
+- a `product.shipped_documentation` entry that is empty, absolute, climbs out of
+  the repository, or is not a Markdown file, since every entry is read into the
+  product manager's context as a description of what the product ships;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a `role` that is not one of the harness's five, which is how a typo in an

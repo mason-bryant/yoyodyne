@@ -656,6 +656,7 @@ func TestAssembleProductDescribesWhatIsShipped(t *testing.T) {
 	bundle, err := AssembleProduct(ProductRequest{
 		RepositoryRoot:          root,
 		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    []string{"README.md", "docs/configuration.md"},
 		CommandHelp:             "Usage: yoyo <command>\n\n  cost  price work items from the runs made for them\n",
 	})
 	if err != nil {
@@ -702,7 +703,8 @@ func TestAssembleProductStatesWhenNothingDescribesWhatIsShipped(t *testing.T) {
 	root := t.TempDir()
 	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
 
-	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	named := []string{"README.md", "docs/configuration.md"}
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product", ShippedDocumentation: named})
 	if err != nil {
 		t.Fatalf("AssembleProduct() error = %v", err)
 	}
@@ -712,7 +714,7 @@ func TestAssembleProductStatesWhenNothingDescribesWhatIsShipped(t *testing.T) {
 	// One document present and the other missing is neither of those cases: what
 	// is there is carried, and nothing claims the rest was found.
 	writeProductFile(t, root, "README.md", "# Yoyodyne\n\nWhat it does.\n")
-	partial, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	partial, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product", ShippedDocumentation: named})
 	if err != nil {
 		t.Fatalf("AssembleProduct() error = %v", err)
 	}
@@ -735,7 +737,12 @@ func TestAssembleProductSpendsTheBudgetOnIntentFirst(t *testing.T) {
 	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
 	writeProductFile(t, root, "README.md", "# Yoyodyne\n\n"+strings.Repeat("described ", 512))
 
-	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product", MaxBytes: 6144})
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    []string{"README.md"},
+		MaxBytes:                6144,
+	})
 	if err != nil {
 		t.Fatalf("AssembleProduct() error = %v", err)
 	}
@@ -756,12 +763,14 @@ func TestAssembleProductSpendsTheBudgetOnIntentFirst(t *testing.T) {
 func TestShippedDocumentationNoteFitsWhatIsReservedForIt(t *testing.T) {
 	t.Parallel()
 
-	reserved := longestShippedDocumentationNote()
+	shipped := HarnessShippedDocumentation
+	reserved := longestShippedDocumentationNote(shipped)
 	for _, note := range []string{
 		noShippedDocumentation,
-		renderShippedDocumentationNote("", shippedDocumentation),
-		renderShippedDocumentationNote("### Shipped documentation: README.md", shippedDocumentation[1:]),
-		renderShippedDocumentationNote("### Shipped documentation: README.md", nil),
+		noShippedDocumentationNamed,
+		renderShippedDocumentationNote(shipped, "", shipped),
+		renderShippedDocumentationNote(shipped, "### Shipped documentation: README.md", shipped[1:]),
+		renderShippedDocumentationNote(shipped, "### Shipped documentation: README.md", nil),
 	} {
 		if len(note) > reserved {
 			t.Fatalf("a note renders %d bytes against a reserve of %d:\n%s", len(note), reserved, note)
@@ -781,15 +790,19 @@ func TestEveryShippedDocumentReachesTheContext(t *testing.T) {
 
 	root := t.TempDir()
 	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
-	for index, documentPath := range shippedDocumentation {
+	for index, documentPath := range HarnessShippedDocumentation {
 		writeProductFile(t, root, documentPath, fmt.Sprintf("# Document %d\n\nSurface %d is described here.\n", index, index))
 	}
 
-	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    HarnessShippedDocumentation,
+	})
 	if err != nil {
 		t.Fatalf("AssembleProduct() error = %v", err)
 	}
-	for index, documentPath := range shippedDocumentation {
+	for index, documentPath := range HarnessShippedDocumentation {
 		if !strings.Contains(bundle.Text, "### Shipped documentation: "+documentPath) {
 			t.Errorf("%s is named in the shipped set and has no section in the context", documentPath)
 		}
@@ -813,7 +826,7 @@ func TestShippedDocumentationNamesDocumentsThisRepositoryHas(t *testing.T) {
 	t.Parallel()
 
 	total := 0
-	for _, documentPath := range shippedDocumentation {
+	for _, documentPath := range HarnessShippedDocumentation {
 		information, err := os.Stat(filepath.Join("../..", documentPath))
 		if err != nil {
 			t.Errorf("the shipped set names %s, which this repository does not have: %v", documentPath, err)
@@ -828,7 +841,179 @@ func TestShippedDocumentationNamesDocumentsThisRepositoryHas(t *testing.T) {
 	if total > defaultMaxProductBytes {
 		t.Errorf("the shipped documentation is %d bytes against a product budget of %d, so some of it cannot be carried", total, defaultMaxProductBytes)
 	}
-	t.Logf("shipped documentation is %d bytes across %d documents, against a product budget of %d", total, len(shippedDocumentation), defaultMaxProductBytes)
+	t.Logf("shipped documentation is %d bytes across %d documents, against a product budget of %d", total, len(HarnessShippedDocumentation), defaultMaxProductBytes)
+}
+
+// The harness's own set is eight generic paths — docs/work.md, docs/reporting.md,
+// docs/operations.md and five more — and an adopting project can hold a file at
+// any of them meaning something else entirely. Applied there it would put a
+// stranger's prose in front of that project's product manager labeled "what the
+// product ships", which is description arriving as gospel about a product it is
+// not describing. So a repository that is not the one the set describes is shown
+// what its own configuration names, and where it names nothing it is shown
+// nothing and told so.
+func TestAnAdoptingProjectIsNotShownTheHarnessOwnDocumentation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "go.mod", "module github.com/someone/ledger\n\ngo 1.24.0\n")
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	// Every one of the eight, holding this project's own unrelated prose.
+	for _, documentPath := range HarnessShippedDocumentation {
+		writeProductFile(t, root, documentPath, "# Ledger\n\nThis is the ledger project's own "+documentPath+".\n")
+	}
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, documentPath := range HarnessShippedDocumentation {
+		if strings.Contains(bundle.Text, "### Shipped documentation: "+documentPath) {
+			t.Errorf("%s is a path the harness holds for its own repository, and it was carried for an adopting project", documentPath)
+		}
+	}
+	if strings.Contains(bundle.Text, "This is the ledger project's own") {
+		t.Errorf("an adopting project's own files were carried as what the product ships:\n%s", bundle.Text)
+	}
+	// What is missing is a setting rather than the documents, and the two are
+	// said differently: a project told its repository holds no documentation
+	// would report itself as undocumented when it is only unconfigured.
+	if !strings.Contains(bundle.Text, "This project names no operator-facing documentation") {
+		t.Errorf("a project that named no documentation is not told so:\n%s", bundle.Text)
+	}
+	if strings.Contains(bundle.Text, "This repository holds none of the operator-facing documentation looked for here") {
+		t.Errorf("a project that named no documentation is told its repository holds none:\n%s", bundle.Text)
+	}
+}
+
+// The scoping turns on one string, and a fixture that writes its own go.mod
+// passes whatever that string says -- so a typo in it, or a module renamed
+// later, would drop all eight documents from this repository's own product
+// manager with a green suite. That is the ifd.20 narrowing again, reached by a
+// spelling mistake, and it is the same failure the neighbouring test guards
+// against for paths. So the constant is checked against the repository it is a
+// claim about, the way that test checks the paths.
+func TestTheHarnessRecognizesThisRepository(t *testing.T) {
+	t.Parallel()
+
+	if !describesTheHarness("../..") {
+		declaration, err := os.ReadFile(filepath.Join("../..", "go.mod"))
+		if err != nil {
+			t.Fatalf("this repository was not recognized as the one the shipped set describes, and its go.mod could not be read: %v", err)
+		}
+		t.Fatalf("this repository was not recognized as the one the shipped set describes, so its product manager is shown none of it.\n"+
+			"harnessModulePath is %q, and go.mod opens:\n%s", harnessModulePath, firstLines(string(declaration), 3))
+	}
+}
+
+// firstLines is what a failure above quotes of go.mod, so the mismatch is read
+// beside the constant rather than looked up afterwards.
+func firstLines(content string, count int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > count {
+		lines = lines[:count]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// The harness's own set still describes the harness's own repository, so it is
+// carried there with nothing configured: narrowing this product manager's view
+// to the command help is the ifd.20 narrowing arrived at through a scoping fix.
+// The repository is identified by the module it declares, which is its own
+// statement of what it is rather than a name an adopting project can hold by
+// coincidence.
+func TestTheHarnessOwnRepositoryIsShownItsOwnDocumentation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "go.mod", "module "+harnessModulePath+"\n\ngo 1.24.0\n")
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	for index, documentPath := range HarnessShippedDocumentation {
+		writeProductFile(t, root, documentPath, fmt.Sprintf("# Document %d\n\nSurface %d is described here.\n", index, index))
+	}
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, documentPath := range HarnessShippedDocumentation {
+		if !strings.Contains(bundle.Text, "### Shipped documentation: "+documentPath) {
+			t.Errorf("%s was not carried for the repository the set describes", documentPath)
+		}
+	}
+}
+
+// What a project configures is the whole of what it is shown, in its own
+// repository and in the harness's alike. A set that merged with the harness's
+// own would be a project describing itself and getting somebody else's documents
+// beside its own, which is the same collision by another door.
+func TestConfiguredDocumentationIsTheWholeOfWhatIsCarried(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "go.mod", "module "+harnessModulePath+"\n\ngo 1.24.0\n")
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	writeProductFile(t, root, "README.md", "# Yoyodyne\n\nThe set the harness holds names this.\n")
+	writeProductFile(t, root, "docs/handbook.md", "# Handbook\n\nThe set this project names holds this.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    []string{"docs/handbook.md"},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(bundle.Text, "### Shipped documentation: docs/handbook.md") {
+		t.Fatalf("the documentation this project names was not carried:\n%s", bundle.Text)
+	}
+	if strings.Contains(bundle.Text, "### Shipped documentation: README.md") {
+		t.Fatalf("the harness's own set was carried beside the one this project named:\n%s", bundle.Text)
+	}
+}
+
+// Whitespace around a configured path is not part of the path, and reading it
+// as though it were loses the document in silence: the confinement rule is made
+// on the trimmed path, and resolving the untrimmed one finds no such file and
+// skips it, so a document configured and validated is simply never carried and
+// nothing anywhere says which one.
+func TestConfiguredDocumentationIsTrimmedBeforeItIsRead(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	writeProductFile(t, root, "docs/handbook.md", "# Handbook\n\nWhat this project ships.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    []string{"  docs/handbook.md  "},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(bundle.Text, "### Shipped documentation: docs/handbook.md") {
+		t.Fatalf("a configured path with surrounding whitespace was not carried:\n%s", bundle.Text)
+	}
+}
+
+// A configured path that climbs out of the repository names text nobody reviewed
+// with the code. Reading one is refused where every other reference is: the
+// resolution proves what it opens is inside the repository, so the confinement
+// does not depend on the configuration having been validated first.
+func TestConfiguredDocumentationIsConfinedToTheRepository(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+
+	if _, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    []string{"../elsewhere.md"},
+	}); err == nil {
+		t.Fatal("a shipped-documentation path outside the repository was read")
+	}
 }
 
 // Help is compiled into the product rather than read from it, so a caller that

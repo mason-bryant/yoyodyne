@@ -66,6 +66,10 @@ type productDocument struct {
 	Invariants     *string              `yaml:"invariants"`
 	Designs        *string              `yaml:"designs"`
 	Decisions      *string              `yaml:"decisions"`
+	// ShippedDocumentation is replaced as a whole list rather than concatenated,
+	// for the reason checks is: a silently merged list is not the description
+	// either layer wrote down.
+	ShippedDocumentation *[]string `yaml:"shipped_documentation"`
 }
 
 type executionDocument struct {

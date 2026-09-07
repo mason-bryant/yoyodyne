@@ -84,13 +84,14 @@ const maxRecordedIntentDocuments = 2
 // maxIntentPathBytes keeps one named document to part of a line.
 const maxIntentPathBytes = 80
 
-// shippedDocumentation is the operator-facing documentation carried as a
-// description of what the product ships. It is a named set rather than a walk of
-// the repository, because what belongs here is documentation written for the
-// people who use the product: a walk would sweep in the design document and the
-// architect's decision records, which say how the product is built and are the
-// half of docs/ that made description reachable as intent in the first place. A
-// path that names nothing in a given repository is simply not there.
+// HarnessShippedDocumentation is Yoyodyne's own operator-facing documentation,
+// carried as a description of what the product ships. It is a named set rather
+// than a walk of the repository, because what belongs here is documentation
+// written for the people who use the product: a walk would sweep in the design
+// document and the architect's decision records, which say how the product is
+// built and are the half of docs/ that made description reachable as intent in
+// the first place. A path that names nothing in a given repository is simply not
+// there.
 //
 // The README's siblings are named individually because the README no longer
 // carries their content: it was reduced to the value proposition, the quick
@@ -100,7 +101,16 @@ const maxIntentPathBytes = 80
 // manager's view of what the product ships to a landing page — the same
 // narrowing that cost ifd.20 a work item drafted against surfaces it could not
 // see. docs/docs-map.md is the enumeration this set is kept against.
-var shippedDocumentation = []string{
+//
+// **It describes this repository and is scoped to it.** Every path in it is
+// generic — docs/work.md, docs/reporting.md, docs/operations.md — so applying it
+// to whatever repository the harness happens to run in feeds an adopting
+// project's unrelated files to its own product manager labeled "what the product
+// ships", which is a stranger's prose arriving as gospel about their product.
+// So it is used only for the repository it is a description of, decided by
+// describesTheHarness, and every other project is shown what
+// ProductRequest.ShippedDocumentation names and nothing else.
+var HarnessShippedDocumentation = []string{
 	"README.md",
 	"docs/conversation.md",
 	"docs/work.md",
@@ -109,6 +119,55 @@ var shippedDocumentation = []string{
 	"docs/operations.md",
 	"docs/developing-yoyo.md",
 	"docs/configuration.md",
+}
+
+// harnessModulePath is what Yoyodyne's own repository declares itself to be. It
+// is the repository's own statement of its identity rather than a guess made
+// from a directory name or a configured product id, both of which an adopting
+// project can hold by coincidence.
+const harnessModulePath = "github.com/mason-bryant/yoyodyne"
+
+// describesTheHarness reports whether a repository is the one
+// HarnessShippedDocumentation is a description of. A repository that declares
+// some other module, and one that declares no module at all, is somebody else's
+// and gets only what its own configuration names.
+func describesTheHarness(root string) bool {
+	declaration, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return false
+	}
+	for _, raw := range strings.Split(string(declaration), "\n") {
+		line := strings.TrimSpace(raw)
+		module, isModule := strings.CutPrefix(line, "module ")
+		if !isModule {
+			continue
+		}
+		return strings.TrimSpace(module) == harnessModulePath
+	}
+	return false
+}
+
+// resolveShippedDocumentation decides which documents are carried as what the
+// product ships. What the project configured is the whole of it; a project that
+// configured none is shown the harness's own set where this is the harness's own
+// repository, and nothing at all anywhere else.
+//
+// A configured path is trimmed, because whitespace around one is not part of the
+// path and nothing downstream would say so: the confinement check is made on the
+// trimmed path, while resolving the untrimmed one finds no such file and skips
+// it — a document configured, validated, and then silently not carried.
+func resolveShippedDocumentation(root string, configured []string) []string {
+	if len(configured) > 0 {
+		trimmed := make([]string, 0, len(configured))
+		for _, documentPath := range configured {
+			trimmed = append(trimmed, strings.TrimSpace(documentPath))
+		}
+		return trimmed
+	}
+	if describesTheHarness(root) {
+		return HarnessShippedDocumentation
+	}
+	return nil
 }
 
 // maxCommandHelpBytes bounds the help a caller supplies. Help text is compiled
@@ -171,6 +230,17 @@ type ProductRequest struct {
 	// WorkItemsUnavailable explains why tracker state is missing when it is.
 	// An absent tracker is stated rather than silently rendered as no work.
 	WorkItemsUnavailable string
+	// ShippedDocumentation is the operator-facing documentation this project
+	// says it ships, as repository-relative paths, from
+	// product.shipped_documentation. It is supplied rather than derived for the
+	// reason the specifications directory is: what a stranger's repository ships
+	// is that project's answer, and a set of generic paths applied to whatever
+	// repository the harness runs in hands the product manager somebody else's
+	// files labeled as this product's own.
+	//
+	// A request that names none is shown none — save in the repository
+	// HarnessShippedDocumentation describes, which is Yoyodyne's own.
+	ShippedDocumentation []string
 	// CommandHelp is what the product's commands print when asked for help. It
 	// is supplied rather than read, because the harness's own help is compiled
 	// into it rather than filed in the repository, and because a product manager
@@ -278,6 +348,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// directory must not be able to push it out. It is bounded by construction,
 	// so what it costs is what it renders.
 	triageDocket := renderTriageDocket(request.TriageDocket, request.TriageDocketUnavailable)
+	shipped := resolveShippedDocumentation(root, request.ShippedDocumentation)
 	shippedSurface := renderShippedSurface(request.CommandHelp)
 	// The tracker section, the recorded-intent section, and what the shipped
 	// surface costs before any of its documents are read are reserved before any
@@ -286,7 +357,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// brief and goals at all, or the label saying what the documentation below is
 	// and is not.
 	reserved := len(header) + headerNote + len(trackerState) + len(triageDocket) + maxRecordedIntentBytes + len(directory) +
-		len(shippedSurface) + longestShippedDocumentationNote()
+		len(shippedSurface) + longestShippedDocumentationNote(shipped)
 	if reserved > maxBytes {
 		return Bundle{}, fmt.Errorf("product context is %d bytes before any specification, exceeding limit %d", reserved, maxBytes)
 	}
@@ -383,7 +454,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// The shipped surface is read after the specifications have taken what they
 	// need, so intent wins the budget over description by construction rather
 	// than by the order somebody happened to write the sections in.
-	documentation, documentationOmitted, err := readShippedDocumentation(root, maxBytes-bundle.Bytes)
+	documentation, documentationOmitted, err := readShippedDocumentation(root, shipped, maxBytes-bundle.Bytes)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -400,7 +471,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	output.WriteString(roleSections)
 	output.WriteString(shippedSurface)
 	output.WriteString(documentation)
-	output.WriteString(renderShippedDocumentationNote(documentation, documentationOmitted))
+	output.WriteString(renderShippedDocumentationNote(shipped, documentation, documentationOmitted))
 	output.WriteString(trackerState)
 	output.WriteString(triageDocket)
 	if len(bundle.SpecificationProblems) > 0 {
@@ -1012,10 +1083,10 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 // rendered block, and names what did not fit. A document the repository does not
 // have is not a failure: a project ships whatever documentation it wrote, and
 // the section says which of these it found.
-func readShippedDocumentation(root string, remainingBytes int) (string, []string, error) {
+func readShippedDocumentation(root string, shipped []string, remainingBytes int) (string, []string, error) {
 	var rendered strings.Builder
 	var omitted []string
-	for _, documentPath := range shippedDocumentation {
+	for _, documentPath := range shipped {
 		reference, err := readReference(root, documentPath, remainingBytes-rendered.Len())
 		if err != nil {
 			var tooLarge tooLargeError
@@ -1093,7 +1164,10 @@ func boundedCommandHelp(help string) string {
 // renderShippedDocumentationNote says what became of the documentation: which
 // files did not fit, or that none was found. Absence is stated rather than left
 // as a section that quietly carries less than it says it does.
-func renderShippedDocumentationNote(documentation string, omitted []string) string {
+func renderShippedDocumentationNote(shipped []string, documentation string, omitted []string) string {
+	if len(shipped) == 0 {
+		return noShippedDocumentationNamed
+	}
 	if len(omitted) > 0 {
 		var rendered strings.Builder
 		rendered.WriteString("\nThis documentation did not fit and is not included above:\n\n")
@@ -1115,13 +1189,30 @@ so what is described above is the command help alone. Say that the rest is not
 written down rather than inferring what the product ships.
 `
 
+// noShippedDocumentationNamed is what a project that named no documentation is
+// told. It is a different fact from the one above and is said differently: there
+// the paths were looked for and the files are not on disk, and here the project
+// never said which files describe it. Reading the first for the second would
+// have the product manager reporting a repository as undocumented when what is
+// missing is a configuration setting.
+const noShippedDocumentationNamed = `
+This project names no operator-facing documentation, so what is described above
+is the command help alone. Nothing here says which documents describe what the
+product ships; that is product.shipped_documentation, and it is unset. Say that
+what the product ships is not written down here rather than inferring it.
+`
+
 // longestShippedDocumentationNote is what the note is reserved as. It is written
 // after the budget has been spent on the documents themselves, so what it can
 // cost is charged before them; the cost is exact rather than an allowance,
-// because every path it can name is one of a fixed set.
-func longestShippedDocumentationNote() int {
+// because every path it can name is one of the set this context was assembled
+// against.
+func longestShippedDocumentationNote(shipped []string) int {
 	longest := len(noShippedDocumentation)
-	if everything := len(renderShippedDocumentationNote("", shippedDocumentation)); everything > longest {
+	if named := len(noShippedDocumentationNamed); named > longest {
+		longest = named
+	}
+	if everything := len(renderShippedDocumentationNote(shipped, "", shipped)); everything > longest {
 		longest = everything
 	}
 	return longest

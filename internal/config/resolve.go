@@ -298,6 +298,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "product.invariants", product.Invariants, &r.config.Product.Invariants, applied.origin)
 		setValue(r.origins, "product.designs", product.Designs, &r.config.Product.Designs, applied.origin)
 		setValue(r.origins, "product.decisions", product.Decisions, &r.config.Product.Decisions, applied.origin)
+		setValue(r.origins, "product.shipped_documentation", product.ShippedDocumentation, &r.config.Product.ShippedDocumentation, applied.origin)
 	}
 	if execution := document.Execution; execution != nil {
 		setValue(r.origins, "execution.max_concurrent_developers", execution.MaxConcurrentDevelopers, &r.config.Execution.MaxConcurrentDevelopers, applied.origin)
