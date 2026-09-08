@@ -563,6 +563,300 @@ func TestParentFieldConformance(t *testing.T) {
 	}
 }
 
+// blocksEdge is the bd relation that makes one item wait for another. It is
+// spelled again here rather than taken from the client, because a check of what
+// bd answers that named the relation the way the reading under test names it
+// would agree with that reading by construction whatever bd said.
+const blocksEdge = "blocks"
+
+// TestBlockerStatusConformance pins what bd says about a blocker that is not
+// finished, on each shape a start decision is made from. Every other check of
+// those decisions can only restate the assumption: they drive a scripted runner
+// that replays the status it was written with, so all of them pass identically
+// whichever way bd answers.
+//
+// Two readings rest on it. The pipeline's start gate reads the item bd shows for
+// it and refuses any blocking dependency that is not closed
+// (orchestrator.blockingDependencies); the claim reads the same shape through
+// WorkItem.WaitingOn to decide whether a status of blocked is stale. The case
+// both have to survive is a blocker that is in flight rather than open: an item
+// started beside the run already working what it waits for is two runs over one
+// dependency, and nothing downstream looks again.
+//
+// bd does not answer the two shapes alike, and the difference is the whole
+// reason WaitingOn asks in both directions. `bd show` embeds the depended-on
+// item and carries its real status, in flight included. `bd list` states the
+// edge alone and carries no status at all, which is why WaitingOn falls back to
+// whether the depended-on item is still in the backlog — and an in-flight
+// blocker has left it, so that fallback cannot see one. The show path is
+// therefore asserted exactly: it is the only reading that refuses a start beside
+// a blocker somebody is working, and a bd that stopped carrying the status there
+// would leave nothing that does.
+//
+// What the listing carries is asserted only as not-closed, which is the whole of
+// what the backlog's reading needs from it. A listing that named an unfinished
+// blocker closed would release the item outright; one that carries no status is
+// the case the fallback already covers, and one that started carrying the real
+// status would only make the fallback redundant.
+func TestBlockerStatusConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	blocker, err := client.Create(ctx, NewWorkItem{
+		Title:       "Release the stale statuses",
+		Description: "The work the item below waits for.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() a blocker error = %v", err)
+	}
+	dependent, err := client.Create(ctx, NewWorkItem{
+		Title:       "Pull from the released queue",
+		Description: "It waits on the release above.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() the item that waits error = %v", err)
+	}
+	if err := client.AddBlocker(ctx, dependent.ID, blocker.ID); err != nil {
+		t.Fatalf("AddBlocker() error = %v", err)
+	}
+
+	// An open blocker first: it is the case both readings already agree on, so a
+	// status wrong here would say nothing about the case where they part.
+	shown, err := client.Show(ctx, dependent.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if got := blockingStatusOf(t, shown, blocker.ID); got != statusOpen {
+		t.Fatalf("Show() gives the open blocker's status as %q, want open; the run-start gate refuses on this status and "+
+			"nothing else looks at the blocker itself", got)
+	}
+
+	// The case the readings part on, and the one the stale-status release made
+	// reachable: the blocker is being worked right now.
+	claimed, err := client.Claim(ctx, blocker.ID)
+	if err != nil {
+		t.Fatalf("Claim() the blocker error = %v", err)
+	}
+	if claimed.Status != "in_progress" {
+		t.Fatalf("Claim() the blocker gave status %q, want in_progress; this check says nothing about an in-flight blocker "+
+			"unless the blocker is actually in flight", claimed.Status)
+	}
+
+	shown, err = client.Show(ctx, dependent.ID)
+	if err != nil {
+		t.Fatalf("Show() with the blocker in flight error = %v", err)
+	}
+	if got := blockingStatusOf(t, shown, blocker.ID); got != "in_progress" {
+		t.Fatalf("Show() gives the in-flight blocker's status as %q, want in_progress; a bd that stops carrying it leaves "+
+			"the run-start gate reading no unfinished blocker and starting a run beside the one already working it", got)
+	}
+
+	// The reading the claim actually makes, over the shape it makes it on. The
+	// admitted work is what the backlog is assembled from, and an in-flight
+	// blocker is in neither half of it, so the status bd carries on the edge is
+	// the only thing here that names the wait.
+	unfinished, err := client.unfinished(ctx)
+	if err != nil {
+		t.Fatalf("read the admitted work error = %v", err)
+	}
+	if _, queued := unfinished[blocker.ID]; queued {
+		t.Fatalf("the in-flight blocker %s is still in the admitted work, so what follows would pass on the fallback "+
+			"rather than on the status bd carries", blocker.ID)
+	}
+	if waiting := shown.WaitingOn(unfinished); len(waiting) != 1 || waiting[0] != blocker.ID {
+		t.Fatalf("the item's own reading names %v as what it waits for, want just the in-flight blocker %s; this is what "+
+			"decides whether a blocked status is stale, and an item released past it is a second run over one dependency",
+			waiting, blocker.ID)
+	}
+
+	listed, err := client.List(ctx, statusOpen)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	waiting, found := itemIn(listed, dependent.ID)
+	if !found {
+		t.Fatalf("List(open) = %#v, want the waiting item %s among them", listed, dependent.ID)
+	}
+	if got := blockingStatusOf(t, waiting, blocker.ID); got == closedDependencyStatus {
+		t.Fatalf("List(open) gives the in-flight blocker's status as closed; every reading believes a status the listing " +
+			"carries, so this releases an item whose blocker somebody is working")
+	}
+
+	// The tracker's own readiness answer, which is what the backlog takes for open
+	// work rather than deciding itself: it must not offer an item whose blocker is
+	// still being worked.
+	ready, err := client.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	if _, offered := itemIn(ready, dependent.ID); offered {
+		t.Fatalf("Ready() offers %s while its blocker %s is in flight, want it held back; the backlog takes this answer "+
+			"for open work rather than deciding readiness itself", dependent.ID, blocker.ID)
+	}
+
+	// And the control, without which the assertion above would pass against a bd
+	// whose ready list simply never named the item.
+	if _, err := client.Complete(ctx, blocker.ID, "landed"); err != nil {
+		t.Fatalf("Complete() the blocker error = %v", err)
+	}
+	ready, err = client.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready() after the blocker closed error = %v", err)
+	}
+	if _, offered := itemIn(ready, dependent.ID); !offered {
+		t.Fatalf("Ready() = %#v, want %s offered once its only blocker closed", ready, dependent.ID)
+	}
+}
+
+// TestBlockedClaimConformance pins what bd does with a claim on an item whose
+// status is blocked, which is the shape every item the stale-status release put
+// back within reach arrives in: the run-start gate admits blocked work and
+// refuses it on its dependencies instead (orchestrator's startableStatuses), so
+// what the tracker does with the claim that follows is the whole of whether such
+// a release starts anything.
+//
+// bd refuses it, and refuses it on the status alone — the item here waits on
+// nothing at all. That refusal is why Claim does not simply pass the claim
+// through: it re-reads the item, and where nothing unfinished blocks it, it
+// corrects the status and takes the item. Between the release and that recovery
+// landing, every released item was selectable and unclaimable at once, and
+// yoyodyne-ifd.285 was dispatched twenty-nine times in twenty hours.
+//
+// Three things are asserted, and each of them is load-bearing on its own. bd
+// refuses. The refusal says what staleBlockedRefusal matches, because that
+// pattern is the only thing the recovery is entered on and a bd that reworded
+// the message would silently stop recovering — every released item unclaimable
+// again, with no line of this repository having changed. And the recovery
+// actually lands against bd rather than against a scripted answer: the item
+// reads in_progress afterwards, on a separate read.
+func TestBlockedClaimConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	created, err := client.Create(ctx, NewWorkItem{
+		Title:       "Finish what a stopped run left",
+		Description: "A run stopped on it, and nothing it waits for is unfinished.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// Blocked the way the harness itself blocks work, so the status under test is
+	// one this project actually writes rather than one this check invented.
+	blocked, err := client.Block(ctx, created.ID, "The run that stopped here recorded why.")
+	if err != nil {
+		t.Fatalf("Block() error = %v", err)
+	}
+	if len(blocked.Dependencies) != 0 {
+		t.Fatalf("the blocked item carries dependencies %#v, want none; the refusal below has to be about the status",
+			blocked.Dependencies)
+	}
+
+	// The bare claim, which is what Claim makes first and what every caller made
+	// before the recovery existed.
+	if item, err := client.claim(ctx, created.ID); err == nil {
+		t.Fatalf("bd claimed the blocked item %#v; it refused before, so the recovery below now runs over a claim that "+
+			"already succeeded and this check no longer says what the claim path meets", item)
+	} else if !staleBlockedRefusal.MatchString(err.Error()) {
+		t.Fatalf("bd refused the blocked claim with %v, which staleBlockedRefusal does not match; the recovery is entered "+
+			"on that pattern and nothing else, so a reworded refusal leaves every released item unclaimable", err)
+	}
+
+	// And the recovery, against bd rather than against a replayed answer: nothing
+	// unfinished blocks this item, so the status is stale and the claim takes it.
+	claimed, err := client.Claim(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Claim() a blocked item waiting on nothing error = %v; the released items all arrive in this shape, so a "+
+			"claim that cannot take one releases nothing", err)
+	}
+	if claimed.Status != "in_progress" {
+		t.Fatalf("Claim() status = %q, want in_progress; the pipeline refuses a claimed item that reads anything else", claimed.Status)
+	}
+	shown, err := client.Show(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Show() after the claim error = %v", err)
+	}
+	if shown.Status != "in_progress" {
+		t.Fatalf("Show() status = %q after the claim, want in_progress; a correction held in the process rather than "+
+			"written to the tracker leaves the item reading as blocked to everything that opens it", shown.Status)
+	}
+
+	// The other half of the same gate, and the reason correcting the status is not
+	// a way around it: an item that really does wait on unfinished work stays
+	// refused, and stays blocked.
+	waiting, err := client.Create(ctx, NewWorkItem{
+		Title:       "Start beside the run working the blocker",
+		Description: "It waits on work somebody is doing.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() the waiting item error = %v", err)
+	}
+	if err := client.AddBlocker(ctx, waiting.ID, created.ID); err != nil {
+		t.Fatalf("AddBlocker() error = %v", err)
+	}
+	if _, err := client.Block(ctx, waiting.ID, "A run stopped here too."); err != nil {
+		t.Fatalf("Block() the waiting item error = %v", err)
+	}
+	// The blocker above is the item this test just claimed, so it is in flight
+	// rather than open: it has left the backlog, and the status bd carries on the
+	// edge is the only thing that says it is unfinished.
+	if _, err := client.Claim(ctx, waiting.ID); err == nil {
+		t.Fatalf("Claim() took %s while %s was in flight, want the refusal to stand; a correction that cannot tell a stale "+
+			"status from a live dependency starts a second run over one piece of work", waiting.ID, created.ID)
+	} else if !strings.Contains(err.Error(), created.ID) {
+		t.Fatalf("Claim() error = %v, want it to name the unfinished work %s", err, created.ID)
+	}
+	stillBlocked, err := client.Show(ctx, waiting.ID)
+	if err != nil {
+		t.Fatalf("Show() after the refused claim error = %v", err)
+	}
+	if stillBlocked.Status != statusBlocked {
+		t.Fatalf("Show() status = %q after a refused claim, want blocked; a refusal that moved the item leaves work in a "+
+			"status no run and no audit accounts for", stillBlocked.Status)
+	}
+}
+
+// closedDependencyStatus is finished work, as a dependency reports it. Every
+// reading of a blocker turns on it: work a listing calls closed is work no
+// dependency on it holds anything back for.
+const closedDependencyStatus = "closed"
+
+// blockingStatusOf is what one reading of an item says about the blocker it
+// waits for: the status carried on its own blocking dependency, and empty where
+// the shape carries none. A reading with no such edge at all fails, because it
+// says nothing about the status on an edge it lost.
+func blockingStatusOf(t *testing.T, item WorkItem, blockerID string) string {
+	t.Helper()
+
+	for _, dependency := range item.Dependencies {
+		if !strings.EqualFold(dependency.Type, blocksEdge) || dependency.ID != blockerID {
+			continue
+		}
+		return dependency.Status
+	}
+	t.Fatalf("the reading of %s carries no blocking dependency on %s: %#v", item.ID, blockerID, item.Dependencies)
+	return ""
+}
+
+// itemIn finds one item in a listing bd answered.
+func itemIn(items []WorkItem, id string) (WorkItem, bool) {
+	for _, item := range items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return WorkItem{}, false
+}
+
 // trackerExportPath is where the harness looks for the tracker's passive JSONL
 // dump, spelled here as the harness spells it — internal/cli/run.go names the
 // same path as the export a worktree is given. Nothing asks bd where it writes,
