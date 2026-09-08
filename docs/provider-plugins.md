@@ -301,7 +301,7 @@ agents:
 
 | Field | Meaning |
 |---|---|
-| `adapter` | Required. The backend whose compiled adapter launches this provider. `claude-code` is the only one this build ships; naming anything else is refused at load. |
+| `adapter` | Required. The backend whose compiled adapter launches this provider. `claude-code` and `codex` are the ones this build ships; naming anything else is refused at load. |
 | `binary` | The executable that adapter runs. Omit it for the adapter's own. |
 | `roles` | Which of the harness's roles this provider serves. |
 | `postures` | `read-only`, `worktree-write`, or both. |
@@ -341,6 +341,35 @@ on the interval rather than waiting to a deadline. If your provider only ever
 states reset times that way, say so — it is the clearest case for a fourth
 format.
 
+## What a new adapter owes
+
+An adapter is Go code and a change to yoyo rather than to a configuration, and
+what it owes before it can be called complete is one suite: every adapter
+classifies the same provider conditions the same way.
+
+The conditions are named once, in terms no provider owns — capacity exhausted, a
+model the provider has not got, an account it will not accept, a network
+failure, and a refusal that judged the work rather than the environment — and
+each adapter supplies its own provider's words for each of them. What the suite
+asserts is not that the words match, which they never will, but that the harness
+is left holding the same answer whichever adapter met the condition: a window to
+wait for, another model to ask for, another attempt to make, or a refusal that
+stands.
+
+Two things make it a gate rather than a checklist. It puts the samples through
+the adapter rather than the dialect, so an adapter that reads a condition
+correctly and loses it on the way to the result fails just as one that misreads
+it does. And an adapter this build ships with no cases beside it fails by being
+absent, so a new adapter arrives as a failing test naming what it owes rather
+than as a provider nobody ever asked how it reads a refusal.
+
+A declared provider is not a new adapter and owes nothing here: it rides on the
+adapter it named, and its rules are checked where your configuration loads. What
+the suite protects for you is the adapter underneath it — a dialect this build
+ships and yours reads a condition differently is exactly the divergence it
+exists to catch, and the case sets are where a provider's real words are written
+down.
+
 ## Where the contract lives in the code
 
 `internal/backend/contract.go` is the contract itself: the answers, the
@@ -348,8 +377,12 @@ observation a dialect returns, and `ReadReset`, which is the single place the
 unknown and past-reset cases are decided. `internal/backend/declarative.go` is
 the rule format on this page. `internal/backend/registry.go` holds the built-in
 descriptions and turns a declaration into one. `internal/backend/claudecode/dialect.go`
-is the Claude Code dialect, which is one implementation of the same contract and
-gets no special treatment above it — the adapter beside it takes whichever
-dialect it is handed, which is how a declared one comes to read a real stream.
+and `internal/backend/codex/dialect.go` are the two built-in dialects, each one
+implementation of the same contract and neither given special treatment above it
+— the adapter beside each takes whichever dialect it is handed, which is how a
+declared one comes to read a real stream.
+`internal/backend/conformance` is the suite above: the conditions, the answer
+each one must leave the harness holding, and every shipped adapter's own words
+for them.
 `internal/cli/provider.go` is where the backend an agent named is resolved into
 the adapter that runs it.
