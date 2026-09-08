@@ -138,19 +138,43 @@ func (f Failover) problems(name string, agent AgentConfig) []string {
 		}
 	}
 	// A provider or an account is a statement about where the alternate is served,
-	// so naming one while failover names nothing to serve is a half-written block
-	// rather than a harmless key.
-	if named := strings.TrimSpace(string(f.Provider)); named != "" {
-		if err := domain.ValidateIdentifier("failover provider", named); err != nil {
+	// so naming one while the block names nothing to serve is a half-written block
+	// rather than a harmless key. It is refused whether or not failover is switched
+	// on, because switching it off is how an operator keeps a choice they made and
+	// there is no choice here to keep: `enabled: false` beside a model is a
+	// decision parked, and beside a provider alone it is a decision never finished.
+	provider := strings.TrimSpace(string(f.Provider))
+	account := strings.TrimSpace(f.Account)
+	if alternate == "" && (provider != "" || account != "") {
+		problems = append(problems, fmt.Sprintf(
+			"agent %q failover says where an alternate would be served and names no alternate model; %s answers where and failover.model answers what",
+			name, describeFailoverPlacement(provider, account)))
+	}
+	if provider != "" {
+		if err := domain.ValidateIdentifier("failover provider", provider); err != nil {
 			problems = append(problems, fmt.Sprintf("agent %q %s", name, err))
 		}
 	}
-	if named := strings.TrimSpace(f.Account); named != "" {
-		if err := domain.ValidateIdentifier("failover account", named); err != nil {
+	if account != "" {
+		if err := domain.ValidateIdentifier("failover account", account); err != nil {
 			problems = append(problems, fmt.Sprintf("agent %q %s", name, err))
 		}
 	}
 	return problems
+}
+
+// describeFailoverPlacement names the keys a half-written block actually wrote,
+// so the refusal points at what is there rather than at both keys whichever one
+// the operator used.
+func describeFailoverPlacement(provider, account string) string {
+	switch {
+	case provider != "" && account != "":
+		return "failover.provider and failover.account"
+	case provider != "":
+		return "failover.provider"
+	default:
+		return "failover.account"
+	}
 }
 
 // failoverEndpointProblems reports an alternate this project could not serve the

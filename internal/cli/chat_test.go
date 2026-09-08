@@ -769,3 +769,74 @@ func (b *recordingChatBackend) Run(_ context.Context, _ backendapi.RunRequest) (
 	result.Backend = domain.BackendClaudeCode
 	return result, nil
 }
+
+// A crossing this conversation cannot make leaves it with no alternate at all,
+// rather than with the alternate's model and none of the rest of it.
+//
+// The two halves are one answer, and splitting them is the failure the whole
+// arrangement exists to prevent: the alternate's model belongs to the other
+// provider, so handing it over on its own asks the endpoint whose window just
+// closed for a selector it has never heard of — at exactly the moment the
+// fallback was supposed to save the turn.
+func TestAnUnresolvedCrossingLeavesTheConversationWithNoAlternateAtAll(t *testing.T) {
+	cfg := config.Config{
+		Accounts: map[string]config.Account{"default": {Provider: domain.BackendClaudeCode}},
+		Agents: map[string]config.AgentConfig{
+			"developer": {
+				Role:    domain.RoleDeveloper,
+				Backend: domain.BackendClaudeCode,
+				Model:   "fable",
+				Failover: config.Failover{
+					Enabled:  true,
+					Model:    "gpt-5-codex",
+					Provider: domain.BackendCodex,
+					// An account no longer declared — an alias edited out from under a
+					// harness that is already running, which is the ordinary way this
+					// resolution comes to fail after the file has loaded.
+					Account: "retired-codex-account",
+				},
+			},
+		},
+	}
+	var stderr strings.Builder
+	// No runner: neither path here builds an adapter, and one supplied would
+	// only hide that.
+	alternate := conversationFailover(cfg, t.TempDir(), "developer", nil, &stderr)
+	if alternate.model != "" {
+		t.Fatalf("alternate model = %q, want none: %q belongs to a provider this conversation cannot reach",
+			alternate.model, alternate.model)
+	}
+	if alternate.endpoint.Provider != "" || alternate.backend != nil || alternate.configDir != "" {
+		t.Fatalf("alternate = %#v, want nothing where the crossing could not be resolved", alternate)
+	}
+	if !strings.Contains(stderr.String(), "cannot fail over at all") {
+		t.Fatalf("warning = %q, want it to say the conversation has no failover rather than a partial one", stderr.String())
+	}
+}
+
+// The same resolution answers the ordinary case, so an agent whose alternate
+// stays on its own provider still gets one and needs no endpoint to reach it.
+func TestAWithinProviderAlternateNeedsNoEndpointToResolve(t *testing.T) {
+	cfg := config.Config{
+		Accounts: map[string]config.Account{"default": {Provider: domain.BackendClaudeCode}},
+		Agents: map[string]config.AgentConfig{
+			"development-manager": {
+				Role:     domain.RoleDevelopmentManager,
+				Backend:  domain.BackendClaudeCode,
+				Model:    "fable",
+				Failover: config.Failover{Enabled: true, Model: "opus"},
+			},
+		},
+	}
+	var stderr strings.Builder
+	alternate := conversationFailover(cfg, t.TempDir(), "development-manager", nil, &stderr)
+	if alternate.model != "opus" {
+		t.Fatalf("alternate model = %q, want the alternate on the agent's own provider", alternate.model)
+	}
+	if alternate.endpoint.Provider != "" || alternate.backend != nil {
+		t.Fatalf("alternate = %#v, want no crossing wired for a substitution that does not leave the provider", alternate)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("warning = %q, want none: nothing failed to resolve", stderr.String())
+	}
+}

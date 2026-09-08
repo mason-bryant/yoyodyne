@@ -2692,6 +2692,12 @@ provider down — and an alternate that could only ever name another model on th
 same provider is no answer to that. An agent that names only a model fails over
 within its own provider, exactly as it did before these two keys existed.
 
+`provider` and `account` say where an alternate is served, so a block that names
+either and no `model` is refused: it says where and never what, which would read
+as a configured crossing that can never happen. That holds with `enabled: false`
+too — switching failover off keeps a choice already made, and there is none to
+keep in a block nobody finished.
+
 A crossing is refused where the file is read if the alternate names a provider
 this project does not name, one that cannot be held to the tool posture the
 agent's role requires, or an account that could not sign that provider in. The
@@ -2701,6 +2707,13 @@ the alias the `failover` block wrote down, so an agent that named no account of
 its own is refused here too. The same three are asked again at the moment of the
 substitution, because a posture is not something to take on trust from a check
 that ran earlier.
+
+A crossing that cannot be resolved when a conversation opens — an account edited
+away under a running harness, say — leaves that conversation with no failover at
+all, and `yoyo chat` says so on stderr. It is not degraded to a substitution
+within the provider: the alternate's model belongs to the other provider, so
+asking this conversation's own provider for it would meet an unknown selector at
+exactly the moment the fallback existed to save the turn.
 
 **A crossing covers conversation turns and nothing else.** An alternate on the
 agent's own provider serves its exchange rounds and its side threads as well; one

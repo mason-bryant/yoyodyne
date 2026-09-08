@@ -326,3 +326,93 @@ agents:
 		t.Fatalf("endpoint = %#v, want the alternate on the account that signs it in", choice.Endpoint)
 	}
 }
+
+// A block that says where an alternate would be served and names no alternate is
+// half written, and is refused as one. Switching failover off is how an operator
+// keeps a choice they already made; a provider standing alone is a choice nobody
+// finished, and left to load it would read as a configured crossing that can
+// never happen.
+func TestAFailoverThatSaysWhereButNotWhatIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name  string
+		block string
+		want  string
+	}{
+		{
+			name: "a provider with no model",
+			block: `    failover:
+      enabled: true
+      provider: codex
+`,
+			want: "failover.provider answers where and failover.model answers what",
+		},
+		{
+			name: "an account with no model",
+			block: `    failover:
+      account: codex-account
+`,
+			want: "failover.account answers where and failover.model answers what",
+		},
+		{
+			// Switched off and half written is still half written: there is no choice
+			// here being parked, because none was ever finished.
+			name: "both, with failover switched off",
+			block: `    failover:
+      enabled: false
+      provider: codex
+      account: codex-account
+`,
+			want: "failover.provider and failover.account answers where and failover.model answers what",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := loadProjectError(t, minimalProjectConfig+`accounts:
+  default:
+    provider: claude-code
+  codex-account:
+    provider: codex
+agents:
+  developer:
+    model: fable
+`+test.block, nil)
+			if err == nil {
+				t.Fatal("LoadResolved() succeeded, want the half-written block refused where the file is read")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want it to name %q", err, test.want)
+			}
+		})
+	}
+}
+
+// And the complete block, switched off, still loads: that is an operator keeping
+// the choice they made rather than making one, which is what `enabled: false`
+// beside a stated alternate has always meant.
+func TestACompleteCrossingSwitchedOffKeepsTheChoiceAndLoads(t *testing.T) {
+	t.Parallel()
+
+	cfg := loadProject(t, minimalProjectConfig+`accounts:
+  default:
+    provider: claude-code
+  codex-account:
+    provider: codex
+agents:
+  developer:
+    model: fable
+    failover:
+      enabled: false
+      model: gpt-5-codex
+      provider: codex
+      account: codex-account
+`, nil).Config
+	if alternate := cfg.AgentFailoverModel("developer"); alternate != "" {
+		t.Fatalf("failover model = %q, want nothing while it is switched off", alternate)
+	}
+	if kept := cfg.AgentFailover("developer"); kept.Model != "gpt-5-codex" || kept.Provider != domain.BackendCodex {
+		t.Fatalf("kept block = %#v, want the whole choice kept so it can be switched back on", kept)
+	}
+}
