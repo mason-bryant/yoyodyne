@@ -960,12 +960,15 @@ Running (2 developer runs):
   yoyodyne-ifd.201 — reviewing, 3m elapsed, cost unknown (its event log is gone)
 Working (1 conversation):
   product-manager — product-manager, a turn in flight for 40s after 270 recorded turns
-Not startable (3 of 7 admitted items):
+Not startable (4 of 7 admitted items; 1 awaits the development manager's decision, 1 awaits the harness carrying out a decision already recorded):
   yoyodyne-ifd.200 — waiting on yoyodyne-ifd.199
   yoyodyne-ifd.212 — parked, so no pull selects it however far the queue drains: the design is being reworked
-  yoyodyne-ifd.153 — run run-5035c832 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; triage decides what happens to it
-Needs a human (1):
+  yoyodyne-ifd.153 — run run-5035c832 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has
+  yoyodyne-ifd.150 — run run-a17c9b40 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager has already decided what happens to it, so what is outstanding is the harness carrying that decision out rather than a decision
+Needs a human (3):
   directive-4f2c… is unresolved: which branch does this land on? — the operator's — the work it affects waits until `yoyo directive resolve` settles it
+  1 admitted item awaits the development manager's decision — the development manager's — nothing pulls a stopped item until she decides what happens to it
+  1 admitted item awaits carry-out of a decision already recorded — the harness's — the decision is made, and what is outstanding is the harness acting on it
 ```
 
 - **Running** is the developer runs in flight, each with its item, the phase it
@@ -998,11 +1001,21 @@ Needs a human (1):
   admitted and would be started next is not listed here at all; the count of
   admitted items beside the heading is where it shows.
 
-  One of the queue's own accounts is an item **held for a person**, which is the
-  third not-startable line in the example above: a run stopped on it and its
+  One of the queue's own accounts is an item **held**, which is the third and
+  fourth not-startable lines in the example above: a run stopped on it and its
   change is still on a branch, its stoppage is in front of the development
   manager and nobody has decided about it, or a run promoted its change and could
-  not finish publishing it. The last one is not a stoppage at all and
+  not finish publishing it.
+
+  A held item says which of two waits it is in, because they are two different
+  people to go to. **Awaiting a decision** is a stoppage the development manager
+  has still to settle. **Awaiting carry-out** is one she has settled — the
+  decision is recorded — and the harness has not yet acted on. The counts are in
+  the head of the line as well as against each item, so the hourly channel
+  message, which prints the heads and drops the entries, still says which of the
+  two the queue is full of. Reporting both as one thing is what cost 2026-09-07:
+  thirty-three items read as a decision backlog for days while the development
+  manager had decided every one of them and the gap was the carry-out. The last one is not a stoppage at all and
   is held for the opposite reason: the change is on the target branch already, so
   there is nothing left to implement and a run started against it can only find
   that out again — which is what yoyodyne-ifd.295 cost, three developer runs and
@@ -1077,9 +1090,10 @@ scheduler that died from one that is wedged: a session whose last word was
 first.
 
 What the message that wakes somebody says beside that is the last poll's own
-account of the queue — "33 of the 47 admitted items are held for a person,
-waiting on triage decisions" — which it reads from the watch log rather than from
-the stall, and only where that poll was made after the silence began.
+account of the queue — "33 of the 47 admitted items are awaiting carry-out of
+decisions already recorded", and the next mover with it — which it reads from the
+watch log rather than from the stall, and only where that poll was made after the
+silence began.
 
 What that bound refuses is an account a start overtook: something ran after the
 poll and the line then went quiet, so the queue has not been read since it moved.

@@ -605,6 +605,7 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		Tracker:    tracker,
 		Runs:       parts.store,
 		Stoppages:  parts.store,
+		Decisions:  parts.store.Triage(),
 		Intake:     parts.intake,
 		Directives: parts.directives,
 		Staleness: repositoryStaleness{

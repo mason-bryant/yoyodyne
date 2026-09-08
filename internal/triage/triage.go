@@ -408,6 +408,17 @@ func (o Override) Describe() string {
 // than a repeat of this one.
 func (c Counters) Decided() bool { return c.Reruns > c.RerunsCarriedOut }
 
+// AwaitingCarryOut reports a decision recorded about this item that the harness
+// has still to act on, whichever of the two it is: a re-run nothing has claimed,
+// or a repair grant whose rounds are unspent.
+//
+// It is the question the whole docket was failing to answer separately. An entry
+// says a stoppage happened, and until now nothing on it said whether what it was
+// waiting for was a decision or the carrying out of one — so a docket of
+// already-decided stoppages read as a decision backlog, which on 2026-09-07 it
+// did for days.
+func (c Counters) AwaitingCarryOut() bool { return c.Decided() || c.GrantOutstanding() }
+
 // Rerun is the re-run the harness has already claimed against one docketed
 // stoppage: what a guard refuses a second of, named on the entry it is about.
 // RunID is the fresh run it started, and is absent on a claim whose run never
@@ -856,6 +867,7 @@ func (e Entry) Render() string {
 	// counters mean rather than a remark about them: a development manager who
 	// read the figures first has already decided how close this item is to its cap.
 	rendered.WriteString(e.renderEnvironmental())
+	rendered.WriteString(e.renderNextMover())
 	fmt.Fprintf(&rendered, "      Triage counters: %d of %s review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
 		e.Counters.ReviewRounds, capFigure(e.Counters.ReviewRoundsCap), roundsNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
@@ -928,6 +940,30 @@ func (e Entry) renderUnstarted() string {
 	fmt.Fprintf(&rendered, "      Nothing was started: this run died before it claimed %s, so the item is untouched, no worktree was cut and nothing was preserved.\n", e.WorkItemID)
 	rendered.WriteString(indented("Why it never started", e.Failure))
 	return rendered.String()
+}
+
+// renderNextMover says which of the two waits this entry is in and who has to
+// move next: a stoppage nobody has decided about is yours, and a decision
+// already recorded is the harness's to carry out.
+//
+// It is never silent, because the state it names is the one the docket could not
+// say before: an entry describing a decided stoppage read exactly like one
+// describing an undecided stoppage, so a docket of work already decided about
+// read as work waiting on the development manager. It is said above the counters
+// for the reason the environmental account is — it is what the figures under it
+// mean rather than a remark about them.
+//
+// A record nobody could read says that instead of guessing, for the reason the
+// decisions below it do: an unreadable record read as an item nobody has decided
+// about is how one authorized recovery is nearly spent twice.
+func (e Entry) renderNextMover() string {
+	if e.CountersProblem != "" {
+		return "      Next mover: unknown — this item's triage record could not be read, so whether anything is already decided about it cannot be said here.\n"
+	}
+	if e.Counters.AwaitingCarryOut() {
+		return "      Next mover: the harness — a decision about this item is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
+	}
+	return "      Next mover: you — nothing is recorded as decided about this item, so it is waiting on your decision.\n"
 }
 
 // renderDecisions says what triage has already decided about this item, in the

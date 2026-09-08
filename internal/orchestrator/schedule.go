@@ -425,7 +425,14 @@ type Pull struct {
 	// wired without it holds every blocked item rather than choosing work whose
 	// hold it could not read; see backlog.Holds for why that is the safe
 	// direction. It is satisfied by *runstate.Store.
-	Stoppages  readmodel.Stoppages
+	Stoppages readmodel.Stoppages
+	// Decisions is what triage has already decided about the items those
+	// stoppages belong to, which is what separates a held item waiting on the
+	// development manager from one waiting on the harness carrying her decision
+	// out. It is optional, and a pull wired without it passes every held item over
+	// as one nobody has decided about — which is where the answer went before the
+	// two were told apart. It is satisfied by *runstate.TriageStore.
+	Decisions  readmodel.Decisions
 	Intake     IntakeHolds
 	Directives Directives
 	// Staleness is optional; see ScheduleStaleness for what a pull without one
@@ -1793,7 +1800,7 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 	case entry.Parking.Parked():
 		return parkedReason(entry.Parking), true
 	case entry.Awaiting != "":
-		return heldReason(entry.Awaiting), true
+		return heldReason(entry.Awaiting, entry.AwaitingCarryOut), true
 	default:
 		return "", false
 	}
@@ -1804,32 +1811,49 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 // can carry, then work somebody parked, then everything that is genuinely
 // waiting for something. An item that is both is told the thing that would still
 // hold once the other was lifted.
+//
+// A held item is one of two classes rather than one, because the two have
+// different next movers: a stoppage nobody has decided about waits on the
+// development manager, and a decision she recorded waits on the harness. The
+// queue already knows which — the hold says so — and reporting both as one class
+// is what made thirty-three carried-out-shaped items read as a decision backlog.
 func unreadyClass(entry backlog.Entry) runstate.PassedOverClass {
 	switch {
 	case !entry.Executor.DeveloperRun():
 		return runstate.PassedOverCarriedInConversation
 	case entry.Parking.Parked():
 		return runstate.PassedOverParked
+	case entry.AwaitingCarryOut:
+		return runstate.PassedOverAwaitingCarryOut
 	case entry.Awaiting != "":
-		return runstate.PassedOverHeldForAPerson
+		return runstate.PassedOverAwaitingDecision
 	default:
 		return runstate.PassedOverWaitingOnOtherWork
 	}
 }
 
 // heldReason says that the item is somebody's to release, and what they have to
-// decide. Like the parking above it is not a wait, and it is named against the
-// item for the same reason: the count it would otherwise disappear into is work
-// that becomes pullable on its own, and this never does.
+// decide or carry out. Like the parking above it is not a wait, and it is named
+// against the item for the same reason: the count it would otherwise disappear
+// into is work that becomes pullable on its own, and this never does.
 //
 // Naming it is the whole of what the status field could not do. A blocked status
 // says one word about a stoppage nobody has decided and about work whose every
 // blocker closed months ago, so a queue that reported both as unready reported
 // nothing anybody could act on — which is how 41 items, two of them p0, went a
 // morning without one line saying which of them were waiting on a person.
-func heldReason(awaiting string) string {
-	return fmt.Sprintf("it is held for a person and this is not a wait for anything: %s. Until they decide, it is passed over at every pull",
-		singleLine(awaiting, maxScheduleReasonBytes))
+//
+// It opens on which of the two waits this is, because that is what says who to
+// go to: a stoppage nobody has decided about is the development manager's, and a
+// decision she recorded is the harness's to act on. The words after it are the
+// hold's own account, which says the same thing at length.
+func heldReason(awaiting string, carryOut bool) string {
+	held := "it is held for a decision nobody has made and this is not a wait for anything"
+	if carryOut {
+		held = "it is held for the carry-out of a decision already recorded and this is not a wait for anything"
+	}
+	return fmt.Sprintf("%s: %s. Until that is settled, it is passed over at every pull",
+		held, singleLine(awaiting, maxScheduleReasonBytes))
 }
 
 // parkedReason says that the work was deliberately taken out of reach, and says
@@ -2204,7 +2228,7 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	// records were consulted at all.
 	var held backlog.Holds
 	if p.Stoppages != nil {
-		held, err = readmodel.HeldForAPerson(p.Stoppages)
+		held, err = readmodel.HeldForAPerson(p.Stoppages, p.Decisions)
 		if err != nil {
 			return pulled{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}

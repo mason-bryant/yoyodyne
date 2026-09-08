@@ -128,7 +128,7 @@ func TestAGovernanceHoldIsNotReleasedByADependencyThatCleared(t *testing.T) {
 			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: beads.BlocksDependency}},
 		},
 		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 2},
-	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]string{"yoyodyne-ifd.153": stoppage}))
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]Hold{"yoyodyne-ifd.153": {Reason: stoppage}}))
 
 	held := queue.Entries[0]
 	if held.Ready || held.Awaiting != stoppage {
@@ -418,8 +418,8 @@ func TestRenderSaysTheOrderWhatIsHeldBackAndWhatIsNext(t *testing.T) {
 		{ID: "yoyodyne-ifd.9", Title: "A run that failed and was blocked", Status: statusBlocked, Priority: 2},
 		// The tracker offers the one item nothing is holding: the first waits for
 		// unfinished work and the third stopped on a change nobody has decided about.
-	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]string{
-		"yoyodyne-ifd.9": "run run-f4fbf60a stopped on it and its change is preserved",
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]Hold{
+		"yoyodyne-ifd.9": {Reason: "run run-f4fbf60a stopped on it and its change is preserved"},
 	}))
 
 	rendered := queue.Render()
@@ -446,7 +446,7 @@ func TestRenderSaysTheOrderWhatIsHeldBackAndWhatIsNext(t *testing.T) {
 	// all, because "nothing is ready" and "nothing is queued" call for opposite
 	// responses from an operator.
 	stalled := Order([]beads.WorkItem{{ID: "yoyodyne-1", Title: "Blocked", Status: statusBlocked, Priority: 0}}, nil,
-		ReadHolds(map[string]string{"yoyodyne-1": "its stoppage is in front of the development manager"}))
+		ReadHolds(map[string]Hold{"yoyodyne-1": {Reason: "its stoppage is in front of the development manager"}}))
 	if !strings.Contains(stalled.Render(), "nothing is ready to be pulled") {
 		t.Fatalf("stalled backlog = %q", stalled.Render())
 	}
@@ -478,5 +478,39 @@ func TestARenderedBacklogIsCutWhileItsCountsStayExact(t *testing.T) {
 		if len(line) > maxRenderedTitleBytes*2 {
 			t.Fatalf("a tracker title escaped its line: %q", line)
 		}
+	}
+}
+
+// Held work carries which of the two waits it is in, and the queue counts them
+// apart. Both are unpullable and neither is a wait for anything, and that is
+// where the resemblance ends: one is the development manager's to settle and the
+// other is the harness's to carry out, so a count that added them together sent
+// an operator to chase decisions that had all been made.
+func TestHeldEntriesCountApartByWhoseMoveTheyAreWaitingOn(t *testing.T) {
+	t.Parallel()
+
+	queue := Order([]beads.WorkItem{
+		{ID: "yoyodyne-ifd.150", Title: "Decided and not carried out", Status: statusBlocked, Priority: 1},
+		{ID: "yoyodyne-ifd.151", Title: "Nobody has decided", Status: statusBlocked, Priority: 1},
+		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 2},
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]Hold{
+		"yoyodyne-ifd.150": {Reason: "run run-a stopped on it; the decision is recorded", Decided: true},
+		"yoyodyne-ifd.151": {Reason: "run run-b stopped on it; nobody has decided"},
+	}))
+
+	if queue.AwaitingCarryOut() != 1 || queue.AwaitingDecision() != 1 {
+		t.Fatalf("the queue counts %d awaiting carry-out and %d awaiting a decision, want one of each",
+			queue.AwaitingCarryOut(), queue.AwaitingDecision())
+	}
+	if decided := queue.Entries[0]; !decided.AwaitingCarryOut || decided.Ready {
+		t.Fatalf("a decided stoppage reads as %#v, want it held and named as the harness's", decided)
+	}
+	if undecided := queue.Entries[1]; undecided.AwaitingCarryOut || undecided.Ready {
+		t.Fatalf("an undecided stoppage reads as %#v, want it held and named as hers", undecided)
+	}
+	// A decision recorded about an item nothing is holding says nothing about why
+	// it is not being pulled, so it is never on either count.
+	if queue.Entries[2].AwaitingCarryOut {
+		t.Fatalf("a pullable item was counted as held: %#v", queue.Entries[2])
 	}
 }

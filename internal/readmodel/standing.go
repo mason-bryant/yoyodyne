@@ -168,7 +168,13 @@ type Sources struct {
 	// all landed. It is optional, and a reading without one holds every blocked
 	// item rather than releasing work whose hold it could not read; see
 	// backlog.Holds for why that is the safe direction.
-	Stoppages     Stoppages
+	Stoppages Stoppages
+	// Decisions is what triage has already decided about those stoppages, which is
+	// what separates an item waiting on the development manager from one waiting
+	// on the harness carrying her decision out. It is optional, and a reading
+	// without one reports every held item as one nobody has decided about, saying
+	// so in the refusal rather than guessing the other way.
+	Decisions     Decisions
 	Directives    Directives
 	Amendments    Amendments
 	OperatorHolds OperatorHolds
@@ -269,7 +275,16 @@ type Standing struct {
 	// Admitted is the whole backlog this reading saw, so a short not-startable
 	// list is legible: two refusals out of three admitted items and two out of
 	// forty are different states of the same machine.
-	Admitted            int    `json:"admitted"`
+	Admitted int `json:"admitted"`
+	// AwaitingDecision and AwaitingCarryOut are how much of the admitted work is
+	// held, split by whose move it is: a stoppage the development manager has
+	// still to decide about, and a decision she recorded that the harness has
+	// still to act on. They are counted separately and said in the head of the
+	// not-startable line, because the head is the whole of what an hourly message
+	// carries and one figure covering both is what sent an operator's attention to
+	// the wrong role for days.
+	AwaitingDecision    int    `json:"awaiting_decision"`
+	AwaitingCarryOut    int    `json:"awaiting_carry_out"`
 	NotStartableProblem string `json:"not_startable_problem,omitempty"`
 
 	NeedsHuman        []Attention `json:"needs_human"`
@@ -327,9 +342,11 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// a person. Reading them twice would be two chances for the two lines to
 	// disagree about one file.
 	switches := readSwitches(sources)
-	refused, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running, now)
+	refused, waits, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running, now)
 	standing.NotStartable = refused
 	standing.Admitted = len(queue.Entries)
+	standing.AwaitingDecision = waits.awaitingDecision
+	standing.AwaitingCarryOut = waits.awaitingCarryOut
 	standing.NotStartableProblem = notStartableProblem
 	// The provider's usage window is read out of the same stall the refusals are
 	// worded from, rather than derived a second time here: one reading of one
@@ -359,6 +376,10 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	if waiting, attention := stall.Waiting(); attention {
 		needs = append(needs, waiting)
 	}
+	// Held work is on both lines for the reason handed-off work below is, and says
+	// a different thing on each: the queue's line says why nothing pulls each
+	// item, and this says who has to move and how many items are waiting on them.
+	needs = append(needs, Held(standing.AwaitingDecision, standing.AwaitingCarryOut)...)
 	// Work marked for a conversation is on both lines and says a different thing
 	// on each: the queue's line says why nothing pulls it, and this says who has
 	// to open the conversation. A reader looking for what waits on a person must
@@ -547,13 +568,18 @@ func readSwitches(sources Sources) switches {
 // an empty queue is a state of the machine and not something waiting on
 // anybody, so it is returned as no stall at all rather than as attention nobody
 // asked for.
-func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun, now time.Time) ([]Refused, backlog.Queue, Stall, string) {
+//
+// The held counts it returns are counted over the same entries, in-flight work
+// left out with the rest of it: they are said in the head of the line the
+// refusals are listed under, so a count covering an item the line does not name
+// is a head that contradicts what is printed beneath it.
+func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun, now time.Time) ([]Refused, heldWork, backlog.Queue, Stall, string) {
 	if sources.Tracker == nil {
-		return nil, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
+		return nil, heldWork{}, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
 	}
 	queue, err := readQueue(ctx, sources)
 	if err != nil {
-		return nil, backlog.Queue{}, Stall{}, fmt.Sprintf("the admitted work could not be read: %v", err)
+		return nil, heldWork{}, backlog.Queue{}, Stall{}, fmt.Sprintf("the admitted work could not be read: %v", err)
 	}
 	// An item a run is already carrying is on the running line. Naming it here as
 	// well would report the machine working as work that will not start.
@@ -576,6 +602,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	// a state of the machine rather than something waiting on a person, and the
 	// attention line must not be given one.
 	stalled := false
+	var waits heldWork
 	refused := make([]Refused, 0, len(queue.Entries))
 	for _, entry := range queue.Entries {
 		if _, carried := inFlight[entry.ID]; carried {
@@ -584,6 +611,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 		paused := pausedBy(held.pausing, entry.ID)
 		switch {
 		case !entry.Ready:
+			waits.count(entry)
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: entry.Hold()})
 		case paused != nil:
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title,
@@ -600,7 +628,26 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	if len(held.problems) > 0 {
 		problem = joinProblems(problem, strings.Join(held.problems, "; "))
 	}
-	return refused, queue, stopped, problem
+	return refused, waits, queue, stopped, problem
+}
+
+// heldWork is how much of a reading's not-startable work is held, split by whose
+// move it is. It is a pair rather than one figure because they are two different
+// people to go to, and it is counted where the refusals are so that the head of
+// that line and the entries under it describe one set of items.
+type heldWork struct {
+	awaitingDecision int
+	awaitingCarryOut int
+}
+
+func (h *heldWork) count(entry backlog.Entry) {
+	switch held, carryOut := entry.Awaits(); {
+	case !held:
+	case carryOut:
+		h.awaitingCarryOut++
+	default:
+		h.awaitingDecision++
+	}
 }
 
 // whyNothingStarts is the pass-level stall: the reason a pullable item with
@@ -713,7 +760,7 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	}
 	var held backlog.Holds
 	if sources.Stoppages != nil {
-		held, err = HeldForAPerson(sources.Stoppages)
+		held, err = HeldForAPerson(sources.Stoppages, sources.Decisions)
 		if err != nil {
 			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}
@@ -748,10 +795,14 @@ func readReports(sources Sources, now time.Time) (report.Pile, string) {
 //
 // What is here and what is not is the whole of the line's value. A switch
 // somebody placed, a directive nobody settled, a proposal nobody decided, a run
-// that owes a step, and work marked for a conversation are all waiting on a
-// named person and will wait forever without one. A parked item is not: parking
-// is a decision already taken, and listing it would tell an operator to act on
-// something somebody deliberately settled.
+// that owes a step, held work, and work marked for a conversation are all
+// waiting on somebody named and will wait forever without them. A parked item is
+// not: parking is a decision already taken, and listing it would tell an
+// operator to act on something somebody deliberately settled.
+//
+// Held work is the one entry here whose mover can be the harness rather than a
+// person, and it is on this line for exactly that reason: an operator scanning
+// for what is waiting on him has to be able to see which of it is not.
 func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 	attention := make([]Attention, 0, 4)
 	if held.operatorHeld {
@@ -807,6 +858,48 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 		}
 	}
 	return attention, problem
+}
+
+// Held is the admitted work somebody has to release, as attention rather than as
+// queue entries: how many items wait on the development manager's decision and
+// how many wait on the harness carrying out decisions she has already recorded.
+//
+// The two are separate entries because they are separate people, and that is the
+// whole of what this exists for. Held work was named on the attention line only
+// through the queue's own refusals, one per item and all of them wording one
+// state, so an operator counting them read every held item as a decision
+// somebody owed. On 2026-09-07 that was thirty-three items and none of them: the
+// development manager had decided each one, and the gap was the harness never
+// carrying them out.
+//
+// Counts rather than identifiers, for the reason the attention line bounds
+// everything else it carries: what this line answers is who has to move, and a
+// reader who wants the items has the not-startable line above it, which names
+// them with the reason against each.
+func Held(awaitingDecision, awaitingCarryOut int) []Attention {
+	attention := make([]Attention, 0, 2)
+	if awaiting := awaitingDecision; awaiting > 0 {
+		attention = append(attention, Attention{
+			What:  fmt.Sprintf("%s %s the development manager's decision", count(awaiting, "admitted item"), awaits(awaiting)),
+			Whose: "the development manager's — nothing pulls a stopped item until she decides what happens to it",
+		})
+	}
+	if awaiting := awaitingCarryOut; awaiting > 0 {
+		attention = append(attention, Attention{
+			What:  fmt.Sprintf("%s %s carry-out of a decision already recorded", count(awaiting, "admitted item"), awaits(awaiting)),
+			Whose: "the harness's — the decision is made, and what is outstanding is the harness acting on it",
+		})
+	}
+	return attention
+}
+
+// awaits agrees the verb with the count, because a line that says "1 admitted
+// item await" is one a reader stops trusting the arithmetic of.
+func awaits(count int) string {
+	if count == 1 {
+		return "awaits"
+	}
+	return "await"
 }
 
 // HandedOff is the admitted work no run will ever carry, as attention rather
