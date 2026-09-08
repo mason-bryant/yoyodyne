@@ -84,6 +84,18 @@ type UsageLimitExhaustion struct {
 	// stoppage: the same refusal happened either way, and what an operator needs
 	// to know is whether the work carried on.
 	ServedBy string `json:"served_by,omitempty"`
+	// Provider and ServedByProvider are the providers the two models above were
+	// asked of, and are written only where a substitution crossed from one to the
+	// other. Both are empty on every entry that stayed on one provider, which is
+	// every entry written before an alternate could name a second one.
+	//
+	// They are here because a turn that crossed providers is not the same news as
+	// a turn that changed model: the second provider held no session, so its
+	// context was rebuilt from the durable record rather than resumed. An operator
+	// reading a substitution needs to know which of the two happened, and the model
+	// selectors alone cannot say — two providers can spell one model name.
+	Provider         domain.Backend `json:"provider,omitempty"`
+	ServedByProvider domain.Backend `json:"served_by_provider,omitempty"`
 	// Substitution is why the turn was moved off the model above. It is empty on
 	// every entry that is not a substitution at all, and empty on one written
 	// before there was more than one reason — which reads back as capacity,
@@ -155,8 +167,12 @@ func (e UsageLimitExhaustion) Validate() error {
 	if strings.TrimSpace(e.ServedBy) != "" && strings.TrimSpace(e.Model) == "" {
 		problems = append(problems, errors.New("served_by names an alternate and model names nothing; a substitution says which model was refused"))
 	}
-	if strings.TrimSpace(e.ServedBy) != "" && strings.TrimSpace(e.ServedBy) == strings.TrimSpace(e.Model) {
-		problems = append(problems, errors.New("served_by and model name the same model; a substitution is a turn served by the model that was not refused"))
+	// The same selector asked of two providers is a real substitution — the turn
+	// moved endpoints, and two providers can spell one model name — so what has to
+	// differ is the pair rather than the model alone.
+	if strings.TrimSpace(e.ServedBy) != "" && strings.TrimSpace(e.ServedBy) == strings.TrimSpace(e.Model) &&
+		strings.TrimSpace(string(e.Provider)) == strings.TrimSpace(string(e.ServedByProvider)) {
+		problems = append(problems, errors.New("served_by and model name the same model on the same provider; a substitution is a turn served by the endpoint that was not refused"))
 	}
 	// A reason belongs to a substitution and to nothing else: an entry that names
 	// why a turn moved without naming what moved it is a reason for something
@@ -174,6 +190,24 @@ func (e UsageLimitExhaustion) Validate() error {
 	// was ever going to change at.
 	if e.Substitution == SubstitutedForAvailability && e.ResetsAt != nil {
 		problems = append(problems, errors.New("an availability substitution names a reset time; a model the provider has not got is not waiting for a window"))
+	}
+	// A crossing is stated as a pair or not at all. One provider named without the
+	// other is a record saying a turn moved between one place and nowhere, which
+	// nothing reading it back could act on.
+	crossed := strings.TrimSpace(string(e.Provider)) != "" || strings.TrimSpace(string(e.ServedByProvider)) != ""
+	if crossed {
+		if err := domain.ValidateIdentifier("provider", string(e.Provider)); err != nil {
+			problems = append(problems, err)
+		}
+		if err := domain.ValidateIdentifier("served_by provider", string(e.ServedByProvider)); err != nil {
+			problems = append(problems, err)
+		}
+		if strings.TrimSpace(e.ServedBy) == "" {
+			problems = append(problems, errors.New("a provider pair names where a turn crossed to and served_by names nothing that took it"))
+		}
+		if e.Provider == e.ServedByProvider {
+			problems = append(problems, errors.New("provider and served_by provider name the same provider; a crossing is a turn served by the provider that did not refuse it"))
+		}
 	}
 	return errors.Join(problems...)
 }
@@ -201,6 +235,53 @@ func describeSubstitutionReasons() string {
 // note.
 func (e UsageLimitExhaustion) Substituted() bool {
 	return strings.TrimSpace(e.ServedBy) != ""
+}
+
+// CrossedProviders reports a substitution that left the provider it was refused
+// by, which is the one that rebuilt its context instead of resuming a session.
+func (e UsageLimitExhaustion) CrossedProviders() bool {
+	return strings.TrimSpace(string(e.Provider)) != "" &&
+		strings.TrimSpace(string(e.ServedByProvider)) != "" &&
+		e.Provider != e.ServedByProvider
+}
+
+// DescribeModel and DescribeServedBy name the two models a substitution moved
+// between, each qualified by its provider where the turn crossed from one to the
+// other. Within one provider they are the selectors themselves, which is what
+// every reader has always been shown.
+//
+// The qualification is here rather than in whatever displays them so that one
+// derivation answers for every surface: two providers can spell one model name,
+// and a reader shown "opus rather than opus" would be shown a substitution that
+// reads as no substitution at all.
+func (e UsageLimitExhaustion) DescribeModel() string {
+	if !e.CrossedProviders() {
+		return strings.TrimSpace(e.Model)
+	}
+	return DescribeServingModel(e.Provider, e.Model)
+}
+
+func (e UsageLimitExhaustion) DescribeServedBy() string {
+	if !e.CrossedProviders() {
+		return strings.TrimSpace(e.ServedBy)
+	}
+	return DescribeServingModel(e.ServedByProvider, e.ServedBy)
+}
+
+// DescribeServingModel names one model selector qualified by the provider it was
+// asked of. It is exported because the same phrase is owed to every surface that
+// says a turn was served somewhere other than where it was configured — the
+// conversation's own evidence line as well as this record — and two spellings of
+// it would be two answers to one question.
+//
+// A provider nobody named leaves the selector as it is, which is the answer for
+// every turn that never left the provider it was configured for.
+func DescribeServingModel(provider domain.Backend, model string) string {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" || strings.TrimSpace(string(provider)) == "" {
+		return trimmed
+	}
+	return string(provider) + "'s " + trimmed
 }
 
 // WindowClosed reports a refusal still standing at the given moment.
@@ -248,6 +329,14 @@ func (e UsageLimitExhaustion) Describe() string {
 	described := DescribePause(PauseUsageLimit, e.Kind)
 	if e.ResetsAt != nil {
 		described += ", until " + e.ResetsAt.UTC().Format(time.RFC3339)
+	}
+	// A crossing says so in the cause rather than only in the two models, because
+	// the cost of it is the part a reader would otherwise have to infer: the second
+	// provider held no session, so the turn carried on from what the record holds
+	// rather than from where the first provider had got to.
+	if e.CrossedProviders() {
+		described += "; the turn crossed to " + string(e.ServedByProvider) +
+			" and rebuilt its context from the durable record rather than resuming a session"
 	}
 	return described
 }

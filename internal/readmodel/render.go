@@ -178,7 +178,8 @@ func (s Standing) renderNotStartable() string {
 	if len(s.NotStartable) == 0 {
 		fmt.Fprintf(&rendered, "Not startable: nothing, of %s\n", count(s.Admitted, "admitted item"))
 	} else {
-		fmt.Fprintf(&rendered, "Not startable (%d of %s):\n", len(s.NotStartable), count(s.Admitted, "admitted item"))
+		fmt.Fprintf(&rendered, "Not startable (%d of %s%s):\n",
+			len(s.NotStartable), count(s.Admitted, "admitted item"), s.heldSplit())
 		listed, further := bound(len(s.NotStartable))
 		for _, refused := range s.NotStartable[:listed] {
 			fmt.Fprintf(&rendered, "  %s — %s\n", refused.WorkItemID, refused.Reason)
@@ -210,6 +211,32 @@ func (s Standing) renderNeedsHuman() string {
 		fmt.Fprintf(&rendered, "%s%s\n", partialRead, s.NeedsHumanProblem)
 	}
 	return rendered.String()
+}
+
+// heldSplit is how much of the not-startable line is held work, said in the head
+// and split by whose move it is: items the development manager has still to
+// decide about, and items whose decision she recorded and the harness has still
+// to act on.
+//
+// It is in the head rather than under it because the head is the whole of what
+// an hourly message carries — the brief rendering drops every entry and keeps
+// the heads — so a distinction only the entries made would be invisible in
+// exactly the message that woke somebody. It says nothing at all when neither
+// kind is present, which is a queue held by dependencies and directives and
+// where a clause about triage would be noise.
+func (s Standing) heldSplit() string {
+	decision := fmt.Sprintf("%d %s the development manager's decision", s.AwaitingDecision, awaits(s.AwaitingDecision))
+	carryOut := fmt.Sprintf("%d %s the harness carrying out a decision already recorded", s.AwaitingCarryOut, awaits(s.AwaitingCarryOut))
+	switch {
+	case s.AwaitingDecision > 0 && s.AwaitingCarryOut > 0:
+		return "; " + decision + ", " + carryOut
+	case s.AwaitingDecision > 0:
+		return "; " + decision
+	case s.AwaitingCarryOut > 0:
+		return "; " + carryOut
+	default:
+		return ""
+	}
 }
 
 // unreadable is a line whose source could not be read. It is never "nothing":

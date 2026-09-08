@@ -1630,3 +1630,63 @@ func TestADispatchTheTrackerRefusesReachesTheDocket(t *testing.T) {
 		t.Fatalf("the rendered entry does not say the dispatch never started:\n%s", entry.Render())
 	}
 }
+
+// The docket's own half of the 2026-09-07 conflation. Every entry described a
+// stoppage and none of them said whether what it was waiting for was a decision
+// or the carrying out of one, so a docket of already-decided work read as work
+// the development manager owed decisions on. Each entry now names its next mover.
+func TestADocketEntrySaysWhetherItWaitsOnHerOrOnTheHarness(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	undecided := &recordedDecisions{}
+	built, err := docketerDeciding([]runstate.State{stopped}, &memoryDocket{}, undecided, undecided).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if rendered := built.Entries[0].Render(); !strings.Contains(rendered, "Next mover: you — nothing is recorded as decided about this item") {
+		t.Fatalf("an undecided stoppage does not name her as the next mover:\n%s", rendered)
+	}
+
+	decided := &recordedDecisions{counters: map[string]runstate.TriageCounters{docketedItem: {Reruns: 1}}}
+	built, err = docketerDeciding([]runstate.State{stopped}, &memoryDocket{}, decided, decided).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if rendered := built.Entries[0].Render(); !strings.Contains(rendered, "Next mover: the harness — a decision about this item is already recorded and has not been carried out") {
+		t.Fatalf("a decided stoppage does not name the harness as the next mover:\n%s", rendered)
+	}
+
+	// And a record nobody could open says that rather than guessing, for the
+	// reason the decisions below it do: an unreadable record read as an item
+	// nobody has decided about is how one authorized recovery is nearly spent
+	// twice.
+	unreadable := &recordedDecisions{}
+	docketer := docketerDeciding([]runstate.State{stopped}, &memoryDocket{}, unreadable, unreadable)
+	if _, err := docketer.Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	unreadable.unreadable = docketedItem
+	built, _ = docketer.Build()
+	if len(built.Entries) != 1 {
+		t.Fatalf("built = %#v, want the entry the docket already held", built)
+	}
+	if rendered := built.Entries[0].Render(); !strings.Contains(rendered, "Next mover: unknown") {
+		t.Fatalf("an unreadable record was given a next mover:\n%s", rendered)
+	}
+}
+
+// A repair grant recorded and unspent is the other decision the harness has
+// still to carry out, and the counters say so without a re-run among them.
+func TestAnOutstandingGrantIsADecisionTheHarnessHasStillToCarryOut(t *testing.T) {
+	t.Parallel()
+
+	outstanding := triage.Counters{RepairGrants: 1, CommittedRounds: 3, ReviewRounds: 2}
+	if !outstanding.AwaitingCarryOut() {
+		t.Fatalf("counters = %#v, want the unspent grant read as a carry-out outstanding", outstanding)
+	}
+	spent := triage.Counters{RepairGrants: 1, CommittedRounds: 3, ReviewRounds: 3}
+	if spent.AwaitingCarryOut() {
+		t.Fatalf("counters = %#v, want a grant whose rounds are spent read as carried out", spent)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -135,6 +136,33 @@ type fakeSessions struct {
 
 func (f fakeSessions) List() ([]runstate.WatchTransition, error) { return f.transitions, f.fail }
 
+type fakeReports struct {
+	reports   []report.Report
+	handlings []report.Handling
+	fail      error
+	handleErr error
+}
+
+func (f fakeReports) List() ([]report.Report, error) { return f.reports, f.fail }
+
+func (f fakeReports) Handlings() ([]report.Handling, error) { return f.handlings, f.handleErr }
+
+// filedReport is one report in the pile, distinguished only by when it was filed
+// and how loudly it asks to be read.
+func filedReport(id string, severity report.Severity, filed time.Time) report.Report {
+	return report.Report{
+		SchemaVersion: report.SchemaVersion,
+		ID:            id,
+		Role:          domain.RoleDeveloper,
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Severity:      severity,
+		Message:       "something was noticed",
+		RecordedAt:    filed,
+	}
+}
+
 // quietSources is a harness with nothing wrong with it and nothing happening:
 // one session choosing work, no holds, an empty queue. Each test moves one
 // thing, so what a line says is attributable to the one record that changed.
@@ -151,8 +179,88 @@ func quietSources() Sources {
 		Sessions: fakeSessions{transitions: []runstate.WatchTransition{
 			{SessionID: "watch-1", State: runstate.WatchWatching, At: moment.Add(-time.Hour)},
 		}},
+		Reports:  fakeReports{},
 		Capacity: 2,
 		Now:      func() time.Time { return moment },
+	}
+}
+
+// A pile that is being worked through says nothing on any line: it is not
+// waiting on a person, and a status that named it every reading would be a
+// status with a permanent entry nobody can clear.
+func TestAPileBeingWorkedThroughWaitsOnNobody(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Reports = fakeReports{reports: []report.Report{
+		filedReport("report-00000000000000000000000000000001", report.SeverityCritical, moment.Add(-2*time.Hour)),
+		filedReport("report-00000000000000000000000000000002", report.SeverityNote, moment.Add(-30*time.Minute)),
+	}}
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.NeedsHuman) != 0 {
+		t.Fatalf("NeedsHuman = %#v, want a fresh pile to wait on nobody", standing.NeedsHuman)
+	}
+	// The counts are still carried, because whether the pile is draining is a
+	// question about a week of readings rather than about this one.
+	if standing.Reports.Unhandled != 2 || standing.Reports.Collected != 2 {
+		t.Fatalf("Reports = %#v", standing.Reports)
+	}
+	if standing.Reports.Worst != report.SeverityCritical {
+		t.Fatalf("Worst = %q, want the pile's worst severity", standing.Reports.Worst)
+	}
+}
+
+// The failure the whole report channel has: reports arriving faster than
+// anything decides about them, which is invisible in any one reading and shows
+// only as the oldest undecided report's age climbing.
+func TestAPileNothingIsDrainingWaitsOnTheProductManager(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Reports = fakeReports{
+		reports: []report.Report{
+			filedReport("report-00000000000000000000000000000001", report.SeverityWarning, moment.Add(-22*24*time.Hour)),
+			filedReport("report-00000000000000000000000000000002", report.SeverityNote, moment.Add(-time.Hour)),
+		},
+		handlings: []report.Handling{{ReportID: "report-00000000000000000000000000000002"}},
+	}
+	standing := ReadStanding(context.Background(), sources)
+	if standing.Reports.Unhandled != 1 || standing.Reports.OldestAge != 22*24*time.Hour {
+		t.Fatalf("Reports = %#v", standing.Reports)
+	}
+	rendered := standing.Render()
+	for _, want := range []string{"1 of 2 collected report(s) are unhandled", "22d ago", "the product manager's"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered is missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// A pile that could not be read is never reported as an empty one: "nobody has
+// reported anything" and "nothing could read what anybody reported" send an
+// operator in opposite directions.
+func TestAPileThatCouldNotBeReadIsNotReportedAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Reports = fakeReports{fail: errors.New("the pile is unreadable")}
+	standing := ReadStanding(context.Background(), sources)
+	if standing.Reports.Collected != 0 || standing.ReportsProblem == "" {
+		t.Fatalf("Reports = %#v, problem = %q", standing.Reports, standing.ReportsProblem)
+	}
+	if !strings.Contains(standing.Render(), "the pile is unreadable") {
+		t.Fatalf("the failure never reached a line:\n%s", standing.Render())
+	}
+	// What became of the pile failing on its own is the same refusal: every report
+	// would otherwise count as undecided, which overstates the backlog in the
+	// direction that sends somebody to work on something already done.
+	sources.Reports = fakeReports{
+		reports:   []report.Report{filedReport("report-00000000000000000000000000000001", report.SeverityNote, moment)},
+		handleErr: errors.New("the handling log is unreadable"),
+	}
+	standing = ReadStanding(context.Background(), sources)
+	if standing.Reports.Unhandled != 0 || standing.ReportsProblem == "" {
+		t.Fatalf("Reports = %#v, problem = %q", standing.Reports, standing.ReportsProblem)
 	}
 }
 
@@ -222,6 +330,10 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		WorktreePath: "/state/worktrees/run-b",
 		Blocker:      "Yoyodyne stopped this item: a configured check still failed after every permitted attempt.",
 	}}}
+	// And nothing has been decided about that stoppage, which is what makes it the
+	// development manager's rather than the harness's: the two are named apart
+	// wherever held work is counted.
+	sources.Decisions = recordedDecisions{}
 	sources.IntakeHolds = fakeIntakeHolds{
 		hold: runstate.IntakeHold{HeldAt: moment.Add(-2 * time.Hour), Reason: "the overnight looked wrong"},
 		held: true,
@@ -233,14 +345,15 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		"  yoyodyne-ifd.194 — developing, 12m elapsed, $3.41 so far\n",
 		"Working (1 conversation):\n",
 		"  product-manager — product-manager, a turn in flight for 40s after 270 recorded turns\n",
-		"Not startable (2 of 3 admitted items):\n",
+		"Not startable (2 of 3 admitted items; 1 awaits the development manager's decision):\n",
 		"  yoyodyne-ifd.200 — intake is held — the overnight looked wrong; `yoyo release` lifts it\n",
 		// The whole line, because docs/operations.md prints it as the example an
 		// operator reads: a wording change has to break the document and the test
 		// together rather than leaving the two saying different things.
-		"  yoyodyne-ifd.201 — run run-b stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; triage decides what happens to it\n",
-		"Needs a human (1):\n",
+		"  yoyodyne-ifd.201 — run run-b stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has\n",
+		"Needs a human (2):\n",
 		"intake is held, since 2026-08-30T10:00:00Z: the overnight looked wrong — the operator's",
+		"1 admitted item awaits the development manager's decision — the development manager's",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered:\n%s\nmissing: %q", rendered, want)
@@ -764,5 +877,108 @@ func TestAConversationThatCannotBeAskedIsSaidBesideTheCount(t *testing.T) {
 	}
 	if !strings.Contains(standing.Render(), "  not fully read: ") {
 		t.Fatalf("rendered:\n%s", standing.Render())
+	}
+}
+
+// The 2026-09-07 shape read end to end. Three items are held: one nobody has
+// decided about, one whose decision was recorded days ago, and one a run is
+// already carrying. The counts in the head describe exactly the items listed
+// under it, so the head cannot say something the entries beneath it contradict —
+// and the attention line names each mover separately, which is what would have
+// told the operator the gap was not his development manager's.
+func TestHeldWorkIsCountedByWhoseMoveItIsAndOnlyWhereItStopsSomething(t *testing.T) {
+	t.Parallel()
+
+	stopped := moment.Add(-24 * time.Hour)
+	sources := quietSources()
+	sources.Runs = fakeRuns{
+		incomplete: []runstate.State{{
+			RunID: "run-c", WorkItemID: "yoyodyne-ifd.152", Status: runstate.StatusRunning, StartedAt: moment.Add(-time.Minute),
+		}},
+		prices: map[string]runstate.ItemPrice{},
+	}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"blocked": {
+			{ID: "yoyodyne-ifd.150", Title: "Decided days ago", Status: "blocked"},
+			{ID: "yoyodyne-ifd.151", Title: "Nobody has decided", Status: "blocked"},
+			{ID: "yoyodyne-ifd.152", Title: "A run is carrying it", Status: "blocked"},
+		}},
+	}}
+	sources.Stoppages = fakeStoppages{runs: []runstate.State{
+		heldRun("run-a", "yoyodyne-ifd.150", stopped),
+		heldRun("run-b", "yoyodyne-ifd.151", stopped),
+		heldRun("run-c0", "yoyodyne-ifd.152", stopped),
+	}}
+	sources.Decisions = recordedDecisions{
+		"yoyodyne-ifd.150": {Decisions: []runstate.TriageDecision{{
+			Decision: runstate.TriageDecisionRerun, RunID: "run-a",
+		}}},
+		// And the item a run is already carrying, so that leaving it out of the
+		// counts is the in-flight rule rather than an absent decision.
+		"yoyodyne-ifd.152": {Decisions: []runstate.TriageDecision{{
+			Decision: runstate.TriageDecisionRerun, RunID: "run-c0",
+		}}},
+	}
+
+	standing := ReadStanding(context.Background(), sources)
+	if standing.AwaitingDecision != 1 || standing.AwaitingCarryOut != 1 {
+		t.Fatalf("standing counts %d awaiting a decision and %d awaiting carry-out, want one of each: %#v",
+			standing.AwaitingDecision, standing.AwaitingCarryOut, standing.NotStartable)
+	}
+	rendered := standing.Render()
+	for _, want := range []string{
+		"Not startable (2 of 3 admitted items; 1 awaits the development manager's decision, 1 awaits the harness carrying out a decision already recorded):\n",
+		"1 admitted item awaits the development manager's decision — the development manager's",
+		"1 admitted item awaits carry-out of a decision already recorded — the harness's",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered:\n%s\nmissing: %q", rendered, want)
+		}
+	}
+	// The item a run is carrying is on the running line and on neither count, so
+	// the head describes the entries printed under it and nothing else.
+	if strings.Count(rendered, "yoyodyne-ifd.152") != 1 {
+		t.Fatalf("the item a run is carrying is counted as held:\n%s", rendered)
+	}
+}
+
+// A parked item that is also held reads as parked, because releasing the hold
+// would not make it pullable. Counting it as held would put it on a total
+// nothing under the line accounts for.
+func TestAParkedItemThatIsAlsoHeldIsNotCountedAsHeld(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"blocked": {{
+			ID: "yoyodyne-ifd.153", Title: "Parked and stopped", Status: "blocked",
+			Parking: "the design is being reworked",
+		}}},
+	}}
+	sources.Stoppages = fakeStoppages{runs: []runstate.State{
+		heldRun("run-d", "yoyodyne-ifd.153", moment.Add(-24*time.Hour)),
+	}}
+	sources.Decisions = recordedDecisions{}
+
+	standing := ReadStanding(context.Background(), sources)
+	if standing.AwaitingDecision != 0 || standing.AwaitingCarryOut != 0 {
+		t.Fatalf("a parked item was counted as held: %d / %d", standing.AwaitingDecision, standing.AwaitingCarryOut)
+	}
+	if rendered := standing.Render(); !strings.Contains(rendered, "Not startable (1 of 1 admitted item):\n") {
+		t.Fatalf("rendered:\n%s\nwant the head to say nothing about held work", rendered)
+	}
+}
+
+// heldRun is a run that stopped on a durable blocker and left its change behind,
+// which is what holds an item for a person.
+func heldRun(runID, workItemID string, stopped time.Time) runstate.State {
+	return runstate.State{
+		RunID:        runID,
+		WorkItemID:   workItemID,
+		Status:       runstate.StatusFailed,
+		UpdatedAt:    stopped,
+		Branch:       "yoyodyne/" + workItemID + "/" + runID,
+		WorktreePath: "/state/worktrees/" + runID,
+		Blocker:      "Yoyodyne stopped this item: a configured check still failed after every permitted attempt.",
 	}
 }

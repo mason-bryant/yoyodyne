@@ -207,6 +207,12 @@ type personaDocument struct {
 type failoverDocument struct {
 	Enabled *bool   `yaml:"enabled"`
 	Model   *string `yaml:"model"`
+	// Provider and Account say where the alternate is served. Both are optional
+	// and both default to this agent's own, so a block that names only a model is
+	// the same failover it always was — one alternate model on the provider the
+	// agent already runs on.
+	Provider *domain.Backend `yaml:"provider"`
+	Account  *string         `yaml:"account"`
 }
 
 func decodeDocument(reader io.Reader) (configDocument, error) {

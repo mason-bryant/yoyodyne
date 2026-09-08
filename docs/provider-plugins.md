@@ -1,16 +1,16 @@
 # Provider plugins
 
 Yoyo runs agents through a provider — a coding CLI or a harness that speaks to a
-model API. Two are in the vocabulary: Claude Code, which serves every role and is
-the one this build ships an adapter for, and Codex, which is the developer's
-alone — it has no adapter yet, and its sandbox cannot hold the tool posture every
-other role requires ([capability validation](#capability-validation)).
+model API. Two are in the vocabulary and this build ships an adapter for both:
+Claude Code, which serves every role, and Codex, which is the developer's alone
+because its sandbox cannot hold the tool posture every other role requires
+([capability validation](#capability-validation)).
 
 A project can declare a provider of its own in its configuration, without forking
 this repository or rebuilding the binary. **What a declaration supplies is the
 dialect and the executable, not a new way of launching a process.** Your provider
-runs on a compiled adapter — Claude Code's, today — which starts it and reads its
-stream, and your declaration says which executable that adapter runs and how to
+runs on a compiled adapter — Claude Code's or Codex's — which starts it and reads
+its stream, and your declaration says which executable that adapter runs and how to
 read what it says about rate limits, retries, and reset times. So a fork of a
 provider yoyo already speaks, a proxy in front of one, or anything that talks the
 same protocol and reports its limits differently is reachable from configuration
@@ -141,11 +141,12 @@ provider that speaks a different one needs an adapter written in Go, which is a
 change to yoyo rather than to your configuration.
 
 `yoyo doctor` diagnoses a declared provider as what it actually runs on: it looks
-for the executable the declaration named, and reports it installed, missing, or
-unauthenticated the same way it reports a built-in. A backend nothing in this
-build can launch — Codex today, or a declaration that would not load — is
-reported as one this build has no adapter for, with the configuration as the
-remedy, because nothing you could install would give this build one.
+for the executable the declaration named, and asks that provider's own adapter
+whether it is installed, missing, or unauthenticated, the same way it reports a
+built-in. A backend nothing in this build can launch — a declaration that would
+not load, or a name nothing describes — is reported as one this build has no
+adapter for, with the configuration as the remedy, because nothing you could
+install would give this build one.
 
 ## Capability validation
 
@@ -172,8 +173,10 @@ The built-ins are held to it too, and Codex is the worked example: it declares
 network, and still lets the agent read the machine — and reading unrelated local
 files and sending them to a provider is the thing the `read-only` posture exists
 to prevent. So `codex` is refused for a `reviewer` agent, with the refusal naming
-the posture rather than the role, and the way to make that claim true again is an
-adapter that achieves the property rather than a line that asserts it.
+the posture rather than the role. That is a fact about the sandbox rather than
+about what this build carries: it held before the Codex adapter landed and holds
+after it, and the way to make the read-only claim true is an adapter that
+achieves the property rather than a line that asserts it.
 
 The same check stands behind a substitution. When a turn is moved off the model
 it asked for — because that model's capacity window closed — the endpoint it
@@ -183,6 +186,18 @@ then takes the refusal it would have taken anyway rather than being served
 somewhere the configuration would never have permitted. Configuration validation
 answers for the configuration as written; this answers for the endpoint an
 invocation is actually about to be made on.
+
+A provider you declare can be the alternate as well as the agent's own, which is
+what an agent's `failover.provider` names — see
+[configuration](configuration.md#serving-a-turn-from-a-permitted-alternate-model).
+That is worth knowing because a crossing costs something a substitution within one
+provider does not: your provider holds no session for the conversation, so it is
+handed the conversation rebuilt from the harness's durable record rather than a
+session identifier to resume. Nothing about your declaration has to say so and
+nothing about your adapter has to do anything differently — the harness sends no
+session and assembles the context — but the first turn your provider takes for a
+conversation somebody else was holding is a long one, and it is a first turn
+rather than a resumption.
 
 An endpoint is the provider, the version of the adapter that reaches it, the
 account alias, and the model, and every cost line records all four. A declared

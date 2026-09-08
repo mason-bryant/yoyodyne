@@ -118,14 +118,31 @@ type PassedOverClass string
 const (
 	PassedOverCarriedInConversation PassedOverClass = "carried in conversation"
 	PassedOverParked                PassedOverClass = "parked"
-	PassedOverHeldForAPerson        PassedOverClass = "held for a person"
-	PassedOverWaitingOnOtherWork    PassedOverClass = "waiting on other work"
-	PassedOverAlreadyTried          PassedOverClass = "already tried this session"
-	PassedOverAlreadyInFlight       PassedOverClass = "already in flight"
-	PassedOverCoveredByChildren     PassedOverClass = "covered by its children"
-	PassedOverPausedByDirective     PassedOverClass = "paused by a directive"
-	PassedOverSequencedBehindWork   PassedOverClass = "sequenced behind work in flight"
-	PassedOverPrerequisiteUnmet     PassedOverClass = "the tree does not meet what it asks for"
+	// PassedOverHeldForAPerson is the class no pull records any more. It said two
+	// states at once — a stoppage nobody has decided about, and a decision nobody
+	// has carried out — and on 2026-09-07 that cost days of the operator's
+	// attention on a development manager who had decided every one of them. The
+	// two below replaced it.
+	//
+	// It stays in the taxonomy because the log is append-only and validated on
+	// every read: a class this no longer recognized would make every log holding
+	// one unreadable, permanently, which is the same reason Restarting below is a
+	// field beside a state rather than a state of its own.
+	PassedOverHeldForAPerson PassedOverClass = "held for a person"
+	// PassedOverAwaitingDecision is a stoppage the development manager has still
+	// to decide about, and PassedOverAwaitingCarryOut one she has decided and the
+	// harness has still to act on. They are separate classes because they have
+	// separate next movers, and naming them apart is the whole of what tells an
+	// operator whether the gap is a decision or its execution.
+	PassedOverAwaitingDecision    PassedOverClass = "awaiting a decision"
+	PassedOverAwaitingCarryOut    PassedOverClass = "awaiting carry-out of a decision"
+	PassedOverWaitingOnOtherWork  PassedOverClass = "waiting on other work"
+	PassedOverAlreadyTried        PassedOverClass = "already tried this session"
+	PassedOverAlreadyInFlight     PassedOverClass = "already in flight"
+	PassedOverCoveredByChildren   PassedOverClass = "covered by its children"
+	PassedOverPausedByDirective   PassedOverClass = "paused by a directive"
+	PassedOverSequencedBehindWork PassedOverClass = "sequenced behind work in flight"
+	PassedOverPrerequisiteUnmet   PassedOverClass = "the tree does not meet what it asks for"
 )
 
 // PassedOverClasses is the whole taxonomy, in the order a pull meets them. A
@@ -136,6 +153,8 @@ func PassedOverClasses() []PassedOverClass {
 		PassedOverCarriedInConversation,
 		PassedOverParked,
 		PassedOverHeldForAPerson,
+		PassedOverAwaitingDecision,
+		PassedOverAwaitingCarryOut,
 		PassedOverWaitingOnOtherWork,
 		PassedOverAlreadyTried,
 		PassedOverAlreadyInFlight,

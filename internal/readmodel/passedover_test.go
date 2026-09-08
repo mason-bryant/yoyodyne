@@ -294,3 +294,42 @@ func TestTheNamesAreBoundedAndTheCountStaysExact(t *testing.T) {
 		t.Fatalf("Passed() = %d, want every item counted", account.Passed())
 	}
 }
+
+// The 2026-09-07 shape as the alarm says it. The queue was a third held, the
+// development manager had decided every one of those stoppages, and the sentence
+// that reached the operator sent him to her. Split, the same queue names the
+// harness — which is a message he could have acted on the first time.
+func TestACarriedOutQueueNamesTheHarnessAndADecidedOneNamesHer(t *testing.T) {
+	t.Parallel()
+
+	awaitingCarryOut := Cause{Class: runstate.PassedOverAwaitingCarryOut, Count: 33, Admitted: 47}
+	if want := "33 of the 47 admitted items are awaiting carry-out of decisions already recorded"; awaitingCarryOut.Says() != want {
+		t.Fatalf("Says() = %q, want %q", awaitingCarryOut.Says(), want)
+	}
+	if !strings.HasPrefix(awaitingCarryOut.Whose(), "the harness's") {
+		t.Fatalf("Whose() = %q, want the harness named as the next mover", awaitingCarryOut.Whose())
+	}
+
+	awaitingDecision := Cause{Class: runstate.PassedOverAwaitingDecision, Count: 33, Admitted: 47}
+	if want := "33 of the 47 admitted items are awaiting the development manager's decision"; awaitingDecision.Says() != want {
+		t.Fatalf("Says() = %q, want %q", awaitingDecision.Says(), want)
+	}
+	if !strings.HasPrefix(awaitingDecision.Whose(), "the development manager's") {
+		t.Fatalf("Whose() = %q, want her named as the next mover", awaitingDecision.Whose())
+	}
+}
+
+// The class no pull records any more still answers. The log is append-only and
+// validated on every read, so entries written before the two were told apart are
+// still in it, and a class the taxonomy dropped would make those logs unreadable
+// rather than merely undifferentiated.
+func TestTheClassThatSaidBothStatesIsStillReadable(t *testing.T) {
+	t.Parallel()
+
+	if !runstate.PassedOverHeldForAPerson.Valid() {
+		t.Fatal("a log entry written before the two holds were told apart no longer reads")
+	}
+	if said := (Cause{Class: runstate.PassedOverHeldForAPerson, Count: 33, Admitted: 47}).Says(); said == "" {
+		t.Fatal("the class that said both states says nothing")
+	}
+}

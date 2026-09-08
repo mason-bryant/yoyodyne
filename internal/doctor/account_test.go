@@ -179,6 +179,60 @@ func TestEachAccountIsAskedInTheHomeTheHarnessWouldInvokeIn(t *testing.T) {
 	}
 }
 
+// Each account is asked about its own provider. A pool that holds one account
+// per provider is the shape account failover has to work across, and a diagnosis
+// that asked every home whether `claude` was signed in there would report a
+// Codex account as broken and a Claude Code account as fine whichever of them
+// was really which.
+//
+// This is the diagnosis half of yoyodyne-ifd.351: `yoyo doctor` reported a pool
+// healthy while a Codex run in it would have been handed a Claude Code provider
+// home and died unauthenticated after claiming an item.
+func TestEachAccountIsAskedAboutItsOwnProvider(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	// Codex says it is not signed in, which is the state this check exists to
+	// catch and the one the Claude Code accounts are not in.
+	world.runner.reply("login status", failed("not logged in"))
+
+	findings := accountDiagnosis(world).checkAccounts(context.Background(), accountsConfig(map[string]config.Account{
+		"default": {},
+		"second":  {Provider: domain.BackendCodex},
+	}), builtInRegistry(t))
+
+	byCheck := map[string]Finding{}
+	for _, finding := range findings {
+		byCheck[finding.Check] = finding
+	}
+	onCodex, found := byCheck["account:second"]
+	if !found || onCodex.Status != StatusProblem {
+		t.Fatalf("account:second = %+v, want the unauthenticated Codex account reported as a problem", onCodex)
+	}
+	if !strings.Contains(onCodex.Summary, `provider "codex"`) {
+		t.Fatalf("account:second summary = %q, want the provider it holds named", onCodex.Summary)
+	}
+	home := filepath.Join(world.stateRoot, "accounts", "second")
+	if !strings.Contains(onCodex.Remedy, "CODEX_HOME="+home) || !strings.Contains(onCodex.Remedy, "codex login") {
+		t.Fatalf("account:second remedy = %q, want codex's own login in codex's own home variable", onCodex.Remedy)
+	}
+	if machine, found := byCheck["account:default"]; !found || machine.Status != StatusOK {
+		t.Fatalf("account:default = %+v, want the Claude Code account still reported healthy", machine)
+	}
+
+	// And the executables are each provider's own, asked in that account's home:
+	// a Codex account asked by `claude` is a diagnosis of somebody else's login.
+	for _, command := range world.runner.invocations {
+		home, wantBinary := "", "claude"
+		if slices.ContainsFunc(command.Env, func(entry string) bool { return strings.HasPrefix(entry, "CODEX_HOME=") }) {
+			home, wantBinary = "codex home", "codex"
+		}
+		if filepath.Base(command.Name) != wantBinary {
+			t.Fatalf("a command in the %q was %q, want %q", home, command.Name, wantBinary)
+		}
+	}
+}
+
 // The executable asked about is the developer's provider rather than this
 // build's own, because the pool exists to serve runs and a run is what the
 // developer's provider spends. A project that declared a fork of Claude Code is
