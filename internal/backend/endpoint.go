@@ -46,6 +46,17 @@ import (
 // stream with it.
 const ClaudeCodeAdapterVersion = "claude-code/1"
 
+// CodexAdapterVersion is the version of the compiled Codex adapter, and is what
+// a record naming a Codex endpoint says read the provider's stream. It is bumped
+// on the same terms as the one above: a change to what the adapter sends or to
+// how it reads a stream, and not a change that leaves both alone.
+//
+// It is "codex/1" because this is the first Codex adapter this build has ever
+// carried. The adapter written under yoyodyne-ifd.6 never reached the line, so
+// no record anywhere names a Codex adapter version, and there is nothing an
+// earlier number would distinguish this from.
+const CodexAdapterVersion = "codex/1"
+
 // Endpoint is one execution endpoint: which provider, read by which compiled
 // adapter, under which account, asking which model.
 //

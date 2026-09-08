@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -99,7 +100,13 @@ func readReports(args []string, stdout, stderr io.Writer) int {
 	// what says somebody has already dealt with that one.
 	handled := report.Handled(handlings)
 	theme := console.ThemeFor(stdout, os.Getenv)
-	fmt.Fprintf(stdout, "reports (%d collected, %d unhandled):\n", len(collected), len(collected)-len(handled))
+	// How the pile stands leads the listing, because that is the question an
+	// operator opens it with and the reports themselves do not answer it: whether
+	// the pile is being worked through is the count and the oldest unhandled
+	// report's age over time, and neither is legible from a page of reports. It is
+	// the shared derivation rather than arithmetic done here, so this number and
+	// the one the channel says cannot come apart.
+	fmt.Fprintf(stdout, "reports: %s\n", report.SummarizeHandled(collected, handled, time.Now()).Describe())
 	for _, reported := range collected {
 		fmt.Fprint(stdout, theme.Severity(console.Severity(reported.Severity), reported.Render()))
 		if handling, done := handled[reported.ID]; done {
@@ -170,10 +177,17 @@ marker is the part that survives: a listing piped to a file, read where
 `+"`NO_COLOR`"+` is set, or shown on a terminal that says it is dumb still says which
 reports are which. `+"`--json`"+` carries none of it and is unchanged.
 
+The listing leads with how the pile stands: how many of the collected reports
+nobody has decided about, how long ago the oldest of those was filed, and the
+worst severity among them. That is the line to read over a week rather than
+once — a pile being worked through has a falling count and a falling oldest age,
+and a pile nothing is draining looks identical to it in any single reading.
+
 A report decides nothing and nothing waits on it, so this is read-only: it
 retires nothing, handles nothing, and changes no work. Deciding what becomes of
 a report is the product manager's, in a conversation, and the unhandled ones are
-carried into that conversation without anybody having to fetch them.
+carried into that conversation without anybody having to fetch them, oldest
+first with anything critical ahead of them, resuming where the last turn stopped.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

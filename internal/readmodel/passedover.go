@@ -276,8 +276,8 @@ func dominantGroup(account runstate.PassedOver) (runstate.PassedOverGroup, bool)
 }
 
 // Says is the cause as one clause, said as a fraction of the queue it was
-// counted against: "33 of the 47 admitted items are held for a person, waiting
-// on triage decisions".
+// counted against: "33 of the 47 admitted items are awaiting carry-out of
+// decisions already recorded".
 //
 // The fraction is the whole point of it. "Some items are held" is a fact a
 // reader can do nothing with; "most of the queue is held" is the difference
@@ -324,6 +324,8 @@ var passedOverClauses = map[runstate.PassedOverClass]string{
 	runstate.PassedOverCarriedInConversation: "carried in conversation",
 	runstate.PassedOverParked:                "parked, and no pull selects a parked item however far the queue drains",
 	runstate.PassedOverHeldForAPerson:        "held for a person, waiting on triage decisions",
+	runstate.PassedOverAwaitingDecision:      "awaiting the development manager's decision",
+	runstate.PassedOverAwaitingCarryOut:      "awaiting carry-out of decisions already recorded",
 	runstate.PassedOverWaitingOnOtherWork:    "waiting on work that has not landed yet",
 	runstate.PassedOverAlreadyTried:          "already tried by this session and waiting out its cooling",
 	runstate.PassedOverAlreadyInFlight:       "already carried by a run in flight",
@@ -353,15 +355,24 @@ func (c Cause) Whose() string {
 	return passedOverMoves[c.Class]
 }
 
-// passedOverMoves is whose move follows each class. The three that name a person
-// are the three that never clear on their own: a parking, a triage decision, and
-// an item asking the tree for something nobody has put there. Everything else
-// clears as work lands, which is a wait rather than a move, and saying otherwise
-// would send somebody to release a queue that is releasing itself.
+// passedOverMoves is whose move follows each class. The ones that name a person
+// are the ones that never clear on their own: a parking, a stoppage nobody has
+// decided about, and an item asking the tree for something nobody has put there.
+// Everything else clears as work lands, which is a wait rather than a move, and
+// saying otherwise would send somebody to release a queue that is releasing
+// itself.
+//
+// A decision already recorded and not carried out names the harness, and it is
+// the one class here whose next mover is neither a person nor a wait. That is
+// the whole of what separating it bought: an operator reading "waiting on triage
+// decisions" goes to the development manager, and for thirty-three items on
+// 2026-09-07 she had made every one of them.
 var passedOverMoves = map[runstate.PassedOverClass]string{
 	runstate.PassedOverCarriedInConversation: "the role that carries them, in conversation — no run will ever start them",
 	runstate.PassedOverParked:                "the product manager's — a parked item is passed over at every pull until it is released",
 	runstate.PassedOverHeldForAPerson:        "the development manager's — nothing pulls work held for a person until triage decides what happens to it",
+	runstate.PassedOverAwaitingDecision:      "the development manager's — nothing pulls a stopped item until she decides what happens to it",
+	runstate.PassedOverAwaitingCarryOut:      "the harness's — the decisions are recorded, and what is outstanding is the harness acting on them",
 	runstate.PassedOverWaitingOnOtherWork:    "nobody's — the work they wait on lands or does not, and the queue is read again either way",
 	runstate.PassedOverAlreadyTried:          "nobody's — the session tries them again once they have cooled",
 	runstate.PassedOverAlreadyInFlight:       "nobody's — the runs carrying them finish, and the queue is read again as each of them does",

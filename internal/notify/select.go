@@ -292,10 +292,13 @@ func FromUsageLimit(exhaustion runstate.UsageLimitExhaustion) (Notification, err
 				ConversationID: exhaustion.ConversationID,
 			},
 			Detail: Detail{
-				Waiting:  exhaustion.Waiting,
-				Cause:    exhaustion.Describe(),
-				Model:    exhaustion.Model,
-				ServedBy: exhaustion.ServedBy,
+				Waiting: exhaustion.Waiting,
+				Cause:   exhaustion.Describe(),
+				// Each model qualified by the provider that was asked for it where the
+				// turn crossed from one to the other, so a substitution between two
+				// providers that spell one model name still reads as a substitution.
+				Model:    exhaustion.DescribeModel(),
+				ServedBy: exhaustion.DescribeServedBy(),
 			},
 		},
 	}, nil

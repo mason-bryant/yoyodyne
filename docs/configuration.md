@@ -2665,32 +2665,99 @@ supplies a `failover` block replaces whatever it inherited whole, rather than
 switching failover on over an alternate some other layer named.
 
 There is exactly one alternate. A list would be a routing policy; this is a
-fallback, so the second model either has capacity or the turn waits as it did
+fallback, so the second endpoint either has capacity or the turn waits as it did
 before. An agent that enables failover and names no alternate is refused, as is
-one that names its own model — a failover to the model whose window just closed
-is a second refusal rather than an alternate.
+one that names its own endpoint — a failover to the endpoint whose window just
+closed is a second refusal rather than an alternate.
+
+The alternate may name a provider and an account as well as a model, and both
+default to the ones the agent already runs on:
+
+```yaml
+agents:
+  development-manager:
+    role: development-manager
+    backend: claude-code
+    model: fable
+    failover:
+      enabled: true
+      model: second-model
+      provider: second-provider
+      account: second-account
+```
+
+That is there because the window that closes is not always the model's. A whole
+provider can decline — an account suspended, a subscription exhausted, the
+provider down — and an alternate that could only ever name another model on the
+same provider is no answer to that. An agent that names only a model fails over
+within its own provider, exactly as it did before these two keys existed.
+
+`provider` and `account` say where an alternate is served, so a block that names
+either and no `model` is refused: it says where and never what, which would read
+as a configured crossing that can never happen. That holds with `enabled: false`
+too — switching failover off keeps a choice already made, and there is none to
+keep in a block nobody finished.
+
+A crossing is refused where the file is read if the alternate names a provider
+this project does not name, one that cannot be held to the tool posture the
+agent's role requires, or an account that could not sign that provider in. The
+account is the one the agent would actually be served under — the account it
+names, or the pool's first that can sign its own provider in — rather than only
+the alias the `failover` block wrote down, so an agent that named no account of
+its own is refused here too. The same three are asked again at the moment of the
+substitution, because a posture is not something to take on trust from a check
+that ran earlier.
+
+A crossing that cannot be resolved when a conversation opens — an account edited
+away under a running harness, say — leaves that conversation with no failover at
+all, and `yoyo chat` says so on stderr. It is not degraded to a substitution
+within the provider: the alternate's model belongs to the other provider, so
+asking this conversation's own provider for it would meet an unknown selector at
+exactly the moment the fallback existed to save the turn.
+
+**A crossing covers conversation turns and nothing else.** An alternate on the
+agent's own provider serves its exchange rounds and its side threads as well; one
+that leaves the provider does not, because those are answered on the endpoint the
+agent is configured for and there is no crossing for them to take. An agent whose
+alternate names a provider therefore has its conversation carried through a window
+and its exchange rounds and side turns waiting the window out, alongside the run
+invocations. `yoyo agent` says which of the two an agent has.
 
 What happens on a refused turn:
 
 - The configured model is asked first. If the provider declines the turn for
-  want of capacity, the same invocation is made once more under the alternate,
-  and the answer that comes back is the answer.
-- Each attempt is priced against the model that attempt actually asked for, so
+  want of capacity, the same invocation is made once more on the alternate
+  endpoint, and the answer that comes back is the answer.
+- Each attempt is priced against the endpoint that attempt actually asked, so
   the cost log says what was spent where rather than billing the alternate's turn
-  to the model that refused it.
+  to the model that refused it. A crossing is charged to the alternate's own
+  account and provider, which is the subscription the money actually left.
 - The endpoint the turn would move onto is checked against the tool posture the
   role requires before it is moved. A substitution can never put a role on a
   provider whose sandbox cannot hold that posture — a reviewer needs a provider
   that can refuse every tool, and a developer one that can scope writes to a
   worktree — and a substitution that would is refused with the posture named,
-  leaving the turn to take the refusal it would have taken anyway. Today's
-  alternate is another model on the same provider, so this refuses nothing a
-  valid configuration asks for; it is what keeps that true as an alternate comes
-  to mean more than a model.
+  leaving the turn to take the refusal it would have taken anyway.
+- **A crossing rebuilds rather than resumes.** Every turn but the first resumes a
+  provider session, which is why a later turn's prompt carries so little: the
+  session already holds the picture, the operator's earlier messages, and what
+  the role has said. A session belongs to the provider that issued it, so a turn
+  served on another provider has nothing to resume. What it is handed instead is
+  assembled from the conversation's own durable record — the picture it is working
+  from, and the replies its event log holds — with no session identifier anywhere.
+  The reconstruction is framed to the role as what it is: the harness records what
+  the role said and not what the operator asked, so the role is told to say when
+  that leaves it unsure rather than to fill the gap in. A crossing that could not
+  be rebuilt is refused before it is attempted, and the turn takes the refusal it
+  already met.
+  The turn after a crossing crosses back the same way: the session on the record
+  belongs to the provider that served the crossing, so it is not sent, and the
+  context is rebuilt again for the provider the agent is configured for.
 - The substitution is recorded in the same per-product usage-limit log every
-  refusal outside a run is recorded in, carrying the model that was refused and
-  the alternate that served. The conversation's own record keeps the model that
-  served each turn, and `yoyo chat` says so at the prompt.
+  refusal outside a run is recorded in, carrying the endpoint that was refused and
+  the one that served — both providers where the turn crossed, because two
+  providers can spell one model name. The conversation's own record keeps the
+  whole endpoint that served each turn, and `yoyo chat` says so at the prompt.
 - While that refusal stands, the next turn goes straight to the alternate rather
   than paying a refused invocation to rediscover a window the harness has already
   watched close. Affinity is the configured model's: the first turn after it
@@ -2704,9 +2771,10 @@ What happens on a refused turn:
   one probe interval long rather than one window of unknown length, and the
   configured model is asked again at the top of each.
 - The substitution reaches the operator's channel as a note. Nothing stopped —
-  that is the whole point of it — but an agent answering on a model the operator
-  did not configure it for is a change to what the work was produced by. It is
-  said once per window rather than again while one stands, which for an undated
+  that is the whole point of it — but an agent answering on an endpoint the
+  operator did not configure it for is a change to what the work was produced by.
+  A crossing says which provider produced it and that the context was rebuilt. It
+  is said once per window rather than again while one stands, which for an undated
   refusal means once per probe interval: a six-hour outage the provider never
   dated is said around twelve times at the `30m` default, not once per turn.
 
@@ -3773,7 +3841,11 @@ These are all errors, reported before any work is claimed:
   bytes, an agent whose `account` names an alias the mapping does not declare, a
   `pool` that is neither `active` nor `reserved`, a negative
   `weekly_budget_usd`, or a mapping whose every account is reserved — a pool
-  with an empty active half is one every run falls out of.
+  with an empty active half is one every run falls out of;
+- an `accounts` entry whose `provider` is not a provider this project names, and
+  an agent no configured account could authenticate — a project whose accounts
+  hold one provider's logins and whose developer runs on another is a project no
+  run can ever be served for.
 
 ## Provider accounts
 
@@ -3810,11 +3882,56 @@ still only a name for the record.
 
 **Under a pool, where an alias authenticates follows from the alias.** `default`
 stays the machine's own home. Every other alias has a provider home of its own,
-at `<state root>/accounts/<alias>`, which the harness sets `CLAUDE_CONFIG_DIR` to
-when it invokes under that account. That is one rule, and the harness,
-`yoyo doctor`, and `bin/yoyo-account` all read it the same way. It is a rule
-rather than a setting because this file is versioned with the repository, and a
-directory belonging to one machine has no business in it.
+at `<state root>/accounts/<alias>`, which the harness sets that provider's home
+variable to when it invokes under that account — `CLAUDE_CONFIG_DIR` for Claude
+Code, `CODEX_HOME` for Codex. That is one rule, and the harness, `yoyo doctor`,
+and `bin/yoyo-account` all read it the same way. It is a rule rather than a
+setting because this file is versioned with the repository, and a directory
+belonging to one machine has no business in it.
+
+**An account names the provider whose authentication its home holds.** A
+provider home is one provider's: an invocation pointed at another provider's home
+authenticates as nobody and is refused. So an account that is not Claude Code's
+says so:
+
+```yaml
+accounts:
+  default:
+    description: the Claude subscription this machine is signed in to
+  on-codex:
+    description: the ChatGPT subscription
+    provider: codex
+```
+
+`provider` is optional, and what leaving it out means depends on whether the
+account has a home of its own:
+
+- An account that authenticates **where the machine does** — a project's single
+  account, and the `default` alias under a pool — serves whichever provider is
+  asking, because each provider reads its own home there. This is every project
+  that pools nothing, and nothing about provider-scoped accounts reaches one.
+- An account with a **home of its own** under the state root is a Claude Code
+  home when it says nothing, because that is what every one of them is:
+  `bin/yoyo-account` makes them with `CLAUDE_CONFIG_DIR=… claude auth login`, and
+  so does the login `yoyo doctor` hands back. A pool of Codex accounts states
+  `provider: codex` on them.
+
+Two providers reached by one adapter — Claude Code and a [declared
+provider](provider-plugins.md) whose `adapter` is `claude-code` — authenticate in
+the same shape of home, so an account holding either serves both.
+
+**An account that cannot sign an agent's provider in is refused before anything
+is claimed.** A run is served by an account that holds its developer's provider,
+and a pool that holds none for it refuses at the point the account would have
+been chosen — before a work item is claimed and before a worktree is cut — naming
+what each account holds. The same project is refused when its configuration is
+read, so the ordinary way to meet this is an edit rather than a run. In a mixed
+pool the rotation simply skips the accounts of other providers, which is what
+lets one pool serve a Claude Code developer and a Codex one.
+
+`yoyo doctor` asks each account about its own provider: a Codex account is asked
+by `codex` whether it is signed in, in `CODEX_HOME`, and the login it hands back
+is that provider's own.
 
 The consequence worth knowing is at the moment you declare the second account,
 not before it. A project whose single account was aliased `work` was
@@ -3840,6 +3957,12 @@ accounts:
     pool: reserved
 ```
 
+- **`provider`** is whose authentication this account's home holds, and defaults
+  as [above](#provider-accounts): the machine's own home serves whichever
+  provider asks, and a home of its own is Claude Code's unless the entry says
+  otherwise. An account of another provider is skipped by the rotation for an
+  agent it could not sign in, rather than handed a run that would die
+  unauthenticated.
 - **`pool`** is `active` or `reserved`, and defaults to `active`. The active
   accounts are round-robined, one account per run; a reserved one is served from
   only when no active account can be. A mapping whose every account is reserved
@@ -3911,13 +4034,18 @@ rotation is what `pool: reserved` is for, and standing one down is what
 every account is over its weekly budget, the run is refused at the point the
 account would have been chosen — before a work item is claimed and before a
 worktree is cut — and the refusal names what each account has spent against what
-it was budgeted.
+it was budgeted. A pool holding no account for the developer's provider is
+refused in the same place and reads as the different fact it is: nothing is
+exhausted, and no amount of waiting makes one of those accounts able to sign this
+agent in.
 
 **Setting the second account up** is [in the
 README](../README.md#running-several-claude-accounts), and `bin/yoyo-account`
 asks the questions and runs the login. `yoyo doctor` then reports each configured
-alias by name — `account:second` — saying whether it is authenticated and which
-half of the pool it is in.
+alias by name — `account:second` — saying which provider's authentication it
+holds, whether it is authenticated, and which half of the pool it is in.
+`bin/yoyo-account` signs an account in with Claude Code; an account on another
+provider is signed in with that provider's own login, which the diagnosis prints.
 
 ## Operators
 
@@ -4230,6 +4358,58 @@ something you can find.
 Every firing ends in a durable report, read with
 [`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found). The reports
 outlive the session that produced them and are written once and never revised.
+
+### Working the report pile on a cadence
+
+The other standing loop worth configuring is the one that drains the
+[collected reports](reporting.md#who-reads-them-and-what-became-of-each-one).
+Every role files what it noticed into one pile, the product manager is the only
+role that can record what became of a report, and until something wakes it for
+that the pile is worked only when you happen to open a conversation. Reports
+arrive at twenty to forty-five a day in this project, which is more than that
+reaches.
+
+`yoyo init` writes this entry into the generated configuration, commented out and
+beside the development manager's sweep, so a new project has it to uncomment
+rather than to compose. **A project that has not uncommented it has no cadence
+over the pile**,
+and no part of the harness supplies one on its behalf — the schedule is where a
+project says which roles are woken and how often, and a task nobody wrote is a
+task that does not fire:
+
+```yaml
+recurring_tasks:
+  report-triage:
+    role: product-manager
+    every: 1h
+    enabled: true
+    max_turns: 4
+    prompt: |
+      Work the collected reports. The unhandled ones are carried into this turn
+      already, oldest first with anything critical ahead of them; decide about
+      every one you are shown and record each decision with the "handle"
+      action, whether that decision is work to admit, a proposal to make, a
+      question to raise, or that it needs nothing. Check anything you would
+      admit against the work already admitted first. Say in your pass's summary
+      how many you decided and how many are still behind them, and keep the
+      findings for what was worth more than a handling; a pass that has more of
+      the pile to work than one turn holds says so and takes another.
+```
+
+Every decision is on the record twice, which is why the prompt does not ask for
+one finding per report: the `handle` action writes what became of each report
+beside the pile, and the pass's own account in `yoyo sweeps` is the summary of
+the pass — bounded at twenty findings a turn, which a pass working forty reports
+would otherwise spend on bookkeeping.
+
+Nothing about that turn is special, which is the point: the same persona, the
+same authority, and the same bounded delivery a conversation you open yourself
+gets. What makes the loop converge is the delivery being a walk with a durable
+position rather than a listing — see
+[the walk](reporting.md#who-reads-them-and-what-became-of-each-one) — so each
+firing takes the next slice of the pile instead of the same worst one. Whether
+it is keeping up is answered by the count and the oldest undecided report's age
+that every listing of the pile now leads with.
 
 ## Personas
 

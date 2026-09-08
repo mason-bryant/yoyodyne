@@ -263,6 +263,12 @@ const (
 // depended-on item is itself still unfinished. A listing that does carry a
 // status is believed on it, so work the tracker reports as unfinished is named
 // whether or not the caller knew it was still queued.
+//
+// Both halves are load-bearing, and which one answers depends on the shape the
+// caller read: bd's show carries the blocker's real status and bd's list carries
+// none, so an in-flight blocker — which has left the backlog and so is in no
+// admitted listing — is named by the status half alone.
+// TestBlockerStatusConformance pins that against the real binary.
 func (w WorkItem) WaitingOn(unfinished map[string]struct{}) []string {
 	var waiting []string
 	for _, dependency := range w.Dependencies {
@@ -659,6 +665,11 @@ func normalizeText(text string) string {
 // what bd says: there is no exit code or JSON field that distinguishes this
 // refusal from any other, so the recovery below is entered on the message and on
 // nothing else, and a bd that reworded it would simply stop recovering.
+//
+// That the refusal happens at all, and that this pattern is what bd's own words
+// match, is pinned against the real binary by TestBlockedClaimConformance rather
+// than left to this comment: every other check of the recovery drives a scripted
+// runner replaying a message this file wrote.
 var staleBlockedRefusal = regexp.MustCompile(`(?i)not claimable: status blocked`)
 
 // Claim takes a work item for a run.

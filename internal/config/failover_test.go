@@ -116,13 +116,13 @@ func TestFailoverIsRefusedWhenItCouldNotServeATurn(t *testing.T) {
 			want: "names no alternate model",
 		},
 		{
-			name: "an alternate that is the model whose window closed",
+			name: "an alternate that is the endpoint whose window closed",
 			agent: `    model: fable
     failover:
       enabled: true
       model: fable
 `,
-			want: "as its own failover model",
+			want: "names its own endpoint as its failover",
 		},
 		{
 			name: "an alternate that could not name a model",

@@ -278,3 +278,58 @@ func TestAnAvailabilitySubstitutionStandsForTheProbeIntervalOnly(t *testing.T) {
 		t.Fatal("a version found missing stays missing forever, so a pin would become an alias the operator thinks is a pin")
 	}
 }
+
+// A crossing is stated as a pair of providers or not at all, and it changes what
+// the record says the substitution was: a turn served by another provider held no
+// session there, so its context was rebuilt rather than resumed. Two providers
+// can spell one model name, so the models alone cannot say a turn crossed.
+func TestACrossingNamesBothProvidersAndSaysWhatItCost(t *testing.T) {
+	t.Parallel()
+
+	crossed := testUsageLimitExhaustion("the development manager conversation", nil)
+	crossed.Model = "fable"
+	crossed.ServedBy = "fable"
+	crossed.Provider = "claude-code"
+	crossed.ServedByProvider = "codex"
+	if err := crossed.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want one selector asked of two providers accepted as a substitution", err)
+	}
+	if !crossed.CrossedProviders() {
+		t.Fatal("the record does not read as a crossing, so nothing would say its context was rebuilt")
+	}
+	if crossed.DescribeModel() != "claude-code's fable" || crossed.DescribeServedBy() != "codex's fable" {
+		t.Fatalf("described as %q rather than %q; a crossing between two providers spelling one model name would read as no substitution at all",
+			crossed.DescribeModel(), crossed.DescribeServedBy())
+	}
+	if !strings.Contains(crossed.Describe(), "rebuilt its context from the durable record") {
+		t.Fatalf("Describe() = %q, want the cost of the crossing said rather than left to be inferred", crossed.Describe())
+	}
+
+	// Within one provider nothing is qualified, which is what every reader has
+	// always been shown.
+	within := testUsageLimitExhaustion("the development manager conversation", nil)
+	within.Model = "fable"
+	within.ServedBy = "opus"
+	if within.CrossedProviders() || within.DescribeModel() != "fable" || within.DescribeServedBy() != "opus" {
+		t.Fatalf("described = %q and %q, want the selectors themselves", within.DescribeModel(), within.DescribeServedBy())
+	}
+
+	half := crossed
+	half.ServedByProvider = ""
+	if err := half.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want a record saying a turn moved between one place and nowhere refused")
+	}
+
+	same := crossed
+	same.ServedByProvider = same.Provider
+	if err := same.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want a crossing onto the provider that refused the turn refused")
+	}
+
+	orphaned := crossed
+	orphaned.ServedBy = ""
+	orphaned.Model = "fable"
+	if err := orphaned.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want a provider pair with nothing that took the turn refused")
+	}
+}
