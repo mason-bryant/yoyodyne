@@ -941,6 +941,7 @@ func (c Config) Validate() error {
 	}
 
 	problems = append(problems, c.accountProblems()...)
+	problems = append(problems, c.accountProviderProblems(providers)...)
 	problems = append(problems, c.operatorProblems()...)
 	problems = append(problems, c.Slack.problems()...)
 	problems = append(problems, validateRecurringTasks(c)...)

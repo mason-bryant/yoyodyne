@@ -520,11 +520,16 @@ both named. An item whose **executor is a persona conversation** rather than
 a developer run is passed over with what carries it named, which the paragraph
 after next is about. An item the product manager has **parked** is passed
 over with the parking reason named, which the paragraph after that is about. And
-an item **held for a person** — a stoppage whose change is still on a branch,
-one nobody has decided about, or a publication that did not finish over work
-already integrated, in the sense the hold paragraph above gives it — is
+a **held** item — a stoppage whose change is still on a branch, one nobody has
+decided about, or a publication that did not finish over work already integrated,
+in the sense the hold paragraph above gives it — is
 passed over with the hold named, because like the parking it is not a wait for
-anything and will not clear on its own. And an item **the tree is not ready
+anything and will not clear on its own. It is passed over as one of two things
+rather than one, because the two have different next movers: an item **awaiting a
+decision** is the development manager's to settle, and one **awaiting carry-out
+of a decision** is one she has settled and the harness has not yet acted on.
+Reporting both as a single class is what made thirty-three already-decided items
+read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its
 own words that something has to land first — is passed over with the unmet
 prerequisite named and routed to the development manager's docket, which the last

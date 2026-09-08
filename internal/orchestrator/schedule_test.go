@@ -2304,6 +2304,12 @@ type scheduleHarness struct {
 	// only where a test asks for it; without it a pull holds every blocked item,
 	// which is what every other test here means.
 	stoppages readmodel.Stoppages
+	// decisions is what triage has already decided about the items those
+	// stoppages belong to, which is what separates a held item waiting on the
+	// development manager from one waiting on the harness carrying her decision
+	// out. A pull wired without one passes every held item over as one nobody has
+	// decided about, which is what every other test here means.
+	decisions readmodel.Decisions
 	// escalate stands in for putting stopped work to the development manager,
 	// with the number of passes already made. A pull is wired with one only where
 	// a test asks for it, so every other test's pass is what it always was.
@@ -2418,7 +2424,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	}
 	h.mu.Lock()
 	blockedRuns := h.blockedRuns
-	stoppages := h.stoppages
+	stoppages, decisions := h.stoppages, h.decisions
 	var escalations ScheduleEscalations
 	if h.escalate != nil {
 		escalations = h
@@ -2438,7 +2444,8 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	}
 	h.mu.Unlock()
 	return Pull{
-		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h, Stoppages: stoppages,
+		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
+		Stoppages: stoppages, Decisions: decisions,
 		Capacity: capacity, Start: h.start, Escalations: escalations,
 		Tree: tree, Triage: docket, Recurring: recurring,
 		// A minute is the shipped interval, and no test spends one: the sleep is
@@ -3982,5 +3989,90 @@ func TestAnUnreadyItemWithNowhereToRouteIsStillNotDispatched(t *testing.T) {
 	}
 	if !strings.Contains(schedule.ReadinessProblem, "nowhere durable") {
 		t.Fatalf("readiness problem = %q, want the missing record reported", schedule.ReadinessProblem)
+	}
+}
+
+// The 2026-09-07 shape, from the pull that records it. Two items are held and
+// neither is a wait for anything, and that is where they stop resembling each
+// other: one stoppage nobody has decided about is the development manager's, and
+// one she decided days ago is the harness's to carry out. Recording both as one
+// class is what made thirty-three already-decided items read as a decision
+// backlog for days.
+func TestAPollPassesADecidedStoppageOverSeparatelyFromAnUndecidedOne(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	harness := newScheduleHarness(
+		beads.WorkItem{ID: "yoyodyne-ifd.150", Title: "Decided days ago", Status: "blocked", Priority: 1},
+		beads.WorkItem{ID: "yoyodyne-ifd.151", Title: "Nobody has decided", Status: "blocked", Priority: 2},
+	)
+	harness.stoppages = heldStoppages{runs: []runstate.State{
+		stoppedRunOf("run-aaaa1111", "yoyodyne-ifd.150", stopped),
+		stoppedRunOf("run-bbbb2222", "yoyodyne-ifd.151", stopped),
+	}}
+	harness.decisions = decidedItems{"yoyodyne-ifd.150": {
+		Decisions: []runstate.TriageDecision{{
+			Decision: runstate.TriageDecisionRerun, RunID: "run-aaaa1111",
+		}},
+	}}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	if _, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}).
+		Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded, so nothing said what the poll found")
+	}
+	want := runstate.PassedOver{Admitted: 2, Groups: []runstate.PassedOverGroup{
+		{Class: runstate.PassedOverAwaitingCarryOut, Count: 1, Items: []string{"yoyodyne-ifd.150"}},
+		{Class: runstate.PassedOverAwaitingDecision, Count: 1, Items: []string{"yoyodyne-ifd.151"}},
+	}}
+	if !reflect.DeepEqual(idle.passedOver, want) {
+		t.Fatalf("idle passed over = %+v, want %+v", idle.passedOver, want)
+	}
+	// And the prose the same poll writes says which is which, so the log reads the
+	// way the classes do.
+	for _, said := range []string{
+		"awaiting carry-out of a decision (yoyodyne-ifd.150)",
+		"awaiting a decision (yoyodyne-ifd.151)",
+	} {
+		if !strings.Contains(idle.reason, said) {
+			t.Fatalf("idle reason = %q, want it to say %q", idle.reason, said)
+		}
+	}
+}
+
+// heldStoppages is the harness's own record of the work it stopped, for the
+// tests that need a held queue rather than a blocked one.
+type heldStoppages struct {
+	runs []runstate.State
+}
+
+func (h heldStoppages) Recorded() ([]runstate.State, error) { return h.runs, nil }
+
+func (h heldStoppages) Escalated() ([]runstate.Escalation, error) { return nil, nil }
+
+// decidedItems is one item's triage record for the items it names, and the
+// empty record every other item actually stands at.
+type decidedItems map[string]runstate.TriageCounters
+
+func (d decidedItems) Counters(workItemID string) (runstate.TriageCounters, error) {
+	return d[workItemID], nil
+}
+
+// stoppedRunOf is a run that stopped on a durable blocker and left its change
+// behind, which is the shape that holds an item for a person.
+func stoppedRunOf(runID, workItemID string, stopped time.Time) runstate.State {
+	return runstate.State{
+		RunID:        runID,
+		WorkItemID:   workItemID,
+		Status:       runstate.StatusFailed,
+		UpdatedAt:    stopped,
+		Branch:       "yoyodyne/" + workItemID + "/" + runID,
+		WorktreePath: "/state/worktrees/" + runID,
+		Blocker:      "Yoyodyne stopped this item: its independent reviewer still required repair after every permitted attempt.",
 	}
 }

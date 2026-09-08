@@ -276,7 +276,7 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		if err != nil {
 			fmt.Fprintf(out, "none of these is shown as handled: %v\n", err)
 		}
-		fmt.Fprint(out, renderCollectedReports(s.theme, reports, handled))
+		fmt.Fprint(out, renderCollectedReports(s.theme, reports, handled, s.options.clock().Now()))
 		fmt.Fprintln(out)
 		return false, nil
 	case "/work":
