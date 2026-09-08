@@ -499,6 +499,12 @@ func (r *resolution) applyAgent(name string, document agentDocument, applied lay
 		if document.Failover.Model != nil {
 			failover.Model = strings.TrimSpace(*document.Failover.Model)
 		}
+		if document.Failover.Provider != nil {
+			failover.Provider = domain.Backend(strings.TrimSpace(string(*document.Failover.Provider)))
+		}
+		if document.Failover.Account != nil {
+			failover.Account = strings.TrimSpace(*document.Failover.Account)
+		}
 		agent.config.Failover = failover
 		agent.origins["failover"] = applied.origin
 	}

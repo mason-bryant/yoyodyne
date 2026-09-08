@@ -55,6 +55,12 @@ type agentReport struct {
 	// alternate named and a run that parks anyway is exactly the pair somebody
 	// would otherwise read as broken.
 	FailoverModel string `json:"failover_model,omitempty"`
+	// FailoverProvider is the provider that alternate is served by, and is absent
+	// where the alternate stays on the provider above — which is every agent that
+	// names none. It is read here because a crossing is a different promise from a
+	// substitution within one provider: the turn is served by a provider holding no
+	// session for it, so its context is rebuilt from the durable record.
+	FailoverProvider domain.Backend `json:"failover_provider,omitempty"`
 	// Conversations is what this agent does with a question that arrives while
 	// its main thread is busy — queueing it, or holding it on a side thread. It is
 	// read here for the reason the alternate is: an operator asking what an agent
@@ -333,6 +339,11 @@ func readAgents(parts components) ([]agentReport, error) {
 			PersonaPath:    agent.Persona.Path,
 			PersonaVersion: agent.Persona.Version,
 		}
+		// Named only where the alternate actually leaves the provider, so an agent
+		// that fails over within its own reads exactly as it always has.
+		if failover := parts.config.AgentFailover(name); failover.Alternate() != "" && failover.CrossesProviders(agent.Backend) {
+			report.FailoverProvider = failover.AlternateProvider(agent.Backend)
+		}
 		if authority, known := chat.AuthorityFor(agent.Role); known {
 			report.Addressable = true
 			report.Owns = authority.Owns
@@ -447,8 +458,17 @@ func renderAgent(report agentReport) string {
 		// behalf, which wait their window out on execution's usage-limit settings.
 		// An unqualified line here would read as a promise the run path does not
 		// keep, for a developer or reviewer agent most of all.
-		fmt.Fprintf(&rendered, "  turns and exchange rounds served by %s while %s has no capacity; run invocations wait it out\n",
-			report.FailoverModel, report.Model)
+		if report.FailoverProvider != "" {
+			// A crossing is a different promise and is said as one: the provider
+			// taking the turn holds no session for it, so what it is handed is
+			// assembled from the durable record rather than resumed. An operator who
+			// read only the model would not know that had been paid for.
+			fmt.Fprintf(&rendered, "  turns and exchange rounds served by %s on %s while %s has no capacity, rebuilding context from the record rather than resuming a session; run invocations wait it out\n",
+				report.FailoverModel, report.FailoverProvider, report.Model)
+		} else {
+			fmt.Fprintf(&rendered, "  turns and exchange rounds served by %s while %s has no capacity; run invocations wait it out\n",
+				report.FailoverModel, report.Model)
+		}
 	}
 	if report.Conversations == config.ConversationSideThreads {
 		// Said only for an agent that holds them, because queueing is what every

@@ -187,6 +187,18 @@ somewhere the configuration would never have permitted. Configuration validation
 answers for the configuration as written; this answers for the endpoint an
 invocation is actually about to be made on.
 
+A provider you declare can be the alternate as well as the agent's own, which is
+what an agent's `failover.provider` names — see
+[configuration](configuration.md#serving-a-turn-from-a-permitted-alternate-model).
+That is worth knowing because a crossing costs something a substitution within one
+provider does not: your provider holds no session for the conversation, so it is
+handed the conversation rebuilt from the harness's durable record rather than a
+session identifier to resume. Nothing about your declaration has to say so and
+nothing about your adapter has to do anything differently — the harness sends no
+session and assembles the context — but the first turn your provider takes for a
+conversation somebody else was holding is a long one, and it is a first turn
+rather than a resumption.
+
 An endpoint is the provider, the version of the adapter that reaches it, the
 account alias, and the model, and every cost line records all four. A declared
 provider's records therefore name your provider *and* the adapter version this

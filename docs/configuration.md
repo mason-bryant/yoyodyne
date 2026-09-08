@@ -2665,32 +2665,74 @@ supplies a `failover` block replaces whatever it inherited whole, rather than
 switching failover on over an alternate some other layer named.
 
 There is exactly one alternate. A list would be a routing policy; this is a
-fallback, so the second model either has capacity or the turn waits as it did
+fallback, so the second endpoint either has capacity or the turn waits as it did
 before. An agent that enables failover and names no alternate is refused, as is
-one that names its own model — a failover to the model whose window just closed
-is a second refusal rather than an alternate.
+one that names its own endpoint — a failover to the endpoint whose window just
+closed is a second refusal rather than an alternate.
+
+The alternate may name a provider and an account as well as a model, and both
+default to the ones the agent already runs on:
+
+```yaml
+agents:
+  development-manager:
+    role: development-manager
+    backend: claude-code
+    model: fable
+    failover:
+      enabled: true
+      model: second-model
+      provider: second-provider
+      account: second-account
+```
+
+That is there because the window that closes is not always the model's. A whole
+provider can decline — an account suspended, a subscription exhausted, the
+provider down — and an alternate that could only ever name another model on the
+same provider is no answer to that. An agent that names only a model fails over
+within its own provider, exactly as it did before these two keys existed.
+
+A crossing is refused where the file is read if the alternate names a provider
+this project does not name, one that cannot be held to the tool posture the
+agent's role requires, or an account that could not sign that provider in. The
+same three are asked again at the moment of the substitution, because a posture is
+not something to take on trust from a check that ran earlier.
 
 What happens on a refused turn:
 
 - The configured model is asked first. If the provider declines the turn for
-  want of capacity, the same invocation is made once more under the alternate,
-  and the answer that comes back is the answer.
-- Each attempt is priced against the model that attempt actually asked for, so
+  want of capacity, the same invocation is made once more on the alternate
+  endpoint, and the answer that comes back is the answer.
+- Each attempt is priced against the endpoint that attempt actually asked, so
   the cost log says what was spent where rather than billing the alternate's turn
-  to the model that refused it.
+  to the model that refused it. A crossing is charged to the alternate's own
+  account and provider, which is the subscription the money actually left.
 - The endpoint the turn would move onto is checked against the tool posture the
   role requires before it is moved. A substitution can never put a role on a
   provider whose sandbox cannot hold that posture — a reviewer needs a provider
   that can refuse every tool, and a developer one that can scope writes to a
   worktree — and a substitution that would is refused with the posture named,
-  leaving the turn to take the refusal it would have taken anyway. Today's
-  alternate is another model on the same provider, so this refuses nothing a
-  valid configuration asks for; it is what keeps that true as an alternate comes
-  to mean more than a model.
+  leaving the turn to take the refusal it would have taken anyway.
+- **A crossing rebuilds rather than resumes.** Every turn but the first resumes a
+  provider session, which is why a later turn's prompt carries so little: the
+  session already holds the picture, the operator's earlier messages, and what
+  the role has said. A session belongs to the provider that issued it, so a turn
+  served on another provider has nothing to resume. What it is handed instead is
+  assembled from the conversation's own durable record — the picture it is working
+  from, and the replies its event log holds — with no session identifier anywhere.
+  The reconstruction is framed to the role as what it is: the harness records what
+  the role said and not what the operator asked, so the role is told to say when
+  that leaves it unsure rather than to fill the gap in. A crossing that could not
+  be rebuilt is refused before it is attempted, and the turn takes the refusal it
+  already met.
+  The turn after a crossing crosses back the same way: the session on the record
+  belongs to the provider that served the crossing, so it is not sent, and the
+  context is rebuilt again for the provider the agent is configured for.
 - The substitution is recorded in the same per-product usage-limit log every
-  refusal outside a run is recorded in, carrying the model that was refused and
-  the alternate that served. The conversation's own record keeps the model that
-  served each turn, and `yoyo chat` says so at the prompt.
+  refusal outside a run is recorded in, carrying the endpoint that was refused and
+  the one that served — both providers where the turn crossed, because two
+  providers can spell one model name. The conversation's own record keeps the
+  whole endpoint that served each turn, and `yoyo chat` says so at the prompt.
 - While that refusal stands, the next turn goes straight to the alternate rather
   than paying a refused invocation to rediscover a window the harness has already
   watched close. Affinity is the configured model's: the first turn after it
@@ -2704,9 +2746,10 @@ What happens on a refused turn:
   one probe interval long rather than one window of unknown length, and the
   configured model is asked again at the top of each.
 - The substitution reaches the operator's channel as a note. Nothing stopped —
-  that is the whole point of it — but an agent answering on a model the operator
-  did not configure it for is a change to what the work was produced by. It is
-  said once per window rather than again while one stands, which for an undated
+  that is the whole point of it — but an agent answering on an endpoint the
+  operator did not configure it for is a change to what the work was produced by.
+  A crossing says which provider produced it and that the context was rebuilt. It
+  is said once per window rather than again while one stands, which for an undated
   refusal means once per probe interval: a six-hour outage the provider never
   dated is said around twelve times at the `30m` default, not once per turn.
 

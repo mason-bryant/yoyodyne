@@ -32,3 +32,16 @@ func (s *Session) spendAttribution() spend.Attribution {
 		ConversationID: s.state.ConversationID,
 	}
 }
+
+// failoverAttribution is the same, for a turn served on the endpoint this
+// conversation fails over to. The account and the provider are that endpoint's
+// rather than this conversation's, because they are what the money was actually
+// spent on: a crossing is a different subscription, and a line charging it to the
+// account whose window closed would attribute the spend to the one place it did
+// not happen.
+func (s *Session) failoverAttribution() spend.Attribution {
+	attribution := s.spendAttribution()
+	attribution.AccountAlias = s.options.FailoverEndpoint.AccountAlias
+	attribution.Backend = s.options.FailoverEndpoint.Provider
+	return attribution
+}

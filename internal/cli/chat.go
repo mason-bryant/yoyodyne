@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
@@ -459,6 +460,13 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		fmt.Fprintf(stderr, "warning: goals not read: %s\n", problem)
 	}
 
+	// Where this agent's turn goes if its own endpoint has no capacity, resolved
+	// here because resolving it needs the configuration, the provider registry, and
+	// the account homes — none of which a conversation is given. An agent that
+	// named no alternate provider resolves to nothing at all, which is failover
+	// within its own provider behaving exactly as it did.
+	failover := conversationFailover(cfg, parts.stateRoot, name, processRunner, stderr)
+
 	ground := newConversationGround(parts, role)
 	briefing, err := ground.Gather(ctx)
 	if err != nil {
@@ -579,6 +587,15 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// models a persona is interchangeable across is the operator's judgement,
 		// stated per agent rather than derived from the role.
 		FailoverModel: cfg.AgentFailoverModel(name),
+		// And where that alternate is served, for an agent whose failover leaves the
+		// provider. The three travel together — the endpoint, the adapter that
+		// reaches it, and the home it authenticates in — because a crossing needs all
+		// three or it is a turn sent somewhere it cannot be answered from. All three
+		// are empty for an agent that fails over within its own provider, which is
+		// every agent that names no provider of its own.
+		FailoverEndpoint:         failover.endpoint,
+		FailoverBackend:          failover.backend,
+		FailoverAccountConfigDir: failover.configDir,
 		// And how long a refusal that named no reset time stands before the
 		// configured model is asked again, which is the same interval a run probes
 		// one on. Without it the conversation would re-ask an exhausted model every
@@ -619,6 +636,48 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 // resolution the answering half of an exchange makes for the same reason.
 func conversationAccount(cfg config.Config, stateRoot, agentName string) (config.AccountEndpoint, error) {
 	return cfg.AgentAccountEndpoint(stateRoot, agentName)
+}
+
+// alternateEndpoint is where one conversation's turn goes when the endpoint it is
+// held on has no capacity: the endpoint itself, the adapter that reaches it, and
+// the provider home it authenticates in. It is empty for every agent that fails
+// over within its own provider, which is what the conversation reads as no
+// crossing being configured.
+type alternateEndpoint struct {
+	endpoint  backend.Endpoint
+	backend   backend.Backend
+	configDir string
+}
+
+// conversationFailover resolves that alternate for one agent.
+//
+// A failover that will not resolve is a warning rather than a refusal, and that
+// is the whole of the choice: what it costs is a substitution the conversation
+// cannot make, and refusing to open the conversation would spend a working
+// provider on a fallback nobody has needed yet. The warning says which, so an
+// operator who configured a crossing is told it is not one rather than finding
+// out at the moment a window closes.
+func conversationFailover(cfg config.Config, stateRoot, agentName string, runner execution.ProcessRunner, stderr io.Writer) alternateEndpoint {
+	providers := providerRegistry(cfg)
+	if providers == nil {
+		return alternateEndpoint{}
+	}
+	choice, crosses, err := cfg.AgentFailoverEndpoint(providers, stateRoot, agentName)
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: this conversation cannot fail over: %v\n", err)
+		return alternateEndpoint{}
+	}
+	if !crosses || choice.Endpoint.Provider == cfg.Agents[agentName].Backend {
+		// The alternate is another model on the provider this conversation is
+		// already on, which needs no second adapter and no second home: the turn is
+		// made through the one it was already being made through.
+		return alternateEndpoint{}
+	}
+	return alternateEndpoint{
+		endpoint:  choice.Endpoint,
+		backend:   providerBackendIn(cfg, choice.Endpoint.Provider, runner, choice.Account.Directory),
+		configDir: choice.Account.Directory,
+	}
 }
 
 // conversationAgent picks the agent a conversation is actually held with, and

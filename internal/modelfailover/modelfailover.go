@@ -122,6 +122,40 @@ type Policy struct {
 	// configuration. Empty is failover off and is the whole of the switch: this
 	// package never reads a configuration and never chooses a model nobody named.
 	Alternate string
+	// AlternateEndpoint is where that alternate is served, and the zero value is
+	// this turn's own endpoint with the model replaced — which is the substitution
+	// as it was before an alternate could name a provider. Where it names another
+	// provider the turn crosses providers, and the three fields below are what
+	// makes that a turn rather than a request sent to the wrong place.
+	AlternateEndpoint backend.Endpoint
+	// AlternateProvider is the invoker that reaches the endpoint above, and is
+	// required for a substitution that crosses providers: a different provider is
+	// a different adapter, reached under a different account and priced against a
+	// different subscription, so the caller hands the whole metered invoker rather
+	// than this package trying to build one. Nil leaves the substitution on the
+	// invoker the turn was already using, which is correct exactly while the
+	// alternate does not leave the provider.
+	AlternateProvider Invoker
+	// AlternateAccountConfigDir is where the alternate's provider keeps its own
+	// authentication on this machine, empty for the machine's own provider home.
+	// It travels with the endpoint above for the reason the account alias does:
+	// crossing providers is crossing logins, and an invocation made in the first
+	// provider's home would authenticate as nobody.
+	AlternateAccountConfigDir string
+	// Rebuild is how a turn that crosses providers gets its context. The provider
+	// taking it has never seen this conversation and holds no session to resume,
+	// so what it is handed has to be assembled from the durable record: the caller
+	// is given the request the refused attempt was made with and returns the one
+	// the alternate is asked, with the session identifier gone and whatever the
+	// record holds in the prompt.
+	//
+	// It is required for a crossing and unused for everything else. A crossing
+	// with no way to rebuild is refused rather than attempted, because a turn sent
+	// to a second provider carrying the first one's session identifier is not a
+	// continuation of anything — it is the conversation silently starting over,
+	// which is the durable-state guarantee failing in the one place it was
+	// supposed to hold.
+	Rebuild func(backend.RunRequest) (backend.RunRequest, error)
 	// Version is the exact model version the agent pinned, from that same
 	// configuration. Empty is no pin, which is every agent until one names one,
 	// and then the request's own selector is asked for and nothing here does
@@ -213,10 +247,33 @@ type Served struct {
 	// hop, which is the one that decided Model. Each hop is recorded separately
 	// in the log, which is where the whole of what happened is kept.
 	Why runstate.SubstitutionReason
+	// Endpoint is where the turn was actually served: the provider, the adapter
+	// that reached it, the account it authenticated under, and the model it asked.
+	// It is the whole identity rather than the model alone because a substitution
+	// can now change any of the four, and a record that carried only the model
+	// could not say a turn had crossed providers at all.
+	//
+	// It is the zero endpoint where the policy named none, which is a caller that
+	// never had one to name. A caller reading this keeps whatever it already knew
+	// rather than recording an endpoint nobody resolved.
+	Endpoint backend.Endpoint
+	// RefusedEndpoint is where the turn was refused, and the zero endpoint where
+	// nothing was — it is the pair to Refused, on the same terms Endpoint is the
+	// pair to Model.
+	RefusedEndpoint backend.Endpoint
 }
 
 // Substituted reports a turn served by a model other than the one it asked for.
 func (s Served) Substituted() bool { return strings.TrimSpace(s.Refused) != "" }
+
+// CrossedProviders reports a turn served by a provider other than the one it was
+// refused by. It is what says a context was rebuilt rather than a session
+// resumed, which is the difference a reader of the record most needs.
+func (s Served) CrossedProviders() bool {
+	refused := strings.TrimSpace(string(s.RefusedEndpoint.Provider))
+	served := strings.TrimSpace(string(s.Endpoint.Provider))
+	return refused != "" && served != "" && refused != served
+}
 
 // Serve makes one provider invocation, under the version the agent pinned where
 // it named one the provider has, and served by the permitted alternate where the
@@ -308,21 +365,35 @@ func serveWithCapacity(ctx context.Context, provider Invoker, request backend.Ru
 	alternate := strings.TrimSpace(policy.Alternate)
 	stood := fellBack
 	stood.Model = request.Model
-	if alternate == "" || alternate == named {
+	stood.Endpoint = policy.servingEndpoint(request.Model)
+	stood.RefusedEndpoint = backend.Endpoint{}
+	// An alternate that is where the turn already is is not an alternate. It is
+	// the whole endpoint that has to differ rather than the model alone: the same
+	// selector asked of another provider is a different endpoint with a capacity
+	// window of its own, which is exactly what a crossing is for.
+	if alternate == "" || (alternate == named && !policy.crosses()) {
 		result, err := provider.Run(ctx, request)
 		return result, stood, err
 	}
-	// An alternate the role may not be served on is not an alternate. It is asked
-	// once, before either path below can take it, so a turn is never moved onto an
-	// endpoint whose sandbox cannot hold this role's tool posture — and the refusal
-	// says which posture and which endpoint rather than leaving the turn to fail
-	// somewhere else.
+	// An alternate the role may not be served on is not an alternate, and neither
+	// is one that crosses providers with no way to rebuild the context the second
+	// provider has never seen. Both are asked once, before either path below can
+	// take it, so a turn is never moved onto an endpoint whose sandbox cannot hold
+	// this role's tool posture and never moved onto one that would silently start
+	// the conversation over — and the refusal says which, rather than leaving the
+	// turn to fail somewhere else.
 	if err := policy.permitSubstitution(alternate); err != nil {
 		policy.report(err)
 		result, err := provider.Run(ctx, request)
 		return result, stood, err
 	}
-	moved := Served{Model: alternate, Refused: named, Why: runstate.SubstitutedForCapacity}
+	moved := Served{
+		Model:           alternate,
+		Refused:         named,
+		Why:             runstate.SubstitutedForCapacity,
+		Endpoint:        policy.alternateEndpoint(alternate),
+		RefusedEndpoint: policy.servingEndpoint(named),
+	}
 
 	// A window the provider said has not lifted is taken at its word for as long
 	// as it stands, and for no longer: the comparison is against the clock at the
@@ -331,7 +402,15 @@ func serveWithCapacity(ctx context.Context, provider Invoker, request backend.Ru
 	if closed, err := windowClosed(policy, named); err != nil {
 		policy.report(err)
 	} else if closed {
-		result, err := runWith(ctx, provider, request, alternate)
+		result, err := policy.runAlternate(ctx, provider, request, alternate)
+		if err != nil && errors.Is(err, errRebuildFailed) {
+			// The context could not be assembled, so there is nothing to send the
+			// second provider. The turn is put back on the endpoint it was already
+			// on, which either serves it or is refused exactly as it would have been.
+			policy.report(err)
+			result, err := provider.Run(ctx, request)
+			return result, stood, err
+		}
 		return result, moved, err
 	}
 
@@ -346,7 +425,14 @@ func serveWithCapacity(ctx context.Context, provider Invoker, request backend.Ru
 	// attempts write to one event log, and a sequence used twice is a log whose
 	// numbering no longer says what order anything happened in.
 	advanceSequence(&request, result)
-	substituted, substitutedErr := runWith(ctx, provider, request, alternate)
+	substituted, substitutedErr := policy.runAlternate(ctx, provider, request, alternate)
+	if substitutedErr != nil && errors.Is(substitutedErr, errRebuildFailed) {
+		// Nothing was asked of the alternate, so the turn ends on the refusal it
+		// already met rather than on the rebuild's failure, which is reported beside
+		// it. Recording a substitution here would claim work carried on that did not.
+		policy.report(substitutedErr)
+		return result, stood, err
+	}
 	// The substitution is written down only where it served. A turn the alternate
 	// could not take either is the refusal the caller already handles, and
 	// recording it here would put the same stoppage in the log twice — once as a
@@ -354,7 +440,7 @@ func serveWithCapacity(ctx context.Context, provider Invoker, request backend.Ru
 	if refusal(substituted, substitutedErr) != nil {
 		return substituted, moved, substitutedErr
 	}
-	if err := record(policy, named, alternate, *refused); err != nil {
+	if err := record(policy, named, alternate, *refused, moved); err != nil {
 		if policy.RecordFailure == nil {
 			return substituted, moved, errors.Join(substitutedErr, err)
 		}
@@ -363,12 +449,72 @@ func serveWithCapacity(ctx context.Context, provider Invoker, request backend.Ru
 	return substituted, moved, substitutedErr
 }
 
-// runWith makes the same invocation under another model. Everything else about
-// the request is the one the caller built: the same prompt, the same session,
-// the same account, so what changes is the model and nothing else.
-func runWith(ctx context.Context, provider Invoker, request backend.RunRequest, model string) (backend.RunResult, error) {
+// errRebuildFailed marks a crossing that never reached the second provider
+// because the context could not be assembled from the durable record. It is a
+// sentinel because it is not a provider failure and must not be reported as one:
+// nothing was asked, nothing was charged, and what the caller owes the turn is
+// the refusal it already had rather than this.
+var errRebuildFailed = errors.New("the context for the substituted turn could not be rebuilt from the durable record")
+
+// runAlternate makes the same turn on the alternate.
+//
+// Where the alternate is another model on the same provider, everything else
+// about the request is the one the caller built — the same prompt, the same
+// session, the same account — so what changes is the model and nothing else.
+//
+// Where it is another provider, three more things change and they change
+// together. The invocation is made through that provider's own invoker, so it is
+// reached by the right adapter and priced against the right subscription; it
+// authenticates under that provider's account rather than the first one's; and it
+// carries no session identifier, because the session it would name belongs to a
+// provider that is not being asked. What replaces the session is the rebuilt
+// context, which is the durable record doing the work a resumption cannot.
+func (p Policy) runAlternate(ctx context.Context, provider Invoker, request backend.RunRequest, model string) (backend.RunResult, error) {
 	request.Model = model
-	return provider.Run(ctx, request)
+	if !p.crosses() {
+		return provider.Run(ctx, request)
+	}
+	request.AccountAlias = p.AlternateEndpoint.AccountAlias
+	request.AccountConfigDir = p.AlternateAccountConfigDir
+	request.SessionID = ""
+	rebuilt, err := p.Rebuild(request)
+	if err != nil {
+		return backend.RunResult{}, fmt.Errorf("%w: %v", errRebuildFailed, err)
+	}
+	// A rebuild that handed back a session identifier would put the crossing right
+	// back where it started, so the one thing this path guarantees is checked here
+	// rather than trusted to every caller that writes one.
+	rebuilt.SessionID = ""
+	return p.AlternateProvider.Run(ctx, rebuilt)
+}
+
+// crosses reports a substitution that leaves the provider the turn is on.
+func (p Policy) crosses() bool {
+	alternate := strings.TrimSpace(string(p.AlternateEndpoint.Provider))
+	return alternate != "" && alternate != strings.TrimSpace(string(p.Endpoint.Provider))
+}
+
+// servingEndpoint is this turn's own endpoint asking one model, and the zero
+// endpoint for a policy that names none.
+func (p Policy) servingEndpoint(model string) backend.Endpoint {
+	if p.Endpoint.Provider == "" {
+		return backend.Endpoint{}
+	}
+	endpoint := p.Endpoint
+	endpoint.Model = strings.TrimSpace(model)
+	return endpoint
+}
+
+// alternateEndpoint is where the substituted turn is served: the stated alternate
+// endpoint where one was named, and this turn's own with the model replaced where
+// none was — which is what a substitution that stays on the provider produces.
+func (p Policy) alternateEndpoint(model string) backend.Endpoint {
+	if p.AlternateEndpoint.Provider != "" {
+		endpoint := p.AlternateEndpoint
+		endpoint.Model = strings.TrimSpace(model)
+		return endpoint
+	}
+	return p.servingEndpoint(model)
 }
 
 // advanceSequence moves the next attempt past the events the refused one already
@@ -454,8 +600,10 @@ func versionMissing(policy Policy, version string) (bool, error) {
 }
 
 // record writes the substitution down where every refusal met outside a run is
-// written down.
-func record(policy Policy, named, alternate string, refused backend.UsageLimit) error {
+// written down. The providers travel with the models, because a turn that
+// crossed providers and a turn that changed model on one are the same two fields
+// otherwise and are not the same news: only the first one rebuilt its context.
+func record(policy Policy, named, alternate string, refused backend.UsageLimit, moved Served) error {
 	if policy.Windows == nil {
 		return nil
 	}
@@ -470,6 +618,10 @@ func record(policy Policy, named, alternate string, refused backend.UsageLimit) 
 		Model:          named,
 		ServedBy:       alternate,
 		Substitution:   runstate.SubstitutedForCapacity,
+	}
+	if moved.CrossedProviders() {
+		exhaustion.Provider = moved.RefusedEndpoint.Provider
+		exhaustion.ServedByProvider = moved.Endpoint.Provider
 	}
 	if !refused.ResetsAt.IsZero() {
 		resetsAt := refused.ResetsAt.UTC()
@@ -526,26 +678,40 @@ func waitingWithDetail(waiting, detail string) string {
 }
 
 // permitSubstitution reports whether this turn may be moved onto the endpoint
-// that would serve it under another model, and says why not where it may not.
+// that would serve it, and says why not where it may not.
 //
-// The candidate is this turn's own endpoint with the model replaced, because
-// that is what a substitution actually produces: the same provider, reached by
-// the same adapter, under the same account, asking something else. The check is
-// written over the whole endpoint rather than over the model alone so that it
-// still holds the day an alternate names one — an alternate on a provider whose
-// sandbox cannot express this role's posture is refused by the same line, with
-// nothing here needing to learn about it.
+// The candidate is the alternate endpoint the policy names, or — where it names
+// none — this turn's own with the model replaced, which is what a substitution
+// that stays on the provider produces. The check is written over the whole
+// endpoint rather than over the model alone precisely so that it holds when the
+// alternate names a provider: one whose sandbox cannot express this role's
+// posture is refused by the same line that refuses a model.
 //
-// A policy that names no endpoint or no eligibility has nothing to ask and
-// permits the substitution, which is what every caller did before the check
-// existed.
+// A crossing carries a second condition of its own. The second provider holds no
+// session for this turn, so a crossing with no invoker to reach it or no way to
+// rebuild the context is refused here rather than attempted — an invocation that
+// arrived with the first provider's session identifier and none of its history
+// would be the conversation quietly starting over.
+//
+// A policy that names no endpoint or no eligibility has nothing to ask about the
+// posture and permits the substitution, which is what every caller did before the
+// check existed. The crossing condition still holds there, because it is about
+// what this package was handed rather than about what a registry says.
 func (p Policy) permitSubstitution(model string) error {
+	if p.crosses() {
+		switch {
+		case p.AlternateProvider == nil:
+			return fmt.Errorf("role %q cannot be moved off %s onto %s: no invoker was supplied for the alternate provider",
+				p.Role, p.Endpoint, p.alternateEndpoint(model))
+		case p.Rebuild == nil:
+			return fmt.Errorf("role %q cannot be moved off %s onto %s: crossing providers rebuilds the turn's context from the durable record, and no way to rebuild it was supplied",
+				p.Role, p.Endpoint, p.alternateEndpoint(model))
+		}
+	}
 	if p.Eligibility == nil || p.Endpoint.Provider == "" {
 		return nil
 	}
-	candidate := p.Endpoint
-	candidate.Model = strings.TrimSpace(model)
-	return p.Eligibility.Substitutable(p.Endpoint, candidate, p.Role)
+	return p.Eligibility.Substitutable(p.Endpoint, p.alternateEndpoint(model), p.Role)
 }
 
 func (p Policy) report(err error) {

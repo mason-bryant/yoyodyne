@@ -81,6 +81,52 @@ func (c Config) AgentEndpoint(providers *backend.Registry, stateRoot, agentName 
 	return c.EndpointFor(providers, stateRoot, agentName, c.agentAccountAlias(providers, agentName))
 }
 
+// AgentFailoverEndpoint is the endpoint one agent's turn may be served on while
+// the endpoint it runs on has no capacity: the alternate model, on the provider
+// and account that agent's own failover block names, each defaulting to the ones
+// it already runs on.
+//
+// It reports false for every agent that has not enabled failover, which is every
+// agent until one says otherwise, and refuses rather than resolving where the
+// alternate names a provider this project does not name, one that may not serve
+// this agent's role, or an account that could not sign it in. Those are the same
+// three refusals configuration validation already makes, asked again here for the
+// reason EndpointFor asks its own again: this answers for the endpoint a
+// substitution is actually about to be made on.
+func (c Config) AgentFailoverEndpoint(providers *backend.Registry, stateRoot, agentName string) (EndpointChoice, bool, error) {
+	name := strings.TrimSpace(agentName)
+	agent, named := c.Agents[name]
+	if !named {
+		return EndpointChoice{}, false, fmt.Errorf("agent %q is not one this configuration names", agentName)
+	}
+	alternate := agent.Failover.Alternate()
+	if alternate == "" {
+		return EndpointChoice{}, false, nil
+	}
+	provider := agent.Failover.AlternateProvider(agent.Backend)
+	alias := agent.Failover.AlternateAccount(c.agentAccountAlias(providers, name))
+	account, err := c.Endpoint(stateRoot, alias)
+	if err != nil {
+		return EndpointChoice{}, false, fmt.Errorf("resolve the endpoint agent %q fails over to: %w", agentName, err)
+	}
+	if err := c.accountServes(providers, account.Alias, provider); err != nil {
+		return EndpointChoice{}, false, fmt.Errorf("agent %q cannot fail over to provider %q: %w", agentName, provider, err)
+	}
+	endpoint, err := providers.Endpoint(provider, account.Alias, alternate)
+	if err != nil {
+		return EndpointChoice{}, false, fmt.Errorf("resolve the endpoint agent %q fails over to: %w", agentName, err)
+	}
+	// The role is asked of the alternate exactly as it is asked of the agent's own
+	// provider, because a fallback that reached a weaker posture would be the one
+	// thing a fallback may never do. EligibleFor rather than Serves: this is a
+	// concrete endpoint an invocation is about to be made on, so whether anything
+	// in this build could launch it is part of the answer.
+	if err := providers.EligibleFor(endpoint, agent.Role); err != nil {
+		return EndpointChoice{}, false, fmt.Errorf("agent %q cannot fail over: %w", agentName, err)
+	}
+	return EndpointChoice{Endpoint: endpoint, Account: account}, true, nil
+}
+
 // AgentAccountEndpoint is where one agent's own invocations authenticate: the
 // account that agent is assigned to, or — where it is assigned to none — the
 // first account in the pool that can sign its provider in.

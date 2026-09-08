@@ -80,6 +80,11 @@ type Store interface {
 	Load(identity runstate.ConversationIdentity) (runstate.Conversation, error)
 	Save(conversation runstate.Conversation) error
 	AppendEvent(event execution.Event) error
+	// LoadEvents is what has been recorded of the conversation, read back. It is
+	// on the store rather than beside it because a turn served by a provider that
+	// has never held this conversation has no session to resume and has to be
+	// handed the record instead — and the record is here.
+	LoadEvents(conversationID string) ([]execution.Event, error)
 }
 
 // Hold is this process's claim on the conversation, which it can put down while
@@ -271,6 +276,26 @@ type Options struct {
 	// loading one, and which models an agent is interchangeable across is the
 	// operator's answer rather than this package's.
 	FailoverModel string
+	// FailoverEndpoint is where that alternate is served, and the zero endpoint
+	// where the alternate is another model on the provider this conversation is
+	// already held on — which is every agent that fails over within one provider.
+	// Where it names another provider the turn crosses, and FailoverBackend is
+	// what reaches it.
+	FailoverEndpoint backend.Endpoint
+	// FailoverBackend is the provider behind that endpoint, metered and pointed at
+	// that account's own provider home by whoever wired this conversation. It is
+	// supplied rather than built here for the reason the conversation's own backend
+	// is: which adapter runs a provider and where it authenticates are the
+	// harness's answers, and a conversation is handed them.
+	//
+	// A crossing with none is refused at the moment it would be made and the turn
+	// stays where it was, because an alternate nothing can reach is not one.
+	FailoverBackend Backend
+	// FailoverAccountConfigDir is where the alternate endpoint's account keeps its
+	// provider's authentication on this machine, and empty for the machine's own
+	// provider home. It travels with the endpoint for the reason the conversation's
+	// own does: crossing providers is crossing logins.
+	FailoverAccountConfigDir string
 	// UsageLimitUnknownResetPause is the project's interval between probes of a
 	// refusal that named no reset time, and it bounds how long a substitution
 	// stands before the configured model is asked again. It is the same setting a
@@ -827,10 +852,18 @@ func (s *Session) requestedModel() string {
 }
 
 // servedByAlternate is the model that answered the last turn where it was not
-// the one asked for, and nothing where it was.
+// the one asked for, and nothing where it was. A turn served on another provider
+// names it, because two providers can spell one model selector and an operator
+// shown "opus rather than opus" is shown a substitution that reads as none.
 func (s *Session) servedByAlternate() string {
 	served := strings.TrimSpace(s.state.ProviderModel)
-	if served == "" || served == strings.TrimSpace(s.requestedModel()) {
+	if served == "" {
+		return ""
+	}
+	if crossed := s.state.Backend; crossed != "" && crossed != s.options.Provider {
+		return string(crossed) + "'s " + served
+	}
+	if served == strings.TrimSpace(s.requestedModel()) {
 		return ""
 	}
 	return served
@@ -1141,23 +1174,23 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 			s.spendProblem = appendProblem(s.spendProblem, singleLine(err.Error(), maxTrackerFailureBytes))
 		},
 	}
-	// The failover goes outside the meter rather than inside it, so each attempt
-	// is one line in the cost log naming the model that attempt actually asked
-	// for. Wrapped the other way round, a turn the alternate served would be
-	// priced against the model that refused it.
-	result, served, err := modelfailover.Serve(ctx, provider, backend.RunRequest{
+	request := backend.RunRequest{
 		RunID:            s.state.ConversationID,
 		Role:             s.state.Role,
 		WorkingDirectory: s.options.Repository,
 		Prompt:           prompt,
 		SystemPrompt:     systemPrompt,
-		SessionID:        s.state.ProviderSessionID,
-		Model:            s.options.Model,
-		AllowedTools:     []string{},
-		Timeout:          s.options.timeout(),
-		LastSequence:     lastSequence,
-		RedactValues:     s.options.RedactValues,
-		EventSink:        sink,
+		// The session this turn may continue from, which is empty where the last
+		// turn was served by a different provider: that provider's session is not
+		// this one's to resume, and what stands in for it is the context rebuilt
+		// from the record below.
+		SessionID:    s.resumableSession(),
+		Model:        s.options.Model,
+		AllowedTools: []string{},
+		Timeout:      s.options.timeout(),
+		LastSequence: lastSequence,
+		RedactValues: s.options.RedactValues,
+		EventSink:    sink,
 		// The account this conversation is held under, so what the invocation
 		// records and what its cost line says are the same alias. Where that
 		// account authenticates is on the backend value rather than here: a
@@ -1169,7 +1202,27 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		// recorded before it arrives here, so nothing about what is recorded
 		// depends on whether anybody was.
 		ReplySink: s.stream.write,
-	}, s.failoverPolicy())
+	}
+	// A conversation that has taken turns and has no session to resume is one that
+	// crossed providers and is now being asked back on its own — the window it was
+	// waiting out has lifted. The turn's prompt carries no history, because every
+	// turn but the first is written for a session that already holds it, so the
+	// same rebuild the crossing made is made here for the crossing back. A rebuild
+	// that fails leaves the turn as it stands and says so: an answer with less
+	// context than it should have is worth more to the operator than no answer.
+	if s.state.Turns > 0 && request.SessionID == "" {
+		rebuilt, rebuildErr := s.rebuildFromRecord(request)
+		if rebuildErr != nil {
+			s.failoverProblem = appendProblem(s.failoverProblem, singleLine(rebuildErr.Error(), maxTrackerFailureBytes))
+		} else {
+			request = rebuilt
+		}
+	}
+	// The failover goes outside the meter rather than inside it, so each attempt
+	// is one line in the cost log naming the model that attempt actually asked
+	// for. Wrapped the other way round, a turn the alternate served would be
+	// priced against the model that refused it.
+	result, served, err := modelfailover.Serve(ctx, provider, request, s.failoverPolicy())
 	// Whatever happened, the event log advanced, and the record has to agree
 	// with it or the next turn would renumber events that already exist.
 	s.state.LastSequence = lastSequence
@@ -1226,20 +1279,24 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	if result.SessionID != "" {
 		s.state.ProviderSessionID = result.SessionID
 	}
-	// The model this turn was actually asked for under, which is the configured
-	// one unless the alternate served it. Recording the configured selector here
-	// would leave the record saying a conversation was held on a model that
-	// refused every turn of it.
-	s.state.ProviderModel = served.Model
+	// The endpoint this turn was actually served on, which is the configured one
+	// unless a substitution moved it. Recording the configured one here would leave
+	// the record saying a conversation was held on an endpoint that refused every
+	// turn of it — and a crossing would leave it naming the wrong provider, so the
+	// session identifier above would read as resumable by something that has never
+	// seen it.
+	serving := s.servingEndpoint(served)
+	s.state.Backend = serving.Provider
+	s.state.ProviderModel = serving.Model
 	s.state.ProviderResolvedModel = result.ResolvedModel
-	// And what served it besides the model: the account the turn was answered on
-	// and the configuration in force while it was. They are rewritten with the
-	// selectors above, so the record says what is serving this conversation now.
-	// What pins each turn rather than the last one is the line this turn already
-	// put in the cost log, which carries the same account and revision and is
-	// refused without them — so an earlier turn's attribution survives a
-	// configuration edit or an account move even though this pair does not.
-	s.state.AccountAlias = s.options.AccountAlias
+	// And what served it besides the endpoint: the configuration in force while it
+	// was. It is rewritten with the endpoint above, so the record says what is
+	// serving this conversation now. What pins each turn rather than the last one
+	// is the line this turn already put in the cost log, which carries the same
+	// account and revision and is refused without them — so an earlier turn's
+	// attribution survives a configuration edit or an account move even though this
+	// pair does not.
+	s.state.AccountAlias = serving.AccountAlias
 	s.state.ConfigRevision = s.options.ConfigRevision
 	// And which harness answered it. It is rewritten with the pair above because
 	// it says the same kind of thing about the conversation as it now stands: a

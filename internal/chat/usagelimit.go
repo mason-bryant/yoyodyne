@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/modelfailover"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
 
 // UsageLimits is where a provider's refusal is collected. It is satisfied by
@@ -130,7 +131,40 @@ func (s *Session) failoverPolicy() modelfailover.Policy {
 	policy.Endpoint = endpoint
 	policy.Role = s.options.Role
 	policy.Eligibility = s.options.providers()
+	// And where the alternate is served, for an agent whose alternate leaves the
+	// provider. Everything a crossing needs travels together — the endpoint, the
+	// adapter that reaches it, and the way back to the conversation's own record —
+	// because a crossing that had two of the three would be a turn sent somewhere
+	// it could not be answered from.
+	if alternate := s.options.FailoverEndpoint; alternate.Provider != "" && alternate.Provider != endpoint.Provider {
+		policy.AlternateEndpoint = alternate
+		policy.AlternateAccountConfigDir = s.options.FailoverAccountConfigDir
+		policy.Rebuild = s.rebuildFromRecord
+		if s.options.FailoverBackend != nil {
+			policy.AlternateProvider = s.meteredFailover()
+		}
+	}
 	return policy
+}
+
+// meteredFailover is the alternate provider with the cost log wired behind it,
+// charged to the account and the provider that actually served the turn. It is
+// built here rather than beside the conversation's own meter because it is only
+// ever used by a substitution: an agent that never crosses providers never builds
+// one, and one that does gets a line saying what the crossing cost and where.
+func (s *Session) meteredFailover() modelfailover.Invoker {
+	return spend.Metered{
+		Provider:    s.options.FailoverBackend,
+		Log:         s.options.Spend,
+		Attribution: s.failoverAttribution(),
+		Clock:       s.options.Clock,
+		// The same trade the conversation's own meter makes, for the same reason: a
+		// turn the alternate has already answered is not thrown away because the
+		// cost log would not take the line.
+		RecordFailure: func(err error) {
+			s.spendProblem = appendProblem(s.spendProblem, singleLine(err.Error(), maxTrackerFailureBytes))
+		},
+	}
 }
 
 // ErrProviderCapacity marks the failure of a turn the provider declined for
