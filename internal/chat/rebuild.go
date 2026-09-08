@@ -86,16 +86,69 @@ func (s *Session) resumableSession() string {
 	return s.state.ProviderSessionID
 }
 
-// rebuildFromRecord assembles the request a provider that has never held this
-// conversation is asked, from the conversation's own durable state.
+// alternateSession is the session the endpoint this conversation fails over to
+// already holds for it, and empty where it holds none.
 //
-// The request it is given is the one the refused attempt was made with, so the
-// system prompt, the role, the tools, and the turn's own prompt are already
-// right — none of those came from a provider session. What is added in front of
-// the prompt is what the session was carrying: the picture, and what has been
-// said. The session identifier is already gone by the time this is called and
-// nothing here puts one back.
+// A window lasts longer than one turn, so the turn after a crossing goes to the
+// same alternate — and by then that provider has a session of its own, recorded
+// exactly as the configured provider's is. Resuming it is what keeps an outage
+// costing one reconstruction rather than one per turn, and it is the same
+// question resumableSession asks, asked about the other endpoint.
+func (s *Session) alternateSession() string {
+	alternate := s.options.FailoverEndpoint.Provider
+	if alternate == "" || s.state.Backend != alternate {
+		return ""
+	}
+	return s.state.ProviderSessionID
+}
+
+// rebuiltContextHeader opens the reconstruction, and is how a request that has
+// already been rebuilt is recognized as one. A turn can reach the rebuild twice —
+// prepared here for the endpoint it was going to and then moved onto the other
+// one by a refusal nobody could have known about in advance — and two
+// reconstructions in one prompt is the conversation told to itself twice.
+const rebuiltContextHeader = "# This conversation, rebuilt from its record"
+
+// rebuildForOwnEndpoint prepares a turn going to the provider this conversation
+// is configured for, where that provider holds no session to resume — which is
+// the turn after a crossing, once the window it was waiting out has lifted. The
+// alternate's session is no answer there: it belongs to the provider not being
+// asked.
+func (s *Session) rebuildForOwnEndpoint(request backend.RunRequest) (backend.RunRequest, error) {
+	return s.rebuildFromRecord(request)
+}
+
+// rebuildForAlternate prepares a turn the failover is moving onto the alternate,
+// and is what the policy calls.
+//
+// It adds nothing where the alternate is already holding a session for this
+// conversation, which is every turn of an outage after the first: that session
+// carries the context, so reconstructing it would be telling the provider what it
+// already knows, once per turn, for as long as the window stands.
+func (s *Session) rebuildForAlternate(request backend.RunRequest) (backend.RunRequest, error) {
+	if s.alternateSession() != "" {
+		return request, nil
+	}
+	return s.rebuildFromRecord(request)
+}
+
+// rebuildFromRecord assembles the request a provider that holds no session for
+// this conversation is asked, from the conversation's own durable state.
+//
+// The request it is given is the one the turn was built with, so the system
+// prompt, the role, the tools, and the turn's own prompt are already right — none
+// of those came from a provider session. What is added in front of the prompt is
+// what a session would have been carrying: the picture, and what has been said.
+//
+// A request that already carries the reconstruction is returned as it is. A turn
+// can reach this twice — prepared for the endpoint it was nominally on, then
+// moved onto the other one by a refusal nobody could have known about in advance
+// — and the conversation told to itself twice is worse than either endpoint
+// getting it once.
 func (s *Session) rebuildFromRecord(request backend.RunRequest) (backend.RunRequest, error) {
+	if strings.HasPrefix(request.Prompt, rebuiltContextHeader) {
+		return request, nil
+	}
 	// A failure hands the request back as it came rather than as a zero value. The
 	// caller discards it either way, and nothing here is a provider invocation —
 	// this assembles what one will be asked, and the invocation itself is made by
@@ -135,7 +188,7 @@ func (s *Session) rebuiltContext(events []execution.Event) string {
 		return ""
 	}
 	var rebuilt strings.Builder
-	rebuilt.WriteString("# This conversation, rebuilt from its record\n\n")
+	rebuilt.WriteString(rebuiltContextHeader + "\n\n")
 	rebuilt.WriteString(fmt.Sprintf(
 		"You are continuing conversation %s, which has taken %d turn(s) so far. The provider that was holding it is not the one serving this turn, so none of its session reaches you. What follows is assembled from the harness's own durable record of the conversation, and it is the whole of what you have.\n\n",
 		s.state.ConversationID, s.state.Turns))

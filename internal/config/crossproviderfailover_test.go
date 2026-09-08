@@ -264,3 +264,65 @@ func TestACrossingIsNotOfferedToACallerThatCannotCross(t *testing.T) {
 		t.Fatalf("within-provider alternate = %q, want the alternate on the agent's own provider", within)
 	}
 }
+
+// An agent that named no account of its own is still refused where the account it
+// would actually be served under cannot sign the alternate in. The alias is the
+// pool's answer rather than the key the failover block wrote down, so an agent
+// that wrote no key is not a hole in the check — it is the common case.
+func TestACrossingIsRefusedOnTheAccountTheAgentWouldActuallyBeServedUnder(t *testing.T) {
+	t.Parallel()
+
+	// No `account` anywhere: not on the agent, not in the failover block. The pool
+	// serves the agent's own provider from `default`, which holds Claude Code's
+	// authentication and cannot sign in a provider on the Codex adapter.
+	_, err := loadProjectError(t, minimalProjectConfig+`accounts:
+  default:
+    provider: claude-code
+agents:
+  developer:
+    model: fable
+    failover:
+      enabled: true
+      model: gpt-5-codex
+      provider: codex
+`, nil)
+	if err == nil {
+		t.Fatal("LoadResolved() succeeded, want the crossing refused where the file is read")
+	}
+	if !strings.Contains(err.Error(), "would authenticate as nobody") {
+		t.Fatalf("error = %v, want the account that could not sign the alternate in named", err)
+	}
+}
+
+// The same agent with an account that does hold the alternate's authentication
+// loads clean, so the refusal above is about the pool rather than about naming no
+// key.
+func TestACrossingLoadsWhereThePoolCanSignTheAlternateIn(t *testing.T) {
+	t.Parallel()
+
+	cfg := loadProject(t, minimalProjectConfig+`accounts:
+  default:
+    provider: claude-code
+  codex-account:
+    provider: codex
+agents:
+  developer:
+    model: fable
+    failover:
+      enabled: true
+      model: gpt-5-codex
+      provider: codex
+      account: codex-account
+`, nil).Config
+	providers, err := cfg.ProviderRegistry()
+	if err != nil {
+		t.Fatalf("ProviderRegistry() error = %v", err)
+	}
+	choice, crosses, err := cfg.AgentFailoverEndpoint(providers, filepath.Join(t.TempDir(), "state"), "developer")
+	if err != nil || !crosses {
+		t.Fatalf("AgentFailoverEndpoint() = %#v, crosses %v, error %v", choice, crosses, err)
+	}
+	if choice.Endpoint.Provider != domain.BackendCodex || choice.Endpoint.AccountAlias != "codex-account" {
+		t.Fatalf("endpoint = %#v, want the alternate on the account that signs it in", choice.Endpoint)
+	}
+}

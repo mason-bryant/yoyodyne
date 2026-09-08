@@ -2695,8 +2695,20 @@ within its own provider, exactly as it did before these two keys existed.
 A crossing is refused where the file is read if the alternate names a provider
 this project does not name, one that cannot be held to the tool posture the
 agent's role requires, or an account that could not sign that provider in. The
-same three are asked again at the moment of the substitution, because a posture is
-not something to take on trust from a check that ran earlier.
+account is the one the agent would actually be served under — the account it
+names, or the pool's first that can sign its own provider in — rather than only
+the alias the `failover` block wrote down, so an agent that named no account of
+its own is refused here too. The same three are asked again at the moment of the
+substitution, because a posture is not something to take on trust from a check
+that ran earlier.
+
+**A crossing covers conversation turns and nothing else.** An alternate on the
+agent's own provider serves its exchange rounds and its side threads as well; one
+that leaves the provider does not, because those are answered on the endpoint the
+agent is configured for and there is no crossing for them to take. An agent whose
+alternate names a provider therefore has its conversation carried through a window
+and its exchange rounds and side turns waiting the window out, alongside the run
+invocations. `yoyo agent` says which of the two an agent has.
 
 What happens on a refused turn:
 

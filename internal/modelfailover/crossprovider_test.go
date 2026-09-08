@@ -372,3 +372,80 @@ func TestACrossingWithNoInvokerIsRefusedRatherThanAttempted(t *testing.T) {
 		t.Fatalf("reported = %v, want the missing invoker named", reported)
 	}
 }
+
+// A window outlasts a turn, so the alternate is asked again while it stands — and
+// by then it holds a session of its own. What is sent is that session and never
+// the one the refusing endpoint held, whatever the rebuild returns: the session is
+// the one thing about the request this package decides for itself, because it is
+// the one thing that must never be the other provider's.
+func TestACrossingSendsTheAlternatesOwnSessionAndNeverTheRefusedEndpointsOne(t *testing.T) {
+	t.Parallel()
+
+	windows := newTestWindows(t)
+	recordWindow(t, windows, runstate.UsageLimitExhaustion{
+		Model:    "fable",
+		ResetsAt: pointerTo(time.Date(2026, 9, 7, 11, 0, 0, 0, time.UTC)),
+	})
+	crossed := &fakeProvider{results: []backend.RunResult{{SessionID: "codex-session-1", FinalText: "decided"}}}
+	policy := crossingPolicy(t, windows, func(request backend.RunRequest) (backend.RunRequest, error) {
+		// A rebuild that tried to put the refusing endpoint's session back gets
+		// nowhere, which is what makes the guarantee this package's rather than
+		// every caller's.
+		request.SessionID = "claude-session-1"
+		return request, nil
+	})
+	policy.AlternateProvider = crossed
+	policy.AlternateSessionID = "codex-session-1"
+
+	if _, _, err := Serve(context.Background(), &fakeProvider{},
+		backend.RunRequest{Model: "fable", SessionID: "claude-session-1"}, policy); err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if len(crossed.requests) != 1 || crossed.requests[0].SessionID != "codex-session-1" {
+		t.Fatalf("crossing invocations = %#v, want one resuming the alternate's own session", crossed.requests)
+	}
+}
+
+// ServesElsewhere is what a caller asks before it prepares the turn, so that the
+// preparation and the routing cannot disagree about which endpoint will serve it.
+// It answers true only for a move this policy would already make unasked — the
+// alternate permitted and the window known closed — and false for the refusal
+// that has not happened yet, which is not knowable in advance.
+func TestServesElsewhereAnswersForTheMoveThePolicyWouldMakeUnasked(t *testing.T) {
+	t.Parallel()
+
+	open := newTestWindows(t)
+	if policy := crossingPolicy(t, open, passThrough); policy.ServesElsewhere("fable") {
+		t.Fatal("a policy with no window recorded says it will move the turn, want the endpoint asked first")
+	}
+
+	closed := newTestWindows(t)
+	recordWindow(t, closed, runstate.UsageLimitExhaustion{
+		Model:    "fable",
+		ResetsAt: pointerTo(time.Date(2026, 9, 7, 11, 0, 0, 0, time.UTC)),
+	})
+	if policy := crossingPolicy(t, closed, passThrough); !policy.ServesElsewhere("fable") {
+		t.Fatal("a policy whose window is recorded closed says it will ask the endpoint, want the turn prepared for the alternate")
+	}
+	// A window that has lifted puts the turn back on the endpoint it was
+	// configured for, so the preparation goes back with it.
+	lifted := crossingPolicy(t, closed, passThrough)
+	lifted.Now = func() time.Time { return time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC) }
+	if lifted.ServesElsewhere("fable") {
+		t.Fatal("a policy whose window has lifted still says it will move the turn")
+	}
+	// And an alternate the role may not be served on is not one, so nothing is
+	// prepared for it.
+	ineligible := crossingPolicy(t, closed, passThrough)
+	ineligible.Role = domain.RoleReviewer
+	if ineligible.ServesElsewhere("fable") {
+		t.Fatal("a policy whose alternate cannot hold the role's posture says it will move the turn")
+	}
+	// Failover off answers false, which is what every caller that has not
+	// configured one asks and gets.
+	if (Policy{}).ServesElsewhere("fable") {
+		t.Fatal("a policy with no alternate says it will move the turn")
+	}
+}
+
+func passThrough(request backend.RunRequest) (backend.RunRequest, error) { return request, nil }

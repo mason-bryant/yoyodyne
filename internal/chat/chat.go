@@ -861,7 +861,9 @@ func (s *Session) servedByAlternate() string {
 		return ""
 	}
 	if crossed := s.state.Backend; crossed != "" && crossed != s.options.Provider {
-		return string(crossed) + "'s " + served
+		// The same phrase the durable record is described in, taken from where that
+		// derivation lives rather than spelled again here.
+		return runstate.DescribeServingModel(crossed, served)
 	}
 	if served == strings.TrimSpace(s.requestedModel()) {
 		return ""
@@ -1203,6 +1205,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		// depends on whether anybody was.
 		ReplySink: s.stream.write,
 	}
+	policy := s.failoverPolicy()
 	// A conversation that has taken turns and has no session to resume is one that
 	// crossed providers and is now being asked back on its own — the window it was
 	// waiting out has lifted. The turn's prompt carries no history, because every
@@ -1210,8 +1213,15 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// same rebuild the crossing made is made here for the crossing back. A rebuild
 	// that fails leaves the turn as it stands and says so: an answer with less
 	// context than it should have is worth more to the operator than no answer.
-	if s.state.Turns > 0 && request.SessionID == "" {
-		rebuilt, rebuildErr := s.rebuildFromRecord(request)
+	//
+	// It is not made where the failover is already going to move this turn: that
+	// turn is prepared for the alternate rather than for the endpoint it is
+	// nominally on, and preparing it twice would send the reconstruction twice.
+	// Which endpoint will serve is the failover's answer rather than a second
+	// reading of the same log taken here, so the preparation and the routing cannot
+	// come apart.
+	if s.state.Turns > 0 && request.SessionID == "" && !policy.ServesElsewhere(request.Model) {
+		rebuilt, rebuildErr := s.rebuildForOwnEndpoint(request)
 		if rebuildErr != nil {
 			s.failoverProblem = appendProblem(s.failoverProblem, singleLine(rebuildErr.Error(), maxTrackerFailureBytes))
 		} else {
@@ -1222,7 +1232,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// is one line in the cost log naming the model that attempt actually asked
 	// for. Wrapped the other way round, a turn the alternate served would be
 	// priced against the model that refused it.
-	result, served, err := modelfailover.Serve(ctx, provider, request, s.failoverPolicy())
+	result, served, err := modelfailover.Serve(ctx, provider, request, policy)
 	// Whatever happened, the event log advanced, and the record has to agree
 	// with it or the next turn would renumber events that already exist.
 	s.state.LastSequence = lastSequence

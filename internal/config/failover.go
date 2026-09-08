@@ -184,7 +184,14 @@ func (c Config) failoverEndpointProblems(providers *backend.Registry, name strin
 	if err := providers.Serves(alternate, agent.Role); err != nil {
 		problems = append(problems, fmt.Sprintf("agent %q cannot fail over to provider %q: %v", name, alternate, err))
 	}
-	if alias := failover.AlternateAccount(agent.Account); alias != "" {
+	// The alias is resolved exactly as AgentFailoverEndpoint resolves it, through
+	// the agent's own account rather than through the key it wrote down: an agent
+	// that named no account is served by the pool's first account that can sign its
+	// provider in, and asking about the key alone would let every such agent load
+	// clean and then find at the first closed window that its alternate
+	// authenticates as nobody. One resolution rather than two is what makes the
+	// refusal here and the endpoint there the same answer.
+	if alias := failover.AlternateAccount(c.agentAccountAlias(providers, name)); alias != "" {
 		if _, declared := c.Accounts[alias]; !declared && strings.TrimSpace(failover.Account) != "" {
 			problems = append(problems, fmt.Sprintf("agent %q fails over onto account %q, which this project does not declare", name, alias))
 		} else if err := c.accountServes(providers, alias, alternate); err != nil {

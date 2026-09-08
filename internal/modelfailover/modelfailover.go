@@ -142,6 +142,21 @@ type Policy struct {
 	// crossing providers is crossing logins, and an invocation made in the first
 	// provider's home would authenticate as nobody.
 	AlternateAccountConfigDir string
+	// AlternateSessionID is the session the alternate endpoint already holds for
+	// this turn's conversation, and empty where it holds none — which is the first
+	// crossing, and every turn of an agent that has never crossed.
+	//
+	// A window lasts longer than one turn, so the second and third turns of an
+	// outage go to the same alternate the first one did, and by then that provider
+	// is holding a session of its own. Resuming it is what keeps a crossing costing
+	// one reconstruction per outage rather than one per turn.
+	//
+	// It is stated by the caller rather than read out of the result, and it is what
+	// this package sends: the session the refusing endpoint held is dropped before
+	// the rebuild is asked for anything and this replaces it afterwards, so no
+	// rebuild can put one provider's session in front of another whatever it
+	// returns.
+	AlternateSessionID string
 	// Rebuild is how a turn that crosses providers gets its context. The provider
 	// taking it has never seen this conversation and holds no session to resume,
 	// so what it is handed has to be assembled from the durable record: the caller
@@ -476,16 +491,47 @@ func (p Policy) runAlternate(ctx context.Context, provider Invoker, request back
 	}
 	request.AccountAlias = p.AlternateEndpoint.AccountAlias
 	request.AccountConfigDir = p.AlternateAccountConfigDir
+	// The refusing endpoint's session is dropped before the rebuild is asked for
+	// anything, so nothing it returns can carry one provider's session to another.
 	request.SessionID = ""
 	rebuilt, err := p.Rebuild(request)
 	if err != nil {
 		return backend.RunResult{}, fmt.Errorf("%w: %v", errRebuildFailed, err)
 	}
-	// A rebuild that handed back a session identifier would put the crossing right
-	// back where it started, so the one thing this path guarantees is checked here
-	// rather than trusted to every caller that writes one.
-	rebuilt.SessionID = ""
+	// And what is sent is the alternate's own session where the caller says it holds
+	// one, rather than whatever the rebuild put back. A session is the only thing
+	// about the request this package decides for itself, because it is the one
+	// thing that must never be the other provider's.
+	rebuilt.SessionID = strings.TrimSpace(p.AlternateSessionID)
 	return p.AlternateProvider.Run(ctx, rebuilt)
+}
+
+// ServesElsewhere reports a turn this policy will move onto the alternate before
+// it is attempted: the alternate is permitted, and the window on the model the
+// request names is one the log already says is closed.
+//
+// It exists for a caller that has to prepare the turn differently for each
+// endpoint — a crossing rebuilds its context from the durable record, and the
+// endpoint the turn was already on resumes a session instead — so that the
+// preparation and the routing cannot disagree about where the turn is going. A
+// caller that asked the question for itself would be reading the same log through
+// a second derivation, which is exactly the disagreement one turn cannot afford.
+//
+// It answers false for the refusal that has not happened yet, which is the honest
+// answer: whether the endpoint will refuse this turn is not knowable until it is
+// asked, and a caller that prepared for a crossing on the strength of a guess
+// would rebuild a turn that was about to be served where it was.
+func (p Policy) ServesElsewhere(model string) bool {
+	alternate := strings.TrimSpace(p.Alternate)
+	named := strings.TrimSpace(model)
+	if alternate == "" || (alternate == named && !p.crosses()) {
+		return false
+	}
+	if p.permitSubstitution(alternate) != nil {
+		return false
+	}
+	closed, err := windowClosed(p, named)
+	return err == nil && closed
 }
 
 // crosses reports a substitution that leaves the provider the turn is on.

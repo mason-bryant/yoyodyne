@@ -139,7 +139,12 @@ func (s *Session) failoverPolicy() modelfailover.Policy {
 	if alternate := s.options.FailoverEndpoint; alternate.Provider != "" && alternate.Provider != endpoint.Provider {
 		policy.AlternateEndpoint = alternate
 		policy.AlternateAccountConfigDir = s.options.FailoverAccountConfigDir
-		policy.Rebuild = s.rebuildFromRecord
+		policy.Rebuild = s.rebuildForAlternate
+		// And the session that endpoint already holds, where the record says it has
+		// been serving this conversation since the window closed. A window outlasts a
+		// turn, so the second and third turns of an outage go where the first one did
+		// and resume rather than reconstructing again.
+		policy.AlternateSessionID = s.alternateSession()
 		if s.options.FailoverBackend != nil {
 			policy.AlternateProvider = s.meteredFailover()
 		}

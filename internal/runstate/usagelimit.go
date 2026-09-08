@@ -255,16 +255,30 @@ func (e UsageLimitExhaustion) CrossedProviders() bool {
 // and a reader shown "opus rather than opus" would be shown a substitution that
 // reads as no substitution at all.
 func (e UsageLimitExhaustion) DescribeModel() string {
-	return describeServingModel(e.Provider, e.Model, e.CrossedProviders())
+	if !e.CrossedProviders() {
+		return strings.TrimSpace(e.Model)
+	}
+	return DescribeServingModel(e.Provider, e.Model)
 }
 
 func (e UsageLimitExhaustion) DescribeServedBy() string {
-	return describeServingModel(e.ServedByProvider, e.ServedBy, e.CrossedProviders())
+	if !e.CrossedProviders() {
+		return strings.TrimSpace(e.ServedBy)
+	}
+	return DescribeServingModel(e.ServedByProvider, e.ServedBy)
 }
 
-func describeServingModel(provider domain.Backend, model string, qualify bool) string {
+// DescribeServingModel names one model selector qualified by the provider it was
+// asked of. It is exported because the same phrase is owed to every surface that
+// says a turn was served somewhere other than where it was configured — the
+// conversation's own evidence line as well as this record — and two spellings of
+// it would be two answers to one question.
+//
+// A provider nobody named leaves the selector as it is, which is the answer for
+// every turn that never left the provider it was configured for.
+func DescribeServingModel(provider domain.Backend, model string) string {
 	trimmed := strings.TrimSpace(model)
-	if !qualify || trimmed == "" {
+	if trimmed == "" || strings.TrimSpace(string(provider)) == "" {
 		return trimmed
 	}
 	return string(provider) + "'s " + trimmed

@@ -440,3 +440,118 @@ func TestTheRebuildDoesNotRepeatAPictureTheTurnAlreadyCarries(t *testing.T) {
 		t.Fatalf("the picture appears %d times in the crossed turn, want exactly once", count)
 	}
 }
+
+// A window outlasts a turn, so the turn after a crossing goes where the last one
+// did. By then that provider holds a session of its own, and resuming it is the
+// whole difference between an outage costing one reconstruction and one per turn
+// — and between the alternate being told the conversation once and being told it
+// again on top of a session that already holds it.
+func TestATurnTakenInsideTheSameWindowResumesTheAlternatesOwnSession(t *testing.T) {
+	t.Parallel()
+
+	resetsAt := time.Date(2026, 9, 7, 11, 0, 0, 0, time.UTC)
+	held := &speakingBackend{results: []backendapi.RunResult{
+		{SessionID: "claude-session-1", FinalText: "Two goals, then."},
+		{
+			IsError:    true,
+			StopReason: "usage_limit",
+			UsageLimit: &backendapi.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt},
+		},
+	}}
+	crossed := &speakingBackend{results: []backendapi.RunResult{
+		{SessionID: "second-session-1", FinalText: "The second one first."},
+		{SessionID: "second-session-1", FinalText: "Still the second one."},
+		{SessionID: "second-session-1", FinalText: "And still."},
+	}}
+	options := crossingOptions(t, held, crossed)
+	options.UsageLimits = newTestUsageLimits(t)
+	session := openTestSession(t, options)
+
+	for _, message := range []string{"what should we do?", "and after that?", "is that still right?", "and now?"} {
+		if _, err := session.Send(context.Background(), message); err != nil {
+			t.Fatalf("Send(%q) error = %v", message, err)
+		}
+	}
+
+	// The endpoint whose window closed is asked twice and no more: the first turn,
+	// and the one it refused. Every turn after that goes straight across, which is
+	// what reading the window back off the log buys.
+	if len(held.requests) != 2 {
+		t.Fatalf("the configured provider was asked %d times, want the first turn and the refused one", len(held.requests))
+	}
+	if len(crossed.requests) != 3 {
+		t.Fatalf("the alternate was asked %d times, want the crossing and the two turns after it", len(crossed.requests))
+	}
+	// The crossing itself has no session and carries the reconstruction.
+	if crossing := crossed.requests[0]; crossing.SessionID != "" || !strings.Contains(crossing.Prompt, "rebuilt from its record") {
+		t.Fatalf("the crossing asked for session %q, want none and the conversation rebuilt in front of the turn", crossing.SessionID)
+	}
+	// Every turn after it resumes the session the alternate reported, and is not
+	// told the conversation a second time.
+	for index, later := range crossed.requests[1:] {
+		if later.SessionID != "second-session-1" {
+			t.Fatalf("turn %d inside the window asked for session %q, want the one the alternate itself reported",
+				index+2, later.SessionID)
+		}
+		if strings.Contains(later.Prompt, "rebuilt from its record") {
+			t.Fatalf("turn %d inside the window carries the reconstruction again: %q", index+2, later.Prompt)
+		}
+	}
+}
+
+// And the reconstruction is never sent twice in one prompt, whichever order a
+// turn reaches the rebuild in. A turn can be prepared for the endpoint it was
+// nominally on and then moved by a refusal nobody could have known about in
+// advance; two reconstructions in one prompt is the conversation told to itself
+// twice, and on a long one it is a turn refused for its own size.
+func TestTheReconstructionIsNeverSentTwiceInOnePrompt(t *testing.T) {
+	t.Parallel()
+
+	held := &speakingBackend{results: []backendapi.RunResult{
+		{SessionID: "claude-session-1", FinalText: "Two goals, then."},
+		{
+			IsError:    true,
+			StopReason: "usage_limit",
+			UsageLimit: &backendapi.UsageLimit{Kind: "five_hour", ResetsAt: time.Date(2026, 9, 7, 11, 0, 0, 0, time.UTC)},
+		},
+		// The window has lifted, and the endpoint refuses again anyway: the turn is
+		// prepared here and then moved across, which is the one ordering that reaches
+		// the rebuild twice.
+		{
+			IsError:    true,
+			StopReason: "usage_limit",
+			UsageLimit: &backendapi.UsageLimit{Kind: "five_hour"},
+		},
+	}}
+	crossed := &speakingBackend{results: []backendapi.RunResult{
+		{SessionID: "second-session-1", FinalText: "The second one first."},
+		{SessionID: "second-session-1", FinalText: "Still here."},
+	}}
+	options := crossingOptions(t, held, crossed)
+	options.UsageLimits = newTestUsageLimits(t)
+	clock := &steppingClock{at: fixedClock{}.Now()}
+	options.Clock = clock
+	session := openTestSession(t, options)
+
+	if _, err := session.Send(context.Background(), "what should we do?"); err != nil {
+		t.Fatalf("Send() error = %v on the first turn", err)
+	}
+	if _, err := session.Send(context.Background(), "and after that?"); err != nil {
+		t.Fatalf("Send() error = %v on the crossing turn", err)
+	}
+	clock.at = time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	if _, err := session.Send(context.Background(), "is that still right?"); err != nil {
+		t.Fatalf("Send() error = %v on the turn after the window lifted", err)
+	}
+
+	for who, requests := range map[string][]backendapi.RunRequest{
+		"the configured provider": held.requests,
+		"the alternate":           crossed.requests,
+	} {
+		for index, request := range requests {
+			if count := strings.Count(request.Prompt, "rebuilt from its record"); count > 1 {
+				t.Fatalf("%s was asked turn %d carrying %d reconstructions, want at most one", who, index+1, count)
+			}
+		}
+	}
+}
