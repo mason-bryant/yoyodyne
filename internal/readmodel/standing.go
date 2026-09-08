@@ -55,6 +55,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -144,6 +145,16 @@ type Sessions interface {
 	List() ([]runstate.WatchTransition, error)
 }
 
+// Reports is the pile every role files what it noticed into, and what became of
+// the ones somebody has decided. It is read for one derived fact — how deep the
+// pile is and how old the oldest undecided report in it is — because that is the
+// only way an operator can tell a channel that is being worked through from one
+// that is quietly filling up. It is satisfied by *runstate.ReportStore.
+type Reports interface {
+	List() ([]report.Report, error)
+	Handlings() ([]report.Handling, error)
+}
+
 // Sources are the durable records one standing reading is assembled from, and
 // the two configured numbers it is read against. Every store is an interface so
 // that this derivation can be exercised without a state directory, which is the
@@ -157,12 +168,23 @@ type Sources struct {
 	// all landed. It is optional, and a reading without one holds every blocked
 	// item rather than releasing work whose hold it could not read; see
 	// backlog.Holds for why that is the safe direction.
-	Stoppages     Stoppages
+	Stoppages Stoppages
+	// Decisions is what triage has already decided about those stoppages, which is
+	// what separates an item waiting on the development manager from one waiting
+	// on the harness carrying her decision out. It is optional, and a reading
+	// without one reports every held item as one nobody has decided about, saying
+	// so in the refusal rather than guessing the other way.
+	Decisions     Decisions
 	Directives    Directives
 	Amendments    Amendments
 	OperatorHolds OperatorHolds
 	IntakeHolds   IntakeHolds
 	Sessions      Sessions
+	// Reports is the collected pile. It is optional, and a reading without one
+	// says nothing about the pile rather than reporting it empty: "nobody has
+	// reported anything" and "nothing was wired to read what anybody reported" are
+	// opposite answers, and only one of them means there is nothing to do.
+	Reports Reports
 	// Capacity is execution.max_concurrent_developers as the caller read it. It is
 	// what turns "nothing is starting" into "there is no slot", which are opposite
 	// things for an operator to do about.
@@ -253,12 +275,47 @@ type Standing struct {
 	// Admitted is the whole backlog this reading saw, so a short not-startable
 	// list is legible: two refusals out of three admitted items and two out of
 	// forty are different states of the same machine.
-	Admitted            int    `json:"admitted"`
+	Admitted int `json:"admitted"`
+	// AwaitingDecision and AwaitingCarryOut are how much of the admitted work is
+	// held, split by whose move it is: a stoppage the development manager has
+	// still to decide about, and a decision she recorded that the harness has
+	// still to act on. They are counted separately and said in the head of the
+	// not-startable line, because the head is the whole of what an hourly message
+	// carries and one figure covering both is what sent an operator's attention to
+	// the wrong role for days.
+	AwaitingDecision    int    `json:"awaiting_decision"`
+	AwaitingCarryOut    int    `json:"awaiting_carry_out"`
 	NotStartableProblem string `json:"not_startable_problem,omitempty"`
 
 	NeedsHuman        []Attention `json:"needs_human"`
 	NeedsHumanProblem string      `json:"needs_human_problem,omitempty"`
+
+	// Reports is how the collected pile stands. It is not a fifth line and is not
+	// rendered as one: the four are a contract the operator ratified, and this is
+	// carried for the surfaces that read the model rather than its lines — the
+	// JSON a script or a dashboard reads, and the arithmetic behind the attention
+	// entry below. Whether the pile is draining is a question about a week rather
+	// than a moment, and it is answerable only if each reading says how deep the
+	// pile is and how old the oldest undecided report in it was.
+	Reports report.Pile `json:"reports"`
+	// ReportsProblem is a pile that could not be read. It is stated rather than
+	// reported as an empty pile, for the reason every other line here states its
+	// own failure: a reader told nothing concludes there is nothing.
+	ReportsProblem string `json:"reports_problem,omitempty"`
 }
+
+// maxUndecidedReportAge is how long the oldest report nobody has decided about
+// may go unanswered before the pile is something waiting on a person rather
+// than something a schedule is working through.
+//
+// A pile is meant to drain on its own: every role files into it, the product
+// manager decides about what it is shown, and a recurring task works it on a
+// cadence so that neither depends on an operator being at a terminal. The
+// failure this catches is that machinery not running or not keeping up, which is
+// invisible in any one reading — the pile looks the same the day it stops
+// draining as it did the day before — and shows only as the oldest report's age
+// climbing past anything a working cadence would leave.
+const maxUndecidedReportAge = 7 * 24 * time.Hour
 
 // ReadStanding assembles the four lines from the durable records. It never
 // fails as a whole: a source that cannot be read costs its own line and leaves
@@ -285,9 +342,11 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// a person. Reading them twice would be two chances for the two lines to
 	// disagree about one file.
 	switches := readSwitches(sources)
-	refused, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running, now)
+	refused, waits, queue, stall, notStartableProblem := readNotStartable(ctx, sources, switches, running, now)
 	standing.NotStartable = refused
 	standing.Admitted = len(queue.Entries)
+	standing.AwaitingDecision = waits.awaitingDecision
+	standing.AwaitingCarryOut = waits.awaitingCarryOut
 	standing.NotStartableProblem = notStartableProblem
 	// The provider's usage window is read out of the same stall the refusals are
 	// worded from, rather than derived a second time here: one reading of one
@@ -296,7 +355,20 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 		standing.Paused = stall.Says
 	}
 
+	standing.Reports, standing.ReportsProblem = readReports(sources, now)
+
 	needs, needsProblem := readNeedsHuman(sources, switches)
+	// A pile whose oldest undecided report has been waiting longer than any
+	// working cadence would leave it is waiting on a person, whatever else is
+	// running. Nothing else says so: the pile is not work, so no queue holds it,
+	// and the reports themselves are filed and forgotten by the roles that filed
+	// them.
+	if standing.Reports.OldestAge > maxUndecidedReportAge {
+		needs = append(needs, Attention{
+			What:  standing.Reports.Describe(),
+			Whose: "the product manager's — reports are decided in conversation, and a pile this old says the cadence that works it is not keeping up",
+		})
+	}
 	// A stall that is holding admitted work back and is nobody else's line to
 	// carry is attention in its own right. Nothing else reports it: a live session
 	// choosing nothing over a ready queue is a state no record announces, and the
@@ -304,12 +376,20 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	if waiting, attention := stall.Waiting(); attention {
 		needs = append(needs, waiting)
 	}
+	// Held work is on both lines for the reason handed-off work below is, and says
+	// a different thing on each: the queue's line says why nothing pulls each
+	// item, and this says who has to move and how many items are waiting on them.
+	needs = append(needs, Held(standing.AwaitingDecision, standing.AwaitingCarryOut)...)
 	// Work marked for a conversation is on both lines and says a different thing
 	// on each: the queue's line says why nothing pulls it, and this says who has
 	// to open the conversation. A reader looking for what waits on a person must
 	// not have to read the queue to find the longest wait there is.
 	standing.NeedsHuman = append(needs, HandedOff(queue)...)
-	standing.NeedsHumanProblem = needsProblem
+	// A pile that could not be read is said on the line the pile would have been
+	// said on, as well as in its own field. The field is what a script reads and
+	// the line is what a person reads, and a failure only the script can see is
+	// one nobody sees.
+	standing.NeedsHumanProblem = joinProblems(needsProblem, standing.ReportsProblem)
 	return standing
 }
 
@@ -488,13 +568,18 @@ func readSwitches(sources Sources) switches {
 // an empty queue is a state of the machine and not something waiting on
 // anybody, so it is returned as no stall at all rather than as attention nobody
 // asked for.
-func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun, now time.Time) ([]Refused, backlog.Queue, Stall, string) {
+//
+// The held counts it returns are counted over the same entries, in-flight work
+// left out with the rest of it: they are said in the head of the line the
+// refusals are listed under, so a count covering an item the line does not name
+// is a head that contradicts what is printed beneath it.
+func readNotStartable(ctx context.Context, sources Sources, held switches, running []RunningRun, now time.Time) ([]Refused, heldWork, backlog.Queue, Stall, string) {
 	if sources.Tracker == nil {
-		return nil, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
+		return nil, heldWork{}, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
 	}
 	queue, err := readQueue(ctx, sources)
 	if err != nil {
-		return nil, backlog.Queue{}, Stall{}, fmt.Sprintf("the admitted work could not be read: %v", err)
+		return nil, heldWork{}, backlog.Queue{}, Stall{}, fmt.Sprintf("the admitted work could not be read: %v", err)
 	}
 	// An item a run is already carrying is on the running line. Naming it here as
 	// well would report the machine working as work that will not start.
@@ -517,6 +602,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	// a state of the machine rather than something waiting on a person, and the
 	// attention line must not be given one.
 	stalled := false
+	var waits heldWork
 	refused := make([]Refused, 0, len(queue.Entries))
 	for _, entry := range queue.Entries {
 		if _, carried := inFlight[entry.ID]; carried {
@@ -525,6 +611,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 		paused := pausedBy(held.pausing, entry.ID)
 		switch {
 		case !entry.Ready:
+			waits.count(entry)
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: entry.Hold()})
 		case paused != nil:
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title,
@@ -541,7 +628,26 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	if len(held.problems) > 0 {
 		problem = joinProblems(problem, strings.Join(held.problems, "; "))
 	}
-	return refused, queue, stopped, problem
+	return refused, waits, queue, stopped, problem
+}
+
+// heldWork is how much of a reading's not-startable work is held, split by whose
+// move it is. It is a pair rather than one figure because they are two different
+// people to go to, and it is counted where the refusals are so that the head of
+// that line and the entries under it describe one set of items.
+type heldWork struct {
+	awaitingDecision int
+	awaitingCarryOut int
+}
+
+func (h *heldWork) count(entry backlog.Entry) {
+	switch held, carryOut := entry.Awaits(); {
+	case !held:
+	case carryOut:
+		h.awaitingCarryOut++
+	default:
+		h.awaitingDecision++
+	}
 }
 
 // whyNothingStarts is the pass-level stall: the reason a pullable item with
@@ -654,7 +760,7 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	}
 	var held backlog.Holds
 	if sources.Stoppages != nil {
-		held, err = HeldForAPerson(sources.Stoppages)
+		held, err = HeldForAPerson(sources.Stoppages, sources.Decisions)
 		if err != nil {
 			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}
@@ -662,14 +768,41 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	return backlog.Order(admitted, pullable, held), nil
 }
 
+// readReports is how the collected pile stands. A pile that could not be read
+// says so and reports no counts at all: a zero here would read as a channel
+// nobody has filed into, which is the one thing a broken read of it must never
+// look like.
+func readReports(sources Sources, now time.Time) (report.Pile, string) {
+	if sources.Reports == nil {
+		return report.Pile{}, "nothing was wired to read what the roles have reported"
+	}
+	reports, err := sources.Reports.List()
+	if err != nil {
+		return report.Pile{}, fmt.Sprintf("the collected reports could not be read: %v", err)
+	}
+	handlings, err := sources.Reports.Handlings()
+	if err != nil {
+		// The pile is readable and what became of it is not, so every report would
+		// count as undecided. That overstates the backlog in the direction that
+		// sends somebody to work on something already done, so no counts are given
+		// at all and the gap is named.
+		return report.Pile{}, fmt.Sprintf("what became of the collected reports could not be read, so how many are still waiting cannot be said: %v", err)
+	}
+	return report.Summarize(reports, handlings, now), ""
+}
+
 // readNeedsHuman is everything waiting on a person, with whose move it is.
 //
 // What is here and what is not is the whole of the line's value. A switch
 // somebody placed, a directive nobody settled, a proposal nobody decided, a run
-// that owes a step, and work marked for a conversation are all waiting on a
-// named person and will wait forever without one. A parked item is not: parking
-// is a decision already taken, and listing it would tell an operator to act on
-// something somebody deliberately settled.
+// that owes a step, held work, and work marked for a conversation are all
+// waiting on somebody named and will wait forever without them. A parked item is
+// not: parking is a decision already taken, and listing it would tell an
+// operator to act on something somebody deliberately settled.
+//
+// Held work is the one entry here whose mover can be the harness rather than a
+// person, and it is on this line for exactly that reason: an operator scanning
+// for what is waiting on him has to be able to see which of it is not.
 func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 	attention := make([]Attention, 0, 4)
 	if held.operatorHeld {
@@ -725,6 +858,48 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 		}
 	}
 	return attention, problem
+}
+
+// Held is the admitted work somebody has to release, as attention rather than as
+// queue entries: how many items wait on the development manager's decision and
+// how many wait on the harness carrying out decisions she has already recorded.
+//
+// The two are separate entries because they are separate people, and that is the
+// whole of what this exists for. Held work was named on the attention line only
+// through the queue's own refusals, one per item and all of them wording one
+// state, so an operator counting them read every held item as a decision
+// somebody owed. On 2026-09-07 that was thirty-three items and none of them: the
+// development manager had decided each one, and the gap was the harness never
+// carrying them out.
+//
+// Counts rather than identifiers, for the reason the attention line bounds
+// everything else it carries: what this line answers is who has to move, and a
+// reader who wants the items has the not-startable line above it, which names
+// them with the reason against each.
+func Held(awaitingDecision, awaitingCarryOut int) []Attention {
+	attention := make([]Attention, 0, 2)
+	if awaiting := awaitingDecision; awaiting > 0 {
+		attention = append(attention, Attention{
+			What:  fmt.Sprintf("%s %s the development manager's decision", count(awaiting, "admitted item"), awaits(awaiting)),
+			Whose: "the development manager's — nothing pulls a stopped item until she decides what happens to it",
+		})
+	}
+	if awaiting := awaitingCarryOut; awaiting > 0 {
+		attention = append(attention, Attention{
+			What:  fmt.Sprintf("%s %s carry-out of a decision already recorded", count(awaiting, "admitted item"), awaits(awaiting)),
+			Whose: "the harness's — the decision is made, and what is outstanding is the harness acting on it",
+		})
+	}
+	return attention
+}
+
+// awaits agrees the verb with the count, because a line that says "1 admitted
+// item await" is one a reader stops trusting the arithmetic of.
+func awaits(count int) string {
+	if count == 1 {
+		return "awaits"
+	}
+	return "await"
 }
 
 // HandedOff is the admitted work no run will ever carry, as attention rather

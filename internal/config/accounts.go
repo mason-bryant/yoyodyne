@@ -28,6 +28,24 @@ type Account struct {
 	// it is the one thing here a reader of the configuration cannot derive from
 	// the alias itself.
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	// Provider is whose authentication this account's provider home holds. It is
+	// the one thing about an account that cannot be derived from the alias and
+	// cannot be guessed from the pool: a provider home is one provider's, so an
+	// invocation pointed at another provider's home authenticates as nobody and is
+	// refused — after a work item has been claimed and a worktree cut for it,
+	// which is what naming the provider here is for.
+	//
+	// It is optional, and what an unstated one means depends on whether the
+	// account has a home of its own. An account that authenticates where the
+	// machine does — a project's single account, and the `default` alias under a
+	// pool — serves whichever provider is asking, because each provider reads its
+	// own home there. An account with a home of its own under the state root is a
+	// Claude Code home when it says nothing, because that is what every such home
+	// on every installation is: `bin/yoyo-account` makes them with
+	// `CLAUDE_CONFIG_DIR=… claude auth login`, and `yoyo doctor` has always asked
+	// them that way. A pool of Codex accounts says so here and is refused with the
+	// reason named until it does.
+	Provider domain.Backend `yaml:"provider,omitempty" json:"provider,omitempty"`
 	// Pool is which half of the pool this account is in: `active` accounts are
 	// round-robined by every run the harness starts, and a `reserved` one is
 	// served from only when no active account can be. It is optional and empty
@@ -150,6 +168,36 @@ func AccountConfigDirectory(stateRoot, alias string) string {
 		return ""
 	}
 	return filepath.Join(stateRoot, "accounts", trimmed)
+}
+
+// AccountProvider is whose authentication one alias's provider home holds, and
+// is empty for an account that authenticates where the machine does — which
+// serves whichever provider asks, because each of them reads its own home there.
+//
+// An account with a home of its own that states no provider answers Claude Code,
+// which is what those homes are: the harness creates none of them, and the two
+// things that do — `bin/yoyo-account` and the login `yoyo doctor` hands back —
+// have signed them in with Claude Code since pooling existed. Answering "any"
+// there is the failure this exists to stop, and answering the developer's own
+// provider would be guessing that a home somebody signed in months ago belongs
+// to whatever the configuration says today.
+func (c Config) AccountProvider(alias string) domain.Backend {
+	trimmed := strings.TrimSpace(alias)
+	if provider := domain.Backend(strings.TrimSpace(string(c.Accounts[trimmed].Provider))); provider != "" {
+		return provider
+	}
+	if c.accountHasOwnHome(trimmed) {
+		return domain.BackendClaudeCode
+	}
+	return ""
+}
+
+// accountHasOwnHome reports an alias the harness points a provider at a home of
+// its own for, rather than letting it authenticate where the machine does. It is
+// the same derivation Endpoint makes, asked without a state root: only a pool
+// gives an alias a home, and `default` keeps the machine's own either way.
+func (c Config) accountHasOwnHome(alias string) bool {
+	return c.Pooled() && strings.TrimSpace(alias) != DefaultAccountAlias
 }
 
 // AccountAliases lists the configured accounts in a stable order, so resolution

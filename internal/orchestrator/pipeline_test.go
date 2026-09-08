@@ -729,7 +729,11 @@ func TestPipelineRefusesUnauthenticatedOrDuplicateRunBeforeClaim(t *testing.T) {
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := &fakeBackend{availability: backend.Availability{Installed: true, Authenticated: false, AuthMethod: "none"}}
 	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !strings.Contains(err.Error(), "claude auth login") {
+	// The refusal names the backend the developer is configured for, because
+	// sending the operator to log into a provider that is not the one this run
+	// would have used is a remedy for a machine that is not theirs.
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil ||
+		!strings.Contains(err.Error(), `the claude-code backend is not authenticated`) {
 		t.Fatalf("Run() auth error = %v", err)
 	}
 	if tracker.claimed {
@@ -814,7 +818,7 @@ func TestPipelineNamesADirtyCheckoutBeforeAskingWhetherTheProviderIsInstalled(t 
 	runPipelineGit(t, repository, "add", ".")
 	runPipelineGit(t, repository, "commit", "-m", "adopt yoyo")
 	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil ||
-		!strings.Contains(err.Error(), "Claude Code is not installed") {
+		!strings.Contains(err.Error(), "the claude-code backend is not installed") {
 		t.Fatalf("Run() error = %v, want the missing provider refused once the checkout is clean", err)
 	}
 	if tracker.claimed {
@@ -1107,11 +1111,11 @@ func TestPipelineRefusesAutomaticIntegrationThatIsNotGatedByAReviewer(t *testing
 
 // The gate that refuses a reviewer this build cannot launch is held here rather
 // than through Run, because no built-in reaches it through a valid configuration
-// any more: the one backend with no compiled adapter is Codex, and it is now the
-// developer's alone, so configuration validation refuses a Codex reviewer first.
-// The gate is what stops an unlaunchable reviewer if that ever stops being true
-// — a built-in that ships without an adapter, or an adapter parked mid-build —
-// and an untested gate is one a later change removes without noticing.
+// any more: both backends this build ships name an adapter, and a provider a
+// project declares has to name one of them or be refused where it is written.
+// What is left that this gate stops is a backend nothing describes at all — and,
+// if it ever stops being true that every built-in ships an adapter, a built-in
+// that does not. An untested gate is one a later change removes without noticing.
 func TestValidateReviewPolicyRefusesAReviewerNothingCanLaunch(t *testing.T) {
 	t.Parallel()
 
@@ -1119,10 +1123,10 @@ func TestValidateReviewPolicyRefusesAReviewerNothingCanLaunch(t *testing.T) {
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
-	pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.BackendCodex, Model: testReviewerModel, Instances: 1}
+	pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: "my-harness", Model: testReviewerModel, Instances: 1}
 
 	err := pipeline.validateReviewPolicy()
-	if err == nil || !strings.Contains(err.Error(), "requires a claude-code reviewer") {
+	if err == nil || !strings.Contains(err.Error(), "requires a reviewer on a backend this build can launch") {
 		t.Fatalf("validateReviewPolicy() error = %v, want a refusal naming the reviewer's backend", err)
 	}
 }
