@@ -418,6 +418,15 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	if err != nil {
 		return nil, nil, err
 	}
+	// What this agent knows, read for the side conversations it held beside this
+	// one: each concluded side thread merges its substance in here, and this
+	// conversation's next turn is where that revision is read. The redaction values
+	// are the store's rather than this reader's — a store built without them is one
+	// nothing may be written through — and reading is all this wiring does.
+	memories, err := runstate.NewMemoryStore(parts.stateRoot, cfg.Product.ID, parts.redactValues...)
+	if err != nil {
+		return nil, nil, err
+	}
 	// The conversation is held, recorded, and resumed under the agent that holds
 	// it, so two agents configured for one role are two conversations rather than
 	// one they would take turns overwriting.
@@ -525,6 +534,11 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.
 		Amendments: parts.amendments,
+		// The agent's own memory, read for what its side threads concluded. A side
+		// conversation never speaks into this one: what it worked out arrives as a
+		// memory revision naming the stream it came from, and anything it promised
+		// stays tentative until this thread ratifies it.
+		Memories: memories,
 		// How evidence from outside the repository is gathered on the role's
 		// behalf, bounded by what the operator configured. It is the harness's own
 		// hand like the tracker is: the role names a question and a permitted
