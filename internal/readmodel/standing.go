@@ -185,6 +185,21 @@ type Sources struct {
 	// reported anything" and "nothing was wired to read what anybody reported" are
 	// opposite answers, and only one of them means there is nothing to do.
 	Reports Reports
+	// UsageLimits is the provider's refusals outside a run, read with the agents
+	// below for the one thing the two say together: whether the provider is
+	// holding every role at once. It is optional, and a reading without one says
+	// nothing about a hold rather than reporting none — a project whose every
+	// refusal went unread for five days is the reason this is here.
+	UsageLimits UsageLimits
+	// Agents is every configured agent, as the configuration resolved it: what
+	// each asks for and what each may be served by instead. It is the other half
+	// of the hold above, because a refusal holds a role only against what that
+	// role is configured to ask.
+	Agents []AgentEndpoint
+	// UnknownResetPause is execution.usage_limit_unknown_reset_pause as the caller
+	// read it: how long a refusal that named no reset stands before the harness
+	// asks again, which is the same interval failover reads the same log on.
+	UnknownResetPause time.Duration
 	// Capacity is execution.max_concurrent_developers as the caller read it. It is
 	// what turns "nothing is starting" into "there is no slot", which are opposite
 	// things for an operator to do about.
@@ -264,6 +279,12 @@ type Standing struct {
 	// four still render exactly as they did, and this is a banner above them, in
 	// the shape `bin/yoyo-status` already puts the operator's own pause in.
 	Paused string `json:"paused,omitempty"`
+	// CapacityHold is the provider holding every configured role at once, as the
+	// refusal log and the agents' configuration say it, and nil where it is not.
+	// It is carried whole for the surfaces that read the model rather than its
+	// lines: the banner above says it in one sentence, and this is the reset, the
+	// count, and the models behind that sentence.
+	CapacityHold *CapacityHold `json:"capacity_hold,omitempty"`
 
 	Running        []RunningRun `json:"running"`
 	RunningProblem string       `json:"running_problem,omitempty"`
@@ -354,10 +375,30 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	if stall.Reason == ReasonProviderWindow {
 		standing.Paused = stall.Says
 	}
+	// The provider holding every role is the other pause, read from the refusal
+	// log rather than from the session choosing work: on 2026-09-08 that session
+	// was idle over items waiting on a decision, and the role that would have
+	// decided was the one being refused, so the watch log never said a window at
+	// all. The session's own account wins where it has one, because it is the
+	// same window said with less inference; this says it where nothing else does.
+	hold, holdProblem := CapacityHoldOf(sources, now)
+	if hold.Holding {
+		standing.CapacityHold = &hold
+		if standing.Paused == "" {
+			standing.Paused = hold.Says()
+		}
+	}
 
 	standing.Reports, standing.ReportsProblem = readReports(sources, now)
 
 	needs, needsProblem := readNeedsHuman(sources, switches)
+	// The hold is waiting on a person in the one way a window is not: the window
+	// lifts on the provider's clock, and the configuration that let it hold every
+	// role is the operator's to change.
+	if attention, held := hold.Attention(); held {
+		needs = append(needs, attention)
+	}
+	needsProblem = joinProblems(needsProblem, holdProblem)
 	// A pile whose oldest undecided report has been waiting longer than any
 	// working cadence would leave it is waiting on a person, whatever else is
 	// running. Nothing else says so: the pile is not work, so no queue holds it,

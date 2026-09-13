@@ -204,6 +204,7 @@ var harnessVoice = voice{
 		KindLineWaiting:              "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull and {publications}.\n\n{standing}",
 		KindStallNoticed:             "Nothing at all has started on this product for {age}, with {ready} ready to pull: {cause}. {stopped}.\n\n{standing}",
 		KindProviderWindow:           "{stopped}. Nothing has been chosen on this product for {age}; nothing has stopped and nothing is waiting on anybody, and the harness asks again when the window lifts.\n\n{standing}",
+		KindCapacityHold:             "{stopped}. Nothing has moved on this product for {age}: every turn every role would take asks a model the provider is refusing, and nothing any of them may fail over to is being served either. The window lifts on the provider's clock; failover on the agents is what would move the work before it does.\n\n{standing}",
 		KindResidentStale:            "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
 		KindBundleImprovement:        "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows {setting} beside everything else the template moved, and it is adopted by hand or not at all.",
 		KindCatchUpDigest:            "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
@@ -264,6 +265,7 @@ var developerVoice = voice{
 		KindLineWaiting:              "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been and {publications} from work already done.\n\n{standing}",
 		KindStallNoticed:             "Nothing has been handed to me for {age} — {ready} sat ready the whole time: {cause}. {stopped}.\n\n{standing}",
 		KindProviderWindow:           "{stopped}. Nothing has been handed to me for {age}, and that is not a queue nobody is reading — there is nothing to pick up until the provider serves again.\n\n{standing}",
+		KindCapacityHold:             "{stopped}. Nothing has reached me for {age}, and nothing will: every role here is refused on the model it asks for, mine included, and nothing my turns could be moved onto is being served either.\n\n{standing}",
 		KindResidentStale:            "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
 		KindBundleImprovement:        "{improvement}. What the template says about {setting} is what I'd be run under if this project took it up, and until somebody does I go on being run under what it holds now.",
 		KindCatchUpDigest:            "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
@@ -324,6 +326,7 @@ var reviewerVoice = voice{
 		KindLineWaiting:              "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it and {publications} I have already approved.\n\n{standing}",
 		KindStallNoticed:             "No change has reached me for a verdict in {age}, and none was written — {ready} ready and no run started: {cause}. {stopped}.\n\n{standing}",
 		KindProviderWindow:           "{stopped}. No change has reached me for a verdict in {age}: nothing was written for me to judge, and nothing was going to be.\n\n{standing}",
+		KindCapacityHold:             "{stopped}. No change has reached me for a verdict in {age}, and none was written to reach me: the provider is refusing every role at once, so nobody writes and nobody judges.\n\n{standing}",
 		KindResidentStale:            "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back, and installing that build is what stops me granting one — the session takes it up itself between runs.",
 		KindBundleImprovement:        "{improvement}. It changes nothing about the standard I hold a change to today, and it would change {setting} for every change judged after somebody adopts it.",
 		KindCatchUpDigest:            "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
@@ -383,6 +386,7 @@ var developmentManagerVoice = voice{
 		KindLineWaiting:              "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now and {publications} still counting as in flight.\n\n{standing}",
 		KindStallNoticed:             "My queue has not been pulled from in {age} — {ready} pullable, no hold on the line, no full machine, no run in flight: {cause}. {stopped}.\n\n{standing}",
 		KindProviderWindow:           "{stopped}. My queue has not been pulled from for {age}; the order stands as I set it, and the next pull takes it from the top when the window lifts.\n\n{standing}",
+		KindCapacityHold:             "{stopped}. My queue has not been pulled from for {age}, and I cannot decide what is waiting on me either: the provider refuses my turns as it refuses everybody's, and nothing they could be moved onto is being served.\n\n{standing}",
 		KindResidentStale:            "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does, and they stop when that build is installed — the session takes it up itself between runs.",
 		KindBundleImprovement:        "{improvement}. Nothing in the queue moves for it, and nothing I hand out changes until {setting} is adopted by hand.",
 		KindCatchUpDigest:            "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
@@ -443,6 +447,7 @@ var productManagerVoice = voice{
 		KindLineWaiting:              "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on, and {publications} paid for and not yet delivered.\n\n{standing}",
 		KindStallNoticed:             "Nothing has been spent on this product for {age}, and {ready} I admitted is still waiting: {cause}. This is not a quiet queue; it is a queue nothing has been started from. {stopped}.\n\n{standing}",
 		KindProviderWindow:           "{stopped}. Nothing has been spent on this product for {age}: this is the one quiet stretch that costs nothing and buys nothing, and it ends on the provider's clock rather than on anybody's decision.\n\n{standing}",
+		KindCapacityHold:             "{stopped}. Nothing has been spent on this product for {age}, and this quiet is not free: every role is refused at once, the window lifts on the provider's clock, and a second model each agent could fail over to is what keeps the work moving through the next one.\n\n{standing}",
 		KindResidentStale:            "What is being spent on this product was built at {commit}, before {behind} landed. Until that build is installed, some of that spend buys work the system has already paid for once; the session takes it up itself between runs once it is.",
 		KindBundleImprovement:        "{improvement}. Whether {setting} is worth taking is the operator's to decide and nobody else's, which is why it is offered once rather than asked for repeatedly.",
 		KindCatchUpDigest:            "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
@@ -503,6 +508,7 @@ var architectVoice = voice{
 		KindLineWaiting:              "Selection has chosen nothing for {age}: {stopped}, with {ready} a run could have been started for behind it and {publications}. Quiet nobody chose is the failure mode this exists to say out loud.\n\n{standing}",
 		KindStallNoticed:             "Selection has started nothing for {age} over {ready} ready: {cause}. The failure this watches for is the one where the process that would have said why is the process that died. {stopped}.\n\n{standing}",
 		KindProviderWindow:           "{stopped}. Selection has chosen nothing for {age}: the loop is alive and reading the queue, and what it would start with is what the provider will not serve yet.\n\n{standing}",
+		KindCapacityHold:             "{stopped}. Selection has started nothing for {age}: every role depends on capacity the provider is refusing, and a system whose every role shares one capacity dependency stops whole.\n\n{standing}",
 		KindResidentStale:            "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
 		KindBundleImprovement:        "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; saying {setting} once makes the difference visible without deciding it for anybody.",
 		KindCatchUpDigest:            "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
@@ -663,6 +669,12 @@ var nextMoves = map[Kind]string{
 	// sending somebody to look at a machine that is behaving, which is exactly
 	// what the alarm this replaces did on 2026-09-05.
 	KindProviderWindow: "nobody's — the window lifts on the provider's clock, and the queue is read again when it does.",
+	// Every role held is the one capacity state that is somebody's move. The window
+	// is still the provider's; what is the operator's is the configuration that
+	// let one window hold every role. The message carries the read model's own
+	// wording of that in Mover, so a terminal and a channel name the same move,
+	// and this is what a record that carried none would say.
+	KindCapacityHold: "the operator's — the window lifts on the provider's clock, and enabling failover on the agents is what would move the work onto another model before it does.",
 	// The restart is no longer anybody's: a watch session takes up a build
 	// installed over it by itself, between the runs it is carrying and without
 	// interrupting one. What is left is the install, which is why this names it
@@ -739,7 +751,7 @@ func nextMove(event Event) (string, bool) {
 	// the two cannot disagree.
 	if strings.TrimSpace(event.Detail.Mover) != "" {
 		switch event.Kind {
-		case KindStallNoticed, KindRunEnded:
+		case KindStallNoticed, KindRunEnded, KindCapacityHold:
 			return ended(strings.TrimSpace(event.Detail.Mover)), true
 		}
 	}

@@ -188,6 +188,10 @@ var reaches = map[Kind]Reach{
 	KindLineWaiting:    ReachChannel,
 	KindStallNoticed:   ReachChannel,
 	KindProviderWindow: ReachChannel,
+	// Every role refused at once on a known reset. It is the one silence here that
+	// has both a cause and a remedy, and it is the operator's: the window is the
+	// provider's, and the configuration that let it hold every role is his.
+	KindCapacityHold: ReachChannel,
 	// A session dispatching work on a binary the harness has moved past. Nothing in
 	// the record says it at all, and what it costs is rounds spent against bugs
 	// that were fixed hours earlier.

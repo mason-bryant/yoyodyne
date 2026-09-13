@@ -622,6 +622,48 @@ func FromProviderWindow(window ProviderWindow, at time.Time) Notification {
 	})
 }
 
+// CapacityHold is the provider holding every configured role at once: what the
+// read model says the state is, when the hold began, and whose move it is.
+//
+// It is the capacity half of the stall rather than another kind of window.
+// The window above is a session waiting out a limit it met itself, and is
+// nobody's move; this is every role refused on a known reset with nothing
+// configured to fail over to, which is the state that held this product for
+// five days in September 2026 while the record said so 134 times.
+type CapacityHold struct {
+	// Says is the state as the read model words it, carried already said for the
+	// reason the window's is: the same sentence heads `yoyo status` and this
+	// message, and a second wording is a second thing that can disagree.
+	Says string
+	// Since is when the earliest standing refusal was recorded, which is what the
+	// age in the message is measured from.
+	Since time.Time
+	// Mover is whose move follows it, worded by the read model beside the fact.
+	Mover string
+	// Standing is where the harness stands, in the four lines the read model
+	// renders, for the reason the stall says them: whoever this reaches was told
+	// nothing is moving and still wants to see what is.
+	Standing string
+}
+
+// FromCapacityHold says that the provider is holding every role. It is
+// addressed to the product and spoken by the harness for the reason the window
+// and the stall are: it is about every item rather than any one of them.
+//
+// The severity is the caller's, because it is what the caller escalates as the
+// hold stands: a warning the first hour and a critical one once it has stood
+// long enough that a person is the only thing that ends it early.
+func FromCapacityHold(hold CapacityHold, severity report.Severity, at time.Time) Notification {
+	notification := productNotification(KindCapacityHold, at, Detail{
+		Stopped:  strings.TrimSpace(hold.Says),
+		Since:    hold.Since,
+		Mover:    strings.TrimSpace(hold.Mover),
+		Standing: strings.TrimRight(hold.Standing, "\n"),
+	})
+	notification.Event.Severity = severity
+	return notification
+}
+
 // Improvement is one value the project's template has improved that this
 // project has never edited: which setting it is, and what the three-way
 // comparison says about it.

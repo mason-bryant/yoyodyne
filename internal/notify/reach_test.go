@@ -181,7 +181,7 @@ func TestWhatIsAlwaysProductAddressedSaysSoInTheTable(t *testing.T) {
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed,
 		KindWatchStopped, KindWatchRedeploying,
 		KindLineWaiting, KindResidentStale, KindStallNoticed, KindProviderWindow,
-		KindBundleImprovement,
+		KindCapacityHold, KindBundleImprovement,
 	}
 	for _, kind := range always {
 		if got := kind.Reach(); got == ReachThread {
