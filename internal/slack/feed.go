@@ -42,7 +42,12 @@ const (
 	heartbeatStream  = "heartbeat"
 	residentStream   = "resident"
 	stallStream      = "stall"
-	directiveStream  = "directives"
+	// capacityStream is the provider holding every role, said again while it
+	// stands. It is a stream of its own rather than a mark on the stall's for the
+	// reason the resident is: it is a state said on a clock rather than a record
+	// said once, and it is true at a time the stall's own record is silent.
+	capacityStream  = "capacity"
+	directiveStream = "directives"
 	// improvementStream is what the project's template offers that the project
 	// has never edited. It is a stream of its own rather than a mark on the
 	// product's because what it holds is one mark per improvement rather than a
@@ -236,6 +241,10 @@ type HarnessFeed struct {
 	// operators are told directly rather than in the channel alone. Zero takes
 	// DefaultStaleBuildThreshold.
 	StaleBuildThreshold int
+	// CapacityEscalation is how long the provider may hold every role before the
+	// hold is said as critical and taken to the operators with every repetition
+	// rather than the first. Zero takes DefaultCapacityEscalation.
+	CapacityEscalation time.Duration
 	// Stalls is the durable record of this product having gone quiet — nothing
 	// started, over work the tracker calls ready, with nothing accounting for it.
 	// It is read here and never written: what notices and records a stall is
@@ -449,6 +458,17 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, stalled...)
+
+	// Whether the provider is holding every role at once, from the refusal log
+	// and the agents' configuration rather than from anything a session wrote
+	// about itself. It is beside the stall rather than part of it because the two
+	// are true at the same time and say opposite things: the stall says nothing
+	// accounts for the quiet, and this says exactly what does and until when.
+	holding, err := f.capacityDeliveries(ctx, cursors.Streams[capacityStream], batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, holding...)
 
 	// What the project's template offers that this project never edited. It is
 	// last because it is the one reading here that is not about the work at all:

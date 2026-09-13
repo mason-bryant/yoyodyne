@@ -99,13 +99,17 @@ nothing typed in the channel ever arrives.
 `im:write` is used for two classes of message and only those two, sent directly
 to whoever step 4 grants `direct-work`. The first is **the harness reporting
 itself degraded**: a session choosing work from a build the harness has moved
-well past, and the harness having started nothing at all while work was ready.
-The second is **advisory-once** — a fact said exactly once and never repeated,
-which today is one value the project's template has improved that this project
-never edited. Every one of them is sent once rather than repeated. Removing the
-scope costs those direct messages and nothing else: the stale-build message and
-the improvement are in the channel either way, and the stall is in the durable
-record `yoyo status` reads back.
+well past, the harness having started nothing at all while work was ready, and
+[the provider holding every role](../reporting.md#the-provider-holding-every-role)
+with nothing configured to fail over to. The second is **advisory-once** — a
+fact said exactly once and never repeated, which today is one value the
+project's template has improved that this project never edited. The first two
+degraded states and the improvement are sent once rather than repeated; the
+hold is sent when it is first seen and again with each hourly repetition once it
+has stood past six hours, because it is the one state a person ends early.
+Removing the scope costs those direct messages and nothing else: the stale-build
+message, the hold, and the improvement are in the channel either way, and the
+stall is in the durable record `yoyo status` reads back.
 
 ## 2. Install it and take the two tokens
 
@@ -1150,7 +1154,7 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
 | `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
 | `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
-| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the two that report the harness itself degraded — a stale session build, and the harness having started nothing at all — and both are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
+| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the three that report the harness itself degraded — a stale session build, the harness having started nothing at all, and the provider holding every role — and all three are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
 | `the watch session's build <sha> is not a revision this product's repository holds` | Said once per build, and not a fault. How old a `yoyo work --watch` session is is measured by counting what has landed in the repository since its binary was built, and that only means anything where the product this sink reports on is Yoyodyne's own source. For any other product the comparison is not this sink's to make, so it says so once and stays quiet. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |

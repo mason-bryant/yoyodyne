@@ -44,7 +44,15 @@ type UsageLimits interface {
 // nowhere to record one, both record nothing and say nothing: the caller is
 // already failing the turn on the refusal itself, and this adds a durable trace
 // of it rather than another way for the turn to fail.
-func (s *Session) noteUsageLimit(result backend.RunResult, err error) error {
+//
+// The model is the one the turn was refused on — the alternate, where failover
+// had already moved the turn there — rather than the one the agent is
+// configured for. A refusal that names it is what lets the record be read back
+// as a hold: whether the provider is refusing every role at once is a question
+// about which models are refused, and a refusal that named none could only be
+// attributed by guessing. Between 2026-09-08 and 09-13 every refusal in the log
+// named none.
+func (s *Session) noteUsageLimit(result backend.RunResult, err error, model string) error {
 	limit := refusedForUsageLimit(result, err)
 	if limit == nil || s.options.UsageLimits == nil {
 		return nil
@@ -59,6 +67,7 @@ func (s *Session) noteUsageLimit(result backend.RunResult, err error) error {
 		Waiting:        fmt.Sprintf("the %s conversation %s", RoleTitle(s.state.Role), s.state.ConversationID),
 		Kind:           limit.Kind,
 		ConversationID: s.state.ConversationID,
+		Model:          strings.TrimSpace(model),
 	}
 	if !limit.ResetsAt.IsZero() {
 		resetsAt := limit.ResetsAt.UTC()

@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -294,6 +295,11 @@ func standingSources(configPath string) readmodel.Sources {
 	}
 	cfg := resolved.Config
 	sources.Capacity = cfg.Execution.MaxConcurrentDevelopers
+	// What each agent asks for and may be served by instead, read against the
+	// refusal log below for the one thing the two say together: whether the
+	// provider is holding every role at once.
+	sources.Agents = agentEndpoints(cfg)
+	sources.UnknownResetPause = cfg.Execution.UsageLimitUnknownResetPause.Duration()
 	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
 	if err != nil {
 		sources.Tracker = unreadableTracker{err}
@@ -328,6 +334,9 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewReportStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Reports = store
 	}
+	if store, err := runstate.NewUsageLimitStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.UsageLimits = store
+	}
 	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
 	if err != nil {
 		sources.Tracker = unreadableTracker{fmt.Errorf("resolve product repository: %w", err)}
@@ -335,6 +344,31 @@ func standingSources(configPath string) readmodel.Sources {
 	}
 	sources.Tracker = beads.Client{Runner: execution.OSProcessRunner{}, Dir: repository}
 	return sources
+}
+
+// agentEndpoints is every configured agent as the read model needs it: what
+// each asks for, and what each fails over to where it fails over at all. The
+// alternate is read through the same answer failover itself reads — an
+// alternate an operator switched off is not one — so what the hold says about
+// the configuration is what the configuration would actually do. Sorted by
+// name, so two readings of one configuration say the agents in one order.
+func agentEndpoints(cfg config.Config) []readmodel.AgentEndpoint {
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	endpoints := make([]readmodel.AgentEndpoint, 0, len(names))
+	for _, name := range names {
+		agent := cfg.Agents[name]
+		endpoint := readmodel.AgentEndpoint{Name: name, Provider: agent.Backend, Model: agent.Model}
+		if alternate := agent.Failover.Alternate(); alternate != "" {
+			endpoint.Alternate = alternate
+			endpoint.AlternateProvider = agent.Failover.AlternateProvider(agent.Backend)
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+	return endpoints
 }
 
 // unreadableTracker is the tracker a reading gets when the harness could not be

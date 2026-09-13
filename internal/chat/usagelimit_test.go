@@ -52,6 +52,12 @@ func TestARefusedTurnRecordsWhatIsWaitingAndUntilWhen(t *testing.T) {
 	if refusal.ConversationID != session.Evidence().ConversationID {
 		t.Fatalf("conversation = %q, want the way back to the record", refusal.ConversationID)
 	}
+	// And the model it was refused on, which is what lets the refusal be read
+	// back as part of the provider holding every role: a refusal that named no
+	// model could only be attributed by guessing.
+	if refusal.Model != "opus" {
+		t.Fatalf("model = %q, want the model the turn was refused on", refusal.Model)
+	}
 }
 
 // A limit reported beside an answer the provider still gave stopped nothing, and

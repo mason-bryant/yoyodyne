@@ -191,7 +191,7 @@ func (v sideVoice) Answer(ctx context.Context, question sidestream.Question) (si
 	// about the whole product rather than about this side thread. Failing to
 	// record it never replaces the refusal in what the turn reports: the turn is
 	// spent either way, and the stream says so.
-	refusal := v.noteSideUsageLimit(question, result, err)
+	refusal := v.noteSideUsageLimit(question, result, err, served.Model)
 	switch {
 	case err != nil:
 		return spoken, errors.Join(fmt.Errorf("the %s could not be reached on %s: %w",
@@ -205,8 +205,10 @@ func (v sideVoice) Answer(ctx context.Context, question sidestream.Question) (si
 }
 
 // noteSideUsageLimit records a provider refusal this turn met, exactly as a
-// conversation turn records one, and reports only what went wrong recording it.
-func (v sideVoice) noteSideUsageLimit(question sidestream.Question, result backend.RunResult, err error) error {
+// conversation turn records one — the model it was refused on included, so the
+// refusal can be read back as part of a hold over every role — and reports only
+// what went wrong recording it.
+func (v sideVoice) noteSideUsageLimit(question sidestream.Question, result backend.RunResult, err error, model string) error {
 	if result.UsageLimit == nil || (err == nil && !result.IsError) || v.usageLimits == nil {
 		return nil
 	}
@@ -216,6 +218,7 @@ func (v sideVoice) noteSideUsageLimit(question sidestream.Question, result backe
 		At:            v.now(),
 		Waiting:       v.waitingOn(question),
 		Kind:          result.UsageLimit.Kind,
+		Model:         strings.TrimSpace(model),
 	}
 	if !result.UsageLimit.ResetsAt.IsZero() {
 		resetsAt := result.UsageLimit.ResetsAt.UTC()

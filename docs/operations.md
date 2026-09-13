@@ -19,9 +19,10 @@ is, Git and whether this project is a repository with something to branch from,
 the tracker and whether it answers *here*, the configuration, the deterministic
 checks and whether this machine can run the programs they name, each provider
 your agents name — installed always, and authenticated where the harness has an
-adapter that can ask, which today is Claude Code — forge access when the project
-publishes, and, when reporting is on, this project's own Slack secrets and the
-sink that is supposed to be using them.
+adapter that can ask, which today is Claude Code — whether every agent runs on
+one model with nothing to fail over to, forge access when the project publishes,
+and, when reporting is on, this project's own Slack secrets and the sink that is
+supposed to be using them.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
 command.** That is the whole difference between this and a status listing: what
@@ -53,7 +54,24 @@ would stop work running and 0 otherwise.
 
 **A warning is not a small problem — it is something about an installation that
 works.** The `yoyo` on your `PATH` having drifted from the one you are running is
-one. Every reporting finding is another, and deliberately so: reporting is an
+one. **Every agent on one model, and none naming an alternate** is another, under
+`failover`:
+
+```text
+warning  failover               every agent runs on one model, opus on claude-code, and none names an alternate
+                                a capacity window closing on that model stops every role at once until it lifts, and nothing fails over; set failover.enabled: true and failover.model on each agent …
+                                fix: ${EDITOR:-vi} .yoyodyne/config.yaml
+```
+
+Nothing about it stops a run today. What it costs is paid the day that model's
+window closes: on 2026-09-08 the seven-day limit on the one model all five
+agents ran on closed with a reset five days off, no agent named an alternate,
+and the harness waited the whole window out. [Failover](configuration.md#serving-a-turn-from-a-permitted-alternate-model)
+had shipped, off by default so that each agent's alternate is a choice somebody
+made, and this project had never turned it on — a condition that was in the
+configuration the whole time and is one line to state. The finding is healthy
+once any agent names an alternate, or the agents run on more than one model,
+and the healthy line says how far the cover goes. Every reporting finding is another, and deliberately so: reporting is an
 observation and never a gate, so a sink you never started, a workspace that is
 down, and a token nobody stored all leave an installation that runs work exactly
 as it would have. They are still named, in full, with the command that ends each
@@ -210,17 +228,31 @@ guessing a wait. An exhausted limit is not the only thing a run waits out:
 [an overloaded provider](#waiting-out-an-overloaded-provider) below takes the
 same machinery on a much shorter clock.
 
+### A provider refusal outside a run
+
 An exhausted limit is not only a run's problem, either. The harness asks a
 provider for work in three places: inside a run, which parks as above; a
 conversation turn; and an independent `yoyo review`, which uses the same reviewer
 with no run around it. The last two have no run to park, so each records the
-refusal instead — what was stopped, the limit the provider named, and when it
-lifts. Nothing waits on it: the turn or the review fails at your terminal exactly
-as before. What the record buys is that
+refusal instead — what was stopped, the limit the provider named, when it
+lifts, and the model the turn was refused on, which is the alternate where
+failover had already moved the turn there. Nothing waits on it: the turn or the
+review fails at your terminal exactly as before. What the record buys is that
 [reporting into Slack](reporting.md#reporting-into-slack) says it as a `warning`
 without you there, and a run that parks on the same limit is said at that weight
 too. Hours in which nothing will happen is the one message a channel nobody is
 watching most needs to carry, and it must not weigh the same as checks passing.
+
+What those refusals add up to is read as well as each one on its own. When the
+refusals standing cover the model every agent's turn ends on, and at least one
+of them stopped a turn rather than being served through by an alternate, **the
+provider is holding every role**, and that is said as a state rather than as
+one more refusal: it heads [the four lines](#where-the-harness-stands-the-four-lines)
+with the reset the provider named, it is on the attention line as your move,
+and the channel [says it again while it stands](reporting.md#the-provider-holding-every-role).
+It is the message that was missing between 2026-09-08 and 09-13, when 134
+refusals were each said once and nothing said that all five agents were on the
+one model being refused, with nothing to fail over to, for five days.
 
 Selection is not a fourth place. A watching `yoyo work` session reads the tracker
 and starts runs, so a limit it meets is met by a run it started, bar the turn it
@@ -1040,7 +1072,7 @@ Needs a human (3):
   proposed change nobody has decided, a run that ended still owing a step, work
   marked for a conversation rather than for a run, a queue nothing is pulling
   from — a session sitting idle over it, or no session at all — while admitted
-  work waits behind that, and a
+  work waits behind that, the provider holding every role at once (below), and a
   [pile of collected reports](reporting.md#whether-the-pile-is-draining) whose
   oldest undecided entry has been waiting more than a week. A stall over an empty
   queue is not listed: it is a state of the machine rather than something waiting
@@ -1070,8 +1102,36 @@ reaches you when you want to know why nothing is happening, and the reason for i
 should be the first thing you read rather than the third line down beside one
 item. It is the same sentence the channel says and the same one the refusals
 carry, from the one derivation, and it is off the moment the window lifts.
-Nothing else is ever put there: every other reason the harness is choosing
-nothing is inside the four lines.
+
+The same place carries the other capacity state, which the session choosing
+work never records because it is not the thing being refused: **the provider
+holding every role at once**.
+
+```text
+Every role is paused on the provider's usage window until 2026-09-13T03:00:00Z: all 5 agents run on opus and none names an alternate, so nothing fails over; 134 turns refused since 2026-09-08T07:38:40Z
+Running: nothing
+...
+Needs a human (1):
+  every role is held by the provider's usage window, since 2026-09-08T07:38:40Z, until 2026-09-13T03:00:00Z — the operator's — the window lifts on the provider's clock, and enabling failover on the agents is what would move the work onto another model before it does
+```
+
+It is read from the [refusals the harness records outside a run](#a-provider-refusal-outside-a-run)
+against what each agent is configured to ask for and to fail over to: a hold
+stands while a refusal the provider has not said lifts yet covers the model
+every agent's turn ends on — its alternate where it names one, its own model
+otherwise — and at least one of those refusals was a turn that actually stopped
+rather than one an alternate served through. A refusal that names no model,
+which is every one recorded before 2026-09-13, counts only where every agent
+asks for the same thing, because on a project whose agents differ it cannot be
+attributed. Unlike the session's window it is on the attention line as well,
+because it is the one capacity state with a move in it: the window is the
+provider's, and the configuration that let one window hold every role is yours.
+Between 2026-09-08 and 09-13 the harness recorded 134 of these refusals and
+said nothing about what they added up to; this is what says it. Where the
+session's own window and this are both true, the session's is the banner —
+it is the same fact with less inference — and the hold is still on the
+attention line. Nothing else is ever put above the four lines: every other
+reason the harness is choosing nothing is inside them.
 
 Naming an item leaves the four lines out. They are about the product, and a
 question about one piece of work is a different question. `--json` carries the

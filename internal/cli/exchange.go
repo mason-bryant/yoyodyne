@@ -297,7 +297,7 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 	// about the whole product rather than about this exchange. Failing to record
 	// it never replaces the refusal itself in what the round reports: the round is
 	// spent either way, and the exchange says so.
-	refusal := v.noteUsageLimit(question, result, err)
+	refusal := v.noteUsageLimit(question, result, err, served.Model)
 	switch {
 	case err != nil:
 		return spoken, errors.Join(fmt.Errorf("the %s could not be reached: %w", chat.RoleTitle(question.Role), err), refusal)
@@ -313,8 +313,11 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 // noteUsageLimit records a provider refusal this round met, exactly as a
 // conversation turn records one, and reports only what went wrong recording it.
 // A round that was not refused, and a voice with nowhere to record one, both
-// record nothing and say nothing.
-func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend.RunResult, err error) error {
+// record nothing and say nothing. The model is the one the round was refused
+// on, for the reason a conversation turn records it: a refusal that names its
+// model can be read back as part of a hold over every role, and one that names
+// none cannot.
+func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend.RunResult, err error, model string) error {
 	if result.UsageLimit == nil || (err == nil && !result.IsError) || v.usageLimits == nil {
 		return nil
 	}
@@ -324,7 +327,8 @@ func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend
 		At:            v.now(),
 		Waiting: fmt.Sprintf("the %s answering exchange %s, asked by the %s",
 			chat.RoleTitle(question.Role), question.ExchangeID, chat.RoleTitle(question.Asker)),
-		Kind: result.UsageLimit.Kind,
+		Kind:  result.UsageLimit.Kind,
+		Model: strings.TrimSpace(model),
 	}
 	if !result.UsageLimit.ResetsAt.IsZero() {
 		resetsAt := result.UsageLimit.ResetsAt.UTC()
