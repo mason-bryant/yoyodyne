@@ -145,6 +145,32 @@ recurring_tasks:
       product manager for every fix you make. End with a durable report; when
       the system is healthy say NO FINDINGS and stop.
 
+  product-manager-sweep:
+    role: product-manager
+    every: 12h
+    enabled: true
+    max_turns: 6
+    prompt: |
+      Two jobs this pass.
+
+      First, read across the goals, the designs, the decisions, and the
+      admitted work, and look for places where they disagree: a goal nothing
+      serves, two items that are the same work, an item citing wording a
+      document no longer states, a design ruling that never landed, work that
+      contradicts a decision already recorded. Fix what your own authority
+      covers and elevate the rest. Say what you decided and why.
+
+      Second, decide whether a release should be cut. A release is worth
+      cutting when a substantial set of features has actually shipped -- work
+      landed and integrated, not merely closed -- and it is worth waiting when
+      what has landed since the last one is small or is one unfinished thread.
+      Never cut more than one a day. When the answer is yes, admit the release
+      work item in this same pass at a priority that gets it built promptly,
+      rather than noting it for later. Name in the item what is in the release.
+
+      End with a durable report. Put any questions for the operator at the
+      top; when nothing needs him, say so and stop.
+
 approvals:
   brief: human
   goals: human
