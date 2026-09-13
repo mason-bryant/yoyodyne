@@ -769,6 +769,28 @@ that account in classes as well as in words — how many items were held for a
 person, parked, carried in a conversation, sequenced behind a run — so that the
 stall alarm below states the same cause rather than deriving a second one.
 
+The first of those three guards says why, against each item it holds out. An
+item passed over as *already tried this session* is the one exclusion whose
+cause is not somewhere you can go and look — every other class names a state of
+the item, the queue, or the machine, and this one names an attempt only the
+session remembers — so the poll records what became of that attempt beside the
+item's name: the run it started and how it ended, the work having gone to
+another process, or the dispatch having failed before any run was recorded, and
+where the record of that failure now is. That last case is the one that could
+leave nothing at all. A dispatch that dies before the reservation writes no run
+record, so nothing built on the run store — the sweep, the docket, `yoyo status`,
+the stall alarm — can ever see it; on 2026-09-13 a session tried two items four
+hours into a returned capacity window, both died that way, and it then excluded
+both for the rest of its life with no surface saying why, over a queue of
+seventy-four. So a dispatch that fails before a run is reserved is put on the
+development manager's docket by the session that tried it, as an *attempt that
+never became a run*, carrying the item, why it was selected, what stopped it,
+and that the session will not try it again until the item changes. It is keyed
+to the item and the failure, so a session meeting the same dead dispatch twice
+dockets it once and a dispatch failing a new way is news. A docket that refuses
+the write does not lose the account: the exclusion says the session's own log is
+all there is, and the pass reports the dispatch nothing recorded.
+
 **A watching session also notices that the harness has stopped doing anything.**
 Everything above is what the session says about itself, which works exactly as
 long as it is choosing at all. So on every pull — at most once per

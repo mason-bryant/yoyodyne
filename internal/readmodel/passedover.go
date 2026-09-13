@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -47,10 +48,16 @@ const MaxPassedOverNamed = 5
 // was left in, and the conversation that carries it where the class names one.
 // The role is empty for every class but the conversation-carried one, which is
 // the only class whose answer is a person rather than a wait.
+//
+// The reason is empty for every class but the already-tried one, which is the
+// only class whose cause is an event rather than a state: every other exclusion
+// names something a reader can go and read for themselves, and this one names an
+// attempt only the session remembers. See runstate.PassedOverGroup.Reasons.
 type PassedOverItem struct {
-	ID    string
-	Class runstate.PassedOverClass
-	Role  domain.AgentRole
+	ID     string
+	Class  runstate.PassedOverClass
+	Role   domain.AgentRole
+	Reason string
 }
 
 // GroupPassedOver gathers what one poll passed over into one group per class, in
@@ -69,6 +76,7 @@ func GroupPassedOver(passed []PassedOverItem, admitted int) runstate.PassedOver 
 	var order []key
 	counted := make(map[key]int, len(passed))
 	named := make(map[key][]string, len(passed))
+	because := make(map[key][]string, len(passed))
 	for _, item := range passed {
 		at := key{class: item.Class, role: item.Role}
 		if _, met := counted[at]; !met {
@@ -77,18 +85,56 @@ func GroupPassedOver(passed []PassedOverItem, admitted int) runstate.PassedOver 
 		counted[at]++
 		if len(named[at]) < MaxPassedOverNamed {
 			named[at] = append(named[at], item.ID)
+			because[at] = append(because[at], boundedReason(item.Reason))
 		}
 	}
 	account := runstate.PassedOver{Admitted: admitted}
 	for _, at := range order {
 		account.Groups = append(account.Groups, runstate.PassedOverGroup{
-			Class: at.class,
-			Role:  at.role,
-			Count: counted[at],
-			Items: named[at],
+			Class:   at.class,
+			Role:    at.role,
+			Count:   counted[at],
+			Items:   named[at],
+			Reasons: reasonsIfAny(because[at]),
 		})
 	}
 	return account
+}
+
+// boundedReason is one item's reason cut to what the record holds. The cut is
+// made here rather than at each caller for the reason the naming is bounded
+// here: what is written down and what is read back have to be the same account,
+// and a reason the store refuses would cost the session the whole transition
+// rather than the sentence.
+//
+// The cut lands on a rune boundary and says it was cut, because a reason ending
+// mid-character is one a later reader cannot decode and a clamped one read as
+// complete is an account that stops where nothing stopped.
+func boundedReason(reason string) string {
+	if len(reason) <= runstate.MaxPassedOverReasonBytes {
+		return reason
+	}
+	cut := runstate.MaxPassedOverReasonBytes - len(reasonCutNote)
+	for cut > 0 && !utf8.RuneStart(reason[cut]) {
+		cut--
+	}
+	return reason[:cut] + reasonCutNote
+}
+
+const reasonCutNote = " […]"
+
+// reasonsIfAny drops a class's reasons where none of its named items had one, so the
+// classes that say the whole of it in their own name carry no empty strings
+// about with them. The slice is positional, so it is all or nothing: a class
+// where some items carry a reason keeps the empties, which is what makes the
+// position mean the item it names.
+func reasonsIfAny(reasons []string) []string {
+	for _, reason := range reasons {
+		if reason != "" {
+			return reasons
+		}
+	}
+	return nil
 }
 
 // Carrier is the conversation an account is waiting on, which is the marker on
@@ -137,15 +183,31 @@ func IdleLine(account runstate.PassedOver, inFlight int) string {
 		// looked at.
 		return fmt.Sprintf("none of the %s admitted was reached at this poll", counted(account.Admitted, "item", "items"))
 	}
-	return strings.Join(said, "; ")
+	// Cut to what the session's log will actually take. The line is assembled from
+	// a queue nothing here bounds — twelve classes, five names each, and now a
+	// reason against the names that carry one — and a line the store refuses costs
+	// the session the whole transition rather than the tail of a sentence, which is
+	// the silence every one of these accounts exists to end.
+	return boundedLine(strings.Join(said, "; "))
+}
+
+func boundedLine(line string) string {
+	if len(line) <= runstate.MaxWatchReasonBytes {
+		return line
+	}
+	cut := runstate.MaxWatchReasonBytes - len(reasonCutNote)
+	for cut > 0 && !utf8.RuneStart(line[cut]) {
+		cut--
+	}
+	return line[:cut] + reasonCutNote
 }
 
 // passedOverGroups is one clause per class, naming the conversation where the
-// class names one.
+// class names one and what excluded each item where the class carries that.
 func passedOverGroups(account runstate.PassedOver) []string {
 	groups := make([]string, 0, len(account.Groups))
 	for _, group := range account.Groups {
-		listed := strings.Join(group.Items, ", ")
+		listed := strings.Join(namedWithReasons(group), ", ")
 		if further := group.Count - len(group.Items); further > 0 {
 			listed += fmt.Sprintf(", and %d further", further)
 		}
@@ -156,6 +218,21 @@ func passedOverGroups(account runstate.PassedOver) []string {
 		groups = append(groups, fmt.Sprintf("%s (%s)", group.Class, listed))
 	}
 	return groups
+}
+
+// namedWithReasons is a class's named items, each with what excluded it where
+// the class recorded one. A class that says the whole of it in its own name
+// reads exactly as it did before this existed.
+func namedWithReasons(group runstate.PassedOverGroup) []string {
+	named := make([]string, 0, len(group.Items))
+	for index, item := range group.Items {
+		if index < len(group.Reasons) && group.Reasons[index] != "" {
+			named = append(named, fmt.Sprintf("%s — %s", item, group.Reasons[index]))
+			continue
+		}
+		named = append(named, item)
+	}
+	return named
 }
 
 // counted says a count in words, so a line an operator reads says "1 run" rather

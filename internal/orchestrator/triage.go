@@ -404,6 +404,99 @@ func (d Docketer) RecordUnreadyItem(item beads.WorkItem, unmet []readiness.Unmet
 	return d.Docket.RecordOnce(entry)
 }
 
+// UnstartedAttempt is one dispatch that never became a run: the item that was
+// chosen, why it was chosen, what stopped the dispatch, and whether the session
+// that made it has excluded the item for the rest of its life.
+//
+// It is assembled by the caller rather than read from a run record, because the
+// whole of what the class describes is a dispatch for which no run record was
+// ever written. Everything here is held by the process that made the attempt and
+// by nothing else, which is exactly why it has to be written down where it
+// happens.
+type UnstartedAttempt struct {
+	WorkItemID string
+	// WorkItemTitle is what the item is called. It is carried for the reason the
+	// run record carries it: an entry outlives whatever could look the title up,
+	// and one holding only an identifier says nothing about what was being tried.
+	WorkItemTitle string
+	// SelectedBecause is the reason the scheduler recorded for choosing the item,
+	// which would have gone onto the run record had one been written.
+	SelectedBecause string
+	// Failure is what stopped the dispatch, in the words of whatever stopped it.
+	Failure string
+	// ExcludedForTheSession reports the session refusing to try the item again
+	// until the item changes, which is the state that turns one failed dispatch
+	// into a queue nothing pulls from.
+	ExcludedForTheSession bool
+}
+
+// RecordUnstartedAttempt dockets one dispatch that failed before any run record
+// existed, at the moment it failed. It reports whether this call is what created
+// the entry, so a caller can tell docketing an attempt from finding it already
+// docketed — which for a session meeting the same failure twice is the second
+// one.
+//
+// It is separate from RecordUnstartedRun because the two are made from opposite
+// evidence. That one is made from a run record whose run never claimed; this one
+// exists precisely because there is no record to make anything from, so it takes
+// what the dispatching process holds and is the only thing that can write it
+// down. An attempt that reached a reservation dockets nothing here and is not an
+// error, which is nearly every attempt.
+func (d Docketer) RecordUnstartedAttempt(attempt UnstartedAttempt) (bool, error) {
+	if d.Docket == nil {
+		return false, errors.New("a triage docket is required to record an attempt that never became a run")
+	}
+	if strings.TrimSpace(attempt.Failure) == "" {
+		return false, nil
+	}
+	entry, err := d.attemptEntry(attempt, d.now())
+	if err != nil {
+		return false, err
+	}
+	return d.Docket.RecordOnce(entry)
+}
+
+// attemptEntry is one dispatch that produced no run record, as the development
+// manager reads it.
+//
+// Like the unready entry it names no run and carries no change evidence, because
+// there is neither. What it carries instead is the selection — the one thing a
+// run record would have held that nothing else in the harness wrote down.
+func (d Docketer) attemptEntry(attempt UnstartedAttempt, now time.Time) (triage.Entry, error) {
+	// Bounded to what an entry may carry, for the reason the unstarted run's
+	// failure is: an entry refused for its length is a failure the development
+	// manager never hears about, which is the silence this class exists to end.
+	failure := runstate.RecordFailure(attempt.Failure)
+	entry := triage.Entry{
+		SchemaVersion: triage.SchemaVersion,
+		Key:           triage.AttemptKey(attempt.WorkItemID, failure),
+		Class:         triage.ClassUnstartedAttempt,
+		ProductID:     d.ProductID,
+		WorkItemID:    attempt.WorkItemID,
+		WorkItemTitle: attempt.WorkItemTitle,
+		RecordedAt:    now.UTC(),
+		Failure:       failure,
+		// The selection is carried whole rather than bounded again. It is the same
+		// string a reservation would have validated at runstate.MaxSelectionReasonBytes,
+		// which is a quarter of what an entry holds, so cutting it here would only
+		// ever cut something already inside the bound.
+		Attempt: &triage.Attempt{
+			SelectedBecause:       attempt.SelectedBecause,
+			ExcludedForTheSession: attempt.ExcludedForTheSession,
+		},
+	}
+	// The counters are read for the reason the unready entry reads them: what a
+	// development manager may still decide about this item is the same question
+	// whether the item stopped, never started, or never got as far as a run, and an
+	// entry showing zeros is indistinguishable from an item nobody has decided
+	// anything about.
+	entry.Counters, entry.CountersProblem = d.unreadyCounters(attempt.WorkItemID)
+	if err := entry.Validate(); err != nil {
+		return triage.Entry{}, fmt.Errorf("docket the attempt at %s that never became a run: %w", attempt.WorkItemID, err)
+	}
+	return entry, nil
+}
+
 func (d Docketer) unreadyEntry(item beads.WorkItem, unmet []readiness.Unmet, now time.Time) (triage.Entry, error) {
 	read := now.UTC()
 	prerequisites := make([]triage.Prerequisite, 0, len(unmet))

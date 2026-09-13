@@ -373,8 +373,15 @@ type ScheduleTree interface {
 // own report either way — and what it loses is the durable record. Withholding
 // the refusal because the record could not be made would spend a run to avoid
 // losing a line.
+//
+// It also records the dispatch that never became a run, which is the other
+// thing this pass knows and nothing else does. A run that dies after it is
+// reserved leaves a record for a sweep to find; one that dies before that leaves
+// nothing anywhere, so the only process that can say it happened is the one that
+// tried it.
 type ScheduleTriage interface {
 	RecordUnreadyItem(item beads.WorkItem, unmet []readiness.Unmet) (bool, error)
+	RecordUnstartedAttempt(attempt UnstartedAttempt) (bool, error)
 }
 
 // ScheduleEscalations puts stopped work in front of the development manager,
@@ -659,6 +666,13 @@ type Schedule struct {
 	// recorded reasons a sentence and costs the schedule nothing else, so it is
 	// reported beside the pass rather than failing it.
 	StalenessProblem string `json:"staleness_problem,omitempty"`
+	// AttemptProblem names a dispatch that never became a run and could not be
+	// recorded where anything outside this session would find it. It costs the pass
+	// nothing it was doing, so it is reported beside the pull rather than stopping
+	// it — but never left unsaid: an attempt that failed into no record at all is
+	// the silence the record exists to end, and a record that failed to be made is
+	// the same silence one step further back.
+	AttemptProblem string `json:"attempt_problem,omitempty"`
 	// ReadinessProblem names a reading of the tree that failed, or an unready item
 	// that could not be routed to the development manager. Neither stops the pass:
 	// the first leaves the item chosen exactly as it would have been, and the
@@ -788,9 +802,9 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// counted only the recorded runs would start the same slot twice.
 	mine := make(map[string]int)
 	// tried is every item this pass has already started, against the item as it
-	// read at the time. A drain never looks at that reading: nothing is ever
-	// removed, because a run that ends without moving the item out of the ready
-	// queue would otherwise be chosen again on the next pull.
+	// read at the time and what became of the start. A drain never looks at that
+	// reading: nothing is ever removed, because a run that ends without moving the
+	// item out of the ready queue would otherwise be chosen again on the next pull.
 	//
 	// A watch cannot afford that rule in either direction. Keeping an item out
 	// for the life of a session that never ends is a queue the session can never
@@ -800,7 +814,15 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// every interval until somebody noticed. So a watch remembers what the item
 	// looked like and tries it again when that changes, which is the same thing a
 	// person means by "nothing has changed, don't try again".
-	tried := make(map[string]string)
+	//
+	// What each exclusion is for travels with it, because the exclusion outlives
+	// every other account of the start that made it. A run this session started and
+	// finished has a record anybody can read; a start that failed before a run was
+	// reserved has none at all, so an item excluded by one is an item nothing
+	// anywhere accounts for. That is the shape that idled a queue of seventy-four
+	// on 2026-09-13, and it is why the reason is carried rather than derived by
+	// whoever asks later.
+	tried := make(map[string]attempt)
 	// deferred is the items already named on the schedule as passed over — paused
 	// by a directive, or covered by children carrying their execution. It bounds
 	// the report rather than the choosing: both are re-read at every pull, so an
@@ -823,6 +845,11 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// pull that could be opened. It is held outside the loop because a run
 	// collected after the final pull still cost what it cost.
 	var spend ScheduleSpend
+	// docket is where a dispatch that never became a run is recorded, taken from
+	// the same pull and held outside the loop for the same reason: a start that
+	// fails after the final pull failed just as much, and the record of it is the
+	// only thing that will ever say so.
+	var docket ScheduleTriage
 	// redeploying is the session having found a build deployed over the one it is
 	// executing. From that point it claims nothing more and waits out what it
 	// already started, which is the whole of how a restart reaches the machine
@@ -850,6 +877,29 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	settle := func(done completed) {
 		started := &schedule.Started[done.index]
 		started.record(done)
+		// What became of the start is written into the exclusion it made, before
+		// anything else is decided about it. A start this session made is the only
+		// thing keeping the item out of the pulls that follow, so an exclusion that
+		// could not say why is the whole of what a reader gets.
+		excluded, held := tried[started.WorkItemID]
+		if held {
+			excluded.reason = excludedBecause(*started)
+		}
+		// And the one ending that leaves no record anywhere else. A dispatch that
+		// failed before a run was reserved wrote nothing to the run store, so every
+		// surface downstream of that store reads it as though the item was never
+		// tried — which is what it looked like on 2026-09-13, four hours into a
+		// capacity window, over a queue of seventy-four.
+		if unstartedAttempt(*started) {
+			recorded, problem := recordAttempt(docket, *started, excluded, s.Watching)
+			excluded.reason = recorded
+			if problem != "" && schedule.AttemptProblem == "" {
+				schedule.AttemptProblem = problem
+			}
+		}
+		if held {
+			tried[started.WorkItemID] = excluded
+		}
 		// What the provider said, taken from the run that was told it. A later
 		// refusal replaces an earlier one rather than being merged with it: the
 		// deadline a run was just given is the provider's current answer, and an
@@ -1054,6 +1104,7 @@ pulling:
 			break
 		}
 		spend = pull.Spend
+		docket = pull.Triage
 		// Stopped work reaches the development manager here, rather than by
 		// somebody carrying it to her. It is done before the brake and before the
 		// hold, because it chooses nothing and starts nothing: what it produces is
@@ -1211,7 +1262,7 @@ pulling:
 				continue
 			}
 			if s.cooling(tried, read.items[entry.ID]) {
-				poll.pass(entry.ID, runstate.PassedOverAlreadyTried, "")
+				poll.passTried(entry.ID, tried[entry.ID].reason)
 				continue
 			}
 			if _, busy := occupied[entry.ID]; busy {
@@ -1326,7 +1377,16 @@ pulling:
 				continue
 			}
 			delete(deferred, entry.ID)
-			tried[entry.ID] = fingerprint(read.items[entry.ID])
+			// The exclusion is made as the start is, and says what it is for from the
+			// first poll that meets it. A start in flight is the one state here nobody
+			// has to be told about afterwards, and it is still said: an exclusion whose
+			// reason appeared only once the run ended would be blank for exactly as long
+			// as the run took.
+			tried[entry.ID] = attempt{
+				fingerprint: fingerprint(read.items[entry.ID]),
+				title:       read.items[entry.ID].Title,
+				reason:      "this session started it at an earlier poll and that run has not ended yet",
+			}
 
 			// Only an item that was actually held back carries the first half of
 			// this; the second is whatever this pull passed over ahead of it.
@@ -1458,12 +1518,103 @@ type readRetries struct {
 // the operator's hold stopped before it claimed anything — where starting again
 // produces the same non-result immediately and with no wait in between. Narrowed
 // to failed starts, that case spins.
-func (s Scheduler) cooling(tried map[string]string, item beads.WorkItem) bool {
+func (s Scheduler) cooling(tried map[string]attempt, item beads.WorkItem) bool {
 	recorded, attempted := tried[item.ID]
 	if !attempted {
 		return false
 	}
-	return !s.Watching || recorded == fingerprint(item)
+	return !s.Watching || recorded.fingerprint == fingerprint(item)
+}
+
+// attempt is one item this pass has already started: the item as it read when
+// the start was made, what it is called, and what the exclusion it produced is
+// for.
+//
+// The last two are carried rather than looked up because neither survives the
+// start. A pull reads the queue afresh every interval and an item excluded by
+// this session is one no later pull dispatches, so by the time anybody asks why,
+// the only thing that still holds the answer is this.
+type attempt struct {
+	fingerprint string
+	title       string
+	reason      string
+}
+
+// unstartedAttempt reports a start that failed with no run behind it: the
+// dispatch died before anything reserved a run, so the run store holds nothing
+// about it and neither does anything built on the run store.
+//
+// It is the one failure in this loop that is invisible everywhere else. A run
+// that fails after it is reserved has a record, and the sweep, the docket, the
+// status surfaces and the stall alarm are all built on that record; this one has
+// none, and until it was recorded the only trace it left was the item quietly
+// dropping out of the session's own choosing.
+func unstartedAttempt(started Started) bool {
+	return started.Failure != "" && strings.TrimSpace(started.Outcome.RunID) == ""
+}
+
+// excludedBecause is what the exclusion this start made says about itself. It is
+// derived once, as the start settles, rather than by whoever reads the exclusion
+// later: the outcome is in hand here and nowhere afterwards.
+func excludedBecause(started Started) string {
+	switch {
+	case started.Declined != "":
+		return "this session started it and the work went to another process: " + started.Declined
+	case unstartedAttempt(started):
+		return "this session tried it and the dispatch failed before any run was recorded: " + started.Failure
+	case strings.TrimSpace(started.Outcome.RunID) == "":
+		if started.Outcome.Paused {
+			return "this session tried it and the dispatch stopped before a run was recorded; the work is paused and owed a continuation"
+		}
+		return "this session tried it and the dispatch returned without recording a run"
+	case started.Failure != "":
+		return fmt.Sprintf("run %s failed: %s", started.Outcome.RunID, started.Failure)
+	case started.Outcome.Blocked:
+		return fmt.Sprintf("run %s stopped on a durable blocker and its change is preserved", started.Outcome.RunID)
+	case started.Outcome.Paused:
+		return fmt.Sprintf("run %s is paused and owed a continuation", started.Outcome.RunID)
+	default:
+		return fmt.Sprintf("run %s ended %s", started.Outcome.RunID, started.Outcome.Status)
+	}
+}
+
+// recordAttempt dockets one dispatch that never became a run, and reports what
+// the exclusion behind it now says and what stopped the record where something
+// did.
+//
+// The record is made where the failure happened because there is nowhere else it
+// could be made from: no run was reserved, so no sweep will ever walk past this
+// and re-derive it. A docket that refuses the write leaves the session's own
+// account as the whole of what says the attempt happened, and says so rather
+// than reading like a record that was made.
+//
+// What the exclusion says puts the record ahead of the failure, deliberately:
+// the reason is cut to a line wherever it is read, and the failure is the half
+// that is on the docket in full where the record was made — so where anything is
+// lost to the cut it is the tail of something a reader can find, never the fact
+// of whether they can.
+func recordAttempt(docket ScheduleTriage, started Started, excluded attempt, watching bool) (string, string) {
+	if docket == nil {
+		return "this session tried it and the dispatch failed before any run was recorded; nothing was wired to record that durably, so this is the only account of it: " + started.Failure,
+			fmt.Sprintf("the dispatch of %s failed before any run was recorded and nothing was wired to docket it, so nothing outside this session's log says it happened: %s",
+				started.WorkItemID, started.Failure)
+	}
+	if _, err := docket.RecordUnstartedAttempt(UnstartedAttempt{
+		WorkItemID:    started.WorkItemID,
+		WorkItemTitle: excluded.title,
+		// The selection this pass recorded, which is the reason that would have gone
+		// onto the run record had one been written.
+		SelectedBecause: started.Reason,
+		Failure:         started.Failure,
+		// A drain excludes it for the rest of a pass that is about to end anyway; a
+		// watch excludes it until somebody edits the item, which is the state worth
+		// putting in front of a person.
+		ExcludedForTheSession: watching,
+	}); err != nil {
+		return "this session tried it and the dispatch failed before any run was recorded; it could not be recorded on the docket, so this is the only account of it: " + started.Failure,
+			fmt.Sprintf("record that the dispatch of %s never became a run: %v", started.WorkItemID, err)
+	}
+	return "this session tried it and the dispatch failed before any run was recorded; it is on the development manager's docket as an attempt that never became a run: " + started.Failure, ""
 }
 
 // fingerprint is what "something about the item changed" means: every part of
@@ -1736,6 +1887,19 @@ type idlePoll struct {
 // is a person rather than a wait.
 func (p *idlePoll) pass(id string, class runstate.PassedOverClass, role domain.AgentRole) {
 	p.passed = append(p.passed, readmodel.PassedOverItem{ID: id, Class: class, Role: role})
+}
+
+// passTried records one item this session has already started and will not start
+// again, with what excluded it. It is the one class that carries a reason, and it
+// carries one because it is the only class whose cause is not somewhere a reader
+// can go and look: every other exclusion names a state of the item, the queue, or
+// the machine, and this one names an attempt only this process remembers.
+func (p *idlePoll) passTried(id, reason string) {
+	p.passed = append(p.passed, readmodel.PassedOverItem{
+		ID:     id,
+		Class:  runstate.PassedOverAlreadyTried,
+		Reason: reason,
+	})
 }
 
 // passedOver is what this poll left where it was, grouped as every reader of it
@@ -2457,6 +2621,9 @@ func (s Schedule) Render() string {
 	}
 	if s.ReadinessProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.ReadinessProblem)
+	}
+	if s.AttemptProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.AttemptProblem)
 	}
 	if len(s.Started) > 0 {
 		fmt.Fprintf(&rendered, "stopped pulling: %s\n", s.Stopped)

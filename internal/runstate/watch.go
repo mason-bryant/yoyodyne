@@ -55,6 +55,13 @@ const WatchSchemaVersion = 1
 // it.
 const MaxWatchReasonBytes = 4 << 10
 
+// MaxPassedOverReasonBytes bounds what one passed-over item says about itself
+// beyond the class it was passed over in. It is far below the bound a hold's
+// reason takes, because these are read several to a line rather than one at a
+// time: a class naming five items with a paragraph against each is a line nobody
+// reads, and the whole point of the naming is that it is read at a glance.
+const MaxPassedOverReasonBytes = 256
+
 // maxEncodedWatchBytes bounds one encoded transition, including the trailing
 // newline. The writer and the reader share it, so a transition that was written
 // is always one that can be read back.
@@ -187,6 +194,18 @@ type PassedOverGroup struct {
 	Role  domain.AgentRole `json:"role,omitempty"`
 	Count int              `json:"count"`
 	Items []string         `json:"items,omitempty"`
+	// Reasons is why each named item above is in this class, positionally, and
+	// empty where the class says the whole of it on its own — which is every class
+	// but the one below.
+	//
+	// "Already tried this session" is the class that does not. It is the only one
+	// whose cause is a thing that already happened rather than a state anybody can
+	// go and read: the item is exactly as ready as it was, nothing is recorded
+	// against it, and what excluded it is an attempt this session made and remembers
+	// privately. An exclusion carrying no reason is what that looks like from
+	// outside, and on 2026-09-13 it is what left two items excluded for the rest of
+	// a session with no surface saying why — over a queue of seventy-four.
+	Reasons []string `json:"reasons,omitempty"`
 }
 
 // PassedOver is one poll's whole account of the items it left where they were,
@@ -363,6 +382,17 @@ func (t WatchTransition) Validate() error {
 		// is to name somebody a reader can go to.
 		if group.Role != "" && !group.Role.Valid() {
 			problems = append(problems, fmt.Errorf("watch transition passes items over to %q, which is not a role anything addresses", group.Role))
+		}
+		// The reasons are positional, so more of them than there are names is an
+		// account nothing can read back: the reader cannot tell which item the extra
+		// one belongs to, and a reason attached to the wrong item is worse than none.
+		if len(group.Reasons) > len(group.Items) {
+			problems = append(problems, fmt.Errorf("watch transition gives %d reason(s) for the %d item(s) it names as %q", len(group.Reasons), len(group.Items), group.Class))
+		}
+		for index, reason := range group.Reasons {
+			if len(reason) > MaxPassedOverReasonBytes {
+				problems = append(problems, fmt.Errorf("watch transition reason for %q item %d is %d bytes, which exceeds the %d byte bound", group.Class, index, len(reason), MaxPassedOverReasonBytes))
+			}
 		}
 	}
 	if t.PassedOver.Admitted < 0 {

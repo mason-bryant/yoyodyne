@@ -1690,3 +1690,97 @@ func TestAnOutstandingGrantIsADecisionTheHarnessHasStillToCarryOut(t *testing.T)
 		t.Fatalf("counters = %#v, want a grant whose rounds are spent read as carried out", spent)
 	}
 }
+
+// The entry made about a dispatch that produced no run record at all. It is the
+// only thing that will ever say the attempt happened: no run was reserved, so no
+// sweep walks past it and nothing downstream of the run store can re-derive it.
+func TestAnAttemptThatNeverBecameARunIsDocketedWithWhatWasTriedAndWhyItFailed(t *testing.T) {
+	t.Parallel()
+
+	docket := &memoryDocket{}
+	docketer := docketerDeciding(nil, docket, &recordedDecisions{}, &recordedDecisions{})
+	docketer.ProductID = "yoyodyne"
+	attempt := UnstartedAttempt{
+		WorkItemID:            "yoyodyne-ifd.353",
+		WorkItemTitle:         "A stall the watchdog can see is one the operator is told about",
+		SelectedBecause:       "first in the product manager's order of 74 admitted items, 12 of them pullable",
+		Failure:               "repository is not ready for an isolated run: the primary checkout has uncommitted changes",
+		ExcludedForTheSession: true,
+	}
+
+	created, err := docketer.RecordUnstartedAttempt(attempt)
+	if err != nil {
+		t.Fatalf("RecordUnstartedAttempt() error = %v", err)
+	}
+	if !created {
+		t.Fatal("RecordUnstartedAttempt() created nothing, want the attempt docketed")
+	}
+	entry := docket.entries[0]
+	if entry.Class != triage.ClassUnstartedAttempt || entry.RunID != "" {
+		t.Fatalf("entry = %+v, want an attempt with no run behind it", entry)
+	}
+	if entry.WorkItemID != attempt.WorkItemID || entry.WorkItemTitle != attempt.WorkItemTitle || entry.ProductID != "yoyodyne" {
+		t.Fatalf("entry = %+v, want the item and its product named", entry)
+	}
+	if entry.Failure != attempt.Failure {
+		t.Fatalf("entry.Failure = %q, want the failure that stopped the dispatch", entry.Failure)
+	}
+	if entry.Attempt == nil || entry.Attempt.SelectedBecause != attempt.SelectedBecause || !entry.Attempt.ExcludedForTheSession {
+		t.Fatalf("entry.Attempt = %+v, want the selection and the exclusion carried", entry.Attempt)
+	}
+	// The budgets travel with it for the reason they travel with every entry: what
+	// may still be decided about this item is the same question whether it stopped,
+	// never started, or never got as far as a run.
+	if entry.Counters.ReviewRoundsCap != docketedTriage.ReviewRoundsCap {
+		t.Fatalf("counters = %+v, want the configured ceilings beside the entry", entry.Counters)
+	}
+
+	// A session that meets the same failure about the same item again has met one
+	// standing fact, so it is one entry.
+	createdAgain, err := docketer.RecordUnstartedAttempt(attempt)
+	if err != nil {
+		t.Fatalf("RecordUnstartedAttempt() error = %v", err)
+	}
+	if createdAgain || len(docket.entries) != 1 {
+		t.Fatalf("docket = %v, want the same dead dispatch docketed once", docket.keys())
+	}
+
+	// A different failure about the same item is a different fact, and one the
+	// development manager has not been told.
+	attempt.Failure = "the claude-code backend is not authenticated"
+	createdAgain, err = docketer.RecordUnstartedAttempt(attempt)
+	if err != nil {
+		t.Fatalf("RecordUnstartedAttempt() error = %v", err)
+	}
+	if !createdAgain || len(docket.entries) != 2 {
+		t.Fatalf("docket = %v, want a dispatch failing a new way recorded", docket.keys())
+	}
+}
+
+// An attempt with nothing wrong with it dockets nothing and is not an error,
+// which is nearly every attempt; and one with nowhere to be recorded says so
+// rather than reporting a record that was never made.
+func TestAnAttemptWithNoFailureIsNotDocketed(t *testing.T) {
+	t.Parallel()
+
+	docket := &memoryDocket{}
+	docketer := docketerDeciding(nil, docket, &recordedDecisions{}, &recordedDecisions{})
+
+	created, err := docketer.RecordUnstartedAttempt(UnstartedAttempt{
+		WorkItemID:      "yoyodyne-ifd.353",
+		SelectedBecause: "first in the order",
+	})
+	if err != nil {
+		t.Fatalf("RecordUnstartedAttempt() error = %v", err)
+	}
+	if created || len(docket.entries) != 0 {
+		t.Fatalf("docket = %v, want nothing said about a dispatch that did not fail", docket.keys())
+	}
+	if _, err := (Docketer{}).RecordUnstartedAttempt(UnstartedAttempt{
+		WorkItemID:      "x",
+		SelectedBecause: "first in the order",
+		Failure:         "the dispatch died",
+	}); err == nil {
+		t.Fatal("RecordUnstartedAttempt() recorded an attempt with no docket wired")
+	}
+}

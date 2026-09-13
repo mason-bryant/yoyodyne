@@ -562,7 +562,16 @@ happened, which is exactly how one item was dispatched twenty-nine times in
 twenty hours with no surface saying a word. Its entry names the run and the item
 it tried to claim, says the item is untouched, and carries the failure. Like the
 death above it is recorded where it happens and never re-derived by the sweep,
-so a pre-claim death from before this existed is not on the docket either. A run
+so a pre-claim death from before this existed is not on the docket either.
+**A dispatch that failed before any run was reserved** is one layer earlier
+still, and is docketed as an *attempt that never became a run* by the
+[watching session](work.md#letting-the-harness-choose-the-work) that made it. There is no run
+to name — nothing wrote a record, which is why nothing else could ever find it —
+so the entry carries what the record would have: the item, why the scheduler
+selected it, what stopped the dispatch, and that the session will not try it
+again until the item changes. It is keyed to the item and the failure rather
+than to a run, so the same dead dispatch is one entry however many sessions meet
+it. A run
 whose work reached
 the target branch is closed and its worktree and branch removed, including when
 the run died before it could record the promotion. A run stopped anywhere

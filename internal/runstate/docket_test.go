@@ -172,3 +172,46 @@ func TestADocketThatCannotBeReadIsAFailureRatherThanAnEmptyDocket(t *testing.T) 
 		t.Fatalf("List() read a corrupt docket as an empty one")
 	}
 }
+
+// An attempt that never became a run is the docket entry with the least behind
+// it — no run, no blocker, no change — and it is what a sweep reads to see that
+// two items were tried and failed rather than seeing nothing at all. So it is
+// written through the real store and read back whole, and the same dead dispatch
+// docketed by a second session is one entry.
+func TestAnAttemptThatNeverBecameARunIsDocketedAndReadBack(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestDocketStore(t, root)
+	failure := "repository is not ready for an isolated run: the primary checkout has uncommitted changes"
+	entry := triage.Entry{
+		SchemaVersion: triage.SchemaVersion,
+		Key:           triage.AttemptKey("yoyodyne-ifd.353", failure),
+		Class:         triage.ClassUnstartedAttempt,
+		ProductID:     "yoyodyne",
+		WorkItemID:    "yoyodyne-ifd.353",
+		WorkItemTitle: "A stall the watchdog can see is one the operator is told about",
+		RecordedAt:    time.Date(2026, 9, 13, 6, 25, 0, 0, time.UTC),
+		Failure:       failure,
+		Attempt:       &triage.Attempt{SelectedBecause: "first in the product manager's order", ExcludedForTheSession: true},
+		Counters:      triage.Counters{ReviewRoundsCap: 4},
+	}
+	created, err := store.RecordOnce(entry)
+	if err != nil || !created {
+		t.Fatalf("RecordOnce() = %t, error = %v", created, err)
+	}
+	again, err := newTestDocketStore(t, root).RecordOnce(entry)
+	if err != nil || again {
+		t.Fatalf("RecordOnce() again = %t, error = %v, want the same dead dispatch recorded once", again, err)
+	}
+	reloaded, err := newTestDocketStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(reloaded) != 1 || reloaded[0].Class != triage.ClassUnstartedAttempt || reloaded[0].RunID != "" {
+		t.Fatalf("List() = %#v, want the one runless entry back", reloaded)
+	}
+	if reloaded[0].Failure != failure || reloaded[0].Attempt == nil || !reloaded[0].Attempt.ExcludedForTheSession {
+		t.Fatalf("entry did not survive intact: %#v", reloaded[0])
+	}
+}

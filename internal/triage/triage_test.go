@@ -878,3 +878,189 @@ func TestAnUnstartedRunReadsAsADispatchRatherThanAStoppage(t *testing.T) {
 		t.Fatalf("the entry claims a change that was never made:\n%s", rendered)
 	}
 }
+
+// unstartedAttemptEntry is a dispatch that never became a run at all: the
+// 2026-09-13 shape. There is no run to name, because nothing reserved one, so
+// what the entry carries is the selection the run record would have carried and
+// the failure that stopped it.
+func unstartedAttemptEntry() Entry {
+	failure := "repository is not ready for an isolated run: the primary checkout has uncommitted changes"
+	return Entry{
+		SchemaVersion: SchemaVersion,
+		Key:           AttemptKey("yoyodyne-ifd.353", failure),
+		Class:         ClassUnstartedAttempt,
+		ProductID:     "yoyodyne",
+		WorkItemID:    "yoyodyne-ifd.353",
+		WorkItemTitle: "A stall the watchdog can see is one the operator is told about",
+		RecordedAt:    time.Date(2026, 9, 13, 6, 25, 0, 0, time.UTC),
+		Failure:       failure,
+		Attempt: &Attempt{
+			SelectedBecause:       "first in the product manager's order of 74 admitted items, 12 of them pullable",
+			ExcludedForTheSession: true,
+		},
+		Counters: Counters{ReviewRoundsCap: 4, RepairGrantAttempts: 2},
+	}
+}
+
+// The entry made about a dispatch that produced no run record. It is held to the
+// evidence that makes it one, exactly as every other class is: an entry that
+// cannot say what was attempted or what stopped it is the silence this class
+// exists to end, wearing a docket entry's clothes.
+func TestAnUnstartedAttemptEntryIsHeldToWhatMakesItOne(t *testing.T) {
+	t.Parallel()
+
+	if err := unstartedAttemptEntry().Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want the entry accepted", err)
+	}
+	for _, test := range []struct {
+		name  string
+		entry func() Entry
+		want  string
+	}{
+		{
+			name: "it does not say what stopped the dispatch",
+			entry: func() Entry {
+				entry := unstartedAttemptEntry()
+				entry.Failure = ""
+				return entry
+			},
+			want: "carries the failure that stopped it before any run record existed",
+		},
+		{
+			name: "it does not say what was being attempted",
+			entry: func() Entry {
+				entry := unstartedAttemptEntry()
+				entry.Attempt = nil
+				return entry
+			},
+			want: "carries what was being attempted",
+		},
+		{
+			// The selection is the one thing a run record would have held that nothing
+			// else in the harness wrote down, so an entry without it answers "why was
+			// this tried at all" with nothing.
+			name: "it does not say why the item was selected",
+			entry: func() Entry {
+				entry := unstartedAttemptEntry()
+				entry.Attempt = &Attempt{}
+				return entry
+			},
+			want: "why the item was selected is required",
+		},
+		{
+			// Naming a run is the one thing this class must not do: there is no run,
+			// and a reader sent to look one up would be sent after a record nothing
+			// ever wrote.
+			name: "it names a run that was never recorded",
+			entry: func() Entry {
+				entry := unstartedAttemptEntry()
+				entry.RunID = "run-0123456789abcdef0123456789abcdef"
+				return entry
+			},
+			want: "names no run",
+		},
+		{
+			name: "it claims a blocker on an item nothing touched",
+			entry: func() Entry {
+				entry := unstartedAttemptEntry()
+				entry.Blocker = "Yoyodyne stopped this item."
+				return entry
+			},
+			want: "names no blocker",
+		},
+		{
+			name: "it carries evidence about a change that was never made",
+			entry: func() Entry {
+				entry := unstartedAttemptEntry()
+				entry.Check = &Check{Command: "make check", ExitCode: 1}
+				return entry
+			},
+			want: "produced no run",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := test.entry().Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want it to name %q", err, test.want)
+			}
+		})
+	}
+}
+
+// The key is what makes docketing idempotent, and for this class it has to be
+// derived from the item and the failure rather than from either alone. Keyed on
+// the item, a dispatch that failed a new way months later would say nothing;
+// keyed on the moment, the same dead dispatch would be docketed afresh every
+// session.
+func TestAnAttemptKeyIsTheItemAndTheFailureTogether(t *testing.T) {
+	t.Parallel()
+
+	item := "yoyodyne-ifd.353"
+	failure := "repository is not ready for an isolated run"
+	if AttemptKey(item, failure) != AttemptKey(item, failure) {
+		t.Fatal("the same item failing the same way twice takes two keys, so one dead dispatch would be docketed over and over")
+	}
+	// Whitespace is not a different failure. The same error rewrapped by a
+	// different writer is the same fact, and a key that disagreed would docket it
+	// twice.
+	if AttemptKey(item, failure) != AttemptKey(item, "repository is not ready\n   for an isolated run") {
+		t.Fatal("the same failure rewrapped takes a different key")
+	}
+	if AttemptKey(item, failure) == AttemptKey(item, "the claude-code backend is not installed") {
+		t.Fatal("two different failures about one item take one key, so the second would never be recorded")
+	}
+	if AttemptKey(item, failure) == AttemptKey("yoyodyne-ifd.354", failure) {
+		t.Fatal("two items failing the same way take one key, so only one of them would be recorded")
+	}
+	if len(AttemptKey(item, failure)) > MaxKeyBytes {
+		t.Fatalf("the key is %d bytes, which the entry refuses", len(AttemptKey(item, failure)))
+	}
+}
+
+// What the development manager reads. She is deciding about a dispatch that left
+// nothing at all — no run to look up, no item claimed — and the entry has to say
+// that rather than leaving her to infer it from a missing identifier.
+func TestAnUnstartedAttemptReadsAsADispatchThatLeftNoRecord(t *testing.T) {
+	t.Parallel()
+
+	entry := unstartedAttemptEntry()
+	rendered := entry.Render()
+	for _, want := range []string{
+		"attempt that never became a run",
+		"nothing ran",
+		"yoyodyne-ifd.353",
+		"no run was recorded",
+		"Why it was selected",
+		entry.Attempt.SelectedBecause,
+		"will not try it again until the item changes",
+		"Why it never started",
+		entry.Failure,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the rendered entry does not say %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Died holding its change") {
+		t.Fatalf("the entry claims a change that was never made:\n%s", rendered)
+	}
+}
+
+// Every class the taxonomy holds is one a reader can be told about. A class
+// missing from the list, or one the list names and Valid refuses, is a docket
+// entry that renders as its own identifier or is refused for being itself.
+func TestEveryClassIsNamedAndValid(t *testing.T) {
+	t.Parallel()
+
+	for _, class := range Classes() {
+		if !class.Valid() {
+			t.Fatalf("class %q is in the taxonomy and refused by Valid", class)
+		}
+		if title := class.Title(); title == "" || title == string(class) {
+			t.Fatalf("class %q renders as %q, which is the identifier rather than something to read", class, title)
+		}
+	}
+	if Class("unheard_of").Valid() {
+		t.Fatal("a class nobody declared is accepted")
+	}
+}
