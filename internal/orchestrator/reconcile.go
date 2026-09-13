@@ -120,7 +120,8 @@ const (
 	// durable state, so it was left exactly as the interrupted process left it.
 	ActionResumable ReconcileAction = "resumable"
 	// ActionCompleted reports a run whose integrated work was carried to its
-	// terminal state: the item closed and the run's artifacts removed.
+	// terminal state: the item settled by its landing — closed, or back in the
+	// backlog — and the run's artifacts removed.
 	ActionCompleted ReconcileAction = "completed"
 	// ActionBlocked reports a run nothing could finish, whose work item now
 	// carries a durable blocker.
@@ -443,8 +444,9 @@ func (r Reconciler) blockContradictedIntegration(ctx context.Context, state runs
 //   - The forge merged. The publication finishes exactly as it would have
 //     inside the run: the remote target is confirmed to carry the promotion, the
 //     merge commit the forge made of it is recorded, the local target branch is
-//     caught up onto the merge commit, and the item is closed on that
-//     confirmation. The catch-up is done here rather than left to the
+//     caught up onto the merge commit, and the item is settled on that
+//     confirmation — closed where its landing discharged it, put back where
+//     it did not. The catch-up is done here rather than left to the
 //     convergence sweep so that settling a merge is complete on its own: a
 //     caller that settles runs without sweeping afterwards must not be the
 //     difference between a converged checkout and one silently left behind. The
@@ -535,7 +537,7 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	// this run's record and every surface reads the disposition off it.
 	state = settled
 	// The branch the merge consumed is removed last, after the item is already
-	// closed, and that ordering is the whole of yoyodyne-ifd.301's first half. It
+	// settled, and that ordering is the whole of yoyodyne-ifd.301's first half. It
 	// is hygiene rather than part of the publication: the merge is confirmed, the
 	// work is on both branches, and the only thing a failed deletion leaves is a
 	// dead branch on the remote. Deleting it first is what made a connection reset
@@ -694,8 +696,8 @@ func (r Reconciler) deleteMergedBranch(ctx context.Context, state *runstate.Stat
 	if saveErr := r.Store.Save(*state); saveErr != nil {
 		return errors.Join(errors.New(failure), fmt.Errorf("record the leftover remote branch of run %s: %w", state.RunID, saveErr)).Error()
 	}
-	// The item is closed by now, so this is a second note rather than a line in
-	// the settlement's. A closure that said nothing about the branch it left
+	// The item is settled by now, so this is a second note rather than a line in
+	// the settlement's. A settlement that said nothing about the branch it left
 	// behind would be the whole of what anybody reading the item is told.
 	if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderLeftoverBranchNotes(*state, failure)); err != nil {
 		return errors.Join(errors.New(failure), fmt.Errorf("record the leftover remote branch on %s: %w", state.WorkItemID, err)).Error()
@@ -746,9 +748,9 @@ func (r Reconciler) recoverIntegration(ctx context.Context, state runstate.State
 }
 
 // completeIntegrated carries a run whose work is already promoted to its
-// terminal state. It keeps the pipeline's ordering: the outcome and the closed
+// terminal state. It keeps the pipeline's ordering: the outcome and the settled
 // item first, then the durable terminal record, and only then the removal of
-// artifacts. That order is what stops a closed item from ever sitting behind a
+// artifacts. That order is what stops a settled item from ever sitting behind a
 // run that still says something is in flight.
 func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State, recovered bool) (Reconciliation, error) {
 	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
@@ -784,7 +786,7 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 		state.CompletedAt = &completedAt
 	}
 	// This is the settlement the record most depends on. The work landed and the
-	// item closes, so a run whose observation stopped somewhere mid-graph reads
+	// item is settled on it, so a run whose observation stopped somewhere mid-graph reads
 	// afterwards exactly like one that walked the definition to the end — which
 	// is the single way the account of a run can be quietly wrong in the
 	// direction of looking clean. The recorded baseline holds one of these: a
@@ -825,9 +827,15 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 		return reconciliationOf(state, ActionCompleted), fmt.Errorf("save completed run state for %s: %w", state.RunID, err)
 	}
 	result := reconciliationOf(state, ActionCompleted)
-	result.Detail = "integrated work was closed and its artifacts removed"
+	// The detail says what the sweep did to the item, and "closed" is only one of
+	// the two things it can have done.
+	settled := "closed"
+	if !state.Discharges() {
+		settled = "put back in the backlog undischarged"
+	}
+	result.Detail = "integrated work was " + settled + " and its artifacts removed"
 	if recovered {
-		result.Detail = "integration recovered from the repository, then closed and cleaned up"
+		result.Detail = "integration recovered from the repository, then " + settled + " and cleaned up"
 	}
 	return result, nil
 }
@@ -1067,14 +1075,22 @@ func (r Reconciler) clock() execution.Clock {
 	return r.Clock
 }
 
-// renderReconciledIntegrationNotes explains a closure the run itself never got
-// to record. It distinguishes integration the run wrote down from integration
-// found in the repository afterwards, because only the second one is a claim
-// reconciliation made on the run's behalf.
+// renderReconciledIntegrationNotes explains a settlement the run itself never
+// got to record. It distinguishes integration the run wrote down from
+// integration found in the repository afterwards, because only the second one
+// is a claim reconciliation made on the run's behalf.
 func renderReconciledIntegrationNotes(state runstate.State, recovered bool) string {
-	headline := "Yoyodyne reconciled an interrupted run: the change was already integrated, so the item is being closed and the run's artifacts removed."
+	// Where the item goes is what the run's own landing says, and the headline
+	// says which: this note is written before the item is settled, so a headline
+	// that always said "closed" would be the first line on an item the sweep was
+	// about to put back in the backlog.
+	settlement := "the item is being closed"
+	if !state.Discharges() {
+		settlement = "the item is being put back in the backlog rather than closed, because its landing did not discharge it,"
+	}
+	headline := "Yoyodyne reconciled an interrupted run: the change was already integrated, so " + settlement + " and the run's artifacts removed."
 	if recovered {
-		headline = "Yoyodyne reconciled an interrupted run: its integration commit was found in the target branch even though the run never recorded it, so the item is being closed and the run's artifacts removed."
+		headline = "Yoyodyne reconciled an interrupted run: its integration commit was found in the target branch even though the run never recorded it, so " + settlement + " and the run's artifacts removed."
 	}
 	lines := []string{
 		headline,

@@ -1051,7 +1051,8 @@ is never used to get past a protection rule. A run whose merge is queued that
 way reports the pull request as queued and finishes, leaving the work item open
 because nothing has yet merged the change anywhere but locally;
 [`yoyo reconcile`](operations.md#recovering-interrupted-runs) settles it once the
-forge has merged — closing the item then — or, if the forge dropped the queued
+forge has merged — settling the item then, closed or put back as its own landing
+says — or, if the forge dropped the queued
 merge, records an outstanding publication and hands the item back with a
 blocker. A repository with no configured remote publishes nothing and behaves
 exactly as a purely local project does.

@@ -1074,6 +1074,25 @@ func TestReconciliationSettlesAnInterruptedRunByTheLandingItClaimed(t *testing.T
 			if waits := strings.Join(tracker.blockers, ","); waits != settled.wantWaits {
 				t.Errorf("the item waits on %q, want %q", waits, settled.wantWaits)
 			}
+			// The words the sweep leaves say which way it went. The note is written
+			// before the item is settled and the detail is what the operator is
+			// shown, so a "closed" on either of them for an item the sweep put back
+			// is the one wrong word on exactly the record a reopened item's reader
+			// turns to first.
+			said, unsaid := "the item is being closed", "put back in the backlog"
+			if !settled.wantClosed {
+				said, unsaid = unsaid, said
+			}
+			if !strings.Contains(tracker.notes, said) || strings.Contains(tracker.notes, unsaid) {
+				t.Errorf("the reconciled note says %q and not %q; notes = %q", said, unsaid, tracker.notes)
+			}
+			said, unsaid = "closed", "put back in the backlog undischarged"
+			if !settled.wantClosed {
+				said, unsaid = unsaid, said
+			}
+			if detail := results[0].Detail; !strings.Contains(detail, said) || strings.Contains(detail, unsaid) {
+				t.Errorf("Detail = %q, want it to say %q and not %q", detail, said, unsaid)
+			}
 			// Whichever way it went, settling it twice settles it once: the second
 			// sweep finds the item already in the state this run's landing calls for.
 			calls := len(tracker.calls)

@@ -367,7 +367,8 @@ for a run whose work is preserved would move the derived word without moving any
 recorded field.
 
 Three things are reported on a succeeded run rather than turning it into a
-failure, because the work is already integrated and the item already closed:
+failure, because the work is already integrated and the item already settled —
+closed where the landing discharged it, back in the backlog where it did not:
 `publish_failure` (an outstanding publication), `cleanup_failure` (an artifact
 that survives, or a removal that could not be confirmed — `worktree_removed` and
 `branch_removed` tell those apart), and `completion_recording_failure` (the final
