@@ -76,6 +76,26 @@ const notFoundStatus = "404"
 // carry the body whole or quote only its message, and both name the model.
 var modelNotFound = regexp.MustCompile(`(?i)not_found_error|\bmodel:`)
 
+// notAuthenticated is this provider saying it will not accept the account the
+// invocation was made under: the CLI's own words for an account that is not
+// logged in, beside the API's names for the same refusal.
+//
+// It is the one place the leftovers below are deliberately narrowed, so the
+// reason is worth stating. The trade those leftovers make — being wrong about a
+// transient death costs one more invocation, being wrong about a refusal that
+// stands costs the whole run — holds for weather and not for this: relaunching
+// into an account the provider will not accept spends a run's whole relaunch
+// budget on an answer that cannot change, and no attempt of it is any different
+// from the first. The same condition already stands as a refusal when the CLI
+// quotes the status instead, since 401 is a client error below, so what this
+// closes is one provider reporting one condition two ways and the harness
+// answering the two differently.
+//
+// It is read only off a terminal API error, like every other match here, so an
+// agent's own prose about being logged out is left where it was: what the
+// provider said about the request is on that envelope and nowhere else.
+var notAuthenticated = regexp.MustCompile(`(?i)not logged in|invalid api key|authentication_error|\bunauthorized\b`)
+
 // clientErrorPrefix marks the API statuses that describe the request rather than
 // the server's ability to serve it. A relaunch would put the identical request in
 // front of the provider again and earn the identical refusal, so nothing in this
@@ -220,12 +240,13 @@ func observeRateLimit(payload json.RawMessage) (backend.Observation, bool) {
 	}, true
 }
 
-// observeFailedTerminal tells the four ways this provider can end an invocation
-// badly apart. A server overload is a wait; a not-found naming a model is a
-// refusal about the selector, which the caller can answer by asking for another
-// one; any other status describing the request is a refusal that stands; and
-// everything else left in the API-error category is a death that judged nothing
-// about the work.
+// observeFailedTerminal tells the ways this provider can end an invocation badly
+// apart. A server overload is a wait; a not-found naming a model is a refusal
+// about the selector, which the caller can answer by asking for another one; an
+// account this provider will not accept is a refusal that stands however it was
+// spelled; any other status describing the request is a refusal that stands too;
+// and everything else left in the API-error category is a death that judged
+// nothing about the work.
 //
 // The model case is read ahead of the general client-error one it is a member
 // of, because it is the narrower reading of the same status and the general one
@@ -254,6 +275,8 @@ func observeFailedTerminal(event backend.ProviderEvent) (backend.Observation, bo
 		return backend.Observation{Answer: backend.AnswerUnavailable, Detail: event.Text}, true
 	case status != nil && status[1] == notFoundStatus && modelNotFound.MatchString(event.Text):
 		return backend.Observation{Answer: backend.AnswerModelUnavailable, Detail: described}, true
+	case notAuthenticated.MatchString(event.Text):
+		return backend.Observation{Answer: backend.AnswerRefused, Detail: described}, true
 	case status != nil && strings.HasPrefix(status[1], clientErrorPrefix):
 		return backend.Observation{Answer: backend.AnswerRefused, Detail: described}, true
 	default:

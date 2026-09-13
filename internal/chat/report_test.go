@@ -186,7 +186,7 @@ func TestReportsCommandShowsWhatEveryRoleReported(t *testing.T) {
 	}
 	transcript := out.String()
 	for _, required := range []string{
-		"reports (1 collected, 1 unhandled)",
+		"1 of 1 collected report(s) are unhandled",
 		"critical",
 		"from the developer on yoyodyne-ifd.19",
 		"bd lint could not run",

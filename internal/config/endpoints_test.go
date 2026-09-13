@@ -187,14 +187,49 @@ func TestAnAgentsOwnEndpointIsTheAccountItIsAssignedTo(t *testing.T) {
 	}
 }
 
+// An agent assigned to no account is served by the first account in the pool
+// that can sign its provider in, rather than by the first account full stop. A
+// conversation held in another provider's home authenticates as nobody, and it
+// is the same failure a run pointed at one meets — arrived at through the agent's
+// own endpoint instead of the rotation.
+func TestAnAgentAssignedToNoAccountTakesTheFirstThatHoldsItsProvider(t *testing.T) {
+	t.Parallel()
+
+	cfg := pooledConfig(t, "")
+	developer := cfg.Agents["developer"]
+	developer.Backend = domain.BackendCodex
+	cfg.Agents["developer"] = developer
+	cfg.Accounts["two"] = Account{Provider: domain.BackendCodex}
+
+	choice, err := cfg.AgentEndpoint(builtInRegistry(t), "/state", "developer")
+	if err != nil {
+		t.Fatalf("AgentEndpoint() error = %v", err)
+	}
+	if choice.Account.Alias != "two" {
+		t.Fatalf("AgentEndpoint() authenticates as %q, want the account that holds the agent's provider", choice.Account.Alias)
+	}
+	// The reviewer is on Claude Code and takes the top of the pool as it always
+	// did, which is the account that holds its own provider.
+	reviewer, err := cfg.AgentEndpoint(builtInRegistry(t), "/state", "reviewer")
+	if err != nil {
+		t.Fatalf("AgentEndpoint() error = %v", err)
+	}
+	if reviewer.Account.Alias != "one" {
+		t.Fatalf("AgentEndpoint() authenticates as %q, want the first account holding Claude Code's login", reviewer.Account.Alias)
+	}
+}
+
 // The pool asks exactly what configuration validation asked, so nothing the
 // loader accepted is refused when a run comes to be served. Codex is the case
 // that makes the difference visible: a project may name it for a developer
 // agent, validation accepts that because Codex's sandbox holds the developer's
-// posture, and what refuses the run is this build having no adapter for it —
-// which is the dispatch's refusal, made before anything is claimed, and not the
-// pool's. A pool that asked the second question too would turn a configuration
-// error into a failure at work-claim time.
+// posture, and the pool answers with the endpoint that provider's own adapter
+// reaches rather than asking a second question of its own. A pool that asked one
+// would turn a configuration error into a failure at work-claim time.
+//
+// The account that serves it says it is Codex's, because a pooled home is one
+// provider's authentication and the pool will not hand a Codex run a Claude Code
+// home.
 func TestThePoolRefusesNothingConfigurationValidationAccepted(t *testing.T) {
 	t.Parallel()
 
@@ -202,8 +237,10 @@ func TestThePoolRefusesNothingConfigurationValidationAccepted(t *testing.T) {
 	developer := cfg.Agents["developer"]
 	developer.Backend = domain.BackendCodex
 	cfg.Agents["developer"] = developer
+	cfg.Accounts["two"] = Account{Provider: domain.BackendCodex}
 	// Configuration validation accepts it: the roles Codex declares and the
-	// posture the developer requires are what it reads, and both hold.
+	// posture the developer requires are what it reads, both hold, and an account
+	// holds the provider the developer runs on.
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v, want a configuration naming a Codex developer accepted", err)
 	}
@@ -212,10 +249,102 @@ func TestThePoolRefusesNothingConfigurationValidationAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChooseEndpoint() error = %v, want the pool to answer for what the loader accepted", err)
 	}
-	// The endpoint says what is true of it: a provider this build ships no
-	// adapter for, expressed rather than hidden, and refused where a run is
-	// dispatched instead.
-	if choice.Endpoint.Provider != domain.BackendCodex || choice.Endpoint.Runnable() {
-		t.Fatalf("ChooseEndpoint() = %s, want the Codex endpoint with no adapter version", choice.Endpoint)
+	// The endpoint says what is true of it: the provider the agent named, and the
+	// compiled adapter that reaches it.
+	if choice.Endpoint.Provider != domain.BackendCodex || choice.Endpoint.AdapterVersion != backend.CodexAdapterVersion {
+		t.Fatalf("ChooseEndpoint() = %s, want the Codex endpoint carrying its adapter's version", choice.Endpoint)
+	}
+	// And the account it is served by is the one that holds Codex's
+	// authentication, rather than the first account in the rotation.
+	if choice.Account.Alias != "two" {
+		t.Fatalf("ChooseEndpoint() chose account %q, want the account that holds the provider's authentication", choice.Account.Alias)
+	}
+}
+
+// A pooled account holds one provider's authentication, and an invocation
+// pointed at another provider's home authenticates as nobody. So the pool leaves
+// such an account out, and — when that leaves it nothing — refuses before a run
+// has claimed a work item, naming what each account holds.
+//
+// This is the shape yoyodyne-ifd.351 was admitted for: a developer configured
+// for Codex on a pooling installation was handed a Claude Code provider home as
+// CODEX_HOME, and found out by dying unauthenticated after the item was claimed
+// and the worktree cut.
+func TestThePoolWillNotServeAnAgentFromAnotherProvidersAccount(t *testing.T) {
+	t.Parallel()
+
+	cfg := pooledConfig(t, "")
+	developer := cfg.Agents["developer"]
+	developer.Backend = domain.BackendCodex
+	cfg.Agents["developer"] = developer
+
+	// Both accounts have provider homes of their own under the state root, and a
+	// home nobody named a provider for is a Claude Code home — which is what
+	// `bin/yoyo-account` and `yoyo doctor` have made every one of them.
+	_, err := cfg.ChooseEndpoint(builtInRegistry(t), "/state", "developer", backend.Endpoint{}, nil)
+	if err == nil {
+		t.Fatal("ChooseEndpoint() served a Codex developer out of a pool of Claude Code accounts")
+	}
+	for _, want := range []string{`no configured account holds provider "codex"`, `one holds "claude-code"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("ChooseEndpoint() = %v, want it to name %q", err, want)
+		}
+	}
+	// It is not reported as a spent budget, which is the other way a pool runs out
+	// and the one thing waiting would fix.
+	if strings.Contains(err.Error(), "weekly budget") {
+		t.Fatalf("ChooseEndpoint() = %v, want a provider mismatch rather than a budget", err)
+	}
+
+	// The same project is refused when its configuration is read, so the ordinary
+	// way to meet this is an edit rather than a run.
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted a project no configured account could sign its developer in to")
+	} else if !strings.Contains(err.Error(), "accounts.<alias>.provider") {
+		t.Fatalf("Validate() = %v, want it to name how an account states its provider", err)
+	}
+}
+
+// A single account authenticates where the machine does, whatever provider is
+// asking, so nothing about provider-scoped accounts reaches a project that pools
+// nothing. The same is true of the `default` alias under a pool: it keeps the
+// machine's own home, and each provider reads its own there.
+func TestAnAccountInTheMachinesOwnHomeServesWhicheverProviderAsks(t *testing.T) {
+	t.Parallel()
+
+	lone := mustDecodeConfig(t, `version: 1
+product:
+  id: yoyodyne
+  repository: .
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  integration: human
+accounts:
+  work: {}
+agents:
+  developer:
+    role: developer
+    backend: codex
+    model: gpt-5
+`)
+	if err := lone.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want a single-account project on Codex accepted", err)
+	}
+	choice, err := lone.ChooseEndpoint(builtInRegistry(t), "/state", "developer", backend.Endpoint{}, nil)
+	if err != nil {
+		t.Fatalf("ChooseEndpoint() error = %v, want the lone account to serve whichever provider asks", err)
+	}
+	if choice.Account.Alias != "work" || choice.Account.Directory != "" {
+		t.Fatalf("ChooseEndpoint() = %#v, want the lone account in the machine's own home", choice.Account)
+	}
+
+	pooled := pooledConfig(t, "")
+	if provider := pooled.AccountProvider(DefaultAccountAlias); provider != "" {
+		t.Fatalf("AccountProvider(%q) = %q, want the machine's own home to hold nobody in particular", DefaultAccountAlias, provider)
+	}
+	if provider := pooled.AccountProvider("one"); provider != domain.BackendClaudeCode {
+		t.Fatalf("AccountProvider(%q) = %q, want a pooled home that names no provider read as Claude Code's", "one", provider)
 	}
 }

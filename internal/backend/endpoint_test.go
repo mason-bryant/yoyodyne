@@ -8,17 +8,16 @@ import (
 )
 
 // Both of the providers this build's vocabulary names are expressed as
-// endpoints, and the two are expressed differently because they are different:
-// one is reached by a compiled adapter and says which, and one is a provider
-// this build ships no adapter for and says that instead of pretending to one.
+// endpoints, each carrying the compiled adapter that reaches it. They are still
+// different endpoints: what a role may be served on is decided by the postures a
+// provider can be held to, and Codex can be held to one of the two.
 //
-// The Codex half of this is a statement about this build rather than about
-// whether the adapter was written. It was, under yoyodyne-ifd.6, and it is on
-// branch yoyodyne/yoyodyne-ifd-6/a0a8ab63 (tip 41b0ec7), which is not an
-// ancestor of this commit — so there is no Codex code here to launch, and this
-// asserts what is true of the build rather than what is true of that branch.
-// What Codex can be held to by capability is the test below, and that half is
-// expressed in full.
+// This is where the second runnable endpoint is actually asserted. Until
+// yoyodyne-ifd.347 there was none — the adapter written under yoyodyne-ifd.6 sat
+// on a branch nothing merged, so a Codex endpoint was expressed and refused at
+// dispatch for want of anything to launch it — and the failover work that
+// generalizes across endpoints has no second endpoint to be proven on unless
+// this holds.
 func TestBothBuiltInProvidersAreExpressedAsEndpoints(t *testing.T) {
 	t.Parallel()
 
@@ -42,32 +41,33 @@ func TestBothBuiltInProvidersAreExpressedAsEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Endpoint() error = %v", err)
 	}
-	if codex.Runnable() {
-		t.Fatalf("the Codex endpoint = %#v, want an endpoint this build ships no adapter for", codex)
+	if !codex.Runnable() || codex.AdapterVersion != CodexAdapterVersion {
+		t.Fatalf("the Codex endpoint = %#v, want the compiled adapter's version", codex)
+	}
+	if codex.Same(claude) {
+		t.Fatalf("the two built-in endpoints share a key: %q", codex.Key())
 	}
 	// Codex is developer-only by capability: its sandbox scopes writes to a
 	// directory, which is the developer's posture, and has no setting for the
-	// read-only posture the reviewer requires.
+	// read-only posture the reviewer requires. That is unaffected by there being
+	// an adapter — the posture is a fact about the provider's sandbox, and it is
+	// decided at configuration load rather than at dispatch.
 	reviewer := registry.EligibleFor(codex, domain.RoleReviewer)
 	if reviewer == nil || !strings.Contains(reviewer.Error(), `cannot hold the "read-only" tool posture`) {
 		t.Fatalf("the reviewer on Codex = %v, want a refusal naming the posture", reviewer)
 	}
-	// The developer's posture Codex can hold, so what refuses that endpoint is the
-	// other thing that is true of it and nothing else: this build has no adapter.
-	// The two refusals are separate answers because they are answered in different
-	// places — the posture at configuration load, the adapter at dispatch.
-	developer := registry.EligibleFor(codex, domain.RoleDeveloper)
-	if developer == nil || !strings.Contains(developer.Error(), "no adapter") {
-		t.Fatalf("the developer on Codex = %v, want a refusal naming the missing adapter", developer)
+	// The developer's posture Codex can hold, and this build can now launch it, so
+	// nothing refuses that endpoint at all.
+	if err := registry.EligibleFor(codex, domain.RoleDeveloper); err != nil {
+		t.Fatalf("the developer on Codex = %v, want the endpoint this build can launch", err)
 	}
 }
 
-// Codex is developer-only by capability, and that half of it is expressed in
-// full whatever this build can launch. Serves is what configuration validation
-// reads, and it says the developer may be served on Codex and the reviewer may
-// not — so the day the adapter that was written under yoyodyne-ifd.6 lands, a
-// Codex developer endpoint is eligible with nothing here changed but the
-// descriptor naming its adapter.
+// Codex is developer-only by capability, whatever this build can launch. Serves
+// is what configuration validation reads, and it says the developer may be
+// served on Codex and the reviewer may not — which held before the adapter
+// landed and holds after it, because the posture is a fact about the provider's
+// sandbox rather than about what this build carries.
 func TestCodexIsDeveloperOnlyByCapabilityWhateverThisBuildCanLaunch(t *testing.T) {
 	t.Parallel()
 
@@ -83,16 +83,15 @@ func TestCodexIsDeveloperOnlyByCapabilityWhateverThisBuildCanLaunch(t *testing.T
 		t.Fatalf("Serves(codex, reviewer) = %v, want a refusal naming the posture", refusal)
 	}
 
-	// What is missing is the adapter and only the adapter. A descriptor that named
-	// one produces an endpoint eligible for the developer with no other change,
-	// which is what makes landing that adapter the whole of the remaining work.
-	landed := Descriptor{
-		ID:             domain.BackendCodex,
-		Adapter:        domain.BackendCodex,
-		AdapterVersion: "codex/1",
-		Roles:          []domain.AgentRole{domain.RoleDeveloper, domain.RoleReviewer},
-		Postures:       []Posture{PostureWorktreeWrite},
-		BuiltIn:        true,
+	// And the description this build actually ships is that one: an adapter named
+	// beside the version that identifies it, which is what makes a Codex endpoint
+	// something a run can be dispatched to.
+	landed, known := BuiltInDescriptor(domain.BackendCodex)
+	if !known {
+		t.Fatal("this build ships no description of the Codex backend")
+	}
+	if landed.Adapter != domain.BackendCodex || landed.AdapterVersion != CodexAdapterVersion {
+		t.Fatalf("the Codex description = %#v, want the adapter this build ships", landed)
 	}
 	endpoint := Endpoint{
 		Provider:       landed.ID,
@@ -335,8 +334,8 @@ func TestTheRecordedAdapterVersionFallsBackOnlyToWhatThisBuildKnows(t *testing.T
 	if version := AdapterVersionFor(domain.BackendClaudeCode); version != ClaudeCodeAdapterVersion {
 		t.Fatalf("AdapterVersionFor(claude-code) = %q, want the compiled adapter's version", version)
 	}
-	if version := AdapterVersionFor(domain.BackendCodex); version != "" {
-		t.Fatalf("AdapterVersionFor(codex) = %q, want nothing for a provider with no adapter", version)
+	if version := AdapterVersionFor(domain.BackendCodex); version != CodexAdapterVersion {
+		t.Fatalf("AdapterVersionFor(codex) = %q, want the compiled adapter's version", version)
 	}
 	if version := AdapterVersionFor("my-harness"); version != "" {
 		t.Fatalf("AdapterVersionFor(my-harness) = %q, want nothing for a provider this build has no description of", version)

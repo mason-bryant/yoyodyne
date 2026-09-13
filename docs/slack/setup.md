@@ -590,11 +590,10 @@ whoever you grant `direct-work` as a direct message, once per stall and never on
 per check:
 
 > Nothing at all has started on this product for 1 hour, with 47 items ready to
-> pull: 33 of the 47 admitted items are held for a person, waiting on triage
-> decisions. The session choosing work last recorded idle at
-> 2026-09-06T02:05:00Z, and has said nothing since. Next: the development
-> manager's — nothing pulls work held for a person until triage decides what
-> happens to it.
+> pull: 33 of the 47 admitted items are awaiting carry-out of decisions already
+> recorded. The session choosing work last recorded idle at
+> 2026-09-06T02:05:00Z, and has said nothing since. Next: the harness's — the
+> decisions are recorded, and what is outstanding is the harness acting on them.
 
 The two counts are two readings and are not the same number twice: the tracker
 calls 47 items ready, and the last poll's own account of those 47 says a third of
@@ -603,10 +602,14 @@ them are waiting on somebody. That gap is the ordinary case rather than an error
 tells a queue nothing will pull from a queue nothing is pulling.
 
 **The cause is the last poll's own, rather than this message's.** A session that
-starts nothing records what it passed over and why — held for a person, parked,
-carried in a conversation, sequenced behind a run, waiting out the provider's
-usage window — and this reads that account rather than working out a second one
-from the silence. The two used to be derived separately and disagreed: on
+starts nothing records what it passed over and why — awaiting a decision,
+awaiting carry-out of one already recorded, parked, carried in a conversation,
+sequenced behind a run, waiting out the provider's usage window — and this reads
+that account rather than working out a second one from the silence. The first two
+are named apart because they are two different people to go to, and the message
+above is the case that says why: the development manager had decided all
+thirty-three of those stoppages, and a sentence that sent the operator to her
+cost days. The two used to be derived separately and disagreed: on
 2026-09-06 the alarm said nothing accounted for an hour of quiet while the
 session's own idle line, in the same log, held the whole accounting.
 

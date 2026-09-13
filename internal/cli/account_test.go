@@ -154,9 +154,10 @@ func TestAProjectWithOneAccountIsAnsweredWithoutPricingAnything(t *testing.T) {
 func TestTheLoginRemedyIsTheOneTheDiagnosisPrints(t *testing.T) {
 	t.Parallel()
 
+	cfg := twoAccounts(config.Account{}, config.Account{})
 	pooled := config.AccountEndpoint{Alias: "second", Directory: "/state/accounts/second"}
-	remedy := accountLoginCommand(pooled)
-	if want := doctor.AccountLoginCommand(pooled.Directory); remedy != want {
+	remedy := accountLoginCommand(cfg, domain.BackendClaudeCode, pooled)
+	if want := doctor.AccountLoginCommand(domain.BackendClaudeCode, pooled.Directory); remedy != want {
 		t.Fatalf("the conversation's remedy = %q, want the diagnosis's %q", remedy, want)
 	}
 	if !strings.Contains(remedy, "mkdir -p") || !strings.Contains(remedy, pooled.Directory) {
@@ -165,9 +166,60 @@ func TestTheLoginRemedyIsTheOneTheDiagnosisPrints(t *testing.T) {
 
 	// The default alias signs in where the machine already does, so its remedy is
 	// the provider's own and has no home to make.
-	lone := accountLoginCommand(config.AccountEndpoint{Alias: config.DefaultAccountAlias})
+	lone := accountLoginCommand(cfg, domain.BackendClaudeCode, config.AccountEndpoint{Alias: config.DefaultAccountAlias})
 	if lone != "claude auth login" {
 		t.Fatalf("the default alias remedy = %q, want the provider's own login", lone)
+	}
+
+	// An account that names its own provider is signed in with that provider's
+	// command, in the variable that provider reads its home from. Handing an
+	// operator the other provider's variable would sign them in where the
+	// invocation will not look.
+	codex := twoAccounts(config.Account{}, config.Account{Provider: domain.BackendCodex})
+	onCodex := accountLoginCommand(codex, domain.BackendClaudeCode, config.AccountEndpoint{Alias: "two", Directory: "/state/accounts/two"})
+	if !strings.Contains(onCodex, "CODEX_HOME=/state/accounts/two") || !strings.Contains(onCodex, "codex login") {
+		t.Fatalf("a codex account's remedy = %q, want codex's own login in codex's own home variable", onCodex)
+	}
+}
+
+// The account a run is served by is chosen before the work item is claimed, so
+// an account that could not sign the developer's provider in is refused there —
+// where it costs nothing — rather than met as an invocation pointed at another
+// provider's home, which is a claimed item, a cut worktree, and a run that dies
+// unauthenticated. This is the run half of yoyodyne-ifd.351.
+func TestThePoolWillNotServeARunFromAnotherProvidersAccount(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	store, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	onCodex := pooledDeveloper()
+	onCodex.Backend = domain.BackendCodex
+	cfg := twoAccounts(config.Account{}, config.Account{})
+	cfg.Agents["developers"] = onCodex
+	pool := accountPool{
+		config:    cfg,
+		stateRoot: stateRoot,
+		runs:      store,
+		now:       func() time.Time { return poolClock },
+	}
+
+	if _, err := pool.ChooseAccount(); err == nil {
+		t.Fatal("ChooseAccount() served a Codex developer out of a pool of Claude Code accounts")
+	} else if !strings.Contains(err.Error(), `no configured account holds provider "codex"`) {
+		t.Fatalf("ChooseAccount() error = %v, want the provider that no account holds named", err)
+	}
+
+	// An account that says it is Codex's serves it, in a provider home of its own.
+	cfg.Accounts["two"] = config.Account{Provider: domain.BackendCodex}
+	chosen, err := pool.ChooseAccount()
+	if err != nil {
+		t.Fatalf("ChooseAccount() error = %v", err)
+	}
+	if want := filepath.Join(stateRoot, "accounts", "two"); chosen.Alias != "two" || chosen.Directory != want {
+		t.Fatalf("ChooseAccount() = %#v, want the Codex account in %q", chosen, want)
 	}
 }
 

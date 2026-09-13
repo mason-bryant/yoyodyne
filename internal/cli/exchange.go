@@ -347,7 +347,13 @@ func (v exchangeVoice) noteUsageLimit(question exchange.Question, result backend
 // it, so a substitution is checked against the role's tool posture before it is
 // made rather than after the round has already moved.
 func (v exchangeVoice) failoverPolicy(question exchange.Question, name string, endpoint backend.Endpoint, providers *backend.Registry) modelfailover.Policy {
-	alternate := v.config.AgentFailoverModel(name)
+	// The alternate only where it stays on the provider this round is answered
+	// on. An exchange has no way to cross — it is answered on the agent's own
+	// endpoint, and asking that provider for another provider's model would fail on
+	// a selector nobody there has heard of, at the moment the fallback was meant to
+	// save the round. An agent whose alternate crosses therefore answers rounds
+	// exactly as it did before failover existed.
+	alternate := v.config.AgentFailoverModelWithinProvider(name)
 	version := v.config.AgentModelVersion(name)
 	if alternate == "" && version == "" {
 		return modelfailover.Policy{}

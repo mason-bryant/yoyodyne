@@ -48,14 +48,16 @@ func TestADeclarationNamesTheAdapterThatRunsIt(t *testing.T) {
 		t.Fatal("the declared provider carries no dialect for its adapter to read with")
 	}
 
-	// A backend the vocabulary has and this build ships no adapter for names
-	// nothing, which is what stops a run being started on it.
+	// Both built-ins name an adapter this build carries, so a declaration may run
+	// on either of them. A built-in that named none would be a backend the
+	// vocabulary has and no run could be started on.
 	codex, known := registry.Lookup(domain.BackendCodex)
-	if !known || codex.Runnable() {
-		t.Fatalf("codex descriptor = %#v, want a backend nothing in this build can launch", codex)
+	if !known || !codex.Runnable() || codex.AdapterVersion != CodexAdapterVersion {
+		t.Fatalf("codex descriptor = %#v, want the adapter this build ships", codex)
 	}
-	if runnable := RunnableAdapters(); len(runnable) != 1 || runnable[0] != domain.BackendClaudeCode {
-		t.Fatalf("RunnableAdapters() = %v, want the one adapter this build ships", runnable)
+	runnable := RunnableAdapters()
+	if len(runnable) != 2 || runnable[0] != domain.BackendClaudeCode || runnable[1] != domain.BackendCodex {
+		t.Fatalf("RunnableAdapters() = %v, want the two adapters this build ships", runnable)
 	}
 }
 
@@ -191,11 +193,12 @@ func TestAPluginThatCouldNeverWorkIsRefused(t *testing.T) {
 			wanted: "names no adapter",
 		},
 		{
-			// The vocabulary has Codex and this build ships nothing that can launch
-			// it, so a declaration running on it is rules with no invocation.
+			// A declaration running on a name this build has no adapter for is
+			// rules with no invocation to observe, so it is refused where it is
+			// written rather than loaded and never fired.
 			name:   "running on an adapter this build does not ship",
 			id:     "my-harness",
-			spoil:  func(p *ProviderPlugin) { p.Adapter = domain.BackendCodex },
+			spoil:  func(p *ProviderPlugin) { p.Adapter = "some-other-harness" },
 			wanted: "ships no adapter for",
 		},
 		{

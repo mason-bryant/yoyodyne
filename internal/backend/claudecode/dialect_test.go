@@ -140,6 +140,22 @@ func TestTheClaudeDialectAnswersInTheContractsTerms(t *testing.T) {
 			},
 		},
 		{
+			// The CLI's own words for an account it will not accept, which quote
+			// no status at all. Reading it as weather would relaunch a run into an
+			// answer no attempt can change, and the same condition already stands
+			// as a refusal when the status is quoted instead.
+			name: "an account that is not logged in is a refusal that stands",
+			event: backend.ProviderEvent{
+				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
+				Text: "Not logged in",
+			},
+			said: true,
+			want: backend.Observation{
+				Answer: backend.AnswerRefused,
+				Detail: "api_error: Not logged in",
+			},
+		},
+		{
 			// "Connection closed mid-response" quotes no status because nothing
 			// answered, and a harness that read it as a judgement of the work
 			// would fail a whole run on weather.

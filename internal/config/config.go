@@ -901,7 +901,8 @@ func (c Config) Validate() error {
 			problems = append(problems, fmt.Sprintf("agent %q instances must be at least 1", name))
 		}
 		problems = append(problems, agent.Persona.problems(name)...)
-		problems = append(problems, agent.Failover.problems(name, agent.Model)...)
+		problems = append(problems, agent.Failover.problems(name, agent)...)
+		problems = append(problems, c.failoverEndpointProblems(providers, name, agent)...)
 		problems = append(problems, conversationModeProblems(name, agent.Conversations)...)
 		if agent.Role == domain.RoleDeveloper {
 			developers += agent.Instances
@@ -941,6 +942,7 @@ func (c Config) Validate() error {
 	}
 
 	problems = append(problems, c.accountProblems()...)
+	problems = append(problems, c.accountProviderProblems(providers)...)
 	problems = append(problems, c.operatorProblems()...)
 	problems = append(problems, c.Slack.problems()...)
 	problems = append(problems, validateRecurringTasks(c)...)

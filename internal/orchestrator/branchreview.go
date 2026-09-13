@@ -451,9 +451,8 @@ func (b BranchReviewer) agentName() string {
 // is already on the branch and is not worth stopping over a mapping edited
 // underneath it; the alias it records is still the one it was made under.
 func (b BranchReviewer) account() config.AccountEndpoint {
-	alias := b.Config.AgentAccountAlias(b.agentName())
-	if endpoint, err := b.Config.Endpoint(b.StateRoot, alias); err == nil {
+	if endpoint, err := b.Config.AgentAccountEndpoint(b.StateRoot, b.agentName()); err == nil {
 		return endpoint
 	}
-	return config.AccountEndpoint{Alias: alias}
+	return config.AccountEndpoint{Alias: b.Config.AgentAccountAlias(b.agentName())}
 }

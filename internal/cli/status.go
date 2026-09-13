@@ -302,6 +302,10 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Runs = store
 		sources.Stoppages = store
+		// The item's own triage record, from the store that already holds it, so a
+		// held item says whether it waits on a decision or on the harness carrying
+		// one out rather than on both at once.
+		sources.Decisions = store.Triage()
 	}
 	if store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Conversations = store
@@ -320,6 +324,9 @@ func standingSources(configPath string) readmodel.Sources {
 	}
 	if store, err := runstate.NewWatchStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Sessions = store
+	}
+	if store, err := runstate.NewReportStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Reports = store
 	}
 	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
 	if err != nil {

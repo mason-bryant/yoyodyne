@@ -114,8 +114,12 @@ jobs:
             echo "::error::The pinned tracker v${BD_VERSION} did not download from ${release}. What is wrong is BD_VERSION in this workflow, not the adoption walkthrough: see docs/developing-yoyo.md#the-tracker-version-ci-pins" >&2
             exit 1
           fi
-          tar -xzf /tmp/beads.tar.gz -C /tmp
-          BD=$(find /tmp -maxdepth 2 -name bd -type f | head -1)
+          # Unpacked into a directory of its own: a find over the shared /tmp
+          # trips on the runner's unreadable service directories, and under
+          # pipefail that exit status is the step's, before any error line.
+          unpacked=$(mktemp -d)
+          tar -xzf /tmp/beads.tar.gz -C "$unpacked"
+          BD=$(find "$unpacked" -maxdepth 2 -name bd -type f | head -1)
           if [ -z "$BD" ]; then
             echo "::error::The archive for the pinned tracker v${BD_VERSION} carries no bd binary where this expects one. What is wrong is BD_VERSION in this workflow, not the adoption walkthrough: see docs/developing-yoyo.md#the-tracker-version-ci-pins" >&2
             exit 1

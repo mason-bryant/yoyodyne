@@ -32,6 +32,7 @@ func TestPreservedWorkAndUndecidedStoppagesAreHeldForAPerson(t *testing.T) {
 			WorkItemID: "yoyodyne-ifd.241", RunID: "run-ffbfc9d1",
 			Attempts: 1, DeliveredAt: &delivered,
 		}},
+		nothingDecided,
 	)
 
 	for _, id := range []string{
@@ -78,6 +79,7 @@ func TestAStoppageWhoseWorkWasCleanedUpHoldsNothing(t *testing.T) {
 			WorkItemID: "yoyodyne-ifd.78", RunID: "run-0aa11bb2",
 			Attempts: 1, DeliveredAt: &decided, Decision: "rerun", Reason: "the ground moved",
 		}},
+		nothingDecided,
 	)
 
 	for _, id := range []string{"yoyodyne-ifd.78", "yoyodyne-ifd.243"} {
@@ -145,7 +147,7 @@ func TestAnUndecidedStoppageSaysWhichPersonItIsWaitingOn(t *testing.T) {
 		t.Run(stoppage.name, func(t *testing.T) {
 			t.Parallel()
 
-			held := heldForAPerson(nil, []runstate.Escalation{stoppage.escalation})
+			held := heldForAPerson(nil, []runstate.Escalation{stoppage.escalation}, nothingDecided)
 			reason := heldReason(t, held, stoppedItem)
 			if !strings.Contains(reason, stoppage.want) {
 				t.Fatalf("the hold says %q, want it to name %q", reason, stoppage.want)
@@ -164,7 +166,7 @@ func TestTheLatestStoppageDescribesAnItemThatStoppedTwice(t *testing.T) {
 	second := preservedRun("run-bbbbbbbb", "yoyodyne-ifd.100", time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC))
 
 	for _, order := range [][]runstate.State{{first, second}, {second, first}} {
-		reason := heldReason(t, heldForAPerson(order, nil), "yoyodyne-ifd.100")
+		reason := heldReason(t, heldForAPerson(order, nil, nothingDecided), "yoyodyne-ifd.100")
 		if !strings.Contains(reason, "run-bbbbbbbb") {
 			t.Fatalf("the hold names %q, want the later run", reason)
 		}
@@ -178,10 +180,10 @@ func TestAFailedReadingIsAnErrorRatherThanNoHolds(t *testing.T) {
 	t.Parallel()
 
 	unreadable := errors.New("state root is not readable")
-	if _, err := HeldForAPerson(failingStoppages{runs: unreadable}); !errors.Is(err, unreadable) {
+	if _, err := HeldForAPerson(failingStoppages{runs: unreadable}, nil); !errors.Is(err, unreadable) {
 		t.Fatalf("HeldForAPerson() error = %v, want the run reading's failure", err)
 	}
-	if _, err := HeldForAPerson(failingStoppages{escalations: unreadable}); !errors.Is(err, unreadable) {
+	if _, err := HeldForAPerson(failingStoppages{escalations: unreadable}, nil); !errors.Is(err, unreadable) {
 		t.Fatalf("HeldForAPerson() error = %v, want the escalation reading's failure", err)
 	}
 }
@@ -195,7 +197,7 @@ func TestAFailedReadingIsAnErrorRatherThanNoHolds(t *testing.T) {
 func TestAnItemWhoseOnlyOutstandingStateIsAPublicationIsHeldForAPerson(t *testing.T) {
 	t.Parallel()
 
-	held := heldForAPerson([]runstate.State{publishedRun("run-55443d4c", "yoyodyne-ifd.295")}, nil)
+	held := heldForAPerson([]runstate.State{publishedRun("run-55443d4c", "yoyodyne-ifd.295")}, nil, nothingDecided)
 	reason := heldReason(t, held, "yoyodyne-ifd.295")
 	for _, want := range []string{"run-55443d4c", "the forge merged it", "nothing here to implement"} {
 		if !strings.Contains(reason, want) {
@@ -219,7 +221,7 @@ func TestADroppedMergeIsHeldWithoutClaimingTheForgeMergedIt(t *testing.T) {
 	dropped.PullRequest.Merged = false
 	dropped.PublishFailure = "the forge dropped the queued merge of pull request 84: it is open and has no merge queued for it"
 
-	reason := heldReason(t, heldForAPerson([]runstate.State{dropped}, nil), "yoyodyne-ifd.288")
+	reason := heldReason(t, heldForAPerson([]runstate.State{dropped}, nil, nothingDecided), "yoyodyne-ifd.288")
 	if !strings.Contains(reason, "the forge has not merged it") {
 		t.Errorf("the hold says %q, want the unmerged publication named", reason)
 	}
@@ -239,7 +241,7 @@ func TestAFinishedOrInFlightPublicationHoldsNothing(t *testing.T) {
 	inFlight := publishedRun("run-7d2e4cc1", "yoyodyne-ifd.302")
 	inFlight.Status = runstate.StatusRunning
 
-	held := heldForAPerson([]runstate.State{settled, inFlight}, nil)
+	held := heldForAPerson([]runstate.State{settled, inFlight}, nil, nothingDecided)
 	for _, id := range []string{"yoyodyne-ifd.300", "yoyodyne-ifd.302"} {
 		if reason, ok := held.Reason(id); ok {
 			t.Fatalf("%s was held for %q, want nothing holding it", id, reason)
@@ -267,7 +269,7 @@ func TestABranchLeftBehindReadsAsThePublicationOnlyWhereTheMergeIsConfirmed(t *t
 	unmerged.PullRequest = &runstate.PullRequest{Number: 84, Branch: unmerged.Branch, State: "OPEN"}
 	unmerged.PublishFailure = "the forge dropped the queued merge of pull request 84"
 
-	held := heldForAPerson([]runstate.State{merged, unmerged}, nil)
+	held := heldForAPerson([]runstate.State{merged, unmerged}, nil, nothingDecided)
 	if reason := heldReason(t, held, "yoyodyne-ifd.295"); !strings.Contains(reason, "the forge merged it") {
 		t.Errorf("the merged item is held for %q, want the publication rather than the preserved change", reason)
 	}
@@ -337,3 +339,172 @@ type failingStoppages struct {
 func (f failingStoppages) Recorded() ([]runstate.State, error) { return nil, f.runs }
 
 func (f failingStoppages) Escalated() ([]runstate.Escalation, error) { return nil, f.escalations }
+
+// The 2026-09-07 shape. The development manager had decided every one of the
+// thirty-three stoppages that were reading as work she owed a decision on, and
+// what was missing was the harness carrying those decisions out. A hold that
+// cannot say which of the two it is sends the operator to the role that has
+// already done its job.
+func TestAStoppageWithADecisionRecordedAwaitsItsCarryOutRatherThanADecision(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	held := heldForAPerson(
+		[]runstate.State{
+			preservedRun("run-aaaa1111", "yoyodyne-ifd.150", stopped),
+			preservedRun("run-bbbb2222", "yoyodyne-ifd.151", stopped),
+		},
+		nil,
+		decisions(map[string]runstate.TriageCounters{
+			"yoyodyne-ifd.150": {Decisions: []runstate.TriageDecision{{
+				Decision: runstate.TriageDecisionRerun, RunID: "run-aaaa1111",
+			}}},
+		}),
+	)
+
+	decided := heldReason(t, held, "yoyodyne-ifd.150")
+	if !strings.Contains(decided, "already decided") || !strings.Contains(decided, "carrying that decision out") {
+		t.Errorf("the decided stoppage is held for %q, want the carry-out named as what is outstanding", decided)
+	}
+	undecided := heldReason(t, held, "yoyodyne-ifd.151")
+	if !strings.Contains(undecided, "the development manager decides what happens to it") {
+		t.Errorf("the undecided stoppage is held for %q, want her decision named", undecided)
+	}
+	if !held.Decided("yoyodyne-ifd.150") || held.Decided("yoyodyne-ifd.151") {
+		t.Errorf("the holds report the wrong movers: %#v", held)
+	}
+}
+
+// A granted repair is asked of the grant rather than of the decision, because a
+// repair continues the run it was granted for and the same run stops again
+// carrying the same decision. A grant whose rounds have all been spent has been
+// carried out, so what the stoppage after it waits on is a fresh decision.
+func TestAGrantThatHasBeenSpentIsNotAStoppageAwaitingCarryOut(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	repair := func(committed, spent int) runstate.TriageCounters {
+		return runstate.TriageCounters{
+			RepairGrants: 1, CommittedRounds: committed, ReviewRounds: spent,
+			Decisions: []runstate.TriageDecision{{
+				Decision: runstate.TriageDecisionRepair, RunID: "run-cccc3333",
+			}},
+		}
+	}
+	for _, granted := range []struct {
+		name     string
+		counters runstate.TriageCounters
+		want     string
+	}{
+		{name: "unspent", counters: repair(3, 2), want: "carrying that decision out"},
+		{name: "spent", counters: repair(3, 3), want: "the development manager decides what happens to it"},
+	} {
+		t.Run(granted.name, func(t *testing.T) {
+			t.Parallel()
+
+			held := heldForAPerson(
+				[]runstate.State{preservedRun("run-cccc3333", "yoyodyne-ifd.152", stopped)},
+				nil,
+				decisions(map[string]runstate.TriageCounters{"yoyodyne-ifd.152": granted.counters}),
+			)
+			if reason := heldReason(t, held, "yoyodyne-ifd.152"); !strings.Contains(reason, granted.want) {
+				t.Fatalf("the hold says %q, want it to name %q", reason, granted.want)
+			}
+		})
+	}
+}
+
+// A wait, a re-scope and an escalation leave the harness nothing to do, so an
+// item still held under one of them is held by what was decided rather than by
+// anything outstanding. Naming the harness as its next mover would send an
+// operator to watch for a run nothing is going to start.
+func TestADecisionTheHarnessDoesNotCarryOutLeavesTheStoppageWaitingOnHer(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	for _, word := range []string{
+		runstate.TriageDecisionWait,
+		runstate.TriageDecisionRescope,
+		runstate.TriageDecisionEscalate,
+	} {
+		t.Run(word, func(t *testing.T) {
+			t.Parallel()
+
+			held := heldForAPerson(
+				[]runstate.State{preservedRun("run-dddd4444", "yoyodyne-ifd.154", stopped)},
+				nil,
+				decisions(map[string]runstate.TriageCounters{"yoyodyne-ifd.154": {
+					Decisions: []runstate.TriageDecision{{Decision: word, RunID: "run-dddd4444"}},
+				}}),
+			)
+			if held.Decided("yoyodyne-ifd.154") {
+				t.Fatalf("a %q decision reads as one the harness has still to carry out", word)
+			}
+		})
+	}
+}
+
+// A triage record nobody can open costs the hold nothing: the item is held
+// exactly as it was, and what the reading could not say it says rather than
+// guessing. One unreadable file must not make a whole queue unpullable, and it
+// must not claim the harness owes a carry-out nothing established.
+func TestATriageRecordThatCouldNotBeReadHoldsTheItemAndSaysSo(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	held := heldForAPerson(
+		[]runstate.State{preservedRun("run-eeee5555", "yoyodyne-ifd.155", stopped)},
+		nil,
+		standingDecisions(failingDecisions{errors.New("open triage counters: permission denied")}),
+	)
+	reason := heldReason(t, held, "yoyodyne-ifd.155")
+	for _, want := range []string{"its change is preserved", "could not be read", "permission denied"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the hold says %q, want it to name %q", reason, want)
+		}
+	}
+	if held.Decided("yoyodyne-ifd.155") {
+		t.Errorf("a hold nothing could be read about claims a carry-out is outstanding")
+	}
+}
+
+// A pull wired without the record is the same case as one that could not read
+// it: the item is held and stated as one nobody has decided about, which is
+// where the answer went before the two were told apart.
+func TestAHoldReadWithoutTheTriageRecordSaysNothingWasWiredToReadIt(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	held := heldForAPerson(
+		[]runstate.State{preservedRun("run-ffff6666", "yoyodyne-ifd.156", stopped)},
+		nil,
+		standingDecisions(nil),
+	)
+	if reason := heldReason(t, held, "yoyodyne-ifd.156"); !strings.Contains(reason, "nothing was wired to read") {
+		t.Fatalf("the hold says %q, want the missing record named", reason)
+	}
+}
+
+// nothingDecided is the reading of an item nobody has decided anything about,
+// which is every item in the fixtures that predate the two holds being told
+// apart.
+func nothingDecided(string, string) (bool, string) { return false, "" }
+
+// decisions is a triage record readable for the items it names, and empty for
+// every other — which is what an item nothing has been decided about actually
+// reads as.
+func decisions(recorded map[string]runstate.TriageCounters) standing {
+	return standingDecisions(recordedDecisions(recorded))
+}
+
+type recordedDecisions map[string]runstate.TriageCounters
+
+func (r recordedDecisions) Counters(workItemID string) (runstate.TriageCounters, error) {
+	return r[workItemID], nil
+}
+
+type failingDecisions struct{ err error }
+
+func (f failingDecisions) Counters(string) (runstate.TriageCounters, error) {
+	return runstate.TriageCounters{}, f.err
+}

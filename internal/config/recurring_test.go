@@ -183,10 +183,14 @@ func TestScaffoldShowsTheRecurringSectionCommented(t *testing.T) {
 	}
 }
 
-// The example is only worth showing if the gesture it asks for works, so it is
-// uncommented here and loaded: an example that does not load is worse than none,
-// because the operator who tried it has no reason to think the fault is the
-// file's.
+// The examples are only worth showing if the gesture they ask for works, so the
+// block is uncommented here and loaded: an example that does not load is worse
+// than none, because the operator who tried it has no reason to think the fault
+// is the file's.
+//
+// Both are checked, and the second is the one that would otherwise rot
+// unnoticed: a scaffolded block whose first entry loads passes a test that only
+// asks about the first entry, whatever happened to the rest of it.
 func TestScaffoldedRecurringExampleLoadsWhenUncommented(t *testing.T) {
 	t.Parallel()
 
@@ -202,6 +206,22 @@ func TestScaffoldedRecurringExampleLoadsWhenUncommented(t *testing.T) {
 	}
 	if !strings.Contains(task.Prompt, "root-cause work") {
 		t.Errorf("prompt = %q, want the filing instruction the example carries", task.Prompt)
+	}
+	// The pile's own standing reader. Every role files reports and only the
+	// product manager can record what became of one, so a project that schedules
+	// nothing works the pile only when somebody opens a conversation.
+	triage, err := resolved.Config.RecurringTaskNamed("report-triage")
+	if err != nil {
+		t.Fatalf("RecurringTaskNamed() error = %v", err)
+	}
+	if triage.Role != domain.RoleProductManager || triage.Every.Duration() != time.Hour || !triage.Enabled {
+		t.Errorf("task = %+v, want the product manager woken hourly for the pile", triage)
+	}
+	// The instruction that makes the pass drain the pile rather than read it: a
+	// turn that decides about nothing leaves every report it was shown unhandled
+	// and offered again.
+	if !strings.Contains(triage.Prompt, `"handle"`) {
+		t.Errorf("prompt = %q, want the instruction to record what became of each report", triage.Prompt)
 	}
 }
 

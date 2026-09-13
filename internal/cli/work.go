@@ -211,7 +211,7 @@ func (w conversationWork) Backlog(ctx context.Context) (backlog.Queue, error) {
 	// releasing work whose hold it could not read.
 	var held backlog.Holds
 	if w.store != nil {
-		held, err = readmodel.HeldForAPerson(w.store)
+		held, err = readmodel.HeldForAPerson(w.store, w.store.Triage())
 		if err != nil {
 			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}

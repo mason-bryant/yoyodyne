@@ -1639,3 +1639,52 @@ func TestARunThatDiedBeforeClaimingIsSaidAsSomebodysMove(t *testing.T) {
 		t.Fatalf("an ordinary ending lost the clause it had:\n%s", ordinary.Body)
 	}
 }
+
+// A turn served by another provider is said as a substitution like any other,
+// and says which provider produced the work. The two model selectors alone
+// cannot: two providers can spell one model name, and an operator shown "fable
+// rather than fable" is shown a substitution that reads as no substitution at
+// all.
+func TestACrossProviderSubstitutionNamesTheProviderThatProducedTheWork(t *testing.T) {
+	crossed := runstate.UsageLimitExhaustion{
+		SchemaVersion:    runstate.UsageLimitSchemaVersion,
+		ProductID:        "yoyodyne",
+		At:               moment,
+		Waiting:          "the development manager conversation chat-91253e0e",
+		ConversationID:   "chat-91253e0e",
+		Kind:             "five_hour",
+		Model:            "fable",
+		ServedBy:         "fable",
+		Provider:         "claude-code",
+		ServedByProvider: "codex",
+		Substitution:     runstate.SubstitutedForCapacity,
+	}
+	notification, err := FromUsageLimit(crossed)
+	if err != nil {
+		t.Fatalf("select from a cross-provider substitution: %v", err)
+	}
+	if notification.Event.Kind != KindModelSubstituted {
+		t.Fatalf("a crossing is said as %q, want %q", notification.Event.Kind, KindModelSubstituted)
+	}
+	if notification.Event.Severity != report.SeverityNote {
+		t.Fatalf("a crossing is said at %q, want %q: nothing stopped", notification.Event.Severity, report.SeverityNote)
+	}
+	for _, speaker := range []Speaker{
+		Harness(),
+		Persona(domain.RoleDeveloper, ""),
+		Persona(domain.RoleReviewer, ""),
+		Persona(domain.RoleDevelopmentManager, ""),
+		Persona(domain.RoleProductManager, ""),
+		Persona(domain.RoleArchitect, ""),
+	} {
+		message, err := Render(notification.Topic, speaker, notification.Event)
+		if err != nil {
+			t.Fatalf("the %s cannot say a crossing: %v", speaker.Key(), err)
+		}
+		for _, want := range []string{"claude-code's fable", "codex's fable", "rebuilt its context from the durable record"} {
+			if !strings.Contains(message.Body, want) {
+				t.Fatalf("the %s said %q, which does not name %q", speaker.Key(), message.Body, want)
+			}
+		}
+	}
+}

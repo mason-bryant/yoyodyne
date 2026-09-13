@@ -183,7 +183,7 @@ type Backend struct {
 	ConfigDir string
 }
 
-// providerConfigDirVariable is how Claude Code is told which provider home to
+// ProviderHomeVariable is how Claude Code is told which provider home to
 // read. It is the provider's own variable rather than anything the harness
 // invented, which is the whole of why an account is a directory here: the
 // provider already keeps one account's authentication per home, so pooling is
@@ -194,7 +194,7 @@ type Backend struct {
 // provider's own vocabulary, and a contract that named this variable would be
 // naming Claude Code's spelling of an answer. What generalizes is the request's
 // AccountConfigDir; what does not is that this provider reads it from here.
-const providerConfigDirVariable = "CLAUDE_CONFIG_DIR"
+const ProviderHomeVariable = "CLAUDE_CONFIG_DIR"
 
 // environmentFor is what an account contributes to the environment one
 // invocation is made in. Naming no directory returns nil, which names no
@@ -206,7 +206,7 @@ func environmentFor(configDir string) []string {
 	if strings.TrimSpace(configDir) == "" {
 		return nil
 	}
-	return append(os.Environ(), providerConfigDirVariable+"="+configDir)
+	return append(os.Environ(), ProviderHomeVariable+"="+configDir)
 }
 
 // dialect is what reads this invocation's stream: whatever the caller resolved

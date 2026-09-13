@@ -50,6 +50,27 @@ const maxRenderedEntries = 20
 // maxRenderedTitleBytes keeps one tracker-supplied title to one line.
 const maxRenderedTitleBytes = 120
 
+// Hold is what somebody has to do before one admitted item is pulled: what is
+// holding it in the harness's own words, and whether what it waits for is a
+// decision or the carrying out of one already made.
+//
+// The two are kept apart because they have different next movers and only one of
+// them is anybody's to decide. On 2026-09-07 thirty-three items read as a
+// backlog of undecided stoppages for days while the development manager had
+// decided every one of them and what was missing was the harness acting on them.
+// One word covering both is what sent the operator's attention to the role that
+// had already done its job.
+type Hold struct {
+	// Reason is what is holding the item, in the harness's own words.
+	Reason string
+	// Decided reports a decision already recorded about the stoppage that holds
+	// this item, which the harness has still to carry out. It is false where
+	// nobody has decided anything, and false where what was decided could not be
+	// read — the reason says which, because a record nobody could open is not a
+	// decision nobody made.
+	Decided bool
+}
+
 // Holds is the admitted work somebody has to release before anything pulls it,
 // keyed by item, with what each one is waiting for. It is what separates a
 // governance hold — a stoppage whose change is still preserved, an escalation
@@ -63,16 +84,16 @@ const maxRenderedTitleBytes = 120
 // because releasing a stoppage starts a fresh run over a change a branch is
 // still holding, while holding a releasable item costs one pull.
 type Holds struct {
-	reasons map[string]string
-	read    bool
+	held map[string]Hold
+	read bool
 }
 
 // ReadHolds is the holds as a reader actually found them, which may be none at
 // all. It is the constructor rather than a literal because an empty Holds and an
 // unread one mean opposite things, and only a reader that got an answer may say
 // the first.
-func ReadHolds(reasons map[string]string) Holds {
-	return Holds{reasons: reasons, read: true}
+func ReadHolds(held map[string]Hold) Holds {
+	return Holds{held: held, read: true}
 }
 
 // unreadHold is what an entry says when nothing could read the holds. It names
@@ -90,14 +111,26 @@ const unreadHold = "blocked, and what is holding it could not be read, so nothin
 // the entry rather than here, because it is a fact about the reading rather than
 // about the item.
 func (h Holds) Reason(workItemID string) (string, bool) {
-	reason := strings.TrimSpace(h.reasons[workItemID])
+	reason := strings.TrimSpace(h.held[workItemID].Reason)
 	return reason, reason != ""
 }
 
-// awaiting is what somebody has to do before this item is pulled, and is empty
-// for an item nothing is holding.
-func (h Holds) awaiting(item beads.WorkItem) string {
-	return strings.TrimSpace(h.reasons[item.ID])
+// Decided reports one named item held for the carrying out of a decision
+// already recorded rather than for a decision. It answers false for an item
+// nothing is holding and for one whose decisions could not be read, which
+// Reason above says in words: what it must never do is name the harness as the
+// next mover on the strength of a record nobody opened.
+func (h Holds) Decided(workItemID string) bool {
+	held := h.held[workItemID]
+	return held.Decided && strings.TrimSpace(held.Reason) != ""
+}
+
+// hold is what somebody has to do before this item is pulled, with an empty
+// reason for an item nothing is holding.
+func (h Holds) hold(item beads.WorkItem) Hold {
+	held := h.held[item.ID]
+	held.Reason = strings.TrimSpace(held.Reason)
+	return held
 }
 
 // Entry is one admitted work item at the position the product manager's
@@ -132,6 +165,13 @@ type Entry struct {
 	// queue's readers do not share, and a hold nobody can read off the item is
 	// exactly the state a blocked status left this backlog in.
 	Awaiting string `json:"awaiting,omitempty"`
+	// AwaitingCarryOut reports a held item whose decision is already recorded and
+	// has not been carried out, so what it waits for is the harness acting rather
+	// than a person deciding. It is meaningless on an entry nothing is holding,
+	// and it is a fact about the wait rather than a second reason: the two waits
+	// are one queue entry apiece and different people to go to, which is the
+	// distinction a single "held for a person" hid for days.
+	AwaitingCarryOut bool `json:"awaiting_carry_out,omitempty"`
 	// WaitingOn names the unfinished work this item waits for. It explains an
 	// unready open entry and decides a blocked one, which is not two behaviours
 	// but one rule applied where each answer comes from: an open item's readiness
@@ -218,7 +258,8 @@ func Order(items []beads.WorkItem, ready []string, held Holds) Queue {
 	queue := Queue{Entries: make([]Entry, 0, len(admitted))}
 	for position, item := range admitted {
 		_, reportedReady := pullable[item.ID]
-		awaiting := held.awaiting(item)
+		holding := held.hold(item)
+		awaiting := holding.Reason
 		waiting := waitingOn(item, unfinished)
 		queue.Entries = append(queue.Entries, Entry{
 			Position: position + 1,
@@ -229,6 +270,10 @@ func Order(items []beads.WorkItem, ready []string, held Holds) Queue {
 			Executor: item.Executor,
 			Parking:  item.Parking,
 			Awaiting: awaiting,
+			// Only ever true beside a reason: a decision recorded about an item
+			// nothing is holding says nothing about why it is not being pulled, and
+			// carrying it here would put an item on the held count that no hold is on.
+			AwaitingCarryOut: awaiting != "" && holding.Decided,
 			// An item whose execution is not a developer run is never the next thing
 			// to pull, however clear the dependency answer about it is, and neither is
 			// one somebody parked or one somebody is holding. All three are a
@@ -316,6 +361,46 @@ func (q Queue) Parked() int {
 		}
 	}
 	return parked
+}
+
+// Awaits reports a hold as the thing that actually stops this entry, and which
+// of the two waits that hold is. It applies the precedence Hold() states below:
+// an executor no run can be and a parking both answer ahead of a hold, so an
+// item that is both is not one of these — what its reader is told is the thing
+// that would still refuse it once the hold was lifted, and counting it here
+// would put it on a total nothing under the line accounts for.
+//
+// It is exported because more than one surface counts held work, and two of them
+// counting it differently is the disagreement one derivation exists to prevent.
+func (e Entry) Awaits() (held bool, carryOut bool) {
+	if !e.Executor.DeveloperRun() || e.Parking.Parked() || e.Awaiting == "" {
+		return false, false
+	}
+	return true, e.AwaitingCarryOut
+}
+
+// AwaitingDecision counts the held entries nobody has decided anything about
+// yet, and AwaitingCarryOut the ones whose decision is recorded and has not been
+// acted on. They are counted apart because they are two different people to go
+// to: the first is the development manager's to settle and the second is the
+// harness's to carry out, and a surface that adds them together tells an
+// operator to go and chase decisions that have all been made.
+func (q Queue) AwaitingDecision() int {
+	return q.awaiting(func(carryOut bool) bool { return !carryOut })
+}
+
+func (q Queue) AwaitingCarryOut() int {
+	return q.awaiting(func(carryOut bool) bool { return carryOut })
+}
+
+func (q Queue) awaiting(wanted func(carryOut bool) bool) int {
+	awaiting := 0
+	for _, entry := range q.Entries {
+		if held, carryOut := entry.Awaits(); held && wanted(carryOut) {
+			awaiting++
+		}
+	}
+	return awaiting
 }
 
 // Render describes the backlog for an operator: the order the product manager

@@ -99,7 +99,7 @@ func TestAnInvocationUnderNoNamedAccountNamesNoProviderHome(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	for _, entry := range runner.commands[0].Env {
-		if strings.HasPrefix(entry, providerConfigDirVariable+"=") {
+		if strings.HasPrefix(entry, ProviderHomeVariable+"=") {
 			t.Fatalf("an invocation naming no account was pointed at a provider home: %q", entry)
 		}
 	}
@@ -115,12 +115,12 @@ func assertConfigDir(t *testing.T, command execution.Command, want string) {
 
 	found := ""
 	for _, entry := range command.Env {
-		if value, ok := strings.CutPrefix(entry, providerConfigDirVariable+"="); ok {
+		if value, ok := strings.CutPrefix(entry, ProviderHomeVariable+"="); ok {
 			found = value
 		}
 	}
 	if found != want {
-		t.Fatalf("%s = %q on the command, want %q", providerConfigDirVariable, found, want)
+		t.Fatalf("%s = %q on the command, want %q", ProviderHomeVariable, found, want)
 	}
 	if len(command.Env) < 2 {
 		t.Fatalf("the command was given only %d environment entries, so the process environment was replaced rather than added to", len(command.Env))

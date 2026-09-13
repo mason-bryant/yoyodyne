@@ -481,11 +481,19 @@ func renderScaffoldReporting(builder *strings.Builder) {
 // given no sign of the shape is one whose operator has to be told the schema by
 // somebody, and uncommenting is the whole gesture asked for.
 //
-// The example is the development manager's hourly sweep rather than a made-up
-// one, because it is the task this capability was built for and the one a project
-// is most likely to want first. Every line is written so that deleting its
-// leading "# " leaves a valid entry, and a test in this package uncomments the
-// block and loads it to keep that true.
+// The examples are the two standing loops this harness actually needs rather
+// than made-up ones: the development manager's sweep over work that has stopped
+// moving, and the product manager's pass over the collected reports. The second
+// is here because the pile has no other standing reader — every role files into
+// it, only the product manager can record what became of a report, and a project
+// that schedules nothing works the pile only when somebody opens a conversation.
+// That is not a hypothetical: this project reached 564 unhandled reports with
+// the oldest three weeks old before the pass existed to be configured.
+//
+// They are still commented out and still off, because what is woken and how
+// often is the project's decision and not this file's. Every line is written so
+// that deleting its leading "# " leaves a valid entry, and a test in this package
+// uncomments the block and loads both tasks to keep that true.
 //
 // What is deliberately absent from the schema is said in the comment rather than
 // left to be discovered: there is no key here for a capability, a tool, or an
@@ -526,6 +534,25 @@ func renderScaffoldRecurring(builder *strings.Builder) {
 #       cause in place is a repair you will make again next hour.
 #       When the harness is healthy this finds nothing, and that is the report.
 #       A sweep that keeps finding things is itself the signal: say so.
+#   report-triage:
+#     role: product-manager
+#     every: 1h
+#     enabled: true
+#     max_turns: 4
+#     prompt: |
+#       Work the collected reports. Every role files what it noticed into one
+#       pile and you are the only role that can record what became of one, so
+#       a pile nobody wakes you for is a pile nothing drains.
+#       The unhandled ones are carried into this turn already, oldest first
+#       with anything critical ahead of them, resuming where the last turn
+#       stopped. Decide about every one you are shown and record each decision
+#       with the "handle" action -- work to admit, a proposal to make, a
+#       question to raise, or that it needs nothing. Check anything you would
+#       admit against the work already admitted first.
+#       Say in your summary how many you decided and how many are still behind
+#       them, and keep the findings for what was worth more than a handling.
+#       A pass with more of the pile than one turn holds says so and takes
+#       another. When nothing is unhandled, that is the report.
 `)
 }
 
@@ -711,8 +738,11 @@ func renderScaffoldAccounts(builder *strings.Builder, effective Config) {
 # A second entry pools the work: active accounts are round-robined a run at a
 # time, a reserved one is served from only when no active account can be, and
 # weekly_budget_usd stands an account down once the runs that named it have cost
-# that much over seven days. bin/yoyo-account signs a second account in and
-# prints the entry for it; docs/configuration.md#provider-accounts has the rest.
+# that much over seven days. A pooled account has a provider home of its own, so
+# an entry whose home is not a Claude Code login says whose it is with
+# provider: -- an agent is only ever served by an account that can sign its
+# provider in. bin/yoyo-account signs a second account in and prints the entry
+# for it; docs/configuration.md#provider-accounts has the rest.
 accounts:
 `)
 	for _, alias := range effective.AccountAliases() {

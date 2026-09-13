@@ -333,6 +333,13 @@ func (c TriageCounters) RoundsUncommitted(limit int) int {
 	return 0
 }
 
+// GrantOutstanding reports a repair grant recorded whose rounds the item has not
+// spent yet, which is what says a granted repair has not been carried out: a
+// grant is spendable from the moment it is written and turns into counted rounds
+// as the attempts it bought are judged, so the two figures differ exactly while
+// the grant is waiting to be acted on.
+func (c TriageCounters) GrantOutstanding() bool { return c.CommittedRounds > c.ReviewRounds }
+
 // committed is what this item has cost or what it stands committed to,
 // whichever is greater. The two are not added: a grant's rounds turn into
 // counted rounds as the attempts it bought are judged, so a sum would charge a

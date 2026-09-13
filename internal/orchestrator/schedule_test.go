@@ -2304,6 +2304,12 @@ type scheduleHarness struct {
 	// only where a test asks for it; without it a pull holds every blocked item,
 	// which is what every other test here means.
 	stoppages readmodel.Stoppages
+	// decisions is what triage has already decided about the items those
+	// stoppages belong to, which is what separates a held item waiting on the
+	// development manager from one waiting on the harness carrying her decision
+	// out. A pull wired without one passes every held item over as one nobody has
+	// decided about, which is what every other test here means.
+	decisions readmodel.Decisions
 	// escalate stands in for putting stopped work to the development manager,
 	// with the number of passes already made. A pull is wired with one only where
 	// a test asks for it, so every other test's pass is what it always was.
@@ -2318,6 +2324,13 @@ type scheduleHarness struct {
 	routeErr   error
 	docketed   []string
 	unroutable bool
+	// attempts is every dispatch that never became a run this harness was asked to
+	// record, and attemptErr is a docket that refuses the write. They are separate
+	// from the unready routing above because they describe the opposite thing: one
+	// is an item nothing was spent on, and this is a start that was made and left
+	// nothing behind.
+	attempts   []UnstartedAttempt
+	attemptErr error
 	// fire stands in for waking a role on its cadence, with the number of passes
 	// already made. A pull is wired with one only where a test asks for it, so
 	// every other test's pass is a project that has scheduled nothing — which is
@@ -2418,7 +2431,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	}
 	h.mu.Lock()
 	blockedRuns := h.blockedRuns
-	stoppages := h.stoppages
+	stoppages, decisions := h.stoppages, h.decisions
 	var escalations ScheduleEscalations
 	if h.escalate != nil {
 		escalations = h
@@ -2432,13 +2445,18 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	h.mu.Unlock()
 	h.mu.Lock()
 	tree := h.tree
+	// The docket is wired whether or not a tree is, because the two things it
+	// records are found at different moments: an unready item is found by reading
+	// the tree, and a dispatch that never became a run is found by making one. A
+	// pull that carries no docket at all is what `unroutable` asks for.
 	var docket ScheduleTriage
-	if tree != nil && !h.unroutable {
+	if !h.unroutable {
 		docket = h
 	}
 	h.mu.Unlock()
 	return Pull{
-		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h, Stoppages: stoppages,
+		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
+		Stoppages: stoppages, Decisions: decisions,
 		Capacity: capacity, Start: h.start, Escalations: escalations,
 		Tree: tree, Triage: docket, Recurring: recurring,
 		// A minute is the shipped interval, and no test spends one: the sleep is
@@ -3763,6 +3781,28 @@ func (h *scheduleHarness) RecordUnreadyItem(item beads.WorkItem, unmet []readine
 	return true, nil
 }
 
+// RecordUnstartedAttempt stands in for docketing a dispatch that failed before
+// any run record existed, and keeps what it was handed so a test can say what the
+// durable record would hold.
+func (h *scheduleHarness) RecordUnstartedAttempt(attempt UnstartedAttempt) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.attemptErr != nil {
+		return false, h.attemptErr
+	}
+	h.attempts = append(h.attempts, attempt)
+	return true, nil
+}
+
+// recordedAttempts is what this harness was asked to docket, read under the lock
+// because the session records them from its own goroutine while a test reads
+// them from another.
+func (h *scheduleHarness) recordedAttempts() []UnstartedAttempt {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]UnstartedAttempt(nil), h.attempts...)
+}
+
 // citingTree is the tree as a test says it stands: the symbols it declares and
 // the files it has, and nothing else. It is a stand-in rather than a checkout
 // because what these tests are about is what the scheduler does with the answer;
@@ -3983,4 +4023,338 @@ func TestAnUnreadyItemWithNowhereToRouteIsStillNotDispatched(t *testing.T) {
 	if !strings.Contains(schedule.ReadinessProblem, "nowhere durable") {
 		t.Fatalf("readiness problem = %q, want the missing record reported", schedule.ReadinessProblem)
 	}
+}
+
+// The 2026-09-07 shape, from the pull that records it. Two items are held and
+// neither is a wait for anything, and that is where they stop resembling each
+// other: one stoppage nobody has decided about is the development manager's, and
+// one she decided days ago is the harness's to carry out. Recording both as one
+// class is what made thirty-three already-decided items read as a decision
+// backlog for days.
+func TestAPollPassesADecidedStoppageOverSeparatelyFromAnUndecidedOne(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	harness := newScheduleHarness(
+		beads.WorkItem{ID: "yoyodyne-ifd.150", Title: "Decided days ago", Status: "blocked", Priority: 1},
+		beads.WorkItem{ID: "yoyodyne-ifd.151", Title: "Nobody has decided", Status: "blocked", Priority: 2},
+	)
+	harness.stoppages = heldStoppages{runs: []runstate.State{
+		stoppedRunOf("run-aaaa1111", "yoyodyne-ifd.150", stopped),
+		stoppedRunOf("run-bbbb2222", "yoyodyne-ifd.151", stopped),
+	}}
+	harness.decisions = decidedItems{"yoyodyne-ifd.150": {
+		Decisions: []runstate.TriageDecision{{
+			Decision: runstate.TriageDecisionRerun, RunID: "run-aaaa1111",
+		}},
+	}}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	if _, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}).
+		Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	idle, recorded := sessions.entered(runstate.WatchIdle)
+	if !recorded {
+		t.Fatal("no idle transition was recorded, so nothing said what the poll found")
+	}
+	want := runstate.PassedOver{Admitted: 2, Groups: []runstate.PassedOverGroup{
+		{Class: runstate.PassedOverAwaitingCarryOut, Count: 1, Items: []string{"yoyodyne-ifd.150"}},
+		{Class: runstate.PassedOverAwaitingDecision, Count: 1, Items: []string{"yoyodyne-ifd.151"}},
+	}}
+	if !reflect.DeepEqual(idle.passedOver, want) {
+		t.Fatalf("idle passed over = %+v, want %+v", idle.passedOver, want)
+	}
+	// And the prose the same poll writes says which is which, so the log reads the
+	// way the classes do.
+	for _, said := range []string{
+		"awaiting carry-out of a decision (yoyodyne-ifd.150)",
+		"awaiting a decision (yoyodyne-ifd.151)",
+	} {
+		if !strings.Contains(idle.reason, said) {
+			t.Fatalf("idle reason = %q, want it to say %q", idle.reason, said)
+		}
+	}
+}
+
+// heldStoppages is the harness's own record of the work it stopped, for the
+// tests that need a held queue rather than a blocked one.
+type heldStoppages struct {
+	runs []runstate.State
+}
+
+func (h heldStoppages) Recorded() ([]runstate.State, error) { return h.runs, nil }
+
+func (h heldStoppages) Escalated() ([]runstate.Escalation, error) { return nil, nil }
+
+// decidedItems is one item's triage record for the items it names, and the
+// empty record every other item actually stands at.
+type decidedItems map[string]runstate.TriageCounters
+
+func (d decidedItems) Counters(workItemID string) (runstate.TriageCounters, error) {
+	return d[workItemID], nil
+}
+
+// stoppedRunOf is a run that stopped on a durable blocker and left its change
+// behind, which is the shape that holds an item for a person.
+func stoppedRunOf(runID, workItemID string, stopped time.Time) runstate.State {
+	return runstate.State{
+		RunID:        runID,
+		WorkItemID:   workItemID,
+		Status:       runstate.StatusFailed,
+		UpdatedAt:    stopped,
+		Branch:       "yoyodyne/" + workItemID + "/" + runID,
+		WorktreePath: "/state/worktrees/" + runID,
+		Blocker:      "Yoyodyne stopped this item: its independent reviewer still required repair after every permitted attempt.",
+	}
+}
+
+// The 06:25Z shape of 2026-09-13, replayed: a watch session pulls two items four
+// hours into a returned capacity window, both dispatches fail before anything
+// reserves a run, and the session then excludes both for the rest of its life.
+//
+// What it left then was nothing. The runs directory had not been written to in
+// five days, the two items were passed over as "already tried this session" with
+// no reason against them, and the queue behind them — seventy-four items — sat
+// idle until a person noticed. So the replay has to leave three things: a
+// durable record of both attempts and what stopped them, an exclusion list that
+// names its reasons, and a session log a sweep can read the two failures from
+// rather than seeing nothing at all.
+func TestAnAttemptThatDiesBeforeItsRunRecordStillRecordsWhatHappened(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.353", "yoyodyne-ifd.354")...)
+	harness.capacity = 2
+	// A dispatch that dies before the reservation: the pipeline returns no run at
+	// all, only the failure, and touches nothing in the tracker.
+	harness.run = func(_ *scheduleHarness, id string) (Outcome, error) {
+		return Outcome{}, errors.New("repository is not ready for an isolated run: the primary checkout has uncommitted changes")
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}.
+		Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %#v, want both attempts on the pass", schedule.Started)
+	}
+	for _, started := range schedule.Started {
+		if started.Failure == "" || started.Outcome.RunID != "" {
+			t.Fatalf("started = %+v, want an attempt that failed with no run behind it", started)
+		}
+	}
+	if schedule.AttemptProblem != "" {
+		t.Fatalf("attempt problem = %q, want both attempts recorded without one", schedule.AttemptProblem)
+	}
+
+	// (1) The durable record: both attempts, each saying what was tried, why it was
+	// chosen, what stopped it, and that the session will not try it again.
+	attempts := harness.recordedAttempts()
+	if len(attempts) != 2 {
+		t.Fatalf("recorded attempts = %+v, want both dispatches docketed", attempts)
+	}
+	recorded := map[string]UnstartedAttempt{}
+	for _, attempt := range attempts {
+		recorded[attempt.WorkItemID] = attempt
+	}
+	for _, id := range []string{"yoyodyne-ifd.353", "yoyodyne-ifd.354"} {
+		attempt, found := recorded[id]
+		if !found {
+			t.Fatalf("recorded attempts = %+v, want %s among them", attempts, id)
+		}
+		if attempt.WorkItemTitle != id {
+			t.Fatalf("attempt = %+v, want the item's title carried, since nothing else will say what was tried", attempt)
+		}
+		if !strings.Contains(attempt.Failure, "uncommitted changes") {
+			t.Fatalf("attempt = %+v, want the failure that stopped the dispatch", attempt)
+		}
+		if attempt.SelectedBecause == "" || attempt.SelectedBecause != harness.selections[id].Reason {
+			t.Fatalf("attempt = %+v, want the selection reason the run record would have carried", attempt)
+		}
+		if !attempt.ExcludedForTheSession {
+			t.Fatalf("attempt = %+v, want the session-long exclusion said out loud", attempt)
+		}
+	}
+
+	// (2) The exclusion list names its reasons: the poll that passed both over
+	// says, against each item, that the dispatch failed before a run was recorded
+	// and where the record of that now is.
+	// The last idle poll rather than the first: the session says a start is in
+	// flight until it ends, and what this is about is what it says once both have.
+	idle, found := lastEntered(sessions, runstate.WatchIdle)
+	if !found {
+		t.Fatal("no idle transition was recorded, so nothing said what the session found")
+	}
+	if len(idle.passedOver.Groups) != 1 || idle.passedOver.Groups[0].Class != runstate.PassedOverAlreadyTried {
+		t.Fatalf("idle passed over = %+v, want the two items passed over as already tried", idle.passedOver)
+	}
+	tried := idle.passedOver.Groups[0]
+	if tried.Count != 2 || len(tried.Items) != 2 || len(tried.Reasons) != 2 {
+		t.Fatalf("already-tried group = %+v, want both items named with a reason against each", tried)
+	}
+	for index, reason := range tried.Reasons {
+		for _, want := range []string{
+			"the dispatch failed before any run was recorded",
+			"uncommitted changes",
+			"docket",
+		} {
+			if !strings.Contains(reason, want) {
+				t.Fatalf("reason for %s = %q, want it to say %q", tried.Items[index], reason, want)
+			}
+		}
+	}
+	// And the same account in words, which is what an operator reading the log
+	// sees: each item, and beside it what excluded it.
+	for _, id := range []string{"yoyodyne-ifd.353", "yoyodyne-ifd.354"} {
+		if !strings.Contains(idle.reason, id+" — this session tried it and the dispatch failed before any run was recorded") {
+			t.Fatalf("idle reason = %q, want %s named with what excluded it", idle.reason, id)
+		}
+	}
+}
+
+// A docket that refuses the write does not lose the session's own account, and
+// the refusal is said rather than reported as a record that was made: the
+// exclusion says the session's log is all there is, and the pass names the
+// dispatch nothing outside the session recorded.
+func TestAnAttemptThatCannotBeDocketedSaysSo(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.353")...)
+	harness.attemptErr = errors.New("the docket is unwritable")
+	harness.run = func(_ *scheduleHarness, id string) (Outcome, error) {
+		return Outcome{}, errors.New("the claude-code backend is not installed")
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}.
+		Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	for _, want := range []string{"yoyodyne-ifd.353", "never became a run", "the docket is unwritable"} {
+		if !strings.Contains(schedule.AttemptProblem, want) {
+			t.Fatalf("attempt problem = %q, want it to say %q", schedule.AttemptProblem, want)
+		}
+	}
+	if !strings.Contains(schedule.Render(), schedule.AttemptProblem) {
+		t.Fatalf("rendered schedule does not carry the attempt problem:\n%s", schedule.Render())
+	}
+	idle, found := sessions.entered(runstate.WatchIdle)
+	if !found {
+		t.Fatal("no idle transition was recorded")
+	}
+	if len(idle.passedOver.Groups) != 1 || len(idle.passedOver.Groups[0].Reasons) != 1 {
+		t.Fatalf("idle passed over = %+v, want the one item passed over with a reason", idle.passedOver)
+	}
+	reason := idle.passedOver.Groups[0].Reasons[0]
+	for _, want := range []string{"not installed", "could not be recorded on the docket", "this is the only account of it"} {
+		if !strings.Contains(reason, want) {
+			t.Fatalf("reason = %q, want it to say %q", reason, want)
+		}
+	}
+}
+
+// A pull wired with no docket at all still says what became of the attempt, and
+// says that nothing outside the session recorded it. This is the shape from
+// before the docket was wired into a pull, and it is the one that must not read
+// as a record having been made.
+func TestAnAttemptWithNothingWiredToRecordItIsStillAccountedFor(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.353")...)
+	harness.unroutable = true
+	harness.run = func(_ *scheduleHarness, id string) (Outcome, error) {
+		return Outcome{}, errors.New("the claude-code backend is not installed")
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}.
+		Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if !strings.Contains(schedule.AttemptProblem, "nothing was wired to docket it") {
+		t.Fatalf("attempt problem = %q, want the missing docket named", schedule.AttemptProblem)
+	}
+	idle, found := sessions.entered(runstate.WatchIdle)
+	if !found {
+		t.Fatal("no idle transition was recorded")
+	}
+	if reason := idle.passedOver.Groups[0].Reasons[0]; !strings.Contains(reason, "nothing was wired to record that durably") {
+		t.Fatalf("reason = %q, want it to say this is the only account of it", reason)
+	}
+}
+
+// Every ending an exclusion can have says what it is, so an item passed over as
+// already tried never reads as a bare exclusion whatever became of the start.
+func TestAnExclusionSaysWhatBecameOfTheStart(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		started Started
+		want    string
+	}{
+		{
+			name:    "the work went to another process",
+			started: Started{Declined: "another process is already running it"},
+			want:    "went to another process: another process is already running it",
+		},
+		{
+			name:    "the dispatch failed before a run was recorded",
+			started: Started{Failure: "the backend is not installed"},
+			want:    "failed before any run was recorded: the backend is not installed",
+		},
+		{
+			name:    "the dispatch stopped short of a run and is owed a continuation",
+			started: Started{Outcome: Outcome{Paused: true}},
+			want:    "paused and owed a continuation",
+		},
+		{
+			name:    "the run failed",
+			started: Started{Failure: "the push was refused", Outcome: Outcome{RunID: "run-1"}},
+			want:    "run run-1 failed: the push was refused",
+		},
+		{
+			name:    "the run stopped on a blocker",
+			started: Started{Outcome: Outcome{RunID: "run-1", Blocked: true}},
+			want:    "run run-1 stopped on a durable blocker",
+		},
+		{
+			name:    "the run is paused",
+			started: Started{Outcome: Outcome{RunID: "run-1", Paused: true}},
+			want:    "run run-1 is paused",
+		},
+		{
+			name:    "the run ended",
+			started: Started{Outcome: Outcome{RunID: "run-1", Status: runstate.StatusSucceeded}},
+			want:    "run run-1 ended succeeded",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := excludedBecause(test.started); !strings.Contains(got, test.want) {
+				t.Fatalf("excludedBecause() = %q, want it to say %q", got, test.want)
+			}
+		})
+	}
+}
+
+// lastEntered is the last transition recorded into a state, for a test about
+// what a session says once everything it started has ended.
+func lastEntered(sessions *recordedSessions, state runstate.WatchState) (recordedTransition, bool) {
+	var last recordedTransition
+	found := false
+	for _, transition := range sessions.recorded() {
+		if transition.state == state {
+			last, found = transition, true
+		}
+	}
+	return last, found
 }

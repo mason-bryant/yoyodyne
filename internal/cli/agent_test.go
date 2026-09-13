@@ -494,3 +494,40 @@ func TestAgentListReportsSiblingAgentsSeparately(t *testing.T) {
 		t.Fatalf("the sibling was reported as having had a conversation: %#v", house.Conversation)
 	}
 }
+
+// What an operator is told about an alternate that leaves the provider. Both
+// halves have to be there: a crossing rebuilds the conversation from the record
+// rather than resuming a session, and it covers conversation turns and nothing
+// else — an exchange round and a side turn are answered on the endpoint the agent
+// is configured for and have no crossing to take, so an unqualified line would be
+// a promise those two paths do not keep.
+func TestAgentSaysWhatACrossingCoversAndWhatItCosts(t *testing.T) {
+	crossing := renderAgent(agentReport{
+		Name: "development-manager", Role: domain.RoleDevelopmentManager,
+		Backend: domain.BackendClaudeCode, Model: "fable", Instances: 1,
+		FailoverModel: "gpt-5-codex", FailoverProvider: domain.BackendCodex,
+	})
+	for _, want := range []string{
+		"conversation turns served by gpt-5-codex on codex",
+		"rebuilding context from the record rather than resuming a session",
+		"exchange rounds, side threads, and run invocations wait it out",
+	} {
+		if !strings.Contains(crossing, want) {
+			t.Fatalf("agent line = %q, which does not say %q", crossing, want)
+		}
+	}
+
+	// An alternate on the agent's own provider is the promise it always was, and
+	// still covers the rounds another role asks it.
+	within := renderAgent(agentReport{
+		Name: "development-manager", Role: domain.RoleDevelopmentManager,
+		Backend: domain.BackendClaudeCode, Model: "fable", Instances: 1,
+		FailoverModel: "opus",
+	})
+	if !strings.Contains(within, "turns and exchange rounds served by opus while fable has no capacity") {
+		t.Fatalf("agent line = %q, want the within-provider alternate said as it always was", within)
+	}
+	if strings.Contains(within, "rebuilding context") {
+		t.Fatalf("agent line = %q, which claims a rebuild for a substitution that resumes its own session", within)
+	}
+}

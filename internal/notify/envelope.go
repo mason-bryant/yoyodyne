@@ -646,7 +646,7 @@ type Detail struct {
 	//
 	// It is read a third time by KindStallNoticed, where it is the dominant thing
 	// accounting for a queue nothing is being pulled from — "33 of the 47 admitted
-	// items are held for a person, waiting on triage decisions". It is carried
+	// items are awaiting carry-out of decisions already recorded". It is carried
 	// already worded, for the reason Standing is: the accounting is derived once
 	// from what the last poll recorded, and a surface that worded it again could
 	// come to say a different thing about one queue than the session's own idle

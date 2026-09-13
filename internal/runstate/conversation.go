@@ -18,6 +18,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // ConversationSchemaVersion is versioned independently of run state. A
@@ -178,6 +179,14 @@ type Conversation struct {
 	// rather than lost — which is the right way for this to fail, because the
 	// failure it must never have is a report nobody is ever shown.
 	DeliveredReportIDs []string `json:"delivered_report_ids,omitempty"`
+	// ReportPosition is how far through the collected pile, in the order it was
+	// filed, this conversation has been carried. The ids above say what it
+	// remembers being shown and this says where it got to, and the pile needs both:
+	// the record is bounded and a pile of hundreds outgrows it, so a delivery
+	// paced by the ids alone re-offers the same worst-first handful forever and
+	// never reaches what was filed behind them. It is empty on a conversation that
+	// has been shown nothing, which is the beginning of the pile.
+	ReportPosition report.Position `json:"report_position,omitempty"`
 	// PendingProposals are the work items an agent proposed that nobody has
 	// decided yet. They are durable for the reason the provider session is, and
 	// the reason is sharper here than anywhere else in this record: a proposal

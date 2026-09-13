@@ -88,3 +88,38 @@ func TestTheBriefRenderingKeepsThePausedBanner(t *testing.T) {
 		t.Fatalf("the lines alone open with the banner, want it left to the caller that says it once")
 	}
 }
+
+// The 2026-09-07 shape, in the message that arrives on its own. The head is the
+// whole of what a brief rendering carries, so a distinction only the entries
+// made would be invisible in exactly the message that woke somebody — and one
+// figure covering both is what sent his attention to a development manager who
+// had decided every one of them.
+func TestTheNotStartableHeadSplitsHeldWorkByWhoseMoveItIs(t *testing.T) {
+	t.Parallel()
+
+	standing := Standing{
+		Admitted:         47,
+		AwaitingDecision: 18,
+		AwaitingCarryOut: 15,
+		NotStartable:     make([]Refused, 33),
+	}
+	head := "Not startable (33 of 47 admitted items; 18 await the development manager's decision, 15 await the harness carrying out a decision already recorded)"
+	if brief := standing.RenderBrief(); !strings.Contains(brief, head+"\n") {
+		t.Fatalf("brief:\n%s\nmissing: %q", brief, head)
+	}
+	if full := standing.Render(); !strings.Contains(full, head+":\n") {
+		t.Fatalf("rendered:\n%s\nmissing: %q", full, head)
+	}
+}
+
+// A queue held by dependencies and directives says nothing about triage at all.
+// A clause announcing that neither kind is present is one every reader learns to
+// skip, and the head is the line that has to stay a line.
+func TestTheNotStartableHeadSaysNothingAboutHeldWorkWhereThereIsNone(t *testing.T) {
+	t.Parallel()
+
+	standing := Standing{Admitted: 3, NotStartable: []Refused{{WorkItemID: "yoyodyne-ifd.200", Reason: "waiting on yoyodyne-ifd.199"}}}
+	if rendered := standing.Render(); !strings.Contains(rendered, "Not startable (1 of 3 admitted items):\n") {
+		t.Fatalf("rendered:\n%s\nwant the plain head", rendered)
+	}
+}

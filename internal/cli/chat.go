@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
@@ -381,7 +382,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// whether the backend the agent named resolves to one — which a provider the
 	// project declared does, and a backend nothing can launch does not.
 	if !providerRuns(cfg, agent.Backend) {
-		return nil, nil, fmt.Errorf("a conversation requires a claude-code agent, and the %s agent %s is configured for %q", role, name, agent.Backend)
+		return nil, nil, fmt.Errorf("a conversation requires an agent on a backend this build can launch, and the %s agent %s is configured for %q", role, name, agent.Backend)
 	}
 	if err := config.ValidateModelSelector(agent.Model); err != nil {
 		return nil, nil, fmt.Errorf("%s agent %s %s", role, name, err)
@@ -400,18 +401,22 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// executable, and its dialect — and then pointed at the account's own
 	// provider home. The two are separate decisions: which provider runs the
 	// agent is the project's, and which login it runs under is this machine's.
-	provider := providerBackend(cfg, agent.Backend, processRunner)
-	provider.ConfigDir = account.Directory
+	provider := providerBackendIn(cfg, agent.Backend, processRunner, account.Directory)
 	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
+	// The refusals name the backend the agent is configured for rather than one
+	// provider for all of them. The login they hand back is Claude Code's, and
+	// that is not a gap: the three roles a conversation is held with are the
+	// management roles, and Codex serves neither of them, so every agent that
+	// reaches here runs on the Claude Code adapter.
 	if !availability.Installed {
-		return nil, nil, errors.New("Claude Code is not installed")
+		return nil, nil, fmt.Errorf("the %s backend is not installed", agent.Backend)
 	}
 	if !availability.Authenticated {
-		return nil, nil, fmt.Errorf("Claude Code is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
-			account.Alias, accountLoginCommand(account), availability.AuthMethod)
+		return nil, nil, fmt.Errorf("the %s backend is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
+			agent.Backend, account.Alias, accountLoginCommand(cfg, agent.Backend, account), availability.AuthMethod)
 	}
 
 	store, err := runstate.NewConversationStore(parts.stateRoot, cfg.Product.ID)
@@ -454,6 +459,13 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	for _, problem := range goals.Problems {
 		fmt.Fprintf(stderr, "warning: goals not read: %s\n", problem)
 	}
+
+	// Where this agent's turn goes if its own endpoint has no capacity, resolved
+	// here because resolving it needs the configuration, the provider registry, and
+	// the account homes — none of which a conversation is given. An agent that
+	// named no alternate provider resolves to nothing at all, which is failover
+	// within its own provider behaving exactly as it did.
+	failover := conversationFailover(cfg, parts.stateRoot, name, processRunner, stderr)
 
 	ground := newConversationGround(parts, role)
 	briefing, err := ground.Gather(ctx)
@@ -571,10 +583,22 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		ModelVersion: cfg.AgentModelVersion(name),
 		// The one alternate this agent's turn may be served by while the model above
 		// has no capacity, empty for every agent that has not enabled failover. It
-		// is read from the agent's own block for the reason its account is: which
-		// models a persona is interchangeable across is the operator's judgement,
+		// belongs to the agent's own block for the reason its account does: which
+		// endpoints a persona is interchangeable across is the operator's judgement,
 		// stated per agent rather than derived from the role.
-		FailoverModel: cfg.AgentFailoverModel(name),
+		//
+		// All four come from one resolution, because they are one answer. Where the
+		// alternate is on this conversation's own provider the last three are empty
+		// and the model is asked of the provider already serving it; where it is on
+		// another they travel together, since a crossing needs the endpoint, the
+		// adapter that reaches it, and the home it authenticates in or it is a turn
+		// sent somewhere it cannot be answered from. And where a crossing would not
+		// resolve, all four are empty: a model without the endpoint it belongs to is
+		// a selector this conversation's own provider has never heard of.
+		FailoverModel:            failover.model,
+		FailoverEndpoint:         failover.endpoint,
+		FailoverBackend:          failover.backend,
+		FailoverAccountConfigDir: failover.configDir,
 		// And how long a refusal that named no reset time stands before the
 		// configured model is asked again, which is the same interval a run probes
 		// one on. Without it the conversation would re-ask an exhausted model every
@@ -614,7 +638,80 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 // agent's is the only alias that is true of the conversation. It is the same
 // resolution the answering half of an exchange makes for the same reason.
 func conversationAccount(cfg config.Config, stateRoot, agentName string) (config.AccountEndpoint, error) {
-	return cfg.Endpoint(stateRoot, cfg.AgentAccountAlias(agentName))
+	return cfg.AgentAccountEndpoint(stateRoot, agentName)
+}
+
+// conversationAlternate is the whole of what one conversation may be served by
+// when the endpoint it is held on has no capacity: the model its turn may ask
+// for, and — where that model is on another provider — the endpoint, the adapter
+// that reaches it, and the provider home it authenticates in.
+//
+// The model is here rather than read separately because the two halves are one
+// answer. A model without the endpoint that serves it is a selector belonging to
+// somewhere else, handed to the provider whose window just closed; a conversation
+// given that would meet, at the moment the fallback existed to save its turn, the
+// unknown-selector failure the fallback was supposed to prevent. So one function
+// answers both, and the zero value is failover off.
+type conversationAlternate struct {
+	model     string
+	endpoint  backend.Endpoint
+	backend   backend.Backend
+	configDir string
+}
+
+// conversationFailover resolves that alternate for one agent.
+//
+// A failover that will not resolve is a warning rather than a refusal, and that
+// is the whole of the choice: what it costs is failover for this conversation,
+// and refusing to open it would spend a working provider on a fallback nobody has
+// needed yet. What it never costs is a substitution onto the wrong endpoint — a
+// crossing that did not resolve leaves this conversation with no alternate at
+// all, rather than with the alternate's model and none of the rest of it. The
+// warning says so, so an operator who configured a crossing is told it is not one
+// rather than finding out at the moment a window closes.
+func conversationFailover(cfg config.Config, stateRoot, agentName string, runner execution.ProcessRunner, stderr io.Writer) conversationAlternate {
+	agent := cfg.Agents[strings.TrimSpace(agentName)]
+	if !agent.Failover.CrossesProviders(agent.Backend) {
+		// Another model on the provider this conversation is already on, which needs
+		// no second adapter and no second home: the turn is made through the one it
+		// was already being made through, and there is nothing to resolve.
+		return conversationAlternate{model: cfg.AgentFailoverModel(agentName)}
+	}
+	providers := providerRegistry(cfg)
+	if providers == nil {
+		return unresolvedCrossing(stderr, agentName,
+			errors.New("this project's declared providers would not build"))
+	}
+	choice, crosses, err := cfg.AgentFailoverEndpoint(providers, stateRoot, agentName)
+	if err != nil {
+		return unresolvedCrossing(stderr, agentName, err)
+	}
+	if !crosses {
+		// The block names a provider and has failover switched off, which is the
+		// operator keeping a choice rather than making one. Nothing is unresolved and
+		// nothing is warned about.
+		return conversationAlternate{}
+	}
+	if choice.Endpoint.Provider == agent.Backend {
+		return conversationAlternate{model: choice.Endpoint.Model}
+	}
+	return conversationAlternate{
+		model:     choice.Endpoint.Model,
+		endpoint:  choice.Endpoint,
+		backend:   providerBackendIn(cfg, choice.Endpoint.Provider, runner, choice.Account.Directory),
+		configDir: choice.Account.Directory,
+	}
+}
+
+// unresolvedCrossing is a crossing this conversation cannot make, said out loud
+// and then not made at all. Handing back the alternate's model without the
+// endpoint it belongs to would ask this conversation's own provider for a model
+// that is somewhere else, so what is handed back is nothing.
+func unresolvedCrossing(stderr io.Writer, agentName string, reason error) conversationAlternate {
+	fmt.Fprintf(stderr,
+		"warning: agent %q fails over onto another provider and that endpoint could not be resolved, so this conversation cannot fail over at all: %v\n",
+		agentName, reason)
+	return conversationAlternate{}
 }
 
 // conversationAgent picks the agent a conversation is actually held with, and

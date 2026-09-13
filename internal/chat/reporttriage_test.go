@@ -12,6 +12,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,68 @@ func TestUnhandledReportsReachTheRoleThatDecidesAboutThem(t *testing.T) {
 	if strings.Contains(provider.requests[1].Prompt, "Reports nobody has decided about") {
 		t.Fatalf("the same reports were delivered twice:\n%s", provider.requests[1].Prompt)
 	}
+}
+
+// The defect the walk exists to fix. A pile deeper than the record of what has
+// been delivered was re-offered from its own top on every turn, so everything
+// filed behind that top was invisible however long it waited — which is how five
+// hundred and sixty-four reports came to be unhandled with the oldest of them
+// three weeks old. A turn now resumes where the last one stopped.
+func TestTheWholePileReachesTheConversationRatherThanItsFirstSlice(t *testing.T) {
+	t.Parallel()
+
+	// Deeper than the bound on the record of what was delivered, which is what
+	// made the old pacing cycle rather than converge.
+	const filed = runstate.MaxDeliveredReportIDs + 40
+	reports := &fakeReports{}
+	for i := 1; i <= filed; i++ {
+		seedReports(t, reports, collectedReport(pileReportID(i), report.SeverityNote,
+			fmt.Sprintf("something was noticed, number %d", i), i))
+	}
+
+	provider := &fakeBackend{}
+	// Enough turns to walk a pile this deep at the budget a deep pile is worked
+	// at, with one spare so the arithmetic does not have to be exact.
+	turns := filed/maxDrainedReports + 2
+	for i := 0; i < turns; i++ {
+		provider.results = append(provider.results, backendapi.RunResult{FinalText: "noted", SessionID: "session-1"})
+	}
+	options := testOptions(t, provider)
+	options.Reports = reports
+	session, err := Open(options)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	offered := map[string]bool{}
+	for i := 0; i < turns; i++ {
+		if _, err := session.Send(context.Background(), "what needs deciding?"); err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+		for number := 1; number <= filed; number++ {
+			if strings.Contains(provider.requests[i].Prompt, pileReportID(number)) {
+				offered[pileReportID(number)] = true
+			}
+		}
+	}
+	if len(offered) != filed {
+		t.Fatalf("%d of %d reports were ever offered; the walk does not reach the whole pile", len(offered), filed)
+	}
+	// The oldest is offered first, which is what makes the age of the oldest thing
+	// nobody has decided about fall rather than climb.
+	if !strings.Contains(provider.requests[0].Prompt, pileReportID(1)) {
+		t.Fatalf("the oldest report was not in the first turn:\n%s", provider.requests[0].Prompt)
+	}
+	// And the pile's own depth is stated rather than left to be inferred from what
+	// one turn happened to carry.
+	if !strings.Contains(provider.requests[0].Prompt, fmt.Sprintf("%d further report(s) are unhandled", filed-maxDrainedReports)) {
+		t.Fatalf("the turn did not say how deep the pile is:\n%s", provider.requests[0].Prompt)
+	}
+}
+
+// pileReportID names one report in a seeded pile by where it sits in it.
+func pileReportID(number int) string {
+	return fmt.Sprintf("report-%032x", number)
 }
 
 // Delivering the pile to a role that cannot record what became of a report gives

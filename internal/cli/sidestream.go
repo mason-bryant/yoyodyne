@@ -236,7 +236,12 @@ func (v sideVoice) noteSideUsageLimit(question sidestream.Question, result backe
 // it, so a substitution is checked against the role's tool posture before it is
 // made rather than after the turn has already moved.
 func (v sideVoice) failoverPolicy(question sidestream.Question, name string, endpoint backend.Endpoint, providers *backend.Registry) modelfailover.Policy {
-	alternate := v.config.AgentFailoverModel(name)
+	// The alternate only where it stays on the provider this side thread is held
+	// on, for the reason an exchange round reads the same answer: a side turn is
+	// made on the agent's own endpoint and has no way to cross, and asking that
+	// provider for another provider's model would fail on a selector nobody there
+	// has heard of.
+	alternate := v.config.AgentFailoverModelWithinProvider(name)
 	if alternate == "" {
 		return modelfailover.Policy{}
 	}

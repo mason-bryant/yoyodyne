@@ -25,6 +25,17 @@ package readmodel
 // this reads stop saying the item is held. An item is released by the facts
 // changing rather than by anything written back over them.
 //
+// # Two holds, two movers
+//
+// A decision being recorded is not the decision being carried out, and until
+// the harness acts the item is held either way. Reporting both as one thing —
+// "held for a person" — is what cost the operator days on 2026-09-07:
+// thirty-three items read as work the development manager owed a decision on
+// while she had decided every one of them, and the gap was the carry-out. So
+// each hold says which of the two it is, read from the item's own durable triage
+// record: a decision standing about the stoppage that holds it is the harness's
+// move, and no decision standing is hers.
+//
 // It lives with the read model rather than beside either caller because the
 // scheduler and every operator surface have to give one answer. A surface that
 // showed an item as pullable while the scheduler held it would be a
@@ -51,15 +62,34 @@ type Stoppages interface {
 	Escalated() ([]runstate.Escalation, error)
 }
 
+// Decisions is the durable per-item record of what triage has decided, which is
+// what says whether a held item is waiting on a decision or on the carrying out
+// of one. It is the record the triage guards spend and refuse against, read
+// rather than re-derived from the runs: a second reading of what has been
+// decided is a second answer, and this one decides which role a surface sends
+// the operator to.
+//
+// It is satisfied by *runstate.TriageStore.
+type Decisions interface {
+	Counters(workItemID string) (runstate.TriageCounters, error)
+}
+
 // HeldForAPerson is the admitted work somebody has to release before anything
-// pulls it, with what each item is waiting for.
+// pulls it, with what each item is waiting for and whose move that is.
 //
 // A reading that fails is an error rather than an empty answer. The zero Holds
 // already means "not read" and holds everything blocked, so a caller that
 // reports the failure and carries on with it loses no safety; what it must not
 // do is treat a failure as "nothing is held", which would release exactly the
 // work this exists to hold.
-func HeldForAPerson(stoppages Stoppages) (backlog.Holds, error) {
+//
+// decisions may be nil, and an item's record may fail to open. Neither costs the
+// hold: the item is held exactly as it was and is reported as one nobody has
+// decided about, with the reason saying that this reading could not tell. That
+// is the conservative direction — it points at the role that would have to
+// decide, which is where the answer went before the two were separated — and it
+// keeps one unreadable file from making a whole queue unpullable.
+func HeldForAPerson(stoppages Stoppages, decisions Decisions) (backlog.Holds, error) {
 	runs, err := stoppages.Recorded()
 	if err != nil {
 		return backlog.Holds{}, fmt.Errorf("read the recorded runs: %w", err)
@@ -68,14 +98,103 @@ func HeldForAPerson(stoppages Stoppages) (backlog.Holds, error) {
 	if err != nil {
 		return backlog.Holds{}, fmt.Errorf("read the escalated stoppages: %w", err)
 	}
-	return heldForAPerson(runs, escalated), nil
+	return heldForAPerson(runs, escalated, standingDecisions(decisions)), nil
+}
+
+// standing is what triage has decided about one item's stoppage: whether a
+// decision the harness carries out stands about it, and what stopped this
+// reading finding out.
+type standing func(workItemID, runID string) (decided bool, problem string)
+
+// standingDecisions reads each item's triage record once, however many of its
+// runs are held: one item's stoppages share one record, and a queue of stopped
+// runs would otherwise open the same file for each of them.
+func standingDecisions(decisions Decisions) standing {
+	if decisions == nil {
+		return func(string, string) (bool, string) {
+			return false, "nothing was wired to read what triage has decided about it"
+		}
+	}
+	read := make(map[string]runstate.TriageCounters)
+	failed := make(map[string]string)
+	return func(workItemID, runID string) (bool, string) {
+		if problem, known := failed[workItemID]; known {
+			return false, problem
+		}
+		counters, seen := read[workItemID]
+		if !seen {
+			opened, err := decisions.Counters(workItemID)
+			if err != nil {
+				problem := fmt.Sprintf("what triage has decided about it could not be read: %v", err)
+				failed[workItemID] = problem
+				return false, problem
+			}
+			read[workItemID], counters = opened, opened
+		}
+		return awaitingCarryOut(counters, runID), ""
+	}
+}
+
+// awaitingCarryOut reports a decision standing about one stoppage that the
+// harness has still to act on.
+//
+// Only the three decisions that buy another attempt are ones the harness
+// carries out. A wait, a re-scope and an escalation are decided and leave the
+// harness nothing to do, so an item still held under one of them is held by
+// what the development manager decided rather than by anything outstanding, and
+// naming the harness as its next mover would send an operator to watch for a run
+// nothing is going to start.
+//
+// A granted repair is asked of the grant rather than of the decision, because a
+// repair continues the run it was granted for: the same run stops again carrying
+// the same decision, so the decision alone would go on claiming a carry-out that
+// has already happened. The grant standing unspent is what actually says it has
+// not.
+//
+// A re-run and a merge re-arm are answered from the decision itself, which is
+// sufficient because carrying either one out changes what this reading is about.
+// A re-run produces a fresh run, and once that run stops it is the latest one the
+// item has, so the hold names it instead and nothing stands recorded about it. A
+// re-arm the forge then honours settles the publication and lifts the hold.
+func awaitingCarryOut(counters runstate.TriageCounters, runID string) bool {
+	decision, decided := counters.DecisionOf(runID)
+	if !decided || !decision.Spends() {
+		return false
+	}
+	if decision.Decision == runstate.TriageDecisionRepair {
+		return counters.GrantOutstanding()
+	}
+	return true
+}
+
+// The clause each hold closes on: whose move follows it. They are two sentences
+// rather than one because they are two people, and they are written once here so
+// that every surface saying a hold says the same words about who releases it.
+const (
+	awaitingDecisionClause = "the development manager decides what happens to it, and nothing pulls it until she has"
+	awaitingCarryOutClause = "the development manager has already decided what happens to it, so what is outstanding is the harness carrying that decision out rather than a decision"
+)
+
+// heldFor is one item's hold: the account of what stopped it, closed by whose
+// move follows. A reading that could not say which of the two it is says so in
+// the reason and reports the decision as unmade, which is where the answer went
+// before the two were told apart.
+func heldFor(account string, decided bool, problem string) backlog.Hold {
+	switch {
+	case problem != "":
+		return backlog.Hold{Reason: account + "; " + problem + ", so this is stated as a stoppage nobody has decided about"}
+	case decided:
+		return backlog.Hold{Reason: account + "; " + awaitingCarryOutClause, Decided: true}
+	default:
+		return backlog.Hold{Reason: account + "; " + awaitingDecisionClause}
+	}
 }
 
 // heldForAPerson is the derivation itself, over records already read. It is
 // separate so the rule can be tested against run and escalation records without
 // a store behind them.
-func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation) backlog.Holds {
-	reasons := make(map[string]string)
+func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, decided standing) backlog.Holds {
+	reasons := make(map[string]backlog.Hold)
 	// The escalations first, so that an item that is both — a stoppage nobody
 	// answered whose change is also still preserved — reads as the preserved one.
 	// Both are true and either would hold it; the preserved change is the one that
@@ -85,7 +204,10 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation) back
 		if escalation.WorkItemID == "" || strings.TrimSpace(escalation.Decision) != "" {
 			continue
 		}
-		reasons[escalation.WorkItemID] = undecidedStoppage(escalation)
+		// Never a carry-out: an escalation with nothing recorded against it is by
+		// construction one nobody has decided, so what it waits on is the decision
+		// itself however much triage has decided about the item's other stoppages.
+		reasons[escalation.WorkItemID] = backlog.Hold{Reason: undecidedStoppage(escalation)}
 	}
 	// A publication the forge never merged next. It holds the item for the same
 	// reason the merged one below does — the work is on the target branch and a
@@ -96,10 +218,12 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation) back
 	for workItemID, run := range latestPerItem(runs, func(run runstate.State) bool {
 		return outstandingPublication(run) && !mergeConfirmed(run)
 	}) {
-		reasons[workItemID] = unmergedPublication(run)
+		carryOut, problem := decided(workItemID, run.RunID)
+		reasons[workItemID] = heldFor(unmergedPublication(run), carryOut, problem)
 	}
 	for workItemID, run := range latestPerItem(runs, preservedStoppage) {
-		reasons[workItemID] = preservedChange(run)
+		carryOut, problem := decided(workItemID, run.RunID)
+		reasons[workItemID] = heldFor(preservedChange(run), carryOut, problem)
 	}
 	// The merged publications last. Only these know the change reached everywhere
 	// it was going, so only these may say there is nothing left to do about it —
@@ -108,7 +232,8 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation) back
 	for workItemID, run := range latestPerItem(runs, func(run runstate.State) bool {
 		return outstandingPublication(run) && mergeConfirmed(run)
 	}) {
-		reasons[workItemID] = mergedPublication(run)
+		carryOut, problem := decided(workItemID, run.RunID)
+		reasons[workItemID] = heldFor(mergedPublication(run), carryOut, problem)
 	}
 	return backlog.ReadHolds(reasons)
 }
@@ -147,9 +272,13 @@ func preservedStoppage(run runstate.State) bool {
 // to pull. It names the run because that is what somebody has to go and look at:
 // the decision is whether to pick the change up, re-run it, or retire it, and
 // none of those is a fresh run started underneath it.
+//
+// It stops short of saying whose move that is, as the two publication accounts
+// below do, because heldFor closes every one of them with the answer the item's
+// own triage record gives.
 func preservedChange(run runstate.State) string {
 	return fmt.Sprintf(
-		"run %s stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; triage decides what happens to it",
+		"run %s stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there",
 		run.RunID)
 }
 
@@ -190,7 +319,7 @@ func mergeConfirmed(run runstate.State) bool {
 // only thing a fresh run could do is find that out again.
 func mergedPublication(run runstate.State) string {
 	return fmt.Sprintf(
-		"run %s integrated its change into %s and the forge merged it, so only the publication is unfinished and there is nothing here to implement; triage decides what settles it",
+		"run %s integrated its change into %s and the forge merged it, so only the publication is unfinished and there is nothing here to implement",
 		run.RunID, run.Integration.TargetBranch)
 }
 
@@ -201,7 +330,7 @@ func mergedPublication(run runstate.State) string {
 // triage decision rather than a developer's.
 func unmergedPublication(run runstate.State) string {
 	return fmt.Sprintf(
-		"run %s integrated its change into %s and the forge has not merged it, so what is outstanding is the publication rather than the work; triage decides what settles it",
+		"run %s integrated its change into %s and the forge has not merged it, so what is outstanding is the publication rather than the work",
 		run.RunID, run.Integration.TargetBranch)
 }
 

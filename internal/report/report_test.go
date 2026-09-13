@@ -189,9 +189,10 @@ func TestCollectedReportsAreRefusedWithoutTheirAttribution(t *testing.T) {
 	}
 }
 
-// The pile is read worst-first by whoever works through it, and a report nobody
-// has decided about is what they are being asked to look at.
-func TestThePileIsReadWorstFirstAndOnlyWhatNobodyHasDecidedAbout(t *testing.T) {
+// What a reader working through the pile is asked to look at is the reports
+// nobody has decided about, in the pile's own order — which is what the walk in
+// pile.go is a position in.
+func TestThePileOffersOnlyWhatNobodyHasDecidedAbout(t *testing.T) {
 	t.Parallel()
 
 	note := piledReport("report-00000000000000000000000000000001", SeverityNote, 1)
@@ -199,22 +200,6 @@ func TestThePileIsReadWorstFirstAndOnlyWhatNobodyHasDecidedAbout(t *testing.T) {
 	warning := piledReport("report-00000000000000000000000000000003", SeverityWarning, 3)
 	newCritical := piledReport("report-00000000000000000000000000000004", SeverityCritical, 4)
 	pile := []Report{note, oldCritical, warning, newCritical}
-
-	ordered := BySeverity(pile)
-	got := []string{ordered[0].ID, ordered[1].ID, ordered[2].ID, ordered[3].ID}
-	// Worst first, and the newest first inside one severity: a bounded listing
-	// then cuts the end nobody minds losing.
-	want := []string{newCritical.ID, oldCritical.ID, warning.ID, note.ID}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("BySeverity() = %v, want %v", got, want)
-		}
-	}
-	// The pile's own order is the order it was reported in, and reading it must
-	// not disturb that.
-	if pile[0].ID != note.ID {
-		t.Fatalf("BySeverity() reordered the pile it was given: %v", pile)
-	}
 
 	handlings := []Handling{testHandling(warning.ID, "already fixed")}
 	open := Unhandled(pile, handlings)

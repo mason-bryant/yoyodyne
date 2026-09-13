@@ -491,3 +491,51 @@ func testWatchTransition(sessionID string, state WatchState, reason string) Watc
 		Reason:        reason,
 	}
 }
+
+// What excluded an item this session already tried survives the session that
+// tried it, against the item it names. It is refused where it could not be read
+// back that way: more reasons than names is an account nothing can attach to an
+// item, and a reason past the bound is a line nobody reads at a glance.
+func TestASessionRecordsWhyItExcludedWhatItAlreadyTried(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	reason := "this session tried it and the dispatch failed before any run was recorded: the checkout is dirty"
+	idle := testWatchTransition(testWatchSessionID, WatchIdle,
+		"2 items passed over, of 74 admitted: already tried this session (yoyodyne-ifd.353 — "+reason+", yoyodyne-ifd.354 — "+reason+")")
+	idle.PassedOver = PassedOver{Admitted: 74, Groups: []PassedOverGroup{{
+		Class:   PassedOverAlreadyTried,
+		Count:   2,
+		Items:   []string{"yoyodyne-ifd.353", "yoyodyne-ifd.354"},
+		Reasons: []string{reason, reason},
+	}}}
+	if err := store.Record(idle); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	recorded, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || len(recorded[0].PassedOver.Groups) != 1 {
+		t.Fatalf("transitions = %#v, want the account back", recorded)
+	}
+	if got := recorded[0].PassedOver.Groups[0].Reasons; len(got) != 2 || got[0] != reason || got[1] != reason {
+		t.Fatalf("reasons = %q, want what excluded each item read back against it", got)
+	}
+
+	unattached := testWatchTransition(testWatchSessionID, WatchIdle, "1 item passed over, of 1 admitted")
+	unattached.PassedOver = PassedOver{Admitted: 1, Groups: []PassedOverGroup{{
+		Class: PassedOverAlreadyTried, Count: 1, Items: []string{"one"}, Reasons: []string{reason, reason},
+	}}}
+	if err := store.Record(unattached); err == nil {
+		t.Fatal("Record() error = nil, want more reasons than named items refused")
+	}
+	unbounded := testWatchTransition(testWatchSessionID, WatchIdle, "1 item passed over, of 1 admitted")
+	unbounded.PassedOver = PassedOver{Admitted: 1, Groups: []PassedOverGroup{{
+		Class: PassedOverAlreadyTried, Count: 1, Items: []string{"one"}, Reasons: []string{strings.Repeat("x", MaxPassedOverReasonBytes+1)},
+	}}}
+	if err := store.Record(unbounded); err == nil {
+		t.Fatal("Record() error = nil, want a reason past the bound refused")
+	}
+}

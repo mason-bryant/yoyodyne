@@ -34,6 +34,8 @@
 package triage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -57,12 +59,13 @@ const CapCleared = math.MaxInt
 // written once and never revised.
 const SchemaVersion = 1
 
-// Class is what stopped. The five are kept apart because they are found
+// Class is what stopped. The six are kept apart because they are found
 // differently and read differently: a stopped run is an event the harness was
 // present for, a stuck publication is a thing that has not happened, which
 // nothing can be present for and only a scan can notice, an unready item is
 // work that never started because the tree does not meet what it asks for, an
-// unstarted run is a dispatch that died before it could take its item, and an
+// unstarted run is a dispatch that died before it could take its item, an
+// unstarted attempt is a dispatch that never became a run at all, and an
 // escalation is a role saying out loud that the item cannot be met at all.
 type Class string
 
@@ -85,6 +88,23 @@ const (
 	// in no surface anybody reads. yoyodyne-ifd.285 was dispatched twenty-nine
 	// times in twenty hours that way.
 	ClassUnstartedRun Class = "unstarted_run"
+	// ClassUnstartedAttempt is a selection that never became a run at all: the
+	// scheduler chose the item and the dispatch failed before anything wrote a run
+	// record for it.
+	//
+	// It is one layer earlier than the class above, and the layer is the whole
+	// distinction. An unstarted run exists — it has an identifier, a record, and a
+	// state somebody can read afterwards — and what it did not do is claim. This
+	// one has none of that: nothing was reserved, so there is no run to name, and
+	// every surface the harness has is built on the run record.
+	//
+	// It exists because that made the failure invisible rather than quiet. On
+	// 2026-09-13 a watch session tried two items four hours into a returned
+	// capacity window, both dispatches failed before either wrote a record, and
+	// the session then excluded both for the rest of its life. Nothing anywhere
+	// said the two had been tried: the runs directory had not been written to in
+	// five days, and the queue behind them was seventy-four items deep.
+	ClassUnstartedAttempt Class = "unstarted_attempt"
 	// ClassEscalation is a developer or a reviewer having said, in the round it
 	// reached, that the work item cannot be met as it stands. It is the one class
 	// that is a judgement rather than an observation, and it is here because the
@@ -111,11 +131,33 @@ const (
 
 func (c Class) Valid() bool {
 	switch c {
-	case ClassStoppedRun, ClassUnstartedRun, ClassEscalation, ClassPublication, ClassUnreadyItem:
+	case ClassStoppedRun, ClassUnstartedRun, ClassUnstartedAttempt, ClassEscalation, ClassPublication, ClassUnreadyItem:
 		return true
 	default:
 		return false
 	}
+}
+
+// Classes is the whole taxonomy, in the order a reader meets them. A caller that
+// has to cover every class reads it from here rather than repeating the list.
+func Classes() []Class {
+	return []Class{
+		ClassStoppedRun,
+		ClassUnstartedRun,
+		ClassUnstartedAttempt,
+		ClassEscalation,
+		ClassPublication,
+		ClassUnreadyItem,
+	}
+}
+
+// Runless reports a class describing work no run record was ever written for.
+// Both of them are made about a dispatch rather than about a change: an item the
+// tree is not ready for was refused before anything was reserved, and an attempt
+// that never became a run died before the reservation it would have been
+// recorded by.
+func (c Class) Runless() bool {
+	return c == ClassUnreadyItem || c == ClassUnstartedAttempt
 }
 
 // Title names a class the way the development manager reads it.
@@ -125,6 +167,8 @@ func (c Class) Title() string {
 		return "stopped run"
 	case ClassUnstartedRun:
 		return "run that died before it started"
+	case ClassUnstartedAttempt:
+		return "attempt that never became a run"
 	case ClassEscalation:
 		return "item raised as unmeetable"
 	case ClassPublication:
@@ -308,6 +352,27 @@ func (u Unready) Kinds() []string {
 	return kinds
 }
 
+// Attempt is what the harness was doing when a dispatch failed before any run
+// record existed: which item it had chosen, and why it chose it. The failure
+// itself is on the entry, in the field every other death records it in.
+//
+// Why it was chosen is the half that would otherwise be lost outright. Every
+// other selection the harness makes is written onto the run record it starts, so
+// an attempt that never reserved one is the only place in the harness where the
+// reason a thing was picked has nowhere to live — and it is exactly what somebody
+// asking "why was this tried at all" goes looking for.
+type Attempt struct {
+	// SelectedBecause is the selection reason the scheduler recorded, in the same
+	// words it would have written onto the run.
+	SelectedBecause string `json:"selected_because"`
+	// ExcludedForTheSession says the session that made this attempt will not try
+	// the item again until the item changes. It is on the entry because it is the
+	// other half of what the operator needs: an attempt that failed is one fact,
+	// and a queue that will not be pulled again behind it is the one that idles a
+	// line.
+	ExcludedForTheSession bool `json:"excluded_for_the_session,omitempty"`
+}
+
 // Escalation is a role's judgement that the work item cannot be met as it
 // stands, as the run recorded it. It is the whole content of the one class that
 // carries a judgement: what it asks the development manager for is a decision
@@ -408,6 +473,17 @@ func (o Override) Describe() string {
 // than a repeat of this one.
 func (c Counters) Decided() bool { return c.Reruns > c.RerunsCarriedOut }
 
+// AwaitingCarryOut reports a decision recorded about this item that the harness
+// has still to act on, whichever of the two it is: a re-run nothing has claimed,
+// or a repair grant whose rounds are unspent.
+//
+// It is the question the whole docket was failing to answer separately. An entry
+// says a stoppage happened, and until now nothing on it said whether what it was
+// waiting for was a decision or the carrying out of one — so a docket of
+// already-decided stoppages read as a decision backlog, which on 2026-09-07 it
+// did for days.
+func (c Counters) AwaitingCarryOut() bool { return c.Decided() || c.GrantOutstanding() }
+
 // Rerun is the re-run the harness has already claimed against one docketed
 // stoppage: what a guard refuses a second of, named on the entry it is about.
 // RunID is the fresh run it started, and is absent on a claim whose run never
@@ -504,6 +580,10 @@ type Entry struct {
 	// manager has to decide about: what the item asks for, what the read found,
 	// and who releases it.
 	Unready *Unready `json:"unready,omitempty"`
+	// Attempt is what was being attempted, on the one class made about a dispatch
+	// that produced no run record. It carries what the run record would have
+	// carried and nothing else: which item, and why it was chosen.
+	Attempt *Attempt `json:"attempt,omitempty"`
 	// Escalation is a role's judgement that the item cannot be met as it stands,
 	// on the one class that carries one. It is written into the entry rather than
 	// joined where the docket is read, for the reason the environmental refusal
@@ -585,6 +665,24 @@ func UnreadyKey(workItemID string, kinds []string) string {
 	return string(ClassUnreadyItem) + ":" + strings.TrimSpace(workItemID) + ":" + strings.Join(slices.Compact(sorted), "+")
 }
 
+// AttemptKey names the event an attempt that never became a run is: this item
+// tried, and this failure met. There is no run in it because there is no run —
+// that is what the class is — so the item and what stopped it are what identify
+// it.
+//
+// The failure is part of the identity rather than only evidence on the entry,
+// and it is a digest of the failure rather than the failure itself so that the
+// key stays a key. Keying on the item alone would say a word the first time an
+// item was ever tried and never again, which is the shape that made this
+// invisible; keying on the moment would docket the same dead dispatch afresh
+// every session. The failure in between is what actually distinguishes them: a
+// dispatch that fails the same way twice is the same standing fact, and one that
+// fails a new way is news.
+func AttemptKey(workItemID, failure string) string {
+	digest := sha256.Sum256([]byte(strings.Join(strings.Fields(failure), " ")))
+	return string(ClassUnstartedAttempt) + ":" + strings.TrimSpace(workItemID) + ":" + hex.EncodeToString(digest[:])[:16]
+}
+
 // keys are the keys one entry may legitimately carry. There are two only for a
 // publication, and only for what is already on disk: entries recorded before the
 // pull request joined the key name the run alone, and the docket is an
@@ -596,6 +694,9 @@ func (e Entry) keys() []string {
 			return nil
 		}
 		return []string{UnreadyKey(e.WorkItemID, e.Unready.Kinds())}
+	}
+	if e.Class == ClassUnstartedAttempt {
+		return []string{AttemptKey(e.WorkItemID, e.Failure)}
 	}
 	derived := []string{Key(e.Class, e.RunID)}
 	if e.Class == ClassPublication && e.Publication != nil {
@@ -611,8 +712,11 @@ func (e Entry) Validate() error {
 		problems = append(problems, fmt.Errorf("schema_version must be %d", SchemaVersion))
 	}
 	if !e.Class.Valid() {
-		problems = append(problems, fmt.Errorf("class %q must be %q, %q, %q, %q or %q",
-			e.Class, ClassStoppedRun, ClassUnstartedRun, ClassEscalation, ClassPublication, ClassUnreadyItem))
+		named := make([]string, 0, len(Classes()))
+		for _, class := range Classes() {
+			named = append(named, strconv.Quote(string(class)))
+		}
+		problems = append(problems, fmt.Errorf("class %q must be one of %s", e.Class, strings.Join(named, ", ")))
 	}
 	switch key := strings.TrimSpace(e.Key); {
 	case key == "":
@@ -628,15 +732,17 @@ func (e Entry) Validate() error {
 	if err := domain.ValidateIdentifier("product id", string(e.ProductID)); err != nil {
 		problems = append(problems, err)
 	}
-	// Every class but one describes something a run did, so the run is what the
-	// entry is about. An unready item is the exception by construction: catching
-	// it before dispatch is the whole point, and an entry that had to name a run
-	// could only be written by the run this exists to save.
-	if strings.TrimSpace(e.RunID) == "" && e.Class != ClassUnreadyItem {
+	// Most classes describe something a run did, so the run is what the entry is
+	// about. The two runless ones are exceptions by construction: an unready item
+	// is caught before dispatch, which is the whole point, and an attempt that
+	// never became a run died before the reservation that would have named one.
+	// Either entry, made to name a run, could only be written by the very thing
+	// that did not happen.
+	if strings.TrimSpace(e.RunID) == "" && !e.Class.Runless() {
 		problems = append(problems, errors.New("run id is required"))
 	}
-	if strings.TrimSpace(e.RunID) != "" && e.Class == ClassUnreadyItem {
-		problems = append(problems, errors.New("an unready item entry names no run: nothing ran, which is what the class says"))
+	if strings.TrimSpace(e.RunID) != "" && e.Class.Runless() {
+		problems = append(problems, fmt.Errorf("a %s entry names no run: none was ever recorded, which is what the class says", e.Class))
 	}
 	if strings.TrimSpace(e.WorkItemID) == "" {
 		problems = append(problems, errors.New("work item id is required"))
@@ -718,6 +824,27 @@ func (e Entry) Validate() error {
 		}
 		if e.Publication != nil || len(e.Findings) > 0 || e.Check != nil {
 			problems = append(problems, errors.New("an unstarted run entry describes a run that reached no change: there is nothing reviewed, checked or published to carry"))
+		}
+	case ClassUnstartedAttempt:
+		// The failure and what was attempted are the whole of the entry, and both are
+		// required: an entry saying only that something was tried is the silence this
+		// class exists to end, wearing a docket entry's clothes.
+		if strings.TrimSpace(e.Failure) == "" {
+			problems = append(problems, errors.New("an attempt entry carries the failure that stopped it before any run record existed"))
+		}
+		switch {
+		case e.Attempt == nil:
+			problems = append(problems, errors.New("an attempt entry carries what was being attempted"))
+		case strings.TrimSpace(e.Attempt.SelectedBecause) == "":
+			problems = append(problems, errors.New("attempt: why the item was selected is required, because no run record was written to carry it"))
+		case len(e.Attempt.SelectedBecause) > MaxBlockerBytes:
+			problems = append(problems, fmt.Errorf("attempt: why the item was selected is %d bytes, limit is %d", len(e.Attempt.SelectedBecause), MaxBlockerBytes))
+		}
+		if strings.TrimSpace(e.Blocker) != "" {
+			problems = append(problems, errors.New("an attempt entry names no blocker: the item was never claimed, so nothing recorded one on it"))
+		}
+		if e.Publication != nil || len(e.Findings) > 0 || e.Check != nil {
+			problems = append(problems, errors.New("an attempt entry describes a dispatch that produced no run: there is nothing reviewed, checked or published to carry"))
 		}
 	case ClassEscalation:
 		// The judgement is the whole of the entry, so an entry that cannot carry it
@@ -820,6 +947,7 @@ func (e Entry) Render() string {
 	rendered.WriteString(e.renderUnready())
 	rendered.WriteString(e.renderEscalation())
 	rendered.WriteString(e.renderUnstarted())
+	rendered.WriteString(e.renderAttempt())
 	if e.Blocker != "" {
 		rendered.WriteString(indented("Blocker", e.Blocker))
 	}
@@ -829,9 +957,9 @@ func (e Entry) Render() string {
 	// reason printed twice beside a blocker that already says it would be noise on
 	// every ordinary stoppage.
 	//
-	// The unstarted run says the same field in its own words above, because "died
-	// holding its change" is exactly what did not happen to it.
-	if e.Blocker == "" && e.Failure != "" && e.Class != ClassUnstartedRun {
+	// The two unstarted classes say the same field in their own words above,
+	// because "died holding its change" is exactly what did not happen to either.
+	if e.Blocker == "" && e.Failure != "" && e.Class != ClassUnstartedRun && e.Class != ClassUnstartedAttempt {
 		rendered.WriteString(indented("Died holding its change; the work item carries no blocker for it", e.Failure))
 	}
 	if e.Summary != "" {
@@ -856,6 +984,7 @@ func (e Entry) Render() string {
 	// counters mean rather than a remark about them: a development manager who
 	// read the figures first has already decided how close this item is to its cap.
 	rendered.WriteString(e.renderEnvironmental())
+	rendered.WriteString(e.renderNextMover())
 	fmt.Fprintf(&rendered, "      Triage counters: %d of %s review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
 		e.Counters.ReviewRounds, capFigure(e.Counters.ReviewRoundsCap), roundsNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
@@ -928,6 +1057,57 @@ func (e Entry) renderUnstarted() string {
 	fmt.Fprintf(&rendered, "      Nothing was started: this run died before it claimed %s, so the item is untouched, no worktree was cut and nothing was preserved.\n", e.WorkItemID)
 	rendered.WriteString(indented("Why it never started", e.Failure))
 	return rendered.String()
+}
+
+// renderAttempt says that the dispatch never became a run at all, what it was
+// for, and what stopped it. It says the first of those out loud because a reader
+// arriving at an entry with no run named would otherwise assume the identifier
+// went missing rather than that there was never one to lose.
+//
+// It says the exclusion in the same breath where the session recorded one. That
+// is the half nobody could see on 2026-09-13: the failure is one fact, and a
+// session that will not try the item again until somebody edits it is the fact
+// that turns one failed dispatch into a queue standing still.
+//
+// It is silent on every entry that is not one, which is nearly all of them.
+func (e Entry) renderAttempt() string {
+	if e.Class != ClassUnstartedAttempt {
+		return ""
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      Nothing was started and no run was recorded: the dispatch of %s failed before anything reserved a run, so there is no run to look up and the item is untouched.\n", e.WorkItemID)
+	if e.Attempt != nil {
+		rendered.WriteString(indented("Why it was selected", e.Attempt.SelectedBecause))
+		if e.Attempt.ExcludedForTheSession {
+			rendered.WriteString("      The session that tried it will not try it again until the item changes, so nothing pulls it in the meantime.\n")
+		}
+	}
+	rendered.WriteString(indented("Why it never started", e.Failure))
+	return rendered.String()
+}
+
+// renderNextMover says which of the two waits this entry is in and who has to
+// move next: a stoppage nobody has decided about is yours, and a decision
+// already recorded is the harness's to carry out.
+//
+// It is never silent, because the state it names is the one the docket could not
+// say before: an entry describing a decided stoppage read exactly like one
+// describing an undecided stoppage, so a docket of work already decided about
+// read as work waiting on the development manager. It is said above the counters
+// for the reason the environmental account is — it is what the figures under it
+// mean rather than a remark about them.
+//
+// A record nobody could read says that instead of guessing, for the reason the
+// decisions below it do: an unreadable record read as an item nobody has decided
+// about is how one authorized recovery is nearly spent twice.
+func (e Entry) renderNextMover() string {
+	if e.CountersProblem != "" {
+		return "      Next mover: unknown — this item's triage record could not be read, so whether anything is already decided about it cannot be said here.\n"
+	}
+	if e.Counters.AwaitingCarryOut() {
+		return "      Next mover: the harness — a decision about this item is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
+	}
+	return "      Next mover: you — nothing is recorded as decided about this item, so it is waiting on your decision.\n"
 }
 
 // renderDecisions says what triage has already decided about this item, in the
