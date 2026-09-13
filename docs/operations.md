@@ -573,21 +573,26 @@ again until the item changes. It is keyed to the item and the failure rather
 than to a run, so the same dead dispatch is one entry however many sessions meet
 it. A run
 whose work reached
-the target branch is closed and its worktree and branch removed, including when
+the target branch is completed — its item closed where the run's landing
+discharged it, put back in the backlog parked or waiting where it did not — and
+its worktree and branch removed, including when
 the run died before it could record the promotion. A run stopped anywhere
 earlier becomes a durable blocker naming the branch and worktree that were
 preserved. A run that finished with its merge queued at the forge is settled
 here too: reconcile asks the forge and, once the merge has landed, finishes the
 publication — merge commit recorded and your local target branch caught up onto
-the merge commit the forge made — and closes the work item, which the run
+the merge commit the forge made — and settles the work item, which the run
 deliberately left open because a queued merge is a
-publication nothing has confirmed. Settling a merge
+publication nothing has confirmed. Where it goes is what the run's own landing
+says: closed where the landing discharged the item, back in the backlog parked
+or waiting where it did not. Settling a merge
 is complete on its own that way rather than leaning on the sweep below, so a
 checkout is never left behind by which command somebody happened to run.
-The branch the merge consumed is deleted **after** the item closes, and its
-removal cannot hold the closure up: it is hygiene on the forge rather than part
-of the publication, so a connection that drops at that last step leaves a dead
-branch and a finished item rather than an item that reads as unfinished work. It
+The branch the merge consumed is deleted **after** the item is settled, and its
+removal cannot hold the settlement up: it is hygiene on the forge rather than
+part of the publication, so a connection that drops at that last step leaves a
+dead branch and a settled item rather than an item that reads as unfinished
+work. It
 is asked again on the recoverable-failure backoff before it gives up, and what
 it leaves if it does is recorded below.
 
@@ -609,10 +614,11 @@ so the record honestly says the publication is not settled even though the
 merge is real. In those two, your local branch is deliberately left where it is
 rather than moved on a publication nothing verified. A **merged branch that
 could not be deleted** is the third, and is the mildest: the item is already
-closed and your local branch already caught up, and what is left is a branch on
-the forge that nothing sweeps for you — the convergence sweep below removes
-local branches only. It says so in a second line on the closed item naming the
-branch, and it is on the triage docket until somebody removes it.
+settled — closed, or back in the backlog, as its landing said — and your local
+branch already caught up, and what is left is a branch on the forge that nothing
+sweeps for you — the convergence sweep below removes local branches only. It
+says so in a second line on the item naming the branch, and it is on the triage
+docket until somebody removes it.
 
 All three are on that docket, and all three hold their item out of the pull for
 as long as they stand — which is the point: the promotion has already put the
@@ -873,7 +879,7 @@ main not caught up: main on origin is at 9f1c2ab, which does not contain the loc
 and until it is resolved every run that reaches integration for that target
 stops with both branch positions named rather than promoting into it. That
 refusal is deliberate — the alternative is a promotion nobody can publish and an
-item closed as integrated against it — but it does mean the branch does no more
+item settled as integrated against it — but it does mean the branch does no more
 work until you say which history is right. Nothing sweeps it away in the
 meantime, and no later `yoyo reconcile` resolves it.
 

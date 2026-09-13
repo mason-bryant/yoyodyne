@@ -2223,7 +2223,7 @@ Three fields on the run say what happened:
   records it there; a run whose process died and is settled by `yoyo reconcile`
   has the same gap recorded by the sweep, in the same words, whether the
   settlement completes it, blocks it, or fails it. The completed case is the one
-  worth naming: the work lands and the item closes, so a run whose observation
+  worth naming: the work lands and the item is settled on it, so a run whose observation
   stopped halfway would otherwise read exactly like one that walked the
   definition to the end.
 
