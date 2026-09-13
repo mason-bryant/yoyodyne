@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -442,6 +444,13 @@ func TestAnInvocationIsMadeUnderTheAccountItWasGiven(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
+			// The cache lives in the repository's Git directory, so the working
+			// directory has to be one: a path in no repository has nowhere to
+			// put a cache and is left alone, which is not what this asserts.
+			worktree := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(worktree, ".git"), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
 			runner := &fakeRunner{results: []execution.ProcessResult{{
 				Status: execution.ProcessSucceeded,
 				Stdout: lines(`{"id":"0","msg":{"type":"task_complete","last_agent_message":"done"}}`),
@@ -449,7 +458,7 @@ func TestAnInvocationIsMadeUnderTheAccountItWasGiven(t *testing.T) {
 			if _, err := (Backend{Runner: runner, Clock: fixedClock{}, ConfigDir: test.onValue}).Run(context.Background(), backendapi.RunRequest{
 				RunID:            testRunID,
 				Role:             domain.RoleDeveloper,
-				WorkingDirectory: "/worktree",
+				WorkingDirectory: worktree,
 				Prompt:           "implement",
 				AccountConfigDir: test.onRequest,
 			}); err != nil {
