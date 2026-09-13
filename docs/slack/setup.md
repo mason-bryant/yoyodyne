@@ -101,8 +101,9 @@ to whoever step 4 grants `direct-work`. The first is **the harness reporting
 itself degraded**: a session choosing work from a build the harness has moved
 well past, and the harness having started nothing at all while work was ready.
 The second is **advisory-once** — a fact said exactly once and never repeated,
-which today is one value the project's template has improved that this project
-never edited. Every one of them is sent once rather than repeated. Removing the
+which today is a value the project's template has improved that this project
+never edited. Every one of them is sent once rather than repeated, and at most
+one message goes per reading however many the reading found. Removing the
 scope costs those direct messages and nothing else: the stale-build message and
 the improvement are in the channel either way, and the stall is in the durable
 record `yoyo status` reads back.
@@ -735,20 +736,33 @@ every value the template has improved since that this project never edited.
 `doctor` and `config validate` say the same thing as an aside — but all three are
 commands somebody runs, and a harness left running for a fortnight runs none of
 them, so a fix the template has since made to a persona sits unheard. So the sink
-says it: one message per newly-available improvement, in the channel and as a
-direct message to whoever you grant `direct-work`.
+says it: one message per reading that finds something new, in the channel and as
+a direct message to whoever you grant `direct-work`. A reading that finds one
+improvement says it with both its values:
 
 > builtin:v1 has improved agents.developer.model, a value this project has not
 > edited: it was "sonnet" and is "opus" now. Nothing has changed and nothing is
 > waiting on anybody: `yoyo config drift` shows agents.developer.model beside
 > everything else the template moved, and it is adopted by hand or not at all.
 
-It is said **once per improvement and never again** — marked in the sink's own
-durable state as it is sent, so a restart says nothing about one it already sent.
-A template that improves the same setting again later is a second improvement and
-is said again; nothing is ever adopted for you, and the message says outright
-that the next move is nobody's. The comparison costs one reading of your
-configuration per `--heartbeat` rather than one per poll.
+A reading that finds several — the first one on a project many template
+revisions behind — says them together, counted and the first few named, rather
+than sending one message each:
+
+> builtin:v1 has improved 12 values this project has not edited:
+> agents.developer.model, agents.reviewer.model, checks, execution.poll,
+> execution.heartbeat, and 7 more. Nothing has changed and nothing is waiting on
+> anybody: `yoyo config drift` shows what each one was and is, and each is
+> adopted by hand or not at all.
+
+Each improvement is said **once and never again** — marked in the sink's own
+durable state as it is sent, one mark per value whether it was said alone or
+among several, so a restart says nothing about one it already sent and a later
+reading that finds one more says that one alone. A template that improves the
+same setting again later is a second improvement and is said again; nothing is
+ever adopted for you, and the message says outright that the next move is
+nobody's. The comparison costs one reading of your configuration per
+`--heartbeat` rather than one per poll.
 
 The queue changing comes from the conversations you hold with the product
 manager and the development manager, read from the same durable records `yoyo

@@ -661,6 +661,28 @@ func FromImprovement(improvement Improvement, at time.Time) Notification {
 	})
 }
 
+// Improvements is several values the project's template has improved, found on
+// one reading and said together. Says is the comparison's own sentence over all
+// of them -- how many, and the first few by name -- for the reason a single
+// improvement's is: the wording has one home, and a surface that counted and
+// named them itself would be a second one.
+type Improvements struct {
+	Says string
+}
+
+// FromImprovements says that the project's template has improved several values
+// this project never edited, in one message rather than one each. It is what
+// bounds the advisory-once class to one message a pass: the first reading on a
+// project several revisions behind is the one that finds a dozen at once, and a
+// dozen direct messages is a burst aimed at the channel that reaches a person
+// as a notification. It is addressed and pitched exactly as one improvement is,
+// and it is a note for the same reason.
+func FromImprovements(improvements Improvements, at time.Time) Notification {
+	return productNotification(KindBundleImprovements, at, Detail{
+		Improvement: strings.TrimSpace(improvements.Says),
+	})
+}
+
 // Accumulation is what one topic gathered while nothing was posting its events:
 // how many there were, the first and last of them, and the most attention any
 // one of them asked for.

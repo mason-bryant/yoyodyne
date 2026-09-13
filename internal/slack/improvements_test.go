@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,17 +26,21 @@ func TestEachNewlyAvailableImprovementIsSaidToTheOperatorsOnce(t *testing.T) {
 	)
 
 	said := harness.improvements(t, harness.start())
-	if len(said) != 2 {
-		t.Fatalf("said %d improvements, want one message per newly-available value", len(said))
+	if len(said) != 1 {
+		t.Fatalf("said %d messages, want the pass's improvements said in one", len(said))
 	}
 	for _, delivery := range said {
 		if !delivery.Direct {
-			t.Fatalf("%q was said in the channel alone; the operator asked to be sent each one",
-				delivery.Notification.Event.Detail.Setting)
+			t.Fatal("the improvements were said in the channel alone; the operator asked to be sent them")
 		}
 		if severity := delivery.Notification.Event.Severity; severity != report.SeverityNote {
 			t.Fatalf("severity = %q, want a note: nothing is degraded and nobody is waiting", severity)
 		}
+	}
+	// Both are marked as said, each on its own: the bound is on messages and the
+	// dedup is still per improvement.
+	if delivered := said[0].Cursor.Delivered; len(delivered) != 2 {
+		t.Fatalf("cursor delivered %v, want each improvement the message named marked on its own", delivered)
 	}
 
 	// And never again, whatever else moves. The second pass is a whole heartbeat
@@ -49,6 +54,58 @@ func TestEachNewlyAvailableImprovementIsSaidToTheOperatorsOnce(t *testing.T) {
 	}
 	if offers.asked < 2 {
 		t.Fatalf("the comparison was made %d times; the silence should be a reading that found nothing new", offers.asked)
+	}
+}
+
+// The bound on the class. A project several template revisions behind offers a
+// dozen values on the first reading, and what the operator is sent is one
+// message naming how many and the first few — not a dozen direct messages, which
+// is the wall aimed at the one channel that reaches them as a notification.
+func TestAProjectManyRevisionsBehindIsSentOneMessageRatherThanABurst(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	values := make([]config.Value, 0, 12)
+	for index := 0; index < 12; index++ {
+		values = append(values, improved(fmt.Sprintf("agents.role%02d.model", index), "sonnet", "opus"))
+	}
+	offers := harness.offering(values...)
+
+	said := harness.improvements(t, harness.start())
+	if len(said) != 1 {
+		t.Fatalf("said %d messages for %d improvements, want one", len(said), len(values))
+	}
+	if !said[0].Direct {
+		t.Fatal("the batch was said in the channel alone; it is the one message the operator is sent")
+	}
+	body := harness.rendered(t, said[0])
+	for _, fact := range []string{"12 values", "agents.role00.model", "agents.role04.model", "and 7 more", "yoyo config drift", "nobody's"} {
+		if !strings.Contains(body, fact) {
+			t.Fatalf("body %q does not carry %q", body, fact)
+		}
+	}
+	if strings.Contains(body, "agents.role05.model") {
+		t.Fatalf("body %q names more than the first few; the rest is counted and left to `yoyo config drift`", body)
+	}
+	if delivered := said[0].Cursor.Delivered; len(delivered) != len(values) {
+		t.Fatalf("cursor delivered %d marks, want every one of the %d the message stood for", len(delivered), len(values))
+	}
+
+	// A later reading that finds one more says that one alone, with both its
+	// values, and nothing the batch already stood for.
+	cursors := harness.start()
+	cursors.Streams[improvementStream] = said[0].Cursor
+	offers.values = append(offers.values, improved("execution.max_concurrent_developers", "1", "2"))
+	harness.now = harness.now.Add(time.Hour)
+	again := harness.improvements(t, cursors)
+	if len(again) != 1 {
+		t.Fatalf("said %d messages, want the one new improvement alone", len(again))
+	}
+	if setting := again[0].Notification.Event.Detail.Setting; setting != "execution.max_concurrent_developers" {
+		t.Fatalf("said %q, want the one improvement the batch did not stand for", setting)
+	}
+	if body := harness.rendered(t, again[0]); strings.Contains(body, "agents.role00.model") {
+		t.Fatalf("body %q repeats what the batch already said", body)
 	}
 }
 

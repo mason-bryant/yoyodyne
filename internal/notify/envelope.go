@@ -245,6 +245,15 @@ const (
 	// of what admits it to a message somebody is sent rather than one they come
 	// looking for: a fact that repeats is a fact somebody mutes.
 	KindBundleImprovement Kind = "bundle.improvement"
+	// Several such values found on one reading, said together: how many there
+	// are and the first few by name. It is the same fact as the kind above at a
+	// coarser grain, and it exists because the class is bounded to one message a
+	// pass: a project several template revisions behind offers a dozen values on
+	// the first reading, and a dozen direct messages is the wall the
+	// communication rule is against, aimed at the one channel that reaches a
+	// person as a notification. Each value it names is still marked as said on
+	// its own, so nothing it stands for is ever said again.
+	KindBundleImprovements Kind = "bundle.improvements"
 	// What one topic gathered while nothing was posting it. Every kind above is
 	// something the record says happened; this one is what a surface does with a
 	// backlog it cannot say one message at a time — a long gap replayed in full
@@ -310,6 +319,7 @@ func Kinds() []Kind {
 		KindStallNoticed,
 		KindProviderWindow,
 		KindBundleImprovement,
+		KindBundleImprovements,
 		KindCatchUpDigest,
 	}
 }
@@ -332,7 +342,7 @@ func (k Kind) Valid() bool {
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
-		KindProviderWindow, KindBundleImprovement, KindCatchUpDigest:
+		KindProviderWindow, KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -796,7 +806,8 @@ type Detail struct {
 	Standing string `json:"standing,omitempty"`
 	// Setting and Improvement are which configuration value the project's template
 	// has improved and what the comparison says about it, read by
-	// KindBundleImprovement.
+	// KindBundleImprovement. KindBundleImprovements reads Improvement alone, worded
+	// over the several values it stands for, and names no one setting.
 	//
 	// Improvement is carried already worded, for the reason Standing is: what
 	// makes a value an improvement -- what the template supplied when the project

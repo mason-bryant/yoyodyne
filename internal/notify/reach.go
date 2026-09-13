@@ -193,8 +193,10 @@ var reaches = map[Kind]Reach{
 	// that were fixed hours earlier.
 	KindResidentStale: ReachChannel,
 	// One value the project's template has improved. It asks for a decision and it
-	// is said exactly once per improvement, ever.
-	KindBundleImprovement: ReachChannel,
+	// is said exactly once per improvement, ever. Several found on one reading are
+	// the same fact said together, and go the same distance.
+	KindBundleImprovement:  ReachChannel,
+	KindBundleImprovements: ReachChannel,
 	// What a topic gathered while nothing was posting it. It stands for that
 	// topic's narrative, so it belongs where the narrative is — and it is exempted
 	// from the no-thread rule in reachOf, because a digest is only ever produced in

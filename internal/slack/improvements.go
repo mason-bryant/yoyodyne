@@ -18,12 +18,14 @@ package slack
 // speaks exactly once per fact, deduplicated durably, never repeated, never
 // urgent in presentation.
 //
-// Exactly once is the whole of the class, so it is the whole of what this file
-// is careful about. The dedup is a mark per improvement in the sink's own
-// durable cursor — the same record that stops a crash repeating every other
-// message — which is what makes a restart silent about an improvement already
-// said, and what makes having said one provable from a file rather than from a
-// process's memory.
+// Exactly once is most of the class, and most of what this file is careful
+// about. The dedup is a mark per improvement in the sink's own durable cursor —
+// the same record that stops a crash repeating every other message — which is
+// what makes a restart silent about an improvement already said, and what makes
+// having said one provable from a file rather than from a process's memory. The
+// rest is a bound: one message a pass, however many improvements the reading
+// found, because a project joined many revisions behind is owed one message it
+// can read in a sitting rather than one per value.
 
 import (
 	"context"
@@ -50,8 +52,20 @@ type Improvements interface {
 	Offered(ctx context.Context) (config.Drift, error)
 }
 
-// improvementDeliveries says each value the template has improved that this
-// project never edited, once each and never again.
+// improvementDeliveries says what the template has improved that this project
+// never edited, once per improvement and never again, in at most one message a
+// pass.
+//
+// The bound is the other half of the class. Once per fact keeps a message from
+// repeating; it says nothing about how many facts one reading can find, and the
+// first reading on a project several template revisions behind finds all of
+// them at once. Said one message each, that is a burst of direct messages at the
+// one channel that reaches a person as a notification — the wall the
+// communication rule is against — so a pass that finds one says it whole, with
+// both its values, and a pass that finds several says them together, counted and
+// the first few named, with `yoyo config drift` holding the rest. Every value a
+// batch names is marked as said on its own, so the dedup is still per fact and a
+// later reading that finds one more says that one alone.
 //
 // The order of the work is the cost model the rest of this package keeps. The
 // comparison means re-reading the project's configuration and the baseline
@@ -94,36 +108,49 @@ func (f *HarnessFeed) improvementDeliveries(ctx context.Context, cursor Cursor, 
 
 	offered := drift.Available()
 	advanced := forgetAdopted(read, offered)
-	var deliveries []Delivery
+	var unsaid []config.Value
 	for _, value := range offered {
 		mark := improvementMarkOf(value)
 		if advanced.Has(mark) {
 			continue
 		}
 		advanced = advanced.With(mark)
-		deliveries = append(deliveries, Delivery{
-			Stream: improvementStream,
-			Cursor: advanced,
-			// It goes to the operators as well as to the channel, which is what the
-			// operator asked for and what the ruling admitted. It is the quietest
-			// thing that tier carries: a note, said once, with no move in it for
-			// anybody — and a channel is somewhere somebody chooses to look, which
-			// is exactly what an unattended fortnight does not include.
-			Direct: true,
-			Notification: notify.FromImprovement(notify.Improvement{
-				Setting: value.Key,
-				Says:    drift.Improvement(value),
-			}, now),
-		})
+		unsaid = append(unsaid, value)
 	}
-	if len(deliveries) == 0 {
+	if len(unsaid) == 0 {
 		// Nothing to offer, or nothing new to offer, which is the ordinary answer
 		// on every pass after the first. The clock still moves, because what a
 		// reading costs is the configuration read again and there is no reason to
 		// spend one every fifteen seconds on a project that has heard all of it.
 		return []Delivery{{Stream: improvementStream, Cursor: advanced}}, nil
 	}
-	return deliveries, nil
+
+	// One message, whatever the pass found, and the cursor that says all of it
+	// was said goes on with it: the sink posts and then writes, so a process
+	// killed between the two repeats the one message rather than re-announcing
+	// some of what it named and not the rest.
+	var notification notify.Notification
+	if len(unsaid) == 1 {
+		notification = notify.FromImprovement(notify.Improvement{
+			Setting: unsaid[0].Key,
+			Says:    drift.Improvement(unsaid[0]),
+		}, now)
+	} else {
+		notification = notify.FromImprovements(notify.Improvements{
+			Says: drift.Improvements(unsaid),
+		}, now)
+	}
+	return []Delivery{{
+		Stream: improvementStream,
+		Cursor: advanced,
+		// It goes to the operators as well as to the channel, which is what the
+		// operator asked for and what the ruling admitted. It is the quietest
+		// thing that tier carries: a note, said once, with no move in it for
+		// anybody — and a channel is somewhere somebody chooses to look, which
+		// is exactly what an unattended fortnight does not include.
+		Direct:       true,
+		Notification: notification,
+	}}, nil
 }
 
 // forgetAdopted drops the marks of improvements that are no longer offered, so
