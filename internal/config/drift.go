@@ -249,28 +249,35 @@ const maxNamedImprovements = 5
 // harness asking for attention it was told not to ask for. Both are still there
 // for anybody who runs `yoyo config drift`.
 //
-// The surfaces that say it are the CLI's. Slack says the same improvements one
-// at a time instead, through Improvement below: the architect's ruling of
+// The surfaces that say it are the CLI's. Slack says the same improvements
+// through Improvement and Improvements below instead: the architect's ruling of
 // 2026-09-03 widened the direct-message tier to two named classes and admitted
 // this notice as the first member of the advisory-once one, which speaks exactly
 // once per fact and deduplicates durably. A count belongs on a line printed
-// beside every command; one improvement said on its own belongs in a message
-// that will only ever be sent once.
+// beside every command; an improvement said on its own, or the few a pass found
+// together, belongs in a message that will only ever be sent once.
 func (d Drift) Notice() string {
 	available := d.Available()
 	if len(available) == 0 {
 		return ""
 	}
+	return fmt.Sprintf("note: %s has improved %s this project has not edited (%s); `yoyo config drift` shows what each one was and is",
+		d.Bundle, countOfValues(len(available)), namedKeys(available))
+}
+
+// namedKeys is the first few keys by name and the rest counted, which is the
+// one shape every surface lists improvements in: a line that named forty keys
+// is one an operator scrolls past, wherever it is printed.
+func namedKeys(values []Value) string {
 	named := make([]string, 0, maxNamedImprovements)
-	for _, value := range available[:min(len(available), maxNamedImprovements)] {
+	for _, value := range values[:min(len(values), maxNamedImprovements)] {
 		named = append(named, value.Key)
 	}
 	listed := strings.Join(named, ", ")
-	if further := len(available) - len(named); further > 0 {
+	if further := len(values) - len(named); further > 0 {
 		listed += fmt.Sprintf(", and %d more", further)
 	}
-	return fmt.Sprintf("note: %s has improved %s this project has not edited (%s); `yoyo config drift` shows what each one was and is",
-		d.Bundle, countOfValues(len(available)), listed)
+	return listed
 }
 
 func countOfValues(count int) string {
@@ -301,6 +308,24 @@ const maxSaidValueRunes = 60
 func (d Drift) Improvement(value Value) string {
 	return fmt.Sprintf("%s has improved %s, a value this project has not edited: it was %s and is %s now",
 		d.Bundle, value.Key, saidValue(value.Baseline), saidValue(value.Bundle))
+}
+
+// Improvements is several available values said together: how many there are
+// and the first few by name, with the rest counted, the way Notice lists them.
+//
+// It is the grain between the other two, for a message that is bounded to one
+// per pass. A project several template revisions behind offers a dozen values on
+// the first reading, and a dozen messages naming both sides of each is the wall
+// the communication rule is against, aimed at the one channel that reaches a
+// person as a notification. What each one was and is stays whole in `yoyo config
+// drift`, which is where the voice that says this points.
+//
+// It words whatever it is given, for the reason Improvement does: the caller has
+// already asked which values are offerable, and deciding it again here would be
+// the classification living in two places.
+func (d Drift) Improvements(values []Value) string {
+	return fmt.Sprintf("%s has improved %s this project has not edited: %s",
+		d.Bundle, countOfValues(len(values)), namedKeys(values))
 }
 
 // saidValue is one value as a message shows it: quoted, so an empty value and a

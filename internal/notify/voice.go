@@ -206,6 +206,7 @@ var harnessVoice = voice{
 		KindProviderWindow:           "{stopped}. Nothing has been chosen on this product for {age}; nothing has stopped and nothing is waiting on anybody, and the harness asks again when the window lifts.\n\n{standing}",
 		KindResidentStale:            "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
 		KindBundleImprovement:        "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows {setting} beside everything else the template moved, and it is adopted by hand or not at all.",
+		KindBundleImprovements:       "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows what each one was and is, and each is adopted by hand or not at all.",
 		KindCatchUpDigest:            "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
 	},
 }
@@ -266,6 +267,7 @@ var developerVoice = voice{
 		KindProviderWindow:           "{stopped}. Nothing has been handed to me for {age}, and that is not a queue nobody is reading — there is nothing to pick up until the provider serves again.\n\n{standing}",
 		KindResidentStale:            "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
 		KindBundleImprovement:        "{improvement}. What the template says about {setting} is what I'd be run under if this project took it up, and until somebody does I go on being run under what it holds now.",
+		KindBundleImprovements:       "{improvement}. What the template says about each of them is what I'd be run under if this project took them up, and until somebody does I go on being run under what it holds now; `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
 	},
 }
@@ -326,6 +328,7 @@ var reviewerVoice = voice{
 		KindProviderWindow:           "{stopped}. No change has reached me for a verdict in {age}: nothing was written for me to judge, and nothing was going to be.\n\n{standing}",
 		KindResidentStale:            "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back, and installing that build is what stops me granting one — the session takes it up itself between runs.",
 		KindBundleImprovement:        "{improvement}. It changes nothing about the standard I hold a change to today, and it would change {setting} for every change judged after somebody adopts it.",
+		KindBundleImprovements:       "{improvement}. None of them changes the standard I hold a change to today, and each would change it for every change judged after somebody adopts it; `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
 	},
 }
@@ -385,6 +388,7 @@ var developmentManagerVoice = voice{
 		KindProviderWindow:           "{stopped}. My queue has not been pulled from for {age}; the order stands as I set it, and the next pull takes it from the top when the window lifts.\n\n{standing}",
 		KindResidentStale:            "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does, and they stop when that build is installed — the session takes it up itself between runs.",
 		KindBundleImprovement:        "{improvement}. Nothing in the queue moves for it, and nothing I hand out changes until {setting} is adopted by hand.",
+		KindBundleImprovements:       "{improvement}. Nothing in the queue moves for any of them, and nothing I hand out changes until one is adopted by hand; `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
 	},
 }
@@ -445,6 +449,7 @@ var productManagerVoice = voice{
 		KindProviderWindow:           "{stopped}. Nothing has been spent on this product for {age}: this is the one quiet stretch that costs nothing and buys nothing, and it ends on the provider's clock rather than on anybody's decision.\n\n{standing}",
 		KindResidentStale:            "What is being spent on this product was built at {commit}, before {behind} landed. Until that build is installed, some of that spend buys work the system has already paid for once; the session takes it up itself between runs once it is.",
 		KindBundleImprovement:        "{improvement}. Whether {setting} is worth taking is the operator's to decide and nobody else's, which is why it is offered once rather than asked for repeatedly.",
+		KindBundleImprovements:       "{improvement}. Whether any of them is worth taking is the operator's to decide and nobody else's, which is why they are offered once, together, rather than one message each; `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
 	},
 }
@@ -505,6 +510,7 @@ var architectVoice = voice{
 		KindProviderWindow:           "{stopped}. Selection has chosen nothing for {age}: the loop is alive and reading the queue, and what it would start with is what the provider will not serve yet.\n\n{standing}",
 		KindResidentStale:            "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
 		KindBundleImprovement:        "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; saying {setting} once makes the difference visible without deciding it for anybody.",
+		KindBundleImprovements:       "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; naming them once, in one message, makes the difference visible without deciding it for anybody, and `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
 	},
 }
@@ -672,8 +678,9 @@ var nextMoves = map[Kind]string{
 	// somebody eventually has to make; this one is an offer an operator is
 	// entitled to decline forever, and a message that implied otherwise would be
 	// the nagging that gets a channel muted.
-	KindBundleImprovement: "nobody's — the value stands as this project has it until somebody decides otherwise, and nothing will ask again.",
-	KindCatchUpDigest:     "nobody's — the record holds all of it, and the thread carries on from here.",
+	KindBundleImprovement:  "nobody's — the value stands as this project has it until somebody decides otherwise, and nothing will ask again.",
+	KindBundleImprovements: "nobody's — every one of them stands as this project has it until somebody decides otherwise, and nothing will ask again.",
+	KindCatchUpDigest:      "nobody's — the record holds all of it, and the thread carries on from here.",
 }
 
 // directiveInForceMove is whose move follows a directive that stopped nothing.

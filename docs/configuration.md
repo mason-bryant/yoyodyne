@@ -4507,7 +4507,8 @@ baseline and report exist: `config.lock` records what the template supplied,
 unprompted on stderr, silently when none, without changing exit codes. Where the
 [Slack sink](reporting.md#what-arrives-as-a-direct-message) is running it says
 the same `available` values without anybody running a command: one direct
-message per improvement, once each and never repeated. A project without a
+message per reading that finds something new, each improvement said once and
+never repeated. A project without a
 baseline hears nothing until `yoyo config baseline` writes it, which touches
 nothing else and starts level. Nothing is adopted for you; `materialize`,
 `extract`, and `adopt` do not exist yet.

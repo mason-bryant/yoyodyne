@@ -164,6 +164,34 @@ func TestALongValueIsCutRatherThanBuryingTheSentence(t *testing.T) {
 	}
 }
 
+// The third grain: several improvements said together, for the surface bounded
+// to one message a pass. It counts them and names the first few the way the
+// notice does, so a project a dozen revisions behind is told how many rather
+// than shown a wall.
+func TestSeveralImprovementsAreSaidByCountAndTheFirstFew(t *testing.T) {
+	t.Parallel()
+
+	drift := Drift{Known: true, Bundle: BuiltinV1}
+	values := make([]Value, 0, 8)
+	for _, key := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		values = append(values, Value{Key: "agents." + key, Class: ClassAvailable, Baseline: "1", Bundle: "2"})
+	}
+	said := drift.Improvements(values)
+	for _, want := range []string{BuiltinV1, "8 values", "agents.a", "agents.e", "and 3 more"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("Improvements() = %q, want it to carry %q", said, want)
+		}
+	}
+	for _, unwanted := range []string{"agents.f", `"1"`, `"2"`} {
+		if strings.Contains(said, unwanted) {
+			t.Errorf("Improvements() = %q, want %q left to `yoyo config drift`", said, unwanted)
+		}
+	}
+	if few := drift.Improvements(values[:2]); strings.Contains(few, "more") {
+		t.Errorf("Improvements() = %q, want nothing counted when every one is named", few)
+	}
+}
+
 // A value the project moved is never offered and never spoken about unprompted.
 // It is the operator's, and a harness that kept mentioning it would be nagging
 // about a decision that was already made.

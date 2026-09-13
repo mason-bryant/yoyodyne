@@ -886,14 +886,21 @@ prints and `doctor` and `config validate` say as an aside — every one of which
 a command somebody has to run. A harness left running for a fortnight runs none
 of them, so a fix the template has since made to a persona sits unheard while the
 project goes on without it. So the sink says the same thing: **one direct message
-per newly-available improvement**, naming the setting, what this project holds,
-and what the template supplies now. Nothing is adopted for you and nothing is
-waiting on you — the message says the move is nobody's, and it is an offer a
+per reading that finds something new**. A reading that finds one improvement
+names the setting, what this project holds, and what the template supplies now;
+a reading that finds several — the first one on a project many template
+revisions behind — says them together, how many and the first few by name, with
+`yoyo config drift` holding what each one was and is. That is the bound on the
+class: an operator joining a project a dozen revisions behind is sent one message
+they can read in a sitting, not a dozen. Nothing is adopted for you and nothing
+is waiting on you — the message says the move is nobody's, and it is an offer a
 project is entitled to decline forever.
 
 Once means once. Each improvement is marked in the sink's own durable cursors as
-it is sent, so a restarted sink, a second sink, and every poll for the rest of
-the project's life stay silent about it. The mark names the value the template
+it is sent — one mark per value, whether it was said alone or among several — so
+a restarted sink, a second sink, and every poll for the rest of the project's
+life stay silent about it, and a later reading that finds one more says that one
+alone. The mark names the value the template
 supplies rather than the setting alone, so a template that improves one setting
 again later is a second improvement and is said again; and a mark is dropped once
 its improvement is no longer offered — adopted, edited, or superseded — which
