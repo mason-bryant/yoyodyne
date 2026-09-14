@@ -674,6 +674,16 @@ waits on somebody who does not know it is theirs. So the count of promotions the
 forge has not published rides with the hourly line while any of them stands, and
 it is why a line with nothing at all ready still says something.
 
+A **merge the forge is holding** — queued, and staying queued because a required
+check is failing on the request — is the other message the count could not carry
+by itself. It looks exactly like a merge the forge is about to perform, and the
+count climbed from one to eight over six days in September 2026 while one check
+failed on every queued request and nothing said which. So the
+[reconcile sweep](operations.md#recovering-interrupted-runs) reads the request's
+checks beside its merge flag, writes the failing ones onto the run's record, and
+that appearing is said as a `warning` naming the check, once, and again only if
+the checks change.
+
 Under that sentence it carries [the four lines](operations.md#where-the-harness-stands-the-four-lines)
 — Running, Working, Not startable, Needs a human — from the same derivation
 `yoyo status` prints them from, so the channel and the terminal answer one

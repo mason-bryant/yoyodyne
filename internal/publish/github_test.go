@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -441,8 +442,81 @@ func TestGitHubStateReportsAQueuedMergeSeparatelyFromADroppedOne(t *testing.T) {
 	runner.reply("pr list", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]"})
 	_, _ = (GitHub{Runner: runner}).State(context.Background(), "yoyodyne/task/abcd1234")
 	listed := runner.matching("pr list")
-	if len(listed) != 1 || !contains(listed[0], "number,url,state,mergedAt,autoMergeRequest") {
-		t.Errorf("pr list args = %v, want the queued merge among the requested fields", listed)
+	if len(listed) != 1 || !contains(listed[0], "number,url,state,mergedAt,autoMergeRequest,mergeStateStatus,statusCheckRollup") {
+		t.Errorf("pr list args = %v, want the queued merge, the merge state and the checks among the requested fields", listed)
+	}
+}
+
+// A queued merge the forge is holding on a failing check is the same
+// observation as one it is about to perform — open, unmerged, merge armed —
+// unless the checks are read. They were not read for six days in September 2026
+// while a required check failed on every queued request, so the state names the
+// failing checks, in both shapes the forge reports a check in, and says whether
+// the merge is waiting on them.
+func TestGitHubStateNamesTheChecksHoldingAQueuedMerge(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct {
+		mergeState string
+		rollup     string
+		failing    []string
+		held       bool
+	}{
+		"a required check run failed": {
+			mergeState: "BLOCKED",
+			rollup:     `[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"CheckRun","name":"adoption","status":"COMPLETED","conclusion":"SUCCESS"}]`,
+			failing:    []string{"build"},
+			held:       true,
+		},
+		"a commit status errored": {
+			mergeState: "UNSTABLE",
+			rollup:     `[{"__typename":"StatusContext","context":"ci/lint","state":"ERROR"}]`,
+			failing:    []string{"ci/lint"},
+			held:       true,
+		},
+		"checks still running": {
+			mergeState: "BLOCKED",
+			rollup:     `[{"__typename":"CheckRun","name":"build","status":"IN_PROGRESS","conclusion":""}]`,
+			held:       false,
+		},
+		"a failing check the base branch does not require": {
+			mergeState: "CLEAN",
+			rollup:     `[{"__typename":"CheckRun","name":"optional","status":"COMPLETED","conclusion":"FAILURE"}]`,
+			failing:    []string{"optional"},
+			held:       false,
+		},
+		"every check green": {
+			mergeState: "CLEAN",
+			rollup:     `[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"}]`,
+			held:       false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &scriptedRunner{}
+			runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+			runner.reply("pr list", execution.ProcessResult{
+				Status: execution.ProcessSucceeded,
+				Stdout: `[{"number":7,"url":"https://example.invalid/pull/7","state":"OPEN","mergedAt":"","autoMergeRequest":{"mergeMethod":"MERGE"},"mergeStateStatus":"` + test.mergeState + `","statusCheckRollup":` + test.rollup + `}]`,
+			})
+			observed, err := (GitHub{Runner: runner}).State(context.Background(), "yoyodyne/task/abcd1234")
+			if err != nil {
+				t.Fatalf("State() error = %v", err)
+			}
+			if !observed.AutoMerge || observed.Merged {
+				t.Fatalf("State() = %#v, want an open request with its merge armed", observed)
+			}
+			if !slices.Equal(observed.FailingChecks, test.failing) {
+				t.Errorf("State() failing checks = %v, want %v", observed.FailingChecks, test.failing)
+			}
+			if observed.MergeState != test.mergeState {
+				t.Errorf("State() merge state = %q, want %q", observed.MergeState, test.mergeState)
+			}
+			if observed.HeldByChecks() != test.held {
+				t.Errorf("HeldByChecks() = %t, want %t", observed.HeldByChecks(), test.held)
+			}
+		})
 	}
 }
 

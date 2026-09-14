@@ -53,6 +53,37 @@ type PullRequest struct {
 	// queued merge that has not landed yet from one the forge dropped, which is
 	// otherwise the same observation — an open, unmerged request.
 	AutoMerge bool `json:"auto_merge,omitempty"`
+	// FailingChecks names the checks the forge reports failed on the request's
+	// head, in the order the forge lists them. It is what tells a queued merge
+	// the forge is holding on a red check from one it is about to perform, which
+	// is otherwise the same observation — open, unmerged, merge armed — and was
+	// the same observation for six days in September 2026 while a required check
+	// failed on every queued request and nothing said so.
+	FailingChecks []string `json:"failing_checks,omitempty"`
+	// MergeState is the forge's own word for whether the request can merge as it
+	// stands — BLOCKED, CLEAN, BEHIND, DIRTY, and the rest — recorded as the forge
+	// reported it. It is carried beside the failing checks because it is what
+	// says the failure matters: a check the base branch does not require fails
+	// without holding anything.
+	MergeState string `json:"merge_state,omitempty"`
+}
+
+// HeldByChecks reports a request whose merge the forge is holding on failing
+// checks: the merge is armed, the request is not merged, the forge names at
+// least one failing check, and its merge state is one of the two that say a
+// check is what is unmet. A failing check on a request the forge reports as
+// mergeable is a check the base branch does not require, and the merge is not
+// waiting on it.
+func (p PullRequest) HeldByChecks() bool {
+	if !p.AutoMerge || p.Merged || len(p.FailingChecks) == 0 {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(p.MergeState)) {
+	case "BLOCKED", "UNSTABLE":
+		return true
+	default:
+		return false
+	}
 }
 
 // Request describes the pull request a published run branch must have open.
@@ -516,7 +547,7 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		"--head", head,
 		"--state", "all",
 		"--limit", "1",
-		"--json", "number,url,state,mergedAt,autoMergeRequest")...)...)
+		"--json", "number,url,state,mergedAt,autoMergeRequest,mergeStateStatus,statusCheckRollup")...)...)
 	if err != nil {
 		return PullRequest{}, false, fmt.Errorf("list pull requests for %s: %w", head, err)
 	}
@@ -534,6 +565,17 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		AutoMergeRequest *struct {
 			MergeMethod string `json:"mergeMethod"`
 		} `json:"autoMergeRequest"`
+		MergeStateStatus string `json:"mergeStateStatus"`
+		// StatusCheckRollup is every check the forge knows about on the head, in
+		// the two shapes the forge reports them: a check run carries a name and a
+		// conclusion, a commit status a context and a state. Both are read,
+		// because a required check can be either.
+		StatusCheckRollup []struct {
+			Name       string `json:"name"`
+			Conclusion string `json:"conclusion"`
+			Context    string `json:"context"`
+			State      string `json:"state"`
+		} `json:"statusCheckRollup"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &reported); err != nil {
 		return PullRequest{}, false, fmt.Errorf("decode pull requests for %s: %w", head, err)
@@ -545,13 +587,40 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 	if one.Number <= 0 {
 		return PullRequest{}, false, fmt.Errorf("pull request for %s reported no number", head)
 	}
+	var failing []string
+	for _, check := range one.StatusCheckRollup {
+		name, verdict := check.Name, check.Conclusion
+		if name == "" {
+			name, verdict = check.Context, check.State
+		}
+		if name != "" && checkFailed(verdict) {
+			failing = append(failing, name)
+		}
+	}
 	return PullRequest{
-		Number:    one.Number,
-		URL:       one.URL,
-		State:     one.State,
-		Merged:    strings.EqualFold(one.State, "MERGED") || strings.TrimSpace(one.MergedAt) != "",
-		AutoMerge: one.AutoMergeRequest != nil,
+		Number:        one.Number,
+		URL:           one.URL,
+		State:         one.State,
+		Merged:        strings.EqualFold(one.State, "MERGED") || strings.TrimSpace(one.MergedAt) != "",
+		AutoMerge:     one.AutoMergeRequest != nil,
+		FailingChecks: failing,
+		MergeState:    strings.ToUpper(strings.TrimSpace(one.MergeStateStatus)),
 	}, true, nil
+}
+
+// checkFailed reads a check's verdict as the forge words it. A check run
+// concludes FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED or STARTUP_FAILURE;
+// a commit status is in state FAILURE or ERROR. Everything else — success,
+// neutral, skipped, and a check still pending — is not a failure holding the
+// merge, and pending in particular is the ordinary state of a request the forge
+// is about to merge.
+func checkFailed(verdict string) bool {
+	switch strings.ToUpper(strings.TrimSpace(verdict)) {
+	case "FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE":
+		return true
+	default:
+		return false
+	}
 }
 
 // repoArgs scopes a forge command to the configured remote's repository. It

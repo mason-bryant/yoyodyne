@@ -588,6 +588,23 @@ says: closed where the landing discharged the item, back in the backlog parked
 or waiting where it did not. Settling a merge
 is complete on its own that way rather than leaning on the sweep below, so a
 checkout is never left behind by which command somebody happened to run.
+
+While the merge is still queued, the sweep reads the request's checks as well as
+its merge flag, because the two things a queued merge can be are the same
+observation without them: a merge the forge is about to perform, and one it is
+**holding on a failing required check** and will never perform until that check
+passes on the base branch. For six days in September 2026 eight queued merges
+were the second and every sweep said "queued", which is what it says about the
+first. So a held merge is reported by name — the request, and the check the
+forge says is failing on it — the failing checks are written onto the run's
+record, and their appearing there is announced in the item's thread and the
+channel as a `warning`, once, the way a dropped merge is. When the same check is
+holding several queued merges the sweep says so once, as one line naming the
+check and every request it holds, because that is the forge refusing the whole
+queue rather than one request's problem; `--json` carries it as `held_merges`.
+The check is on the base branch, so the fix is there too — nothing a run repairs
+reaches it — and the forge performs every held merge by itself once it passes.
+`docs/diagnoses/yoyodyne-ifd-362-red-check-landed-locally.md` is the six days.
 The branch the merge consumed is deleted **after** the item is settled, and its
 removal cannot hold the settlement up: it is hygiene on the forge rather than
 part of the publication, so a connection that drops at that last step leaves a

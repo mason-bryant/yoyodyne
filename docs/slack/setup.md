@@ -568,6 +568,15 @@ promoted, the thread reads as landed, and the pull request sits on the forge. So
 the count comes back with the line while the publication stands, and a line with
 nothing ready at all says so as long as there is one.
 
+A **held merge** is said the same way, once: a queued merge the forge is holding
+on a failing required check, named with the check. It is a `warning` in the
+channel because the count alone did not tell anybody — the count climbed from
+one to eight over six days in September 2026 while the same check failed on every
+queued request, and a merge the forge is holding looks exactly like one it is
+about to perform until the check is read. It is said when the
+[reconcile sweep](../operations.md#recovering-interrupted-runs) writes the
+failing checks onto the run's record, and again only if they change.
+
 It is otherwise deliberately narrow about when it speaks. A run in flight is not
 a stalled line, so nothing is said while work is visibly moving. A product nobody
 has ever watched is not one either: running items by name is a queue you are
