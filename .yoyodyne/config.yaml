@@ -77,7 +77,7 @@ product:
   decisions: docs/decisions
 
 execution:
-  max_concurrent_developers: 3  # raised 2->3 by the operator 2026-09-04 for the wide post-sweep queue; watch the replay rate and usage windows, drop back if either climbs. Was: raised for the ifd.49 soak; the promotion
+  max_concurrent_developers: 2  # dropped 3->2 on 2026-09-15: three concurrent full test suites (with race) saturated the machine (load 12-18), checks timed out spuriously, and tracker writes timed out mid-run; raise again only with the checks' load bounded. Was: raised 2->3 2026-09-04 for the wide post-sweep queue; before that raised for the ifd.49 soak; the promotion
                                 # lease serializes integrations underneath
   repair_attempts_before_replan: 2
   # A promotion that loses a race -- to another run, or to whoever moved the
