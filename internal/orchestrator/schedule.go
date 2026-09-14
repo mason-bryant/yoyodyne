@@ -457,8 +457,15 @@ type Pull struct {
 	// wired without it holds every blocked item rather than choosing work whose
 	// hold it could not read; see backlog.Holds for why that is the safe
 	// direction. It is satisfied by *runstate.Store.
-	Stoppages  readmodel.Stoppages
-	Intake     IntakeHolds
+	Stoppages readmodel.Stoppages
+	Intake    IntakeHolds
+	// Holds is the operator's pause over everything the harness spends. The pass
+	// enforces nothing with it — the actions it fires read the same switch and
+	// refuse under it — and reads it for one thing: whether a decision the pause
+	// already stopped once is worth attempting again this pull. Optional, and a
+	// pull wired without it attempts such a decision on every pull the pause
+	// stands, which is what a pass that cannot see a switch has to do.
+	Holds      OperatorHolds
 	Directives Directives
 	// Staleness is optional; see ScheduleStaleness for what a pull without one
 	// loses, which is a sentence rather than a constraint.
@@ -869,6 +876,13 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// remembered so that the selection which eventually pulls one can say it
 	// waited, which is the only place that fact survives the pass.
 	sequencedEarlier := make(map[string]conflict)
+	// waitingOn is the decisions this session has attempted and a gate shut for
+	// everything at once stopped, against the gate that stopped each. The record
+	// does not pace those refusals, so it offers the same decision on every pull
+	// the gate stands; this is what keeps the pass from attempting every offer.
+	// It is read against the switches the pull can see, and a decision is dropped
+	// from it by any attempt that ended some other way.
+	waitingOn := make(map[string]string)
 	// blockedInARow counts the runs that ended blocked with nothing landing
 	// between them. It is the storm the brake watches for, and it is reset by any
 	// run that finishes: one item failing is not a systemic failure, and the
@@ -909,8 +923,15 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		// all is what it answers. One that fired is a run like any other from here
 		// on; one a gate stopped started nothing, so it is neither priced, nor
 		// counted toward the failure storm, nor reported as a run that failed.
-		if carried := done.carriedOut; carried != nil && !s.settleCarryOut(&schedule, started, *carried) {
-			return
+		if carried := done.carriedOut; carried != nil {
+			if !carried.Carried && carried.Waiting {
+				waitingOn[carried.WorkItemID] = carried.Gate
+			} else {
+				delete(waitingOn, carried.WorkItemID)
+			}
+			if !s.settleCarryOut(&schedule, started, *carried) {
+				return
+			}
 		}
 		started.record(done)
 		// What the provider said, taken from the run that was told it. A later
@@ -1147,10 +1168,34 @@ pulling:
 			s.brake(&schedule, pull, blockedInARow)
 			blockedInARow = 0
 		}
-		// What is in flight is read before the hold rather than after it. It chooses
-		// nothing — it is two counts taken from the durable records — and reading it
-		// here is what lets the carry-out below be attempted whatever the hold turns
-		// out to say.
+		// The intake hold is read before anything is chosen, because choosing is
+		// the whole of what it holds. It is asked again on every pull rather than
+		// once for the pass: the hold that matters is the one the operator places
+		// while the scheduler is running, and a pass that answered from its first
+		// reading would keep choosing work for as long as it lasted.
+		//
+		// It is read here, ahead of the carry-out below, and acted on after it. The
+		// reading chooses nothing; what it is for at this point is telling the
+		// carry-out whether a decision the hold already stopped once is worth
+		// attempting again, which it is not while the hold still stands.
+		hold, held, err := pull.Intake.Held()
+		if err != nil {
+			if !unreadable(fmt.Errorf("read whether the operator has held intake: %w", err)) {
+				break
+			}
+			continue
+		}
+		paused, err := pull.paused()
+		if err != nil {
+			if !unreadable(err) {
+				break
+			}
+			continue
+		}
+		// What is in flight is read before the hold is acted on rather than after.
+		// It chooses nothing — it is two counts taken from the durable records — and
+		// reading it here is what lets the carry-out below be attempted whatever
+		// the hold turns out to say.
 		occupied, err := occupiedItems(pull.Runs)
 		if err != nil {
 			if !unreadable(err) {
@@ -1174,18 +1219,31 @@ pulling:
 		// so nothing below would ever have reached it, and the started entry it
 		// leaves is what accounts for the run.
 		//
-		// It is attempted before the hold and before the capacity check below, and
-		// that placement is the whole of what keeps those two gates from being
-		// silent. Both stop the pass here, so a carry-out placed after either would
-		// never be reached while either was closed — and a decision that cannot be
-		// carried out with nothing anywhere saying why is the one outcome this
-		// mechanism exists to end. Nothing is chosen by attempting it: the hold and
-		// the capacity are read again inside the action, which is where they refuse
-		// and where the refusal is written onto the item as a finding the development
-		// manager reads. So the harness claims nothing under a hold and records why
-		// it did not, which is what the hold is for and what she was missing.
+		// It is attempted before the hold and before the capacity check below are
+		// acted on, and that placement is the whole of what keeps those two gates
+		// from being silent. Both stop the pass here, so a carry-out placed after
+		// either would never be reached while either was closed — and a decision
+		// that cannot be carried out with nothing anywhere saying why is the one
+		// outcome this mechanism exists to end. Nothing is chosen by attempting it:
+		// the hold and the capacity are read again inside the action, which is where
+		// they refuse and where the refusal is written onto the item as a finding the
+		// development manager reads. So the harness claims nothing under a hold and
+		// records why it did not, which is what the hold is for and what she was
+		// missing.
+		//
+		// Once, though, per closing of the gate. A refusal by a gate shut for
+		// everything at once is not paced in the record, because pacing it would leave
+		// a lifted hold unnoticed for the whole delay — so the record offers the same
+		// decision again on every pull the gate stands, and a pass that attempted
+		// every offer would append a started entry and rewrite the item's record once
+		// per poll interval for the length of a pause. What bounds that is the pass's
+		// own memory of which gate stopped which decision, read against the switches
+		// this pull can see: a decision the hold stopped is left alone while the hold
+		// is up and attempted on the first pull it is down, which is the latency the
+		// unpaced record exists to keep. See nextCarryOut.
+		closed := closedGates{intake: held, pause: paused, capacity: free < 1}
 		carrying := false
-		if task, found := s.nextCarryOut(&schedule, pull, occupied); found {
+		if task, found := s.nextCarryOut(&schedule, pull, occupied, waitingOn, closed); found {
 			index := len(schedule.Started)
 			schedule.Started = append(schedule.Started, Started{
 				WorkItemID: task.WorkItemID,
@@ -1211,18 +1269,6 @@ pulling:
 			}(task)
 		}
 
-		// The intake hold is read before anything is chosen, because choosing is
-		// the whole of what it holds. It is asked again on every pull rather than
-		// once for the pass: the hold that matters is the one the operator places
-		// while the scheduler is running, and a pass that answered from its first
-		// reading would keep choosing work for as long as it lasted.
-		hold, held, err := pull.Intake.Held()
-		if err != nil {
-			if !unreadable(fmt.Errorf("read whether the operator has held intake: %w", err)) {
-				break
-			}
-			continue
-		}
 		if held {
 			schedule.IntakeHeld = &hold
 			if !s.Watching {
@@ -1825,7 +1871,17 @@ func (s Scheduler) correct(ctx context.Context, schedule *Schedule, pull Pull) {
 // records, and a run does not appear in those until it reserves — several steps
 // after the pass started it — so a pull that did not ask this would fire the same
 // decision again on the very next pull and put two developers on one item.
-func (s Scheduler) nextCarryOut(schedule *Schedule, pull Pull, occupied map[string]struct{}) (CarryOutTask, bool) {
+//
+// And a decision this session already attempted, which a gate shut for everything
+// at once stopped, is passed over for as long as this pull can see that gate
+// still shut. The record offers it on every pull on purpose, so that the first
+// pull after the gate opens fires it; attempting every offer would append a
+// started entry and rewrite the item's record once per poll interval for the
+// whole length of a pause. The gates the pass can see are the three that stop
+// everything — the intake hold, the operator's pause, and a full harness — which
+// is exactly the set the record leaves unpaced. A gate it cannot see is attempted,
+// because the alternative is a decision this session never fires.
+func (s Scheduler) nextCarryOut(schedule *Schedule, pull Pull, occupied map[string]struct{}, waitingOn map[string]string, closed closedGates) (CarryOutTask, bool) {
 	if pull.CarryOut == nil {
 		return CarryOutTask{}, false
 	}
@@ -1843,9 +1899,54 @@ func (s Scheduler) nextCarryOut(schedule *Schedule, pull Pull, occupied map[stri
 		if _, busy := occupied[task.WorkItemID]; busy {
 			continue
 		}
+		if gate, stopped := waitingOn[task.WorkItemID]; stopped && closed.stillShut(gate) {
+			continue
+		}
 		return task, true
 	}
 	return CarryOutTask{}, false
+}
+
+// closedGates is what this pull can see of the switches that stop everything at
+// once, read before the carry-out is chosen. It decides nothing about whether a
+// decision may fire — the action reads each switch again and refuses under it —
+// and is only what says whether attempting a decision one of them already stopped
+// would find the same switch still shut.
+type closedGates struct {
+	intake   bool
+	pause    bool
+	capacity bool
+}
+
+// stillShut reports the named gate being one this pull can see, and shut. A gate
+// the pass cannot see reads as open, so the decision it stopped is attempted and
+// the action answers — the direction that costs an attempt rather than a decision
+// this session never fires.
+func (c closedGates) stillShut(gate string) bool {
+	switch gate {
+	case runstate.TriageGateIntakeHold:
+		return c.intake
+	case runstate.TriageGateSpendingPause:
+		return c.pause
+	case runstate.TriageGateCapacity:
+		return c.capacity
+	default:
+		return false
+	}
+}
+
+// paused reports the operator's pause as this pull can see it. A pull with no way
+// to read it reports it open, which is what lets a decision the pause stopped be
+// attempted again rather than never; see closedGates.
+func (p Pull) paused() (bool, error) {
+	if p.Holds == nil {
+		return false, nil
+	}
+	_, held, err := p.Holds.Held()
+	if err != nil {
+		return false, fmt.Errorf("read whether the operator has paused harness activity: %w", err)
+	}
+	return held, nil
 }
 
 // carryingOutReason is what the started entry says about a run the harness fired

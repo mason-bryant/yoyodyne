@@ -603,10 +603,14 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		return orchestrator.Pull{}, err
 	}
 	return orchestrator.Pull{
-		Tracker:    tracker,
-		Runs:       parts.store,
-		Stoppages:  parts.store,
-		Intake:     parts.intake,
+		Tracker:   tracker,
+		Runs:      parts.store,
+		Stoppages: parts.store,
+		Intake:    parts.intake,
+		// The same pause every run and every turn reads. The pass enforces nothing
+		// with it; it is what tells the pass not to attempt, on every poll of a
+		// pause, a decision the pause has already stopped once.
+		Holds:      parts.holds,
 		Directives: parts.directives,
 		Staleness: repositoryStaleness{
 			repository: parts.repository,
@@ -778,8 +782,10 @@ preserved worktree being what a continued developer could be handed back. Nothin
 is spent by a refusal, and every refusal is written onto the item's triage record
 and onto the docket entry she reads, naming the gate and what would clear it -- so
 a decision that cannot be carried out says so where she is looking rather than
-sitting silently. A gate that needs something changed is retried at a paced
-interval rather than every poll; one that clears on its own is retried at once.
+sitting silently. A gate that stops one item is retried at a paced interval
+rather than every poll; one that stops everything at once -- your pause, your
+intake hold, a full harness -- is attempted once while it stands, so the docket
+says so, and again on the first pull after it opens.
 
 Every pull also wakes a role whose block of tracker actions the harness refused.
 A block it cannot read is refused whole, so nothing in it happens and the queue

@@ -742,7 +742,7 @@ wakes a role to put its own refused block right, so
 `yoyo pause` is the switch for stopping what a quiet session spends. It does stop
 the fourth: carrying out a decision is the harness choosing work, so a held intake
 leaves the decision standing and the docket entry says the hold is what it is
-waiting on.
+waiting on, and the first pull after you release it carries the decision out.
 
 **Only one session watches a product at a time.** A second `yoyo work --watch`
 is refused as it starts, in a sentence naming the session holding the watch and

@@ -433,12 +433,25 @@ func (h *scheduleHarness) Carry(_ context.Context, task CarryOutTask) (CarriedOu
 	return carry(h, task)
 }
 
-// outstandingUntilCarried is the fake reading what the real one reads: a decision
-// the harness has attempted is not outstanding on the next pull — either it fired
-// and is spent, or a gate stopped it and its pacing has it. Without that a drain
-// would offer the same decision on every pull for ever, which is the loop the
-// durable records exist to close.
-func outstandingUntilCarried(tasks ...CarryOutTask) func(*scheduleHarness) ([]CarryOutTask, error) {
+// harnessPause is the operator's pause as the pull reads it, over the harness's
+// own switch.
+type harnessPause struct{ h *scheduleHarness }
+
+func (p harnessPause) Held() (runstate.OperatorHold, bool, error) {
+	p.h.mu.Lock()
+	defer p.h.mu.Unlock()
+	if !p.h.paused {
+		return runstate.OperatorHold{}, false, nil
+	}
+	return runstate.OperatorHold{HeldAt: p.h.now}, true, nil
+}
+
+// outstandingUntilAttempted is the fake reading what the real one reads for a
+// decision that fired or that a gate shut for one item refused: it is not
+// outstanding on the next pull, because it is spent or its pacing has it. It is
+// wrong for a gate shut for everything at once, which the record deliberately
+// does not pace — see outstandingUntilFired for those.
+func outstandingUntilAttempted(tasks ...CarryOutTask) func(*scheduleHarness) ([]CarryOutTask, error) {
 	return func(h *scheduleHarness) ([]CarryOutTask, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -449,6 +462,25 @@ func outstandingUntilCarried(tasks ...CarryOutTask) func(*scheduleHarness) ([]Ca
 				attempted = attempted || done.WorkItemID == task.WorkItemID
 			}
 			if !attempted {
+				waiting = append(waiting, task)
+			}
+		}
+		return waiting, nil
+	}
+}
+
+// outstandingUntilFired is the fake reading what the real one reads for a
+// decision a gate shut for everything at once refused: the record does not pace
+// it, so it is offered again on every pull until it actually fires. It is what
+// exercises the recurrence the pass has to bound, and the fired set is the test's
+// own, kept by its carry.
+func outstandingUntilFired(fired map[string]bool, tasks ...CarryOutTask) func(*scheduleHarness) ([]CarryOutTask, error) {
+	return func(h *scheduleHarness) ([]CarryOutTask, error) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		var waiting []CarryOutTask
+		for _, task := range tasks {
+			if !fired[task.WorkItemID] {
 				waiting = append(waiting, task)
 			}
 		}
@@ -476,7 +508,7 @@ func TestAPassCarriesOutARecordedDecisionBesideTheQueuesOwnWork(t *testing.T) {
 
 	harness := newScheduleHarness(readyItems("yoyodyne-ifd.500")...)
 	harness.capacity = 2
-	harness.outstanding = outstandingUntilCarried(decidedTask("yoyodyne-ifd.346"))
+	harness.outstanding = outstandingUntilAttempted(decidedTask("yoyodyne-ifd.346"))
 	harness.carry = func(h *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
 		return CarriedOut{
 			WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
@@ -524,7 +556,7 @@ func TestAPullFiresOneDecisionHoweverManyAreOutstanding(t *testing.T) {
 
 	harness := newScheduleHarness()
 	harness.capacity = 3
-	harness.outstanding = outstandingUntilCarried(
+	harness.outstanding = outstandingUntilAttempted(
 		decidedTask("yoyodyne-ifd.346"), decidedTask("yoyodyne-ifd.347"), decidedTask("yoyodyne-ifd.348"))
 	harness.carry = func(h *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
 		return CarriedOut{
@@ -555,7 +587,7 @@ func TestADecisionAGateStoppedIsNotARunThatFailed(t *testing.T) {
 
 	harness := newScheduleHarness()
 	harness.blockedRuns = 1
-	harness.outstanding = outstandingUntilCarried(decidedTask("yoyodyne-ifd.346"))
+	harness.outstanding = outstandingUntilAttempted(decidedTask("yoyodyne-ifd.346"))
 	harness.carry = func(_ *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
 		return CarriedOut{
 			WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
@@ -759,7 +791,7 @@ func TestAHeldIntakeStillAttemptsTheCarryOutSoTheRefusalIsRecorded(t *testing.T)
 	harness := newScheduleHarness(readyItems("yoyodyne-ifd.500")...)
 	harness.capacity = 2
 	harness.held = &runstate.IntakeHold{HeldAt: harness.now, Reason: "the queue is heading somewhere odd"}
-	harness.outstanding = outstandingUntilCarried(decidedTask("yoyodyne-ifd.346"))
+	harness.outstanding = outstandingUntilAttempted(decidedTask("yoyodyne-ifd.346"))
 	harness.carry = func(_ *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
 		// What the action reports when it reads the same hold the pass just read.
 		// Nothing is claimed and nothing is started; the finding is the whole of it.
@@ -800,7 +832,9 @@ func TestAFullHarnessStillAttemptsTheCarryOutSoTheRefusalIsRecorded(t *testing.T
 	harness.capacity = 1
 	// One slot, taken by a run this pass did not start.
 	harness.inFlight["yoyodyne-ifd.400"] = runningState("run-aaaabbbbccccddddeeeeffff00002222", "yoyodyne-ifd.400")
-	harness.outstanding = outstandingUntilCarried(decidedTask("yoyodyne-ifd.346"))
+	// The record offers a decision a full harness stopped on every pull, which is
+	// what a drain that attempted every offer would loop on for ever.
+	harness.outstanding = outstandingUntilFired(map[string]bool{}, decidedTask("yoyodyne-ifd.346"))
 	harness.carry = func(_ *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
 		return CarriedOut{
 			WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
@@ -813,7 +847,10 @@ func TestAFullHarnessStillAttemptsTheCarryOutSoTheRefusalIsRecorded(t *testing.T
 		t.Fatalf("Schedule() error = %v", err)
 	}
 	if len(harness.carried) != 1 {
-		t.Fatalf("carried = %#v, want the decision attempted so the full harness has somewhere to be recorded", harness.carried)
+		t.Fatalf("carried = %#v, want the decision attempted once so the full harness has somewhere to be recorded, and not again while it stays full", harness.carried)
+	}
+	if schedule.Stopped != ScheduleCapacityFull {
+		t.Fatalf("stopped = %q, want the drain to end on the full harness rather than loop on the decision it stopped", schedule.Stopped)
 	}
 	if !strings.Contains(schedule.CarryOutProblem, runstate.TriageGateCapacity) {
 		t.Fatalf("problem = %q, want developer capacity named as the gate that stopped it", schedule.CarryOutProblem)
@@ -828,7 +865,7 @@ func TestAFiredDecisionDoesNotEraseAReadingThatFailed(t *testing.T) {
 
 	harness := newScheduleHarness()
 	harness.capacity = 2
-	readable := outstandingUntilCarried(decidedTask("yoyodyne-ifd.346"))
+	readable := outstandingUntilAttempted(decidedTask("yoyodyne-ifd.346"))
 	harness.outstanding = func(h *scheduleHarness) ([]CarryOutTask, error) {
 		tasks, _ := readable(h)
 		// Part of the record answered and part of it did not, which is what
@@ -957,5 +994,185 @@ func TestADecisionADirectivePausesDoesNotPinThePass(t *testing.T) {
 	}
 	if len(later) != 2 {
 		t.Fatalf("outstanding = %#v, want the paused decision offered again once its pacing has passed", later)
+	}
+}
+
+// The recurrence the record leaves unpaced, bounded by the pass. A gate shut for
+// everything at once is not paced in the item's record, so the same decision is
+// offered on every pull the gate stands — and a pass that attempted every offer
+// would append a started entry and rewrite the item's record once per poll
+// interval for the whole length of a pause. What the pass owes instead is one
+// attempt per closing of the gate, so the refusal is on the record, and the
+// decision fired on the first pull after the gate opens, so the latency the
+// unpaced record exists to keep is kept.
+func TestAWaitingGateStopsADecisionOnceAndFiresItThePullTheGateOpens(t *testing.T) {
+	t.Parallel()
+
+	for _, gate := range []struct {
+		name string
+		gate string
+		// shut closes the gate before the session starts, open opens it between
+		// polls, and closed reports what the carry-out meets when it is attempted.
+		shut   func(h *scheduleHarness)
+		open   func(h *scheduleHarness)
+		closed func(h *scheduleHarness) bool
+	}{
+		{
+			name: "the intake hold",
+			gate: runstate.TriageGateIntakeHold,
+			shut: func(h *scheduleHarness) {
+				h.held = &runstate.IntakeHold{HeldAt: h.now, Reason: "the queue is heading somewhere odd"}
+			},
+			open:   func(h *scheduleHarness) { h.release() },
+			closed: func(h *scheduleHarness) bool { return h.held != nil },
+		},
+		{
+			name:   "the operator's pause",
+			gate:   runstate.TriageGateSpendingPause,
+			shut:   func(h *scheduleHarness) { h.seePaused, h.paused = true, true },
+			open:   func(h *scheduleHarness) { h.mu.Lock(); h.paused = false; h.mu.Unlock() },
+			closed: func(h *scheduleHarness) bool { return h.paused },
+		},
+		{
+			name: "a full harness",
+			gate: runstate.TriageGateCapacity,
+			shut: func(h *scheduleHarness) {
+				h.inFlight["yoyodyne-ifd.400"] = runningState("run-aaaabbbbccccddddeeeeffff00002222", "yoyodyne-ifd.400")
+			},
+			open:   func(h *scheduleHarness) { h.mu.Lock(); delete(h.inFlight, "yoyodyne-ifd.400"); h.mu.Unlock() },
+			closed: func(h *scheduleHarness) bool { return len(h.inFlight) > 0 },
+		},
+	} {
+		t.Run(gate.name, func(t *testing.T) {
+			t.Parallel()
+
+			harness := newScheduleHarness()
+			harness.capacity = 1
+			gate.shut(harness)
+			fired := map[string]bool{}
+			harness.outstanding = outstandingUntilFired(fired, decidedTask("yoyodyne-ifd.346"))
+			harness.carry = func(h *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
+				h.mu.Lock()
+				stillShut := gate.closed(h)
+				h.mu.Unlock()
+				if stillShut {
+					// What the action reports when it reads the same switch the pass just
+					// read: nothing claimed, nothing started, the finding written.
+					return CarriedOut{
+						WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
+						Gate: gate.gate, Waiting: true,
+						Problem: "the \"rerun\" the development manager decided is waiting on " + gate.gate,
+					}, Outcome{}, nil
+				}
+				h.mu.Lock()
+				fired[task.WorkItemID] = true
+				h.mu.Unlock()
+				return CarriedOut{
+					WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
+					Carried: true, Reason: rerunReasoning,
+				}, h.complete(task.WorkItemID), nil
+			}
+			// Three polls with the gate shut, then it opens; the session is stopped
+			// two polls after that, once the decision has had a pull to fire on.
+			harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+				if sleeps == 3 {
+					gate.open(h)
+				}
+				return sleeps < 5
+			}
+			// The limit is a guard rather than the test: a pass that attempted the
+			// decision on every pull never sleeps — each attempt is a run to collect
+			// — so without it a regression would hang here rather than fail.
+			schedule, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Limit: 4}).Schedule(context.Background())
+			if err != nil {
+				t.Fatalf("Schedule() error = %v", err)
+			}
+			if schedule.Stopped == ScheduleLimitReached {
+				t.Fatalf("the pass attempted the decision on every pull %s stood: %#v", gate.name, harness.carried)
+			}
+			// Once while the gate stood, however many polls it stood for, and once
+			// more to fire it: each attempt is a durable write and a started entry, so
+			// one per poll would be the pause's length in both.
+			if len(harness.carried) != 2 {
+				t.Fatalf("carried = %d attempt(s) (%#v), want one refused while %s stood and one fired when it opened", len(harness.carried), harness.carried, gate.name)
+			}
+			if len(schedule.Started) != 2 || schedule.Started[0].Declined == "" || schedule.Started[1].Declined != "" {
+				t.Fatalf("started = %#v, want one start that never became a run and then one that did", schedule.Started)
+			}
+			if len(schedule.CarriedOut) != 1 || !schedule.CarriedOut[0].Carried {
+				t.Fatalf("carried out = %#v, want the decision fired once %s opened", schedule.CarriedOut, gate.name)
+			}
+			// The finding is not left standing on the pass once the decision fired.
+			if schedule.CarryOutProblem != "" {
+				t.Fatalf("problem = %q, want nothing said about a gate once the decision fired", schedule.CarryOutProblem)
+			}
+		})
+	}
+}
+
+// The pass's memory is of the gate it saw, not of the decision: a decision one
+// gate stopped is attempted again the pull that gate opens, even if the attempt
+// then meets a different one, and what the pass remembers is the gate it met
+// last. A memory that outlived the gate would be a decision this session never
+// fires.
+func TestAWaitingGateRefusalIsForgottenTheMomentThatGateOpens(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.capacity = 1
+	harness.seePaused, harness.paused = true, true
+	fired := map[string]bool{}
+	harness.outstanding = outstandingUntilFired(fired, decidedTask("yoyodyne-ifd.346"))
+	harness.carry = func(h *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
+		// What the action reports is read from the same switches the pass reads,
+		// in the order the action asks them: the pause first, then the hold.
+		h.mu.Lock()
+		paused, held := h.paused, h.held != nil
+		h.mu.Unlock()
+		gate := ""
+		switch {
+		case paused:
+			gate = runstate.TriageGateSpendingPause
+		case held:
+			gate = runstate.TriageGateIntakeHold
+		}
+		if gate != "" {
+			return CarriedOut{
+				WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
+				Gate: gate, Waiting: true, Problem: "waiting on " + gate,
+			}, Outcome{}, nil
+		}
+		h.mu.Lock()
+		fired[task.WorkItemID] = true
+		h.mu.Unlock()
+		return CarriedOut{WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision, Carried: true, Reason: rerunReasoning},
+			h.complete(task.WorkItemID), nil
+	}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		switch sleeps {
+		case 2:
+			// The pause lifts and the hold goes up in the same gap between polls, so
+			// the attempt the lifted pause earns meets the hold instead.
+			h.mu.Lock()
+			h.paused = false
+			h.held = &runstate.IntakeHold{HeldAt: h.now, Reason: "held between polls"}
+			h.mu.Unlock()
+		case 4:
+			h.release()
+		}
+		return sleeps < 6
+	}
+	schedule, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Limit: 5}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped == ScheduleLimitReached {
+		t.Fatalf("the pass attempted the decision on every pull a gate stood: %#v", harness.carried)
+	}
+	if len(harness.carried) != 3 {
+		t.Fatalf("carried = %d attempt(s), want one per gate closing and one to fire: %#v", len(harness.carried), harness.carried)
+	}
+	if len(schedule.CarriedOut) != 1 {
+		t.Fatalf("carried out = %#v, want the decision fired once both gates had opened", schedule.CarriedOut)
 	}
 }

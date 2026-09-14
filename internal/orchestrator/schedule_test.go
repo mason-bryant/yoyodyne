@@ -2331,6 +2331,11 @@ type scheduleHarness struct {
 	carried     []CarryOutTask
 	outstanding func(*scheduleHarness) ([]CarryOutTask, error)
 	carry       func(*scheduleHarness, CarryOutTask) (CarriedOut, Outcome, error)
+	// paused is the operator's pause over everything the harness spends, as the
+	// pull reads it. A pull is wired with the switch only where a test asks, so
+	// every other test's pass cannot see it — which is what every pass was before.
+	paused    bool
+	seePaused bool
 
 	pulls      int
 	order      []string
@@ -2440,6 +2445,10 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	if h.outstanding != nil {
 		carryOut = h
 	}
+	var holds OperatorHolds
+	if h.seePaused {
+		holds = harnessPause{h}
+	}
 	h.mu.Unlock()
 	h.mu.Lock()
 	tree := h.tree
@@ -2451,7 +2460,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h, Stoppages: stoppages,
 		Capacity: capacity, Start: h.start, Escalations: escalations,
-		Tree: tree, Triage: docket, Recurring: recurring, CarryOut: carryOut,
+		Tree: tree, Triage: docket, Recurring: recurring, CarryOut: carryOut, Holds: holds,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.
