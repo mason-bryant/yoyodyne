@@ -265,6 +265,53 @@ func TestAStatusIsNotClearedOnALinkNothingSettles(t *testing.T) {
 	}
 }
 
+// A repair has to take, or the next pass reports the same item again and the
+// loop this class exists to end is the loop it runs. The attribution repair
+// appends the goal's note rather than rewriting anything, so what has to hold is
+// that the item in the state that leaves it — its old note still there, the new
+// one after it — is no longer stale. The newest attribution line is the current
+// claim, so it is; and where the goal carries an identity, what is appended is
+// that identity, so the next re-wording leaves it resolved too.
+func TestARepairedAttributionIsNoLongerStale(t *testing.T) {
+	t.Parallel()
+
+	goals := recordedGoals("Run development nearly autonomously")
+	goals.Goals[0].Identity = "run-autonomously"
+	orphaned := attributedItem("yoyodyne-ifd.46", "Attributed before the goal was reworded", "Run development almost without a person")
+	records := Records{Admitted: []beads.WorkItem{orphaned}, Held: backlog.ReadHolds(nil), Goals: goals}
+	if _, err := Judge(orphaned, ClassAttribution, "", records); err != nil {
+		t.Fatalf("Judge() error = %v, want the orphaned attribution offered for repair", err)
+	}
+
+	// What the repair writes, appended after everything already there — the old
+	// note included — and the witness the tracker re-records from that write.
+	repaired := orphaned
+	repaired.Notes = orphaned.Notes + "\n\nRe-attributed after the goal it named stopped resolving.\n\n" + goals.NoteFor("Run development nearly autonomously")
+	repaired.GoalWitness = goal.Witness{Recorded: true, Statement: "[run-autonomously] Run development nearly autonomously"}
+	records.Admitted = []beads.WorkItem{repaired}
+
+	if attribution := goals.AttributionOf(repaired.Notes, repaired.GoalWitness); !attribution.Resolved() || attribution.Identity != "run-autonomously" {
+		t.Fatalf("after the repair the item is %#v, want it attributed by the goal's identity", attribution)
+	}
+	if report := Survey(records); len(report.Repairs) != 0 || len(report.Holds) != 0 {
+		t.Fatalf("after the repair the survey still reports %#v / %#v", report.Repairs, report.Holds)
+	}
+	if _, err := Judge(repaired, ClassAttribution, "", records); err == nil {
+		t.Fatal("Judge() offered a repaired attribution for repair again")
+	} else if !strings.Contains(err.Error(), "one the goals state") {
+		t.Fatalf("Judge() refused with %q, want it to say the goal now resolves", err)
+	}
+
+	// The re-wording that orphaned the old note does nothing to the new one,
+	// which is the whole of why the repair writes the identity rather than the
+	// words.
+	goals.Goals[0].Statement = "Run development with almost nobody in the loop"
+	records.Goals = goals
+	if report := Survey(records); len(report.Repairs) != 0 {
+		t.Fatalf("a re-wording orphaned the repaired attribution again: %#v", report.Repairs)
+	}
+}
+
 func TestJudgeRefusesAStateItDoesNotRecognize(t *testing.T) {
 	t.Parallel()
 

@@ -156,6 +156,13 @@ func (s *Session) carryOutRepair(ctx context.Context, outcome *TrackerOutcome) {
 		}
 		outcome.applied("retired %s's dependency on %s, which the tracker holds as closed", id, repair.DependsOn)
 	case backlogrepair.ClassAttribution:
+		// Appended, exactly as an attribution is, and that is enough for the repair
+		// to take: the newest attribution line on an item is its current claim, so
+		// the orphaned line above it becomes the record of how the item got here
+		// rather than what it says now, and the tracker re-records the goal witness
+		// from the same write. What is written is the goal's identity where it has
+		// one, so the next re-wording leaves this item alone. The goal line goes
+		// last so that nothing in the account above it can read as the claim.
 		attributed := strings.TrimSpace(action.Goal)
 		change := beads.WorkItemChange{AppendNotes: note + "\n\n" + s.options.Goals.NoteFor(attributed)}
 		if _, err := s.options.Tracker.Update(ctx, id, change); err != nil {

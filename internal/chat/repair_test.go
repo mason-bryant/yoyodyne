@@ -137,6 +137,24 @@ func TestTheOtherTwoKindsOfStaleStateAreCorrectedAgainstTheirOwnRecords(t *testi
 				t.Errorf("the note recorded on the item is %q, want it to say %q", notes, want)
 			}
 		}
+		// And the repair takes. The item as the tracker leaves it — the old note
+		// still there, this one appended after it — resolves, and a survey over it
+		// offers nothing: the newest attribution line is the current claim, and the
+		// tracker re-records the witness from the same write (which the client's own
+		// tests pin), so nothing about the item reads as orphaned any more.
+		repaired := item
+		repaired.Notes = item.Notes + "\n\n" + notes
+		if attribution := options.Goals.AttributionOf(repaired.Notes, repaired.GoalWitness); !attribution.Resolved() {
+			t.Fatalf("after the repair the item is %#v, want it attributed", attribution)
+		}
+		report := backlogrepair.Survey(backlogrepair.Records{
+			Admitted: []beads.WorkItem{repaired},
+			Held:     backlog.ReadHolds(nil),
+			Goals:    options.Goals,
+		})
+		if report.Anything() {
+			t.Fatalf("after the repair the survey still reports %#v / %#v", report.Repairs, report.Holds)
+		}
 	})
 }
 
