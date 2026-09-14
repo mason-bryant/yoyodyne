@@ -581,8 +581,8 @@ func TestADeliveryAShutdownCancelledAfterHerAnswerIsNotDeliveredAgain(t *testing
 
 // A turn that may have been taken is one nothing can claim was not, so the
 // attempt stands and the delivery does not. It is tried again, and the trying is
-// bounded: past the bound the stoppage needs a person, and every pass afterwards
-// says so rather than falling quiet about it.
+// bounded: past the bound the harness stops trying, and stops saying so on every
+// pass with it.
 func TestADeliveryThatKeepsFailingStopsBeingTried(t *testing.T) {
 	t.Parallel()
 
@@ -604,24 +604,93 @@ func TestADeliveryThatKeepsFailingStopsBeingTried(t *testing.T) {
 		}
 		clock.now = clock.now.Add(runstate.EscalationRetryDelay)
 	}
-	// Past the bound the harness has stopped trying, and every pass from here on
-	// says so: a stoppage that reached nobody and is reported nowhere is the
-	// silence this exists to end, and nothing else in the harness will mention it.
+	// Past the bound the harness has stopped trying and says nothing further about
+	// it. The stoppage is not lost by that: its record is what holds the item for a
+	// person on every operator surface, and it holds it whether or not a pull
+	// mentions it. What restating it here cost was every session start opening with
+	// a paragraph per abandoned stoppage -- twelve of them by 2026-09-05 -- which
+	// buried what each pass had actually done under a standing fact nothing was
+	// acting on.
 	for _, pass := range []string{"the pass that finds it spent", "the pass after that"} {
 		spent, err := escalator.Escalate(context.Background())
 		if err != nil {
 			t.Fatalf("%s: Escalate() error = %v", pass, err)
 		}
-		if len(spent.Escalated) != 1 || spent.Escalated[0].Delivered {
-			t.Fatalf("%s = %#v, want the abandoned stoppage reported and not delivered", pass, spent.Escalated)
-		}
-		if !strings.Contains(spent.Escalated[0].Problem, "needs a person") {
-			t.Fatalf("%s problem = %q, want it to say the stoppage needs a person", pass, spent.Escalated[0].Problem)
+		if len(spent.Escalated) != 0 {
+			t.Fatalf("%s = %#v, want a pass with nothing to do about an abandoned stoppage to say nothing", pass, spent.Escalated)
 		}
 		clock.now = clock.now.Add(runstate.EscalationRetryDelay)
 	}
 	if len(judge.shown) != runstate.MaxEscalationAttempts {
 		t.Fatalf("turns taken = %d, want the %d the bound permits", len(judge.shown), runstate.MaxEscalationAttempts)
+	}
+}
+
+// A session opening onto a docket full of stoppages the harness gave up on says
+// nothing about them, and gets on with the one it can still deliver.
+//
+// This is the shape the operator actually met: twelve spent escalations from a
+// kill loop, none of them anything a pass could act on, restated in full at the
+// top of every session start until the block was what a session start was. The
+// stoppage still awaiting somebody is what the pass is for, and it is what the
+// pass should be legible as having done.
+func TestASessionStartSaysNothingAboutStoppagesItGaveUpOn(t *testing.T) {
+	t.Parallel()
+
+	spent := []runstate.State{
+		reviewStoppedState("run-"+strings.Repeat("a", 32), "yoyodyne-spent-1"),
+		reviewStoppedState("run-"+strings.Repeat("b", 32), "yoyodyne-spent-2"),
+		reviewStoppedState("run-"+strings.Repeat("c", 32), "yoyodyne-spent-3"),
+	}
+	refusing := &standingJudge{err: errors.New("the provider refused the turn")}
+	escalator := escalatorOver(t, spent, refusing, nil)
+	clock := &movingClock{now: escalationNow}
+	escalator.Clock = clock
+
+	// Every one of them tried until the harness stops trying: one attempt per
+	// pass, and the pacing waited out between them.
+	for range len(spent) * runstate.MaxEscalationAttempts {
+		if _, err := escalator.Escalate(context.Background()); err != nil {
+			t.Fatalf("Escalate() error = %v", err)
+		}
+		clock.now = clock.now.Add(runstate.EscalationRetryDelay)
+	}
+	if len(refusing.shown) != len(spent)*runstate.MaxEscalationAttempts {
+		t.Fatalf("turns taken = %d, want every stoppage tried the %d times the bound permits", len(refusing.shown), runstate.MaxEscalationAttempts)
+	}
+
+	// The session that starts next: the same docket and the same records, a
+	// conversation that answers, and one stoppage nobody has been shown yet.
+	awaiting := reviewStoppedState(docketedRunID, docketedItem)
+	docket, ok := escalator.Docket.(*memoryDocket)
+	if !ok {
+		t.Fatalf("docket = %T, want the memory docket the helper wires", escalator.Docket)
+	}
+	if _, err := docket.RecordOnce(stoppedEntry(awaiting)); err != nil {
+		t.Fatalf("RecordOnce() error = %v", err)
+	}
+	runs, ok := escalator.Runs.(loadableRuns)
+	if !ok {
+		t.Fatalf("runs = %T, want the loadable runs the helper wires", escalator.Runs)
+	}
+	runs.states[awaiting.RunID] = awaiting
+	answering := &standingJudge{judgment: Judgment{ConversationID: "chat-abc", Decision: "rerun"}}
+	escalator.Manager = answering
+
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("the session start's Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 {
+		t.Fatalf("escalated = %#v, want the one stoppage the pass could still do something about and none of the spent ones", sweep.Escalated)
+	}
+	if !sweep.Escalated[0].Delivered || sweep.Escalated[0].RunID != docketedRunID {
+		t.Fatalf("escalated = %#v, want the awaiting stoppage delivered", sweep.Escalated[0])
+	}
+	for _, state := range spent {
+		if strings.Contains(sweep.Render(), state.RunID) {
+			t.Fatalf("Render() = %q, want the session start to say nothing about the stoppage of run %s", sweep.Render(), state.RunID)
+		}
 	}
 }
 
