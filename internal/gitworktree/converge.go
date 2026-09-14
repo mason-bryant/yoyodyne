@@ -311,7 +311,8 @@ func (m *Manager) RemoveMergedBranch(ctx context.Context, branch, targetBranch s
 // the harness may do about each part. Only a declared export with committed
 // content behind it is ever thrown away; a declared export that exists only in
 // the working tree, and anything the project never declared, are somebody
-// else's to resolve.
+// else's to resolve. An export's in-flight temp file is in none of the three:
+// it is not a change anybody made, and it will not exist a moment from now.
 type primaryStatus struct {
 	exports          []string
 	untrackedExports []string
@@ -341,6 +342,13 @@ func (m *Manager) primaryChanges(ctx context.Context) (primaryStatus, error) {
 		}
 		path := filepath.ToSlash(line[3:])
 		if _, allowed := m.allowedPrimaryChanges[path]; !allowed {
+			// An export being rewritten right now is not a change anybody made, and
+			// it is gone by the time anybody could look at it. Reading one as
+			// unsaved work is how a round that had already passed every gate came
+			// to be thrown away twice in one afternoon.
+			if strings.HasPrefix(line, "??") && isExportWriteInProgress(m.allowedPrimaryChanges, path) {
+				continue
+			}
 			status.unexpected = append(status.unexpected, path)
 			continue
 		}
@@ -351,6 +359,62 @@ func (m *Manager) primaryChanges(ctx context.Context) (primaryStatus, error) {
 		status.exports = append(status.exports, path)
 	}
 	return status, nil
+}
+
+// exportWritePrefix is what an atomic rewrite of a declared export leaves
+// beside it while the write is in flight. The writer creates its temp file in
+// the target's own directory, named for the target with a marker in front and a
+// unique suffix behind — `.beads/.~issues.jsonl.2847119036` for
+// `.beads/issues.jsonl` — and renames it over the target once the content is
+// down. The window is milliseconds wide and it recurs on every export, which is
+// what makes reading one as somebody's uncommitted work a race rather than a
+// fault: a check landing inside the window refuses, and the same check a moment
+// later passes.
+//
+// The suffix is deliberately not matched any more precisely than "something,
+// and no path separator in it". What has actually been observed is a run of
+// digits, but the exporter is somebody else's software: pinning its choice of
+// randomness here would turn a version bump into the same discarded round this
+// exists to prevent, and the prefix already names one declared file exactly.
+func exportWritePrefix(declared string) string {
+	separator := strings.LastIndex(declared, "/")
+	return declared[:separator+1] + ".~" + declared[separator+1:] + "."
+}
+
+// isExportWriteInProgress reports whether an untracked path is a declared
+// export's temp file rather than a file somebody put there. Only an untracked
+// path is ever asked: a tracked file by that name is committed content, and
+// nothing about how it got its name makes it transient.
+//
+// This repository also ignores them, so in this checkout they usually never
+// reach Git's status at all: the root .gitignore's last entry is `.beads/.~*`,
+// added by hand in 11ee8f0 after the two rounds. That entry is checkable in one
+// command and this comment is not, so read it rather than this sentence —
+// `git show HEAD:.gitignore | tail -3`. The two are not redundant. The entry is
+// one line in one project's tracked content, which the exporter's own `bd setup`
+// rewrites for the file beneath `.beads/` and which a second project managed by
+// this harness has no reason to have; the check is the half that travels, and it
+// is the only half a repository without that line has.
+//
+// The tolerance has no staleness bound. An exporter killed mid-write leaves a
+// temp file that nothing renames away, and from here it is indistinguishable
+// from one being written right now, so it is ignored for as long as it sits
+// there rather than surfacing later as unexpected state. That is the deliberate
+// trade: the alternative reading is the one that discarded two reviewed rounds,
+// and a leftover temp file is Git-ignored here anyway, so refusing on it would
+// buy visibility this check was never the place to give.
+func isExportWriteInProgress(declared map[string]struct{}, path string) bool {
+	for export := range declared {
+		prefix := exportWritePrefix(export)
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		suffix := path[len(prefix):]
+		if suffix != "" && !strings.Contains(suffix, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) unexpectedPrimaryChanges(ctx context.Context) ([]string, error) {
