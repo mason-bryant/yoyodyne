@@ -285,8 +285,12 @@ type ChecksPassed struct {
 	// RepairAttempts at the time. The first attempt is zero.
 	Attempt int `json:"attempt"`
 	// Commit is the harness commit the worktree stood at when the checks ran,
-	// and empty where the run had made none yet — a project that does not
-	// publish commits nothing until the promotion itself.
+	// where the run had made one: a project that publishes commits each attempt
+	// before the checks run, and a replayed promotion records the rebased commit
+	// before the gate is re-earned. A project that does not publish commits
+	// nothing until the promotion itself, so on its ordinary path this is empty
+	// and the attempt above is the whole of the binding. The attempt is the
+	// binding that always holds; the commit tightens it where there is one.
 	Commit string `json:"commit,omitempty"`
 	// Commands are the configured checks that passed, in the order they ran.
 	Commands []string  `json:"commands,omitempty"`

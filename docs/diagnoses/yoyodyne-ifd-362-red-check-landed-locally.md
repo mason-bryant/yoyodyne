@@ -181,8 +181,10 @@ days found anything to write.
 
 The forge's own state is now read beside the merge flag. `publish.PullRequest`
 carries the checks the forge reports failing on the request's head and its merge
-state; a queued merge whose forge state is BLOCKED or UNSTABLE with a named
-failing check is held by that check. `settleQueuedMerge` writes those checks
+state; a queued merge the forge reports BLOCKED with a named failing check is
+held by that check. (UNSTABLE — mergeable despite a non-passing status — is a
+check the base does not require, and such a merge goes ahead; it is named and
+not called held.) `settleQueuedMerge` writes those checks
 onto the run's `pull_request.failing_checks`, once, and clears them the sweep
 they stop failing; the notify layer says `merge.held` as a `warning` in the
 item's thread and the channel when they appear, naming the check, exactly as it

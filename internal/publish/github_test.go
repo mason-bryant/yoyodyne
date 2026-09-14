@@ -468,11 +468,20 @@ func TestGitHubStateNamesTheChecksHoldingAQueuedMerge(t *testing.T) {
 			failing:    []string{"build"},
 			held:       true,
 		},
-		"a commit status errored": {
-			mergeState: "UNSTABLE",
+		"a required commit status errored": {
+			mergeState: "BLOCKED",
 			rollup:     `[{"__typename":"StatusContext","context":"ci/lint","state":"ERROR"}]`,
 			failing:    []string{"ci/lint"},
 			held:       true,
+		},
+		// UNSTABLE is the forge saying the request is mergeable despite a
+		// non-passing status: the failing check is not one the base requires,
+		// and the queued merge goes ahead. It is named and it is not a hold.
+		"a failing check on a request the forge still calls mergeable": {
+			mergeState: "UNSTABLE",
+			rollup:     `[{"__typename":"StatusContext","context":"ci/lint","state":"FAILURE"}]`,
+			failing:    []string{"ci/lint"},
+			held:       false,
 		},
 		"checks still running": {
 			mergeState: "BLOCKED",

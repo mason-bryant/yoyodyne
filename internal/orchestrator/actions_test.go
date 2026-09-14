@@ -627,9 +627,12 @@ func TestPerformingCleanUpReachesTheCleanUp(t *testing.T) {
 // promotion reading its own gate off the record rather than trusting whoever
 // called it. The repair loop orders the checks in front of the promotion, and
 // that is a property of one caller; a definition that routed straight to this
-// door, or a resumed run that skipped the loop, has to be refused here on the
-// evidence — and refused before the lease is taken or the phase is written, so a
-// refusal leaves the run exactly as the reviewer left it.
+// door has to be refused here on the evidence — and refused before the lease is
+// taken or the phase is written, so a refusal leaves the run exactly as the
+// reviewer left it. This door is the only route into a promotion: a resumed run
+// re-enters the repair loop and re-earns the gate before it reaches here, and
+// reconciliation never promotes — recoverIntegration only records a promotion
+// the repository already shows, and refuses that without an approving verdict.
 //
 // yoyodyne-ifd.362 asked for this after five landings carried a test that was
 // red on the forge: the check phase had run and exited 0 on every one of them,

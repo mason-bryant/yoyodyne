@@ -70,21 +70,21 @@ type PullRequest struct {
 
 // HeldByChecks reports a request whose merge the forge is holding on failing
 // checks: the merge is armed, the request is not merged, the forge names at
-// least one failing check, and its merge state is one of the two that say a
-// check is what is unmet. A failing check on a request the forge reports as
-// mergeable is a check the base branch does not require, and the merge is not
-// waiting on it.
+// least one failing check, and it reports the request BLOCKED — the one merge
+// state that says a requirement of the base branch is unmet. A failing check
+// on a request in any other state is one the base branch does not require:
+// UNSTABLE is the forge's word for exactly that, "mergeable with a non-passing
+// status", and a queued merge in that state is one the forge performs. Calling
+// it held would warn the operator about a merge that is about to happen, which
+// is the false alarm this reading exists not to raise.
 func (p PullRequest) HeldByChecks() bool {
-	if !p.AutoMerge || p.Merged || len(p.FailingChecks) == 0 {
-		return false
-	}
-	switch strings.ToUpper(strings.TrimSpace(p.MergeState)) {
-	case "BLOCKED", "UNSTABLE":
-		return true
-	default:
-		return false
-	}
+	return p.AutoMerge && !p.Merged && len(p.FailingChecks) > 0 &&
+		strings.EqualFold(strings.TrimSpace(p.MergeState), mergeStateBlocked)
 }
+
+// mergeStateBlocked is the forge's word for a request its base branch's
+// requirements are holding back.
+const mergeStateBlocked = "BLOCKED"
 
 // Request describes the pull request a published run branch must have open.
 type Request struct {
