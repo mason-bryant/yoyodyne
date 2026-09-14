@@ -379,19 +379,26 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	// standing that could differ, which is the disagreement only the operator
 	// could adjudicate. Every store here is one this sink already holds.
 	standing := &readmodel.Sources{
-		Runs:           runs,
-		Stoppages:      runs,
-		Decisions:      runs.Triage(),
-		Conversations:  conversations,
-		Tracker:        tracker,
-		Directives:     directives,
-		Amendments:     proposals,
-		OperatorHolds:  holds,
-		IntakeHolds:    intake,
-		Sessions:       watch,
-		Reports:        reports,
-		Capacity:       resolved.Config.Execution.MaxConcurrentDevelopers,
-		TrackerTimeout: chatTrackerTimeout,
+		Runs:          runs,
+		Stoppages:     runs,
+		Decisions:     runs.Triage(),
+		Conversations: conversations,
+		Tracker:       tracker,
+		Directives:    directives,
+		Amendments:    proposals,
+		OperatorHolds: holds,
+		IntakeHolds:   intake,
+		Sessions:      watch,
+		Reports:       reports,
+		// The refusal log and the agents' configuration, read together for whether
+		// the provider is holding every role at once. The feed says that hold again
+		// while it stands, through these same sources, and the lines carry it as
+		// their banner — one derivation, said in two places.
+		UsageLimits:       usageLimits,
+		Agents:            agentEndpoints(resolved.Config),
+		UnknownResetPause: resolved.Config.Execution.UsageLimitUnknownResetPause.Duration(),
+		Capacity:          resolved.Config.Execution.MaxConcurrentDevelopers,
+		TrackerTimeout:    chatTrackerTimeout,
 	}
 	sink, err := slack.New(slack.Options{
 		Channel: settings.Channel,

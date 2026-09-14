@@ -178,6 +178,12 @@ func TestAnAlternateThatIsAlsoRefusedFailsTheTurnOnce(t *testing.T) {
 	if recorded[0].Substituted() {
 		t.Fatalf("recorded = %#v, want a stoppage rather than a substitution nothing served", recorded[0])
 	}
+	// The stoppage names the alternate, because that is the model the turn ended
+	// on: a refusal of an agent's alternate is what says its whole chain is
+	// closed, which is how the provider holding every role is read back.
+	if recorded[0].Model != "opus" {
+		t.Fatalf("model = %q, want the alternate the turn was finally refused on", recorded[0].Model)
+	}
 }
 
 // The record says which model served the turn rather than which one was

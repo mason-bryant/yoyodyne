@@ -233,6 +233,20 @@ const (
 	// anybody, so a second message would be a reason to mute the channel that
 	// carries the alarm this replaces.
 	KindProviderWindow Kind = "provider.window"
+	// The provider holding every configured role at once. It is the capacity half
+	// of the stall: the window above is a session waiting out a window it met
+	// itself, and this is every role refused on a known reset with nothing
+	// configured to fail over to — which the session choosing work never records,
+	// because it is not the thing being refused. Between 2026-09-08 and 09-13 the
+	// harness wrote 134 refusals down, each said once in the channel, and the fact
+	// they added up to reached the operator five days later from his assistant.
+	//
+	// It is a warning, said the first time it is seen and again while it stands,
+	// and it goes to the operators directly rather than to the channel alone: a
+	// line stopped on a known reset with a remedy in the configuration is the
+	// sharpest case there is of the harness being degraded by something a person
+	// can change.
+	KindCapacityHold Kind = "capacity.hold"
 	// One value the project's template has improved that this project has never
 	// edited. It is the third state here rather than a crossing, and it is the
 	// mildest thing this vocabulary carries: nothing is wrong, nothing is waiting,
@@ -318,6 +332,7 @@ func Kinds() []Kind {
 		KindResidentStale,
 		KindStallNoticed,
 		KindProviderWindow,
+		KindCapacityHold,
 		KindBundleImprovement,
 		KindBundleImprovements,
 		KindCatchUpDigest,
@@ -342,7 +357,7 @@ func (k Kind) Valid() bool {
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
-		KindProviderWindow, KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest:
+		KindProviderWindow, KindCapacityHold, KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -676,6 +691,10 @@ type Detail struct {
 	// other ending under that kind recorded nothing for anybody to decide — one
 	// kind of message, two different people again. A run that got as far as
 	// claiming carries none, and the table answers.
+	//
+	// KindCapacityHold reads Mover alone: whose move ends a hold early is worded by
+	// the read model beside the hold itself, so the sentence a terminal prints on
+	// its attention line and the clause this message ends on are one wording.
 	Cause string `json:"cause,omitempty"`
 	Mover string `json:"mover,omitempty"`
 	// Waiting is what a provider's refusal stopped, read by
@@ -762,7 +781,9 @@ type Detail struct {
 	// Stopped and Since are read a third time by KindProviderWindow, which is the
 	// same silence again with the one thing that accounts for it: what the harness
 	// is waiting on, and since when. It reads no ready count, because a window is
-	// the provider's answer whatever is in the queue behind it.
+	// the provider's answer whatever is in the queue behind it. KindCapacityHold
+	// reads the pair the same way for the provider holding every role: the hold as
+	// the read model words it, and when its earliest refusal was recorded.
 	//
 	// Since is read once more by KindCatchUpDigest, where it is the first of the
 	// events the digest stands for: the same subtraction against the event's own
@@ -795,8 +816,9 @@ type Detail struct {
 	// admission would be naming the one act that cannot help.
 	ProviderWindow bool `json:"provider_window,omitempty"`
 	// Standing is where the harness stands, already rendered into the four lines
-	// the read model produces, and read by KindLineWaiting, KindStallNoticed and
-	// KindProviderWindow — every message that says nothing is being chosen, since
+	// the read model produces, and read by KindLineWaiting, KindStallNoticed,
+	// KindProviderWindow and KindCapacityHold — every message that says nothing is
+	// being chosen, since
 	// a reader told that still wants to see what is. It is carried as the
 	// rendered text rather than as the state it came from, because the format is
 	// the contract: the same four lines are printed at a terminal and said here,

@@ -183,6 +183,9 @@ func brokenInstallations() map[string]func(*world) {
 		"the state root cannot be written": func(w *world) {
 			w.stateRoot = "relative/not/absolute"
 		},
+		"every agent runs on one model and none names an alternate": func(w *world) {
+			w.configuration = singleModelConfig
+		},
 	}
 }
 
@@ -204,12 +207,70 @@ func TestAHealthyInstallationSaysSo(t *testing.T) {
 	if _, warnings, problems := report.Counts(); warnings != 0 || problems != 0 {
 		t.Fatalf("Diagnose() = %d warnings, %d problems: %s", warnings, problems, render(report))
 	}
-	for _, want := range []string{"path", "binary", "git", "repository", "tracker", "state", "checks", "artifact-readmes", "provider:claude-code", "forge", "slack"} {
+	for _, want := range []string{"path", "binary", "git", "repository", "tracker", "state", "checks", "artifact-readmes", "provider:claude-code", "failover", "forge", "slack"} {
 		if finding, found := findingFor(report, want); !found {
 			t.Fatalf("Diagnose() never checked %q: %s", want, render(report))
 		} else if finding.Status != StatusOK {
 			t.Fatalf("check %q = %s on a healthy installation", want, finding.Status)
 		}
+	}
+}
+
+// A project whose every agent asks one model and names no alternate is the
+// condition that made a five-day stoppage out of one provider window. It is a
+// warning and never a problem: every run proceeds exactly as it would have,
+// right up to the window closing.
+func TestEveryAgentOnOneModelWithNoAlternateIsAWarning(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = singleModelConfig
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "failover")
+	if !found {
+		t.Fatalf("Diagnose() never checked failover: %s", render(report))
+	}
+	if finding.Status != StatusWarning {
+		t.Fatalf("failover = %s, want a warning: a single model stops no work until its window closes", finding.Status)
+	}
+	if !report.Healthy() {
+		t.Fatalf("Diagnose() = %s, want an installation that still runs work: %s", report.Status, render(report))
+	}
+	for _, want := range []string{"one model", "opus on claude-code", "none names an alternate"} {
+		if !strings.Contains(finding.Summary, want) {
+			t.Fatalf("summary = %q, want %q in it", finding.Summary, want)
+		}
+	}
+	for _, want := range []string{"stops every role", "failover.enabled", "failover.model"} {
+		if !strings.Contains(finding.Detail, want) {
+			t.Fatalf("detail = %q, want %q in it", finding.Detail, want)
+		}
+	}
+	if !strings.Contains(finding.Remedy, "config.yaml") {
+		t.Fatalf("remedy = %q, want the configuration named as what to edit", finding.Remedy)
+	}
+}
+
+// The same project with one alternate named is not the condition, and the
+// healthy line says how far the cover goes rather than only that it is fine.
+func TestAnAlternateOnAnyAgentIsNotTheSingleModelCondition(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = strings.Replace(singleModelConfig,
+		"  reviewer:\n", "    failover:\n      enabled: true\n      model: sonnet\n  reviewer:\n", 1)
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "failover")
+	if !found {
+		t.Fatalf("Diagnose() never checked failover: %s", render(report))
+	}
+	if finding.Status != StatusOK {
+		t.Fatalf("failover = %s, want ok: one agent fails over, so the window does not hold every role", finding.Status)
+	}
+	if !strings.Contains(finding.Summary, "1 of them names an alternate") {
+		t.Fatalf("summary = %q, want the cover counted", finding.Summary)
 	}
 }
 
@@ -1274,6 +1335,34 @@ agents:
     role: developer
     backend: claude-code
     model: opus
+    failover:
+      enabled: true
+      model: sonnet
+`
+
+// singleModelConfig is the configuration that held this product for five days
+// in September 2026: every agent on one model, and nothing to fail over to.
+const singleModelConfig = `version: 1
+product:
+  id: yoyodyne
+  repository: .
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  integration: human
+  publishing: human
+checks:
+  - go test ./...
+agents:
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+  reviewer:
+    role: reviewer
+    backend: claude-code
+    model: opus
 `
 
 const publishingConfig = `version: 1
@@ -1293,6 +1382,9 @@ agents:
     role: developer
     backend: claude-code
     model: opus
+    failover:
+      enabled: true
+      model: sonnet
 `
 
 const reportingConfig = `version: 1
@@ -1315,4 +1407,7 @@ agents:
     role: developer
     backend: claude-code
     model: opus
+    failover:
+      enabled: true
+      model: sonnet
 `
