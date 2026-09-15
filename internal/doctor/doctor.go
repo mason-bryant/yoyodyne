@@ -242,6 +242,7 @@ func Diagnose(ctx context.Context, env Environment) Report {
 	report.Findings = append(report.Findings, diagnosis.checkChecks(resolved, repository)...)
 	report.Findings = append(report.Findings, diagnosis.checkArtifactHomes(project, repository, resolved))
 	report.Findings = append(report.Findings, diagnosis.checkProviders(ctx, resolved)...)
+	report.Findings = append(report.Findings, diagnosis.checkFailover(resolved))
 	report.Findings = append(report.Findings, diagnosis.checkForge(ctx, resolved, repository))
 	report.Findings = append(report.Findings, diagnosis.checkSlack(ctx, resolved, installed)...)
 

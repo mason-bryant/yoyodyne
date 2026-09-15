@@ -2664,6 +2664,16 @@ turning it back on is one word. The two keys are read together: a layer that
 supplies a `failover` block replaces whatever it inherited whole, rather than
 switching failover on over an alternate some other layer named.
 
+Off by default has a price, and it was paid once: between 2026-09-08 and 09-13
+every agent of this project ran on one model, that model's seven-day window
+closed with a reset five days off, no agent had turned this on, and nothing
+moved for five days. So a project whose every agent runs on one model with no
+alternate named is a [`yoyo doctor`](operations.md#checking-the-installation)
+warning under `failover`, before any window closes; and while a window is
+holding every role, the channel and `yoyo status`
+[say so](reporting.md#the-provider-holding-every-role), naming the reset and
+this block as the remedy.
+
 There is exactly one alternate. A list would be a routing policy; this is a
 fallback, so the second endpoint either has capacity or the turn waits as it did
 before. An agent that enables failover and names no alternate is refused, as is

@@ -1251,7 +1251,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// the turn is failed, because the refusal is a fact about the whole product
 	// rather than about this conversation, and nothing else in the record would
 	// ever say it happened.
-	refusal := s.noteUsageLimit(result, err)
+	refusal := s.noteUsageLimit(result, err, served.Model)
 	// And it says so in the error the turn fails with. To a person at a terminal
 	// that changes nothing — they are told what happened either way — but a caller
 	// that is not a person has to be able to tell "the role was never asked" from

@@ -863,6 +863,71 @@ read back afterwards by
 place it exists: a stall leaves no other trace, because the process that would
 have left one is the process a stall means has died.
 
+### The provider holding every role
+
+The window above is a session's own account of a limit it met, and it is only
+written when the session choosing work is the thing refused. Between
+2026-09-08 and 09-13 it was not: the session was idle over items waiting on a
+decision, the role that would have decided was refused twenty times a day, all
+five agents were on the one model being refused, and no agent named an
+alternate. Each of the 134 refusals was said once in the channel as itself, at
+warning severity, and nothing said what they added up to. The operator heard
+five days later, from his assistant.
+
+So the sink reads the refusals against the configuration and says the sum. When
+the refusals the provider has not said lifts yet cover the model every agent's
+turn ends on — its alternate where it names one, its own model otherwise — and
+at least one of them stopped a turn rather than being served through, that is
+**the provider holding every role**, and it is said as a state:
+
+> Every role is paused on the provider's usage window until
+> 2026-09-13T03:00:00Z: all 5 agents run on opus and none names an alternate,
+> so nothing fails over; 134 turns refused since 2026-09-08T07:38:40Z. Nothing
+> has moved on this product for 26 hours: every turn every role would take asks
+> a model the provider is refusing, and nothing any of them may fail over to is
+> being served either. The window lifts on the provider's clock; failover on
+> the agents is what would move the work before it does.
+>
+> Next: the operator's — the window lifts on the provider's clock, and enabling
+> failover on the agents is what would move the work onto another model before
+> it does.
+
+It is shaped the opposite way from the window on purpose. The window is the
+provider's ordinary behaviour, said once as a note and to nobody's phone. This
+is the harness stopped by something a person can change, so it **reaches the
+operators directly the first time it is seen** — the first pass after the
+window closes, minutes rather than days — and is **said again in the channel
+every heartbeat it stands**, at warning severity while it is young. Once it has
+stood for six hours — the longest a run itself will wait out a limit, which is
+where `execution.usage_limit_max_pause` ships and for the same reason: a
+capacity problem that has outlasted every timer needs a person — it is said as
+**critical and taken to the operators again with every repetition**. A hold
+nothing but a person ends early is the one state where getting quieter as it
+stands is the wrong shape. The stall alarm's own escalation is
+`yoyodyne-ifd.354`; this is the capacity half, and a line stopped on a known
+reset is a different message from a line stopped for reasons nobody can name.
+
+The hold is marked by the reset the provider named, so the same window is one
+thing to say and a later one is another; the sweep adding a refusal an hour
+does not restart the clock. It lifts at the reset — or, for a refusal the
+provider named no reset for, after `execution.usage_limit_unknown_reset_pause`
+with nothing recorded since, which is the same reading failover takes of the
+same log — and nothing is said about that: the turn that is served says it. A
+refusal that names no model, which is every one written before the model was
+recorded, counts only where every agent asks for the same thing, and then only
+as a refusal of the model they ask for first — never of an alternate, which is
+asked only after that model has refused and which a record naming no model
+cannot have asked. On a project whose agents differ it cannot be attributed,
+and a hold invented over it would send somebody to look at roles that are being
+served; on a project that enabled failover after such refusals were written,
+the unexpired ones hold nobody while the alternate is being served, rather
+than reading as the provider refusing both. Failover working is the
+opposite of a hold: a window that closed and was served through by an
+alternate stopped nothing, however many times it is recorded. The condition
+that makes a hold possible at all — every agent on one model with nothing to
+fail over to — is what [`yoyo doctor`](operations.md#checking-the-installation)
+names under `failover` before any window closes.
+
 ### What arrives as a direct message
 
 Almost everything above is posted in the channel and nowhere else, because a
@@ -873,9 +938,10 @@ only by naming its class — the
 state fitting neither class does not get one:
 
 - **Degraded** — the system is stopped, stale, or choosing nothing over ready
-  work: something only a person fixes. The two shipped states are the ones above
-  — a session running a build the harness has moved well past, and the harness
-  having started nothing at all while work was ready.
+  work: something only a person fixes. The three shipped states are the ones
+  above — a session running a build the harness has moved well past, the
+  harness having started nothing at all while work was ready, and the provider
+  holding every role with nothing configured to fail over to.
 - **Advisory-once** — a fact addressed to a person that speaks exactly once per
   fact, never repeated and never urgent in presentation. One state ships in it:
   **a value the project's template has improved that this project never edited**.
