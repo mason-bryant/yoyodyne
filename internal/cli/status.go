@@ -306,6 +306,16 @@ func standingSources(configPath string) readmodel.Sources {
 		// held item says whether it waits on a decision or on the harness carrying
 		// one out rather than on both at once.
 		sources.Decisions = store.Triage()
+		// And what has been carried out of its re-run decisions, which is what
+		// says a docketed stoppage was re-run rather than left.
+		sources.Reruns = store.Reruns()
+	}
+	// The docket as it stands, read and never rebuilt: a status verb writes
+	// nothing, and the development manager's sweep is where the docket is
+	// rebuilt. What is counted from it here is the same derivation she is woken
+	// with, so the two figures cannot disagree.
+	if store, err := runstate.NewDocketStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Docket = store
 	}
 	if store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Conversations = store

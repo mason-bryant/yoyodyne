@@ -174,7 +174,15 @@ type Sources struct {
 	// on the harness carrying her decision out. It is optional, and a reading
 	// without one reports every held item as one nobody has decided about, saying
 	// so in the refusal rather than guessing the other way.
-	Decisions     Decisions
+	Decisions Decisions
+	// Docket is the triage docket as it stands, read against the same stoppages,
+	// decisions, and tracker above to say how many of its entries wait on the
+	// development manager and how many on the harness. It is optional, and a
+	// reading without one says the docket was not read rather than reporting it
+	// empty, for the reason the reports below do. Reruns is what has been carried
+	// out of its re-run decisions, read beside it.
+	Docket        DocketEntries
+	Reruns        Reruns
 	Directives    Directives
 	Amendments    Amendments
 	OperatorHolds OperatorHolds
@@ -290,6 +298,20 @@ type Standing struct {
 	NeedsHuman        []Attention `json:"needs_human"`
 	NeedsHumanProblem string      `json:"needs_human_problem,omitempty"`
 
+	// Docket is how the triage docket stands: how many of its entries have no
+	// decision standing, how many carry a decision the harness has not acted on,
+	// and how many this reading could not place. It is the same derivation the
+	// development manager's recurring sweep is woken with, reduced to its counts,
+	// so what she is handed and what an operator reads here are one reading. It
+	// is not a fifth line: the counts are said on the needs-a-human line, whose
+	// question they answer, and carried here for whatever reads the model rather
+	// than its lines.
+	Docket DocketCounts `json:"docket"`
+	// DocketProblem is a docket that could not be read, in whole or in part. It is
+	// stated rather than left as zeros, which would read as a docket nothing is
+	// waiting on.
+	DocketProblem string `json:"docket_problem,omitempty"`
+
 	// Reports is how the collected pile stands. It is not a fifth line and is not
 	// rendered as one: the four are a contract the operator ratified, and this is
 	// carried for the surfaces that read the model rather than its lines — the
@@ -356,6 +378,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	}
 
 	standing.Reports, standing.ReportsProblem = readReports(sources, now)
+	standing.Docket, standing.DocketProblem = readDocketCounts(ctx, sources)
 
 	needs, needsProblem := readNeedsHuman(sources, switches)
 	// A pile whose oldest undecided report has been waiting longer than any
@@ -380,6 +403,13 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// a different thing on each: the queue's line says why nothing pulls each
 	// item, and this says who has to move and how many items are waiting on them.
 	needs = append(needs, Held(standing.AwaitingDecision, standing.AwaitingCarryOut)...)
+	// The docket beside the held work, and saying a different thing: the held
+	// work counts admitted items nothing pulls, and this counts the stoppages on
+	// the docket — one item can have stopped twice — and says which of them are
+	// the development manager's to decide and which the harness's to carry out.
+	// It is the figure her sweep is woken with, so a sweep reporting calm can be
+	// read against the same number here.
+	needs = append(needs, standing.Docket.Attention()...)
 	// Work marked for a conversation is on both lines and says a different thing
 	// on each: the queue's line says why nothing pulls it, and this says who has
 	// to open the conversation. A reader looking for what waits on a person must
@@ -389,8 +419,37 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// said on, as well as in its own field. The field is what a script reads and
 	// the line is what a person reads, and a failure only the script can see is
 	// one nobody sees.
-	standing.NeedsHumanProblem = joinProblems(needsProblem, standing.ReportsProblem)
+	standing.NeedsHumanProblem = joinProblems(joinProblems(needsProblem, standing.ReportsProblem), standing.DocketProblem)
 	return standing
+}
+
+// readDocketCounts is how the triage docket stands, reduced to its counts. It is
+// read over the docket as it is rather than rebuilt, because a status reading
+// writes nothing; the development manager's wakeup is where the docket is
+// rebuilt, and it reads this same derivation over the result.
+//
+// A docket nothing was wired for says so rather than reporting zeros, and a
+// docket read in part carries what it found beside what it could not: the
+// entries it could not place are counted as unchecked, which the attention line
+// says out loud.
+func readDocketCounts(ctx context.Context, sources Sources) (DocketCounts, string) {
+	if sources.Docket == nil {
+		return DocketCounts{}, "nothing was wired to read the triage docket"
+	}
+	standing := ReadDocket(ctx, DocketSources{
+		Docket:         sources.Docket,
+		Stoppages:      sources.Stoppages,
+		Decisions:      sources.Decisions,
+		Reruns:         sources.Reruns,
+		Tracker:        sources.Tracker,
+		TrackerTimeout: sources.TrackerTimeout,
+		Now:            sources.Now,
+	})
+	problem := ""
+	if len(standing.Problems) > 0 {
+		problem = "the triage docket could not be read in full: " + strings.Join(standing.Problems, "; ")
+	}
+	return standing.Counts(), problem
 }
 
 // readRunning is the developer runs in flight, priced from the same recorded

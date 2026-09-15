@@ -53,6 +53,25 @@ package orchestrator
 // chooses nothing, claims nothing, and starts nothing — what it produces is a
 // role looking at what has already gone wrong, which is usually what a held
 // queue is waiting on.
+//
+// # The development manager is handed the docket
+//
+// A wakeup of the development manager carries where the triage docket stands,
+// read at the moment of the firing: every stoppage nobody has decided about, and
+// every decision recorded that the harness has not carried out. It is on the
+// wake message rather than left to her conversation's own context because that
+// context is gathered once, when the conversation opens, and a sweep on a resumed
+// conversation reads a docket days old. That is how the hourly sweep came to
+// report calm on 2026-09-14 while thirty stoppages waited where it could not see
+// them.
+//
+// What that makes the sweep is the re-offer. The event-driven delivery beside it
+// puts a stoppage to her once, when the run newly stops, and only for the two
+// classes it covers; this puts every undecided entry to her on every cadence,
+// whatever class it is and however it reached the docket, until a decision naming
+// its run is recorded. A wait is a decision, so it is bounded by her rather than
+// by the harness, and it is idempotent by construction: the same docket read
+// twice is the same list twice.
 
 import (
 	"context"
@@ -65,6 +84,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
 )
@@ -99,6 +119,15 @@ type RecurringReports interface {
 // answered in prose with no account reports exactly that.
 type RecurringRole interface {
 	Wake(ctx context.Context, role domain.AgentRole, message string) (Turn, error)
+}
+
+// RecurringDocket is where the triage docket stands, read at the moment a
+// firing is made. It is read and never written: handing the docket to the
+// development manager settles nothing about any entry on it.
+//
+// It is satisfied by a caller wrapping readmodel.ReadDocket.
+type RecurringDocket interface {
+	Standing(ctx context.Context) readmodel.DocketStanding
 }
 
 // Turn is what one turn of a firing came to.
@@ -142,6 +171,13 @@ type Fired struct {
 	// out. It is the one thing a reader cannot infer from a short report, and
 	// leaving it unsaid would make a bounded pass look like a finished one.
 	Truncated bool `json:"truncated,omitempty"`
+	// Undecided and Uncarried are what the docket handed to the development
+	// manager held: the stoppages with no decision standing and the decisions the
+	// harness has not carried out. They are on the pass's own line so the operator
+	// reading it sees the same figures she was woken with, and they are zero on
+	// every task that is not hers.
+	Undecided int `json:"undecided,omitempty"`
+	Uncarried int `json:"uncarried,omitempty"`
 	// Problem is what stopped or spoiled the firing.
 	Problem string `json:"problem,omitempty"`
 }
@@ -170,6 +206,11 @@ type Trigger struct {
 	Reports RecurringReports
 	// Roles is how the harness reaches a role's conversation. Required.
 	Roles RecurringRole
+	// Docket is where the triage docket stands, handed to the development manager
+	// with every wakeup of hers. Optional, and a trigger wired without one wakes
+	// her blind to the docket, which is what every sweep before yoyodyne-ifd.353
+	// was; the wake message then says so rather than leaving her to report calm.
+	Docket RecurringDocket
 	// Holds is the operator's pause over everything the harness would spend.
 	// Optional, and a trigger wired without one is one nothing can pause, which
 	// is what every provider invocation was before the switch existed.
@@ -233,7 +274,17 @@ func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask
 	}
 	var merged *sweep.Result
 	var problems []string
-	message := wakeMessage(name, task)
+	docket, docketProblem := t.docketFor(ctx, task)
+	if docketProblem != "" {
+		// Said on the record as well as to her: a pass that was woken over a docket
+		// nobody could read is one whose "no findings" means less than it says.
+		problems = append(problems, docketProblem)
+	}
+	if docket != nil {
+		fired.Undecided, fired.Uncarried = len(docket.Undecided), len(docket.Uncarried)
+		recorded.DocketUndecided, recorded.DocketUncarried = fired.Undecided, fired.Uncarried
+	}
+	message := wakeMessage(name, task, docket)
 	for turn := 0; turn < task.Turns(); turn++ {
 		answered, err := t.Roles.Wake(ctx, task.Role, message)
 		// What the turn cost is carried whichever way it went, because the provider
@@ -416,16 +467,68 @@ func describeFailedTurn(name string, role domain.AgentRole, turn int, err error)
 // only thing standing between a weekly cadence and a duplicate admitted every
 // week, which has already cost this project a full run and two review rounds
 // twice.
-func wakeMessage(name string, task config.RecurringTask) string {
-	return strings.Join([]string{
+func wakeMessage(name string, task config.RecurringTask, docket *readmodel.DocketStanding) string {
+	parts := []string{
 		fmt.Sprintf("The harness woke you for the recurring task %q, which runs every %s. Nobody is waiting at a terminal for this: what you produce is recorded and read later.", name, task.Every),
 		"Your authority here is exactly the authority your role already holds — this turn grants you nothing extra, and nothing about being woken on a schedule widens what you may decide or change.",
 		"Before you file anything, check it against the work already admitted. A duplicate admission costs a whole run and the reviews after it, and a task that runs on a cadence files the same duplicate on every cadence.",
 		"",
 		strings.TrimSpace(task.Prompt),
 		"",
-		sweep.Contract(),
-	}, "\n")
+	}
+	// The docket goes between the task and the contract, as evidence the task is
+	// to be done over. It is the harness's own reading rather than the role's, so
+	// it comes after the project's instruction and is never mistaken for part of
+	// it; and it goes before the contract so a pass that says NO FINDINGS has read
+	// what it is denying.
+	if section := docketSection(task.Role, docket); section != "" {
+		parts = append(parts, section, "")
+	}
+	parts = append(parts, sweep.Contract())
+	return strings.Join(parts, "\n")
+}
+
+// docketFor reads where the docket stands for a task that wakes the development
+// manager, and reports what stopped the reading. Every other role is handed
+// nothing: the docket is hers to decide, and a docket delivered to a role that
+// cannot act on it is a section every pass pays for and reads past.
+//
+// A reading with problems is still handed over. What it found is real, and what
+// it could not read it says; the problem is reported beside the pass so the
+// record shows the sweep was woken over a docket it could only partly see. A
+// trigger wired with no docket at all is reported the same way.
+func (t Trigger) docketFor(ctx context.Context, task config.RecurringTask) (*readmodel.DocketStanding, string) {
+	if task.Role != domain.RoleDevelopmentManager {
+		return nil, ""
+	}
+	if t.Docket == nil {
+		// On the record as well as in the message. A pass woken blind and a pass
+		// handed an empty docket would otherwise read alike in the listing — no
+		// counts on either — and that is the one distinction the listing exists to
+		// make.
+		return nil, fmt.Sprintf("the %s was woken without the triage docket, so its pass may have been made over stoppages it could not see", task.Role)
+	}
+	standing := t.Docket.Standing(ctx)
+	if len(standing.Problems) == 0 {
+		return &standing, ""
+	}
+	return &standing, fmt.Sprintf("the docket handed to the %s could not be read in full, so its pass may have been made over stoppages it could not see: %s",
+		task.Role, strings.Join(standing.Problems, "; "))
+}
+
+// docketSection is the docket as the wake message carries it. A development
+// manager woken by a trigger wired without one is told so in as many words,
+// because the alternative is a sweep that reads its opening context's docket —
+// gathered when the conversation opened, however long ago — as though it were
+// current, and reports calm off it.
+func docketSection(role domain.AgentRole, docket *readmodel.DocketStanding) string {
+	if role != domain.RoleDevelopmentManager {
+		return ""
+	}
+	if docket == nil {
+		return "# Triage docket: not read\n\nThis wakeup was not handed the triage docket, and the docket in your opening context was gathered when the conversation opened rather than now. Do not report that nothing is waiting on your decision: survey the stopped work before concluding anything about it."
+	}
+	return strings.TrimSpace(docket.Render())
 }
 
 // continueMessage is what a pass that said it had more to do is given next. It
@@ -504,6 +607,10 @@ func (s RecurringSweep) Render() string {
 		default:
 			fmt.Fprintf(&rendered, "the recurring task %s woke the %s, which found %d thing(s) in %d turn(s)\n",
 				fired.Task, fired.Role, fired.Findings, fired.Turns)
+		}
+		if fired.Undecided > 0 || fired.Uncarried > 0 {
+			fmt.Fprintf(&rendered, "  it was handed the docket: %d stoppage(s) with no decision standing, %d recorded decision(s) not yet carried out\n",
+				fired.Undecided, fired.Uncarried)
 		}
 		if fired.SilentRepairs > 0 {
 			fmt.Fprintf(&rendered, "  %d of its fixes filed nothing for their root cause\n", fired.SilentRepairs)

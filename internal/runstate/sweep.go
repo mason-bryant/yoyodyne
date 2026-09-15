@@ -180,6 +180,13 @@ type Sweep struct {
 	// spent a turn and told nobody anything, which must never be indistinguishable
 	// from a quiet pass that found nothing.
 	Problem string `json:"problem,omitempty"`
+	// DocketUndecided and DocketUncarried are what the docket handed to the role
+	// held as it was woken: the stoppages with no decision standing and the
+	// decisions the harness had not carried out. They are on the record so a pass
+	// that reports calm can be read against what it was shown, and they are zero
+	// on every task that wakes a role the docket is not handed to.
+	DocketUndecided int `json:"docket_undecided,omitempty"`
+	DocketUncarried int `json:"docket_uncarried,omitempty"`
 }
 
 // FoundNothing reports the quiet pass: an account that was given and carried no
@@ -212,6 +219,9 @@ func (s Sweep) Validate() error {
 	}
 	if s.Turns < 0 {
 		problems = append(problems, fmt.Errorf("turns is %d, and a pass cannot take a negative number of them", s.Turns))
+	}
+	if s.DocketUndecided < 0 || s.DocketUncarried < 0 {
+		problems = append(problems, fmt.Errorf("the docket counts are %d and %d, and a docket cannot hold a negative number of entries", s.DocketUndecided, s.DocketUncarried))
 	}
 	// A pass that produced neither an account nor a problem would be a firing the
 	// record can say nothing at all about, which is the one thing this must not be

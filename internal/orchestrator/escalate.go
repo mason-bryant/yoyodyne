@@ -28,8 +28,11 @@ package orchestrator
 // The first is the 2-of-2 review stoppage — a run that ended on a durable blocker
 // with its reviewer still requiring repair. A failing check, a refused path, and
 // a replay conflict are all stoppages too, and each is a different question. They
-// stay on the docket for her to read, exactly as before, rather than being
-// delivered by a rule nobody has argued for yet.
+// are not delivered here by a rule nobody has argued for; what reaches her about
+// them is the docket her recurring sweep is handed, which re-offers every
+// undecided entry on every cadence whatever its class (see the Trigger). This
+// delivery is the fast path for the two classes it covers, and it is one-shot:
+// an entry she was shown and did not decide is the sweep's to put to her again.
 //
 // The second is an escalation: a developer or a reviewer having said, in the
 // round it reached, that the work item cannot be met as it stands. It is the one

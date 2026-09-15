@@ -9,8 +9,10 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 var recurringNow = time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
@@ -459,7 +461,7 @@ func TestAFiringAtEveryTurnsMaximumStillLandsItsReport(t *testing.T) {
 	}
 	answers = append(answers, scriptedTurn{result: crowded(sweep.StatusComplete)})
 	role := &wokenRole{answers: answers}
-	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Docket: &scriptedDocket{standing: readmodel.DocketStanding{ReadAt: recurringNow}}, Clock: recurringClock{}}
 
 	fired, err := trigger.Fire(context.Background())
 	if err != nil {
@@ -582,4 +584,171 @@ func (r *refusingReports) Append(recorded runstate.Sweep) error {
 		return errors.New("this record carries an account and will not store")
 	}
 	return r.store.Append(recorded)
+}
+
+// scriptedDocket is where the docket stands, as a test hands it to the trigger.
+type scriptedDocket struct {
+	standing readmodel.DocketStanding
+	reads    int
+}
+
+func (d *scriptedDocket) Standing(context.Context) readmodel.DocketStanding {
+	d.reads++
+	return d.standing
+}
+
+func waitingDocket() readmodel.DocketStanding {
+	return readmodel.DocketStanding{
+		ReadAt: recurringNow,
+		Undecided: []readmodel.DocketWait{
+			{Class: triage.ClassStoppedRun, RunID: "run-ce3a1135", WorkItemID: "yoyodyne-ifd.192", RecordedAt: recurringNow.Add(-6 * 24 * time.Hour),
+				Stopped: "Yoyodyne stopped this item: its independent reviewer still required repair after every permitted attempt."},
+			{Class: triage.ClassStoppedRun, RunID: "run-af66cb33", WorkItemID: "yoyodyne-ifd.187", RecordedAt: recurringNow.Add(-5 * 24 * time.Hour),
+				Stopped: "Yoyodyne stopped this item: its target branch moved."},
+		},
+		Uncarried: []readmodel.DocketWait{
+			{Class: triage.ClassStoppedRun, RunID: "run-f71718d7", WorkItemID: "yoyodyne-ifd.117.1", RecordedAt: recurringNow.Add(-2 * 24 * time.Hour),
+				Decision: "repair", DecidedBy: "development manager", DecidedAt: recurringNow.Add(-24 * time.Hour)},
+		},
+	}
+}
+
+// The development manager's wakeup carries the docket as it stands at the
+// firing: every stoppage nobody has decided about, by run and blocker, and
+// every decision nobody has carried out. It is read at the firing rather than
+// taken from her conversation's own picture, and the pass's line says what she
+// was handed, so a sweep reporting calm over thirty waiting entries is
+// something an operator can see is false from the line alone.
+func TestTheDevelopmentManagerIsWokenWithTheDocket(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("decided two, waiting on one")}}}
+	docket := &scriptedDocket{standing: waitingDocket()}
+	trigger := Trigger{Tasks: hourlyTask("sweep for undecided stoppages"), Claims: store, Reports: store, Roles: role, Docket: docket, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if docket.reads != 1 {
+		t.Fatalf("the docket was read %d time(s), want once per firing", docket.reads)
+	}
+	if len(role.messages) != 1 {
+		t.Fatalf("messages = %v, want one", role.messages)
+	}
+	message := role.messages[0]
+	for _, want := range []string{
+		"2 stoppages have no decision standing; 1 decision is recorded and not yet carried out",
+		"run run-ce3a1135 on yoyodyne-ifd.192",
+		"Stopped by: Yoyodyne stopped this item: its independent reviewer still required repair",
+		"run run-af66cb33 on yoyodyne-ifd.187",
+		`run run-f71718d7 on yoyodyne-ifd.117.1 [stopped run, docketed 2026-09-03]: "repair" recorded by the development manager`,
+		"re-offered on every pass until a decision naming its run is recorded",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the wake message does not carry %q:\n%s", want, message)
+		}
+	}
+	// The docket is evidence the task is done over, so it sits between the
+	// project's instruction and the channel's contract.
+	if prompt, docketAt, contract := strings.Index(message, "sweep for undecided stoppages"), strings.Index(message, "# Triage docket"), strings.Index(message, sweep.Fence); !(prompt < docketAt && docketAt < contract) {
+		t.Errorf("the docket is at %d, want it after the prompt at %d and before the contract at %d", docketAt, prompt, contract)
+	}
+	if fired.Fired[0].Undecided != 2 || fired.Fired[0].Uncarried != 1 {
+		t.Errorf("fired = %+v, want the counts she was handed", fired.Fired[0])
+	}
+	if rendered := fired.Render(); !strings.Contains(rendered, "handed the docket: 2 stoppage(s) with no decision standing, 1 recorded decision(s) not yet carried out") {
+		t.Errorf("the pass's line does not carry the counts:\n%s", rendered)
+	}
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].DocketUndecided != 2 || recorded[0].DocketUncarried != 1 {
+		t.Errorf("recorded = %+v, want the counts on the durable report", recorded)
+	}
+}
+
+// A task that wakes any other role is handed nothing: the docket is the
+// development manager's to decide, and a section a role cannot act on is one
+// every pass pays for and reads past.
+func TestOnlyTheDevelopmentManagerIsHandedTheDocket(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
+	docket := &scriptedDocket{standing: waitingDocket()}
+	tasks := map[string]config.RecurringTask{"coherence": {
+		Role: domain.RoleProductManager, Every: config.Duration(time.Hour), Enabled: true, Prompt: "read across the goals", MaxTurns: 1,
+	}}
+	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Docket: docket, Clock: recurringClock{}}
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if docket.reads != 0 {
+		t.Errorf("the docket was read %d time(s) for the product manager, want never", docket.reads)
+	}
+	if strings.Contains(role.messages[0], "Triage docket") {
+		t.Errorf("the product manager's wake message carries the docket:\n%s", role.messages[0])
+	}
+	if fired.Fired[0].Undecided != 0 || fired.Fired[0].Uncarried != 0 {
+		t.Errorf("fired = %+v, want no docket counts on another role's pass", fired.Fired[0])
+	}
+}
+
+// A docket that could only be read in part is still handed over, and the pass
+// carries the problem: what she found is real, and what the record says is that
+// she was woken over stoppages the reading could not see. A trigger wired with
+// no docket at all tells her so in as many words, because the alternative is a
+// sweep that reads its opening context's docket as though it were current.
+func TestAnUnreadableDocketIsSaidToHerAndOnTheRecord(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
+	partial := waitingDocket()
+	partial.Unchecked = 3
+	partial.Problems = []string{"the admitted work could not be read, so no docket entry could be checked against it: bd is not answering"}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Docket: &scriptedDocket{standing: partial}, Clock: recurringClock{}}
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if !strings.Contains(role.messages[0], "3 entries could not be placed") || !strings.Contains(role.messages[0], "bd is not answering") {
+		t.Errorf("the wake message does not say what could not be read:\n%s", role.messages[0])
+	}
+	if !strings.Contains(fired.Fired[0].Problem, "could not be read in full") {
+		t.Errorf("problem = %q, want the partial docket on the pass", fired.Fired[0].Problem)
+	}
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || !strings.Contains(recorded[0].Problem, "bd is not answering") {
+		t.Errorf("recorded = %+v, want the docket problem on the durable report", recorded)
+	}
+
+	blind := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
+	unwired := Trigger{Tasks: hourlyTask("sweep"), Claims: sweepStore(t), Reports: store, Roles: blind, Clock: recurringClock{}}
+	blindFired, err := unwired.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if !strings.Contains(blind.messages[0], "This wakeup was not handed the triage docket") {
+		t.Errorf("a blind wakeup does not say so:\n%s", blind.messages[0])
+	}
+	// And on the record, so a pass woken blind and a pass handed an empty docket
+	// never read alike in the listing.
+	if !strings.Contains(blindFired.Fired[0].Problem, "woken without the triage docket") {
+		t.Errorf("problem = %q, want the blind wakeup on the pass", blindFired.Fired[0].Problem)
+	}
+	recorded, _, err = store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 || !strings.Contains(recorded[1].Problem, "woken without the triage docket") {
+		t.Errorf("recorded = %+v, want the blind wakeup on the durable report", recorded)
+	}
 }
