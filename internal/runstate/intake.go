@@ -42,13 +42,47 @@ const IntakeHoldSchemaVersion = 1
 // was for, and a bounded line is enough to say it.
 const MaxIntakeReasonBytes = 4 << 10
 
-// IntakeHold is the recorded fact that the operator has stopped the harness
-// choosing new work for this product. It carries when they did and why, and
-// nothing else: what lifts it is them, so there is no deadline to record.
+// IntakeHolder is who placed a hold on intake. It is recorded with the hold
+// rather than worked out afterwards, because the two things that place one are
+// different things for a reader to do something about, and every surface that
+// says intake is held has to say which it was. Inferring it is what went wrong
+// before: a session that reported its own brake's hold as the operator's sent
+// somebody to look for a decision nobody had made.
+type IntakeHolder string
+
+const (
+	// IntakeHolderOperator is the operator stopping the choosing themselves,
+	// which is what the switch exists for.
+	IntakeHolderOperator IntakeHolder = "operator"
+	// IntakeHolderBrake is the harness's own failure-storm brake placing the
+	// operator's switch after runs kept blocking. What lifts it is still a
+	// person, which is the whole reason for tripping it.
+	IntakeHolderBrake IntakeHolder = "brake"
+)
+
+// Recorded reports a holder this harness knows how to name. The empty holder is
+// not one: it is a hold written before the holder was recorded, and it is read
+// rather than refused — a hold nobody can read must never be treated as absent —
+// while nothing pretends to know whose it is.
+func (h IntakeHolder) Recorded() bool {
+	switch h {
+	case IntakeHolderOperator, IntakeHolderBrake:
+		return true
+	}
+	return false
+}
+
+// IntakeHold is the recorded fact that the harness has been stopped from
+// choosing new work for this product. It carries who stopped it, when, and why,
+// and nothing else: what lifts it is a person, so there is no deadline to
+// record.
 type IntakeHold struct {
 	SchemaVersion int              `json:"schema_version"`
 	ProductID     domain.ProductID `json:"product_id"`
 	HeldAt        time.Time        `json:"held_at"`
+	// HeldBy is who placed it. It is absent only on a hold written before this
+	// was recorded, which Says names as the absence it is rather than guessing.
+	HeldBy IntakeHolder `json:"held_by,omitempty"`
 	// Reason is optional, for the reason a stop's is: an operator who holds
 	// intake in a hurry owes nobody an explanation.
 	Reason string `json:"reason,omitempty"`
@@ -65,10 +99,50 @@ func (h IntakeHold) Validate() error {
 	if h.HeldAt.IsZero() {
 		problems = append(problems, errors.New("held at is required"))
 	}
+	// An unrecorded holder is a hold from before this was written down and is
+	// read as one. A holder that is recorded and is not one this harness places
+	// is a record nothing here can speak for, and reading it as an absence would
+	// put the guessing back.
+	if h.HeldBy != "" && !h.HeldBy.Recorded() {
+		problems = append(problems, fmt.Errorf("intake hold holder %q is not one this harness records", h.HeldBy))
+	}
 	if len(h.Reason) > MaxIntakeReasonBytes {
 		problems = append(problems, fmt.Errorf("intake hold reason is %d bytes, which exceeds the %d byte bound", len(h.Reason), MaxIntakeReasonBytes))
 	}
 	return errors.Join(problems...)
+}
+
+// Says is the one clause every surface prints about a hold in force: who placed
+// it and what caused it, composed once here rather than assembled by whichever
+// format string is doing the printing.
+//
+// It is one clause rather than a whole sentence because every surface that
+// prints it already frames it — a banner, a headline, a persona's line — and
+// what they were all missing was whose hold it is and why. Three of those
+// frames stacked, each introducing the next with its own colon, is what an
+// operator read instead, and the innermost one was the only one that named the
+// actual holder.
+//
+// The connective differs by holder because the causes do: a brake counts runs
+// that blocked, and an operator says what looked wrong.
+func (h IntakeHold) Says() string {
+	cause := strings.TrimSpace(h.Reason)
+	switch h.HeldBy {
+	case IntakeHolderBrake:
+		if cause == "" {
+			return "the harness's own brake placed it after runs kept blocking"
+		}
+		return "the harness's own brake placed it after " + cause
+	case IntakeHolderOperator:
+		if cause == "" {
+			return "the operator placed it and gave no reason"
+		}
+		return "the operator placed it — " + cause
+	}
+	if cause == "" {
+		return "the record does not say who placed it or why"
+	}
+	return "the record does not say who placed it — " + cause
 }
 
 // IntakeHoldStore is where the hold is recorded: one file under the product,
@@ -93,14 +167,19 @@ func NewIntakeHoldStore(root string, productID domain.ProductID) (*IntakeHoldSto
 
 func (s *IntakeHoldStore) Root() string { return s.root }
 
-// Hold records the operator's hold on intake. Holding what is already held is
-// deliberately not an error and deliberately does not restamp it: an operator who
-// holds twice means the same thing the second time, and when the hold began is
-// what says how long the harness has been choosing nothing. A second reason is
-// dropped for the same reason the time is kept — the hold in force is the one
-// that was placed, and rewriting its reason would rewrite the account of why
-// nothing has started since.
-func (s *IntakeHoldStore) Hold(reason string, at time.Time) (IntakeHold, error) {
+// Hold records a hold on intake, and who is placing it. Holding what is already
+// held is deliberately not an error and deliberately does not restamp it: an
+// operator who holds twice means the same thing the second time, and when the
+// hold began is what says how long the harness has been choosing nothing. A
+// second reason and a second holder are dropped for the same reason the time is
+// kept — the hold in force is the one that was placed, and rewriting either would
+// rewrite the account of why nothing has started since. That is also what makes
+// the brake tripping over the operator's own hold report the operator, which is
+// the truth about who stopped the line.
+func (s *IntakeHoldStore) Hold(holder IntakeHolder, reason string, at time.Time) (IntakeHold, error) {
+	if !holder.Recorded() {
+		return IntakeHold{}, fmt.Errorf("intake hold holder %q is not one this harness records", holder)
+	}
 	if existing, held, err := s.Held(); err != nil || held {
 		return existing, err
 	}
@@ -108,6 +187,7 @@ func (s *IntakeHoldStore) Hold(reason string, at time.Time) (IntakeHold, error) 
 		SchemaVersion: IntakeHoldSchemaVersion,
 		ProductID:     s.productID,
 		HeldAt:        at.UTC(),
+		HeldBy:        holder,
 		Reason:        strings.TrimSpace(reason),
 	}
 	if err := recorded.Validate(); err != nil {
@@ -142,7 +222,7 @@ func (s *IntakeHoldStore) Hold(reason string, at time.Time) (IntakeHold, error) 
 	return recorded, nil
 }
 
-// Held reports whether the operator is holding intake. No record is the ordinary
+// Held reports whether intake is held, by whoever placed it. No record is the ordinary
 // answer and means the harness may choose work, which is why it is reported as an
 // absence rather than as a failure to look. A record that cannot be read is
 // neither: it is an error, because a hold nobody can read must never be started

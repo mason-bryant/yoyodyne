@@ -24,7 +24,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -78,11 +77,12 @@ func releaseIntake(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "intake was not held; the harness may already choose work on its own and nothing changed")
 		return 0
 	}
-	fmt.Fprintf(stdout, "released the hold on intake, held since %s; the harness may choose work from the backlog again\n",
-		lifted.HeldAt.Format(time.RFC3339))
-	if reason := strings.TrimSpace(lifted.Reason); reason != "" {
-		fmt.Fprintln(stdout, reason)
-	}
+	// What was lifted is named by whoever placed it: releasing the brake's hold
+	// is the ordinary way that one ends, and a line that read as though the
+	// operator had placed it would send them looking for a decision they never
+	// made.
+	fmt.Fprintf(stdout, "released the hold on intake, held since %s: %s; the harness may choose work from the backlog again\n",
+		lifted.HeldAt.Format(time.RFC3339), lifted.Says())
 	fmt.Fprintln(stdout, "a watching `yoyo work` session chooses again at its next poll; a session that has ended is started again by `yoyo work`")
 	fmt.Fprintln(stdout, "this is the same hold the conversation's /release lifts, so nothing else has to be done there")
 	return 0

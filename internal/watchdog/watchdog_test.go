@@ -164,7 +164,7 @@ func TestNothingAccountedForIsEverRecordedAsAStall(t *testing.T) {
 		"intake is held": func(t *testing.T, h *harness) {
 			h.ready(3)
 			h.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
-			if _, err := h.intake.Hold("reordering the backlog first", moment); err != nil {
+			if _, err := h.intake.Hold(runstate.IntakeHolderOperator, "reordering the backlog first", moment); err != nil {
 				t.Fatalf("Hold() error = %v", err)
 			}
 		},
@@ -317,7 +317,7 @@ func TestTheTrackerIsAskedOnlyWhereNothingElseAccountsForTheQuiet(t *testing.T) 
 	harness := newHarness(t)
 	backlog := harness.tallies(0)
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
-	if _, err := harness.intake.Hold("reordering the backlog first", moment); err != nil {
+	if _, err := harness.intake.Hold(runstate.IntakeHolderOperator, "reordering the backlog first", moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 

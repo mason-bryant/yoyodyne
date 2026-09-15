@@ -854,12 +854,13 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 		})
 	}
 	if held.intakeHeld {
-		what := fmt.Sprintf("intake is held, since %s", held.intake.HeldAt.UTC().Format(time.RFC3339))
-		if reason := singleLine(held.intake.Reason, maxRefusalBytes); reason != "" {
-			what += ": " + reason
-		}
+		// Who placed it is on the record and is said with it: the same switch is
+		// placed by the operator and by the harness's own failure-storm brake,
+		// and an operator told this hold is theirs when the brake placed it goes
+		// looking for a decision they never made.
 		attention = append(attention, Attention{
-			What:  what,
+			What: fmt.Sprintf("intake is held, since %s: %s",
+				held.intake.HeldAt.UTC().Format(time.RFC3339), singleLine(held.intake.Says(), maxRefusalBytes)),
 			Whose: "the operator's — nothing new is chosen until `yoyo release` lifts it",
 		})
 	}

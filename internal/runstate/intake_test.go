@@ -3,6 +3,7 @@ package runstate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,23 +24,31 @@ func TestHoldingIntakeSurvivesTheProcessThatPlacedIt(t *testing.T) {
 	}
 
 	heldAt := time.Date(2026, 8, 18, 18, 15, 0, 0, time.UTC)
-	recorded, err := store.Hold("the decomposition is heading somewhere odd", heldAt)
+	recorded, err := store.Hold(IntakeHolderOperator, "the decomposition is heading somewhere odd", heldAt)
 	if err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 	if !recorded.HeldAt.Equal(heldAt) || recorded.Reason != "the decomposition is heading somewhere odd" {
 		t.Fatalf("Hold() = %#v, want the moment it was placed and why", recorded)
 	}
+	if recorded.HeldBy != IntakeHolderOperator {
+		t.Fatalf("Hold() held by %q, want who placed it recorded rather than left to be guessed", recorded.HeldBy)
+	}
 
 	// A second hold says the same thing as the first. Restamping it would make a
 	// hold that has been in force since yesterday describe itself as new, and
 	// rewriting its reason would rewrite the account of why nothing has started.
-	again, err := store.Hold("something else entirely", heldAt.Add(time.Hour))
+	// The holder is kept for the same reason and one more: the brake tripping over
+	// a hold the operator placed must not make the harness the one holding it.
+	again, err := store.Hold(IntakeHolderBrake, "something else entirely", heldAt.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("second Hold() error = %v", err)
 	}
 	if !again.HeldAt.Equal(heldAt) || again.Reason != "the decomposition is heading somewhere odd" {
 		t.Fatalf("second Hold() = %#v, want the hold left exactly as it was placed", again)
+	}
+	if again.HeldBy != IntakeHolderOperator {
+		t.Fatalf("second Hold() held by %q, want the operator still named as the holder", again.HeldBy)
 	}
 
 	// A separate store over the same root is what every other process is.
@@ -47,8 +56,8 @@ func TestHoldingIntakeSurvivesTheProcessThatPlacedIt(t *testing.T) {
 	if err != nil || !held {
 		t.Fatalf("Held() = %t, %v, want the recorded hold", held, err)
 	}
-	if !loaded.HeldAt.Equal(heldAt) {
-		t.Fatalf("Held() = %#v, want the hold as it was placed", loaded)
+	if !loaded.HeldAt.Equal(heldAt) || loaded.HeldBy != IntakeHolderOperator {
+		t.Fatalf("Held() = %#v, want the hold as it was placed, holder and all", loaded)
 	}
 
 	lifted, wasHeld, err := store.Release()
@@ -77,7 +86,7 @@ func TestHoldingIntakeOnOneProductLeavesAnotherAlone(t *testing.T) {
 	root := t.TempDir()
 	held := newIntakeStoreAt(t, root, "yoyodyne")
 	other := newIntakeStoreAt(t, root, "something-else")
-	if _, err := held.Hold("", time.Date(2026, 8, 18, 18, 15, 0, 0, time.UTC)); err != nil {
+	if _, err := held.Hold(IntakeHolderOperator, "", time.Date(2026, 8, 18, 18, 15, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 	if _, isHeld, err := other.Held(); err != nil || isHeld {
@@ -110,6 +119,93 @@ func TestAnUnreadableIntakeHoldIsNotReportedAsAbsent(t *testing.T) {
 		if _, held, err := store.Held(); err == nil || held {
 			t.Fatalf("%s: Held() = %t, %v, want a refusal to read it as absent", name, held, err)
 		}
+	}
+}
+
+// Who holds intake is recorded state, so a hold this harness cannot attribute is
+// refused at the point it would be written rather than reported as somebody's
+// later.
+func TestHoldingIntakeRequiresAHolderThisHarnessRecords(t *testing.T) {
+	t.Parallel()
+
+	store := newIntakeStoreAt(t, t.TempDir(), "yoyodyne")
+	for _, holder := range []IntakeHolder{"", "someone", "the operator"} {
+		if _, err := store.Hold(holder, "the queue looks wrong", time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)); err == nil {
+			t.Fatalf("Hold(%q) was accepted, want a holder nothing can name refused", holder)
+		}
+	}
+	if _, held, err := store.Held(); err != nil || held {
+		t.Fatalf("Held() = %t, %v, want a refused hold to have stopped nothing", held, err)
+	}
+}
+
+// The one sentence every surface prints about a hold. It names the actual holder
+// and the cause, and it never says the operator did something the brake did:
+// what that misreporting cost was somebody diagnosing a decision nobody made.
+func TestAnIntakeHoldSaysWhoPlacedItAndWhy(t *testing.T) {
+	t.Parallel()
+
+	for name, testCase := range map[string]struct {
+		hold IntakeHold
+		want string
+	}{
+		"the brake, with the storm that tripped it": {
+			hold: IntakeHold{HeldBy: IntakeHolderBrake, Reason: "3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3"},
+			want: "the harness's own brake placed it after 3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3",
+		},
+		"the brake, with nothing recorded": {
+			hold: IntakeHold{HeldBy: IntakeHolderBrake},
+			want: "the harness's own brake placed it after runs kept blocking",
+		},
+		"the operator, with what looked wrong": {
+			hold: IntakeHold{HeldBy: IntakeHolderOperator, Reason: "the queue needs reordering first"},
+			want: "the operator placed it — the queue needs reordering first",
+		},
+		"the operator, in a hurry": {
+			hold: IntakeHold{HeldBy: IntakeHolderOperator},
+			want: "the operator placed it and gave no reason",
+		},
+		"a hold from before the holder was recorded": {
+			hold: IntakeHold{Reason: "the queue needs reordering first"},
+			want: "the record does not say who placed it — the queue needs reordering first",
+		},
+		"a hold from before, saying nothing at all": {
+			hold: IntakeHold{},
+			want: "the record does not say who placed it or why",
+		},
+	} {
+		if said := testCase.hold.Says(); said != testCase.want {
+			t.Fatalf("%s: Says() = %q, want %q", name, said, testCase.want)
+		}
+	}
+}
+
+// A hold written before the holder was recorded is still a hold, and reading it
+// as absent would start work under a stopped line. What it must not do is
+// acquire an attribution nobody wrote: the operator is the likely answer and a
+// guess either way.
+func TestAnIntakeHoldWithNoRecordedHolderIsReadWithoutOneBeingInvented(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newIntakeStoreAt(t, root, "yoyodyne")
+	directory := filepath.Join(root, "products", "yoyodyne")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := `{"schema_version":1,"product_id":"yoyodyne","held_at":"2026-08-18T18:15:00Z","reason":"the queue needs reordering first"}`
+	if err := os.WriteFile(filepath.Join(directory, "intake-hold.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	held, isHeld, err := store.Held()
+	if err != nil || !isHeld {
+		t.Fatalf("Held() = %t, %v, want a hold with no recorded holder still read as a hold", isHeld, err)
+	}
+	if held.HeldBy != "" {
+		t.Fatalf("Held() held by %q, want no holder invented for a record that names none", held.HeldBy)
+	}
+	if said := held.Says(); !strings.Contains(said, "does not say who placed it") || strings.Contains(said, "the operator") {
+		t.Fatalf("Says() = %q, want the absence stated rather than the operator assumed", said)
 	}
 }
 

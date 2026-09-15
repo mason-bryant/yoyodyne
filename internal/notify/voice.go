@@ -438,7 +438,7 @@ var productManagerVoice = voice{
 		KindDirectiveResolved:        "The operator settled it: {text}",
 		KindDirectiveCarriedOut:      "It was carried out, and this is what came of what the operator asked for: {text}",
 		KindDirectiveRefused:         "The operator said something here the harness would not record as a directive rather than guess at it: {why}",
-		KindIntakeHeld:               "The operator holds intake, so nothing new is chosen until they lift it: {why}",
+		KindIntakeHeld:               "Intake is held, so nothing new is chosen until somebody lifts it: {why}",
 		KindIntakeReleased:           "The operator released intake; the backlog is being pulled from again.",
 		KindHoldPlaced:               "The operator holds all harness activity.",
 		KindHoldLifted:               "The operator lifted the hold.",

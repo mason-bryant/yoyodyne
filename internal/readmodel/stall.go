@@ -261,13 +261,12 @@ func WhyNothingStarts(conditions Conditions) Stall {
 			Since:  conditions.OperatorHold.HeldAt,
 		}
 	case conditions.IntakeHeld:
-		says := "intake is held"
-		if reason := singleLine(conditions.IntakeHold.Reason, maxRefusalBytes); reason != "" {
-			says += " — " + reason
-		}
+		// Who placed it is part of the standing state rather than a detail below
+		// it: a line about a stopped queue that named the wrong holder would be
+		// wrong every time it was said.
 		return Stall{
 			Reason: ReasonIntakeHold,
-			Says:   says,
+			Says:   "intake is held, and " + singleLine(conditions.IntakeHold.Says(), maxRefusalBytes),
 			Clears: "`yoyo release` lifts it",
 			Since:  conditions.IntakeHold.HeldAt,
 		}
