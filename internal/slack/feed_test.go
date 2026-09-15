@@ -331,7 +331,7 @@ func TestWhatAWatchSessionIsDoingStaysInTheLogExceptWhenItStops(t *testing.T) {
 	}
 	cursors = harness.poll(t, cursors)
 
-	harness.watched(t, runstate.WatchBraked, "the operator is holding intake", moment.Add(2*time.Minute))
+	harness.watched(t, runstate.WatchBraked, "the operator placed it — the queue is being reordered", moment.Add(2*time.Minute))
 	harness.poll(t, cursors, notify.KindWatchBraked)
 }
 
@@ -411,7 +411,7 @@ func TestAHoldIsSaidWhenItIsPlacedAndAgainWhenItIsLifted(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
-	if _, err := harness.intake.Hold("reordering the backlog first", moment); err != nil {
+	if _, err := harness.intake.Hold(runstate.IntakeHolderOperator, "reordering the backlog first", moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)

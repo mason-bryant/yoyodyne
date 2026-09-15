@@ -29,7 +29,7 @@ func TestWorkStartsNothingWhileIntakeIsHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIntakeHoldStore() error = %v", err)
 	}
-	if _, err := intake.Hold("the queue needs reordering first", time.Now()); err != nil {
+	if _, err := intake.Hold(runstate.IntakeHolderOperator, "the queue needs reordering first", time.Now()); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 
@@ -40,7 +40,7 @@ func TestWorkStartsNothingWhileIntakeIsHeld(t *testing.T) {
 	// The remedy is named as something runnable from this terminal: `/release`
 	// is said beside it rather than instead of it, because whoever is reading
 	// this may have no conversation open.
-	for _, want := range []string{"nothing was started", "holding intake", "the queue needs reordering first", "yoyo release", "/release", "yoyo run"} {
+	for _, want := range []string{"nothing was started", "intake is held", "the operator placed it — the queue needs reordering first", "yoyo release", "/release", "yoyo run"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("work stdout = %q, want it to mention %q", stdout, want)
 		}
@@ -398,7 +398,7 @@ func TestADrainNeitherTakesTheWatchNorIsRefusedByIt(t *testing.T) {
 	}
 	// Held intake keeps this pass off the tracker, which is not what is being
 	// tested and is not available here.
-	if _, err := intake.Hold("the queue needs reordering first", time.Now()); err != nil {
+	if _, err := intake.Hold(runstate.IntakeHolderOperator, "the queue needs reordering first", time.Now()); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 

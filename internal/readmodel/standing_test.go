@@ -335,7 +335,7 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 	// wherever held work is counted.
 	sources.Decisions = recordedDecisions{}
 	sources.IntakeHolds = fakeIntakeHolds{
-		hold: runstate.IntakeHold{HeldAt: moment.Add(-2 * time.Hour), Reason: "the overnight looked wrong"},
+		hold: runstate.IntakeHold{HeldAt: moment.Add(-2 * time.Hour), HeldBy: runstate.IntakeHolderOperator, Reason: "the overnight looked wrong"},
 		held: true,
 	}
 
@@ -346,13 +346,13 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		"Working (1 conversation):\n",
 		"  product-manager — product-manager, a turn in flight for 40s after 270 recorded turns\n",
 		"Not startable (2 of 3 admitted items; 1 awaits the development manager's decision):\n",
-		"  yoyodyne-ifd.200 — intake is held — the overnight looked wrong; `yoyo release` lifts it\n",
+		"  yoyodyne-ifd.200 — intake is held, and the operator placed it — the overnight looked wrong; `yoyo release` lifts it\n",
 		// The whole line, because docs/operations.md prints it as the example an
 		// operator reads: a wording change has to break the document and the test
 		// together rather than leaving the two saying different things.
 		"  yoyodyne-ifd.201 — run run-b stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has\n",
 		"Needs a human (2):\n",
-		"intake is held, since 2026-08-30T10:00:00Z: the overnight looked wrong — the operator's",
+		"intake is held, since 2026-08-30T10:00:00Z: the operator placed it — the overnight looked wrong — the operator's",
 		"1 admitted item awaits the development manager's decision — the development manager's",
 	} {
 		if !strings.Contains(rendered, want) {

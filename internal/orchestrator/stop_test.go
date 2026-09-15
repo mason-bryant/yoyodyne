@@ -166,7 +166,7 @@ func TestHeldIntakeStartsNothingTheHarnessChose(t *testing.T) {
 		At:     baseTime,
 	}
 	heldAt := baseTime
-	if _, err := intake.Hold("the queue looks wrong", heldAt); err != nil {
+	if _, err := intake.Hold(runstate.IntakeHolderOperator, "the queue looks wrong", heldAt); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestHeldIntakeStillRunsAnItemTheOperatorNames(t *testing.T) {
 	intake := newIntakeHoldStore(t)
 	pipeline.Intake = intake
 	pipeline.Selection = runstate.OperatorSelection("the operator ran this item by name", baseTime)
-	if _, err := intake.Hold("the queue looks wrong", baseTime); err != nil {
+	if _, err := intake.Hold(runstate.IntakeHolderOperator, "the queue looks wrong", baseTime); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 

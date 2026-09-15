@@ -13,6 +13,7 @@
         "paused": true,
         "paused_by_intake": {
           "held_at": "\u003ctime\u003e",
+          "held_by": "operator",
           "product_id": "yoyodyne",
           "reason": "the queue is heading somewhere wrong",
           "schema_version": 1

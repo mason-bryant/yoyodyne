@@ -29,7 +29,7 @@ func TestReleaseLiftsTheSameHoldTheConversationLifts(t *testing.T) {
 	// The conversation holds intake through this interface over this store, so
 	// asking it afterwards is asking what a conversation would see.
 	var conversation chat.IntakeHolds = store
-	held, err := conversation.Hold("the queue needs reordering first", time.Now())
+	held, err := conversation.Hold(runstate.IntakeHolderOperator, "the queue needs reordering first", time.Now())
 	if err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
@@ -76,7 +76,7 @@ func TestReleaseReportsTheLiftedHoldAsJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIntakeHoldStore() error = %v", err)
 	}
-	placed, err := store.Hold("looking at the queue", time.Now())
+	placed, err := store.Hold(runstate.IntakeHolderOperator, "looking at the queue", time.Now())
 	if err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}

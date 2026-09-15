@@ -834,7 +834,7 @@ func baselineHeldClaimedRun(t *testing.T) *baselineFixture {
 func baselineIntakeHold(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
 	intake := newIntakeHoldStore(t)
-	if _, err := intake.Hold("the queue is heading somewhere wrong", baseTime); err != nil {
+	if _, err := intake.Hold(runstate.IntakeHolderOperator, "the queue is heading somewhere wrong", baseTime); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 	provider := roleBackend(baselineImplements, approveVerdict)

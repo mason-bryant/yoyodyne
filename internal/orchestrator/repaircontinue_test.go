@@ -479,7 +479,7 @@ func TestAHeldIntakeContinuesNothingAndSpendsNothing(t *testing.T) {
 	t.Parallel()
 
 	harness := newContinueHarness(t, continuableState())
-	held, err := harness.intake.Hold("the queue is heading somewhere odd", docketedNow)
+	held, err := harness.intake.Hold(runstate.IntakeHolderOperator, "the queue is heading somewhere odd", docketedNow)
 	if err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}

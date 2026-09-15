@@ -768,9 +768,11 @@ cannot get past is not retried every minute forever, and a blocker you release i
 picked up because releasing it changed the item. Runs blocking one after another
 with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
-whole backlog through a failed run overnight. And it records what it is doing —
-watching, idle, braked, resumed, stopped — where `yoyo status` and the Slack sink
-read it, because an idle session and a dead one are otherwise the same silence. A
+whole backlog through a failed run overnight — and what reports that hold
+names the brake rather than you, because the hold records which of the two
+placed it. And it records what it is doing — watching, idle, braked, resumed,
+stopped — where `yoyo status` and the Slack sink read it, because an idle
+session and a dead one are otherwise the same silence. A
 poll that starts nothing names the runs going and what it passed over. It records
 that account in classes as well as in words — how many items were held for a
 person, parked, carried in a conversation, sequenced behind a run — so that the
