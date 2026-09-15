@@ -1056,13 +1056,18 @@ the reply moves with it. A project that has granted nobody is steered by nobody.
 What a reply may say is in
 [`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).
 
-Outside those threads the sink is silent, with one exception: **a message that
-@-mentions the app is always answered**, wherever it can see one — at the top of
-the channel or in a thread it never opened. A question about where things stand
-is answered with the same four lines `yoyo status` prints, read from the same
-place rather than assembled a second way; anything else gets one sentence saying
-that is the only question it answers here yet and where the work is driven from
-instead. No directive is recorded from one and nothing about the work changes,
+Outside those threads the sink is silent, with two exceptions. The first is a
+direct message it opened to ask you something: a reply in that thread is the
+decision and is acted on and answered there, and a message typed at the top of
+that conversation is answered saying nothing was recorded — see
+[what arrives as a direct message](#what-arrives-as-a-direct-message) above.
+The second is that **a message that @-mentions the app is always answered**,
+wherever it can see one — at the top of the channel or in a thread it never
+opened. A question about where things stand is answered with the same four
+lines `yoyo status` prints, read from the same place rather than assembled a
+second way; anything else gets one sentence saying that is the only question it
+answers here yet and where the work is driven from instead. No directive is
+recorded from a mention and nothing about the work changes,
 because a message at the top of the channel names no item to scope a directive
 to — but every message addressed to the app goes into the sink's own log, with
 what was asked in it and before the answer is posted, so being heard does not
