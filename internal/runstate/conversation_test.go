@@ -474,10 +474,19 @@ func TestAFirstClaimWaitsForAnInFlightTurnRatherThanRefusing(t *testing.T) {
 		}
 	case err := <-failed:
 		t.Fatalf("Claim() error = %v after the turn in flight ended", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(claimHangGuard):
 		t.Fatal("Claim() did not return after the turn in flight ended")
 	}
 }
+
+// claimHangGuard bounds how long a test waits for a queued claim to notice the
+// conversation was put down. It is a guard against a claim that never returns
+// and not a measure of how quickly one should: the claim polls the lock every
+// ten milliseconds, and under the race detector on a machine running other
+// suites beside this one that goroutine has been starved past five seconds and
+// then taken the conversation after the test had already given up on it. A
+// bound that only a genuine hang reaches costs a working claim nothing.
+const claimHangGuard = 30 * time.Second
 
 // The caller that has something better to do than wait still gets its refusal.
 // A background delivery has asked the agent nothing yet, so it comes back later
@@ -599,7 +608,7 @@ func TestTakingAConversationBackWaitsForWhoeverHasIt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Retake() error = %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(claimHangGuard):
 		t.Fatal("Retake() did not return after the other process released the conversation")
 	}
 	if err := hold.Release(); err != nil {

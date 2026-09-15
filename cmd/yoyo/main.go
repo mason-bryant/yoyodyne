@@ -3,11 +3,10 @@ package main
 import (
 	"context"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/cli"
+	"github.com/mason-bryant/yoyodyne/internal/shutdown"
 )
 
 // version is what the linker stamps into a release build and what "make build"
@@ -16,8 +15,12 @@ import (
 // "go install" has no stamp, so buildinfo resolves the rest.
 var version = "dev"
 
+// A stop signal cancels the command and, where the command does not stop on the
+// cancellation, ends the process anyway. See the shutdown package for why the
+// cancellation on its own turned out not to be enough.
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	os.Exit(cli.RunContext(ctx, os.Args[1:], os.Stdout, os.Stderr, buildinfo.Resolve(version)))
+	ctx, stop := shutdown.Answering(context.Background(), os.Stderr)
+	code := cli.RunContext(ctx, os.Args[1:], os.Stdout, os.Stderr, buildinfo.Resolve(version))
+	stop()
+	os.Exit(code)
 }
