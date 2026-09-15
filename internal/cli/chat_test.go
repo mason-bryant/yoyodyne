@@ -727,6 +727,10 @@ func (t *recordingChatTracker) Block(context.Context, string, string) (beads.Wor
 	return beads.WorkItem{}, errors.New("this test did not expect a block")
 }
 
+func (t *recordingChatTracker) Unblock(context.Context, string, string) (beads.WorkItem, error) {
+	return beads.WorkItem{}, errors.New("this test did not expect a status to be cleared")
+}
+
 func (t *recordingChatTracker) AddBlocker(context.Context, string, string) error    { return nil }
 func (t *recordingChatTracker) RemoveBlocker(context.Context, string, string) error { return nil }
 

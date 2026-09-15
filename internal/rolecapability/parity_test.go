@@ -172,6 +172,21 @@ var conversationAuthorities = map[domain.AgentRole]conversationAuthority{
 	},
 }
 
+// grantedSinceTheConversion is the authority a ruling added after the table
+// above was transcribed, per role. It is kept apart from the table rather than
+// folded into it because the two say different things: the table is what the
+// conversion had to preserve exactly, and this is what somebody decided to change
+// afterwards and can be read as a list of such decisions.
+//
+// The one entry is the product manager's `repair`, which corrects backlog state
+// the records have made stale. It is the product-manager half of the operator's
+// 2026-09-07 broad-authority direction, recorded as a capability addition in the
+// configurable-workflows design's authority-model section, and it is a widening
+// of the role rather than drift in the conversion.
+var grantedSinceTheConversion = map[domain.AgentRole][]string{
+	domain.RoleProductManager: {"repair"},
+}
+
 func TestConversationAuthorityDecidesWhatItDecidedBeforeTheConversion(t *testing.T) {
 	t.Parallel()
 
@@ -192,13 +207,22 @@ func TestConversationAuthorityDecidesWhatItDecidedBeforeTheConversion(t *testing
 		if authority.Owns != want.owns {
 			t.Errorf("the %s owns %q, want %q", role, authority.Owns, want.owns)
 		}
-		if !slices.Equal(authority.TrackerActions, want.trackerActions) {
-			t.Errorf("the %s may ask for %v, want %v", role, authority.TrackerActions, want.trackerActions)
+		granted := grantedSinceTheConversion[role]
+		// What a later ruling granted is taken back out before the comparison, so
+		// the parity guarantee still holds over everything else: an action that
+		// appears here without a ruling behind it fails exactly as it always did.
+		decided := slices.DeleteFunc(slices.Clone(authority.TrackerActions), func(action string) bool {
+			return slices.Contains(granted, action)
+		})
+		if !slices.Equal(decided, want.trackerActions) {
+			t.Errorf("the %s may ask for %v, want %v beyond what a ruling granted (%v)",
+				role, authority.TrackerActions, want.trackerActions, granted)
 		}
 		// The same list asked one action at a time, because MayAct is what every
 		// call site actually calls and a list nothing reads is not a decision.
 		for _, action := range trackerActionsInTheContract(t) {
-			if may, wanted := authority.MayAct(action), slices.Contains(want.trackerActions, action); may != wanted {
+			wantedAction := slices.Contains(want.trackerActions, action) || slices.Contains(granted, action)
+			if may, wanted := authority.MayAct(action), wantedAction; may != wanted {
 				t.Errorf("MayAct(%s) for the %s = %t, want %t", action, role, may, wanted)
 			}
 		}

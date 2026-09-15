@@ -81,16 +81,28 @@ var expresses = map[string]expression{
 		asks: []capability.Capability{
 			capability.WorkItemRead, capability.WorkItemMutate, capability.BacklogAdmit,
 			capability.BacklogOrder, capability.WorkDecompose, capability.WorkTriage,
+			capability.WorkItemRepairState,
 		},
-		gap: "which of the fifteen named tracker actions falls under which capability is a mapping this registry does not carry; the conversion wrote it down where the actions are, as `trackerCapabilities`",
+		gap: "which of the sixteen named tracker actions falls under which capability is a mapping this registry does not carry; the conversion wrote it down where the actions are, as `trackerCapabilities`",
+	},
+	"conversation.repair-is-stale": {
+		question: "none: whether a state is stale is read off the records rather than off any role",
+		gap:      "holding the capability is the whole of what a bundle can say here; that the status, the link, or the attribution has actually stopped describing the records is state read at the call site, and no bundle carries state",
+	},
+	"conversation.repair-hold": {
+		question: "none: what somebody still has to release is a fact about the work rather than an authority anybody holds",
+		gap:      "a bundle says the product manager may correct stale backlog state and cannot say which items are exempt from it; the hold is the harness's own record of stopped work and the directives in force, read as the act runs",
 	},
 	"conversation.contract": {
 		question: "none: what is sent to a role is not what the role may do",
 		gap:      "a contract sent verbatim ahead of a persona is a runtime guarantee, and no bundle can say a persona may not stand in for one",
 	},
 	"conversation.contract.product-manager": {
-		question: "what the contract states in prose is this bundle: admission, order, and the product's own documents",
-		asks:     []capability.Capability{capability.BacklogAdmit, capability.BacklogOrder, capability.ArtifactProductMutate},
+		question: "what the contract states in prose is this bundle: admission, order, the product's own documents, and correcting what the records have made stale",
+		asks: []capability.Capability{
+			capability.BacklogAdmit, capability.BacklogOrder, capability.ArtifactProductMutate,
+			capability.WorkItemRepairState,
+		},
 	},
 	"conversation.contract.architect": {
 		question: "the architect changes designs and invariants and nothing else; the refusals are the capabilities its bundle does not hold",

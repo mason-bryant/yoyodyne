@@ -43,6 +43,14 @@ func bundles() []Bundle {
 				capability.ProviderInvoke,
 				capability.BacklogAdmit,
 				capability.BacklogOrder,
+				// Correcting backlog state the records have made stale is hers over her
+				// own backlog, and it is the one capability here that decides nothing:
+				// what it acts on is a status, a dependency, or an attribution that
+				// stopped describing what the records say, and every act under it is
+				// refused where they still do. It is the product-manager half of the
+				// operator's broad-authority direction, recorded in the
+				// configurable-workflows design's authority-model section.
+				capability.WorkItemRepairState,
 				// Admitting work includes creating it wherever it belongs, so the product
 				// manager decomposes as well. The development manager holds only this half,
 				// which is what the parent requirement enforces today.

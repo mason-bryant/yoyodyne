@@ -125,6 +125,13 @@ func (h Holds) Decided(workItemID string) bool {
 	return held.Decided && strings.TrimSpace(held.Reason) != ""
 }
 
+// Read reports holds a reader actually got an answer about. It is exported
+// because "nothing is held" and "nothing could say what is held" are opposite
+// answers to anything deciding whether an item may be touched, and only the
+// reader that got an answer may give the first: an unread Holds says nothing
+// about any item, which is exactly why the queue holds every blocked one.
+func (h Holds) Read() bool { return h.read }
+
 // hold is what somebody has to do before this item is pulled, with an empty
 // reason for an item nothing is holding.
 func (h Holds) hold(item beads.WorkItem) Hold {

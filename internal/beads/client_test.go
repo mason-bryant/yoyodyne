@@ -87,6 +87,39 @@ func TestClientBlocksAnItemAndVerifiesTheStatusItApplied(t *testing.T) {
 	}
 }
 
+// Clearing a status is the other end of blocking one, and it is verified the
+// same way: an item still reading blocked afterwards is unclaimable, with a note
+// on it saying it was released.
+func TestClientClearsABlockedStatusAndVerifiesTheStatusItApplied(t *testing.T) {
+	t.Parallel()
+
+	note := "the run that blocked it ended and nothing unfinished is behind it"
+	runner := &fakeRunner{responses: []string{workItemJSON("open", note)}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	item, err := client.Unblock(context.Background(), "yoyodyne-1", note)
+	if err != nil {
+		t.Fatalf("Unblock() error = %v", err)
+	}
+	if item.Status != "open" || item.Notes != note {
+		t.Fatalf("Unblock() = %#v", item)
+	}
+	wantArgs := [][]string{{"update", "yoyodyne-1", "--status=open", "--append-notes=" + note, "--json"}}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	unapplied := &fakeRunner{responses: []string{workItemJSON("blocked", note)}}
+	if _, err := (Client{Runner: unapplied}).Unblock(context.Background(), "yoyodyne-1", note); err == nil ||
+		!strings.Contains(err.Error(), "want open") {
+		t.Fatalf("Unblock() unapplied error = %v", err)
+	}
+	// A status cleared with nothing recorded about why is a change nobody can
+	// account for afterwards, which is the whole of what makes this reviewable.
+	if _, err := (Client{Runner: &fakeRunner{}}).Unblock(context.Background(), "yoyodyne-1", " "); err == nil {
+		t.Fatal("Unblock() empty note error = nil")
+	}
+}
+
 // An item a run integrated a change for and did not discharge goes back to the
 // backlog carrying why, and under whatever parking the caller decided. The status
 // is read back for the reason a blocker's is: an item left claimed by a run that
