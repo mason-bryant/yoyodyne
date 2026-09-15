@@ -928,6 +928,25 @@ that makes a hold possible at all — every agent on one model with nothing to
 fail over to — is what [`yoyo doctor`](operations.md#checking-the-installation)
 names under `failover` before any window closes.
 
+### An item claimed with nothing working on it
+
+The stall reading has a blind spot, and neither state above can see it either:
+**an item the tracker calls in progress with nothing working on it**. A stall is
+derived from ready work going unstarted, and an item the harness claimed is not
+ready — so a machine whose only startable work is sitting under dead claims reads
+as a drained queue, and the stall is silent about it by construction. Four
+nights of throughput went that way in the week of 2026-09-01.
+
+The audit is the watch loop's rather than the sink's, because giving a claim back
+is directing work and this surface does not direct work. What arrives here is
+what it did:
+[the harness gives the claim back and ends the record of the run that left it](operations.md#claims-with-nothing-working-on-them),
+so the item is pullable again and the developer slot is free, and the sink says
+each release once, in the item's own thread, as a direct message. Once is the
+log's position rather than this process's memory, so a restarted sink re-says
+nothing; and it is never repeated, because what follows a release is the item
+being pulled again, which says so itself.
+
 ### What arrives as a direct message
 
 Almost everything above is posted in the channel and nowhere else, because a
@@ -938,10 +957,15 @@ only by naming its class — the
 state fitting neither class does not get one:
 
 - **Degraded** — the system is stopped, stale, or choosing nothing over ready
-  work: something only a person fixes. The three shipped states are the ones
+  work: something only a person fixes. The four shipped states are the ones
   above — a session running a build the harness has moved well past, the
-  harness having started nothing at all while work was ready, and the provider
-  holding every role with nothing configured to fail over to.
+  harness having started nothing at all while work was ready, the provider
+  holding every role with nothing configured to fail over to, and an item that
+  sat claimed with nothing working on it until the harness gave it back. The
+  last of those is a fix rather than a request, and it is still in this class:
+  the line was quietly degraded for as long as it stood, and a second run for an
+  item with nothing accounting for the first is the kind of thing a person has
+  to be able to read afterwards.
 - **Advisory-once** — a fact addressed to a person that speaks exactly once per
   fact, never repeated and never urgent in presentation. One state ships in it:
   **a value the project's template has improved that this project never edited**.
@@ -975,10 +999,10 @@ said. The comparison itself is read once per `--heartbeat` rather than once per
 poll, so a sink polling every fifteen seconds reads the configuration hourly and
 not four times a minute.
 
-All three need the `im:write` scope the checked-in manifest asks for. A workspace
-that refuses it costs the direct messages and nothing else: the stale build and
-the improvement are in the channel either way, and the stall is in the durable
-record `yoyo status` reads back.
+All five need the `im:write` scope the checked-in manifest asks for. A workspace
+that refuses it costs the direct messages and nothing else: the stale build, the
+provider's hold, the improvement, and the released claim are in the channel
+either way, and the stall is in the durable record `yoyo status` reads back.
 
 Every message ends by saying whose move follows it. A thread is a narrative and a
 narrative goes quiet — a run takes an hour, an item sits in the queue overnight,

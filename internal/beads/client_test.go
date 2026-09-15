@@ -162,6 +162,35 @@ func reopenedItemJSON(status, notes, parking string) string {
 }]`, notes, status, parking)
 }
 
+func TestClientReleasesAClaimAndVerifiesTheStatusItApplied(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{responses: []string{workItemJSON("open", "the harness gave this item back")}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	item, err := client.Release(context.Background(), "yoyodyne-1", "the harness gave this item back")
+	if err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if item.Status != "open" || item.Notes != "the harness gave this item back" {
+		t.Fatalf("Release() = %#v, want the item back in the queue", item)
+	}
+	wantArgs := [][]string{{"update", "yoyodyne-1", "--status=open", "--append-notes=the harness gave this item back", "--json"}}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	// A release that did not take leaves work nothing will ever pull, which is the
+	// direction that goes unnoticed, so it is a failure rather than a report of
+	// success.
+	unapplied := &fakeRunner{responses: []string{workItemJSON("in_progress", "given back")}}
+	if _, err := (Client{Runner: unapplied}).Release(context.Background(), "yoyodyne-1", "given back"); err == nil || !strings.Contains(err.Error(), "want open") {
+		t.Fatalf("Release() unapplied error = %v", err)
+	}
+	if _, err := (Client{Runner: &fakeRunner{}}).Release(context.Background(), "yoyodyne-1", " "); err == nil {
+		t.Fatal("Release() empty reason error = nil")
+	}
+}
+
 func TestClientAppliesOnlyTheEditItWasGiven(t *testing.T) {
 	t.Parallel()
 

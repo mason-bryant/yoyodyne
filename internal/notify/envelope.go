@@ -247,6 +247,20 @@ const (
 	// sharpest case there is of the harness being degraded by something a person
 	// can change.
 	KindCapacityHold Kind = "capacity.hold"
+	// A claim the harness gave back because nothing was working on it. It is the
+	// same reading as the stall above, taken from the other end: that one asks
+	// whether anything has started and this one asks whether what the tracker says
+	// is running actually is. The difference is what each can see. An item the
+	// harness claimed has left the ready queue, so a machine whose only startable
+	// work is sitting under dead claims reads as a drained queue — nothing held,
+	// nothing running, nothing ready — and the stall reading is silent about it by
+	// construction. Four nights of throughput went that way in the week of
+	// 2026-09-01.
+	//
+	// It is said once per release, which is once per stuck item, because the
+	// release is what ends the state: what follows it is the item being pulled
+	// again, and that has its own message.
+	KindClaimReleased Kind = "claim.released"
 	// One value the project's template has improved that this project has never
 	// edited. It is the third state here rather than a crossing, and it is the
 	// mildest thing this vocabulary carries: nothing is wrong, nothing is waiting,
@@ -333,6 +347,7 @@ func Kinds() []Kind {
 		KindStallNoticed,
 		KindProviderWindow,
 		KindCapacityHold,
+		KindClaimReleased,
 		KindBundleImprovement,
 		KindBundleImprovements,
 		KindCatchUpDigest,
@@ -357,7 +372,8 @@ func (k Kind) Valid() bool {
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
-		KindProviderWindow, KindCapacityHold, KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest:
+		KindProviderWindow, KindCapacityHold, KindClaimReleased,
+		KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -784,6 +800,13 @@ type Detail struct {
 	// the provider's answer whatever is in the queue behind it. KindCapacityHold
 	// reads the pair the same way for the provider holding every role: the hold as
 	// the read model words it, and when its earliest refusal was recorded.
+	//
+	// KindClaimReleased reads the same pair about one item rather than about the
+	// line: what the record said became of the run that left the claim behind, and
+	// the last moment that run said anything. They are the same fields for the
+	// same reason — one reader is being told one thing, nothing is working on
+	// this, since when — and a vocabulary of its own would be a second way to say
+	// it.
 	//
 	// Since is read once more by KindCatchUpDigest, where it is the first of the
 	// events the digest stands for: the same subtraction against the event's own

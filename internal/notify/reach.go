@@ -192,6 +192,13 @@ var reaches = map[Kind]Reach{
 	// has both a cause and a remedy, and it is the operator's: the window is the
 	// provider's, and the configuration that let it hold every role is his.
 	KindCapacityHold: ReachChannel,
+	// A claim the harness gave back because nothing was working on it. It is the
+	// stall's blind spot said from the other end — an item that had left the ready
+	// queue under a run that died, with the line idle behind it — and it is said
+	// once per release, in the item's thread and at the top, because the harness
+	// was degraded for as long as the claim stood and a second run for the item is
+	// something a reader has to be able to account for afterwards.
+	KindClaimReleased: ReachChannel,
 	// A session dispatching work on a binary the harness has moved past. Nothing in
 	// the record says it at all, and what it costs is rounds spent against bugs
 	// that were fixed hours earlier.

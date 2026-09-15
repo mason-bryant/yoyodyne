@@ -417,6 +417,19 @@ type ScheduleCorrections interface {
 	Correct(ctx context.Context) (CorrectionSweep, error)
 }
 
+// ScheduleClaims audits the items the tracker says are claimed against the runs
+// the harness actually has, and gives back the ones with nothing alive behind
+// them. It is satisfied by ClaimAuditor.
+//
+// It is optional, and a pull wired without one pulls exactly the same work and
+// spends exactly what it spent before — the tracker reading the audit needs is
+// made where the audit is, so a pull with no audit makes it where it always did.
+// What is lost is the only thing that ever frees an item whose run died, which is
+// why every session the harness builds is given one.
+type ScheduleClaims interface {
+	Audit(ctx context.Context, claimed []beads.WorkItem) (ClaimSweep, error)
+}
+
 // Starter runs one chosen item to its end. It is a function rather than the
 // pipeline itself because a pull hands each run the configuration that pull
 // read, and because what the scheduler needs from a run is only its outcome.
@@ -487,7 +500,10 @@ type Pull struct {
 	// lost are re-issued without a person prompting it. Optional; see
 	// ScheduleCorrections.
 	Corrections ScheduleCorrections
-	Start       Starter
+	// Claims gives back the claims with nothing alive behind them. Optional; see
+	// ScheduleClaims.
+	Claims ScheduleClaims
+	Start  Starter
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -719,6 +735,17 @@ type Schedule struct {
 	// unsaid, because a refusal nobody woke for is exactly the loss the wakeup
 	// exists to prevent.
 	CorrectionProblem string `json:"correction_problem,omitempty"`
+	// Released is the claims this pass audited against the runs the harness has,
+	// found nothing alive behind, and gave back to the queue. It is on the schedule
+	// for the reason the started runs are: a pass that freed work somebody would
+	// otherwise have found stuck in the morning is a pass that did something.
+	//
+	// ClaimProblem names the claims it found dead and could not give back. It costs
+	// the pass nothing it was doing, so it is reported beside the pull rather than
+	// stopping it — and never left unsaid, because an item nothing will ever pull
+	// is exactly what the audit exists to stop being invisible.
+	Released     []runstate.ReleasedClaim `json:"released,omitempty"`
+	ClaimProblem string                   `json:"claim_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -1129,6 +1156,26 @@ pulling:
 		// a stoppage nobody delivers and a cadence nobody fires cost their whole
 		// pass. Like both of them it takes at most one turn; see Corrector.
 		s.correct(ctx, &schedule, pull)
+		// The claims the tracker holds are audited here, for the reason the three
+		// above it run here: it chooses nothing and starts nothing, so none of what
+		// follows is allowed to stop it happening. It is last of the four because it
+		// spends no turn — it is a reading and, on the rare pass, a tracker write —
+		// so nothing it does bears on how much waking the pass has done.
+		//
+		// Each of the three things below would, and each is a state the audit is most
+		// needed in. A held intake is often this session's own brake, which is placed
+		// exactly when runs are failing one after another — the pass where a claim is
+		// most likely to have just died is the pass a hold would have silenced. A full
+		// machine is the state a dead claim produces: two slots held by runs nobody is
+		// running, and no pull that stops at the capacity check ever gets as far as
+		// the queue. And the queue read below is the last of them, which is why the
+		// claimed items are read here and handed down to it rather than read twice.
+		//
+		// It costs a held or full session one tracker read a poll it did not pay
+		// before, and buys the only thing that ever frees those slots. A pull wired
+		// without an audit spends nothing at all: the reading is the audit's, so
+		// that pull makes it where it always did, in the queue below.
+		claimed, claimedRead := s.audit(ctx, &schedule, pull)
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -1209,7 +1256,7 @@ pulling:
 			continue
 		}
 
-		read, err := pull.queue(ctx)
+		read, err := pull.queue(ctx, claimed, claimedRead)
 		if err != nil {
 			if !unreadable(err) {
 				break
@@ -1844,6 +1891,61 @@ func (s Scheduler) correct(ctx context.Context, schedule *Schedule, pull Pull) {
 	}
 }
 
+// audit gives back the claims with nothing alive behind them, and records on the
+// schedule what it freed and what it could not.
+//
+// Nothing here stops the pass, for the reason nothing in escalate does: an audit
+// that failed costs the pass nothing it was doing, and a pass that stopped
+// choosing work because it could not read a claim would be a worse failure than
+// the stuck item it was looking for. What must not happen is silence, which is
+// the whole of what this exists to end.
+//
+// What it does cost is the pull's own thread while the records are read — the
+// runs and the log of what has already been given back, once per pass — and one
+// tracker write per stuck item, which on the ordinary pass is none.
+//
+// It returns what the tracker holds as claimed and whether that reading was made,
+// because the queue below needs the same listing: a pull makes it once, here,
+// and a pull with no audit wired makes it there instead and pays nothing for this.
+//
+// A reading that fails here is reported rather than retried, which is the one
+// place in this loop that is true of a reading. Every other one is something the
+// pass cannot go on without; this is only the audit's, and routing it through the
+// retry would make a held intake — which is answered from a switch and needs no
+// tracker at all — stop being answerable on a machine whose tracker is down. The
+// queue below still meets the same store and still rides it out, so a session in
+// contention behaves exactly as it did.
+func (s Scheduler) audit(ctx context.Context, schedule *Schedule, pull Pull) ([]beads.WorkItem, bool) {
+	if pull.Claims == nil {
+		return nil, false
+	}
+	claimed, err := pull.claimed(ctx)
+	if err != nil {
+		schedule.ClaimProblem = fmt.Sprintf("what the tracker holds as claimed could not be read, so an item whose run died stays claimed and nothing will pull it: %v", err)
+		return nil, false
+	}
+	sweep, err := pull.Claims.Audit(ctx, claimed)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("the claims the tracker holds could not be audited against the runs the harness has, so an item whose run died stays claimed and nothing will pull it: %v", err))
+	}
+	schedule.Released = append(schedule.Released, sweep.Released...)
+	problems = append(problems, sweep.Problems...)
+	// What the pass says is replaced by what this sweep found, and cleared by a
+	// sweep that found nothing wrong. Unlike a stopped delivery there is no retry
+	// delay here — every pull audits every claim — so on most passes a sweep with
+	// no problems means the problem before it is gone. The one exception is a run
+	// the audit settled whose release the tracker then refused: the settling dated
+	// the run's record from the audit's own write, so the claim is not read as
+	// dead again until the threshold has passed over that, and the problem line
+	// goes quiet for that long before the release is tried again and said again.
+	// The item is still claimed through it, so an empty line here is not proof
+	// that every claim is pullable — only that this sweep found nothing it could
+	// still act on.
+	schedule.ClaimProblem = strings.Join(problems, "; ")
+	return claimed, true
+}
+
 // priceRun is what one finished run cost, from the recorded evidence. A run that
 // never got as far as a record is priced at nothing because there is nothing to
 // price, which is the truth about a start that failed before it began; evidence
@@ -2376,11 +2478,30 @@ type pulled struct {
 	children map[string][]string
 }
 
+// claimed is the tracker slice that has left the backlog by being pulled. It is
+// read on its own because two things in one pull need it and neither is the
+// other's: the claim audit reads it before the machine's capacity is even
+// consulted, and the queue below reads it for coverage. One reading serves both,
+// so a pull spawns `bd` for it once.
+func (p Pull) claimed(ctx context.Context) ([]beads.WorkItem, error) {
+	items, err := p.Tracker.List(ctx, claimedStatus)
+	if err != nil {
+		return nil, fmt.Errorf("list %s work items: %w", claimedStatus, err)
+	}
+	return items, nil
+}
+
 // queue assembles the admitted work into the product manager's order. It is the
 // same assembly a conversation's backlog uses and the same one a development
 // manager reads, built from the tracker every pull rather than stored, so what
 // the scheduler pulls can never drift from the priorities actually set.
-func (p Pull) queue(ctx context.Context) (pulled, error) {
+//
+// The claimed slice is passed in rather than read here because the pull has
+// already read it for the claim audit; see Pull.claimed. Where that reading did
+// not happen — the audit's read failed, and it is reported rather than retried —
+// this makes it, because the coverage below is not optional the way the audit is
+// and a pull that skipped it would start a parent beside the child running it.
+func (p Pull) queue(ctx context.Context, claimed []beads.WorkItem, read bool) (pulled, error) {
 	var admitted []beads.WorkItem
 	for _, status := range scheduledStatuses {
 		items, err := p.Tracker.List(ctx, status)
@@ -2417,9 +2538,11 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	// Coverage is read one status wider than the backlog. A claimed child has left
 	// the queue and is never chosen from here, but it is a run in flight over the
 	// same work, so its parent is the last thing that should be started beside it.
-	claimed, err := p.Tracker.List(ctx, claimedStatus)
-	if err != nil {
-		return pulled{}, fmt.Errorf("list %s work items: %w", claimedStatus, err)
+	if !read {
+		claimed, err = p.claimed(ctx)
+		if err != nil {
+			return pulled{}, err
+		}
 	}
 	for _, item := range claimed {
 		items[item.ID] = item
@@ -2582,6 +2705,16 @@ func (s Schedule) Render() string {
 	rendered.WriteString(CorrectionSweep{Corrected: s.Corrected}.Render())
 	if s.CorrectionProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.CorrectionProblem)
+	}
+	// What the pass gave back, said beside what it pulled: an item the harness
+	// unstuck is work that will be started again, and a reader who is not told
+	// would find a second run for it with nothing accounting for the first.
+	for _, released := range s.Released {
+		fmt.Fprintf(&rendered, "%s was claimed with nothing working on it and was given back to the queue: %s\n",
+			released.WorkItemID, released.Because)
+	}
+	if s.ClaimProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.ClaimProblem)
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s: %s\n",
