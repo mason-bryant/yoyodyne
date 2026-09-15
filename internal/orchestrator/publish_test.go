@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1268,6 +1269,12 @@ type fakeForge struct {
 	// lagging the merge it just performed.
 	openReplies int
 	stateCalls  int
+	// failingChecks and mergeState are what the forge says about the checks on
+	// the request while its merge is queued: the checks it reports failing, and
+	// its merge state. A forge holding a queued merge on a red required check
+	// names the check and reports the request BLOCKED.
+	failingChecks []string
+	mergeState    string
 	// ensureResets and mergeResets are how many times the connection carrying
 	// that call drops before it goes through. They are the failure that killed
 	// four runs on 2026-09-03: nothing about the request reached the forge, so
@@ -1415,7 +1422,10 @@ func (f *fakeForge) State(context.Context, string) (publish.PullRequest, error) 
 	f.stateCalls++
 	url := fmt.Sprintf("https://example.invalid/pull/%d", f.number)
 	if !f.merged || f.stateCalls <= f.openReplies {
-		return publish.PullRequest{Number: f.number, URL: url, State: "OPEN", AutoMerge: f.queued}, nil
+		return publish.PullRequest{
+			Number: f.number, URL: url, State: "OPEN", AutoMerge: f.queued,
+			FailingChecks: slices.Clone(f.failingChecks), MergeState: f.mergeState,
+		}, nil
 	}
 	return publish.PullRequest{Number: f.number, URL: url, State: "MERGED", Merged: true}, nil
 }
@@ -1736,6 +1746,105 @@ func TestReconcileLeavesAQueuedMergeThatIsStillWaiting(t *testing.T) {
 	fixture.forge.performQueuedMerge(t)
 	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
 		t.Fatalf("reconciliation after the merge = %#v, want it completed", settled)
+	}
+}
+
+// A queued merge the forge is holding on a failing required check is the same
+// observation as one it is about to perform — open, unmerged, merge armed — and
+// for six days in September 2026 every sweep answered "queued" over ten of them.
+// So the sweep reads the checks: a held merge is reported with the check by
+// name, the failing checks are written onto the run's record so a sink comparing
+// two readings finds them appear, and the record is written once rather than
+// once a sweep. The check passing clears them and the merge settles as any
+// queued merge does.
+func TestReconcileNamesTheCheckHoldingAQueuedMerge(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	fixture.run(t)
+	fixture.forge.failingChecks = []string{"build"}
+	fixture.forge.mergeState = "BLOCKED"
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionQueued || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the run reported as queued", results)
+	}
+	held := results[0]
+	if !slices.Equal(held.FailingChecks, []string{"build"}) || held.PullRequest != fixture.forge.number {
+		t.Fatalf("reconciliation = %#v, want the failing check and the request named", held)
+	}
+	for _, want := range []string{"holding the queued merge", `"build"`, "failing required check"} {
+		if !strings.Contains(held.Detail, want) {
+			t.Errorf("detail %q does not say %q", held.Detail, want)
+		}
+	}
+	recorded, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.PullRequest.HeldByChecks() || !slices.Equal(recorded.PullRequest.FailingChecks, []string{"build"}) {
+		t.Fatalf("recorded pull request = %#v, want the failing check on the record", recorded.PullRequest)
+	}
+	if !recorded.PullRequest.MergeQueued || !recorded.Outstanding() {
+		t.Fatalf("recorded run = %#v, want the merge still queued and the run still outstanding", recorded)
+	}
+	// The sweep-wide reading groups the same fact the other way round: one check,
+	// every merge it holds.
+	if holds := HeldMerges(results); len(holds) != 1 || holds[0].Check != "build" ||
+		!slices.Equal(holds[0].PullRequests, []int{fixture.forge.number}) || !slices.Equal(holds[0].WorkItems, []string{"yoyodyne-task"}) {
+		t.Fatalf("HeldMerges() = %#v, want the one check with the one merge it holds", holds)
+	}
+
+	// The same answer again writes nothing: a record already saying what the
+	// forge says is left as it stands.
+	updated := recorded.UpdatedAt
+	fixture.reconcile(t)
+	if again, _ := fixture.store.Load(pipelineRunID); !again.UpdatedAt.Equal(updated) {
+		t.Errorf("a repeated reading rewrote the record at %s, was %s", again.UpdatedAt, updated)
+	}
+
+	// The check passes on the base branch and the forge is about to merge: the
+	// checks come off the record, and nothing is said as held any more.
+	fixture.forge.failingChecks = nil
+	fixture.forge.mergeState = "CLEAN"
+	cleared := fixture.reconcile(t)
+	if len(cleared) != 1 || cleared[0].Action != ActionQueued || len(cleared[0].FailingChecks) != 0 {
+		t.Fatalf("reconciliation after the check passed = %#v, want a plainly queued merge", cleared)
+	}
+	if holds := HeldMerges(cleared); len(holds) != 0 {
+		t.Errorf("HeldMerges() = %#v, want nothing held", holds)
+	}
+	if recorded, _ := fixture.store.Load(pipelineRunID); recorded.PullRequest.HeldByChecks() {
+		t.Errorf("recorded pull request = %#v, want the failing checks cleared", recorded.PullRequest)
+	}
+
+	// And the merge the forge then performs settles the run exactly as before.
+	fixture.forge.performQueuedMerge(t)
+	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
+		t.Fatalf("reconciliation after the merge = %#v, want it completed", settled)
+	}
+	if recorded, _ := fixture.store.Load(pipelineRunID); len(recorded.PullRequest.FailingChecks) != 0 || recorded.PullRequest.MergeQueued {
+		t.Errorf("settled pull request = %#v, want no failing checks and no queued merge", recorded.PullRequest)
+	}
+}
+
+// A failing check the forge reports on a request it still calls mergeable is
+// one the base branch does not require, and the merge is not waiting on it: it
+// is not written onto the record and the merge is reported as plainly queued.
+func TestReconcileDoesNotCallAQueuedMergeHeldOnACheckTheBaseDoesNotRequire(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	fixture.run(t)
+	fixture.forge.failingChecks = []string{"optional-lint"}
+	fixture.forge.mergeState = "CLEAN"
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionQueued || len(results[0].FailingChecks) != 0 {
+		t.Fatalf("reconciliation = %#v, want a plainly queued merge", results)
+	}
+	if recorded, _ := fixture.store.Load(pipelineRunID); recorded.PullRequest.HeldByChecks() {
+		t.Errorf("recorded pull request = %#v, want no failing checks recorded", recorded.PullRequest)
 	}
 }
 

@@ -114,6 +114,11 @@ var reaches = map[Kind]Reach{
 	// out about on their own: the change is promoted, the item reads as landed, and
 	// the request waits on a person who does not know it is theirs.
 	KindMergeDropped: ReachChannel,
+	// A merge the forge is holding on a failing check is the same silence with
+	// the merge still armed: nothing in the thread moves, the heartbeat's count
+	// goes up by one, and the check that has to pass is on the base branch rather
+	// than in anything this run can do.
+	KindMergeHeld: ReachChannel,
 	// Work that stopped. A park waits on something outside the run, a blocker is
 	// the development manager's decision and moves nothing until it is made, and a
 	// run that ended without succeeding has materially changed what exists.

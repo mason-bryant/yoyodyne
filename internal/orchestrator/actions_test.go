@@ -623,6 +623,155 @@ func TestPerformingCleanUpReachesTheCleanUp(t *testing.T) {
 	}
 }
 
+// TestPerformingIntegrateRefusesAChangeTheRecordDoesNotShowPassedItsGate is the
+// promotion reading its own gate off the record rather than trusting whoever
+// called it. The repair loop orders the checks in front of the promotion, and
+// that is a property of one caller; a definition that routed straight to this
+// door has to be refused here on the evidence — and refused before the lease is
+// taken or the phase is written, so a refusal leaves the run exactly as the
+// reviewer left it. This door is the only route into a promotion: a resumed run
+// re-enters the repair loop and re-earns the gate before it reaches here, and
+// reconciliation never promotes — recoverIntegration only records a promotion
+// the repository already shows, and refuses that without an approving verdict.
+//
+// yoyodyne-ifd.362 asked for this after five landings carried a test that was
+// red on the forge: the check phase had run and exited 0 on every one of them,
+// so the gate was never bypassed — but a gate that holds by control flow alone
+// had nothing on the record to say so, and nothing to refuse a route that skips
+// the loop.
+func TestPerformingIntegrateRefusesAChangeTheRecordDoesNotShowPassedItsGate(t *testing.T) {
+	t.Parallel()
+
+	registry, err := deliveryRegistry()
+	if err != nil {
+		t.Fatalf("deliveryRegistry() error = %v", err)
+	}
+	integrate, found := registry.Lookup("candidate.integrate")
+	if !found {
+		t.Fatal(`Lookup("candidate.integrate") found nothing`)
+	}
+	const checkedCommit = "c0ffee01c0ffee01c0ffee01c0ffee01c0ffee01"
+	earned := &runstate.ChecksPassed{Attempt: 1, Commit: checkedCommit, Commands: []string{"make test"}, At: baseTime}
+	for name, test := range map[string]struct {
+		shape func(*runstate.State)
+		want  string
+	}{
+		"a failing check still recorded": {
+			shape: func(s *runstate.State) {
+				s.ChecksPassed = nil
+				s.CheckFailure = &runstate.CheckFailure{Command: "make test", ExitCode: 2}
+			},
+			want: "make test exited with 2",
+		},
+		"a protected-path refusal still recorded": {
+			shape: func(s *runstate.State) {
+				s.PathRefusal = &runstate.PathRefusal{Paths: []string{".yoyodyne/config.yaml"}}
+			},
+			want: "protected-path refusal",
+		},
+		"no passing checks recorded at all": {
+			shape: func(s *runstate.State) { s.ChecksPassed = nil },
+			want:  "no configured check is recorded as having passed",
+		},
+		"checks that passed over an earlier attempt": {
+			shape: func(s *runstate.State) { s.RepairAttempts = 2 },
+			want:  "passed over attempt 1 and the change being promoted is attempt 2",
+		},
+		"checks that passed at a different commit": {
+			shape: func(s *runstate.State) { s.HarnessCommit = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" },
+			want:  `passed at commit "` + checkedCommit + `" and the change being promoted is at "deadbeef`,
+		},
+		"no approving verdict": {
+			shape: func(s *runstate.State) { s.ReviewDecision = runstate.ReviewRepair },
+			want:  "rather than an approval",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+			if err != nil {
+				t.Fatalf("runstate.NewStore() error = %v", err)
+			}
+			state := gatedRun(t, earned)
+			test.shape(&state)
+			if err := store.Create(state); err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			run := &activeRun{
+				pipeline: Pipeline{Worktrees: partialWorktreeManager{}, Store: store},
+				claimed:  true,
+				state:    state,
+				worktree: gitworktree.Worktree{TargetBranch: "main"},
+			}
+			err = integrate.Perform(context.Background(), run)
+			if !errors.Is(err, ErrIntegrationUnearned) {
+				t.Fatalf("Perform() error = %v, want %v", err, ErrIntegrationUnearned)
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Errorf("Perform() error = %v, want it to say %q", err, test.want)
+			}
+			// Nothing was taken and nothing was written: the run is where the
+			// reviewer left it, and the record says so.
+			if run.state.Phase != runstate.PhaseReviewing || run.state.Integration != nil {
+				t.Errorf("a refused promotion moved the run to %q with integration %v", run.state.Phase, run.state.Integration)
+			}
+			saved, err := store.Load(state.RunID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if saved.Phase != runstate.PhaseReviewing {
+				t.Errorf("the durable record is in %q; a refused promotion wrote a phase it never earned", saved.Phase)
+			}
+		})
+	}
+
+	// The control: the same record with the gate earned passes the reading and
+	// reaches the promotion itself, which is what proves the refusals above are
+	// the gate and not the manager refusing everything.
+	t.Run("checks that passed over exactly this attempt", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+		if err != nil {
+			t.Fatalf("runstate.NewStore() error = %v", err)
+		}
+		state := gatedRun(t, earned)
+		if err := store.Create(state); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		run := &activeRun{
+			pipeline: Pipeline{Worktrees: partialWorktreeManager{}, Store: store},
+			claimed:  true,
+			state:    state,
+			worktree: gitworktree.Worktree{TargetBranch: "main"},
+		}
+		err = integrate.Perform(context.Background(), run)
+		if errors.Is(err, ErrIntegrationUnearned) {
+			t.Fatalf("Perform() refused a change whose record shows it earned the promotion: %v", err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "partial worktree cannot be integrated") {
+			t.Fatalf("Perform() error = %v, want the promotion itself to have been reached", err)
+		}
+	})
+}
+
+// gatedRun is a reviewed run standing in front of its promotion, with the
+// record showing the gate earned for exactly the attempt and commit it holds.
+func gatedRun(t *testing.T, earned *runstate.ChecksPassed) runstate.State {
+	t.Helper()
+	state := completingRun("yoyodyne-ifd.362", runstate.PhaseReviewing)
+	state.WorktreePath = filepath.Join(t.TempDir(), "worktree")
+	state.Branch = "yoyodyne/yoyodyne-ifd-362/0123456789abcdef"
+	state.BaseCommit = "0123456789abcdef0123456789abcdef01234567"
+	state.TargetBranch = "main"
+	state.RepairAttempts = 1
+	state.HarnessCommit = earned.Commit
+	state.ReviewDecision = runstate.ReviewApprove
+	state.ChecksPassed = earned
+	return state
+}
+
 // parseNonTestFiles is every non-test Go file in a directory, parsed. Test files
 // are left out throughout: an action wrapping something only the tests have
 // would be a door onto code no run executes.
@@ -850,6 +999,7 @@ var notAStep = map[string]string{
 	"attemptReview":           "one provider invocation inside candidate.review",
 	"recordReviewVerdict":     "records a verdict against the item, charging a round where it sent the work back, inside candidate.review",
 	"gateProtectedPaths":      "the scope refusal candidate.check makes before it spends a suite",
+	"integrationEarned":       "the reading of the gate off the record that candidate.integrate makes before it takes anything",
 	"settleRemoteTarget":      "the pre-promotion remote check inside candidate.integrate",
 	"publishIntegration":      "the merge candidate.integrate asks the forge for once the promotion stands",
 	"repair":                  "records one repair attempt and re-enters candidate.develop with the findings",
