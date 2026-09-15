@@ -204,6 +204,13 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 			Standing:    f.standing(ctx),
 		}, now),
 	}
+	if count == 0 {
+		// The line is said for the promotion waiting on the forge, and that is the
+		// channel's to carry: nothing here is choosing nothing over ready work, so
+		// there is no decision to put to anybody. An ask offering to release intake
+		// over an empty queue would be a question about the wrong thing.
+		return []Delivery{said}, nil, nil
+	}
 	asking := Ask{
 		Mark:    mark,
 		Stopped: state.Says,

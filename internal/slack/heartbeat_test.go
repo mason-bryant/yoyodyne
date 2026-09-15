@@ -365,6 +365,29 @@ func TestAnIdleLineWithNothingReadyAsksNobody(t *testing.T) {
 	}
 }
 
+// A promotion waiting on the forge makes the channel line worth saying over an
+// empty queue, and it is the channel's alone: nothing is choosing nothing over
+// ready work, so there is no decision to put to anybody, and an ask offering to
+// release intake over an empty queue would be a question about the wrong thing.
+func TestAPromotionWaitingOnTheForgeOverAnEmptyQueueAsksNobody(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(0)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	harness.record(t, harness.awaitingForge(t))
+
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksPassed,
+		notify.KindReviewApproved, notify.KindPromoted, notify.KindPublished,
+		notify.KindMergeQueued)
+	harness.now = harness.now.Add(time.Hour)
+	batch := harness.batch(t, cursors)
+	harness.say(t, cursors, notify.KindLineWaiting)
+	if batch.Asking != nil {
+		t.Fatalf("asking = %+v beside a line said for the forge alone, want nobody asked over an empty queue", batch.Asking)
+	}
+}
+
 // Every reason the heartbeat repeats has answers to offer, so an ask is never a
 // question with nothing numbered under it for want of somebody adding a case.
 func TestEveryStateTheHeartbeatSaysOffersOptions(t *testing.T) {

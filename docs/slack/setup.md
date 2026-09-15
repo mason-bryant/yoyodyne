@@ -1042,9 +1042,11 @@ same record.
 ## Deciding a stopped line from a direct message
 
 The hourly waiting line above is the one state the sink asks you about rather
-than reports. The same moment it first says a line has stopped in the channel,
-it opens a direct message with each operator — everybody in `operators` with a
-bound Slack member id, one conversation each — and puts the decision to them:
+than reports. The same moment it first says a line has stopped over ready work
+in the channel, it opens a direct message with each person granted `direct-work`
+with a bound Slack member id — the same allow-list a thread reply is acted on
+by, and nobody else in `operators` — one conversation each, and puts the
+decision to them:
 
 > **Nothing is being started, and it is waiting on you.** intake is held, and
 > the harness's own brake placed it after runs kept blocking. 4 admitted items
@@ -1082,8 +1084,9 @@ operational directive in the same record `yoyo directive record` writes and
 every run consults — unscoped, because what you were asked about is the whole
 line rather than one item — and it carries what was asked, which option you
 took, and the words you typed, so somebody reading it weeks later can
-reconstruct the decision. The thread answers you by name with the directive's
-identifier.
+reconstruct the decision. The thread answers you by name with which option was
+taken and the sentence it stood for — and, as everywhere else here, no
+identifier: `yoyo directive list` is where the record is read back.
 
 The two halves of that are worth being plain about. Nothing acts on your answer
 by itself: choosing "release intake" records that you decided to, and does not
@@ -1095,8 +1098,11 @@ is what gets an app muted.
 
 Each operator is asked separately rather than in one conversation, because a
 decision addressed to a room is one everybody can reasonably assume somebody else
-is making. Somebody who is not in `operators` replying in one of these threads is
-told so and nothing is recorded, the same way a channel reply from them is. A
+is making. Somebody without `direct-work` replying in one of these threads is
+told so and nothing is recorded, the same way a channel reply from them is. And
+a line said for a promotion waiting on the forge alone, with nothing ready to
+pull, asks nobody: nothing is choosing nothing over ready work, so there is no
+decision to put, and the channel line carries the count. A
 reply into an ask whose state has since cleared is still recorded: a decision
 made late is still a decision. And if the workspace refuses the direct message —
 an app somebody has never opened, a workspace that does not let its apps message

@@ -949,10 +949,13 @@ state fitting neither class does not get one:
   **a value the project's template has improved that this project never edited**.
 
 The stopped line is the hourly state above, put to you personally. At the same
-moment the channel first says the line has stopped, the sink opens a direct
-message with each operator — everybody in `operators` with a bound Slack member
-id, one conversation each — with a brief top line carrying the ask, and the
-context with the answers numbered threaded under it. **The reply in that thread
+moment the channel first says the line has stopped over ready work, the sink
+opens a direct message with each person the project granted `direct-work` with
+a bound Slack member id — the same people whose thread replies steer the work,
+one conversation each — with a brief top line carrying the ask, and the context
+with the answers numbered threaded under it. A line said for a promotion
+waiting on the forge alone, with nothing ready to pull, is the channel's to
+carry and asks nobody. **The reply in that thread
 is the decision**: a number takes the option it names, anything else is recorded
 in your own words, and either way it lands as one unscoped operational directive
 in the record every run consults, carrying what was asked, what you chose, and

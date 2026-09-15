@@ -115,8 +115,14 @@ func TestADecisionRecordsTheChosenOptionWhereEveryRunReadsIt(t *testing.T) {
 			t.Fatalf("recorded text = %q, want it to carry %q", recorded.Text, wanted)
 		}
 	}
-	if !strings.Contains(answer, recorded.ID) {
-		t.Fatalf("answer = %q, want it to name the directive it recorded", answer)
+	// The answer says which option was taken and the sentence it stood for, and
+	// names no identifier — the same rule a channel acknowledgment follows, since
+	// a slug is the one thing in it the person would have to go and resolve.
+	if !strings.Contains(answer, "option 2") || !strings.Contains(answer, testOptions[1]) {
+		t.Fatalf("answer = %q, want it to say which option was taken and what it stood for", answer)
+	}
+	if strings.Contains(answer, recorded.ID) {
+		t.Fatalf("answer = %q, want no directive identifier posted; `yoyo directive list` is where it is read", answer)
 	}
 }
 

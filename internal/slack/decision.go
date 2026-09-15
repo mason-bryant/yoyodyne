@@ -191,6 +191,13 @@ func misplaced(latest Decision, standing string) string {
 // branch produces one: an operator who answered and heard nothing back cannot
 // tell being ignored from being unheard, and this is the one message in the
 // workspace that exists because somebody was asked a question.
+//
+// The answer names no identifier, for the reason a channel acknowledgment names
+// none: the person being answered typed what is read back to them, and a slug
+// is the one thing in the answer they would have to go and resolve. What they
+// are owed is which option was taken and the sentence it stood for; the
+// identifier is for the processes that read directives, and `yoyo directive
+// list` is where a person reads it.
 func (s *steering) decide(asked Decision, message inboundMessage, at time.Time) string {
 	// Authority first, and before the reply is read at all — the same rule the
 	// channel holds to, because it is the same record being written. Somebody
@@ -203,15 +210,14 @@ func (s *steering) decide(asked Decision, message inboundMessage, at time.Time) 
 	if err != nil {
 		return "Nothing was recorded. " + err.Error()
 	}
-	recorded, err := s.recordDecision(asked, chosen, at)
-	if err != nil {
+	if _, err := s.recordDecision(asked, chosen, at); err != nil {
 		return "Nothing was recorded. " + err.Error()
 	}
 	if chosen.option > 0 {
-		return fmt.Sprintf("Recorded as %s — option %d, %s. Every run reads it from here; nothing carries it out on its own.",
-			recorded.ID, chosen.option, asked.Options[chosen.option-1])
+		return fmt.Sprintf("Recorded — option %d, %s. Every run reads it from here; nothing carries it out on its own, and `yoyo directive list` is where it is read back.",
+			chosen.option, asked.Options[chosen.option-1])
 	}
-	return fmt.Sprintf("Recorded as %s, in your own words. Every run reads it from here; nothing carries it out on its own.", recorded.ID)
+	return "Recorded, in your own words. Every run reads it from here; nothing carries it out on its own, and `yoyo directive list` is where it is read back."
 }
 
 // recordDecision writes the decision where every process that acts on this

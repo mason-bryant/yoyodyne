@@ -754,9 +754,10 @@ the moment the state clears, and a line that is idle with nothing ready says
 nothing at all: silence has to mean nothing to do rather than waiting on you.
 
 That state is also the one thing the sink asks about directly. When it first says
-a line has stopped, it opens a direct message with each operator -- a brief top
-line carrying the ask, and the context with the answers numbered threaded under
-it -- and the reply in that thread is the decision. A number takes the option it
+a line has stopped over ready work, it opens a direct message with each person
+granted direct-work with a bound member id -- a brief top line carrying the ask,
+and the context with the answers numbered threaded under it -- and the reply in
+that thread is the decision. A number takes the option it
 names and anything else is recorded in your own words; either way it lands as one
 unscoped operational directive in the record every run consults. Nothing is
 carried out on its own: deciding to release intake records that you decided to,
