@@ -238,6 +238,10 @@ var expresses = map[string]expression{
 		question: "the same question, asked once and returned by every refusal of it",
 		asks:     []capability.Capability{capability.AgentContextMutate},
 	},
+	"agent-context.merge-through-the-one-door": {
+		question: "does the agent whose side thread this was hold its own context?",
+		asks:     []capability.Capability{capability.AgentContextMutate},
+	},
 	"amendment.decide-under-owner": {
 		question: "does the deciding role hold the capability the proposed-against document belongs to?",
 		asks:     []capability.Capability{capability.ArtifactProductMutate, capability.ArtifactDesignMutate, capability.InvariantMutate},
