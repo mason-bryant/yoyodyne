@@ -933,6 +933,11 @@ func TestReportingSaysSoWhenItStartsWorkingAgain(t *testing.T) {
 		defer close(done)
 		sink.deliver(ctx)
 	}()
+	// A wait that fails ends the test without reaching the cancel below, and a
+	// sink still writing its store while the temporary directory is removed is
+	// a second failure on top of the first. Stopped here so the first is the only
+	// one reported.
+	t.Cleanup(func() { cancel(); <-done })
 	waitFor(t, func() bool { return posts.attempts() >= 2 })
 	posts.invite() // the operator invites the app to the channel
 	waitFor(t, func() bool {
@@ -1643,9 +1648,17 @@ func (r *refusingPosts) invite() {
 // waitFor spends real time rather than fake time, because what these tests are
 // about is a loop running repeatedly. The bound is generous and the condition is
 // reached in milliseconds when the code is right.
+//
+// Generous means against the machine the checks actually run on, not an idle
+// one. Every pass the sink makes syncs its store to disk, and this project runs
+// two developers' suites at once with the race detector on; under that load a
+// ten-second bound failed TestReportingSaysSoWhenItStartsWorkingAgain on
+// 2026-09-15 while the same test passed two hundred times in a row on the same
+// machine once the load lifted. A wait for an eventual condition costs nothing
+// extra when the code is right, so the bound is what a saturated machine needs.
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !condition() {
 		if time.Now().After(deadline) {
 			t.Fatal("the sink never reached the state this test is about")
