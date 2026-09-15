@@ -1053,6 +1053,18 @@ Needs a human (3):
   on you, and neither is a report pile that is being worked through — what is
   listed is one that is not.
 
+  The triage docket is on this line too, as counts: how many stoppages on it
+  have no decision standing (the development manager's), how many carry a
+  decision the harness has not carried out (the harness's), and how many the
+  reading could not place against the admitted work (nobody's yet, and said so
+  rather than counted as settled). They are stoppages rather than items — one
+  item can have stopped twice — which is why they sit beside the held-work
+  counts rather than replacing them. They are the same reading the development
+  manager's [recurring sweep](configuration.md#recurring-tasks) is woken with,
+  reduced to its figures, so a sweep that reports calm can be checked against
+  this line. A status that could not read the docket says so on this line
+  rather than counting nothing.
+
 A line with nothing in it says `nothing` in words, and a line whose records could
 not be read says that instead — never `nothing`, which would be a confident
 emptiness assembled from a file nobody could open. There is no fifth line and no

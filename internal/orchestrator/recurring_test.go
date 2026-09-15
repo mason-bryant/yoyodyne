@@ -461,7 +461,7 @@ func TestAFiringAtEveryTurnsMaximumStillLandsItsReport(t *testing.T) {
 	}
 	answers = append(answers, scriptedTurn{result: crowded(sweep.StatusComplete)})
 	role := &wokenRole{answers: answers}
-	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Docket: &scriptedDocket{standing: readmodel.DocketStanding{ReadAt: recurringNow}}, Clock: recurringClock{}}
 
 	fired, err := trigger.Fire(context.Background())
 	if err != nil {
@@ -732,10 +732,23 @@ func TestAnUnreadableDocketIsSaidToHerAndOnTheRecord(t *testing.T) {
 
 	blind := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
 	unwired := Trigger{Tasks: hourlyTask("sweep"), Claims: sweepStore(t), Reports: store, Roles: blind, Clock: recurringClock{}}
-	if _, err := unwired.Fire(context.Background()); err != nil {
+	blindFired, err := unwired.Fire(context.Background())
+	if err != nil {
 		t.Fatalf("Fire() error = %v", err)
 	}
 	if !strings.Contains(blind.messages[0], "This wakeup was not handed the triage docket") {
 		t.Errorf("a blind wakeup does not say so:\n%s", blind.messages[0])
+	}
+	// And on the record, so a pass woken blind and a pass handed an empty docket
+	// never read alike in the listing.
+	if !strings.Contains(blindFired.Fired[0].Problem, "woken without the triage docket") {
+		t.Errorf("problem = %q, want the blind wakeup on the pass", blindFired.Fired[0].Problem)
+	}
+	recorded, _, err = store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 || !strings.Contains(recorded[1].Problem, "woken without the triage docket") {
+		t.Errorf("recorded = %+v, want the blind wakeup on the durable report", recorded)
 	}
 }

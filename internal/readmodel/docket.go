@@ -15,10 +15,13 @@ package readmodel
 // read a docket gathered days before and reported calm over thirty undecided
 // stoppages.
 //
-// This is the one derivation both her wakeup and any surface read, for the
-// reason every derivation here is shared: a sweep that counted the undecided
+// This is the one derivation her wakeup and the operator's surfaces read, for
+// the reason every derivation here is shared: a sweep that counted the undecided
 // stoppages one way and a status line that counted them another would be a
-// disagreement only the operator could adjudicate.
+// disagreement only the operator could adjudicate. Her wakeup reads it over a
+// docket rebuilt at the firing; `yoyo status` and the channel read it over the
+// docket as it stands, because a status verb writes nothing. Both are the same
+// classification of the same entries against the same records.
 //
 // # What "undecided" means
 //
@@ -53,14 +56,25 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
-// DocketEntries is the triage docket as it now stands, built and joined to the
-// triage record the way the development manager's conversation reads it. A build
-// that could only be completed in part returns the entries it has beside the
-// error, and this reading carries both.
+// DocketEntries is the triage docket as it now stands. A reading that could only
+// be completed in part returns the entries it has beside the error, and this
+// carries both.
 //
-// It is satisfied by a caller wrapping orchestrator.Docketer.Build.
+// It is satisfied by *runstate.DocketStore, which reads the docket as it stands,
+// and by a caller wrapping orchestrator.Docketer.Build, which dockets what has
+// stopped since the last build and then reads it. A status surface takes the
+// first because it writes nothing; the development manager's wakeup takes the
+// second because a build is what puts a newly stuck publication on the docket
+// before she is woken.
 type DocketEntries interface {
-	Docket() ([]triage.Entry, error)
+	List() ([]triage.Entry, error)
+}
+
+// Reruns is what the harness has carried out of the re-run decisions: the
+// re-runs claimed for one work item, each against the docket entry it re-ran.
+// It is satisfied by *runstate.RerunStore.
+type Reruns interface {
+	Claimed(workItemID string) ([]runstate.Rerun, error)
 }
 
 // AdmittedWork is the tracker slice the admitted work is read from. It is what
@@ -85,6 +99,10 @@ type DocketSources struct {
 	// without it could not tell a decided stoppage from an undecided one, which is
 	// the whole of the question.
 	Decisions Decisions
+	// Reruns is what the harness has carried out of those decisions. Optional: an
+	// entry read through a docket build already carries the re-run claimed against
+	// it, and this is what says so for an entry read straight off the docket log.
+	Reruns Reruns
 	// Tracker is the admitted work. Optional; a reading without one cannot tell a
 	// stoppage on closed work from one on open work, and says so rather than
 	// listing every stoppage the docket ever recorded as though it were waiting.
@@ -167,7 +185,7 @@ func ReadDocket(ctx context.Context, sources DocketSources) DocketStanding {
 		standing.Problems = append(standing.Problems, "nothing was wired to read the docket, the runs, or what triage has decided, so where the docket stands cannot be said")
 		return standing
 	}
-	entries, err := sources.Docket.Docket()
+	entries, err := sources.Docket.List()
 	if err != nil {
 		standing.Problems = append(standing.Problems, fmt.Sprintf("the triage docket could not be read in full: %v", err))
 	}
@@ -222,7 +240,13 @@ func ReadDocket(ctx context.Context, sources DocketSources) DocketStanding {
 			standing.Settled++
 			continue
 		}
-		if entry.Rerun != nil {
+		rerun, err := sources.rerunOf(entry)
+		if err != nil {
+			standing.Problems = append(standing.Problems, fmt.Sprintf("the re-runs already carried out for %s could not be read: %v", entry.WorkItemID, err))
+			standing.Unchecked++
+			continue
+		}
+		if rerun {
 			// A re-run claimed against this entry is her decision acted on, and the
 			// stopped run stays exactly as it was: nothing on it will ever say so.
 			standing.Settled++
@@ -285,6 +309,29 @@ func (s DocketSources) admitted(ctx context.Context) (map[string]beads.WorkItem,
 		}
 	}
 	return admitted, ""
+}
+
+// rerunOf reports a re-run claimed against one entry: the one joined onto the
+// entry by a docket build, or the one the re-run record holds, whichever is
+// wired. It is matched on the docket key rather than on the run or the item,
+// because the key is what the claim was taken under.
+func (s DocketSources) rerunOf(entry triage.Entry) (bool, error) {
+	if entry.Rerun != nil {
+		return true, nil
+	}
+	if s.Reruns == nil {
+		return false, nil
+	}
+	claimed, err := s.Reruns.Claimed(entry.WorkItemID)
+	if err != nil {
+		return false, err
+	}
+	for _, existing := range claimed {
+		if existing.DocketKey == entry.Key {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s DocketSources) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -411,6 +458,63 @@ func describeDelivery(delivery runstate.Escalation) string {
 // what a sweep that reports calm has to be able to deny.
 func (s DocketStanding) Waiting() bool {
 	return len(s.Undecided) > 0 || len(s.Uncarried) > 0 || s.Unchecked > 0
+}
+
+// DocketCounts is the docket standing as a status line carries it: the three
+// figures and none of the entries. It is what the four-line status and the
+// channel say about the docket, derived from the same reading the development
+// manager's wakeup lists in full.
+type DocketCounts struct {
+	Undecided int `json:"undecided"`
+	Uncarried int `json:"uncarried"`
+	Unchecked int `json:"unchecked,omitempty"`
+}
+
+// Counts is the standing reduced to its figures.
+func (s DocketStanding) Counts() DocketCounts {
+	return DocketCounts{Undecided: len(s.Undecided), Uncarried: len(s.Uncarried), Unchecked: s.Unchecked}
+}
+
+// Attention is what the docket puts on the needs-a-human line, and whose move
+// each part is. The undecided stoppages are the development manager's; the
+// uncarried decisions are the harness's; entries the reading could not place are
+// nobody's yet, and are said so a reader does not take the other two figures as
+// the whole docket.
+func (c DocketCounts) Attention() []Attention {
+	attention := make([]Attention, 0, 3)
+	if c.Undecided > 0 {
+		attention = append(attention, Attention{
+			What:  fmt.Sprintf("%s on the triage docket %s no decision standing", count(c.Undecided, "stoppage"), has(c.Undecided)),
+			Whose: "the development manager's — each is re-offered on her recurring sweep until a triage decision naming its run is recorded",
+		})
+	}
+	if c.Uncarried > 0 {
+		attention = append(attention, Attention{
+			What:  fmt.Sprintf("%s on the triage docket %s recorded and not carried out", count(c.Uncarried, "decision"), is(c.Uncarried)),
+			Whose: "the harness's — the decision is made, and what is outstanding is the harness acting on it",
+		})
+	}
+	if c.Unchecked > 0 {
+		attention = append(attention, Attention{
+			What:  fmt.Sprintf("%s on the triage docket could not be placed", count(c.Unchecked, "entry")),
+			Whose: "unknown — the admitted work or a run record could not be read, so these are neither counted as waiting nor as settled",
+		})
+	}
+	return attention
+}
+
+func has(n int) string {
+	if n == 1 {
+		return "has"
+	}
+	return "have"
+}
+
+func is(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }
 
 // Render is the docket as the development manager's wakeup carries it: the

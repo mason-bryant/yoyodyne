@@ -323,6 +323,13 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	if err != nil {
 		return nil, "", err
 	}
+	// The docket as it stands, read and never rebuilt, so the channel's count of
+	// what waits on the development manager is the same reading `yoyo status`
+	// prints and her sweep is woken with.
+	docket, err := runstate.NewDocketStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	proposals, err := runstate.NewAmendmentStore(stateRoot, productID)
 	if err != nil {
 		return nil, "", err
@@ -382,6 +389,8 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		Runs:           runs,
 		Stoppages:      runs,
 		Decisions:      runs.Triage(),
+		Reruns:         runs.Reruns(),
+		Docket:         docket,
 		Conversations:  conversations,
 		Tracker:        tracker,
 		Directives:     directives,

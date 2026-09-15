@@ -170,6 +170,8 @@ func quietSources() Sources {
 	return Sources{
 		Runs:          fakeRuns{prices: map[string]runstate.ItemPrice{}},
 		Stoppages:     fakeStoppages{},
+		Decisions:     recordedDecisions{},
+		Docket:        fakeDocket{},
 		Conversations: fakeConversations{},
 		Tracker:       statusTracker{},
 		Directives:    fakeDirectives{},

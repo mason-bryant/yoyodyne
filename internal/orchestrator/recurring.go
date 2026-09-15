@@ -495,10 +495,18 @@ func wakeMessage(name string, task config.RecurringTask, docket *readmodel.Docke
 //
 // A reading with problems is still handed over. What it found is real, and what
 // it could not read it says; the problem is reported beside the pass so the
-// record shows the sweep was woken over a docket it could only partly see.
+// record shows the sweep was woken over a docket it could only partly see. A
+// trigger wired with no docket at all is reported the same way.
 func (t Trigger) docketFor(ctx context.Context, task config.RecurringTask) (*readmodel.DocketStanding, string) {
-	if task.Role != domain.RoleDevelopmentManager || t.Docket == nil {
+	if task.Role != domain.RoleDevelopmentManager {
 		return nil, ""
+	}
+	if t.Docket == nil {
+		// On the record as well as in the message. A pass woken blind and a pass
+		// handed an empty docket would otherwise read alike in the listing — no
+		// counts on either — and that is the one distinction the listing exists to
+		// make.
+		return nil, fmt.Sprintf("the %s was woken without the triage docket, so its pass may have been made over stoppages it could not see", task.Role)
 	}
 	standing := t.Docket.Standing(ctx)
 	if len(standing.Problems) == 0 {

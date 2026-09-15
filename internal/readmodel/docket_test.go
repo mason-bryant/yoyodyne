@@ -19,7 +19,7 @@ type fakeDocket struct {
 	fail    error
 }
 
-func (f fakeDocket) Docket() ([]triage.Entry, error) { return f.entries, f.fail }
+func (f fakeDocket) List() ([]triage.Entry, error) { return f.entries, f.fail }
 
 type admitted map[string][]beads.WorkItem
 
@@ -303,4 +303,69 @@ func TestTheDocketRenderingLeadsWithTheCountsAndSeparatesTheTwoWaits(t *testing.
 	if !strings.Contains(DocketStanding{ReadAt: docketReadAt}.Render(), "Nothing on the docket is waiting on your decision") {
 		t.Errorf("an empty standing does not say so:\n%s", DocketStanding{ReadAt: docketReadAt}.Render())
 	}
+}
+
+// The four-line status reads the same derivation the development manager's
+// sweep is woken with, reduced to its counts, and says them on the needs-a-human
+// line with whose move each is. A status wired without the docket says the
+// docket was not read rather than reporting nothing waiting on it.
+func TestTheStatusLinesCarryTheDocketCounts(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	decided := time.Date(2026, 9, 7, 9, 0, 0, 0, time.UTC)
+	undecided := preservedRun("run-ce3a1135", "yoyodyne-ifd.192", stopped)
+	uncarried := preservedRun("run-f71718d7", "yoyodyne-ifd.117.1", stopped)
+	rerunFrom := preservedRun("run-bd6c12d0", "yoyodyne-ifd.349", stopped)
+
+	sources := quietSources()
+	sources.Stoppages = fakeStoppages{runs: []runstate.State{undecided, uncarried, rerunFrom}}
+	sources.Decisions = recordedDecisions{
+		uncarried.WorkItemID: {WorkItemID: uncarried.WorkItemID, ReviewRounds: 2, CommittedRounds: 3,
+			Decisions: []runstate.TriageDecision{decidedAbout(uncarried.RunID, runstate.TriageDecisionRepair, decided)}},
+		rerunFrom.WorkItemID: {WorkItemID: rerunFrom.WorkItemID, Reruns: 1,
+			Decisions: []runstate.TriageDecision{decidedAbout(rerunFrom.RunID, runstate.TriageDecisionRerun, decided)}},
+	}
+	// Read straight off the docket log, as a status does, so the re-run claimed
+	// against the third entry comes from the re-run record rather than from a
+	// build having joined it.
+	sources.Docket = fakeDocket{entries: []triage.Entry{
+		stoppedEntry(undecided.RunID, undecided.WorkItemID, stopped),
+		stoppedEntry(uncarried.RunID, uncarried.WorkItemID, stopped),
+		stoppedEntry(rerunFrom.RunID, rerunFrom.WorkItemID, stopped),
+	}}
+	sources.Reruns = claimedReruns{rerunFrom.WorkItemID: {{DocketKey: triage.Key(triage.ClassStoppedRun, rerunFrom.RunID), RunID: "run-fresh", ClaimedAt: decided}}}
+	sources.Tracker = statusTracker{fakeTracker{byStatus: map[string][]beads.WorkItem{"blocked": {
+		{ID: undecided.WorkItemID}, {ID: uncarried.WorkItemID}, {ID: rerunFrom.WorkItemID},
+	}}}}
+
+	standing := ReadStanding(context.Background(), sources)
+	if standing.DocketProblem != "" {
+		t.Fatalf("docket problem = %q, want none", standing.DocketProblem)
+	}
+	if standing.Docket != (DocketCounts{Undecided: 1, Uncarried: 1}) {
+		t.Fatalf("docket = %+v, want one undecided and one uncarried", standing.Docket)
+	}
+	rendered := standing.Render()
+	for _, want := range []string{
+		"1 stoppage on the triage docket has no decision standing — the development manager's",
+		"1 decision on the triage docket is recorded and not carried out — the harness's",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered is missing %q:\n%s", want, rendered)
+		}
+	}
+
+	unwired := quietSources()
+	unwired.Docket = nil
+	blind := ReadStanding(context.Background(), unwired)
+	if blind.DocketProblem == "" || !strings.Contains(blind.Render(), "nothing was wired to read the triage docket") {
+		t.Fatalf("a reading without the docket reports it as empty:\n%s", blind.Render())
+	}
+}
+
+type claimedReruns map[string][]runstate.Rerun
+
+func (c claimedReruns) Claimed(workItemID string) ([]runstate.Rerun, error) {
+	return c[workItemID], nil
 }

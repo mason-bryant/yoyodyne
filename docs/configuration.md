@@ -4358,7 +4358,9 @@ within the hour rather than only when somebody opens her conversation. A docket
 the harness could only read in part is handed over with what it could not read
 said, and the pass is recorded as one made over a docket it could not fully see;
 the pass's own line in the session output and `yoyo sweeps` say how many of each
-she was handed. Tasks that wake any other role carry no docket.
+she was handed, and `yoyo status` and the channel say the same two counts on
+their needs-a-human line, from the same reading. Tasks that wake any other role
+carry no docket.
 
 **A heavy pass iterates rather than truncating.** A role that has more to do than
 one turn holds says so in its account, and the harness gives it another turn up

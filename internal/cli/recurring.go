@@ -54,8 +54,8 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		Roles:   roleConversation{configPath: configPath, stderr: stderr},
 		// Where the docket stands, read at each firing and handed to the
 		// development manager with her wakeup. It is built by the same docketer her
-		// conversation's context is built from and read against the same run,
-		// triage, and tracker records `yoyo status` counts held work from, so what
+		// conversation's context is built from, and classified by the same
+		// derivation `yoyo status` and the channel count the docket from, so what
 		// she is woken with and what the operator reads are one reading.
 		Docket: recurringDocket{parts: parts},
 		// The same pause every run, turn, and delivery reads. A firing is a
@@ -78,6 +78,7 @@ func (d recurringDocket) Standing(ctx context.Context) readmodel.DocketStanding 
 		Docket:         builtDocket{docketer: docketerFrom(d.parts)},
 		Stoppages:      d.parts.store,
 		Decisions:      d.parts.store.Triage(),
+		Reruns:         d.parts.store.Reruns(),
 		Tracker:        chatTracker(d.parts.runner, d.parts.repository),
 		TrackerTimeout: chatTrackerTimeout,
 	})
@@ -90,7 +91,7 @@ type builtDocket struct {
 	docketer *orchestrator.Docketer
 }
 
-func (b builtDocket) Docket() ([]triage.Entry, error) {
+func (b builtDocket) List() ([]triage.Entry, error) {
 	built, err := b.docketer.Build()
 	return built.Entries, err
 }
