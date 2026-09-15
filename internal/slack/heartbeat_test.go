@@ -297,6 +297,103 @@ func TestATrackerThatCannotBeReadIsSaidRatherThanGuessedAt(t *testing.T) {
 	}
 }
 
+// The ask put to the operators is the same reading as the line said in the
+// channel: it is produced beside the message and never without it, it names the
+// state by the mark the cursor stands on, and what stopped the line is the read
+// model's own sentence rather than one this surface composed. The options are
+// this surface's, keyed by the read model's reason.
+func TestTheAskIsDerivedBesideTheChannelLineFromTheReadModelsState(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(4)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	harness.hold(t, "reordering the backlog first", moment)
+
+	// Arming says nothing and asks nobody: the hold said itself when it was
+	// placed.
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+	if batch := harness.batch(t, cursors); batch.Asking != nil {
+		t.Fatalf("asking = %+v on the pass that armed the state, want nobody asked before the line is said", batch.Asking)
+	}
+
+	harness.now = harness.now.Add(2 * time.Hour)
+	batch := harness.batch(t, cursors)
+	said := harness.say(t, cursors, notify.KindLineWaiting)
+	if batch.Asking == nil {
+		t.Fatal("asking = nil on the pass that said the line is waiting, want the operators asked beside it")
+	}
+	if batch.Asking.Mark != cursors.Streams[heartbeatStream].Standing {
+		t.Fatalf("asking about %q, want the mark the cursor stands on, %q", batch.Asking.Mark, cursors.Streams[heartbeatStream].Standing)
+	}
+	if !strings.Contains(said.Body, batch.Asking.Stopped) {
+		t.Fatalf("the channel said %q, want it to carry what the ask says stopped the line, %q", said.Body, batch.Asking.Stopped)
+	}
+	if !strings.Contains(batch.Asking.Stopped, "reordering the backlog first") {
+		t.Fatalf("asking.Stopped = %q, want the read model's own account of the hold", batch.Asking.Stopped)
+	}
+	if batch.Asking.Ready != 4 || !batch.Asking.Since.Equal(moment) {
+		t.Fatalf("asking = %+v, want what is waiting and since when carried as the line says them", batch.Asking)
+	}
+	if want := options(readmodel.ReasonIntakeHold); len(batch.Asking.Options) != len(want) || batch.Asking.Options[0] != want[0] {
+		t.Fatalf("asking.Options = %v, want the answers for a held intake", batch.Asking.Options)
+	}
+
+	// The state clears, and with it the ask: a line that is moving is not
+	// waiting on anybody.
+	if _, _, err := harness.intake.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if batch := harness.batch(t, cursors); batch.Asking != nil {
+		t.Fatalf("asking = %+v after the state cleared, want nobody asked about a line that is moving", batch.Asking)
+	}
+}
+
+// A line that is idle with nothing ready is not waiting on anybody, so nobody is
+// asked about it — the healthy quiet is quiet in the direct messages too.
+func TestAnIdleLineWithNothingReadyAsksNobody(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(0)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+
+	cursors := harness.poll(t, harness.start())
+	harness.now = harness.now.Add(2 * time.Hour)
+	if batch := harness.batch(t, cursors); batch.Asking != nil {
+		t.Fatalf("asking = %+v over an idle line with nothing ready, want nobody asked", batch.Asking)
+	}
+}
+
+// Every reason the heartbeat repeats has answers to offer, so an ask is never a
+// question with nothing numbered under it for want of somebody adding a case.
+func TestEveryStateTheHeartbeatSaysOffersOptions(t *testing.T) {
+	t.Parallel()
+
+	for _, reason := range readmodel.Reasons() {
+		// A run in flight and the provider's usage window are never said by this
+		// surface, and a product nobody watched is not a stopped line; the rest are.
+		switch reason {
+		case readmodel.ReasonNoCapacity, readmodel.ReasonProviderWindow, readmodel.ReasonUnwatched:
+			continue
+		}
+		if len(options(reason)) < 2 {
+			t.Fatalf("options(%q) = %v, want at least two answers to offer", reason, options(reason))
+		}
+	}
+}
+
+// batch makes one pass and returns the whole of what the feed produced, which is
+// where a test reads the ask beside the deliveries.
+func (h *testHarness) batch(t *testing.T, cursors Cursors) Batch {
+	t.Helper()
+	batch, err := h.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	return batch
+}
+
 // A different state is a different thing to do something about, so it is armed
 // afresh rather than inheriting a clock that has already run out — the sink says
 // the state that stands now, once it has stood for an interval, rather than the

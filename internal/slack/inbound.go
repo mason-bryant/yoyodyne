@@ -180,7 +180,10 @@ func membership(members []string) map[string]bool {
 }
 
 // handle reads one inbound envelope and, where it is a reply in a thread this
-// sink opened, answers it in that thread.
+// sink opened, answers it in that thread. Which conversation it arrived in says
+// which of the two things it is: a reply in the reporting channel steers the
+// work item its thread is about, and a reply in a direct message is the answer
+// to a decision this sink asked for there.
 //
 // It reports nothing to its caller and stops nothing when it fails. Reporting is
 // an observation rather than a gate in both directions: a reply that could not be
@@ -188,8 +191,21 @@ func membership(members []string) map[string]bool {
 // connection carries on reading. What an operator must never get is silence, so
 // every path out of here either answers in the thread or says why it could not.
 func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
-	message, ok := readInbound(envelope, s.sink.channel)
+	message, ok := readInbound(envelope)
 	if !ok {
+		return
+	}
+
+	// Which conversation it arrived in is which half it belongs to, and the two
+	// are not variations of each other. A reply in the reporting channel is about
+	// the thread's work item and is scoped to it; a reply anywhere else is in a
+	// direct message, which this sink only ever opens to ask an operator to decide
+	// something about the whole line. The channel is the sink's own, so the test
+	// is exact rather than a guess about what a conversation id looks like — and
+	// a message in some other channel entirely is one this sink asked nothing in,
+	// which decision.go leaves exactly as alone as it always was.
+	if message.channel != s.sink.channel {
+		s.decideThread(ctx, message)
 		return
 	}
 
@@ -571,30 +587,40 @@ func (s *steering) first(ts string) bool {
 }
 
 // inboundMessage is one Slack message event reduced to what this reads: who said
-// it, what they said, and which thread they said it in. A message at the top of
-// the channel is in no thread, and its thread is empty rather than its own
-// timestamp — what it is not in is the whole of what the caller reads it for.
+// it, what they said, which thread they said it in, and which conversation that
+// thread is in. A message at the top of a conversation is in no thread, and its
+// thread is empty rather than its own timestamp — what it is not in is the whole
+// of what the caller reads it for.
+//
+// The conversation is carried rather than checked away here because it is what
+// says which half of this connection the message belongs to: the reporting
+// channel is a reply about a work item, and anything else is a direct message
+// answering an ask. Deciding that inside the reader would put the routing in the
+// one place that cannot see either map.
 type inboundMessage struct {
 	user     string
 	text     string
 	ts       string
 	threadTS string
+	channel  string
 }
 
-// readInbound reads a message a person typed in this sink's channel, and reports
-// whether the envelope was one at all.
+// readInbound reads a message a person typed, and reports whether the envelope
+// was one at all.
 //
 // What it refuses is as important as what it accepts. A message with a subtype
 // or a bot id is not a person typing — an edit, a join, a file share, and above
 // all this sink's own posts, which arrive back on the same connection and would
-// otherwise be read as instructions the harness gave itself. And a message in
-// another channel is not this sink's business even when one workspace runs two.
+// otherwise be read as instructions the harness gave itself. Which conversation
+// it was said in is reported rather than refused, and the caller routes on it:
+// a message in another channel is still not this sink's business even when one
+// workspace runs two, and it is the caller that knows which channel is its own.
 //
 // A message at the top of the channel is read rather than refused, which it was
 // not until an operator asked the app three questions there and got silence.
 // Reading it is not acting on it: what steers work is still only a reply in one
 // of this sink's own threads, and what a top-level message gets is an answer.
-func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool) {
+func readInbound(envelope socketEnvelope) (inboundMessage, bool) {
 	if envelope.Type != socketEventsAPI || len(envelope.Payload) == 0 {
 		return inboundMessage{}, false
 	}
@@ -617,12 +643,12 @@ func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool)
 	if event.Type != "message" || event.Subtype != "" || strings.TrimSpace(event.BotID) != "" {
 		return inboundMessage{}, false
 	}
-	if event.Channel != channel || strings.TrimSpace(event.User) == "" {
+	if strings.TrimSpace(event.Channel) == "" || strings.TrimSpace(event.User) == "" {
 		return inboundMessage{}, false
 	}
 	// A message that carries its own timestamp as its thread's is the message a
 	// thread hangs from rather than a reply into one, so it is read as what it is:
-	// something said at the top of the channel.
+	// something said at the top of the conversation.
 	threadTS := strings.TrimSpace(event.ThreadTS)
 	if threadTS == event.TS {
 		threadTS = ""
@@ -632,6 +658,7 @@ func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool)
 		text:     event.Text,
 		ts:       event.TS,
 		threadTS: threadTS,
+		channel:  strings.TrimSpace(event.Channel),
 	}, true
 }
 

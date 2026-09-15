@@ -938,13 +938,34 @@ only by naming its class — the
 state fitting neither class does not get one:
 
 - **Degraded** — the system is stopped, stale, or choosing nothing over ready
-  work: something only a person fixes. The three shipped states are the ones
-  above — a session running a build the harness has moved well past, the
-  harness having started nothing at all while work was ready, and the provider
-  holding every role with nothing configured to fail over to.
+  work: something only a person fixes. Four states ship in it — a session
+  running a build the harness has moved well past, the harness having started
+  nothing at all while work was ready, the provider holding every role with
+  nothing configured to fail over to, and **the line choosing nothing over ready
+  work**, which is the one state that is asked rather than reported and is
+  below.
 - **Advisory-once** — a fact addressed to a person that speaks exactly once per
   fact, never repeated and never urgent in presentation. One state ships in it:
   **a value the project's template has improved that this project never edited**.
+
+The stopped line is the hourly state above, put to you personally. At the same
+moment the channel first says the line has stopped, the sink opens a direct
+message with each operator — everybody in `operators` with a bound Slack member
+id, one conversation each — with a brief top line carrying the ask, and the
+context with the answers numbered threaded under it. **The reply in that thread
+is the decision**: a number takes the option it names, anything else is recorded
+in your own words, and either way it lands as one unscoped operational directive
+in the record every run consults, carrying what was asked, what you chose, and
+what you said. Nothing is carried out on its own — deciding to release intake
+records that you decided to, and the switch stays yours. Each person is asked
+once per state, because a direct message repeated hourly is what gets an app
+muted, and the channel is where the repetition belongs. A reply typed in the
+conversation rather than in the ask's thread — which is what tapping a phone
+notification opens — records nothing and is told so, and pointed at the ask
+where it is still the live one; where it has since cleared it is told that
+instead, so nobody is sent to decide about a line that is already moving.
+[`docs/slack/setup.md`](slack/setup.md#deciding-a-stopped-line-from-a-direct-message)
+has the whole of it.
 
 The last of those is the comparison
 [`yoyo config drift`](configuration.md#extending-a-built-in-bundle)
@@ -975,10 +996,11 @@ said. The comparison itself is read once per `--heartbeat` rather than once per
 poll, so a sink polling every fifteen seconds reads the configuration hourly and
 not four times a minute.
 
-All three need the `im:write` scope the checked-in manifest asks for. A workspace
-that refuses it costs the direct messages and nothing else: the stale build and
-the improvement are in the channel either way, and the stall is in the durable
-record `yoyo status` reads back.
+All of them need the `im:write` scope the checked-in manifest asks for, and the
+ask needs `im:history` and the `message.im` event beside it to read the reply.
+A workspace that refuses them costs the direct messages and nothing else: the
+stale build, the stopped line, and the improvement are in the channel either
+way, and the stall is in the durable record `yoyo status` reads back.
 
 Every message ends by saying whose move follows it. A thread is a narrative and a
 narrative goes quiet — a run takes an hour, an item sits in the queue overnight,

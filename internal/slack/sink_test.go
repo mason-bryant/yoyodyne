@@ -1464,10 +1464,13 @@ type fixedFeed struct {
 	// reading rather than a history: a test moves it and polls again exactly as a
 	// record moving underneath the sink would.
 	statuses map[string]notify.Status
+	// asking is the decision this pass owes the operators, which the heartbeat
+	// derives in a real feed and a test states outright.
+	asking *Ask
 }
 
 func (f *fixedFeed) Poll(_ context.Context, cursors Cursors) (Batch, error) {
-	batch := Batch{Streams: map[string]struct{}{}, Statuses: f.statuses}
+	batch := Batch{Streams: map[string]struct{}{}, Statuses: f.statuses, Asking: f.asking}
 	for _, delivery := range f.deliveries {
 		batch.Streams[delivery.Stream] = struct{}{}
 		if delivery.Cursor.Position <= cursors.Streams[delivery.Stream].Position {
