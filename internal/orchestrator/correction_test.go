@@ -640,6 +640,10 @@ func (t *parkingTracker) Block(_ context.Context, id, _ string) (beads.WorkItem,
 	return beads.WorkItem{ID: id, Status: "open"}, nil
 }
 
+func (t *parkingTracker) Unblock(_ context.Context, id, _ string) (beads.WorkItem, error) {
+	return beads.WorkItem{ID: id, Status: "open"}, nil
+}
+
 func (t *parkingTracker) AddBlocker(_ context.Context, _, _ string) error    { return nil }
 func (t *parkingTracker) RemoveBlocker(_ context.Context, _, _ string) error { return nil }
 
