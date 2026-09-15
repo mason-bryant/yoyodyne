@@ -22,8 +22,10 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // recurringTrigger wires the schedule over parts that are already built, so a
@@ -50,10 +52,47 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		Claims:  parts.store.Sweeps(),
 		Reports: parts.store.Sweeps(),
 		Roles:   roleConversation{configPath: configPath, stderr: stderr},
+		// Where the docket stands, read at each firing and handed to the
+		// development manager with her wakeup. It is built by the same docketer her
+		// conversation's context is built from and read against the same run,
+		// triage, and tracker records `yoyo status` counts held work from, so what
+		// she is woken with and what the operator reads are one reading.
+		Docket: recurringDocket{parts: parts},
 		// The same pause every run, turn, and delivery reads. A firing is a
 		// provider invocation, so `yoyo pause` covers it exactly as it covers them.
 		Holds: parts.holds,
 	}
+}
+
+// recurringDocket is where the triage docket stands, as a firing reads it. The
+// docket is built fresh — a build dockets what has stopped since the last one,
+// which is what makes a stoppage reach her within the cadence rather than only
+// when a run newly stops — and then read against the records that say which
+// entries are still waiting on somebody.
+type recurringDocket struct {
+	parts components
+}
+
+func (d recurringDocket) Standing(ctx context.Context) readmodel.DocketStanding {
+	return readmodel.ReadDocket(ctx, readmodel.DocketSources{
+		Docket:         builtDocket{docketer: docketerFrom(d.parts)},
+		Stoppages:      d.parts.store,
+		Decisions:      d.parts.store.Triage(),
+		Tracker:        chatTracker(d.parts.runner, d.parts.repository),
+		TrackerTimeout: chatTrackerTimeout,
+	})
+}
+
+// builtDocket is the docket as one build leaves it. A build that could only be
+// completed in part hands over the entries it has beside the error, so what was
+// found reaches her and what could not be found is said rather than dropped.
+type builtDocket struct {
+	docketer *orchestrator.Docketer
+}
+
+func (b builtDocket) Docket() ([]triage.Entry, error) {
+	built, err := b.docketer.Build()
+	return built.Entries, err
 }
 
 // roleConversation is a role's own conversation, reached the way an operator
@@ -311,6 +350,12 @@ func renderSweep(recorded runstate.Sweep) string {
 		fmt.Fprintf(&rendered, ", $%.4f", recorded.CostUSD)
 	}
 	rendered.WriteString("\n")
+	// What the role was handed before it answered, so a pass whose summary says
+	// nothing is waiting can be read against what it was shown.
+	if recorded.DocketUndecided > 0 || recorded.DocketUncarried > 0 {
+		fmt.Fprintf(&rendered, "  handed the docket: %d stoppage(s) with no decision standing, %d recorded decision(s) not yet carried out\n",
+			recorded.DocketUndecided, recorded.DocketUncarried)
+	}
 	if recorded.Result == nil {
 		fmt.Fprintf(&rendered, "  no account of this pass was recorded: %s\n", nonEmptySweepProblem(recorded.Problem))
 		return rendered.String()
@@ -365,6 +410,11 @@ Three outcomes look alike and are not: a pass that found nothing shows its own
 summary and no findings, which on a healthy harness is most of them; a pass that
 produced no account says so and names what stopped it; and a pass stopped by its
 turn bound is recorded as partial, so it is never mistaken for a finished one.
+
+A pass that woke the development manager says what it handed her: how many
+stoppages had no decision standing and how many recorded decisions the harness
+had not carried out, above her own summary, so a pass reporting calm can be read
+against what it was shown.
 
 The twenty most recent passes are shown by default, which for an hourly task is
 under a day. "--limit 200" reads further back and "--limit 0" reads every pass

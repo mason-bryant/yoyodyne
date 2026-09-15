@@ -4343,6 +4343,23 @@ exactly the kind of look a sweep takes — but it is the opposite of what an
 operator reaching for the hold to stop spending expects, so it is worth saying
 plainly: to stop paying for a cadence, pause rather than hold.
 
+**A task that wakes the development manager hands her the triage docket.** The
+wake message carries where the docket stands at the moment of the firing: every
+stoppage with no decision standing, by run and item and what stopped it, and
+every decision she has recorded that the harness has not carried out. It is read
+fresh each firing rather than taken from her conversation's own picture, which
+is gathered once when the conversation opens and does not move — a sweep on a
+resumed conversation would otherwise read a docket days old and report calm over
+stoppages it could not see. An undecided stoppage is re-offered on every cadence
+until a triage decision naming its run is recorded; a wait is a decision and
+stops the re-offer. This is also how a stoppage the event-driven delivery does
+not cover — a failing check, a refused path, a stuck publication — reaches her
+within the hour rather than only when somebody opens her conversation. A docket
+the harness could only read in part is handed over with what it could not read
+said, and the pass is recorded as one made over a docket it could not fully see;
+the pass's own line in the session output and `yoyo sweeps` say how many of each
+she was handed. Tasks that wake any other role carry no docket.
+
 **A heavy pass iterates rather than truncating.** A role that has more to do than
 one turn holds says so in its account, and the harness gives it another turn up
 to `max_turns`. A pass that still had more to do when the bound ran out is

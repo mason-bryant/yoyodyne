@@ -1490,6 +1490,14 @@ Three outcomes look similar in a listing and are not the same thing:
 - **A pass stopped by its turn bound** is recorded as partial, naming the bound,
   so a truncated pass is never mistaken for a finished one.
 
+**A development manager's pass says what it was handed.** Her wakeup carries the
+[triage docket as it stands](configuration.md#recurring-tasks) — the stoppages
+with no decision standing and the decisions the harness has not carried out —
+and the listing puts both counts above the pass's own summary. A pass that
+reports calm above "handed the docket: 30 stoppage(s) with no decision standing"
+is one to read, and one whose docket could only be read in part carries that in
+its problem line rather than passing as quiet.
+
 One turn may report at most twenty findings and five questions, and a whole
 firing holds what its turns come to. A pass that ran past even that says so in
 its own summary, naming how many entries are not listed — a shortened list that
