@@ -34,12 +34,18 @@ package slack
 // answered once with a refusal naming who to contact instead, which is
 // stranger.go's.
 //
-// Two answers, and no more than two. A question about where things stand gets
-// the read model's own four lines, because that derivation is the read model's
-// and a surface that assembled its own would be a second answer to the one
-// question an operator asks most. Everything else gets one sentence saying what
-// this app cannot do yet and where to do it instead — which is a worse answer
-// than the operator wanted and an immeasurably better one than nothing.
+// Three answers now. A question about where things stand gets the read model's
+// own four lines, because that derivation is the read model's and a surface that
+// assembled its own would be a second answer to the one question an operator
+// asks most. Everything else an operator says reaches the product manager, in
+// the durable conversation `yoyo chat` holds rather than in one of this
+// channel's own — which is conversation.go's, and is what makes a question begun
+// at a terminal answerable from a phone and back again.
+//
+// The sentence saying what this app cannot do is still here and is now the last
+// resort rather than the ordinary case: a sink assembled without the
+// conversation, and somebody the project recognizes but has granted nothing,
+// both get an answer in words rather than silence.
 
 import (
 	"context"
@@ -51,7 +57,9 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 )
 
-// The two answers this door has.
+// The answers this door has of its own. What the product manager says is not
+// among them, and could not be: it is a turn of a conversation rather than a
+// sentence this file wrote.
 //
 // The lead line goes in front of the four lines rather than in place of any of
 // them: what somebody asked for is the standing, and a message that opened
@@ -64,11 +72,22 @@ const (
 	// four is: a confident nothing assembled from a source nobody could read is
 	// the worst answer this could give.
 	unanswerable = "Where the harness stands cannot be read from here — this sink was started without the read model, so `yoyo status` at the terminal is the answer."
-	// unhandled is what everything that is not a question about the standing gets.
-	// One sentence, saying the thing this app cannot do and the two places the
-	// work is actually driven from, because somebody who has just been told no is
-	// owed the next thing to try rather than an apology.
+	// unhandled is what everything that is not a question about the standing gets
+	// where nothing can carry it to the product manager. One sentence, saying the
+	// thing this app cannot do and the two places the work is actually driven
+	// from, because somebody who has just been told no is owed the next thing to
+	// try rather than an apology.
 	unhandled = "Asking me where things stand is the only thing I can answer here yet — to steer the work, reply inside a work item's thread in this channel, and everything else is driven by `yoyo` at the terminal."
+	// ungranted is what a colleague this project recognizes and has granted
+	// nothing gets for anything but a question about the standing. Talking to the
+	// product manager admits work, reorders the queue, and spends the operator's
+	// money, so it is held to the grant a thread reply is held to, and the refusal
+	// names the grant rather than the person.
+	ungranted = "Where things stand is what I can tell you — talking to the product manager is for the humans this project granted direct-work with a bound Slack member id, and `operators` in .yoyodyne/config.yaml is where that grant lives."
+	// nothingSaid answers a message that named this app and said nothing else. It
+	// is a prompt rather than a refusal: somebody who typed a mention and stopped
+	// meant to ask something.
+	nothingSaid = "You named me without saying anything — ask me where things stand, or say what you want the product manager to hear."
 )
 
 // maxAskedBytes bounds how much of somebody's own words one log line carries. It
@@ -143,14 +162,36 @@ func (s *steering) mentioned(ctx context.Context, message inboundMessage) {
 	}
 
 	said := withoutMentions(message.text)
-	answer, subject := unhandled, "what it cannot do yet"
+	// The standing first, whatever else this door can do. That derivation is the
+	// read model's, it is already in this channel, and it costs nothing — so the
+	// question an operator asks most is never spent on a conversation turn.
 	if asksForStanding(said) {
-		answer, subject = s.sink.standingAnswer(ctx), "where the harness stands"
+		s.answerOnce(ctx, message, s.sink.standingAnswer(ctx), "where the harness stands")
+		return
 	}
-	// Written down before the answer is posted rather than after it, and carrying
-	// the words rather than only the fact that somebody typed something. A message
-	// the workspace then refuses to carry an answer for is still one this operator
-	// sent, and the line below is the whole of what says so.
+	// Everything else is for the product manager, where there is a conversation to
+	// carry it and the person asking may steer the work. Each of the three ways
+	// that can fail is answered in words rather than by falling silent.
+	switch {
+	case s.conversation == nil:
+		s.answerOnce(ctx, message, unhandled, "what it cannot do yet")
+	case !s.operators[message.user]:
+		s.answerOnce(ctx, message, ungranted, "the grant they are missing")
+	case said == "":
+		s.answerOnce(ctx, message, nothingSaid, "a prompt to say something")
+	default:
+		s.converse(ctx, message, said)
+	}
+}
+
+// answerOnce posts one of this door's own answers and says in the sink's log
+// what was asked and what it is being told.
+//
+// It is written down before the answer is posted rather than after it, and
+// carries the words rather than only the fact that somebody typed something. A
+// message the workspace then refuses to carry an answer for is still one this
+// operator sent, and the line below is the whole of what says so.
+func (s *steering) answerOnce(ctx context.Context, message inboundMessage, answer, subject string) {
 	s.sink.log("this app was addressed by %s outside its own threads, saying %q, and is being answered with %s",
 		message.user, singleLine(message.text, maxAskedBytes), subject)
 	if err := s.sink.answerMention(ctx, message, answer); err != nil {
@@ -237,10 +278,24 @@ func (s *Sink) standingAnswer(ctx context.Context) string {
 // is the same rule said the same way.
 //
 // The thread map is not touched. These are not a topic's threads and never
-// become one: the map is the delivery pass's, this runs on the connection, and
-// a second writer to it is the one way this path could damage anything.
+// become one: the map is the delivery pass's, this runs on the connection and on
+// the conversation's own goroutine, and a second writer to it is the one way this
+// path could damage anything.
 func (s *Sink) answerMention(ctx context.Context, message inboundMessage, answer string) error {
-	identity := s.appearance.Identity(notify.Harness())
+	return s.answerAs(ctx, notify.Harness(), message, answer, standingElsewhere)
+}
+
+// answerAs is the same answer in a named voice, with its own account of where
+// the whole of a truncated one is.
+//
+// Both are the conversation's to say rather than the harness's. A reply from the
+// product manager wears the product manager's name and face, exactly as its
+// reporting in this channel already does, because a message in the harness's
+// voice saying what a persona said is attribution nobody can check. And what a
+// cut answer points at is the durable conversation rather than `yoyo status`,
+// which is a different thing entirely and would not hold it.
+func (s *Sink) answerAs(ctx context.Context, speaker notify.Speaker, message inboundMessage, answer, elsewhere string) error {
+	identity := s.appearance.Identity(speaker)
 	emoji, url := icon(identity.Avatar)
 	// A message that is already in a thread is answered there; one at the top of
 	// the channel opens a thread of its own under itself.
@@ -250,7 +305,7 @@ func (s *Sink) answerMention(ctx context.Context, message inboundMessage, answer
 	}
 	_, err := s.post(ctx, Message{
 		Channel:   s.channel,
-		Text:      boundAnswer(tagged(message.user, answer)),
+		Text:      boundAnswer(tagged(message.user, answer), elsewhere),
 		ThreadTS:  thread,
 		Username:  identity.Name,
 		IconEmoji: emoji,
@@ -259,20 +314,25 @@ func (s *Sink) answerMention(ctx context.Context, message inboundMessage, answer
 	return err
 }
 
+// standingElsewhere is where the whole of a truncated standing is. It names the
+// terminal rather than a durable record, which is what every other truncation
+// here names, because that answer is not a rendering of a record somebody can go
+// and open: it is the standing, and `yoyo status` is where the unbounded version
+// of it is printed.
+const standingElsewhere = "`yoyo status` at the terminal prints the whole of it"
+
 // boundAnswer keeps one answer inside what a message may carry, and says where
 // the whole of it is.
 //
-// It names the terminal rather than a durable record, which is what every other
-// truncation here names, because this answer is not a rendering of a record
-// somebody can go and open: it is the standing, and `yoyo status` is where the
-// unbounded version of it is printed. The read model already bounds each of the
-// four lines, so what this catches is a standing far past anything a channel
-// could carry — which Slack would otherwise refuse forever rather than once.
-func boundAnswer(answer string) string {
+// The read model already bounds each of the four lines and the conversation
+// bounds what one turn may say, so what this catches is an answer far past
+// anything a channel could carry — which Slack would otherwise refuse forever
+// rather than once.
+func boundAnswer(answer, elsewhere string) string {
 	if len(answer) <= maxTextBytes {
 		return answer
 	}
-	marker := "\n… truncated; `yoyo status` at the terminal prints the whole of it"
+	marker := "\n… truncated; " + elsewhere
 	cut := maxTextBytes - len(marker)
 	for cut > 0 && !utf8.RuneStart(answer[cut]) {
 		cut--

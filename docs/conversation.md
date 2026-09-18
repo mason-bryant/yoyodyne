@@ -1387,6 +1387,59 @@ Everything you type as a command — `/status`, `/backlog`, `/show`, `/work`,
 those are your authority carried out by the harness rather than anything the
 agent did.
 
+## The same conversation from Slack
+
+`yoyo chat` is not the only way into it. Where the
+[Slack sink](slack/setup.md#asking-the-app-directly) is running, @-mentioning the
+app in its channel reaches the same product manager, and the answer comes back in
+the thread you asked in and in the product manager's own name.
+
+It is the same conversation and not a copy of one. There is one durable record
+per agent, and the terminal and the channel are two clients of it: the provider
+session is resumed rather than restarted, the turns accumulate on one record, and
+a proposal put to you in one client is decided in the other — `y` typed in the
+channel approves what `yoyo chat` offered you, because the harness carries out a
+decision the same way whichever client it arrived through. So a question you
+asked before you left your desk is answered from a phone, and what was said there
+is in front of you when you open `yoyo chat` again.
+
+What is exclusive is a turn, [as it is everywhere](#talking-to-the-other-agents),
+and that is what the two rules around it are for. The channel takes the
+conversation when you say something and gives it back as soon as the answer is
+in hand — the same span your own window holds it for, so neither client is ever
+locked out for longer than one turn, and a `yoyo chat` waiting at its prompt
+holds nothing against the channel at all. Where the product manager is mid-turn
+with another client when your message arrives — your terminal answering, or the
+harness delivering something to it — the thread says so rather than failing
+quietly, and rather than queueing behind it: nothing was said, and you say it
+again once that turn lands. And the channel's wait is bounded at ten minutes,
+after which the thread is told what happened: the wait running out, the
+conversation mid-turn elsewhere, or the provider's own reason, which for an
+exhausted usage limit is that limit in its own words. A turn that steers work
+can wait on capacity for hours, and that is a thing you choose at a terminal
+rather than something a channel does to you while you watch a thread.
+
+That bound is on your wait rather than on the turn: a turn the channel stopped
+waiting for may still be running, since a provider sleeping out a usage limit
+never hears a cancellation. It holds the conversation until it lands, and the
+thread says so plainly rather than sending you somewhere that will not answer
+either. The next thing you say from the channel is answered with the product
+manager being busy. `yoyo chat` is not refused, and it does not show you a turn
+that is still being written: it queues behind that turn, says that another
+process is mid-turn and that it is waiting, and then continues the same
+conversation from wherever the turn got to. `yoyo agent list` says whether the
+product manager is still mid-turn without waiting on it, which is the reading to
+take before deciding whether to wait.
+
+Two things do not go to the product manager from there. Where things stand is
+answered without a turn: `@yoyodyne status` is the read model's own four lines
+rather than something the product manager was asked for. And the commands above
+are refused with where to type them: they are your authority carried out by the
+harness, so `@yoyodyne /backlog` is answered rather than read out to the product
+manager as a sentence, and costs nothing. Talking to it at all is held to the
+same `direct-work` grant a thread reply is, because it admits work, reorders the
+queue, and spends your money.
+
 ## What the conversation looks like on a terminal
 
 On a terminal, the line you are composing has a region of its own at the bottom
