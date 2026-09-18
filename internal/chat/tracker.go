@@ -49,6 +49,14 @@ const (
 	maxTrackerActionsPerTurnText = "10"
 )
 
+// maxDelegatedCapCrossingsText is the bound on the development manager's own cap
+// crossings as his contract states it. The bound itself is the store's, because
+// the store is what refuses the sixth; this is the same number written out for
+// the role, and a test keeps the two equal. A contract that promised a different
+// number than the guard enforces would teach the role to plan around a budget it
+// does not have.
+const maxDelegatedCapCrossingsText = "five"
+
 // MaxTrackerBlockBytes bounds the untrusted action payload one turn may carry.
 const MaxTrackerBlockBytes = 32 << 10
 
@@ -106,6 +114,15 @@ const (
 	// maxTrackerFailureBytes keeps a tracker failure to one readable line, in the
 	// reply the operator reads and in the results the product manager is given.
 	maxTrackerFailureBytes = 512
+	// maxTrackerRefusalBytes is the room a refusal gets when it has to hand the
+	// role something to write rather than only say no. A triage cap refusal is the
+	// one that does: it names every budget that refused, the crossing that is the
+	// role's own for each, and the operator's command for each, and an action can
+	// stand behind two budgets — so what does not fit is the second remedy, which
+	// is exactly the omission that cost two override sittings minutes apart on each
+	// of two items on 2026-09-05. A line is the right shape for a failure and the
+	// wrong shape for instructions.
+	maxTrackerRefusalBytes = 2 << 10
 )
 
 // The operations the product manager may ask for. Each is bounded, has named
@@ -191,7 +208,7 @@ var trackerActionArguments = map[string][]string{
 	actionRepair:       {"state", "depends_on", "goal"},
 	actionClose:        {},
 	actionRetire:       {},
-	actionTriage:       {"run", "decision"},
+	actionTriage:       {"run", "decision", "budget"},
 	actionHandle:       {"report"},
 }
 
@@ -342,10 +359,33 @@ type TrackerAction struct {
 	// repair, a re-run, and a re-arm each spend a budget, and an escalation
 	// blocks the item — and prose is what "reason" carries beside it.
 	Decision string `json:"decision,omitempty"`
+	// Budget is the cap a crossing decision crosses, named in the vocabulary the
+	// refusal names. It is taken by that decision and by nothing else: a cap is
+	// crossed by deciding to cross it, and an argument that quietly widened another
+	// decision would be a budget raised by whoever asked to spend it.
+	Budget string `json:"budget,omitempty"`
 	// Reason is why this is being done. It is required on everything that
 	// changes something: the operator reads the queue afterwards and is owed the
 	// reasoning, not only the edit.
 	Reason string `json:"reason,omitempty"`
+}
+
+// CapCrossing is what a delegated cap crossing came to, as the record of the
+// action carries it: which cap was crossed, the ceiling now in force for it, and
+// which of the item's permitted crossings this was.
+//
+// It travels on the outcome because it is what the operator is told in the
+// channel at the moment of the crossing, and that message is the whole of the
+// veto. Deriving those figures a second time where the message is built would be
+// a second chance to say a different number than the guard used.
+type CapCrossing struct {
+	Budget string `json:"budget"`
+	Cap    int    `json:"cap"`
+	// Crossing is which one of Crossings this was, counting every budget together:
+	// what is bounded is how often this role may decide the item deserves more
+	// room, not which room it asked for.
+	Crossing  int `json:"crossing"`
+	Crossings int `json:"crossings"`
 }
 
 // TrackerOutcome is one requested action and what actually became of it. Applied
@@ -363,6 +403,12 @@ type TrackerOutcome struct {
 	// WorkItemID names the item the action affected, including the identifier a
 	// creation was assigned.
 	WorkItemID string `json:"work_item_id,omitempty"`
+	// Crossing is what a delegated cap crossing came to, and is absent on every
+	// other action, which is all of them. It is carried out of the action because
+	// the figures are the store's — which cap now stands where, and which of the
+	// item's crossings this was — and the message the operator reads has to be the
+	// record's own account rather than a count taken again afterwards.
+	Crossing *CapCrossing `json:"crossing,omitempty"`
 	// WorkItemTitle is what the tracker calls that item, taken from the same
 	// reading the action was carried out against. A creation names the item it is
 	// admitting and every other action does not, so without this the record of a
@@ -968,6 +1014,9 @@ func (a TrackerAction) arguments() []string {
 	if strings.TrimSpace(a.Run) != "" {
 		carried = append(carried, "run")
 	}
+	if strings.TrimSpace(a.Budget) != "" {
+		carried = append(carried, "budget")
+	}
 	if strings.TrimSpace(a.Decision) != "" {
 		carried = append(carried, "decision")
 	}
@@ -1073,8 +1122,13 @@ func (s *Session) performTrackerActions(ctx context.Context, actions []TrackerAc
 			// know what the harness saw.
 			"target_status": outcome.TargetStatus,
 			"target_unread": outcome.TargetUnread,
-			"summary":       outcome.Summary,
-			"failure":       outcome.Failure,
+			// What a delegated cap crossing came to, recorded beside what was done
+			// because it is what the channel says about it: the crossing is in force
+			// from the moment it is written, and the operator's veto is that they read
+			// which cap moved, by how much, and which of the item's crossings it was.
+			"crossing": outcome.Crossing,
+			"summary":  outcome.Summary,
+			"failure":  outcome.Failure,
 			// What a failure left behind is recorded beside the failure itself. A
 			// reader of this log afterwards is asking exactly the question the report
 			// answers — whether the action is safe to ask for again — and an event
@@ -1618,6 +1672,14 @@ func (o *TrackerOutcome) noteLanded(format string, args ...any) {
 // which is the mistake in the other direction.
 func (o *TrackerOutcome) noteUnknown(format string, args ...any) {
 	o.Unknown = append(o.Unknown, singleLine(fmt.Sprintf(format, args...), maxTrackerFailureBytes))
+}
+
+// refused is fail for a refusal that carries what to do instead. It is the same
+// failure in every other respect and differs only in how much of it survives:
+// see maxTrackerRefusalBytes for why a line is not enough here.
+func (o *TrackerOutcome) refused(err error) {
+	o.Applied = false
+	o.Failure = singleLine(err.Error(), maxTrackerRefusalBytes)
 }
 
 // retiredWithoutBeingDone is what a retired item records about itself. It is
