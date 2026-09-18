@@ -629,6 +629,11 @@ type Started struct {
 // about any one item, and the counts on the schedule report them at that grain.
 // A line per unready item would be a line per backlog entry on every pass, which
 // is how a listing stops being read at all.
+//
+// An item is one line however many pulls passed it over, and the line says what
+// the last of those pulls found rather than the first: a sibling held behind
+// three runs in turn over a session names the third, with the run itself named
+// so the reader can check it against `yoyo status`.
 type Deferred struct {
 	WorkItemID string `json:"work_item_id"`
 	Reason     string `json:"reason"`
@@ -827,11 +832,27 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// whoever asks later.
 	tried := make(map[string]attempt)
 	// deferred is the items already named on the schedule as passed over — paused
-	// by a directive, or covered by children carrying their execution. It bounds
-	// the report rather than the choosing: both are re-read at every pull, so an
-	// item stops being deferred the moment somebody resolves what paused it or
-	// closes what covered it.
-	deferred := make(map[string]bool)
+	// by a directive, or covered by children carrying their execution — against
+	// where on the schedule each is named. It bounds the report rather than the
+	// choosing: both are re-read at every pull, so an item stops being deferred
+	// the moment somebody resolves what paused it or closes what covered it.
+	deferred := make(map[string]int)
+	// passOver names an item on the schedule as passed over, once: an item held
+	// across a hundred polls is one line in the report. A later pull that passes
+	// the same item over for a later reason rewrites that line rather than leaving
+	// the first, because the report is rendered when the session ends and the
+	// reason it carries has to be the last pull's. On 2026-09-18 a report rendered
+	// with each sibling's first reason named a run that had failed two days
+	// earlier as what they were all still waiting on, and was read as the guard
+	// holding a developer slot on a dead run.
+	passOver := func(workItemID, reason string) {
+		if index, named := deferred[workItemID]; named {
+			schedule.Deferred[index].Reason = reason
+			return
+		}
+		deferred[workItemID] = len(schedule.Deferred)
+		schedule.Deferred = append(schedule.Deferred, Deferred{WorkItemID: workItemID, Reason: reason})
+	}
 	// sequencedEarlier is the items this pass passed over because starting them
 	// would have raced work already in flight, against the conflict that held
 	// each one. It
@@ -1182,7 +1203,12 @@ pulling:
 			continue
 		}
 		for id := range mine {
-			occupied[id] = struct{}{}
+			// A run this session started and that has not reserved yet is in flight
+			// with no identifier to name; one that has reserved is already here under
+			// the identifier the store gave it.
+			if _, recorded := occupied[id]; !recorded {
+				occupied[id] = ""
+			}
 		}
 		schedule.Capacity = pull.Capacity
 		schedule.Occupied = len(occupied)
@@ -1230,8 +1256,8 @@ pulling:
 		// this pass's own runs and another process's alike — and grows as this
 		// pull starts things.
 		flight := newInFlight()
-		for id := range occupied {
-			flight.take(read.items[id])
+		for id, run := range occupied {
+			flight.take(read.items[id], run)
 		}
 		// sequenced names the items this pull has held back for a conflict so
 		// far, in the order the product manager set. An item started after one of
@@ -1257,9 +1283,8 @@ pulling:
 				// disappear into — work that will become pullable — is a count neither
 				// of them will ever join. Each is named once, like every other
 				// deferral, and what it names is what somebody does about it.
-				if reason, named := passedOverReason(entry); named && !deferred[entry.ID] {
-					deferred[entry.ID] = true
-					schedule.Deferred = append(schedule.Deferred, Deferred{WorkItemID: entry.ID, Reason: reason})
+				if reason, named := passedOverReason(entry); named {
+					passOver(entry.ID, reason)
 				}
 				poll.pass(entry.ID, unreadyClass(entry), entry.Executor.Role())
 				continue
@@ -1285,13 +1310,7 @@ pulling:
 			// closes, and one that is decomposed while the session watches stops being
 			// pullable at the next selection.
 			if covering := read.children[entry.ID]; len(covering) > 0 {
-				if !deferred[entry.ID] {
-					deferred[entry.ID] = true
-					schedule.Deferred = append(schedule.Deferred, Deferred{
-						WorkItemID: entry.ID,
-						Reason:     coveredReason(covering),
-					})
-				}
+				passOver(entry.ID, coveredReason(covering))
 				poll.pass(entry.ID, runstate.PassedOverCoveredByChildren, "")
 				continue
 			}
@@ -1315,13 +1334,7 @@ pulling:
 				// that outlives them answering is that it notices. What is
 				// remembered is only that this was said: an item paused all night
 				// is one line in the report rather than one per poll.
-				if !deferred[entry.ID] {
-					deferred[entry.ID] = true
-					schedule.Deferred = append(schedule.Deferred, Deferred{
-						WorkItemID: entry.ID,
-						Reason:     "an unresolved directive pauses it: " + pausing[0].Summary(),
-					})
-				}
+				passOver(entry.ID, "an unresolved directive pauses it: "+pausing[0].Summary())
 				poll.pass(entry.ID, runstate.PassedOverPausedByDirective, "")
 				continue
 			}
@@ -1331,15 +1344,11 @@ pulling:
 			// between a wait and a replayed, re-checked, re-reviewed run. It is
 			// re-read at every pull like everything else here, so an item held back
 			// now is pulled at the first pull where the run it would have raced has
-			// ended.
+			// ended. The line it leaves on the schedule names the run this pull found
+			// it behind, so a session that held an item behind three runs in turn
+			// reports the last of them rather than the first.
 			if racing, races := flight.against(read.items[entry.ID]); races {
-				if !deferred[entry.ID] {
-					deferred[entry.ID] = true
-					schedule.Deferred = append(schedule.Deferred, Deferred{
-						WorkItemID: entry.ID,
-						Reason:     racing.reason(),
-					})
-				}
+				passOver(entry.ID, racing.reason())
 				sequencedEarlier[entry.ID] = racing
 				sequenced = append(sequenced, entry.ID)
 				poll.pass(entry.ID, runstate.PassedOverSequencedBehindWork, "")
@@ -1369,13 +1378,7 @@ pulling:
 				if err := pull.route(read.items[entry.ID], unmet); err != nil && schedule.ReadinessProblem == "" {
 					schedule.ReadinessProblem = err.Error()
 				}
-				if !deferred[entry.ID] {
-					deferred[entry.ID] = true
-					schedule.Deferred = append(schedule.Deferred, Deferred{
-						WorkItemID: entry.ID,
-						Reason:     unreadyReason(unmet),
-					})
-				}
+				passOver(entry.ID, unreadyReason(unmet))
 				poll.pass(entry.ID, runstate.PassedOverPrerequisiteUnmet, "")
 				continue
 			}
@@ -1402,7 +1405,7 @@ pulling:
 				Reason: scheduleReason(entry, queue, free, pull.Capacity, stale[entry.ID], ordering),
 			}
 			schedule.Started = append(schedule.Started, Started{WorkItemID: entry.ID, Reason: selection.Reason})
-			flight.take(read.items[entry.ID])
+			flight.take(read.items[entry.ID], "")
 			mine[entry.ID] = index
 			running++
 			started++
@@ -2341,17 +2344,32 @@ func (s *Started) record(done completed) {
 	}
 }
 
-// occupiedItems names the work items with a run in flight anywhere. It is both
-// halves of what a pull needs from the durable state: how many developer slots
-// are taken, and which items must not be started again.
-func occupiedItems(runs ScheduleRuns) (map[string]struct{}, error) {
+// occupiedItems names the work items with a run in flight anywhere, each
+// against the run that is in flight over it. It is both halves of what a pull
+// needs from the durable state: how many developer slots are taken, and which
+// items must not be started again or raced.
+//
+// In flight is runstate.Status.InFlight — pending or running — which is the one
+// predicate the status surface's running count and the store's own listing are
+// both built on, so what this refuses an item for is a run `yoyo status` lists.
+// The phase does not enter into it: a run integrating is in flight, and holds
+// its epic until the promotion settles. A failed run over an item — one that
+// stopped on a replay conflict, say, with its branch and pull request preserved
+// and a decision about it still owed — is a record of that item, and a record
+// holds neither a slot nor an epic. The store's listing already answers in these
+// terms, and the predicate is applied here as well so that the guard's reading
+// is the status's own rather than whatever the listing it was handed returns.
+func occupiedItems(runs ScheduleRuns) (map[string]string, error) {
 	incomplete, err := runs.Incomplete()
 	if err != nil {
 		return nil, fmt.Errorf("read what is already in flight: %w", err)
 	}
-	occupied := make(map[string]struct{}, len(incomplete))
+	occupied := make(map[string]string, len(incomplete))
 	for _, state := range incomplete {
-		occupied[state.WorkItemID] = struct{}{}
+		if !state.Status.InFlight() {
+			continue
+		}
+		occupied[state.WorkItemID] = state.RunID
 	}
 	return occupied, nil
 }

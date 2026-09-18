@@ -438,6 +438,12 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 // evidence `yoyo cost` reads. A run whose price cannot be read is reported as
 // unpriceable rather than as free, which is the rule every cost surface here
 // already holds.
+//
+// In flight is runstate.Status.InFlight and nothing wider: the store's listing
+// already answers in those terms, and the predicate is applied here as well so
+// that this count is the status's own whatever listing it was handed. The
+// scheduler reads the same predicate for the slots and epics already taken,
+// which is what lets its refusals be checked against this line.
 func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 	if sources.Runs == nil {
 		return nil, "nothing was wired to read the runs in flight"
@@ -448,6 +454,9 @@ func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 	}
 	running := make([]RunningRun, 0, len(states))
 	for _, state := range states {
+		if !state.Status.InFlight() {
+			continue
+		}
 		run := RunningRun{
 			RunID:      state.RunID,
 			WorkItemID: state.WorkItemID,

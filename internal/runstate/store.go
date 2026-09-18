@@ -458,8 +458,12 @@ func (s *Store) Load(runID string) (State, error) {
 	return state, nil
 }
 
+// Incomplete lists every run still in flight, in the one sense Status.InFlight
+// gives that word. It is what the status surface counts as running and what the
+// scheduler reads for the slots and epics already taken, so the predicate is the
+// status's own rather than this listing's.
 func (s *Store) Incomplete() ([]State, error) {
-	return s.scan("incomplete", func(state State) bool { return !state.Status.Terminal() })
+	return s.scan("incomplete", func(state State) bool { return state.Status.InFlight() })
 }
 
 // Outstanding lists every recorded run that still owes a step. That is a

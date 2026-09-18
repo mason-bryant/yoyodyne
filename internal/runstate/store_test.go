@@ -32,6 +32,69 @@ func TestCleanupFailedCreateRemovesPartialState(t *testing.T) {
 	}
 }
 
+// Every valid status is exactly one of in flight and terminal, and in flight is
+// pending or running. Three readers are built on this one predicate — the store's
+// incomplete listing, the status surface's running count, and the scheduler's
+// reading of the slots and epics already taken — so a status that fell into
+// neither set, or both, would be counted differently by each of them.
+func TestStatusIsInFlightOrTerminalAndNeverBoth(t *testing.T) {
+	t.Parallel()
+
+	inFlight := map[Status]bool{StatusPending: true, StatusRunning: true}
+	for _, status := range []Status{StatusPending, StatusRunning, StatusSucceeded, StatusFailed, StatusCancelled, StatusTimedOut} {
+		if !status.Valid() {
+			t.Fatalf("%q is not a valid status", status)
+		}
+		if status.InFlight() == status.Terminal() {
+			t.Fatalf("%q: InFlight() = %v and Terminal() = %v, want exactly one of them", status, status.InFlight(), status.Terminal())
+		}
+		if status.InFlight() != inFlight[status] {
+			t.Fatalf("%q: InFlight() = %v, want %v", status, status.InFlight(), inFlight[status])
+		}
+	}
+	if Status("integrating").InFlight() || Status("").InFlight() {
+		t.Fatal("a phase name or an empty status reads as in flight")
+	}
+}
+
+// The store lists as incomplete exactly the runs whose status is in flight, so a
+// run that ended in any terminal status — whatever phase it ended in, and
+// whatever it left behind — is a record rather than something the listing
+// reports as still going.
+func TestStoreIncompleteListsExactlyTheRunsInFlight(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	for _, status := range []Status{StatusPending, StatusRunning, StatusSucceeded, StatusFailed, StatusCancelled, StatusTimedOut} {
+		state := testState(t, status)
+		state.WorkItemID = "yoyodyne-" + string(status)
+		if status == StatusFailed {
+			// The 2026-09-16 shape: stopped at integration on a replay conflict,
+			// with the published pull request still open.
+			state.Phase = PhaseIntegrating
+			state.Failure = "change cannot be replayed onto the moved integration target"
+			state.PullRequest = &PullRequest{
+				Remote: "origin", Branch: "yoyodyne/failed", Number: 511, State: "OPEN",
+				URL: "https://example.test/pull/511", HeadCommit: strings.Repeat("a", 40),
+			}
+		}
+		if err := store.Create(state); err != nil {
+			t.Fatalf("Create(%s) error = %v", status, err)
+		}
+	}
+	incomplete, err := store.Incomplete()
+	if err != nil {
+		t.Fatalf("Incomplete() error = %v", err)
+	}
+	listed := map[Status]bool{}
+	for _, state := range incomplete {
+		listed[state.Status] = true
+	}
+	if len(listed) != 2 || !listed[StatusPending] || !listed[StatusRunning] {
+		t.Fatalf("Incomplete() listed statuses %v, want exactly pending and running", listed)
+	}
+}
+
 func TestStoreLifecycleAndIncompleteDiscovery(t *testing.T) {
 	t.Parallel()
 
