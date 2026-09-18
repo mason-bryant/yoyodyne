@@ -3551,6 +3551,13 @@ offers no event to hang a deadline on. It must be positive: an age of no time at
 all dockets every publication the instant it is made, which is a docket of
 everything and a triage of nothing.
 
+It is also how long a decision to `wait` leaves that entry alone. Waiting says
+the forge still has the merge, which is "not yet" rather than a decision about
+it, so the entry comes back once it has been sitting there this long again —
+otherwise a merge nothing is happening to would disappear on the strength of a
+decision to look at it later, since nothing about it will ever change to bring it
+back.
+
 `review_rounds_cap` bounds the review rounds one work item may accumulate in
 total — across repairs, across runs — past which triage may no longer hand it
 back for another repair. Past the cap triage still has both of its other
@@ -3623,7 +3630,9 @@ Three of the development manager's six decisions spend a budget here — a repai
 grant, a re-run, a merge re-arm — and `wait`, `rescope`, and `escalate` cost
 nothing and reach no counter, so an item that was escalated reads `triage has
 spent nothing on it`. Whether stopped work has been decided, and what was
-decided, is recorded on the work item itself.
+decided, is recorded on the work item itself — and on the docket entry, which
+every decision closes, so a stoppage settled without spending anything still
+leaves the docket rather than being put to the development manager again.
 
 **This is also what the docket reports.** Every entry for an item carries these
 counters and these caps, read as the docket is read, so what `yoyo status` says

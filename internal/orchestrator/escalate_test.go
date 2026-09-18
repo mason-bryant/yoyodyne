@@ -838,6 +838,143 @@ func TestAStoppageSheHasDecidedIsNotDeliveredAgain(t *testing.T) {
 	}
 }
 
+// The decisions no counter can see: waiting, re-scoping, escalating. She looked
+// and she answered, and what says so is the entry's own closure — without it the
+// same stoppage was put to her again on the next pass that reached it.
+func TestAStoppageSheClosedIsNotDeliveredAgain(t *testing.T) {
+	t.Parallel()
+
+	stopped := reviewStoppedState(docketedRunID, docketedItem)
+	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}
+	escalator := escalatorOver(t, []runstate.State{stopped}, judge, nil)
+	docket, ok := escalator.Docket.(*memoryDocket)
+	if !ok {
+		t.Fatalf("docket = %T, want the in-memory docket these tests build", escalator.Docket)
+	}
+	key := triage.Key(triage.ClassStoppedRun, stopped.RunID)
+	docket.close(key, "escalate", escalationNow.Add(-time.Hour))
+
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 0 || len(judge.shown) != 0 {
+		t.Fatalf("delivered %#v, want a stoppage she has decided left alone", sweep.Escalated)
+	}
+
+	// A decision that only holds for a while is not that: once it has lapsed the
+	// stoppage is a question again, and the pass puts it to her.
+	docket.waitOn(key, escalationNow.Add(-3*time.Hour), escalationNow.Add(-time.Hour))
+	sweep, err = escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after the wait error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || len(judge.shown) != 1 {
+		t.Fatalf("delivered %#v, want the stoppage her lapsed decision put back", sweep.Escalated)
+	}
+}
+
+// The other half of the recurring-stoppage case: the same work stopping again
+// after she decided about it is not only listed but delivered. A repair continues
+// the run that stopped, so the run that dies again carries the key its settled
+// entry did, and the delivery record left under that key says the stoppage was
+// put to her and answered. That record is about the stoppage before this one,
+// and reading it as this one's is how a fresh blocker on live work reached
+// nobody.
+func TestARunThatStoppedAgainAfterItsRepairIsDeliveredAgain(t *testing.T) {
+	t.Parallel()
+
+	stopped := reviewStoppedState(docketedRunID, docketedItem)
+	key := triage.Key(triage.ClassStoppedRun, stopped.RunID)
+	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc", Decision: "repair", Reason: "the findings are actionable"}}
+	clock := &movingClock{now: escalationNow}
+	escalator := escalatorOver(t, []runstate.State{stopped}, judge, nil)
+	escalator.Clock = clock
+	docket, ok := escalator.Docket.(*memoryDocket)
+	if !ok {
+		t.Fatalf("docket = %T, want the in-memory docket these tests build", escalator.Docket)
+	}
+	runs, ok := escalator.Runs.(loadableRuns)
+	if !ok {
+		t.Fatalf("runs = %T, want the loadable runs these tests build", escalator.Runs)
+	}
+
+	// The first stoppage reaches her and she grants a repair, which closes the
+	// entry and leaves the grant outstanding on the item's record.
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("first Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || len(judge.shown) != 1 {
+		t.Fatalf("delivered %#v, want the first stoppage put to her", sweep.Escalated)
+	}
+	decided := escalationNow.Add(10 * time.Minute)
+	docket.close(key, "repair", decided)
+	escalator.Decisions = judgedItems{counters: map[string]runstate.TriageCounters{
+		docketedItem: {RepairGrants: 1, ReviewRounds: 2, CommittedRounds: 3},
+	}}
+	clock.now = decided.Add(time.Minute)
+	sweep, err = escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() with the grant outstanding error = %v", err)
+	}
+	if len(sweep.Escalated) != 0 || len(judge.shown) != 1 {
+		t.Fatalf("delivered %#v, want the settled stoppage left alone while its repair is owed", sweep.Escalated)
+	}
+
+	// The repair is carried out on the run that stopped, spends the round it was
+	// granted, and the run dies again on its reviewer, with a new blocker.
+	died := decided.Add(time.Hour)
+	repaired := reviewStoppedState(docketedRunID, docketedItem)
+	repaired.CompletedAt = &died
+	repaired.UpdatedAt = died
+	repaired.ReviewRounds = 3
+	repaired.ReviewSummary = "the repaired change still misses one criterion"
+	repaired.Blocker = "Yoyodyne stopped this item: its independent reviewer still required repair after the repair triage granted."
+	runs.states[repaired.RunID] = repaired
+	again := stoppedEntry(repaired)
+	if created, err := docket.RecordOnce(again); err != nil || !created {
+		t.Fatalf("RecordOnce() = %v, %v, want the fresh stoppage docketed under the settled key", created, err)
+	}
+	escalator.Decisions = judgedItems{counters: map[string]runstate.TriageCounters{
+		docketedItem: {RepairGrants: 1, ReviewRounds: 3, CommittedRounds: 3},
+	}}
+	clock.now = died.Add(time.Minute)
+
+	sweep, err = escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after the second death error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || !sweep.Escalated[0].Delivered || len(judge.shown) != 2 {
+		t.Fatalf("delivered %#v, shown %d, want the fresh stoppage put to her", sweep.Escalated, len(judge.shown))
+	}
+	// What she is shown is the blocker the run stopped on this time, and not the
+	// decision made about the last one: that decision was about a stoppage this
+	// entry replaced, and an entry carrying it would read as already decided.
+	if shown := judge.shown[1]; shown.Blocker != repaired.Blocker || shown.Closed != nil {
+		t.Fatalf("shown %#v, want the blocker the run stopped on this time and no decision over it", shown)
+	}
+	// The record under the key is now about this stoppage: one attempt, delivered,
+	// and nothing carried over from the delivery it replaced.
+	recorded, found, err := escalator.Records.Find(key)
+	if err != nil || !found {
+		t.Fatalf("Find() = %v, %v, want the delivery recorded", found, err)
+	}
+	if recorded.Attempts != 1 || !recorded.Delivered() || !recorded.DocketedAt.Equal(again.RecordedAt) {
+		t.Fatalf("record = %#v, want a fresh delivery of the stoppage docketed at %s", recorded, again.RecordedAt)
+	}
+
+	// And having been delivered, the fresh stoppage is not put to her again.
+	clock.now = died.Add(2 * time.Minute)
+	sweep, err = escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after the second delivery error = %v", err)
+	}
+	if len(sweep.Escalated) != 0 || len(judge.shown) != 2 {
+		t.Fatalf("delivered %#v, want the delivered stoppage left alone", sweep.Escalated)
+	}
+}
+
 // A decision that cannot be read is not a decision that is absent. Delivering on
 // a record nobody could read is exactly the second delivery this guards against,
 // so the pass says what it could not read and puts nothing to her.
@@ -1072,14 +1209,15 @@ func TestAStoppageAnotherSessionJustClaimedIsLeftToIt(t *testing.T) {
 	}
 }
 
-// The limit of what the harness can see, held here so it cannot drift from what
-// the documents promise. Escalating to the operator, re-scoping, and waiting
-// spend nothing, so they leave no counter anywhere this reads — and a stoppage
-// she settled one of those ways is delivered to her once more. What that costs is
-// a turn and a paragraph she has read before: the docket entry says what has been
-// decided about the item, and the delivery spends no budget and carries nothing
-// out.
-func TestAStoppageSettledWithoutSpendingIsDeliveredAgain(t *testing.T) {
+// The limit of what the counters can see, held here so it cannot drift from
+// what the documents promise. Escalating to the operator, re-scoping, and
+// waiting spend nothing, so they leave no counter anywhere this reads: what says
+// she settled one of those is the entry's own closure, and a stoppage whose
+// closure was never written — a conversation with no docket wired, a closure the
+// store refused — is delivered to her once more. What that costs is a turn and a
+// paragraph she has read before: the delivery spends no budget and carries
+// nothing out.
+func TestAStoppageSettledWithoutSpendingOrClosingIsDeliveredAgain(t *testing.T) {
 	t.Parallel()
 
 	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}
