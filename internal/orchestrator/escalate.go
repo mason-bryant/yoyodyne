@@ -479,6 +479,14 @@ func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, error) {
 	if err != nil {
 		return standingSettled, fmt.Errorf("read whether the stoppage of run %s has been put to the development manager: %w", entry.RunID, err)
 	}
+	// A record about an earlier stoppage under this key says nothing about this
+	// one. The key names the run, a repair continues the run that stopped, and a
+	// repaired run that dies again is docketed afresh under it — so what was
+	// delivered and decided last time is the last stoppage's, and this one is
+	// still owed its delivery.
+	if found && !recorded.About(entry.RecordedAt) {
+		found = false
+	}
 	if found && recorded.Delivered() {
 		return standingSettled, nil
 	}
@@ -525,12 +533,21 @@ func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, error) {
 // operator, a re-scope, a wait. Those leave no counter anywhere this reads, and
 // what says somebody looked is the decision recorded on the entry, which
 // standingOf asks before it asks this.
+//
+// None of the three holds the same run stopping again after the decision. A
+// grant is outstanding only until the attempts it bought are judged, and the one
+// stoppage this delivers is the run's reviewer still requiring repair after every
+// permitted attempt — so a repaired run that dies again that way has spent the
+// grant that continued it, and the counters no longer say a decision is
+// standing. A re-run starts a fresh run under its own identifier and leaves the
+// stopped one settled, so the run a re-run was claimed against never stops
+// again, and a claim under this key is always about the stoppage on the docket.
 func (e Escalator) alreadyJudged(entry triage.Entry) (bool, error) {
 	counters, err := e.Decisions.Counters(entry.WorkItemID)
 	if err != nil {
 		return false, fmt.Errorf("read what triage has already decided about %s: %w", entry.WorkItemID, err)
 	}
-	if counters.CommittedRounds > counters.ReviewRounds {
+	if counters.GrantOutstanding() {
 		return true, nil
 	}
 	claimed, err := e.Reruns.Claimed(entry.WorkItemID)
@@ -593,9 +610,13 @@ func reviewRepairStoppage(state runstate.State) bool {
 func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, bool, error) {
 	escalated := Escalated{WorkItemID: entry.WorkItemID, RunID: entry.RunID, DocketKey: entry.Key, Class: entry.Class}
 	attempted, err := e.Records.Attempt(ctx, runstate.Escalation{
-		DocketKey:        entry.Key,
-		RunID:            entry.RunID,
-		WorkItemID:       entry.WorkItemID,
+		DocketKey:  entry.Key,
+		RunID:      entry.RunID,
+		WorkItemID: entry.WorkItemID,
+		// Which stoppage under this key is being delivered, so a record left by an
+		// earlier one — delivered, decided, and the work then stopped again — starts
+		// a fresh delivery rather than refusing this one as already made.
+		DocketedAt:       entry.RecordedAt,
 		FirstAttemptedAt: e.now(),
 	})
 	if err != nil {

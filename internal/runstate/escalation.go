@@ -111,6 +111,16 @@ type Escalation struct {
 	DocketKey  string `json:"docket_key"`
 	RunID      string `json:"run_id"`
 	WorkItemID string `json:"work_item_id"`
+	// DocketedAt is when the stoppage this record is about was docketed, which is
+	// what makes the record one per stoppage rather than one per key. A key names
+	// a run rather than one moment of it: a repair continues the run that stopped,
+	// and a repaired run that dies again is docketed under the key its settled
+	// entry carried, so a record that was only keyed would say the fresh stoppage
+	// had already been put in front of her. A record written before this was kept
+	// carries zero, and reads as being about whatever stoppage is asked after it —
+	// the accounting in force when it was written rather than a record that is
+	// wrong.
+	DocketedAt time.Time `json:"docketed_at,omitempty"`
 	// Attempts counts the deliveries begun and not given back, including the one
 	// in progress. It is what the bound above is read against, and it counts an
 	// attempt whatever became of it: a delivery that may have reached her is spent
@@ -147,6 +157,20 @@ type Escalation struct {
 	// worked. A record carrying one is a stoppage that may have reached nobody,
 	// which is exactly the state somebody has to be able to find.
 	Problem string `json:"problem,omitempty"`
+}
+
+// About reports this record being about the stoppage docketed at a moment. A
+// record about an earlier stoppage under the same key is not: what it delivered
+// was decided, and the work then stopped again, so the delivery it recorded says
+// nothing about the stoppage now on the docket. Either side saying nothing about
+// when — a record written before that was kept, or a caller not asking about a
+// particular stoppage — reads as the same stoppage, which is the reading every
+// record had before this distinction existed.
+func (e Escalation) About(docketedAt time.Time) bool {
+	if e.DocketedAt.IsZero() || docketedAt.IsZero() {
+		return true
+	}
+	return !e.DocketedAt.Before(docketedAt)
 }
 
 // Delivered reports the development manager having been asked. It is the
@@ -368,6 +392,14 @@ func (s *EscalationStore) Attempt(ctx context.Context, escalation Escalation) (E
 	attempted, found, err := s.load(key)
 	if err != nil {
 		return Escalation{}, err
+	}
+	// A record about an earlier stoppage under this key has spent nothing on this
+	// one. The work stopped again after what it recorded was decided, so the
+	// delivery starts over — attempts, pacing, and what came back — and the record
+	// is about the stoppage that is actually on the docket from here on. One record
+	// per key is kept, because a reader of the records asks what a key stands at.
+	if found && !attempted.About(escalation.DocketedAt) {
+		found = false
 	}
 	if found {
 		if attempted.Spent() {

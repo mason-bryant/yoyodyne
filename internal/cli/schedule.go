@@ -797,9 +797,13 @@ is passed over whether or not that decision has been carried out yet. Her
 decisions that spend nothing -- escalating to you, re-scoping, waiting -- leave
 no counter to read, and what says she looked is that the decision closed the
 docket entry: a settled stoppage is neither delivered again nor listed on the
-docket she reads, whichever way she decided it. What is delivered again is the
-same work stopping again after she decided about it, and a merge she decided to
-wait on once it has been sitting there for another triage.stuck_merge_age. She
+docket she reads, whichever way she decided it. The same run stopping again
+after she decided about it -- a repair she granted, carried out on the run that
+stopped, and that run dying again on its reviewer -- is a fresh stoppage, and
+the pass delivers it as it delivered the first, with the blocker it stopped on
+this time; a merge she decided to wait on is back on the docket she reads once
+it has been sitting there for another triage.stuck_merge_age, though the pass
+delivers no publication. She
 decides there and the decision is recorded against the item's triage budget
 exactly as it is when somebody brings her a stoppage by hand; nothing is carried
 out by this, so "yoyo triage repair" and "yoyo triage rerun" still act on what

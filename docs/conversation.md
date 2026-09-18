@@ -1157,8 +1157,10 @@ continues the run that stopped, so a repaired run that dies again is a fresh
 stoppage under the identifier the settled entry carries — and it is docketed,
 because what the decision settled was the stoppage rather than the run. The scan
 compares the two: work that stopped after the decision about it goes back on the
-docket with the blocker it stopped on this time, and work nothing has happened to
-since stays settled. **A decision to `wait` is the one that lapses rather than
+docket with the blocker it stopped on this time — and is delivered into her
+conversation by the watching pass as the first stoppage was, since the record of
+that delivery is about the stoppage it delivered and not the run — and work
+nothing has happened to since stays settled. **A decision to `wait` is the one that lapses rather than
 settling anything**: it says the forge still has the merge, so the entry comes
 back once the merge has been sitting there for another
 [`triage.stuck_merge_age`](configuration.md#triage-thresholds), carrying what
@@ -1183,14 +1185,14 @@ reasoning beside the evidence rather than deciding it a second time, and it
 closes the entry it settled — a repair, a re-run, or a re-scope closes the
 run's own entries, whichever of the stopped run, the run that died before it
 claimed, and the escalation a role raised from it the run carries; a re-arm or a
-wait closes the unfinished publication's; and an escalation closes all of them,
-because an escalated item is waiting on you and none of it is hers to decide
-until you answer. The two entries that name no run — an item the tree is not
-ready for, and an attempt that never became a run — are closed by nothing yet,
-because a decision names a run and neither has one. `wait` closes it until the merge has
-been sitting there as long again; the rest close it for good, and what puts one
-of those back on the docket is the same work stopping again rather than anything
-about the decision.
+wait closes the unfinished publication's entry, `wait` only until the merge has
+been sitting there as long again and `rearm` for good; and an escalation closes
+all of them, because an escalated item is waiting on you and none of it is hers
+to decide until you answer. Every decision but `wait` closes its entry for good,
+and what puts one of those back on the docket is the same work stopping again
+rather than anything about the decision. The two entries that name no run — an
+item the tree is not ready for, and an attempt that never became a run — are
+closed by nothing yet, because a decision names a run and neither has one.
 
 **It also lands as a record the harness reads**: the decision, the stoppage it
 settles, the reasoning verbatim, and where it was recorded, on the item's durable

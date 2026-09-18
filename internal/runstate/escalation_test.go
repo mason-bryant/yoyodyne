@@ -72,6 +72,56 @@ func TestADeliveredStoppageIsNotDeliveredAgain(t *testing.T) {
 	}
 }
 
+// The bound is per stoppage rather than per key. A key names a run, a repair
+// continues the run that stopped, and a repaired run that dies again is docketed
+// under the key its settled entry carried — so a record keyed alone would refuse
+// the fresh stoppage as a delivery already made. What the record is about is the
+// stoppage docketed at a moment, and a later one starts the delivery over.
+func TestAStoppageDocketedAfterTheDeliveryIsDeliveredAfresh(t *testing.T) {
+	t.Parallel()
+
+	store := newEscalationStore(t)
+	docketed := firstAttemptAt.Add(-time.Hour)
+	first := attemptedEscalation()
+	first.DocketedAt = docketed
+	if _, err := store.Attempt(context.Background(), first); err != nil {
+		t.Fatalf("Attempt() error = %v", err)
+	}
+	if _, err := store.Settle(context.Background(), escalationDocketKey, delivered()); err != nil {
+		t.Fatalf("Settle() error = %v", err)
+	}
+	// The same stoppage, asked about again, is still refused.
+	if _, err := store.Attempt(context.Background(), first); !errors.Is(err, ErrEscalationSpent) {
+		t.Fatalf("Attempt() of the same stoppage error = %v, want it refused", err)
+	}
+	// A record written before the stoppage was kept on it says nothing about
+	// when, and is read as the same stoppage rather than reset by every entry
+	// that carries a moment.
+	unknown := attemptedEscalation()
+	if _, err := store.Attempt(context.Background(), unknown); !errors.Is(err, ErrEscalationSpent) {
+		t.Fatalf("Attempt() naming no stoppage error = %v, want the standing record kept", err)
+	}
+
+	// The run stopped again after that delivery was decided.
+	again := attemptedAt(firstAttemptAt.Add(2 * time.Hour))
+	again.DocketedAt = firstAttemptAt.Add(time.Hour)
+	fresh, err := store.Attempt(context.Background(), again)
+	if err != nil {
+		t.Fatalf("Attempt() of the later stoppage error = %v, want a fresh delivery", err)
+	}
+	if fresh.Attempts != 1 || fresh.Delivered() || fresh.Decision != "" || !fresh.DocketedAt.Equal(again.DocketedAt) {
+		t.Fatalf("record = %#v, want the delivery started over for the later stoppage", fresh)
+	}
+	if !fresh.FirstAttemptedAt.Equal(again.FirstAttemptedAt) {
+		t.Fatalf("first attempted at = %s, want the later stoppage's own first attempt", fresh.FirstAttemptedAt)
+	}
+	// One record per key, and it is now about the later stoppage.
+	listed, err := store.List()
+	if err != nil || len(listed) != 1 || !listed[0].DocketedAt.Equal(again.DocketedAt) {
+		t.Fatalf("List() = %#v, %v, want one record about the later stoppage", listed, err)
+	}
+}
+
 // A delivery that failed is worth making again, and not forever. The bound is
 // what separates riding out a provider that was briefly unreachable from
 // spending every pass on a conversation nothing can open.
