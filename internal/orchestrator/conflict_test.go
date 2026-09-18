@@ -49,12 +49,27 @@ func TestSchedulerSequencesSiblingsOfOneEpicRatherThanRacingThem(t *testing.T) {
 	if len(schedule.Deferred) != 2 {
 		t.Fatalf("deferred = %#v, want the two siblings held back named", schedule.Deferred)
 	}
+	// Each line names the run its item was last held behind, which is one of this
+	// session's own — named as the session's where the pull that held it had not
+	// yet seen the run reserve, and by its identifier afterwards. The second
+	// sibling only ever waited on the first; the third waited on the first and
+	// then, at whichever pulls found the second's run still over an item the
+	// tracker listed, on the second.
 	for _, deferred := range schedule.Deferred {
 		if !strings.Contains(deferred.Reason, "yoyodyne-epic") {
 			t.Fatalf("deferred reason = %q, want the epic the two share named", deferred.Reason)
 		}
-		if !strings.Contains(deferred.Reason, "yoyodyne-epic.1") {
-			t.Fatalf("deferred reason = %q, want the run it would have raced named", deferred.Reason)
+		switch deferred.WorkItemID {
+		case "yoyodyne-epic.2":
+			if !namesRunOf(deferred.Reason, "yoyodyne-epic.1") {
+				t.Fatalf("deferred reason for %s = %q, want the first sibling's run named", deferred.WorkItemID, deferred.Reason)
+			}
+		case "yoyodyne-epic.3":
+			if !namesRunOf(deferred.Reason, "yoyodyne-epic.1") && !namesRunOf(deferred.Reason, "yoyodyne-epic.2") {
+				t.Fatalf("deferred reason for %s = %q, want the sibling's run it was held behind named", deferred.WorkItemID, deferred.Reason)
+			}
+		default:
+			t.Fatalf("deferred = %#v, want only the two held-back siblings named", deferred)
 		}
 	}
 	// And the ordering rationale reaches durable state, which is the only place
@@ -228,10 +243,117 @@ func TestSchedulerSequencesBehindWorkAnotherProcessAlreadyHasInFlight(t *testing
 		t.Fatalf("deferred = %#v, want the sibling named as sequenced behind it: %s", schedule.Deferred, schedule.Render())
 	}
 	if !strings.Contains(schedule.Deferred[0].Reason, claimed.ID) {
+		t.Fatalf("deferred reason = %q, want the item in flight named", schedule.Deferred[0].Reason)
+	}
+	// The run itself, and not only its item: an item cannot be checked against
+	// `yoyo status`, which lists runs, and a reason that named one alone was read
+	// on 2026-09-18 as the guard holding a slot on a run that had already failed.
+	if !strings.Contains(schedule.Deferred[0].Reason, "run-"+claimed.ID) {
 		t.Fatalf("deferred reason = %q, want the run in flight named", schedule.Deferred[0].Reason)
 	}
 	if schedule.Stopped != ScheduleDrained {
 		t.Fatalf("stopped = %q, want a drain that found nothing startable to end", schedule.Stopped)
+	}
+}
+
+// The 2026-09-18 shape, replayed: one sibling whose last run failed at
+// integration — stopped on a replay conflict, its branch and pull request
+// preserved for a person — and another sibling ready. A failed run is a record
+// of its item rather than work in flight, so it holds neither a developer slot
+// nor the epic, and the ready sibling is pulled beside it with nothing said.
+//
+// The store's own listing of what is in flight already leaves a terminal run
+// out, so the fixture hands the guard the one thing the store never would, and
+// what this holds is that the guard's reading is its own: a run counts only in
+// the status the status surface counts as running.
+func TestSchedulerDoesNotHoldAnEpicOnASiblingWhoseRunFailed(t *testing.T) {
+	t.Parallel()
+
+	stopped := beads.WorkItem{
+		ID: "yoyodyne-epic.272", Title: "A claimed-but-dead item is audited", Status: "blocked", Priority: 1,
+		Parent: "yoyodyne-epic",
+	}
+	ready := beads.WorkItem{
+		ID: "yoyodyne-epic.379", Title: "The guard reads run state", Status: "open", Priority: 0,
+		Parent: "yoyodyne-epic",
+	}
+	harness := newScheduleHarness(stopped, ready)
+	harness.capacity = 2
+	harness.inFlight[stopped.ID] = runstate.State{
+		RunID:      "run-2f6e6e0a",
+		WorkItemID: stopped.ID,
+		Status:     runstate.StatusFailed,
+		Phase:      runstate.PhaseIntegrating,
+		Failure:    "change cannot be replayed onto the moved integration target",
+		PullRequest: &runstate.PullRequest{
+			Remote: "origin", Branch: "yoyodyne/yoyodyne-epic-272/2f6e6e0a", Number: 511, State: "OPEN",
+		},
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != ready.ID {
+		t.Fatalf("started = %#v, want the ready sibling pulled beside a failed run over the other: %s",
+			schedule.Started, schedule.Render())
+	}
+	if len(schedule.Deferred) != 0 {
+		t.Fatalf("deferred = %#v, want nothing held behind a run that has failed", schedule.Deferred)
+	}
+	if schedule.Occupied != 0 {
+		t.Fatalf("occupied = %d, want a failed run to hold no developer slot", schedule.Occupied)
+	}
+	if reason := harness.selectionFor(ready.ID).Reason; strings.Contains(reason, "held back") {
+		t.Fatalf("reason = %q, want the sibling to have waited for nothing", reason)
+	}
+}
+
+// What the schedule says about a held item is what the last pull found, not the
+// first. A session that holds a sibling behind one run, and then behind the run
+// that follows it, reports the second: the schedule is rendered when the session
+// ends, and on 2026-09-18 one rendered with each sibling's first reason named a
+// run two days dead as what every one of them was still waiting on.
+func TestWatchingReportsTheLastRunAHeldItemWaitedBehind(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(siblings("yoyodyne-epic", "yoyodyne-epic.1")...)
+	harness.capacity = 2
+	harness.admit(
+		beads.WorkItem{ID: "yoyodyne-epic.8", Title: "First elsewhere", Status: "in_progress", Priority: 1, Parent: "yoyodyne-epic"},
+		beads.WorkItem{ID: "yoyodyne-epic.9", Title: "Second elsewhere", Status: "in_progress", Priority: 1, Parent: "yoyodyne-epic"},
+	)
+	harness.inFlight["yoyodyne-epic.8"] = runstate.State{
+		RunID: "run-first", WorkItemID: "yoyodyne-epic.8", Status: runstate.StatusRunning,
+	}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 2 {
+			// The first run ends and another process starts the next sibling
+			// before this session's next pull.
+			h.mu.Lock()
+			delete(h.inFlight, "yoyodyne-epic.8")
+			h.inFlight["yoyodyne-epic.9"] = runstate.State{
+				RunID: "run-second", WorkItemID: "yoyodyne-epic.9", Status: runstate.StatusRunning,
+			}
+			h.mu.Unlock()
+		}
+		return sleeps < 4
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want the sibling held for the whole session", schedule.Started)
+	}
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != "yoyodyne-epic.1" {
+		t.Fatalf("deferred = %#v, want the held sibling named once", schedule.Deferred)
+	}
+	reason := schedule.Deferred[0].Reason
+	if !strings.Contains(reason, "run-second") || strings.Contains(reason, "run-first") {
+		t.Fatalf("deferred reason = %q, want the run the last pull held it behind rather than the first", reason)
 	}
 }
 
@@ -278,6 +400,15 @@ func TestWatchingPullsASequencedItemOnceTheRunItWouldRaceEnds(t *testing.T) {
 	if !strings.Contains(reason, "held back earlier in this session") || !strings.Contains(reason, "yoyodyne-epic.9") {
 		t.Fatalf("reason = %q, want the wait it came out of recorded with what caused it", reason)
 	}
+}
+
+// namesRunOf reports a hold reason naming the run over one item, in either of
+// the ways a pull can know it: as this session's own, where the pull that held
+// the item had not yet seen the run reserve, and by the identifier the fake
+// harness mints for it afterwards.
+func namesRunOf(reason, item string) bool {
+	return strings.Contains(reason, "the run this session started for "+item+",") ||
+		strings.Contains(reason, "run-"+item+" ("+item+")")
 }
 
 // siblings builds the ordinary decomposition: several open items at one

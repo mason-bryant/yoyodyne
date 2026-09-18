@@ -36,11 +36,34 @@ import (
 // finishes reading accounts for nothing.
 const maxSequencedItemsNamed = 3
 
+// holder is one run in flight as the guard names it: the item it is over, and
+// the run itself where the pull can know it. A run this session started has no
+// identifier until it reserves, which is several steps after it is started, so
+// for that one pull it is named as the session's own rather than by a run.
+//
+// The run is named because a reader is going to check it. Until
+// yoyodyne-ifd.379 the report named the item alone, and an item cannot be checked
+// against `yoyo status`, which lists runs: on 2026-09-18 a report that said
+// yoyodyne-ifd.272 was in flight, two days after its last run had failed, was
+// read as the guard holding a developer slot on a dead run.
+type holder struct {
+	item string
+	run  string
+}
+
+// String is how the reason names the run.
+func (h holder) String() string {
+	if h.run == "" {
+		return "the run this session started for " + h.item
+	}
+	return h.run + " (" + h.item + ")"
+}
+
 // conflict is one reason an item was not started now: the work already in
 // flight it would race, and what the two of them share.
 type conflict struct {
-	// With is the item whose run is already going.
-	With string
+	// With is the run already going, and the item it is over.
+	With holder
 	// Over is what the two share, in words, because what an operator does about
 	// a shared epic and about a shared file are different things.
 	Over string
@@ -53,8 +76,14 @@ type conflict struct {
 // three entries ago is in flight as surely as one another process is running,
 // and the durable run state does not know about it yet — a run does not appear
 // there until it reserves, which is several steps after it is started.
+//
+// What it is built from is the runs in flight now and nothing else, in the sense
+// the status surface counts them: a run that has not reached a terminal status.
+// A run that failed — at integration, on a replay conflict, with its branch and
+// pull request preserved for a person — is a record, and a record holds no
+// epic. See occupiedItems, which is where that reading is made.
 type inFlight struct {
-	// epics maps an epic identifier to the in-flight item working under it. Both
+	// epics maps an epic identifier to the in-flight run working under it. Both
 	// an item's parent and the item itself are keys: two children of one epic
 	// race each other, and a child races the epic it was broken out of.
 	//
@@ -66,45 +95,47 @@ type inFlight struct {
 	// race — which the header above says is exactly what this is not. Widening it
 	// wants a container epic told from a decomposed one first, and that question
 	// is not answered here.
-	epics map[string]string
-	// taken is the surfaces each in-flight item holds, in the order the items
+	epics map[string]holder
+	// taken is the surfaces each in-flight run holds, in the order the runs
 	// were taken, so which conflict is reported for a candidate is stable rather
 	// than an artifact of map ordering.
 	taken []takenSurfaces
 }
 
 type takenSurfaces struct {
-	by    string
+	by    holder
 	paths []string
 }
 
 func newInFlight() *inFlight {
-	return &inFlight{epics: map[string]string{}}
+	return &inFlight{epics: map[string]holder{}}
 }
 
-// take records an item as work in flight, so nothing that would race it is
-// started beside it. An item the tracker no longer lists arrives here empty and
-// takes nothing: a run over work that has left the queue cannot be compared with
-// anything, and guessing at what it touches would hold real work back on no
-// evidence.
-func (f *inFlight) take(item beads.WorkItem) {
+// take records a run over an item as work in flight, so nothing that would race
+// it is started beside it. The run is the identifier the durable state gave it,
+// and empty for a run this pull started itself, which has none yet. An item the
+// tracker no longer lists arrives here empty and takes nothing: a run over work
+// that has left the queue cannot be compared with anything, and guessing at what
+// it touches would hold real work back on no evidence.
+func (f *inFlight) take(item beads.WorkItem, run string) {
 	id := strings.TrimSpace(item.ID)
 	if id == "" {
 		return
 	}
-	f.claim(id, id)
+	by := holder{item: id, run: strings.TrimSpace(run)}
+	f.claim(id, by)
 	if parent := strings.TrimSpace(item.Parent); parent != "" {
-		f.claim(parent, id)
+		f.claim(parent, by)
 	}
 	if paths := surface.Of(item); len(paths) > 0 {
-		f.taken = append(f.taken, takenSurfaces{by: id, paths: paths})
+		f.taken = append(f.taken, takenSurfaces{by: by, paths: paths})
 	}
 }
 
-// claim records one epic identifier against the first in-flight item to hold it.
+// claim records one epic identifier against the first in-flight run to hold it.
 // The first rather than the last, so a candidate held back at one pull is told
 // about the same run at the next one for as long as that run lasts.
-func (f *inFlight) claim(epic, by string) {
+func (f *inFlight) claim(epic string, by holder) {
 	if _, held := f.epics[epic]; !held {
 		f.epics[epic] = by
 	}
@@ -117,14 +148,14 @@ func (f *inFlight) claim(epic, by string) {
 func (f *inFlight) against(item beads.WorkItem) (conflict, bool) {
 	id := strings.TrimSpace(item.ID)
 	if parent := strings.TrimSpace(item.Parent); parent != "" {
-		if by, held := f.epics[parent]; held && by != id {
+		if by, held := f.epics[parent]; held && by.item != id {
 			return conflict{With: by, Over: "the epic " + parent + " both were broken out of"}, true
 		}
 	}
 	// The other direction: a run over the epic this item belongs to. Nothing
 	// else catches it — the coverage check reads an item's own children, which
 	// says nothing about a parent somebody else is already running.
-	if by, held := f.epics[id]; held && by != id {
+	if by, held := f.epics[id]; held && by.item != id {
 		return conflict{With: by, Over: "the epic " + id + " that run was broken out of"}, true
 	}
 	mine := surface.Of(item)
@@ -132,7 +163,7 @@ func (f *inFlight) against(item beads.WorkItem) (conflict, bool) {
 		return conflict{}, false
 	}
 	for _, taken := range f.taken {
-		if taken.by == id {
+		if taken.by.item == id {
 			continue
 		}
 		if shared, races := surface.Shared(mine, taken.paths); races {
@@ -146,9 +177,15 @@ func (f *inFlight) against(item beads.WorkItem) (conflict, bool) {
 // says what would have been bought as well as what was avoided, because an
 // operator reading that the scheduler passed over ready work needs the trade
 // rather than the rule.
+//
+// It is dated to the pull rather than said in the present tense, because the
+// schedule that carries it is rendered when the session ends, which can be days
+// after the pull that last held the item. A line that said a run "is already in
+// flight" was read, on 2026-09-18, as the guard's current reading rather than as
+// a session's record of one.
 func (c conflict) reason() string {
 	return fmt.Sprintf(
-		"it would race %s, which is already in flight over %s. Sequencing them costs a wait; racing them costs the loser a replay, a fresh set of checks, and a fresh review. It is pulled once that run ends",
+		"it would race %s, which was in flight over %s at the last pull that held it back. Sequencing them costs a wait; racing them costs the loser a replay, a fresh set of checks, and a fresh review. It is pulled once that run ends",
 		c.With, c.Over)
 }
 
@@ -179,7 +216,7 @@ type sequencing struct {
 // picked it, and this is what happened to that order on the way.
 func (s sequencing) reason() string {
 	var said strings.Builder
-	if s.after.With != "" {
+	if s.after.With.item != "" {
 		fmt.Fprintf(&said, " It was held back earlier in this session because %s, and was pulled once that cleared.", s.after.waited())
 	}
 	if len(s.ahead) > 0 {

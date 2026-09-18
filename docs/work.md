@@ -569,11 +569,24 @@ integration, and a change whose target moved is still replayed onto where it wen
 — and what it buys is the difference between one wait and a replayed, re-checked,
 freshly reviewed run, or a stopped one where the replay will not apply. An item is
 held for exactly as long as the run it would have raced lasts, because the
-conflicts are re-read at every pull from what is actually in flight. And the slot a
+conflicts are re-read at every pull from what is actually in flight — and in
+flight means what `yoyo status` counts as running: a run that has not reached a
+terminal status. A run that failed, at integration or anywhere else, is a record
+of its item and holds neither a developer slot nor the epic, whatever branch or
+pull request it left behind. And the slot a
 hold frees is not idled: the pass carries on down the order to the next item that
 races nothing, and both runs record what the sequencing did — the one that waited
 says what it waited for, and the one pulled past it says which items it was pulled
 ahead of.
+
+The line the pass prints for a held item names the run it was held behind — the
+run's identifier, so it can be checked against `yoyo status`, and the item that run
+is over — and says what the last pull that held the item found rather than the
+first. A watching session renders its report when it ends, which can be days after
+a hold was first recorded, and a sibling held behind three runs in turn over that
+time is one line naming the third. Until 2026-09-18 it named the first, in the
+present tense, and a report that said a run two days dead was "already in flight"
+was read as the guard holding a slot on it.
 
 Not everything in the backlog is a developer run. Promoting a document the
 architect owns, settling a decomposition, recording a decision: those happen in a
