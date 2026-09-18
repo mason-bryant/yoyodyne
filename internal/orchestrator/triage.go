@@ -88,6 +88,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -102,9 +103,14 @@ import (
 
 // Docket is the durable docket entries are recorded into and read back from.
 // It is satisfied by runstate.DocketStore.
+//
+// Close is here for the one closure the harness makes rather than a role: a
+// publication entry whose publication a later sweep finished. Every other
+// closure is a triage decision, recorded in the conversation that made it.
 type Docket interface {
 	RecordOnce(entry triage.Entry) (bool, error)
 	List() ([]triage.Entry, error)
+	Close(closure triage.Closure) (bool, error)
 }
 
 // DocketRuns is the run evidence a docket is built from: every record the
@@ -438,6 +444,74 @@ func (d Docketer) RecordStoppedRun(state runstate.State) (bool, error) {
 		return false, err
 	}
 	return d.Docket.RecordOnce(entry)
+}
+
+// settledPublicationDecision is the word a closure the harness makes carries, so
+// a reader of a closed publication entry can tell a stoppage that stopped being
+// one from a stoppage somebody decided about.
+const settledPublicationDecision = "settled"
+
+// SettlePublication closes the docket entries a run's publication had open, once
+// a sweep has finished that publication. It reports how many it closed.
+//
+// This is the one closure the harness makes rather than a role, and it is not a
+// decision: a publication entry is the absence of an event, and the merge being
+// confirmed on the remote is the event. Left open, the entry would say a
+// publication needs a person while the record beside it says nothing about it
+// is outstanding — and a docket rebuilt from the records would never re-derive
+// it, so it would stand there until somebody decided a question that had already
+// been answered. Eight did, after PR 497 merged ten held requests on
+// 2026-09-13.
+//
+// The stopped-run entry is closed with it only where the settlement cleared the
+// run's blocker, which it does for a blocker about this publication and for
+// nothing else: a run that stopped on something other than its publication is
+// still stopped.
+func (d Docketer) SettlePublication(state runstate.State, reason string) (int, error) {
+	if err := d.validate(); err != nil {
+		return 0, err
+	}
+	if state.PullRequest == nil {
+		return 0, nil
+	}
+	entries, err := d.Docket.List()
+	if err != nil {
+		return 0, fmt.Errorf("read the triage docket to settle the publication of run %s: %w", state.RunID, err)
+	}
+	classes := []triage.Class{triage.ClassPublication}
+	if strings.TrimSpace(state.Blocker) == "" {
+		classes = append(classes, triage.ClassStoppedRun)
+	}
+	now := d.now().UTC()
+	closed := 0
+	var problems []error
+	for _, entry := range entries {
+		if entry.RunID != state.RunID || !slices.Contains(classes, entry.Class) {
+			continue
+		}
+		if entry.Closed != nil && entry.Closed.Holds(now) {
+			continue
+		}
+		took, err := d.Docket.Close(triage.Closure{
+			SchemaVersion: triage.ClosureSchemaVersion,
+			Key:           entry.Key,
+			ProductID:     entry.ProductID,
+			RunID:         entry.RunID,
+			WorkItemID:    entry.WorkItemID,
+			Decision:      settledPublicationDecision,
+			Reason:        reason,
+			DecidedBy:     "the harness, settling the publication in a reconcile sweep",
+			ClosedAt:      now,
+		})
+		if err != nil {
+			problems = append(problems, fmt.Errorf("close the %s entry of run %s: %w", entry.Class, entry.RunID, err))
+			continue
+		}
+		if took {
+			closed++
+		}
+	}
+	return closed, errors.Join(problems...)
 }
 
 // RecordUnstartedRun dockets one run that died before it claimed its work item,

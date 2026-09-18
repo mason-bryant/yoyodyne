@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -58,6 +59,28 @@ func (d *memoryDocket) waitOn(key string, at, revisitAfter time.Time) {
 	settled := d.closed[key]
 	settled.RevisitAfter = revisitAfter
 	d.closed[key] = settled
+}
+
+// Close is the store's closure, reduced to what these tests read of it: the
+// latest decision about a key is what stands, and one recorded while an earlier
+// one still holds changes nothing.
+func (d *memoryDocket) Close(closure triage.Closure) (bool, error) {
+	if err := closure.Validate(); err != nil {
+		return false, err
+	}
+	if d.closed == nil {
+		d.closed = make(map[string]triage.Closure)
+	}
+	if standing, decided := d.closed[closure.Key]; decided && standing.Holds(closure.ClosedAt) {
+		return false, nil
+	}
+	for _, entry := range d.entries {
+		if entry.Key == closure.Key {
+			d.closed[closure.Key] = closure
+			return true, nil
+		}
+	}
+	return false, fmt.Errorf("no docket entry keyed %s is recorded", closure.Key)
 }
 
 func (d *memoryDocket) RecordOnce(entry triage.Entry) (bool, error) {

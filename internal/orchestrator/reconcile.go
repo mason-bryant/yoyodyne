@@ -27,7 +27,7 @@ import (
 type ReconcileWorktrees interface {
 	Observe(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Observation, error)
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
-	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
+	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration, mergeCommit string) (string, error)
 	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
 	// The two writes convergence needs, and the only ones here that move a ref.
 	// Both are fast-forward-or-nothing and both refuse on the evidence rather
@@ -500,7 +500,7 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	}
 	detail := fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
 	var catchup *gitworktree.Catchup
-	if failure := r.confirmQueuedPublication(ctx, state, &published); failure != nil {
+	if failure := r.confirmQueuedPublication(ctx, state, &published, observed.MergeCommit); failure != nil {
 		state.PublishFailure = failure.Error()
 		detail = failure.Error()
 	} else {
@@ -686,25 +686,35 @@ func (r Reconciler) settleDroppedMerge(ctx context.Context, state runstate.State
 // is an outstanding publication and nothing is closed against it: the forge says
 // it merged and nothing could check what the merge produced.
 //
+// mergeCommit is the commit the forge named as the merge, where it named one. It
+// decides only what is recorded, never whether the merge is confirmed: it is
+// recorded where it is the merge of this promotion on the remote, and the merge
+// is found in the remote history otherwise.
+//
 // It is asked once, exactly as it always was. The recoverable-failure rule is
 // applied below to the deletion and to nothing else here: a sweep settles its
 // runs one at a time under each one's lease, so a boundary that waits out a
 // window holds up every run behind it, and that is worth spending on the step
 // whose failure a person would otherwise have to finish by hand.
-func (r Reconciler) confirmQueuedPublication(ctx context.Context, state runstate.State, published *runstate.PullRequest) error {
-	integration := gitworktree.Integration{
+func (r Reconciler) confirmQueuedPublication(ctx context.Context, state runstate.State, published *runstate.PullRequest, mergeCommit string) error {
+	remoteTarget, err := r.Worktrees.ConfirmRemoteTarget(ctx, integrationOf(state), mergeCommit)
+	if err != nil {
+		return fmt.Errorf("confirm the queued merge reached %s: %w", state.Integration.TargetBranch, err)
+	}
+	published.MergeCommit = remoteTarget
+	return nil
+}
+
+// integrationOf is the promotion a run recorded, in the shape the repository
+// access asks about it.
+func integrationOf(state runstate.State) gitworktree.Integration {
+	return gitworktree.Integration{
 		Branch:               state.Branch,
 		TargetBranch:         state.Integration.TargetBranch,
 		SourceCommit:         state.Integration.SourceCommit,
 		TargetCommit:         state.Integration.TargetCommit,
 		PreviousTargetCommit: state.Integration.PreviousTargetCommit,
 	}
-	remoteTarget, err := r.Worktrees.ConfirmRemoteTarget(ctx, integration)
-	if err != nil {
-		return fmt.Errorf("confirm the queued merge reached %s: %w", integration.TargetBranch, err)
-	}
-	published.MergeCommit = remoteTarget
-	return nil
 }
 
 // deleteMergedBranch removes the branch the merge consumed, once the item is

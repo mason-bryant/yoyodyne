@@ -3196,7 +3196,7 @@ func (partialWorktreeManager) VerifyRemoteTarget(context.Context, gitworktree.In
 	return errors.New("partial worktree has no remote target")
 }
 
-func (partialWorktreeManager) ConfirmRemoteTarget(context.Context, gitworktree.Integration) (string, error) {
+func (partialWorktreeManager) ConfirmRemoteTarget(context.Context, gitworktree.Integration, string) (string, error) {
 	return "", errors.New("partial worktree has no remote")
 }
 

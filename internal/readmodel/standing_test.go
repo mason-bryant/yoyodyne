@@ -33,9 +33,11 @@ func (f fakeStoppages) Escalated() ([]runstate.Escalation, error) { return f.esc
 type fakeRuns struct {
 	incomplete  []runstate.State
 	outstanding []runstate.State
+	recorded    []runstate.State
 	prices      map[string]runstate.ItemPrice
 	failIncomplete,
 	failOutstanding,
+	failRecorded,
 	failPrice error
 }
 
@@ -45,6 +47,10 @@ func (f fakeRuns) Incomplete() ([]runstate.State, error) {
 
 func (f fakeRuns) Outstanding() ([]runstate.State, error) {
 	return f.outstanding, f.failOutstanding
+}
+
+func (f fakeRuns) Recorded() ([]runstate.State, error) {
+	return f.recorded, f.failRecorded
 }
 
 func (f fakeRuns) Price(workItemID string) (runstate.ItemPrice, error) {
@@ -794,6 +800,79 @@ func TestAnOutstandingRunNeedsAHuman(t *testing.T) {
 	}
 	if !strings.Contains(standing.NeedsHuman[0].Whose, "yoyo reconcile") {
 		t.Fatalf("whose = %q, want the command that settles it", standing.NeedsHuman[0].Whose)
+	}
+}
+
+// A promotion the forge has not published is on the attention line by the same
+// predicate the channel's heartbeat counts it by, so the hourly "N promotions
+// awaiting the forge" and the four lines name the same runs. A run settled after
+// a dropped merge is the case that separated them: it owes no step, so the
+// outstanding listing does not have it, and its publication is still not on the
+// remote. The three movers are three different entries.
+func TestAPromotionAwaitingTheForgeNeedsAHuman(t *testing.T) {
+	t.Parallel()
+	promoted := func(runID string, published runstate.PullRequest, drop *runstate.MergeDrop) runstate.State {
+		return runstate.State{
+			RunID:       runID,
+			WorkItemID:  "item-" + runID,
+			Status:      runstate.StatusSucceeded,
+			Integration: &runstate.Integration{TargetBranch: "main"},
+			PullRequest: &published,
+			MergeDrop:   drop,
+		}
+	}
+	dropped := promoted("run-dropped", runstate.PullRequest{Number: 401, URL: "https://forge.invalid/pull/401"}, &runstate.MergeDrop{At: moment, Reason: "a requirement went unmet"})
+	queued := promoted("run-queued", runstate.PullRequest{Number: 402, MergeQueued: true}, nil)
+	unasked := promoted("run-unasked", runstate.PullRequest{Number: 403}, nil)
+	merged := promoted("run-merged", runstate.PullRequest{Number: 404, Merged: true}, nil)
+	running := promoted("run-running", runstate.PullRequest{Number: 405}, nil)
+	running.Status = runstate.StatusRunning
+	recorded := []runstate.State{dropped, queued, unasked, merged, running}
+
+	// The heartbeat's count and the attention line's entries are one derivation.
+	if awaiting := AwaitingForge(recorded); len(awaiting) != 3 {
+		t.Fatalf("AwaitingForge() = %d run(s), want the dropped, the queued, and the unasked and not the merged or the one still running", len(awaiting))
+	}
+	sources := quietSources()
+	sources.Runs = fakeRuns{prices: map[string]runstate.ItemPrice{}, recorded: recorded}
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.NeedsHuman) != 3 {
+		t.Fatalf("needs a human = %+v, want one entry per promotion awaiting the forge", standing.NeedsHuman)
+	}
+	for _, want := range []struct {
+		run, mover string
+	}{
+		{"run-dropped", "the development manager's"},
+		{"run-queued", "the forge's"},
+		{"run-unasked", "the operator's"},
+	} {
+		found := false
+		for _, attention := range standing.NeedsHuman {
+			if !strings.Contains(attention.What, want.run) {
+				continue
+			}
+			found = true
+			if !strings.Contains(attention.What, "the forge has not published it") || !strings.Contains(attention.What, "pull request #") {
+				t.Errorf("what = %q, want the unpublished promotion and its pull request named", attention.What)
+			}
+			if !strings.HasPrefix(attention.Whose, want.mover) || !strings.Contains(attention.Whose, "yoyo reconcile") {
+				t.Errorf("whose for %s = %q, want %s and the sweep that settles it", want.run, attention.Whose, want.mover)
+			}
+		}
+		if !found {
+			t.Errorf("needs a human = %+v, want %s named", standing.NeedsHuman, want.run)
+		}
+	}
+	if strings.Contains(standing.NeedsHumanProblem, "forge") {
+		t.Fatalf("needs a human problem = %q, want the promotions read without complaint", standing.NeedsHumanProblem)
+	}
+
+	// A reading that cannot read the runs says so rather than reporting nothing
+	// awaiting the forge.
+	sources.Runs = fakeRuns{prices: map[string]runstate.ItemPrice{}, failRecorded: errors.New("the records are unreadable")}
+	standing = ReadStanding(context.Background(), sources)
+	if !strings.Contains(standing.NeedsHumanProblem, "the promotions awaiting the forge could not be read") {
+		t.Fatalf("needs a human problem = %q, want the unreadable records named", standing.NeedsHumanProblem)
 	}
 }
 

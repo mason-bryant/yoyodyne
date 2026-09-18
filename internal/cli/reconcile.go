@@ -24,7 +24,13 @@ type reconcileOutput struct {
 	// settles a run, and a corrected record is a fact about the forge rather than
 	// a step somebody was owed.
 	Publications []orchestrator.PublicationRefresh `json:"publications"`
-	Convergence  orchestrator.Convergence          `json:"convergence"`
+	// Settlements is what this sweep did about the publications the harness had
+	// recorded as merged and unfinished: the merge confirmed on the remote and the
+	// record finished, or what still stands in the way. It is beside the refresh
+	// rather than folded into it because the two are different acts — one writes
+	// what the forge says, the other finishes what the record says is unfinished.
+	Settlements []orchestrator.PublicationSettlement `json:"settlements"`
+	Convergence orchestrator.Convergence             `json:"convergence"`
 	// Docketed is how many entries this sweep is what put on the triage docket.
 	// It is a count rather than the entries because the docket is read where it
 	// is acted on, which is the development manager's conversation; what this
@@ -54,6 +60,7 @@ type reconcileOutput struct {
 type reconcileSweep struct {
 	Runs         []orchestrator.Reconciliation
 	Publications []orchestrator.PublicationRefresh
+	Settlements  []orchestrator.PublicationSettlement
 	Convergence  orchestrator.Convergence
 	Docketed     int
 	Supervision  []orchestrator.SupervisionResult
@@ -110,6 +117,13 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	// docketed first would decide against the very staleness it was about to fix.
 	publications, publicationErr := reconciler.RefreshPublications(ctx)
 	err = errors.Join(err, publicationErr)
+	// The publications the harness recorded as merged and could not finish are
+	// finished next, after the refresh has recorded which of them the forge has
+	// since merged and before the docket is built: a docket built first would
+	// docket a publication this sweep was about to settle, and a hold read first
+	// would hold an item whose publication is about to stop being outstanding.
+	settlements, settlementErr := reconciler.FinishPublications(ctx)
+	err = errors.Join(err, settlementErr)
 	// Convergence is swept even when settling a run failed. The two are
 	// independent — one finishes runs, the other finishes branches — and a
 	// checkout left behind the forge because some unrelated run could not be
@@ -146,6 +160,7 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{
 		Runs:         results,
 		Publications: publications,
+		Settlements:  settlements,
 		Convergence:  convergence,
 		Docketed:     docketed.Added,
 		Supervision:  supervision,
@@ -233,10 +248,19 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 			failed = true
 		}
 	}
+	// A publication the remote still refuses to confirm is not a failure of the
+	// sweep: it is what the sweep found, recorded, and left for a person. One the
+	// sweep could not finish for its own reasons is.
+	for _, settlement := range sweep.Settlements {
+		if settlement.Failure != "" {
+			failed = true
+		}
+	}
 	if jsonOutput {
 		output := reconcileOutput{
 			Runs:         results,
 			Publications: publications,
+			Settlements:  sweep.Settlements,
 			Convergence:  convergence,
 			Docketed:     docketed,
 			Supervision:  sweep.Supervision,
@@ -251,6 +275,9 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		}
 		if output.Publications == nil {
 			output.Publications = []orchestrator.PublicationRefresh{}
+		}
+		if output.Settlements == nil {
+			output.Settlements = []orchestrator.PublicationSettlement{}
 		}
 		if output.Convergence.Targets == nil {
 			output.Convergence.Targets = []gitworktree.Catchup{}
@@ -318,6 +345,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 			}
 		}
 		printPublications(stdout, stderr, publications)
+		printSettlements(stdout, stderr, sweep.Settlements)
 		printConvergence(stdout, stderr, convergence)
 		printSupervision(stdout, sweep.Supervision)
 		printStall(stdout, stderr, sweep.Stall, sweep.StallProblem)
@@ -419,6 +447,34 @@ func printPublications(stdout, stderr io.Writer, publications []orchestrator.Pub
 		case publication.Updated:
 			fmt.Fprintf(stdout, "pull request #%d of %s recorded as %s, was %s\n",
 				publication.Number, publication.WorkItemID, publication.State, publication.Recorded)
+		}
+	}
+}
+
+// printSettlements reports the publications this sweep finished and the ones it
+// could not, and says nothing about a record it deliberately left alone. A
+// publication the remote still refuses is said on every sweep it stands, because
+// it is the state a person has to act on and a sweep that went quiet about it
+// would read as one that had settled it.
+func printSettlements(stdout, stderr io.Writer, settlements []orchestrator.PublicationSettlement) {
+	for _, settlement := range settlements {
+		switch {
+		case settlement.Failure != "":
+			fmt.Fprintf(stderr, "pull request #%d of %s not settled: %s\n", settlement.Number, settlement.WorkItemID, settlement.Failure)
+		case settlement.Settled:
+			fmt.Fprintf(stdout, "pull request #%d of %s settled: its merge is confirmed on the remote, and nothing about the publication is outstanding\n",
+				settlement.Number, settlement.WorkItemID)
+			if settlement.Catchup != nil && settlement.Catchup.Advanced {
+				fmt.Fprintf(stdout, "  %s caught up to %s\n", settlement.Catchup.TargetBranch, settlement.Catchup.RemoteCommit)
+			}
+			if settlement.Catchup != nil && settlement.Catchup.Held != "" {
+				fmt.Fprintf(stderr, "  %s not caught up: %s\n", settlement.Catchup.TargetBranch, settlement.Catchup.Held)
+			}
+			if settlement.DocketProblem != "" {
+				fmt.Fprintf(stderr, "  docket entry not closed: %s\n", settlement.DocketProblem)
+			}
+		case settlement.Remaining != "":
+			fmt.Fprintf(stderr, "pull request #%d of %s still outstanding: %s\n", settlement.Number, settlement.WorkItemID, settlement.Remaining)
 		}
 	}
 }
@@ -529,6 +585,14 @@ It also re-asks the forge about the pull request of every run that ended without
 its publication being settled, and records what the forge now says — merged,
 closed, or still open. Nothing is merged or closed for you: the record is
 brought onto the truth, so what reads it afterwards reads truth too.
+
+A publication recorded as merged and unfinished — a merge that could not be
+confirmed when it landed, a dropped merge somebody then made by hand, a consumed
+branch that could not be deleted — is then finished where the remote now
+confirms it: the merge commit is recorded, the local target caught up, the item
+settled by its own landing, and the hold, the heartbeat's count, and the docket
+entry it carried all clear together. One the remote still refuses stays
+outstanding and says so.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development

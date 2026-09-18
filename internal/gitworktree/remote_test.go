@@ -93,7 +93,7 @@ func TestManagerPublishesEachAttemptAndThenObservesTheMerge(t *testing.T) {
 	// What a forge merge leaves behind is its own merge commit above the promoted
 	// commit — not the promoted commit itself, which no merge method produces.
 	mergeCommit := mergeInRemote(t, remote, "main", integration.TargetCommit)
-	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration)
+	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration, "")
 	if err != nil {
 		t.Fatalf("ConfirmRemoteTarget() error = %v", err)
 	}
@@ -184,7 +184,7 @@ func TestManagerPublishesRunBranchesToTheForkAndKeepsTheTargetUpstream(t *testin
 	// than as a branch, which is what makes a merge of it possible at all.
 	runGit(t, upstream, "fetch", fork, "refs/heads/"+worktree.Branch+":refs/pull/1/head")
 	mergeCommit := mergeInRemote(t, upstream, "main", integration.TargetCommit)
-	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration)
+	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration, "")
 	if err != nil {
 		t.Fatalf("ConfirmRemoteTarget() error = %v", err)
 	}
@@ -410,7 +410,7 @@ func TestManagerVerifyRemoteTargetAcceptsTheForgesOwnMergeCommit(t *testing.T) {
 		t.Fatalf("VerifyRemoteTarget() first error = %v", err)
 	}
 	merged := mergeInRemote(t, remote, "main", first.TargetCommit)
-	if _, err := manager.ConfirmRemoteTarget(context.Background(), first); err != nil {
+	if _, err := manager.ConfirmRemoteTarget(context.Background(), first, ""); err != nil {
 		t.Fatalf("ConfirmRemoteTarget() first error = %v", err)
 	}
 
@@ -423,7 +423,7 @@ func TestManagerVerifyRemoteTargetAcceptsTheForgesOwnMergeCommit(t *testing.T) {
 	if err := manager.VerifyRemoteTarget(context.Background(), second); err != nil {
 		t.Fatalf("VerifyRemoteTarget() after a forge merge error = %v, want the merge commit %s accepted", err, merged)
 	}
-	if _, err := manager.ConfirmRemoteTarget(context.Background(), mergeInRemoteAnd(t, remote, second)); err != nil {
+	if _, err := manager.ConfirmRemoteTarget(context.Background(), mergeInRemoteAnd(t, remote, second), ""); err != nil {
 		t.Fatalf("ConfirmRemoteTarget() second error = %v", err)
 	}
 }
@@ -441,12 +441,90 @@ func TestManagerConfirmRemoteTargetRefusesARewrittenPromotion(t *testing.T) {
 
 	// The same tree, on the same base, without the promoted commit as a parent.
 	replayed := replayInRemote(t, remote, "main", integration.TargetCommit)
-	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration)
+	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration, "")
 	if !errors.Is(err, ErrRemoteTargetMismatch) {
 		t.Fatalf("ConfirmRemoteTarget() rewritten = %q, %v; want ErrRemoteTargetMismatch", confirmed, err)
 	}
 	if !strings.Contains(err.Error(), replayed) || !strings.Contains(err.Error(), integration.TargetCommit) {
 		t.Errorf("mismatch error names neither the remote commit %q nor the promoted one %q: %v", replayed, integration.TargetCommit, err)
+	}
+}
+
+// The shape PR 497 left on 2026-09-13: ten held merges landed in one sitting,
+// so every promotion but the last sat under a merge commit that later merges had
+// built on. Requiring the remote tip to carry exactly the promotion's content
+// confirmed the last of them and reported the other nine as carrying content the
+// promotion did not, on every sweep, for good. What a merge guarantees is that
+// the promoted commit is on the branch, and that is what is checked; the merge
+// commit reported is the one that brought it in rather than whatever the tip
+// happens to be.
+func TestManagerConfirmRemoteTargetAcceptsAMergeThatLandedAmongOthers(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := newPublishedRepository(t)
+	manager := newRemoteManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin")
+	integration := publishAndIntegrate(t, manager, "yoyodyne-batched", "feature.txt", "published\n")
+
+	// The forge merges this request, and then somebody else's on top of it, so the
+	// remote tip carries content this promotion never had.
+	merged := mergeInRemote(t, remote, "main", integration.TargetCommit)
+	elsewhere := pushUnrelatedCommit(t, remote, "yoyodyne-elsewhere")
+	tip := mergeInRemote(t, remote, "main", elsewhere)
+
+	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration, "")
+	if err != nil {
+		t.Fatalf("ConfirmRemoteTarget() after a later merge error = %v, want the promotion confirmed by containment", err)
+	}
+	if confirmed != merged {
+		t.Fatalf("ConfirmRemoteTarget() = %q, want this request's merge commit %q rather than the tip %q", confirmed, merged, tip)
+	}
+}
+
+// The forge's own record of which commit merged the request is what is
+// reported as the merge commit when it is what it claims to be — on the remote
+// target with the promoted commit as a parent. It never decides the
+// confirmation: containment does that, and a forge record that disagrees with a
+// remote that provably carries the promotion is a fact about the record. A
+// named commit that carries the promotion without being its merge — a later
+// merge on the branch, or the merge of a batch this request landed inside — is
+// set aside and this request's own merge is found in the history instead; a
+// named commit the remote does not carry at all is set aside the same way.
+func TestManagerConfirmRemoteTargetChecksTheForgesMergeCommit(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := newPublishedRepository(t)
+	manager := newRemoteManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin")
+	integration := publishAndIntegrate(t, manager, "yoyodyne-recorded", "feature.txt", "published\n")
+	merged := mergeInRemote(t, remote, "main", integration.TargetCommit)
+	elsewhere := pushUnrelatedCommit(t, remote, "yoyodyne-elsewhere")
+	other := mergeInRemote(t, remote, "main", elsewhere)
+
+	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration, merged)
+	if err != nil || confirmed != merged {
+		t.Fatalf("ConfirmRemoteTarget() with the forge's merge commit = %q, %v; want %q confirmed", confirmed, err, merged)
+	}
+	// A commit on the remote that contains the promotion without being its merge
+	// confirms the publication all the same, and the merge reported is this
+	// request's own rather than the forge's word.
+	confirmed, err = manager.ConfirmRemoteTarget(context.Background(), integration, other)
+	if err != nil || confirmed != merged {
+		t.Fatalf("ConfirmRemoteTarget() with a later merge named = %q, %v; want the promotion confirmed under its own merge %q", confirmed, err, merged)
+	}
+	// A commit the remote target does not carry — on some other branch of the
+	// remote, and never fetched here — is set aside the same way rather than
+	// refusing a promotion the remote provably contains.
+	stray := gitLine(t, remote, "-c", "user.name=Forge", "-c", "user.email=forge@example.invalid",
+		"commit-tree", other+"^{tree}", "-p", other, "-p", integration.TargetCommit, "-m", "a merge somewhere else")
+	runGit(t, remote, "update-ref", "refs/heads/yoyodyne-stray", stray)
+	confirmed, err = manager.ConfirmRemoteTarget(context.Background(), integration, stray)
+	if err != nil || confirmed != merged {
+		t.Fatalf("ConfirmRemoteTarget() with a commit off the target named = %q, %v; want the promotion confirmed under its own merge %q", confirmed, err, merged)
+	}
+	// What the forge names never confirms a promotion the remote does not carry.
+	replayed := publishAndIntegrate(t, manager, "yoyodyne-replayed", "second.txt", "replayed\n")
+	rewritten := replayInRemote(t, remote, "main", replayed.TargetCommit)
+	if _, err := manager.ConfirmRemoteTarget(context.Background(), replayed, rewritten); !errors.Is(err, ErrRemoteTargetMismatch) {
+		t.Fatalf("ConfirmRemoteTarget() of a rewritten promotion with the forge's commit named error = %v, want ErrRemoteTargetMismatch", err)
 	}
 }
 
@@ -500,7 +578,7 @@ func TestManagerVerifyRemoteTargetRefusesARemoteThatMoved(t *testing.T) {
 	}
 	// A merge cannot have reached a branch that is not there either, and that is
 	// a mismatch rather than drift: it describes a merge that already happened.
-	if _, err := manager.ConfirmRemoteTarget(context.Background(), integration); !errors.Is(err, ErrRemoteTargetMismatch) {
+	if _, err := manager.ConfirmRemoteTarget(context.Background(), integration, ""); !errors.Is(err, ErrRemoteTargetMismatch) {
 		t.Fatalf("ConfirmRemoteTarget() absent error = %v, want ErrRemoteTargetMismatch", err)
 	}
 }

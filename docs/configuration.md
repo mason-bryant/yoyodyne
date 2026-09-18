@@ -2460,10 +2460,10 @@ commit, the same commit on both sides.
 The merge itself does not leave the two at the same commit, and no forge merge
 method would: **the merge leaves the remote target at your local target plus one
 merge commit**, made by the forge and identical in content. The last step of the
-promotion is to catch your local branch up onto it, which is an ordinary
-fast-forward onto a commit that already contains the promotion and carries
-exactly its content. Nothing is rewritten, reset, or merged, and nothing is
-decided: that is the `git pull` you used to run yourself.
+promotion is to catch your local branch up onto the remote, which is an ordinary
+fast-forward onto a commit that already contains the promotion. Nothing is
+rewritten, reset, or merged, and nothing is decided: that is the `git pull` you
+used to run yourself.
 
 A catch-up the harness cannot make cleanly is held rather than forced, and says
 why:
@@ -2488,10 +2488,17 @@ Because the forge performs the merge, the harness checks that relationship
 rather than assuming it. Before the merge, the remote target must contain the
 commit your promotion was made from and carry exactly its content — that is what
 tells a target another run already published into from someone else's work.
-After the merge, it must contain the promoted commit itself and carry exactly
-its content. A forge that rewrote the commit or merged something else is
-reported, not reconciled, and the run branch is left on the remote for whoever
-decides which history is right.
+After the merge, it must contain the promoted commit itself, unrewritten. It
+need not carry exactly its content: a merge that lands among others — ten held
+requests merged in one sitting — leaves every promotion but the last under a
+merge commit later merges have built on, and requiring equality there reported
+nine confirmable publications as unconfirmable for good. What is recorded as the
+merge commit is the one the forge names for the pull request, where that commit
+is on the remote target with the promoted commit as a parent, or otherwise the
+one found in the remote history with the promoted commit as a parent; the
+forge's record never decides the confirmation, only what is recorded. A forge that rewrote the
+commit is reported, not reconciled, and the run branch is left on the remote for
+whoever decides which history is right.
 
 If a promotion cannot be published — the forge is unreachable, the remote target
 moved, or the forge refused the merge — the run still succeeds and closes its

@@ -379,7 +379,7 @@ func TestGitHubStateReportsMergeAndAbsence(t *testing.T) {
 	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
 	runner.reply("pr list", execution.ProcessResult{
 		Status: execution.ProcessSucceeded,
-		Stdout: `[{"number":7,"url":"https://example.invalid/pull/7","state":"MERGED","mergedAt":"2026-08-16T12:00:00Z","autoMergeRequest":null}]`,
+		Stdout: `[{"number":7,"url":"https://example.invalid/pull/7","state":"MERGED","mergedAt":"2026-08-16T12:00:00Z","autoMergeRequest":null,"mergeCommit":{"oid":"9f1c2ab7e05c4d3b9a1b6e8f0d2a4c71deadbeef"}}]`,
 	})
 	forge := GitHub{Runner: runner}
 	merged, err := forge.State(context.Background(), "yoyodyne/task/abcd1234")
@@ -388,6 +388,11 @@ func TestGitHubStateReportsMergeAndAbsence(t *testing.T) {
 	}
 	if !merged.Merged || merged.Number != 7 {
 		t.Fatalf("State() = %#v", merged)
+	}
+	// The forge's own record of which commit merged the request is what confirms
+	// a merge other merges have since landed on top of, so it is carried through.
+	if merged.MergeCommit != "9f1c2ab7e05c4d3b9a1b6e8f0d2a4c71deadbeef" {
+		t.Fatalf("State() merge commit = %q, want the forge's recorded merge commit", merged.MergeCommit)
 	}
 
 	absent := &scriptedRunner{}
@@ -431,18 +436,24 @@ func TestGitHubStateReportsAQueuedMergeSeparatelyFromADroppedOne(t *testing.T) {
 			if observed.AutoMerge != test.want {
 				t.Errorf("State() auto-merge = %t, want %t", observed.AutoMerge, test.want)
 			}
+			// An unmerged request has no merge commit, and the forge says so as null
+			// rather than as an empty object.
+			if observed.MergeCommit != "" {
+				t.Errorf("State() merge commit = %q, want none on an unmerged request", observed.MergeCommit)
+			}
 		})
 	}
 
-	// The queued merge and the head the request carries are only knowable if they
-	// were asked for, so the query has to ask for them.
+	// The queued merge, the head the request carries, and the commit that merged
+	// it are only knowable if they were asked for, so the query has to ask for
+	// them.
 	runner := &scriptedRunner{}
 	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
 	runner.reply("pr list", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]"})
 	_, _ = (GitHub{Runner: runner}).State(context.Background(), "yoyodyne/task/abcd1234")
 	listed := runner.matching("pr list")
-	if len(listed) != 1 || !contains(listed[0], "number,url,state,mergedAt,autoMergeRequest,headRefOid") {
-		t.Errorf("pr list args = %v, want the queued merge and the head among the requested fields", listed)
+	if len(listed) != 1 || !contains(listed[0], "number,url,state,mergedAt,autoMergeRequest,headRefOid,mergeCommit") {
+		t.Errorf("pr list args = %v, want the queued merge, the head, and the merge commit among the requested fields", listed)
 	}
 }
 

@@ -707,7 +707,8 @@ earlier becomes a durable blocker naming the branch and worktree that were
 preserved. A run that finished with its merge queued at the forge is settled
 here too: reconcile asks the forge and, once the merge has landed, finishes the
 publication — merge commit recorded and your local target branch caught up onto
-the merge commit the forge made — and settles the work item, which the run
+the remote target, which carries the forge's merge and whatever landed after it
+— and settles the work item, which the run
 deliberately left open because a queued merge is a
 publication nothing has confirmed. Where it goes is what the run's own landing
 says: closed where the landing discharged the item, back in the backlog parked
@@ -743,10 +744,8 @@ merge is real. In those two, your local branch is deliberately left where it is
 rather than moved on a publication nothing verified. A **merged branch that
 could not be deleted** is the third, and is the mildest: the item is already
 settled — closed, or back in the backlog, as its landing said — and your local
-branch already caught up, and what is left is a branch on the forge that nothing
-sweeps for you — the convergence sweep below removes local branches only. It
-says so in a second line on the item naming the branch, and it is on the triage
-docket until somebody removes it.
+branch already caught up, and what is left is a branch on the forge. It says so
+in a second line on the item naming the branch.
 
 All three are on that docket, and all three hold their item out of the pull for
 as long as they stand — which is the point: the promotion has already put the
@@ -767,22 +766,47 @@ exercise judgement: it reports and leaves the decision where it belongs.
 Reconcile never invokes a provider either: a lost process handle is not a
 reason to start a second developer for an item.
 
-Every other publication is re-asked about on the same sweep. A run that ended
-without its publication settled — one that failed before it integrated
-anything, or one whose request the forge merged after the harness had stopped
-watching — used to keep whatever the forge last said at the moment the run
-ended, for good: a pull request somebody merged days later stayed recorded open
-and unmerged, and the triage docket and the status surfaces read that rather
-than the truth. Reconcile now asks the forge about each of those and records
-the answer — merged, closed, or still open. It only writes the record: nothing
-is merged, nothing is closed, no branch moves, and the work item is not
-touched, so a request that turns out to have merged outside the harness leaves
-its publication outstanding for triage rather than being finished behind your
-back. A record the forge agrees with is left exactly as it is, and a merged one
-is never asked about again — merged is the one answer a forge does not take
-back. A record left alone for a reason, such as a branch the forge answers
-about with some other request, is reported and is not a failure; a forge that
-could not be reached is, and the next sweep asks the same question again.
+**None of the three stands forever.** Every sweep asks the remote again about
+each publication the record says is merged and unfinished, and finishes the ones
+the remote now confirms — the promoted commit on the remote target, unrewritten.
+The merge commit recorded is the one the forge names for the request where it is
+the merge of that promotion, or otherwise the one the sweep finds in the remote
+history with the promoted commit as a parent; the forge's record never decides
+the confirmation. Finishing is
+the settle path's own work in the settle path's order: the merge commit recorded,
+your local branch caught up, the item settled by its own landing where the drop
+had handed it back, the consumed branch deleted, and the docket entry closed as
+`settled` by the harness — so the hold, the heartbeat's count, and the
+`Publication outstanding` line on the item all clear together, and the item gets
+one note saying what was settled and which line it replaces. That is the lever
+behind the sentence in [how work flows](work.md#letting-the-harness-choose-the-work)
+that a hold lifts by the publication being settled, which until yoyodyne-ifd.357
+had nothing behind it. A publication the remote still refuses stays exactly
+where it was — the record keeps the account the run wrote, which is the line on
+the item, and nothing is written on either — and the sweep says what the remote
+answers now on every pass it stands. The eight held requests PR 497 merged on 2026-09-13 are
+the case this was built on: confirmation then required the remote tip to carry
+exactly the promotion's content, which only the last merge of a batch does, so
+all eight settled as unconfirmed and stayed that way until this could re-ask.
+
+Every other publication is re-asked about on the same sweep, before that. A run
+that ended without its publication settled — one that failed before it
+integrated anything, or one whose request the forge merged after the harness had
+stopped watching — used to keep whatever the forge last said at the moment the
+run ended, for good: a pull request somebody merged days later stayed recorded
+open and unmerged, and the triage docket and the status surfaces read that rather
+than the truth. Reconcile asks the forge about each of those and records the
+answer — merged, closed, or still open. It only writes the record: nothing is
+merged, nothing is closed, no branch moves, and the work item is not touched by
+the asking. A request that turns out to have merged outside the harness — a
+dropped merge you made by hand on the forge — is recorded as merged here, and the
+finishing above then confirms it on the remote and settles the item, so a hand
+merge is settled by the sweep that finds it rather than staying handed back for
+good. A record the forge agrees with is left exactly as it is, and a merged one
+is never asked about again by this half — merged is the one answer a forge does
+not take back. A record left alone for a reason, such as a branch the forge
+answers about with some other request, is reported and is not a failure; a forge
+that could not be reached is, and the next sweep asks the same question again.
 
 The same sweep recovers the [exchanges the roles have put to each
 other](conversation.md#roles-asking-each-other-things), for the reason it settles
@@ -1016,8 +1040,11 @@ cross-machine race after promoting, and a repository still standing in that stat
 is what this section is for. A run today cannot produce it that way: it settles
 where the remote target stands before promoting, and stops without closing
 anything if the remote moves afterwards. Reaching it now takes somebody pushing
-to the target directly, or the window a queued merge leaves open. The recovery is
-the same either way, and it is yours to run.
+to the target directly. The recovery is the same either way, and it is yours to
+run. (A queued merge landing among others used to reach this page too — as a
+publication reported unconfirmable for good rather than as a wedge — until
+confirmation asked whether the remote contains the promotion rather than whether
+its tip carries exactly the promotion's content.)
 
 **Which side is which.** The remote is the shared truth: the forge has it, and so
 does every other checkout of the project. The commits your local branch has that
@@ -1171,7 +1198,8 @@ Needs a human (3):
   backlog on 2026-09-04.
 - **Needs a human** is always present, and says either `nothing` or the list with
   whose move each one is: the operator's two switches, an unresolved directive, a
-  proposed change nobody has decided, a run that ended still owing a step, work
+  proposed change nobody has decided, a run that ended still owing a step, a
+  promotion the forge has not published, work
   marked for a conversation rather than for a run, a queue nothing is pulling
   from — a session sitting idle over it, or no session at all — while admitted
   work waits behind that, the provider holding every role at once (below), and a
@@ -1179,7 +1207,13 @@ Needs a human (3):
   oldest undecided entry has been waiting more than a week. A stall over an empty
   queue is not listed: it is a state of the machine rather than something waiting
   on you, and neither is a report pile that is being worked through — what is
-  listed is one that is not.
+  listed is one that is not. The unpublished promotions are the same set the
+  channel's hourly line counts as awaiting the forge, read by the same
+  derivation, and each says whose move it is: the forge's while it holds the
+  merge queued, the development manager's once it has dropped one, and the
+  operator's for a request nothing ever asked it to merge. All three leave the
+  line the moment the forge records the merge and
+  [`yoyo reconcile`](#recovering-interrupted-runs) settles it.
 
 A line with nothing in it says `nothing` in words, and a line whose records could
 not be read says that instead — never `nothing`, which would be a confident

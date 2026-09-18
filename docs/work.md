@@ -484,8 +484,8 @@ What still holds a blocked item back is a **hold**, which is the harness's own
 durable record rather than a field: a run that stopped on the item and whose
 change is still on a branch, a stoppage put in front of the development
 manager that nobody has decided about, or a run that integrated the item's
-change and could not finish publishing it. None is ever released automatically.
-Releasing a stoppage would start a fresh run on top of a change that is still
+change and could not finish publishing it. None is released by a pass deciding
+to. Releasing a stoppage would start a fresh run on top of a change that is still
 there, and releasing an outstanding publication would start one over work the
 promotion has already put on the target branch — which is what
 [yoyodyne-ifd.295](operations.md#recovering-interrupted-runs)
@@ -493,7 +493,14 @@ cost, three developer runs and three reviews each re-deriving that the change
 was already on `main`. So a hold is lifted only by triage picking the change up,
 by the escalation being answered, or by the publication being settled
 — at which point the records stop saying the item is
-held, and it becomes pullable without anybody having edited its status. A pass
+held, and it becomes pullable without anybody having edited its status. The
+first two are a person's. The third is
+[`yoyo reconcile`](operations.md#recovering-interrupted-runs)'s: every sweep
+asks the remote again whether it carries a publication the record says is
+unfinished, and where it does — a merge that landed among others, a dropped merge
+somebody then made by hand, a consumed branch somebody removed — the sweep
+finishes the record, and the hold, the heartbeat's count, the item's
+`Publication outstanding` line, and the docket entry all stop with it. A pass
 that cannot read those records holds every blocked item rather than releasing
 work whose hold it could not see.
 
@@ -531,11 +538,16 @@ over with the parking reason named, which the paragraph after that is about. And
 a **held** item — a stoppage whose change is still on a branch, one nobody has
 decided about, or a publication that did not finish over work already integrated,
 in the sense the hold paragraph above gives it — is
-passed over with the hold named, because like the parking it is not a wait for
-anything and will not clear on its own. It is passed over as one of two things
-rather than one, because the two have different next movers: an item **awaiting a
-decision** is the development manager's to settle, and one **awaiting carry-out
-of a decision** is one she has settled and the harness has not yet acted on.
+passed over with the hold named. A stoppage is, like the parking, not a wait for
+anything and will not clear on its own. An unfinished publication is the one
+hold that is a wait: the next `yoyo reconcile` re-asks the remote, and a merge
+the forge has since made — queued and then landed, landed among others, or made
+by hand after a drop — settles on that sweep with nobody acting, while a merge
+the forge dropped and nobody has made stays a person's. A stoppage is passed over
+as one of two things rather than one, because the two have different next
+movers: an item **awaiting a decision** is the development manager's to settle,
+and one **awaiting carry-out of a decision** is one she has settled and the
+harness has not yet acted on.
 Reporting both as a single class is what made thirty-three already-decided items
 read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its
@@ -1075,9 +1087,21 @@ carrying exactly that commit under a merge commit — the one method that puts t
 reviewed commit itself on the base, where a squash or a rebase would substitute
 a rewritten copy. So the merge leaves the remote target at your local branch
 plus one forge merge commit, identical in content, and the harness checks that
-relationship on both sides of the merge. The last step of the promotion is to
-catch your local branch up onto that merge commit: a fast-forward onto a commit
-that already contains the promotion and carries exactly its content, so nothing
+relationship on both sides of the merge — with one deliberate asymmetry. Before
+the merge, the remote must carry exactly what the promotion was written against,
+because anything else is work the forge would reconcile that nobody here saw.
+After it, the remote must *contain* the promoted commit, unrewritten; it need
+not carry exactly its content, because a merge that lands among others — ten
+held requests merged in one sitting, on 2026-09-13 — leaves every promotion but
+the last under a merge commit later merges have built on, and demanding equality
+there confirmed the last one and reported the other nine as unconfirmable for
+good. What the harness records as the merge commit is the one the forge names for
+the pull request, where that commit is on the remote target with the promoted
+commit as a parent, or otherwise the one it finds in the remote history with the
+promoted commit as a parent; the forge's record never decides the confirmation,
+only what is recorded. The last step of the promotion is to
+catch your local branch up onto the remote: a fast-forward onto a commit
+that already contains the promotion, so nothing
 is rewritten, nothing is merged, and nothing is decided. That is the `git pull`
 you used to have to remember after every merge, and it is why your checkout
 stays level with the forge on its own. A fast-forward blocked by uncommitted
