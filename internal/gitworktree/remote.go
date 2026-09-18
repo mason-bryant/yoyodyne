@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -232,24 +233,40 @@ func (m *Manager) VerifyRemoteTarget(ctx context.Context, integration Integratio
 	return nil
 }
 
-// ConfirmRemoteTarget reports where a forge's merge left the remote target
-// branch, and refuses anything that is not the promotion arriving there. The
+// ConfirmRemoteTarget establishes that a forge's merge put the promotion on the
+// remote target branch, and names the merge commit that carried it there. The
 // two branches do not end at the same commit — the forge adds a merge commit of
 // its own, which is the price of not pushing the target branch — so what is
 // checked is the relationship that a merge does guarantee: the promoted commit
-// itself is on the remote target, unrewritten, and the branch carries exactly
-// its content and nothing besides.
+// itself is on the remote target, unrewritten. A forge that replayed the
+// commits instead of merging them fails that, and it is reported rather than
+// reconciled: which history is right is a person's decision, not a harness's.
 //
-// A forge that replayed the commits instead of merging them fails the first
-// half, and one that merged something else along the way fails the second. Both
-// are reported rather than reconciled: which history is right is a person's
-// decision, not a harness's.
-func (m *Manager) ConfirmRemoteTarget(ctx context.Context, integration Integration) (string, error) {
+// What is deliberately not checked is that the remote target carries exactly
+// the promotion's content. That was the rule until yoyodyne-ifd.357, and it is
+// satisfied only by the last merge into the branch: a queued merge that lands
+// among others — ten held requests merged in one sitting, on 2026-09-13 — puts
+// the promoted commit on the remote under a merge commit that later merges have
+// since built on, and every reconcile then reported the remote as carrying
+// content the promotion did not, for good. Containment is the fact a merge
+// guarantees; equality is a fact about being merged last.
+//
+// mergeCommit is the commit the forge recorded as this request's merge, where
+// the caller has it, and empty otherwise. Given, it is checked rather than
+// believed — it has to be on the remote target and to carry the promoted
+// commit — and it is what is reported. Without it, the merge commit is found in
+// the remote history itself: the merge on the path from the promoted commit to
+// the tip whose parents include the promoted commit, which is the one the forge
+// made of this request. A fast-forward has no such commit and reports none.
+func (m *Manager) ConfirmRemoteTarget(ctx context.Context, integration Integration, mergeCommit string) (string, error) {
 	if err := validateTargetBranch(integration.TargetBranch); err != nil {
 		return "", err
 	}
 	if !commitPattern.MatchString(integration.TargetCommit) {
 		return "", fmt.Errorf("integrated target commit %q is invalid", integration.TargetCommit)
+	}
+	if mergeCommit != "" && !commitPattern.MatchString(mergeCommit) {
+		return "", fmt.Errorf("forge merge commit %q is invalid", mergeCommit)
 	}
 	published, exists, err := m.remoteCommit(ctx, m.remote, integration.TargetBranch)
 	if err != nil {
@@ -271,15 +288,90 @@ func (m *Manager) ConfirmRemoteTarget(ctx context.Context, integration Integrati
 		return "", fmt.Errorf("%w: %s on %s is at %s, which does not contain the promoted commit %s",
 			ErrRemoteTargetMismatch, integration.TargetBranch, m.remote, published, integration.TargetCommit)
 	}
-	same, err := m.sameContent(ctx, published, integration.TargetCommit)
+	if mergeCommit != "" {
+		// The forge's merge commit is an ancestor of the fetched tip whenever it is
+		// what it claims to be, so the fetch above brought it in and both questions
+		// below are answerable. A commit the fetch did not bring in answers no to
+		// the first, which is the right answer: a merge commit the remote target does
+		// not carry did not merge this request into it.
+		onTarget, err := m.descendsFrom(ctx, mergeCommit, published)
+		if err != nil {
+			return "", err
+		}
+		if !onTarget {
+			return "", fmt.Errorf("%w: the forge records %s as the merge of this request, and %s on %s at %s does not carry it",
+				ErrRemoteTargetMismatch, mergeCommit, integration.TargetBranch, m.remote, published)
+		}
+		// The merge of this request is the commit whose parent is the promoted
+		// commit. Containment would accept every later merge on the branch as well,
+		// since each of those carries the promotion too, and a record naming one of
+		// them is a record about some other request.
+		parents, err := m.parentsOf(ctx, mergeCommit)
+		if err != nil {
+			return "", err
+		}
+		if !slices.Contains(parents, integration.TargetCommit) {
+			return "", fmt.Errorf("%w: the forge records %s as the merge of this request, and the promoted commit %s is not among its parents",
+				ErrRemoteTargetMismatch, mergeCommit, integration.TargetCommit)
+		}
+		return mergeCommit, nil
+	}
+	return m.mergeOf(ctx, integration.TargetCommit, published)
+}
+
+// parentsOf lists a commit's parents, for the one question containment cannot
+// answer: whether a merge commit is the merge of this promotion rather than of
+// something later that carries it.
+func (m *Manager) parentsOf(ctx context.Context, commit string) ([]string, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "rev-list", "--parents", "-n", "1", commit)
+	if err != nil {
+		return nil, err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return nil, fmt.Errorf("list the parents of %s failed with exit code %d: %s", commit, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	fields := strings.Fields(result.Stdout)
+	if len(fields) == 0 || fields[0] != commit {
+		return nil, fmt.Errorf("list the parents of %s answered about %q", commit, strings.TrimSpace(result.Stdout))
+	}
+	return fields[1:], nil
+}
+
+// mergeOf names the merge commit that brought one commit into a branch whose
+// tip is another: the merge on the ancestry path between the two that has the
+// promoted commit as a parent. Nothing is found for a fast-forward, where the
+// promoted commit is on the branch's own line and no merge was made of it, and
+// that is reported as no merge commit rather than as a failure — the promotion
+// is on the remote either way, and containment already said so.
+//
+// The listing is newest first, so where more than one merge has the promoted
+// commit as a parent — a branch merged twice, which nothing here does — the
+// oldest is taken, because it is the one that brought the commit in.
+func (m *Manager) mergeOf(ctx context.Context, promoted, tip string) (string, error) {
+	if promoted == tip {
+		return "", nil
+	}
+	result, err := m.run(ctx, "-C", m.repositoryRoot,
+		"rev-list", "--merges", "--parents", "--ancestry-path", promoted+".."+tip)
 	if err != nil {
 		return "", err
 	}
-	if !same {
-		return "", fmt.Errorf("%w: %s on %s is at %s, which carries content the promoted commit %s does not",
-			ErrRemoteTargetMismatch, integration.TargetBranch, m.remote, published, integration.TargetCommit)
+	if result.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("list the merges between %s and %s failed with exit code %d: %s", promoted, tip, result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
-	return published, nil
+	merge := ""
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || !commitPattern.MatchString(fields[0]) {
+			continue
+		}
+		for _, parent := range fields[1:] {
+			if parent == promoted {
+				merge = fields[0]
+			}
+		}
+	}
+	return merge, nil
 }
 
 // fetchRemoteBranch brings one remote branch's tip into this repository so it

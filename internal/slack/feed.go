@@ -333,19 +333,16 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// is not, and two readings of the same files a moment apart could disagree
 	// about it.
 	// What is waiting on the forge is counted from that same reading, for the same
-	// reason and from the record's own predicate rather than from a reading of the
-	// publication fields taken here: a count this surface derived for itself is a
-	// count `yoyo status` could come to disagree with about one run.
-	inFlight, awaitingForge := 0, 0
+	// reason and by the read model's derivation rather than by a reading of the
+	// publication fields taken here: it is the same derivation the attention line
+	// of `yoyo status` lists, so a count said here is a count that line names.
+	inFlight, awaitingForge := 0, len(readmodel.AwaitingForge(states))
 	for _, state := range states {
 		if err := ctx.Err(); err != nil {
 			return Batch{}, err
 		}
 		if !state.Status.Terminal() {
 			inFlight++
-		}
-		if state.AwaitingForge() {
-			awaitingForge++
 		}
 		stream := runStream(state.RunID)
 		batch.Streams[stream] = struct{}{}

@@ -59,6 +59,12 @@ type PullRequest struct {
 	// queued merge that has not landed yet from one the forge dropped, which is
 	// otherwise the same observation — an open, unmerged request.
 	AutoMerge bool `json:"auto_merge,omitempty"`
+	// MergeCommit is the commit the forge recorded as the merge of this request,
+	// and is empty on a request the forge has not merged or answered about
+	// without naming one. It is what lets a merge be confirmed after other merges
+	// have landed on top of it: the remote target's tip is then somebody else's
+	// merge commit, and this is the one that carried this request.
+	MergeCommit string `json:"merge_commit,omitempty"`
 }
 
 // Request describes the pull request a published run branch must have open.
@@ -578,7 +584,7 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		"--head", head,
 		"--state", "all",
 		"--limit", "1",
-		"--json", "number,url,state,mergedAt,autoMergeRequest,headRefOid")...)...)
+		"--json", "number,url,state,mergedAt,autoMergeRequest,headRefOid,mergeCommit")...)...)
 	if err != nil {
 		return PullRequest{}, false, fmt.Errorf("list pull requests for %s: %w", head, err)
 	}
@@ -597,6 +603,11 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		AutoMergeRequest *struct {
 			MergeMethod string `json:"mergeMethod"`
 		} `json:"autoMergeRequest"`
+		// MergeCommit is the forge's own record of the commit that merged the
+		// request, and is null until it has merged one.
+		MergeCommit *struct {
+			OID string `json:"oid"`
+		} `json:"mergeCommit"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &reported); err != nil {
 		return PullRequest{}, false, fmt.Errorf("decode pull requests for %s: %w", head, err)
@@ -608,14 +619,18 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 	if one.Number <= 0 {
 		return PullRequest{}, false, fmt.Errorf("pull request for %s reported no number", head)
 	}
-	return PullRequest{
+	found := PullRequest{
 		Number:     one.Number,
 		URL:        one.URL,
 		State:      one.State,
 		Merged:     strings.EqualFold(one.State, "MERGED") || strings.TrimSpace(one.MergedAt) != "",
 		HeadCommit: strings.TrimSpace(one.HeadRefOid),
 		AutoMerge:  one.AutoMergeRequest != nil,
-	}, true, nil
+	}
+	if one.MergeCommit != nil {
+		found.MergeCommit = strings.TrimSpace(one.MergeCommit.OID)
+	}
+	return found, true, nil
 }
 
 // repoArgs scopes a forge command to the configured remote's repository. It

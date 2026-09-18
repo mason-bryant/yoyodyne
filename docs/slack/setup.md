@@ -574,7 +574,12 @@ because a **dropped merge** is said once, as it happens. A reader who was away
 for that message has nothing else that would ever tell them: the change is
 promoted, the thread reads as landed, and the pull request sits on the forge. So
 the count comes back with the line while the publication stands, and a line with
-nothing ready at all says so as long as there is one.
+nothing ready at all says so as long as there is one. It is the same derivation
+the attention line of `yoyo status` names each of them on, so what the count says
+is waiting is what the terminal lists, with whose move it is against each; and
+it stops counting a publication the moment the forge records the merge, which
+[`yoyo reconcile`](../operations.md#recovering-interrupted-runs) writes onto the
+record whether the harness made the merge or somebody made it by hand.
 
 It is otherwise deliberately narrow about when it speaks. A run in flight is not
 a stalled line, so nothing is said while work is visibly moving. A product nobody

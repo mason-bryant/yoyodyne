@@ -79,10 +79,16 @@ const maxRefusalBytes = 160
 // adopts: what is in flight and what is unsettled are both questions about runs
 // other processes own, and answering them is not acting on one.
 //
+// Recorded is every run, and it is read for the one question the other two
+// listings cannot answer: which promotions the forge has not published. A run
+// settled after a dropped merge owes no step and is not in flight, and its
+// publication is still not on the remote.
+//
 // It is satisfied by *runstate.Store.
 type Runs interface {
 	Incomplete() ([]runstate.State, error)
 	Outstanding() ([]runstate.State, error)
+	Recorded() ([]runstate.State, error)
 	Price(workItemID string) (runstate.ItemPrice, error)
 }
 
@@ -945,7 +951,13 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 
 	if sources.Runs == nil {
 		problem = joinProblems(problem, "nothing was wired to read the runs that owe a step")
-	} else if outstanding, err := sources.Runs.Outstanding(); err != nil {
+		return attention, problem
+	}
+	// A run that owes a step and a promotion the forge has not published are two
+	// entries where one run is both — a merge the forge still has queued — because
+	// they are two different waits: the step is the harness's to take, and the
+	// publication is whoever's the entry names.
+	if outstanding, err := sources.Runs.Outstanding(); err != nil {
 		problem = joinProblems(problem, fmt.Sprintf("the runs that owe a step could not be read: %v", err))
 	} else {
 		for _, state := range outstanding {
@@ -953,6 +965,17 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 				What:  fmt.Sprintf("run %s of %s ended still owing a step", state.RunID, state.WorkItemID),
 				Whose: "the operator's — `yoyo reconcile` reports which and settles it",
 			})
+		}
+	}
+	// What is awaiting the forge is read by the record's own predicate, over every
+	// recorded run, because it is the same reading the channel's heartbeat counts:
+	// a count said hourly in a channel and a line absent from the terminal is the
+	// disagreement this whole package exists to prevent.
+	if recorded, err := sources.Runs.Recorded(); err != nil {
+		problem = joinProblems(problem, fmt.Sprintf("the promotions awaiting the forge could not be read: %v", err))
+	} else {
+		for _, state := range AwaitingForge(recorded) {
+			attention = append(attention, awaitingForgeAttention(state))
 		}
 	}
 	return attention, problem

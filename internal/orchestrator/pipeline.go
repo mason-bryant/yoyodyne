@@ -116,7 +116,10 @@ type WorktreeManager interface {
 	// exactly the commit the harness published there and nothing else.
 	RepublishBranch(ctx context.Context, worktree gitworktree.Worktree, previousCommit string) (gitworktree.Publication, error)
 	VerifyRemoteTarget(ctx context.Context, integration gitworktree.Integration) error
-	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
+	// ConfirmRemoteTarget establishes that the forge's merge put the promotion on
+	// the remote target and names the merge commit that carried it, given the
+	// commit the forge recorded as the merge where the caller has one.
+	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration, mergeCommit string) (string, error)
 	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
 	// CatchUpTarget brings the local target branch onto what the forge has,
 	// which is the local half of the merge the forge just performed. It moves
