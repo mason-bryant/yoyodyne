@@ -17,6 +17,27 @@ is a developer run.
 > source of truth; don't `bd import` during normal operation; don't
 > reach for third-party Dolt hosting before trying the default).
 
+## Format and location of interactive documents
+
+For standalone design documents, reports, and analysis produced in an interactive
+session, use Markdown in the existing `ai-output/` layout unless the user
+explicitly requests another format or destination.
+
+- Before authoring, inspect the destination and read
+  `ai-output/markdowns/AGENTS.md`. This project's existing directory is
+  `ai-output/markdowns/yoyodyne/`; follow its filename and metadata requirements.
+- Treat a requested page count as a length guideline, not a request for Word or
+  PDF. Tool and skill output defaults do not override the user's format or path.
+- Resolve the `ai-output` symlink before writing. If its target needs filesystem
+  approval, use the approval mechanism rather than silently choosing another
+  destination.
+- Before handing over a document, verify its format and final path, then link to
+  that file. After a requested move, verify the old path is gone and the document
+  body was preserved.
+
+This applies to interactive working documents. Governed repository artifacts and
+developer-run scratch files still follow their assigned paths and contracts.
+
 ## Quick Reference
 
 These run in the contexts that reach the store — the harness, the product
