@@ -548,6 +548,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// every operator surface read, so an item this conversation reports as held
 		// is the item the queue is holding back.
 		Held: conversationHeldWork(parts),
+		// The docket those decisions are about, so a decision takes the stoppage it
+		// settled off it. An entry nothing closed comes back on every docket after
+		// it, because the docket is rebuilt from durable records at every scan.
+		Docket: conversationDocketEntries(parts, role),
 		// The changes other roles have proposed to the documents this one owns.
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.

@@ -63,9 +63,12 @@ package orchestrator
 // recorded against the item's budget the moment she decides, and acted on later,
 // so between the two the stopped run still reads as untouched to anything looking
 // only at the run — which is where every stoppage somebody carried to her by hand
-// also sits. What that cannot see is a decision costing nothing, which leaves no
-// counter anywhere the harness reads; see alreadyJudged for what follows from
-// that.
+// also sits. A decision costing nothing leaves no counter anywhere the harness
+// reads, and is seen instead as the entry's own closure: every decision closes
+// the entry it settles, and an entry a decision still holds over is nothing this
+// delivers. A decision to wait holds only until the moment it names, so the
+// stoppage it settled is delivered again after that — which is what waiting asked
+// for.
 //
 // # Why the spending pause and not the intake hold
 //
@@ -464,6 +467,14 @@ func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, error) {
 	if entry.Class != triage.ClassStoppedRun && entry.Class != triage.ClassEscalation {
 		return standingSettled, nil
 	}
+	// A decided entry is settled whatever the decision was, which is the half
+	// alreadyJudged below cannot see: waiting, re-scoping, and escalating spend no
+	// counter, so a stoppage settled that way used to be delivered again the next
+	// time a pass reached it. The closure is what says somebody looked — for as
+	// long as it holds, which on a decision to wait is until the moment it names.
+	if entry.Closed != nil && entry.Closed.Holds(e.now()) {
+		return standingSettled, nil
+	}
 	recorded, found, err := e.Records.Find(entry.Key)
 	if err != nil {
 		return standingSettled, fmt.Errorf("read whether the stoppage of run %s has been put to the development manager: %w", entry.RunID, err)
@@ -510,12 +521,10 @@ func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, error) {
 // decision acted on, which the run's record cannot say either, because a re-run
 // starts a fresh run and leaves the stopped one exactly as it was.
 //
-// What it deliberately cannot see is a decision that spends nothing — an
-// escalation to the operator, a re-scope, a wait. Those leave no counter, so a
-// stoppage she settled that way is delivered again if the harness ever reaches
-// it. The docket entry she is shown says what has been decided about the item,
-// so the second delivery costs a turn and tells her nothing she cannot see; what
-// it must never do is spend a budget, and nothing here can.
+// What it cannot see is a decision that spends nothing — an escalation to the
+// operator, a re-scope, a wait. Those leave no counter anywhere this reads, and
+// what says somebody looked is the decision recorded on the entry, which
+// standingOf asks before it asks this.
 func (e Escalator) alreadyJudged(entry triage.Entry) (bool, error) {
 	counters, err := e.Decisions.Counters(entry.WorkItemID)
 	if err != nil {

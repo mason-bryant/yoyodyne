@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -195,6 +196,96 @@ type conversationHolds struct {
 
 func (h conversationHolds) HeldForAPerson(context.Context) (backlog.Holds, error) {
 	return readmodel.HeldForAPerson(h.store, h.store.Triage())
+}
+
+// conversationDocketEntries wires the docket itself for the role that decides
+// about what is on it, and for no other. It is the same log the docket in that
+// role's context was built from, so a decision recorded in the conversation and
+// the entry it settled are one record rather than two accounts of one stoppage.
+func conversationDocketEntries(parts components, role domain.AgentRole) chat.TriageEntries {
+	if role != domain.RoleDevelopmentManager {
+		return nil
+	}
+	return conversationDocketLog{
+		store: parts.docket,
+		clock: execution.RealClock{},
+		// How long a decision to wait leaves a publication alone: as long again as
+		// it took to become docketable in the first place. The role decides to wait;
+		// what waiting means in hours is the operator's number, and it is the same
+		// one that put the entry on the docket.
+		revisitAfter: parts.config.Triage.StuckMergeAge.Duration(),
+	}
+}
+
+// conversationDocketLog closes the entries one recorded decision settled. What the
+// conversation supplies is the decision and the reasoning; which entries those
+// answer, when the closing happened, and how long a decision to wait holds, are
+// the harness's.
+type conversationDocketLog struct {
+	store        *runstate.DocketStore
+	clock        execution.Clock
+	revisitAfter time.Duration
+}
+
+// Close settles the run's open entries of the classes the decision answers.
+//
+// Every entry it can close is attempted rather than stopping at the first
+// failure, and what failed is reported: a run with two open entries where one
+// closure fails leaves the other one settled, which is a docket closer to right
+// than one that gave up on both.
+func (d conversationDocketLog) Close(_ context.Context, closure chat.DocketClosure) (int, error) {
+	entries, err := d.store.List()
+	if err != nil {
+		return 0, fmt.Errorf("read the triage docket to close what was decided: %w", err)
+	}
+	decidedAt := d.clock.Now().UTC()
+	revisit := time.Time{}
+	if closure.Revisit {
+		// A decision that means "not yet" leaves the entry alone for as long again
+		// as the wait that docketed it. Where the project configured no such age —
+		// which its own validation refuses — nothing is closed at all rather than a
+		// stuck merge being closed for good: the entry stands and is asked about
+		// again, which is what it did before decisions closed anything.
+		if d.revisitAfter <= 0 {
+			return 0, nil
+		}
+		revisit = decidedAt.Add(d.revisitAfter)
+	}
+	closed := 0
+	var problems []error
+	for _, entry := range entries {
+		// A decision that answers neither kind of stoppage closes nothing, which
+		// leaves the entry standing rather than taking a question off the docket
+		// that nobody answered. An entry a standing decision already settled is not
+		// this one's either; one whose decision has lapsed is, because that entry is
+		// a question again and this is the answer to it.
+		if entry.RunID != closure.RunID || !slices.Contains(closure.Classes, entry.Class) {
+			continue
+		}
+		if entry.Closed != nil && entry.Closed.Holds(decidedAt) {
+			continue
+		}
+		took, err := d.store.Close(triage.Closure{
+			SchemaVersion: triage.ClosureSchemaVersion,
+			Key:           entry.Key,
+			ProductID:     entry.ProductID,
+			RunID:         entry.RunID,
+			WorkItemID:    entry.WorkItemID,
+			Decision:      closure.Decision,
+			Reason:        closure.Reason,
+			DecidedBy:     closure.DecidedBy,
+			ClosedAt:      decidedAt,
+			RevisitAfter:  revisit,
+		})
+		if err != nil {
+			problems = append(problems, fmt.Errorf("close the docket entry of run %s: %w", entry.RunID, err))
+			continue
+		}
+		if took {
+			closed++
+		}
+	}
+	return closed, errors.Join(problems...)
 }
 
 // conversationStoppages wires the durable run records a triage decision is

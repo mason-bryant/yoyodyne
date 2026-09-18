@@ -1361,11 +1361,16 @@ forge says about the merge, the unmet prerequisite and who releases it, and what
 the work item has already spent against what it is allowed to spend.
 
 An entry states that something stopped or never started. It does not decide what
-becomes of it, and nothing has: an entry stands until somebody decides. Read the
-counters before deciding one — an item that has reached its review-round cap is
-one no further repair may be granted to, whatever else the evidence argues for.
-An unready item is the one entry whose subject can go out of date on its own: it
-says when the tree was read, and a citation it names may have landed since.
+becomes of it, and nothing has: an entry stands until somebody decides, and
+recording a decision closes it. So what is listed here is what nobody has decided
+about yet — a stoppage settled in an earlier conversation is closed and is not
+here, whatever the harness has or has not carried out since. An entry that says
+what was decided about it is one that came back: the same work stopped again
+after that decision, or a decision to wait ran out. Read the counters before
+deciding one — an item that has reached its review-round cap is one no further
+repair may be granted to, whatever else the evidence argues for. An unready item
+is the one entry whose subject can go out of date on its own: it says when the
+tree was read, and a citation it names may have landed since.
 `
 
 func renderSpecificationProblems(problems []SpecificationProblem) string {

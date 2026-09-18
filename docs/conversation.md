@@ -1140,6 +1140,30 @@ entry between them, and a run that is merely parked — waiting out a usage limi
 held by a directive, or paused by you — is never docketed at all, because it is
 owed a continuation rather than a decision.
 
+**A decision closes the entry it settled**, which is the other half of that
+lifecycle: an entry is created where work stops and closed where somebody
+decides. The docket is rebuilt from the durable records at every scan, so an
+entry nothing closed came back on every docket after it — and three of the six
+decisions spend no budget, so nothing the harness reads could tell a stoppage
+somebody had settled from one nobody had looked at. The decision is recorded
+beside the entry rather than over it: the entry stays on the log, which is what
+stops the same stoppage being docketed a second time from the same records, and
+what a reader is shown is the join of the two. So the docket in that
+conversation is the stoppages nobody has decided about, and a settled one is
+neither listed there nor delivered again.
+
+**What closing does not do is silence the same work stopping again.** A repair
+continues the run that stopped, so a repaired run that dies again is a fresh
+stoppage under the identifier the settled entry carries — and it is docketed,
+because what the decision settled was the stoppage rather than the run. The scan
+compares the two: work that stopped after the decision about it goes back on the
+docket with the blocker it stopped on this time, and work nothing has happened to
+since stays settled. **A decision to `wait` is the one that lapses rather than
+settling anything**: it says the forge still has the merge, so the entry comes
+back once the merge has been sitting there for another
+[`triage.stuck_merge_age`](configuration.md#triage-thresholds), carrying what
+was decided last time so whoever gets it knows they have seen it.
+
 Finding a publication nobody merged is a scan rather than an event, because
 nothing happening is not something anything can be present for. Two things scan:
 `yoyo reconcile`, and opening a development manager conversation. There is no
@@ -1155,7 +1179,18 @@ the change it has, `rerun` runs it again from the start, `rescope` splits out
 what was refused as out of scope, `rearm` repeats a merge the forge dropped,
 `wait` says the forge still has it, and `escalate` hands it to you. The decision
 lands in the item's notes, so the next reader of a run that stopped finds the
-reasoning beside the evidence rather than deciding it a second time.
+reasoning beside the evidence rather than deciding it a second time, and it
+closes the entry it settled — a repair, a re-run, or a re-scope closes the
+run's own entries, whichever of the stopped run, the run that died before it
+claimed, and the escalation a role raised from it the run carries; a re-arm or a
+wait closes the unfinished publication's; and an escalation closes all of them,
+because an escalated item is waiting on you and none of it is hers to decide
+until you answer. The two entries that name no run — an item the tree is not
+ready for, and an attempt that never became a run — are closed by nothing yet,
+because a decision names a run and neither has one. `wait` closes it until the merge has
+been sitting there as long again; the rest close it for good, and what puts one
+of those back on the docket is the same work stopping again rather than anything
+about the decision.
 
 **It also lands as a record the harness reads**: the decision, the stoppage it
 settles, the reasoning verbatim, and where it was recorded, on the item's durable

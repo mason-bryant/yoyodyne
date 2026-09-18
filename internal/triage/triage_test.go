@@ -1089,3 +1089,135 @@ func TestEveryClassIsNamedAndValid(t *testing.T) {
 		t.Fatal("a class nobody declared is accepted")
 	}
 }
+
+func stoppageClosure() Closure {
+	return Closure{
+		SchemaVersion: ClosureSchemaVersion,
+		Key:           Key(ClassStoppedRun, "run-0123456789abcdef0123456789abcdef"),
+		ProductID:     "yoyodyne",
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:    "yoyodyne-task",
+		Decision:      "escalate",
+		Reason:        "the findings dispute the item's criteria",
+		DecidedBy:     "the development manager in conversation chat-0123456789abcdef",
+		ClosedAt:      time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC),
+	}
+}
+
+// A closure takes a stoppage off the docket, so what it must never be is a
+// record that cannot say which stoppage, what was decided, or by whom: each of
+// those missing is an entry nobody is looking at any more with nothing saying
+// why.
+func TestAClosureIsRefusedWhenItCannotSayWhatWasSettledOrByWhom(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		closure func(Closure) Closure
+		want    string
+	}{
+		{
+			name:    "no entry",
+			closure: func(c Closure) Closure { c.Key = "  "; return c },
+			want:    "key is required",
+		},
+		{
+			name:    "no decision",
+			closure: func(c Closure) Closure { c.Decision = ""; return c },
+			want:    "the decision that settled this stoppage is required",
+		},
+		{
+			name:    "prose where a decision was expected",
+			closure: func(c Closure) Closure { c.Decision = strings.Repeat("x", MaxDecisionBytes+1); return c },
+			want:    "decision is",
+		},
+		{
+			name:    "nobody",
+			closure: func(c Closure) Closure { c.DecidedBy = ""; return c },
+			want:    "who decided this is required",
+		},
+		{
+			name:    "no moment",
+			closure: func(c Closure) Closure { c.ClosedAt = time.Time{}; return c },
+			want:    "closed_at is required",
+		},
+		{
+			name:    "reasoning past the bound",
+			closure: func(c Closure) Closure { c.Reason = strings.Repeat("x", MaxMessageBytes+1); return c },
+			want:    "reason is",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := test.closure(stoppageClosure()).Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want %q refused", err, test.want)
+			}
+		})
+	}
+	if err := stoppageClosure().Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want a well-formed closure accepted", err)
+	}
+}
+
+// An entry that has been decided must never render as one nobody has looked at.
+// A closed entry is not listed on the development manager's docket at all, so
+// this is what says so wherever else one is shown.
+func TestARenderedEntrySaysTheDecisionThatClosedIt(t *testing.T) {
+	t.Parallel()
+
+	closed := stoppedRunEntry()
+	settled := stoppageClosure()
+	closed.Closed = &settled
+	rendered := closed.Render()
+	for _, want := range []string{
+		`Decided: "escalate"`,
+		"the development manager in conversation",
+		"2026-08-20T09:00:00Z",
+		"dispute the item's criteria",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the rendered entry is missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(stoppedRunEntry().Render(), "Decided:") {
+		t.Fatalf("an entry nobody has decided about rendered as decided:\n%s", stoppedRunEntry().Render())
+	}
+	// A decision that only holds for a while says so, because the entry carrying
+	// it is back on the docket the moment it lapses.
+	waited := stoppedRunEntry()
+	wait := stoppageClosure()
+	wait.Decision = "wait"
+	wait.RevisitAfter = wait.ClosedAt.Add(2 * time.Hour)
+	waited.Closed = &wait
+	if !strings.Contains(waited.Render(), "to be looked at again after 2026-08-20T11:00:00Z") {
+		t.Fatalf("a decision that lapses did not say when:\n%s", waited.Render())
+	}
+}
+
+// Waiting is the decision that holds for a while rather than settling anything,
+// and everything else settles the stoppage for good.
+func TestADecisionHoldsUntilTheMomentItNames(t *testing.T) {
+	t.Parallel()
+
+	settled := stoppageClosure()
+	if !settled.Holds(settled.ClosedAt.Add(10 * 365 * 24 * time.Hour)) {
+		t.Fatalf("a decision that settled the stoppage stopped holding")
+	}
+	waited := stoppageClosure()
+	waited.RevisitAfter = waited.ClosedAt.Add(2 * time.Hour)
+	if !waited.Holds(waited.ClosedAt.Add(time.Hour)) {
+		t.Fatalf("a decision to wait stopped holding before the moment it named")
+	}
+	if waited.Holds(waited.RevisitAfter) {
+		t.Fatalf("a decision to wait still held at the moment it named")
+	}
+	// A moment already past is a decision that closed nothing, which nobody could
+	// tell from one that settled the stoppage.
+	lapsed := stoppageClosure()
+	lapsed.RevisitAfter = lapsed.ClosedAt
+	if err := lapsed.Validate(); err == nil || !strings.Contains(err.Error(), "look again") {
+		t.Fatalf("Validate() error = %v, want a decision to look again before it was made refused", err)
+	}
+}

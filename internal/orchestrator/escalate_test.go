@@ -838,6 +838,42 @@ func TestAStoppageSheHasDecidedIsNotDeliveredAgain(t *testing.T) {
 	}
 }
 
+// The decisions no counter can see: waiting, re-scoping, escalating. She looked
+// and she answered, and what says so is the entry's own closure — without it the
+// same stoppage was put to her again on the next pass that reached it.
+func TestAStoppageSheClosedIsNotDeliveredAgain(t *testing.T) {
+	t.Parallel()
+
+	stopped := reviewStoppedState(docketedRunID, docketedItem)
+	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}
+	escalator := escalatorOver(t, []runstate.State{stopped}, judge, nil)
+	docket, ok := escalator.Docket.(*memoryDocket)
+	if !ok {
+		t.Fatalf("docket = %T, want the in-memory docket these tests build", escalator.Docket)
+	}
+	key := triage.Key(triage.ClassStoppedRun, stopped.RunID)
+	docket.close(key, "escalate", escalationNow.Add(-time.Hour))
+
+	sweep, err := escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() error = %v", err)
+	}
+	if len(sweep.Escalated) != 0 || len(judge.shown) != 0 {
+		t.Fatalf("delivered %#v, want a stoppage she has decided left alone", sweep.Escalated)
+	}
+
+	// A decision that only holds for a while is not that: once it has lapsed the
+	// stoppage is a question again, and the pass puts it to her.
+	docket.waitOn(key, escalationNow.Add(-3*time.Hour), escalationNow.Add(-time.Hour))
+	sweep, err = escalator.Escalate(context.Background())
+	if err != nil {
+		t.Fatalf("Escalate() after the wait error = %v", err)
+	}
+	if len(sweep.Escalated) != 1 || len(judge.shown) != 1 {
+		t.Fatalf("delivered %#v, want the stoppage her lapsed decision put back", sweep.Escalated)
+	}
+}
+
 // A decision that cannot be read is not a decision that is absent. Delivering on
 // a record nobody could read is exactly the second delivery this guards against,
 // so the pass says what it could not read and puts nothing to her.
@@ -1072,14 +1108,15 @@ func TestAStoppageAnotherSessionJustClaimedIsLeftToIt(t *testing.T) {
 	}
 }
 
-// The limit of what the harness can see, held here so it cannot drift from what
-// the documents promise. Escalating to the operator, re-scoping, and waiting
-// spend nothing, so they leave no counter anywhere this reads — and a stoppage
-// she settled one of those ways is delivered to her once more. What that costs is
-// a turn and a paragraph she has read before: the docket entry says what has been
-// decided about the item, and the delivery spends no budget and carries nothing
-// out.
-func TestAStoppageSettledWithoutSpendingIsDeliveredAgain(t *testing.T) {
+// The limit of what the counters can see, held here so it cannot drift from
+// what the documents promise. Escalating to the operator, re-scoping, and
+// waiting spend nothing, so they leave no counter anywhere this reads: what says
+// she settled one of those is the entry's own closure, and a stoppage whose
+// closure was never written — a conversation with no docket wired, a closure the
+// store refused — is delivered to her once more. What that costs is a turn and a
+// paragraph she has read before: the delivery spends no budget and carries
+// nothing out.
+func TestAStoppageSettledWithoutSpendingOrClosingIsDeliveredAgain(t *testing.T) {
 	t.Parallel()
 
 	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}

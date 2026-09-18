@@ -50,6 +50,40 @@ package orchestrator
 // because the alternative it replaces is the expensive one: a role with no cheap
 // way to say "this cannot work" spends repair rounds against a wall, or spends
 // the item's whole budget, before the stoppage reaches her at all.
+//
+// # What takes an entry off again
+//
+// A triage decision does, by closing it: the docket's lifecycle is
+// create-on-death and close-on-decision. Nothing used to close one, and because
+// the docket is rebuilt from durable records at every scan, a stoppage decided
+// last week came back on every docket after it — three of the six decisions spend
+// no counter, so nothing the harness reads could tell a settled stoppage from a
+// fresh one, and the only guard against deciding it twice was prose telling the
+// development manager to go and read the item's notes. The listing she is given
+// is bounded, so the settled ones crowded out the ones nobody had looked at.
+//
+// A closure is joined where the docket is read and the entry stays on the log,
+// which is what keeps the two halves from fighting: the scan goes on finding the
+// same stoppage in the same records and goes on recording nothing, because the
+// key is already there.
+//
+// # What puts one back
+//
+// Two things, and neither is the scan changing its mind. The same work stopping
+// again is the first: a key names a run rather than one moment of it, a repair
+// continues the run that stopped, and a run that dies again after being repaired
+// derives the key its settled entry carries — so a stoppage that happened after
+// the decision about the last one is docketed, and one nothing has happened to
+// since is not. The run's own ending is what that is measured by rather than this
+// build's clock, because every scan re-derives the same stoppages and only the
+// run says whether anything has happened.
+//
+// The second is a decision that only held for a while. Waiting says the forge
+// still has the merge, and nothing about a merge that is not happening ever
+// changes, so a wait that settled the entry for good would be a stuck publication
+// disappearing on the strength of a decision to look at it again. It comes back
+// when the decision lapses, carrying what was decided, and nothing is docketed
+// twice for it.
 
 import (
 	"errors"
@@ -139,20 +173,27 @@ type Docketer struct {
 	Clock     execution.Clock
 }
 
-// DocketBuild is what one build found: the whole docket as it now stands, and
-// how many entries this build is what created. The count is reported rather
-// than the entries themselves because a build is not a notification — an entry
+// DocketBuild is what one build found: the docket as it now stands, and how
+// many entries this build is what created. The count is reported rather than
+// the entries themselves because a build is not a notification — an entry
 // created by this build and one created by last week's sweep are the same
 // standing fact to whoever reads the docket.
 type DocketBuild struct {
+	// Entries are the stoppages nobody has decided about, which is what a docket
+	// is for. An entry a triage decision closed is not among them.
 	Entries []triage.Entry `json:"entries"`
 	Added   int            `json:"added"`
+	// Closed is how many of the docket's entries have been decided and are
+	// therefore not listed. It is reported rather than dropped because a docket
+	// that silently shows a subset is one a reader takes for the whole: the number
+	// says the rest were settled rather than never noticed.
+	Closed int `json:"closed"`
 }
 
 // Build scans every recorded run, dockets what has stopped and is not docketed
-// yet, and returns the docket as it stands. It is safe to repeat and safe to
-// run concurrently with anything: every write is keyed to the event it
-// describes, so a build that races another build records the same entries and
+// yet, and returns the stoppages nobody has decided about. It is safe to repeat
+// and safe to run concurrently with anything: every write is keyed to the event
+// it describes, so a build that races another build records the same entries and
 // the docket collapses them.
 //
 // A run whose record cannot supply an entry is skipped rather than failing the
@@ -182,10 +223,7 @@ func (d Docketer) Build() (DocketBuild, error) {
 	if err != nil {
 		return DocketBuild{}, fmt.Errorf("read the triage docket: %w", err)
 	}
-	already := make(map[string]bool, len(docketed))
-	for _, entry := range docketed {
-		already[entry.Key] = true
-	}
+	already := docketStanding(docketed)
 	now := d.now()
 	added := 0
 	var problems []error
@@ -211,8 +249,77 @@ func (d Docketer) Build() (DocketBuild, error) {
 		problems = append(problems, fmt.Errorf("read the triage docket: %w", err))
 		return DocketBuild{Added: added}, errors.Join(problems...)
 	}
-	problems = append(problems, d.joinDecisions(entries, publicationsOf(recorded))...)
-	return DocketBuild{Entries: entries, Added: added}, errors.Join(problems...)
+	// A decided entry leaves the docket here rather than in each reader of it. The
+	// entry stays on the log, which is what stops the same stoppage being docketed
+	// again from the same durable records the next time anything scans; what a
+	// decision ends is its being a question, and this is where the questions are
+	// handed over.
+	open, closed := openDocket(entries, now)
+	problems = append(problems, d.joinDecisions(open, publicationsOf(recorded))...)
+	return DocketBuild{Entries: open, Added: added, Closed: closed}, errors.Join(problems...)
+}
+
+// openDocket separates the stoppages nobody has decided about from the ones a
+// standing decision settled, and reports how many were settled.
+//
+// A decision that has lapsed leaves its entry open, which is what waiting means:
+// the forge still had the merge when somebody looked, and the entry is a
+// question again once it has been sitting there as long as it took to become one
+// in the first place. The entry still carries what was decided, so the reader
+// who gets it back is told they have seen it before.
+func openDocket(entries []triage.Entry, now time.Time) ([]triage.Entry, int) {
+	open := make([]triage.Entry, 0, len(entries))
+	closed := 0
+	for _, entry := range entries {
+		if entry.Closed != nil && entry.Closed.Holds(now) {
+			closed++
+			continue
+		}
+		open = append(open, entry)
+	}
+	if len(open) == 0 {
+		// Nothing open reads as nothing to decide wherever a docket is rendered, and
+		// an empty slice and no slice at all must not be two different answers to it.
+		return nil, closed
+	}
+	return open, closed
+}
+
+// standingDocket is what the docket already holds for each key: an entry nobody
+// has decided about, or the decision that settled the one it holds.
+//
+// The two are kept apart because they answer differently. A key with an entry
+// standing is one this build leaves alone. A key whose entry was settled is one
+// this build dockets again only if the work stopped again since the decision —
+// re-deriving the same settled stoppage is exactly the phantom that closing the
+// entry was for, and refusing every later stoppage under that key is how a fresh
+// death on a repaired run reaches nobody.
+// A key with no entry is absent from it; a key with one maps to the decision
+// that settled that entry, or to nothing where nobody has decided about it.
+type standingDocket map[string]*triage.Closure
+
+func docketStanding(entries []triage.Entry) standingDocket {
+	standing := make(standingDocket, len(entries))
+	for _, entry := range entries {
+		standing[entry.Key] = entry.Closed
+	}
+	return standing
+}
+
+// dockets reports a stoppage this build records under one key: one the docket
+// holds no entry for, or one whose entry was decided before the work stopped
+// again. The stoppage's own moment is what decides it rather than this build's,
+// because every scan re-derives the same stoppages from the same records and it
+// is the run that says whether anything has happened since.
+func (s standingDocket) dockets(key string, stoppedAt time.Time) bool {
+	decided, docketed := s[key]
+	if !docketed {
+		return true
+	}
+	if decided == nil {
+		return false
+	}
+	return stoppedAt.After(decided.ClosedAt)
 }
 
 // joinDecisions puts the triage record as it now stands onto every entry: what
@@ -557,10 +664,10 @@ func (d Docketer) unreadyEntry(item beads.WorkItem, unmet []readiness.Unmet, now
 // it costs nothing: a run that carried one always did, and no record written
 // before the verb existed can carry it. So an escalation whose docket write
 // failed as the run ended is picked up by the next scan, exactly as a blocker is.
-func (d Docketer) entriesFor(state runstate.State, now time.Time, already map[string]bool) ([]triage.Entry, error) {
+func (d Docketer) entriesFor(state runstate.State, now time.Time, already standingDocket) ([]triage.Entry, error) {
 	var entries []triage.Entry
 	var problems []error
-	if stoppedRun(state) && !already[triage.Key(triage.ClassStoppedRun, state.RunID)] {
+	if stoppedRun(state) && already.dockets(triage.Key(triage.ClassStoppedRun, state.RunID), stoppedAt(state)) {
 		entry, err := d.stoppedRunEntry(state, now)
 		if err != nil {
 			problems = append(problems, err)
@@ -568,7 +675,10 @@ func (d Docketer) entriesFor(state runstate.State, now time.Time, already map[st
 			entries = append(entries, entry)
 		}
 	}
-	if state.Escalated() && !already[triage.Key(triage.ClassEscalation, state.RunID)] {
+	// A settled escalation counts as docketed whatever was decided, as a
+	// publication does: the word stands on the run's record forever, so there is
+	// no later moment for a second escalation of the same run to be measured by.
+	if _, docketed := already[triage.Key(triage.ClassEscalation, state.RunID)]; state.Escalated() && !docketed {
 		entry, err := d.escalationEntry(state, now)
 		if err != nil {
 			problems = append(problems, err)
@@ -595,12 +705,22 @@ func (d Docketer) entriesFor(state runstate.State, now time.Time, already map[st
 // request joined the key names the run alone, the log is append-only and nothing
 // rewrites it, so a build that asked only the current key would docket every one
 // of those a second time.
-func publicationDocketed(state runstate.State, already map[string]bool) bool {
-	if already[triage.Key(triage.ClassPublication, state.RunID)] {
+//
+// A settled entry counts as docketed here whatever was decided, and unlike a
+// stopped run it is never docketed again: a publication is the absence of an
+// event, so there is no later moment to compare a decision against — nothing
+// happens to a merge that is not happening. What puts a waited publication back
+// in front of somebody is the decision lapsing rather than a fresh entry.
+func publicationDocketed(state runstate.State, already standingDocket) bool {
+	if _, docketed := already[triage.Key(triage.ClassPublication, state.RunID)]; docketed {
 		return true
 	}
 	published := state.PullRequest
-	return published != nil && already[triage.PublicationKey(state.RunID, published.Number)]
+	if published == nil {
+		return false
+	}
+	_, docketed := already[triage.PublicationKey(state.RunID, published.Number)]
+	return docketed
 }
 
 // stoppedRun reports a run that ended on a durable blocker. Both halves matter.
@@ -759,7 +879,17 @@ func stuckPublication(state runstate.State, now time.Time, stuckMergeAge time.Du
 // forge. It is the moment the run ended rather than the moment the record was
 // last touched: a sweep that walks past a stuck publication and writes nothing
 // must not be able to reset its age, and one that does write must not either.
-func publicationApprovedAt(state runstate.State) time.Time {
+func publicationApprovedAt(state runstate.State) time.Time { return stoppedAt(state) }
+
+// stoppedAt is when this run's work stopped moving, which is what a build
+// compares against a decision already made about it: a run that was repaired and
+// died again ended after the decision that settled its last stoppage, and a run
+// nothing has touched since ended before it.
+//
+// The moment the run ended rather than the moment its record was last written,
+// for the reason the publication's age is measured from there: a sweep that
+// writes to a settled record must not be able to make an old stoppage look new.
+func stoppedAt(state runstate.State) time.Time {
 	if state.CompletedAt != nil {
 		return *state.CompletedAt
 	}

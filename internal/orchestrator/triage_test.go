@@ -23,11 +23,41 @@ import (
 // one here only ever spend it; what they need is somebody to have charged it.
 const countingProcess = "pid-1-000000000000000a"
 
-// memoryDocket is the durable docket without the disk: it enforces the one
-// property the store guarantees, which is that a key is recorded once.
+// memoryDocket is the durable docket without the disk: it enforces the two
+// properties the store guarantees, which are that a key is recorded once and
+// that a decision recorded against a key is joined onto its entry.
 type memoryDocket struct {
 	entries []triage.Entry
+	closed  map[string]triage.Closure
 	failOn  string
+}
+
+// close settles one entry the way the store does: the entry stays on the log
+// and the decision is recorded beside it, at a moment the caller names because
+// what a build does about a settled key turns on when it was settled.
+func (d *memoryDocket) close(key, decision string, at time.Time) {
+	if d.closed == nil {
+		d.closed = make(map[string]triage.Closure)
+	}
+	d.closed[key] = triage.Closure{
+		SchemaVersion: triage.ClosureSchemaVersion,
+		Key:           key,
+		ProductID:     "yoyodyne",
+		RunID:         docketedRunID,
+		WorkItemID:    docketedItem,
+		Decision:      decision,
+		DecidedBy:     "the development manager in conversation chat-0123456789abcdef",
+		ClosedAt:      at,
+	}
+}
+
+// waitOn settles one entry with a decision that holds only until the moment it
+// names, which is what waiting on a forge is.
+func (d *memoryDocket) waitOn(key string, at, revisitAfter time.Time) {
+	d.close(key, "wait", at)
+	settled := d.closed[key]
+	settled.RevisitAfter = revisitAfter
+	d.closed[key] = settled
 }
 
 func (d *memoryDocket) RecordOnce(entry triage.Entry) (bool, error) {
@@ -37,10 +67,19 @@ func (d *memoryDocket) RecordOnce(entry triage.Entry) (bool, error) {
 	if err := entry.Validate(); err != nil {
 		return false, err
 	}
-	for _, existing := range d.entries {
-		if existing.Key == entry.Key {
+	for index, existing := range d.entries {
+		if existing.Key != entry.Key {
+			continue
+		}
+		// A key whose entry a decision settled carries the stoppage that happened
+		// after it, exactly as the durable store does: the same run can stop twice,
+		// and the second time is not the first arriving again.
+		closure, decided := d.closed[entry.Key]
+		if !decided || !entry.RecordedAt.After(closure.ClosedAt) {
 			return false, nil
 		}
+		d.entries[index] = entry
+		return true, nil
 	}
 	d.entries = append(d.entries, entry)
 	return true, nil
@@ -49,7 +88,20 @@ func (d *memoryDocket) RecordOnce(entry triage.Entry) (bool, error) {
 // List hands back a copy, as the durable store does by decoding the log afresh:
 // what a reader joins onto the entries it was given must not travel back into
 // the log, which is written once and never revised.
-func (d *memoryDocket) List() ([]triage.Entry, error) { return slices.Clone(d.entries), nil }
+func (d *memoryDocket) List() ([]triage.Entry, error) {
+	listed := slices.Clone(d.entries)
+	for index := range listed {
+		closure, found := d.closed[listed[index].Key]
+		// A decision settles the stoppage it was made about, and not one docketed
+		// after it.
+		if !found || listed[index].RecordedAt.After(closure.ClosedAt) {
+			continue
+		}
+		settled := closure
+		listed[index].Closed = &settled
+	}
+	return listed, nil
+}
 
 func (d *memoryDocket) keys() []string {
 	keys := make([]string, 0, len(d.entries))
@@ -104,6 +156,13 @@ var docketedNow = time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 type docketClock struct{}
 
 func (docketClock) Now() time.Time { return docketedNow }
+
+// docketClockAt is the same for a build that happens later than the one before
+// it, which is what a test about a decision and a stoppage on either side of it
+// needs: the order of those moments is the whole of what it is measuring.
+type docketClockAt struct{ at time.Time }
+
+func (c docketClockAt) Now() time.Time { return c.at }
 
 func docketerOver(states []runstate.State, docket *memoryDocket) Docketer {
 	recorded := &recordedDecisions{
@@ -797,6 +856,166 @@ func TestBuildingTheDocketTwiceDocketsEachEventOnce(t *testing.T) {
 	}
 	if strings.Join(docket.keys(), ",") != strings.Join(want, ",") {
 		t.Fatalf("docket keys = %v, want %v", docket.keys(), want)
+	}
+}
+
+// The regression case the twelve phantoms of the 250 sweep left behind: a
+// stoppage the development manager decided about must not come back on the next
+// docket. The scan goes on finding the same run in the same durable records, so
+// what settles it has to be the decision rather than the evidence changing.
+func TestAStoppageDecidedOnceDoesNotComeBackOnTheNextDocket(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	published := publishedState(3 * time.Hour)
+	published.RunID = "run-fedcba9876543210fedcba9876543210"
+	docket := &memoryDocket{}
+	docketer := docketerOver([]runstate.State{stopped, published}, docket)
+	if _, err := docketer.Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	// An escalation spends no counter at all, which is precisely the decision
+	// nothing else the harness reads can see.
+	docket.close(triage.PublicationKey(published.RunID, published.PullRequest.Number), "escalate", docketedNow)
+
+	rebuilt, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("second Build() error = %v", err)
+	}
+	if rebuilt.Added != 0 {
+		t.Fatalf("second build added %d entry(s), want the settled stoppage left alone", rebuilt.Added)
+	}
+	if rebuilt.Closed != 1 {
+		t.Fatalf("second build closed = %d, want the decided entry counted", rebuilt.Closed)
+	}
+	if len(rebuilt.Entries) != 1 || rebuilt.Entries[0].Class != triage.ClassStoppedRun {
+		t.Fatalf("second build = %#v, want the undecided stoppage and nothing else", rebuilt.Entries)
+	}
+	// The entry is still on the log. That is what stops the scan docketing the
+	// same publication again the next time it walks the same records.
+	if len(docket.entries) != 2 {
+		t.Fatalf("docket entries = %#v, want both stoppages still recorded", docket.keys())
+	}
+}
+
+// A docket every entry of which has been decided is a docket with nothing on
+// it, rather than one that could not be read: what a reader must be told is that
+// nothing is waiting on them.
+func TestADocketWhoseEntriesAreAllDecidedListsNothing(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	docket := &memoryDocket{}
+	docketer := docketerOver([]runstate.State{stopped}, docket)
+	if _, err := docketer.Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	docket.close(triage.Key(triage.ClassStoppedRun, stopped.RunID), "escalate", docketedNow)
+
+	rebuilt, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("second Build() error = %v", err)
+	}
+	if len(rebuilt.Entries) != 0 || rebuilt.Closed != 1 {
+		t.Fatalf("second build = %#v, want nothing listed and the decided entry counted", rebuilt)
+	}
+}
+
+// The other half of that rule, and the one a closed entry could hide: a repair
+// continues the run that stopped, so a repaired run that dies again derives the
+// key its settled entry carries. What decides whether it is a fresh stoppage is
+// the run's own ending, not the build's clock — every scan re-derives the same
+// stoppages, and the settled one must stay settled.
+func TestARunThatStoppedAgainAfterItsDecisionIsDocketedAgain(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	docket := &memoryDocket{}
+	if _, err := docketerOver([]runstate.State{stopped}, docket).Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	decided := docketedNow.Add(30 * time.Minute)
+	docket.close(triage.Key(triage.ClassStoppedRun, stopped.RunID), "repair", decided)
+
+	// A build between the decision and anything happening leaves the settled
+	// stoppage alone, which is the phantom this must not regrow.
+	quiet := docketerOver([]runstate.State{stopped}, docket)
+	quiet.Clock = docketClockAt{at: decided.Add(time.Minute)}
+	unchanged, err := quiet.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if unchanged.Added != 0 || len(unchanged.Entries) != 0 || unchanged.Closed != 1 {
+		t.Fatalf("build over an unchanged run = %#v, want the settled stoppage left alone", unchanged)
+	}
+
+	// The repair was carried out in the run that stopped, and the run died again.
+	died := decided.Add(15 * time.Minute)
+	repaired := stoppedState()
+	repaired.CompletedAt = &died
+	repaired.UpdatedAt = died
+	repaired.Blocker = "Yoyodyne stopped this item: the push was refused by the remote."
+	after := docketerOver([]runstate.State{repaired}, docket)
+	after.Clock = docketClockAt{at: died.Add(time.Minute)}
+	rebuilt, err := after.Build()
+	if err != nil {
+		t.Fatalf("second Build() error = %v", err)
+	}
+	if rebuilt.Added != 1 || len(rebuilt.Entries) != 1 || rebuilt.Closed != 0 {
+		t.Fatalf("second build = %#v, want the fresh stoppage docketed and listed", rebuilt)
+	}
+	if rebuilt.Entries[0].Blocker != repaired.Blocker {
+		t.Fatalf("entry = %#v, want the blocker the run stopped on this time", rebuilt.Entries[0])
+	}
+}
+
+// Waiting says the forge still has the merge, which is "not yet" rather than a
+// decision about it. So the entry comes back once it has been sitting there as
+// long again — nothing about a merge that is not happening ever changes, so
+// without that a stuck publication disappears on the strength of a decision to
+// look at it later.
+func TestAPublicationWaitedOnComesBackOnceTheWaitHasRunOut(t *testing.T) {
+	t.Parallel()
+
+	published := publishedState(3 * time.Hour)
+	docket := &memoryDocket{}
+	docketer := docketerOver([]runstate.State{published}, docket)
+	if _, err := docketer.Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	key := triage.PublicationKey(published.RunID, published.PullRequest.Number)
+
+	// Decided as the entry was made, to be looked at again two hours later.
+	decided := docketedNow.Add(time.Minute)
+	docket.waitOn(key, decided, decided.Add(2*time.Hour))
+
+	waiting := docketerOver([]runstate.State{published}, docket)
+	waiting.Clock = docketClockAt{at: decided.Add(time.Hour)}
+	held, err := waiting.Build()
+	if err != nil {
+		t.Fatalf("Build() while waiting error = %v", err)
+	}
+	if len(held.Entries) != 0 || held.Closed != 1 {
+		t.Fatalf("build while the wait holds = %#v, want the entry left alone", held)
+	}
+
+	// The same decision, once the moment it named has passed.
+	docketer.Clock = docketClockAt{at: decided.Add(3 * time.Hour)}
+	lapsed, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("Build() after the wait error = %v", err)
+	}
+	if len(lapsed.Entries) != 1 || lapsed.Closed != 0 {
+		t.Fatalf("build after the wait ran out = %#v, want the publication back", lapsed)
+	}
+	// It comes back as the entry it was, carrying what was decided about it, so
+	// whoever gets it is told they have seen it before.
+	if lapsed.Entries[0].Closed == nil || lapsed.Entries[0].Closed.Decision != "wait" {
+		t.Fatalf("entry = %#v, want the lapsed decision carried on it", lapsed.Entries[0])
+	}
+	// And nothing was docketed a second time for it.
+	if lapsed.Added != 0 || len(docket.entries) != 1 {
+		t.Fatalf("build = %#v, docket = %v, want the one entry", lapsed, docket.keys())
 	}
 }
 

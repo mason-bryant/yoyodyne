@@ -27,6 +27,13 @@ package chat
 // write, on the one record `selected-work-passes-intake-and-records-why` exists
 // to make trustworthy.
 //
+// A decision also closes the entry it settled. The docket is rebuilt from
+// durable records at every scan, so an entry nothing closed came back for ever,
+// and the three decisions that spend no counter — waiting, re-scoping,
+// escalating — left nothing behind that the harness could read as "somebody has
+// looked at this". What guarded against deciding it a second time was prose in
+// this role's contract telling it to go and read the item's notes.
+//
 // Escalation is the one decision that reaches the operator, and it is
 // deliberately more than prose: a durable blocker on the item, so the item
 // itself says it is waiting on a person, and a report at warning severity or
@@ -48,11 +55,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // The decisions triage may record. They are the two decision trees the
@@ -89,6 +98,49 @@ const (
 // triageDecisions lists the vocabulary in the order the contract states it, so a
 // refusal names exactly what was available.
 var triageDecisions = runstate.TriageDecisionVocabulary()
+
+// triageSettles is which docketed stoppage each decision is an answer to, and
+// therefore which entry it closes. It is a map from the vocabulary rather than a
+// rule about the run, because the two decision trees are about different things:
+// a repair, a re-run, and a re-scope answer a run — one that stopped, one that
+// died before it claimed, or one a role escalated as unmeetable, which are the
+// three entries a run can put on the docket under its own identifier — and a
+// re-arm and a wait answer a publication the forge did not finish.
+//
+// Escalating answers either, and closes both where a run has both. An escalation
+// blocks the work item and hands it to the operator, so nothing about that run is
+// the development manager's to decide until they answer — leaving half of it on
+// her docket would put a question to her that she has already passed on.
+//
+// A decision whose class the run has no open entry of closes nothing, which is
+// the safe direction: the entry stands and is put to her again, exactly as every
+// entry did before closing existed. The two entries that name no run — an item
+// the tree is not ready for, and an attempt that never became a run — are closed
+// by nothing here, because a triage decision names a run and neither has one.
+var triageSettles = map[string]triageSettlement{
+	decisionRepair:   {classes: runEntryClasses},
+	decisionRerun:    {classes: runEntryClasses},
+	decisionRescope:  {classes: runEntryClasses},
+	decisionRearm:    {classes: []triage.Class{triage.ClassPublication}},
+	decisionWait:     {classes: []triage.Class{triage.ClassPublication}, revisit: true},
+	decisionEscalate: {classes: append(slices.Clone(runEntryClasses), triage.ClassPublication)},
+}
+
+// runEntryClasses are the docket entries a decision about a run answers: what a
+// run can be docketed as under its own identifier, other than the publication of
+// its work.
+var runEntryClasses = []triage.Class{triage.ClassStoppedRun, triage.ClassUnstartedRun, triage.ClassEscalation}
+
+// triageSettlement is what one decision does to the entry it answers.
+type triageSettlement struct {
+	classes []triage.Class
+	// revisit says the decision holds for a while rather than settling anything.
+	// Waiting is the only one: its whole content is that the forge still has the
+	// merge, so an entry it closed for good would be a stuck merge nobody ever
+	// looks at again on the strength of a decision to look again. How long the
+	// harness leaves it alone is the harness's, not this role's.
+	revisit bool
+}
 
 // triageVerbs is what each decision records about itself on the work item. The
 // item's notes are read by people and by later conversations rather than by
@@ -134,6 +186,43 @@ type TriageBudgets interface {
 	// budget to write it beside: what makes those three atomic is the counter they
 	// move, and these move none.
 	RecordDecision(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error)
+}
+
+// TriageEntries is the docket the decisions are about, written the one way a
+// decision writes to it: a settled stoppage is closed, so it stops being put to
+// this role again.
+//
+// It is the other half of the lifecycle the docket never had. An entry is
+// created where work stops and the docket is rebuilt from durable records at
+// every scan, so without this a stoppage decided once came back for ever — and
+// three of the six decisions spend no counter, which leaves nothing else the
+// harness can read to tell a settled stoppage from a fresh one.
+//
+// It is optional like the rest, and a conversation without one records the
+// decision and leaves the entry standing, rather than appearing to have taken it
+// off the docket.
+type TriageEntries interface {
+	// Close settles the docket entries of one stoppage and reports how many it
+	// closed. An entry already closed, and a run with no open entry of the classes
+	// the decision answers, are both nothing to do rather than failures.
+	Close(ctx context.Context, closure DocketClosure) (int, error)
+}
+
+// DocketClosure is one recorded triage decision as the docket takes it: which
+// stoppage was decided, which of that run's entries the decision answers, and
+// the reasoning to keep beside them. Who decided is filled in by the session,
+// because a closure attributed to the harness rather than to the conversation
+// that made it is a decision nobody can be asked about.
+type DocketClosure struct {
+	RunID    string
+	Classes  []triage.Class
+	Decision string
+	Reason   string
+	// Revisit says this decision holds for a while rather than settling the
+	// stoppage, which is what waiting is. How long is the harness's to decide, so
+	// what travels from here is that the decision lapses and not when.
+	Revisit   bool
+	DecidedBy string
 }
 
 // Stoppages is what the harness durably recorded about the runs triage decides
@@ -341,7 +430,8 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 			s.settleTrackerBlock(ctx, outcome, id, note)
 			return
 		}
-		outcome.applied("escalated %s to the operator and blocked it, on the stopped work of run %s", id, run)
+		outcome.applied("escalated %s to the operator and blocked it, on the stopped work of run %s%s",
+			id, run, s.closeDocketEntry(ctx, decision, run, action.Reason))
 		return
 	}
 	if _, err := s.options.Tracker.Update(ctx, id, beads.WorkItemChange{AppendNotes: note}); err != nil {
@@ -349,7 +439,8 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 		s.settleTrackerNote(ctx, outcome, id, note, "the decision recorded on the item")
 		return
 	}
-	outcome.applied("triaged %s as %q, on the stopped work of run %s%s", id, decision, run, spent.clause)
+	outcome.applied("triaged %s as %q, on the stopped work of run %s%s%s",
+		id, decision, run, spent.clause, s.closeDocketEntry(ctx, decision, run, action.Reason))
 }
 
 // settleTrackerNote asks the tracker whether a write it reported as failed
@@ -432,6 +523,51 @@ func carriesNote(item beads.WorkItem, note string) bool {
 // per-command timeout, which is what bounds every other call it makes.
 func (s *Session) settlingRead(ctx context.Context, id string) (beads.WorkItem, error) {
 	return s.options.Tracker.Show(context.WithoutCancel(ctx), id)
+}
+
+// closeDocketEntry takes the stoppage this decision settled off the docket, and
+// says what that came to.
+//
+// It happens after the decision has landed on the work item rather than before,
+// which is the opposite order to the budget above and is the same reasoning: an
+// entry closed on a decision the item never recorded is a stoppage nobody is
+// looking at any more and nothing saying what was decided about it, while a
+// decision recorded whose entry stayed open is a stoppage put to somebody twice —
+// and the second of those is the state every entry was in before closing existed.
+//
+// A closure that could not be written is said in the outcome rather than failing
+// the action. The decision is recorded, the budget is spent, and what is left is
+// an entry that will be asked about again; reporting the action as failed would
+// invite exactly the second decision the closure exists to prevent.
+//
+// What was closed is said beside what failed rather than instead of it. One run
+// can carry two entries, so a decision that closed one of them and could not
+// close the other has done half of what it was going to, and a reader told only
+// about the failure would go looking for the entry that is no longer there.
+func (s *Session) closeDocketEntry(ctx context.Context, decision, runID, reason string) string {
+	if s.options.Docket == nil {
+		return ""
+	}
+	settles := triageSettles[decision]
+	closed, err := s.options.Docket.Close(ctx, DocketClosure{
+		RunID:    runID,
+		Classes:  settles.classes,
+		Decision: decision,
+		Reason:   reason,
+		Revisit:  settles.revisit,
+		// The conversation the decision was made in, in the words the item's own
+		// notes attribute it with, so a closure and the note beside it name the same
+		// answerable thing.
+		DecidedBy: fmt.Sprintf("the %s in conversation %s", RoleTitle(s.state.Role), s.state.ConversationID),
+	})
+	settled := ""
+	if closed > 0 {
+		settled = fmt.Sprintf("; %d docket entry(s) of that run are closed", closed)
+	}
+	if err != nil {
+		return settled + fmt.Sprintf("; a docket entry could not be closed and will be put to you again: %v", err)
+	}
+	return settled
 }
 
 // refuseTransposedStoppage refuses a decision whose run was made for some other
