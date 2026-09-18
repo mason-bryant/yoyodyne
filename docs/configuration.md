@@ -3584,10 +3584,10 @@ back.
 
 `review_rounds_cap` bounds the review rounds one work item may accumulate in
 total — across repairs, across runs — past which triage may no longer hand it
-back for another repair. Past the cap triage still has both of its other
-actions: escalate the item, or re-scope it. `0` is a choice somebody can mean and
-is accepted as one: an item that reaches triage at all is never repaired again.
-What crosses it for a single item is
+back for another repair. Past the cap triage still has three things it may do:
+escalate the item, re-scope it, or cross the cap. `0` is a choice somebody can
+mean and is accepted as one: an item that reaches triage at all is never
+repaired again without a crossing. What crosses it for a single item is
 [a recorded crossing](#crossing-a-cap-the-operator-decides-to-cross): the operator's
 own override, to any ceiling, or the development manager's, far enough for the
 one decision that was refused and five times per item — which is what makes an
