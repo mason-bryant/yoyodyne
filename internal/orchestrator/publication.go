@@ -265,9 +265,11 @@ type PublicationSettlement struct {
 	// Catchup is where the confirmation left the local target branch, present only
 	// on a publication this sweep confirmed.
 	Catchup *gitworktree.Catchup `json:"catchup,omitempty"`
-	// Remaining is what is still outstanding after this sweep: a confirmation the
-	// remote still refuses, or a consumed branch that still could not be deleted.
-	// It is what the record now says, so the next sweep asks the same question.
+	// Remaining is what is still outstanding after this sweep, in the remote's
+	// words now: a confirmation it still refuses, or a consumed branch that still
+	// could not be deleted. The record keeps the account the run wrote, which is
+	// the line the work item carries, so the next sweep asks the same question
+	// and a reader can match the record to the item.
 	Remaining string `json:"remaining,omitempty"`
 	// Kept is why a record was deliberately left where it stands, which is not a
 	// failure: a run a live process holds, or a branch the forge answers about
@@ -288,9 +290,8 @@ type PublicationSettlement struct {
 //
 // One publication that cannot be finished never stops the sweep, for the reason
 // one unreconcilable run does not. A publication the remote still refuses keeps
-// its record and is asked about again next time; what changes is only that the
-// record says what the remote says now rather than what it said the day the run
-// ended.
+// its record exactly as the run wrote it and is asked about again next time;
+// what the remote says now is reported by the sweep rather than written.
 func (r Reconciler) FinishPublications(ctx context.Context) ([]PublicationSettlement, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
@@ -345,8 +346,8 @@ func unfinishedPublication(state runstate.State) bool {
 //
 // The steps are the settle path's, in the settle path's order and for its
 // reasons. A publication nothing confirmed is confirmed first, and where the
-// remote refuses that is the whole of what happens: the record is brought to
-// what the remote says now and the publication stays outstanding for a person.
+// remote refuses that is the whole of what happens: nothing is written, and the
+// publication stays outstanding for a person.
 // A confirmed publication settles its item before its record stops saying it is
 // outstanding, so a process that dies between the two leaves an item held for
 // one more sweep rather than one nothing holds out of the pull. And the branch
@@ -414,7 +415,7 @@ func (r Reconciler) finishPublication(ctx context.Context, recorded runstate.Sta
 			return r.Worktrees.DeleteRemoteBranch(ctx, worktreeOf(state), published.HeadCommit)
 		})
 		if err != nil {
-			settlement.Remaining = r.restatePublishFailure(&settlement, state, fmt.Errorf("delete the merged remote branch: %w", err).Error())
+			settlement.Remaining = fmt.Errorf("delete the merged remote branch: %w", err).Error()
 			return settlement
 		}
 		settlement = r.recordSettledPublication(ctx, &state, published, settlement)
@@ -423,10 +424,12 @@ func (r Reconciler) finishPublication(ctx context.Context, recorded runstate.Sta
 
 	confirmed, err := r.Worktrees.ConfirmRemoteTarget(ctx, integrationOf(state), observed.MergeCommit)
 	if err != nil {
-		// The remote still refuses. The record says so in this sweep's words rather
-		// than the run's, so a reader is told what the remote says now, and the
+		// The remote still refuses, and the sweep says so in the remote's words now.
+		// The record is deliberately left as the run wrote it: that account is the
+		// `Publication outstanding` line on the work item, and a record reworded on
+		// every sweep would stop matching the line a reader finds there. The
 		// publication stays outstanding for the next sweep and for a person.
-		settlement.Remaining = r.restatePublishFailure(&settlement, state, fmt.Errorf("confirm the merge reached %s: %w", state.Integration.TargetBranch, err).Error())
+		settlement.Remaining = fmt.Errorf("confirm the merge reached %s: %w", state.Integration.TargetBranch, err).Error()
 		return settlement
 	}
 	published.MergeCommit = confirmed
@@ -469,21 +472,6 @@ func (r Reconciler) settleDocket(settlement PublicationSettlement, state runstat
 		settlement.DocketProblem = err.Error()
 	}
 	return settlement
-}
-
-// restatePublishFailure brings the record's account of what is outstanding to
-// what this sweep found, and returns it. A record that already says so is not
-// rewritten, so a sweep over a publication nothing has changed writes nothing.
-func (r Reconciler) restatePublishFailure(settlement *PublicationSettlement, state runstate.State, failure string) string {
-	if failure == state.PublishFailure {
-		return failure
-	}
-	state.PublishFailure = failure
-	state.UpdatedAt = r.clock().Now()
-	if err := r.Store.Save(state); err != nil {
-		settlement.Failure = fmt.Errorf("record what the remote says about the publication of run %s: %w", state.RunID, err).Error()
-	}
-	return failure
 }
 
 // recordSettledPublication writes a confirmed publication onto the item and
@@ -542,9 +530,9 @@ func settledPublicationReason(state runstate.State) string {
 }
 
 // renderSettledPublicationNotes tells the work item that a publication it
-// carried as outstanding is finished. It names what was outstanding, because
-// the line that said so is still on the item and a reader has to be able to
-// match the two.
+// carried as outstanding is finished. It quotes the line that said so, exactly
+// as every writer of that line renders it, because the line is still on the
+// item above this note and a reader has to be able to match the two.
 func renderSettledPublicationNotes(state runstate.State, previously string, catchup *gitworktree.Catchup) string {
 	lines := []string{
 		"Yoyodyne settled this item's publication: the forge's merge is confirmed on the remote target, and nothing about it is outstanding any more.",
@@ -556,6 +544,6 @@ func renderSettledPublicationNotes(state runstate.State, previously string, catc
 	if state.PullRequest.MergeCommit != "" {
 		lines = append(lines, fmt.Sprintf("Remote target commit: %s (the forge's merge commit above the promoted commit)", state.PullRequest.MergeCommit))
 	}
-	lines = append(lines, "Previously outstanding: "+previously)
+	lines = append(lines, "Previously outstanding, as the line above it reads: \"Publication outstanding: "+previously+"\"")
 	return strings.Join(append(lines, renderCatchupNotes(catchup)...), "\n")
 }

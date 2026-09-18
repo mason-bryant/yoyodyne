@@ -538,11 +538,16 @@ over with the parking reason named, which the paragraph after that is about. And
 a **held** item — a stoppage whose change is still on a branch, one nobody has
 decided about, or a publication that did not finish over work already integrated,
 in the sense the hold paragraph above gives it — is
-passed over with the hold named, because like the parking it is not a wait for
-anything and will not clear on its own. It is passed over as one of two things
-rather than one, because the two have different next movers: an item **awaiting a
-decision** is the development manager's to settle, and one **awaiting carry-out
-of a decision** is one she has settled and the harness has not yet acted on.
+passed over with the hold named. A stoppage is, like the parking, not a wait for
+anything and will not clear on its own. An unfinished publication is the one
+hold that is a wait: the next `yoyo reconcile` re-asks the remote, and a merge
+the forge has since made — queued and then landed, landed among others, or made
+by hand after a drop — settles on that sweep with nobody acting, while a merge
+the forge dropped and nobody has made stays a person's. A stoppage is passed over
+as one of two things rather than one, because the two have different next
+movers: an item **awaiting a decision** is the development manager's to settle,
+and one **awaiting carry-out of a decision** is one she has settled and the
+harness has not yet acted on.
 Reporting both as a single class is what made thirty-three already-decided items
 read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its

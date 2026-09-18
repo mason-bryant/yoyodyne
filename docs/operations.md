@@ -707,7 +707,8 @@ earlier becomes a durable blocker naming the branch and worktree that were
 preserved. A run that finished with its merge queued at the forge is settled
 here too: reconcile asks the forge and, once the merge has landed, finishes the
 publication — merge commit recorded and your local target branch caught up onto
-the merge commit the forge made — and settles the work item, which the run
+the remote target, which carries the forge's merge and whatever landed after it
+— and settles the work item, which the run
 deliberately left open because a queued merge is a
 publication nothing has confirmed. Where it goes is what the run's own landing
 says: closed where the landing discharged the item, back in the backlog parked
@@ -781,9 +782,9 @@ one note saying what was settled and which line it replaces. That is the lever
 behind the sentence in [how work flows](work.md#letting-the-harness-choose-the-work)
 that a hold lifts by the publication being settled, which until yoyodyne-ifd.357
 had nothing behind it. A publication the remote still refuses stays exactly
-where it was, with the record's account brought to what the remote says now —
-once, because the same answer is not written twice — and the sweep says so on
-every pass it stands. The eight held requests PR 497 merged on 2026-09-13 are
+where it was — the record keeps the account the run wrote, which is the line on
+the item, and nothing is written on either — and the sweep says what the remote
+answers now on every pass it stands. The eight held requests PR 497 merged on 2026-09-13 are
 the case this was built on: confirmation then required the remote tip to carry
 exactly the promotion's content, which only the last merge of a batch does, so
 all eight settled as unconfirmed and stayed that way until this could re-ask.

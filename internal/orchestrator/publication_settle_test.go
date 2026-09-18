@@ -106,7 +106,7 @@ func TestReconcileFinishesAMergeThatLandedAmongOthers(t *testing.T) {
 		t.Errorf("holds = %v, want the item released once its publication settled", held)
 	}
 	// The item: told, and not closed a second time — its run closed it.
-	if !strings.Contains(fixture.tracker.notes, "settled this item's publication") || !strings.Contains(fixture.tracker.notes, "Previously outstanding: confirm the queued merge") {
+	if !strings.Contains(fixture.tracker.notes, "settled this item's publication") || !strings.Contains(fixture.tracker.notes, "Previously outstanding, as the line above it reads: \"Publication outstanding: confirm the queued merge") {
 		t.Errorf("tracker notes do not report the settlement against the line it replaces:\n%s", fixture.tracker.notes)
 	}
 	for _, call := range fixture.tracker.calls[completes:] {
@@ -258,10 +258,10 @@ func TestReconcileFinishesADroppedMergeSomebodyMadeByHand(t *testing.T) {
 	}
 }
 
-// A publication the remote still refuses stays outstanding. What the sweep
-// changes is the record's account of why — the remote's answer now rather than
-// the run's day — and it changes it once: a sweep that finds the same answer
-// writes nothing, touches the item nothing, and leaves the hold standing.
+// A publication the remote still refuses stays outstanding, and the sweep
+// writes nothing at all: the record keeps the account the run wrote, which is
+// the line on the item, the item gets no note, and the hold stands. What the
+// remote says now is reported by the sweep rather than written anywhere.
 func TestReconcileLeavesAPublicationTheRemoteStillRefuses(t *testing.T) {
 	t.Parallel()
 
@@ -291,9 +291,11 @@ func TestReconcileLeavesAPublicationTheRemoteStillRefuses(t *testing.T) {
 	if !strings.Contains(settlements[0].Remaining, "does not contain the promoted commit") {
 		t.Errorf("remaining = %q, want the remote's refusal", settlements[0].Remaining)
 	}
+	// The record keeps the run's own account, which is the `Publication
+	// outstanding` line on the item; what the remote says now is the sweep's.
 	after := loadRun(t, fixture.store, pipelineRunID)
-	if after.PublishFailure != settlements[0].Remaining {
-		t.Errorf("publish failure = %q, want the record brought to what the remote says now: %q", after.PublishFailure, settlements[0].Remaining)
+	if after.PublishFailure != before.PublishFailure {
+		t.Errorf("publish failure = %q, want the run's own account %q kept", after.PublishFailure, before.PublishFailure)
 	}
 	if after.PullRequest.MergeCommit != "" {
 		t.Errorf("record = %#v, want nothing confirmed", after.PullRequest)
@@ -310,8 +312,8 @@ func TestReconcileLeavesAPublicationTheRemoteStillRefuses(t *testing.T) {
 	if err != nil || len(again) != 1 || again[0].Settled {
 		t.Fatalf("second FinishPublications() = %#v, %v; want the same publication still outstanding", again, err)
 	}
-	if repeated := loadRun(t, fixture.store, pipelineRunID); !repeated.UpdatedAt.Equal(after.UpdatedAt) {
-		t.Errorf("a record the remote answered about the same way was rewritten at %s, was %s", repeated.UpdatedAt, after.UpdatedAt)
+	if repeated := loadRun(t, fixture.store, pipelineRunID); !repeated.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("a record the remote still refuses was rewritten at %s, was %s", repeated.UpdatedAt, before.UpdatedAt)
 	}
 }
 
@@ -365,7 +367,7 @@ func TestReconcileFinishesAPublicationOnceItsLeftoverBranchIsGone(t *testing.T) 
 	if published := publishedCommit(t, fixture.remote, leftover.Branch); published != "" {
 		t.Errorf("merged remote branch survived at %q", published)
 	}
-	if len(fixture.tracker.noteRecords) != notes+1 || !strings.Contains(fixture.tracker.noteRecords[notes], "Previously outstanding: delete the merged remote branch") {
+	if len(fixture.tracker.noteRecords) != notes+1 || !strings.Contains(fixture.tracker.noteRecords[notes], "Previously outstanding, as the line above it reads: \"Publication outstanding: delete the merged remote branch") {
 		t.Errorf("tracker notes after the settlement = %q, want one note naming the leftover it replaces", fixture.tracker.noteRecords[notes:])
 	}
 }
