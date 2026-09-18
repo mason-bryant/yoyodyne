@@ -66,13 +66,32 @@ const settledWorktreeTail = 8
 // somebody still has to decide about, and a checkout kept is a directory
 // somebody has to look at by hand.
 type Convergence struct {
-	Targets   []gitworktree.Catchup `json:"targets"`
-	Worktrees []WorktreeSweep       `json:"worktrees"`
-	Branches  []BranchSweep         `json:"branches"`
+	Targets []gitworktree.Catchup `json:"targets"`
+	// Publications is the forge's half of the same hygiene: the pull requests of
+	// runs whose work landed by another vehicle, closed with that vehicle named.
+	Publications []PublicationSweep `json:"publications"`
+	// Unsuperseded is what is left open: the pull requests still open at the
+	// forge that this sweep cannot close, because no recorded landing supersedes
+	// them. They are named so that what is open is a list somebody has read;
+	// deciding each one is a person's.
+	Unsuperseded []OpenPublication `json:"unsuperseded"`
+	Worktrees    []WorktreeSweep   `json:"worktrees"`
+	Branches     []BranchSweep     `json:"branches"`
 	// Registrations is the repository-wide prune that runs between the two. It
 	// is not per run because what it removes is exactly what no run record
 	// names any more.
 	Registrations RegistrationSweep `json:"registrations"`
+}
+
+// PublicationSweep is one superseded run's publication and what became of it.
+// Both the run that published it and the vehicle its work landed by are named,
+// because that pair is the whole of the justification for closing a pull
+// request somebody may still be looking at.
+type PublicationSweep struct {
+	RunID        string       `json:"run_id"`
+	WorkItemID   string       `json:"work_item_id"`
+	SupersededBy Supersession `json:"superseded_by"`
+	PublicationRetirement
 }
 
 // WorktreeSweep is one settled run's leftover checkout and what became of it.
@@ -137,9 +156,10 @@ type BranchSweep struct {
 
 // Converge brings the primary checkout and the local branches onto what the
 // forge has: every target branch the harness knows about is fast-forwarded onto
-// its remote counterpart, the checkouts of settled runs past the tail are
-// retired, the registrations of checkouts that are already gone are pruned, and
-// then every settled run's leftover branch whose work those targets already
+// its remote counterpart, every superseded run's publication is closed with the
+// vehicle its work landed by named, the checkouts of settled runs past the tail
+// are retired, the registrations of checkouts that are already gone are pruned,
+// and then every settled run's leftover branch whose work those targets already
 // carry is deleted.
 //
 // The order matters and is not an accident. A target that has just caught up
@@ -149,6 +169,10 @@ type BranchSweep struct {
 // branch a checkout still holds is kept and that checkout is the one being
 // retired just above. The prune sits between them, so a registration something
 // else emptied stops holding its branch in the same pass rather than the next.
+// The publications come after the targets because the landing they are closed
+// on is what the target has just caught up onto, and before the checkouts and
+// branches because they touch neither: what a superseded run kept locally is
+// the checkout sweep's and the branch sweep's, judged by their own rules.
 //
 // One branch that cannot be converged never stops the sweep, for the reason one
 // unreconcilable run does not: what could not be done is reported beside
@@ -163,12 +187,22 @@ func (r Reconciler) Converge(ctx context.Context) (Convergence, error) {
 	}
 	convergence := Convergence{
 		Targets:       make([]gitworktree.Catchup, 0),
+		Publications:  make([]PublicationSweep, 0),
+		Unsuperseded:  make([]OpenPublication, 0),
 		Worktrees:     make([]WorktreeSweep, 0),
 		Branches:      make([]BranchSweep, 0),
 		Registrations: RegistrationSweep{Pruned: make([]string, 0)},
 	}
 	for _, target := range recordedTargets(recorded) {
 		convergence.Targets = append(convergence.Targets, r.catchUp(ctx, target))
+	}
+	superseded, open := partitionPublications(recorded)
+	convergence.Unsuperseded = open
+	for _, publication := range superseded {
+		sweep, swept := r.sweepPublication(ctx, publication)
+		if swept {
+			convergence.Publications = append(convergence.Publications, sweep)
+		}
 	}
 	for _, state := range sweepableWorktrees(recorded) {
 		sweep, swept := r.sweepWorktree(ctx, state)
@@ -184,6 +218,78 @@ func (r Reconciler) Converge(ctx context.Context) (Convergence, error) {
 		}
 	}
 	return convergence, nil
+}
+
+// sweepPublication retires one superseded run's pull request, and reports
+// whether this sweep is what had anything to say about it.
+//
+// The run's record is taken under its own lease and re-read there, for the
+// reason settling a run is: the listing is a snapshot another process may have
+// moved on from, and the close and the note of it have to be one act. A run a
+// live process holds is left to that process and reported by nobody — it is not
+// a failure, and a line about it on every sweep would bury the ones that are.
+//
+// The checkout and the local branch the superseded run kept are deliberately
+// not touched here. The checkout is the checkout sweep's, which captures what
+// it holds before retiring it; the branch is the branch sweep's, which needs the
+// target to judge it — and a local branch carrying work nothing promoted is the
+// one copy of that work left once the remote branch has gone, so it is kept
+// with the reason rather than deleted with the request.
+func (r Reconciler) sweepPublication(ctx context.Context, superseded supersededPublication) (PublicationSweep, bool) {
+	published := *superseded.state.PullRequest
+	sweep := PublicationSweep{
+		RunID:        superseded.state.RunID,
+		WorkItemID:   superseded.state.WorkItemID,
+		SupersededBy: superseded.by,
+		PublicationRetirement: PublicationRetirement{
+			Number: published.Number,
+			URL:    published.URL,
+			Branch: published.Branch,
+		},
+	}
+	if r.Publisher == nil {
+		sweep.Failure = fmt.Sprintf(
+			"run %s left pull request %d open and run %s landed the work instead, and this sweep has no forge access to close it",
+			superseded.state.RunID, published.Number, superseded.by.RunID)
+		return sweep, true
+	}
+	state, lease, err := r.Store.AdoptRun(ctx, superseded.state.RunID)
+	switch {
+	case errors.Is(err, runstate.ErrRunHeld):
+		return PublicationSweep{}, false
+	case err != nil:
+		sweep.Failure = fmt.Errorf("adopt run %s to retire the publication it left: %w", superseded.state.RunID, err).Error()
+		return sweep, true
+	}
+	defer lease.Release()
+
+	// What was read from the listing is asked again of the record just adopted.
+	// Another process may have retired this publication in between, and a second
+	// close would put a second comment on somebody's pull request.
+	if !retirablePublication(state) {
+		return PublicationSweep{}, false
+	}
+	sweep.PublicationRetirement = retirePublication(ctx, r.Publisher, r.Worktrees, state, superseded.by)
+	if sweep.Failure != "" {
+		return sweep, true
+	}
+	published = *state.PullRequest
+	published.Superseded = superseded.by.Vehicle()
+	// The forge's last word is recorded beside it, so a reader of the record is
+	// not told the request is open under the line saying what closed it.
+	published.State = "CLOSED"
+	state.PullRequest = &published
+	state.UpdatedAt = r.clock().Now()
+	if err := r.Store.Save(state); err != nil {
+		// The forge is settled and the record is not, so the next sweep asks the
+		// forge about a request it has already closed. That costs a query and adds
+		// no second comment — Close reports an already-closed request rather than
+		// closing it again — but it repeats forever until somebody looks, so it is
+		// never left unsaid.
+		sweep.Failure = fmt.Errorf("record that pull request %d of run %s was retired as superseded: %w",
+			published.Number, state.RunID, err).Error()
+	}
+	return sweep, true
 }
 
 // sweepableWorktrees lists the settled runs whose checkout this sweep may

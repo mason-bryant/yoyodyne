@@ -320,6 +320,84 @@ func TestReconcileReportsWhatItRecoveredRatherThanWhatItDeclinedToDeliver(t *tes
 	}
 }
 
+// A superseded publication the sweep closed is said with the vehicle that
+// superseded it, one it could not close fails the command, and the residue —
+// the requests still open that no recorded landing supersedes — is one line
+// naming them all rather than a standing list, with the reasons in `--json`.
+func TestReconcileReportsClosedPublicationsAndNamesTheResidue(t *testing.T) {
+	t.Parallel()
+
+	sweep := reconcileSweep{Convergence: orchestrator.Convergence{
+		Publications: []orchestrator.PublicationSweep{
+			{
+				RunID:      "run-dead",
+				WorkItemID: "yoyodyne-task",
+				SupersededBy: orchestrator.Supersession{
+					RunID: "run-landed", Commit: "abc1234", TargetBranch: "main", Number: 46,
+				},
+				PublicationRetirement: orchestrator.PublicationRetirement{Number: 44, Closed: true, BranchDeleted: true},
+			},
+			{
+				RunID:                 "run-quiet",
+				WorkItemID:            "yoyodyne-task",
+				PublicationRetirement: orchestrator.PublicationRetirement{Number: 45},
+			},
+		},
+		Unsuperseded: []orchestrator.OpenPublication{
+			{RunID: "run-a", WorkItemID: "yoyodyne-ifd.102", Number: 103, Reason: "no run of yoyodyne-ifd.102 has landed anything"},
+			{RunID: "run-b", WorkItemID: "yoyodyne-ifd.241", Number: 342, Reason: "no run of yoyodyne-ifd.241 has landed anything"},
+		},
+	}}
+
+	var stdout, stderr bytes.Buffer
+	if code := reportReconcileResult(&stdout, &stderr, false, sweep, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "pull request #44 of yoyodyne-task closed: pull request #46") {
+		t.Errorf("stdout = %q, want the closed request and its vehicle named", stdout.String())
+	}
+	// A request already closed by somebody else is the status quo and says
+	// nothing, like a branch already gone.
+	if strings.Contains(stdout.String(), "#45") || strings.Contains(stderr.String(), "#45") {
+		t.Errorf("output = %q / %q, want nothing said about a request that was already closed", stdout.String(), stderr.String())
+	}
+	residue := "2 open pull request(s) belong to runs that ended without landing"
+	if !strings.Contains(stdout.String(), residue) || !strings.Contains(stdout.String(), "#103 (yoyodyne-ifd.102), #342 (yoyodyne-ifd.241)") {
+		t.Errorf("stdout = %q, want the residue named on one line", stdout.String())
+	}
+	if strings.Count(stdout.String(), "yoyodyne-ifd.241") != 1 {
+		t.Errorf("stdout = %q, want each open request named once, with its reason left to --json", stdout.String())
+	}
+
+	var jsonOut bytes.Buffer
+	if code := reportReconcileResult(&jsonOut, &stderr, true, sweep, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d; stderr = %q", code, stderr.String())
+	}
+	var result reconcileOutput
+	if err := json.Unmarshal(jsonOut.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Convergence.Unsuperseded) != 2 || result.Convergence.Unsuperseded[0].Reason == "" {
+		t.Fatalf("Unsuperseded = %#v, want each open request carried with its reason", result.Convergence.Unsuperseded)
+	}
+
+	// A superseded request the sweep could not close is the state this sweep
+	// exists to end, so it fails the command like a branch it could not remove.
+	failing := reconcileSweep{Convergence: orchestrator.Convergence{Publications: []orchestrator.PublicationSweep{{
+		RunID:                 "run-dead",
+		WorkItemID:            "yoyodyne-task",
+		PublicationRetirement: orchestrator.PublicationRetirement{Number: 44, Failure: "close the superseded pull request 44: the forge refused"},
+	}}}}
+	stdout.Reset()
+	stderr.Reset()
+	if code := reportReconcileResult(&stdout, &stderr, false, failing, nil); code != 1 {
+		t.Fatalf("reportReconcileResult() code = %d, want 1 for a request that could not be closed", code)
+	}
+	if !strings.Contains(stderr.String(), "pull request #44 not closed: close the superseded pull request 44") {
+		t.Errorf("stderr = %q, want the failure named", stderr.String())
+	}
+}
+
 // The printing is decided by a closed classification, so an outcome added later
 // and named on neither side fails here rather than being printed as though the
 // sweep had acted on it. That is the mistake this replaces: a skip list that did

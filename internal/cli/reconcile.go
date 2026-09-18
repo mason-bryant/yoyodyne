@@ -233,6 +233,15 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 			failed = true
 		}
 	}
+	// A superseded publication left open is a false signal on the forge rather
+	// than something at risk, but it is exactly the state this sweep exists to
+	// end, so a sweep that could not end it reports failure like the rest. The
+	// list left open is not a failure: it is the list a person decides from.
+	for _, publication := range convergence.Publications {
+		if publication.Failure != "" {
+			failed = true
+		}
+	}
 	if jsonOutput {
 		output := reconcileOutput{
 			Runs:         results,
@@ -254,6 +263,12 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		}
 		if output.Convergence.Targets == nil {
 			output.Convergence.Targets = []gitworktree.Catchup{}
+		}
+		if output.Convergence.Publications == nil {
+			output.Convergence.Publications = []orchestrator.PublicationSweep{}
+		}
+		if output.Convergence.Unsuperseded == nil {
+			output.Convergence.Unsuperseded = []orchestrator.OpenPublication{}
 		}
 		if output.Convergence.Branches == nil {
 			output.Convergence.Branches = []orchestrator.BranchSweep{}
@@ -447,6 +462,19 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 			fmt.Fprintf(stderr, "%s not caught up: %s\n", target.TargetBranch, target.Held)
 		}
 	}
+	// A pull request somebody else had already closed says nothing here, for the
+	// reason a branch already gone does: it is the status quo, and this sweep
+	// only reports what it changed and what it could not do.
+	for _, publication := range convergence.Publications {
+		switch {
+		case publication.Failure != "":
+			fmt.Fprintf(stderr, "pull request #%d not closed: %s\n", publication.Number, publication.Failure)
+		case publication.Closed:
+			fmt.Fprintf(stdout, "pull request #%d of %s closed: %s superseded it\n",
+				publication.Number, publication.WorkItemID, publication.SupersededBy.Vehicle())
+		}
+	}
+	printUnsuperseded(stdout, convergence.Unsuperseded)
 	for _, worktree := range convergence.Worktrees {
 		switch {
 		// A checkout that is gone whose run was not told so is read first, because
@@ -504,6 +532,25 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 	}
 }
 
+// printUnsuperseded names the pull requests still open at the forge that the
+// sweep could not close, on one line rather than one each. They are what a
+// person decides from — pending work on a preserved branch, or work
+// that landed by a vehicle the harness never recorded — and they stay open until
+// somebody decides, so a line per request on every sweep would be a standing
+// list nobody reads. The one line says how many and which; `--json` carries the
+// reason for each under `convergence.unsuperseded`.
+func printUnsuperseded(stdout io.Writer, open []orchestrator.OpenPublication) {
+	if len(open) == 0 {
+		return
+	}
+	named := make([]string, 0, len(open))
+	for _, publication := range open {
+		named = append(named, fmt.Sprintf("#%d (%s)", publication.Number, publication.WorkItemID))
+	}
+	fmt.Fprintf(stdout, "%d open pull request(s) belong to runs that ended without landing, and no later run of their item has landed to supersede them; each is a person's to merge or close: %s\n",
+		len(open), strings.Join(named, ", "))
+}
+
 func printReconcileUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo reconcile [options]
 
@@ -527,8 +574,19 @@ leaves the checkout exactly where it was.
 
 It also re-asks the forge about the pull request of every run that ended without
 its publication being settled, and records what the forge now says — merged,
-closed, or still open. Nothing is merged or closed for you: the record is
-brought onto the truth, so what reads it afterwards reads truth too.
+closed, or still open. Nothing is merged for you: the record is brought onto the
+truth, so what reads it afterwards reads truth too.
+
+It then closes the pull requests whose work landed by another vehicle: a run
+that ended without integrating, whose item a later run of this harness did
+integrate — a relaunch after a killed run, the loser of a duplicate selection,
+a re-run triage decided. Each is closed with a comment naming the pull request
+or commit the work actually landed by, the remote branch it published is
+deleted, and the supersession is recorded on the run so no later sweep asks
+again. A request that merged is never touched. What is left open and cannot be
+closed on the harness's own records — no run of its item has landed — is named
+on one line, so what is left open is a list a person decides from; `+"`--json`"+` carries
+the reason for each under convergence.unsuperseded.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development

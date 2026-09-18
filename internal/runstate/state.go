@@ -470,6 +470,19 @@ type PullRequest struct {
 	// every triage counter fails in: a process that dies between the two has
 	// recorded a re-arm it did not make rather than made one it did not record.
 	MergeRearms int `json:"merge_rearms,omitempty"`
+	// Superseded names the vehicle this publication's work landed by, when it
+	// landed by another one: a later run's pull request, or the commit that run
+	// integrated. A branch carries the run that published it, so an item run
+	// again publishes a fresh branch and a fresh request rather than reusing this
+	// one, and this request would otherwise sit open for work that is already on
+	// the target branch.
+	//
+	// It is written when the harness retires the publication — the request
+	// closed with a comment naming that vehicle, the branch it carried deleted —
+	// and it is what stops a later sweep asking the forge about a request it has
+	// already dealt with. Absent is every publication that merged, that is still
+	// pending, or that stopped for a reason somebody has to decide about.
+	Superseded string `json:"superseded,omitempty"`
 }
 
 // MergeDrop is the moment a promoted change stopped being something the forge
@@ -531,6 +544,12 @@ func (p PullRequest) Validate() error {
 	// repeated.
 	if p.MergeRearms > 0 && strings.TrimSpace(p.MergeMethod) == "" {
 		problems = append(problems, errors.New("pull_request merge_rearms requires the merge method the repeated request was made by"))
+	}
+	// The two are contradictory claims about one request: a merge is this
+	// publication's work reaching the remote, and a supersession is another
+	// vehicle's work reaching it instead.
+	if p.Merged && strings.TrimSpace(p.Superseded) != "" {
+		problems = append(problems, errors.New("a merged pull request was not superseded; what landed is its own work"))
 	}
 	return errors.Join(problems...)
 }

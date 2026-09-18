@@ -302,4 +302,11 @@ func (f *answeringForge) State(_ context.Context, head string) (publish.PullRequ
 	return f.answer, nil
 }
 
+// Close is the write the refresh never makes. A refresh that reached it would
+// be closing a request on the strength of an answer, which is the orphan
+// sweep's decision and not this one's.
+func (f *answeringForge) Close(context.Context, publish.CloseRequest) (publish.Closure, error) {
+	return publish.Closure{}, errors.New("a refresh closes nothing")
+}
+
 var _ ReconcilePullRequests = (*answeringForge)(nil)

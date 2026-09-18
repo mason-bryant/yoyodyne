@@ -847,6 +847,13 @@ func stuckPublication(state runstate.State, now time.Time, stuckMergeAge time.Du
 	if !state.Status.Terminal() {
 		return false
 	}
+	// A publication the harness retired as superseded is finished with, for the
+	// opposite reason a merged one is: its work landed by another vehicle and
+	// the request itself is closed. Docketing it would send the development
+	// manager to a pull request the harness has already dealt with.
+	if strings.TrimSpace(published.Superseded) != "" {
+		return false
+	}
 	// Only an approved publication is stuck. A pull request from a run that was
 	// never approved is a branch nobody authorized merging, and the run's own
 	// blocker is what says so.
