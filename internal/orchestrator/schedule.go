@@ -2349,13 +2349,16 @@ func (s *Started) record(done completed) {
 // needs from the durable state: how many developer slots are taken, and which
 // items must not be started again or raced.
 //
-// In flight is what the status surface counts as running: a run that has not
-// reached a terminal status. A failed run over an item — one that stopped on a
-// replay conflict, say, with its branch and pull request preserved for a person
-// — is a record of that item, and a record holds neither a slot nor an epic. The
-// store's own listing already leaves a terminal run out, and the rule is applied
-// here as well so that the guard's reading is its own rather than whatever the
-// listing it was handed happens to return.
+// In flight is runstate.Status.InFlight — pending or running — which is the one
+// predicate the status surface's running count and the store's own listing are
+// both built on, so what this refuses an item for is a run `yoyo status` lists.
+// The phase does not enter into it: a run integrating is in flight, and holds
+// its epic until the promotion settles. A failed run over an item — one that
+// stopped on a replay conflict, say, with its branch and pull request preserved
+// and a decision about it still owed — is a record of that item, and a record
+// holds neither a slot nor an epic. The store's listing already answers in these
+// terms, and the predicate is applied here as well so that the guard's reading
+// is the status's own rather than whatever the listing it was handed returns.
 func occupiedItems(runs ScheduleRuns) (map[string]string, error) {
 	incomplete, err := runs.Incomplete()
 	if err != nil {
@@ -2363,7 +2366,7 @@ func occupiedItems(runs ScheduleRuns) (map[string]string, error) {
 	}
 	occupied := make(map[string]string, len(incomplete))
 	for _, state := range incomplete {
-		if state.Status.Terminal() {
+		if !state.Status.InFlight() {
 			continue
 		}
 		occupied[state.WorkItemID] = state.RunID

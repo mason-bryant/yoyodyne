@@ -77,8 +77,8 @@ type conflict struct {
 // and the durable run state does not know about it yet — a run does not appear
 // there until it reserves, which is several steps after it is started.
 //
-// What it is built from is the runs in flight now and nothing else, in the sense
-// the status surface counts them: a run that has not reached a terminal status.
+// What it is built from is the runs in flight now and nothing else, in the one
+// sense runstate.Status.InFlight gives that: pending or running, whatever phase.
 // A run that failed — at integration, on a replay conflict, with its branch and
 // pull request preserved for a person — is a record, and a record holds no
 // epic. See occupiedItems, which is where that reading is made.

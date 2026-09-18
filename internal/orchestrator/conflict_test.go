@@ -256,56 +256,107 @@ func TestSchedulerSequencesBehindWorkAnotherProcessAlreadyHasInFlight(t *testing
 	}
 }
 
-// The 2026-09-18 shape, replayed: one sibling whose last run failed at
-// integration — stopped on a replay conflict, its branch and pull request
-// preserved for a person — and another sibling ready. A failed run is a record
-// of its item rather than work in flight, so it holds neither a developer slot
-// nor the epic, and the ready sibling is pulled beside it with nothing said.
+// What the guard counts as in flight is runstate.Status.InFlight — pending or
+// running — and nothing the listing it is handed says otherwise. The store's own
+// listing already answers in those terms, so with the real store this rule is
+// never the one that decides; what this proves is that the guard's reading is
+// the status's own rather than the listing's, by handing it the runs the store
+// never would: a sibling whose last run ended in each terminal status, beside a
+// ready sibling of the same epic. None of them holds a developer slot or the
+// epic, and the ready sibling is pulled with nothing said about a wait.
 //
-// The store's own listing of what is in flight already leaves a terminal run
-// out, so the fixture hands the guard the one thing the store never would, and
-// what this holds is that the guard's reading is its own: a run counts only in
-// the status the status surface counts as running.
-func TestSchedulerDoesNotHoldAnEpicOnASiblingWhoseRunFailed(t *testing.T) {
+// The failed case is shaped like yoyodyne-ifd.272's run of 2026-09-16 — stopped
+// at integration on a replay conflict, its pull request still open, a decision
+// about it owed — because that is the run a stale schedule report named two days
+// later as still in flight. That report, not the guard, was what misread the run
+// (see passOver); this is the rule the report was mistaken for having broken.
+func TestSchedulerDoesNotHoldAnEpicOnASiblingWhoseRunHasEnded(t *testing.T) {
 	t.Parallel()
 
-	stopped := beads.WorkItem{
-		ID: "yoyodyne-epic.272", Title: "A claimed-but-dead item is audited", Status: "blocked", Priority: 1,
-		Parent: "yoyodyne-epic",
-	}
-	ready := beads.WorkItem{
-		ID: "yoyodyne-epic.379", Title: "The guard reads run state", Status: "open", Priority: 0,
-		Parent: "yoyodyne-epic",
-	}
-	harness := newScheduleHarness(stopped, ready)
-	harness.capacity = 2
-	harness.inFlight[stopped.ID] = runstate.State{
-		RunID:      "run-2f6e6e0a",
-		WorkItemID: stopped.ID,
-		Status:     runstate.StatusFailed,
-		Phase:      runstate.PhaseIntegrating,
-		Failure:    "change cannot be replayed onto the moved integration target",
-		PullRequest: &runstate.PullRequest{
-			Remote: "origin", Branch: "yoyodyne/yoyodyne-epic-272/2f6e6e0a", Number: 511, State: "OPEN",
-		},
-	}
+	for _, status := range []runstate.Status{
+		runstate.StatusFailed, runstate.StatusSucceeded, runstate.StatusCancelled, runstate.StatusTimedOut,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
 
-	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
-	if err != nil {
-		t.Fatalf("Schedule() error = %v", err)
+			ended := beads.WorkItem{
+				ID: "yoyodyne-epic.272", Title: "A claimed-but-dead item is audited", Status: "blocked", Priority: 1,
+				Parent: "yoyodyne-epic",
+			}
+			ready := beads.WorkItem{
+				ID: "yoyodyne-epic.379", Title: "The guard reads run state", Status: "open", Priority: 0,
+				Parent: "yoyodyne-epic",
+			}
+			harness := newScheduleHarness(ended, ready)
+			harness.capacity = 2
+			run := runstate.State{RunID: "run-2f6e6e0a", WorkItemID: ended.ID, Status: status, Phase: runstate.PhaseComplete}
+			if status == runstate.StatusFailed {
+				run.Phase = runstate.PhaseIntegrating
+				run.Failure = "change cannot be replayed onto the moved integration target"
+				run.PullRequest = &runstate.PullRequest{
+					Remote: "origin", Branch: "yoyodyne/yoyodyne-epic-272/2f6e6e0a", Number: 511, State: "OPEN",
+				}
+			}
+			harness.inFlight[ended.ID] = run
+
+			schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+			if err != nil {
+				t.Fatalf("Schedule() error = %v", err)
+			}
+			if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != ready.ID {
+				t.Fatalf("started = %#v, want the ready sibling pulled beside a %s run over the other: %s",
+					schedule.Started, status, schedule.Render())
+			}
+			if len(schedule.Deferred) != 0 {
+				t.Fatalf("deferred = %#v, want nothing held behind a run that has ended", schedule.Deferred)
+			}
+			if schedule.Occupied != 0 {
+				t.Fatalf("occupied = %d, want a %s run to hold no developer slot", schedule.Occupied, status)
+			}
+			if reason := harness.selectionFor(ready.ID).Reason; strings.Contains(reason, "held back") {
+				t.Fatalf("reason = %q, want the sibling to have waited for nothing", reason)
+			}
+		})
 	}
-	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != ready.ID {
-		t.Fatalf("started = %#v, want the ready sibling pulled beside a failed run over the other: %s",
-			schedule.Started, schedule.Render())
-	}
-	if len(schedule.Deferred) != 0 {
-		t.Fatalf("deferred = %#v, want nothing held behind a run that has failed", schedule.Deferred)
-	}
-	if schedule.Occupied != 0 {
-		t.Fatalf("occupied = %d, want a failed run to hold no developer slot", schedule.Occupied)
-	}
-	if reason := harness.selectionFor(ready.ID).Reason; strings.Contains(reason, "held back") {
-		t.Fatalf("reason = %q, want the sibling to have waited for nothing", reason)
+}
+
+// The other half of the same predicate: a run that is pending or running holds
+// its epic whatever phase it is in. A run integrating is the case worth
+// stating, because "failed/integrating" is how the 2026-09-16 run was described
+// and the phase is not what decided anything — a running run at that phase is a
+// promotion in progress, listed by `yoyo status`, and exactly the run a sibling
+// would race.
+func TestSchedulerHoldsAnEpicOnASiblingWhoseRunIsInFlightWhateverItsPhase(t *testing.T) {
+	t.Parallel()
+
+	for _, run := range []runstate.State{
+		{RunID: "run-pending", Status: runstate.StatusPending},
+		{RunID: "run-integrating", Status: runstate.StatusRunning, Phase: runstate.PhaseIntegrating},
+	} {
+		t.Run(run.RunID, func(t *testing.T) {
+			t.Parallel()
+
+			claimed := beads.WorkItem{ID: "yoyodyne-epic.1", Title: "First half", Status: "in_progress", Priority: 1, Parent: "yoyodyne-epic"}
+			sibling := beads.WorkItem{ID: "yoyodyne-epic.2", Title: "Second half", Status: "open", Priority: 1, Parent: "yoyodyne-epic"}
+			harness := newScheduleHarness(claimed, sibling)
+			harness.capacity = 2
+			run.WorkItemID = claimed.ID
+			harness.inFlight[claimed.ID] = run
+
+			schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+			if err != nil {
+				t.Fatalf("Schedule() error = %v", err)
+			}
+			if len(schedule.Started) != 0 {
+				t.Fatalf("started = %#v, want nothing started beside a %s run over the same epic", schedule.Started, run.Status)
+			}
+			if len(schedule.Deferred) != 1 || !strings.Contains(schedule.Deferred[0].Reason, run.RunID) {
+				t.Fatalf("deferred = %#v, want the sibling held behind %s: %s", schedule.Deferred, run.RunID, schedule.Render())
+			}
+			if schedule.Occupied != 1 {
+				t.Fatalf("occupied = %d, want the run in flight to hold a developer slot", schedule.Occupied)
+			}
+		})
 	}
 }
 

@@ -570,10 +570,14 @@ integration, and a change whose target moved is still replayed onto where it wen
 freshly reviewed run, or a stopped one where the replay will not apply. An item is
 held for exactly as long as the run it would have raced lasts, because the
 conflicts are re-read at every pull from what is actually in flight — and in
-flight means what `yoyo status` counts as running: a run that has not reached a
-terminal status. A run that failed, at integration or anywhere else, is a record
-of its item and holds neither a developer slot nor the epic, whatever branch or
-pull request it left behind. And the slot a
+flight means a run whose status is pending or running, whatever phase it is in:
+a run integrating is in flight and holds its epic until the promotion settles.
+That is one predicate, `runstate.Status.InFlight`, and it is the same one the
+store's listing of incomplete runs and the running line of `yoyo status` are
+built on, so a run the guard holds an item behind is a run that line lists. A run
+whose status is succeeded, failed, cancelled, or timed out is a record of its
+item and holds neither a developer slot nor the epic, whatever branch or pull
+request it left behind and whatever a person has yet to decide about it. And the slot a
 hold frees is not idled: the pass carries on down the order to the next item that
 races nothing, and both runs record what the sequencing did — the one that waited
 says what it waited for, and the one pulled past it says which items it was pulled

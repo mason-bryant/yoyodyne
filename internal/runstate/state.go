@@ -2251,6 +2251,18 @@ func (s Status) Terminal() bool {
 	return s == StatusSucceeded || s == StatusFailed || s == StatusCancelled || s == StatusTimedOut
 }
 
+// InFlight reports a run that is still going: reserved and not yet ended,
+// whatever phase it is in — a run integrating is as much in flight as one
+// developing. It is the complement of Terminal over the valid statuses, and it
+// is stated once, here, because three readers have to agree on it: the store's
+// listing of incomplete runs, the status surface's count of running runs, and
+// the scheduler's reading of which items hold a developer slot and an epic. A
+// run that failed, whatever it left behind and whatever a person has yet to
+// decide about it, is a record and not one of these.
+func (s Status) InFlight() bool {
+	return s == StatusPending || s == StatusRunning
+}
+
 func DefaultRoot(getenv func(string) string, userHomeDir func() (string, error), goos string) (string, error) {
 	if value := strings.TrimSpace(getenv("YOYODYNE_STATE_HOME")); value != "" {
 		if !filepath.IsAbs(value) {
