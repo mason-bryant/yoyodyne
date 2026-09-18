@@ -624,7 +624,7 @@ Commands:
   sweeps            read what the recurring tasks found on their own cadence
   run               run one Beads work item in an isolated worktree
   work              schedule the ready work the harness chooses for itself
-  triage            carry out what the development manager decided about a stoppage
+  triage            carry out what the development manager decided about stopped work
   status            read what became of recent runs, and why one of them failed
   pause             pause everything the harness would spend on a provider
   resume            lift that pause, or release one run's wait on the provider

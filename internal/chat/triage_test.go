@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // The run a docket entry names, in the shape the harness mints them, and a
@@ -310,9 +311,9 @@ func TestARerunAndAMergeRearmSpendTheirOwnBudgets(t *testing.T) {
 		{
 			name:     "a merge re-arm",
 			decision: "rearm",
-			summary:  "1 merge re-arm(s) of it are now recorded",
+			summary:  "1 merge re-arm(s) of publication " + triage.PublicationKey(stoppedRun, 7) + " are now recorded",
 			counted:  func(counters runstate.TriageCounters) int { return counters.MergeRearms },
-			refusal:  "merge re-arm is refused for yoyodyne-ifd.68.3: 1 of 1 permitted merge re-arm(s) are spent",
+			refusal:  "merge re-arm is refused for publication " + triage.PublicationKey(stoppedRun, 7) + " of yoyodyne-ifd.68.3: 1 of 1 permitted merge re-arm(s) are spent",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1114,10 +1115,6 @@ func (b *triageBudgetGate) RecordRerun(ctx context.Context, workItemID string, d
 	return b.store.RecordRerun(ctx, workItemID, decision, b.now(), b.caps)
 }
 
-func (b *triageBudgetGate) RecordMergeRearm(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
-	return b.store.RecordMergeRearm(ctx, workItemID, decision, b.now(), b.caps)
-}
-
 func (b *triageBudgetGate) RecordDecision(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error) {
 	return b.store.RecordDecision(ctx, workItemID, decision, b.now())
 }
@@ -1132,6 +1129,19 @@ func (b *triageBudgetGate) counters(t *testing.T, workItemID string) runstate.Tr
 		t.Fatalf("Counters() error = %v", err)
 	}
 	return counters
+}
+
+// RecordMergeRearm keys the budget to the publication the decision's run made,
+// the way the command line wires it. The number is fixed here because these tests
+// are about the gate rather than about resolving a publication: what matters is
+// that one run's decision spends one publication's budget.
+func (b *triageBudgetGate) RecordMergeRearm(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.MergeRearmDecision, error) {
+	publication := triage.PublicationKey(decision.RunID, 7)
+	counters, err := b.store.RecordMergeRearm(ctx, workItemID, publication, decision, b.now(), b.caps)
+	if err != nil {
+		return runstate.MergeRearmDecision{}, err
+	}
+	return runstate.MergeRearmDecision{Publication: publication, Counters: counters}, nil
 }
 
 func (b *triageBudgetGate) now() time.Time { return b.clock.Now() }

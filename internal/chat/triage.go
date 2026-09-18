@@ -123,8 +123,12 @@ type TriageBudgets interface {
 	GrantRepair(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.RepairGrant, error)
 	// RecordRerun records that triage caused this item to be run again.
 	RecordRerun(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error)
-	// RecordMergeRearm records that triage re-armed a merge the forge dropped.
-	RecordMergeRearm(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.TriageCounters, error)
+	// RecordMergeRearm records that triage re-armed the merge the forge dropped
+	// for the publication of one run. The run is what the decision names; which
+	// publication that is, is the harness's to resolve from its own records,
+	// because the budget a re-arm spends is that publication's rather than the
+	// item's and a conversation must not be the thing that says which one it was.
+	RecordMergeRearm(ctx context.Context, workItemID string, decision runstate.TriageDecision) (runstate.MergeRearmDecision, error)
 	// RecordDecision records a decision that spends nothing, which is the other
 	// half of the vocabulary. It is a separate operation because there is no
 	// budget to write it beside: what makes those three atomic is the counter they
@@ -549,6 +553,12 @@ type triageSpend struct {
 // re-scoping, waiting, and escalating buy no attempt at all and are never refused
 // for budget.
 //
+// Two of the three are budgets of the work item's. The third is not: a re-arm
+// repeats one merge request the reviewer's verdict already authorized, so it is
+// bounded per publication, and what it says it recorded names that publication
+// rather than the item — a development manager told "1 re-arm of this item is
+// recorded" would read a second publication's untouched budget as a spent one.
+//
 // A conversation with no record wired can still decide the three that spend
 // nothing, exactly as it always could, and its decision reaches the item's notes
 // and no further. What it cannot do is grant, re-run, or re-arm: a budget that
@@ -597,13 +607,13 @@ func (s *Session) recordTriageDecision(ctx context.Context, workItemID string, d
 			landed: fmt.Sprintf("the re-run is spent against %s's durable budget: %d re-run(s) of it are now recorded", workItemID, counters.Reruns),
 		}, nil
 	default:
-		counters, err := s.options.Triage.RecordMergeRearm(ctx, workItemID, decided)
+		rearmed, err := s.options.Triage.RecordMergeRearm(ctx, workItemID, decided)
 		if err != nil {
 			return triageSpend{}, err
 		}
 		return triageSpend{
-			clause: fmt.Sprintf("; %d merge re-arm(s) of it are now recorded", counters.MergeRearms),
-			landed: fmt.Sprintf("the merge re-arm is spent against %s's durable budget: %d re-arm(s) of it are now recorded", workItemID, counters.MergeRearms),
+			clause: fmt.Sprintf("; %d merge re-arm(s) of publication %s are now recorded", rearmed.Rearms(), rearmed.Publication),
+			landed: fmt.Sprintf("the merge re-arm is spent against publication %s's durable budget: %d re-arm(s) of it are now recorded", rearmed.Publication, rearmed.Rearms()),
 		}, nil
 	}
 }

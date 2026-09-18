@@ -48,6 +48,12 @@ type PullRequest struct {
 	URL    string `json:"url"`
 	State  string `json:"state,omitempty"`
 	Merged bool   `json:"merged,omitempty"`
+	// HeadCommit is the commit the request currently carries, which is what the
+	// forge would merge. It is reported so a caller about to ask for a merge can
+	// tell a request that still carries the commit it was opened for from one that
+	// has moved: the merge itself pins the head as well, and this is what lets the
+	// question be answered before anything is asked of the forge.
+	HeadCommit string `json:"head_commit,omitempty"`
 	// AutoMerge reports a merge the forge is holding for this request: it will
 	// perform it once the base branch's requirements are met. It is what tells a
 	// queued merge that has not landed yet from one the forge dropped, which is
@@ -460,21 +466,77 @@ func normalizeAutoMerge(reason string) string {
 // explain a refusal that already happened, and a second failure must not
 // replace the answer the forge already gave.
 func (g GitHub) mergeState(ctx context.Context, number int) string {
-	scope, err := g.repoArgs(ctx)
+	status, err := g.MergeState(ctx, number)
 	if err != nil {
 		return ""
 	}
+	return status
+}
+
+// MergeState reports the forge's own merge state for one pull request, in the
+// forge's vocabulary — CLEAN, BLOCKED, DIRTY and the rest, which MergeRequirement
+// states in words.
+//
+// It reports a failure rather than swallowing it, unlike the reading that
+// explains a refusal: a caller deciding whether to ask the forge for anything is
+// gating on this, and a state that could not be read must refuse rather than read
+// as one with nothing outstanding.
+func (g GitHub) MergeState(ctx context.Context, number int) (string, error) {
+	if number <= 0 {
+		return "", fmt.Errorf("pull request number %d is not a request", number)
+	}
+	scope, err := g.repoArgs(ctx)
+	if err != nil {
+		return "", err
+	}
 	viewed, err := g.exec(ctx, append([]string{"pr", "view", strconv.Itoa(number)}, append(scope, "--json", "mergeStateStatus")...)...)
-	if err != nil || viewed.Status != execution.ProcessSucceeded {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("ask the forge for the merge state of pull request %d: %w", number, err)
+	}
+	if viewed.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("ask the forge for the merge state of pull request %d: exit code %d: %s",
+			number, viewed.ExitCode, g.redact(strings.TrimSpace(viewed.Stderr)))
 	}
 	var reported struct {
 		MergeStateStatus string `json:"mergeStateStatus"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(viewed.Stdout)), &reported); err != nil {
-		return ""
+		return "", fmt.Errorf("decode the merge state of pull request %d: %w", number, err)
 	}
-	return strings.TrimSpace(reported.MergeStateStatus)
+	return strings.TrimSpace(reported.MergeStateStatus), nil
+}
+
+// MergeRequirement states in words what a forge merge state says is unmet, and
+// says nothing for a state with nothing outstanding. It is exported because a
+// caller deciding whether a dropped merge is worth asking about again has to be
+// able to say what stopped it, in the same words a refusal already uses.
+func MergeRequirement(status string) string { return mergeRequirement(status) }
+
+// AwaitsOnlyAPerson reports a merge state naming a requirement that only a
+// person can satisfy, so nothing the harness may do would change the answer.
+//
+// The line is drawn where the harness's own reach ends. A conflict with the base
+// branch, a request still in draft, a base branch that has moved ahead of it, and
+// a protection rule the request does not satisfy are each somebody's work — and
+// the harness does not merge past any of them, not with administrator privileges
+// and not by asking again. What is left is a request the forge has nothing
+// outstanding on, or has not finished deciding about, where a merge that was
+// dropped was dropped for a cause that has passed: those are the ones repeating
+// the request is worth anything for, and repeating it puts the forge's whole
+// requirement machinery back in front of the merge rather than around it.
+//
+// A state that could not be read answers yes. A gate is what asks this, and the
+// safe answer for a gate is the one that refuses.
+func AwaitsOnlyAPerson(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "CLEAN", "UNSTABLE", "HAS_HOOKS", "UNKNOWN":
+		return false
+	default:
+		// BLOCKED, BEHIND, DIRTY and DRAFT each name something a person supplies,
+		// and so does a state this does not recognize: a forge vocabulary that grew
+		// a word since must not have it read as nothing outstanding.
+		return true
+	}
 }
 
 // State reports what the forge currently says about a branch's pull request. It
@@ -516,7 +578,7 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		"--head", head,
 		"--state", "all",
 		"--limit", "1",
-		"--json", "number,url,state,mergedAt,autoMergeRequest")...)...)
+		"--json", "number,url,state,mergedAt,autoMergeRequest,headRefOid")...)...)
 	if err != nil {
 		return PullRequest{}, false, fmt.Errorf("list pull requests for %s: %w", head, err)
 	}
@@ -524,10 +586,11 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		return PullRequest{}, false, fmt.Errorf("list pull requests for %s failed with exit code %d: %s", head, result.ExitCode, g.redact(strings.TrimSpace(result.Stderr)))
 	}
 	var reported []struct {
-		Number   int    `json:"number"`
-		URL      string `json:"url"`
-		State    string `json:"state"`
-		MergedAt string `json:"mergedAt"`
+		Number     int    `json:"number"`
+		URL        string `json:"url"`
+		State      string `json:"state"`
+		MergedAt   string `json:"mergedAt"`
+		HeadRefOid string `json:"headRefOid"`
 		// AutoMergeRequest is the merge the forge is holding, and is null on a
 		// request that has none. Its contents say who asked and how; only its
 		// presence matters here.
@@ -546,11 +609,12 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		return PullRequest{}, false, fmt.Errorf("pull request for %s reported no number", head)
 	}
 	return PullRequest{
-		Number:    one.Number,
-		URL:       one.URL,
-		State:     one.State,
-		Merged:    strings.EqualFold(one.State, "MERGED") || strings.TrimSpace(one.MergedAt) != "",
-		AutoMerge: one.AutoMergeRequest != nil,
+		Number:     one.Number,
+		URL:        one.URL,
+		State:      one.State,
+		Merged:     strings.EqualFold(one.State, "MERGED") || strings.TrimSpace(one.MergedAt) != "",
+		HeadCommit: strings.TrimSpace(one.HeadRefOid),
+		AutoMerge:  one.AutoMergeRequest != nil,
 	}, true, nil
 }
 
