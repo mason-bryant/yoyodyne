@@ -686,9 +686,10 @@ func (r Reconciler) settleDroppedMerge(ctx context.Context, state runstate.State
 // is an outstanding publication and nothing is closed against it: the forge says
 // it merged and nothing could check what the merge produced.
 //
-// mergeCommit is the commit the forge named as the merge, where it named one; it
-// is checked against the remote rather than believed, and the merge is found in
-// the remote history where the forge named none.
+// mergeCommit is the commit the forge named as the merge, where it named one. It
+// decides only what is recorded, never whether the merge is confirmed: it is
+// recorded where it is the merge of this promotion on the remote, and the merge
+// is found in the remote history otherwise.
 //
 // It is asked once, exactly as it always was. The recoverable-failure rule is
 // applied below to the deletion and to nothing else here: a sweep settles its

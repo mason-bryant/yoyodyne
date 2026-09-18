@@ -1091,9 +1091,10 @@ held requests merged in one sitting, on 2026-09-13 — leaves every promotion bu
 the last under a merge commit later merges have built on, and demanding equality
 there confirmed the last one and reported the other nine as unconfirmable for
 good. What the harness records as the merge commit is the one the forge names for
-the pull request, checked against the remote rather than believed, or the one it
-finds in the remote history with the promoted commit as a parent where the forge
-names none. The last step of the promotion is to
+the pull request, where that commit is on the remote target with the promoted
+commit as a parent, or otherwise the one it finds in the remote history with the
+promoted commit as a parent; the forge's record never decides the confirmation,
+only what is recorded. The last step of the promotion is to
 catch your local branch up onto the remote: a fast-forward onto a commit
 that already contains the promotion, so nothing
 is rewritten, nothing is merged, and nothing is decided. That is the `git pull`

@@ -480,10 +480,15 @@ func TestManagerConfirmRemoteTargetAcceptsAMergeThatLandedAmongOthers(t *testing
 	}
 }
 
-// The forge's own record of which commit merged the request is taken over
-// working it out from the history, and it is checked rather than believed: it has
-// to be on the remote target and to carry the promoted commit, or the answer is
-// the mismatch a wrong record would otherwise hide.
+// The forge's own record of which commit merged the request is what is
+// reported as the merge commit when it is what it claims to be — on the remote
+// target with the promoted commit as a parent. It never decides the
+// confirmation: containment does that, and a forge record that disagrees with a
+// remote that provably carries the promotion is a fact about the record. A
+// named commit that carries the promotion without being its merge — a later
+// merge on the branch, or the merge of a batch this request landed inside — is
+// set aside and this request's own merge is found in the history instead; a
+// named commit the remote does not carry at all is set aside the same way.
 func TestManagerConfirmRemoteTargetChecksTheForgesMergeCommit(t *testing.T) {
 	t.Parallel()
 
@@ -498,19 +503,28 @@ func TestManagerConfirmRemoteTargetChecksTheForgesMergeCommit(t *testing.T) {
 	if err != nil || confirmed != merged {
 		t.Fatalf("ConfirmRemoteTarget() with the forge's merge commit = %q, %v; want %q confirmed", confirmed, err, merged)
 	}
-	// A merge commit that is on the remote and does not carry the promotion is
-	// some other request's merge, whatever the forge says about it.
-	if _, err := manager.ConfirmRemoteTarget(context.Background(), integration, other); !errors.Is(err, ErrRemoteTargetMismatch) {
-		t.Fatalf("ConfirmRemoteTarget() with another request's merge commit error = %v, want ErrRemoteTargetMismatch", err)
+	// A commit on the remote that contains the promotion without being its merge
+	// confirms the publication all the same, and the merge reported is this
+	// request's own rather than the forge's word.
+	confirmed, err = manager.ConfirmRemoteTarget(context.Background(), integration, other)
+	if err != nil || confirmed != merged {
+		t.Fatalf("ConfirmRemoteTarget() with a later merge named = %q, %v; want the promotion confirmed under its own merge %q", confirmed, err, merged)
 	}
-	// A merge commit the remote target does not carry merged nothing into it,
-	// and this repository has never even fetched it: a commit on some other
-	// branch of the remote, above the target's tip.
+	// A commit the remote target does not carry — on some other branch of the
+	// remote, and never fetched here — is set aside the same way rather than
+	// refusing a promotion the remote provably contains.
 	stray := gitLine(t, remote, "-c", "user.name=Forge", "-c", "user.email=forge@example.invalid",
 		"commit-tree", other+"^{tree}", "-p", other, "-p", integration.TargetCommit, "-m", "a merge somewhere else")
 	runGit(t, remote, "update-ref", "refs/heads/yoyodyne-stray", stray)
-	if _, err := manager.ConfirmRemoteTarget(context.Background(), integration, stray); !errors.Is(err, ErrRemoteTargetMismatch) {
-		t.Fatalf("ConfirmRemoteTarget() with a commit off the target error = %v, want ErrRemoteTargetMismatch", err)
+	confirmed, err = manager.ConfirmRemoteTarget(context.Background(), integration, stray)
+	if err != nil || confirmed != merged {
+		t.Fatalf("ConfirmRemoteTarget() with a commit off the target named = %q, %v; want the promotion confirmed under its own merge %q", confirmed, err, merged)
+	}
+	// What the forge names never confirms a promotion the remote does not carry.
+	replayed := publishAndIntegrate(t, manager, "yoyodyne-replayed", "second.txt", "replayed\n")
+	rewritten := replayInRemote(t, remote, "main", replayed.TargetCommit)
+	if _, err := manager.ConfirmRemoteTarget(context.Background(), replayed, rewritten); !errors.Is(err, ErrRemoteTargetMismatch) {
+		t.Fatalf("ConfirmRemoteTarget() of a rewritten promotion with the forge's commit named error = %v, want ErrRemoteTargetMismatch", err)
 	}
 }
 

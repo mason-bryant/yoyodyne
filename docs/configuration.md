@@ -2493,9 +2493,10 @@ need not carry exactly its content: a merge that lands among others — ten held
 requests merged in one sitting — leaves every promotion but the last under a
 merge commit later merges have built on, and requiring equality there reported
 nine confirmable publications as unconfirmable for good. What is recorded as the
-merge commit is the one the forge names for the pull request, checked against
-the remote rather than believed, or the one found in the remote history with the
-promoted commit as a parent where the forge names none. A forge that rewrote the
+merge commit is the one the forge names for the pull request, where that commit
+is on the remote target with the promoted commit as a parent, or otherwise the
+one found in the remote history with the promoted commit as a parent; the
+forge's record never decides the confirmation, only what is recorded. A forge that rewrote the
 commit is reported, not reconciled, and the run branch is left on the remote for
 whoever decides which history is right.
 

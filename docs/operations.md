@@ -767,9 +767,11 @@ reason to start a second developer for an item.
 
 **None of the three stands forever.** Every sweep asks the remote again about
 each publication the record says is merged and unfinished, and finishes the ones
-the remote now confirms — the promoted commit on the remote target, unrewritten,
-under the merge commit the forge names for the request or the one the sweep
-finds in the remote history with the promoted commit as a parent. Finishing is
+the remote now confirms — the promoted commit on the remote target, unrewritten.
+The merge commit recorded is the one the forge names for the request where it is
+the merge of that promotion, or otherwise the one the sweep finds in the remote
+history with the promoted commit as a parent; the forge's record never decides
+the confirmation. Finishing is
 the settle path's own work in the settle path's order: the merge commit recorded,
 your local branch caught up, the item settled by its own landing where the drop
 had handed it back, the consumed branch deleted, and the docket entry closed as

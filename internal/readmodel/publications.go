@@ -45,9 +45,19 @@ func AwaitingForge(states []runstate.State) []runstate.State {
 // sweep once the forge records the merge, and the line says so, because that is
 // what stops a reader going looking for a lever that is not there.
 func awaitingForgeAttention(state runstate.State) Attention {
-	published := state.PullRequest
+	// The predicate that selects a state here requires both the promotion and the
+	// pull request to be recorded, so neither can be missing; a reading of every
+	// recorded run must still not be able to panic on a record if that predicate
+	// is ever widened, so a missing one is named rather than dereferenced.
+	target, published := "an unrecorded target", runstate.PullRequest{}
+	if state.Integration != nil {
+		target = state.Integration.TargetBranch
+	}
+	if state.PullRequest != nil {
+		published = *state.PullRequest
+	}
 	what := fmt.Sprintf("run %s promoted %s into %s and the forge has not published it: pull request #%d %s",
-		state.RunID, state.WorkItemID, state.Integration.TargetBranch, published.Number, published.URL)
+		state.RunID, state.WorkItemID, target, published.Number, published.URL)
 	switch {
 	case published.MergeQueued:
 		return Attention{

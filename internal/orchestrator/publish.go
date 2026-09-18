@@ -433,9 +433,9 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	}
 	// The forge says it merged; this is what its merge actually did to the
 	// branch. The recorded commit is the forge's merge commit, which is the one
-	// commit the remote target has that the local one does not — checked against
-	// the remote rather than taken from the forge's word, and found in the remote
-	// history where the forge named none.
+	// commit the remote target has that the local one does not — the forge's own
+	// where it is the merge of this promotion on the remote, and otherwise found in
+	// the remote history.
 	remoteTarget, err := recoveringValue(ctx, a, runstate.RetryRemoteTarget, func(ctx context.Context) (string, error) {
 		return a.pipeline.Worktrees.ConfirmRemoteTarget(ctx, integration, merged.MergeCommit)
 	})
