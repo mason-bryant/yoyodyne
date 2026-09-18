@@ -188,6 +188,12 @@ type Options struct {
 	// not at this terminal needs to be told. It is optional like the rest, and a
 	// conversation without one fails a refused turn exactly as it always did.
 	UsageLimits UsageLimits
+	// ProviderOutages is where a provider answering nobody — a login nobody has
+	// renewed, an API nothing reaches — is recorded when a turn meets it and
+	// cleared when a turn is served. It is optional like the rest, and a
+	// conversation without one fails a refused turn naming the wait and leaves
+	// no trace of it for anybody else.
+	ProviderOutages ProviderOutages
 	// Intake is the operator's switch over the work the harness chooses for
 	// itself: what a development manager may pull, as opposed to what the operator
 	// names. It is optional like the rest, and a conversation without one says it
@@ -1279,6 +1285,14 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// rather than about this conversation, and nothing else in the record would
 	// ever say it happened.
 	refusal := s.noteUsageLimit(result, err, served.Model)
+	// A provider answering nobody is recorded the same way and for the same
+	// reason, and it is the one refusal a served turn has to undo: the outage
+	// stands until something is served, and this turn may be the first thing
+	// that was.
+	away := s.noteProviderOutage(result, err)
+	if away == nil && err == nil {
+		s.noteProviderServed()
+	}
 	// And it says so in the error the turn fails with. To a person at a terminal
 	// that changes nothing — they are told what happened either way — but a caller
 	// that is not a person has to be able to tell "the role was never asked" from
@@ -1299,7 +1313,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// wherever the error is eventually reported.
 	if err != nil {
 		s.stream.cutOff()
-		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), declined, abandoned, refusal, s.record())
+		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), declined, abandoned, refusal, away, s.record())
 	}
 	if result.IsError {
 		s.stream.cutOff()
@@ -1308,6 +1322,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 			declined,
 			abandoned,
 			refusal,
+			away,
 			s.record(),
 		)
 	}

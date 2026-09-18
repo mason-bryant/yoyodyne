@@ -230,6 +230,40 @@ type ModelUnavailable struct {
 	Detail string
 }
 
+// ProviderOutage is a provider's report that it is answering nobody: the account
+// the attempt was made under is not logged in, or nothing reaches its API at
+// all. Like UsageLimit it is deliberately not a failure — the work was never
+// judged — and unlike UsageLimit it names no reset, because neither a login nor
+// a network quotes one.
+//
+// What it asks for is the one response none of the other answers gives: a wait
+// that spends nothing. No relaunch is counted against it, no repair attempt is
+// charged, and no blocker is recorded, because no attempt of the same request
+// goes differently until a person logs in or the network returns, and every
+// budget the harness keeps is a budget for something a run can do something
+// about. The wait ends when the provider answers again, which the harness finds
+// by asking, and nothing else ends it.
+//
+// The evidence. From 2026-09-17 18:17 local the Claude Code login on the
+// operator's machine had expired. Every dispatch was refused at the availability
+// check; the runs already going died on
+//
+//	API Error: Can't reach the API server
+//
+// spent their relaunch budgets, and were recorded as blocked; three of them in a
+// row tripped the intake brake, whose remedy — `yoyo release` — was the wrong
+// one; every recurring sweep pass recorded 0 turns; and the operator's
+// maintenance job restarted the watch 158 times. Nothing told him. He learned by
+// asking, three days later.
+type ProviderOutage struct {
+	// Cause is which of the two it is, in the domain's own vocabulary, because it
+	// decides what the operator is told to do.
+	Cause domain.ProviderOutageCause
+	// Detail is the provider's own words, carried as evidence rather than
+	// interpreted by the harness.
+	Detail string
+}
+
 // RunResult is what one provider invocation is worth: the invocation's own
 // terminal, and nothing nested inside it.
 //
@@ -302,6 +336,12 @@ type RunResult struct {
 	// version the provider has retired falls back to its family on this and on
 	// nothing else.
 	ModelUnavailable *ModelUnavailable
+	// ProviderOutage is set when the provider refused the attempt because nobody
+	// is logged into it or nobody can reach it. It travels beside IsError like
+	// the three above, and it is never set alongside an overload or a transient
+	// failure: it is the one wait that spends nothing, and a result that also
+	// asked for a relaunch would spend exactly what this exists not to.
+	ProviderOutage *ProviderOutage
 }
 
 // maxFailureDetailBytes bounds the provider's own words in a described failure.

@@ -668,6 +668,51 @@ func FromCapacityHold(hold CapacityHold, severity report.Severity, at time.Time)
 	return notification
 }
 
+// ProviderOutage is the provider answering nobody, as the read model says it:
+// what the state is, when it began, and whose move it is. It is the other half
+// of the capacity hold above and is shaped the same way for the same reason —
+// the same sentence heads `yoyo status` and this message.
+type ProviderOutage struct {
+	// Says is the state as the read model words it, carried already said.
+	Says string
+	// Since is when the outage was first noticed, which is what the age in the
+	// message is measured from.
+	Since time.Time
+	// Mover is whose move ends it, worded by the read model beside the fact.
+	Mover string
+	// Standing is where the harness stands, in the four lines the read model
+	// renders, for the reason the hold says them.
+	Standing string
+}
+
+// FromProviderOutage says that the provider is answering nobody. It is
+// addressed to the product and spoken by the harness for the reason the hold
+// and the stall are: it is about every item rather than any one of them.
+//
+// It is a warning, and it is said once: the caller tags the operators and does
+// not repeat it while it stands. What is degraded is the harness, and what ends
+// it is a person, which is the case the reach rule takes to somebody directly.
+func FromProviderOutage(outage ProviderOutage, at time.Time) Notification {
+	notification := productNotification(KindProviderOutage, at, Detail{
+		Stopped:  strings.TrimSpace(outage.Says),
+		Since:    outage.Since,
+		Mover:    strings.TrimSpace(outage.Mover),
+		Standing: strings.TrimRight(outage.Standing, "\n"),
+	})
+	notification.Event.Severity = report.SeverityWarning
+	return notification
+}
+
+// FromProviderRestored says that the provider is answering again after an
+// outage. It is a note: nothing is wrong and nothing is waiting on anybody, and
+// what it carries is what was restored and how long it had stood.
+func FromProviderRestored(says string, since, at time.Time) Notification {
+	return productNotification(KindProviderRestored, at, Detail{
+		Stopped: strings.TrimSpace(says),
+		Since:   since,
+	})
+}
+
 // Improvement is one value the project's template has improved that this
 // project has never edited: which setting it is, and what the three-way
 // comparison says about it.

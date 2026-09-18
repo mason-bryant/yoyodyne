@@ -247,6 +247,25 @@ const (
 	// sharpest case there is of the harness being degraded by something a person
 	// can change.
 	KindCapacityHold Kind = "capacity.hold"
+	// The provider answering nobody: a login nobody has renewed, or an API nothing
+	// reaches. It is the other half of the capacity hold — no reset, no window,
+	// nothing the harness can wait out on a clock — and the one the operator has
+	// to be told the moment it happens, because a person is the only thing that
+	// ends the first kind and the record is the only thing that says either.
+	// From 2026-09-17 18:17 local every dispatch was refused, every recurring
+	// pass recorded 0 turns, and the brake tripped naming the wrong remedy; the
+	// operator learned of it by asking, three days later.
+	//
+	// It is a warning, said once when it is seen and tagged to the operators by
+	// member id, because it is both important and theirs to act on. It is not
+	// said again while it stands: the line's own banner carries it, and what a
+	// repeated message would buy is a reason to mute the channel.
+	KindProviderOutage Kind = "provider.outage"
+	// The provider answering again after an outage: the login was renewed, or the
+	// network came back. It is said once, as a note, because the operator was told
+	// the line had stopped and is owed being told it carried on — and because the
+	// remedy is the harness's own: nothing was released and nothing was restarted.
+	KindProviderRestored Kind = "provider.restored"
 	// One value the project's template has improved that this project has never
 	// edited. It is the third state here rather than a crossing, and it is the
 	// mildest thing this vocabulary carries: nothing is wrong, nothing is waiting,
@@ -333,6 +352,8 @@ func Kinds() []Kind {
 		KindStallNoticed,
 		KindProviderWindow,
 		KindCapacityHold,
+		KindProviderOutage,
+		KindProviderRestored,
 		KindBundleImprovement,
 		KindBundleImprovements,
 		KindCatchUpDigest,
@@ -357,7 +378,8 @@ func (k Kind) Valid() bool {
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
-		KindProviderWindow, KindCapacityHold, KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest:
+		KindProviderWindow, KindCapacityHold, KindProviderOutage, KindProviderRestored,
+		KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest:
 		return true
 	default:
 		return false

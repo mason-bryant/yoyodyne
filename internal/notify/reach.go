@@ -192,6 +192,12 @@ var reaches = map[Kind]Reach{
 	// has both a cause and a remedy, and it is the operator's: the window is the
 	// provider's, and the configuration that let it hold every role is his.
 	KindCapacityHold: ReachChannel,
+	// The provider answering nobody, and answering again. The first is the one
+	// silence whose remedy is a person and nothing else, and the second is that
+	// person being told the line carried on: both belong at the top, where the
+	// operator asked that a pause name its cause.
+	KindProviderOutage:   ReachChannel,
+	KindProviderRestored: ReachChannel,
 	// A session dispatching work on a binary the harness has moved past. Nothing in
 	// the record says it at all, and what it costs is rounds spent against bugs
 	// that were fixed hours earlier.

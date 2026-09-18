@@ -171,6 +171,7 @@ func checkForStall(ctx context.Context, parts components, threshold time.Duratio
 		Sessions: parts.watch,
 		Holds:    parts.holds,
 		Intake:   parts.intake,
+		Outages:  parts.outages,
 		// The tracker's own count of what a developer run could actually be started
 		// for, which is the same reading the sink's heartbeat takes: work marked for
 		// a conversation and work the product manager parked are ready to the tracker

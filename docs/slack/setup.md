@@ -102,7 +102,10 @@ to whoever step 4 grants `direct-work`. The first is **the harness reporting
 itself degraded**: a session choosing work from a build the harness has moved
 well past, the harness having started nothing at all while work was ready, and
 [the provider holding every role](../reporting.md#the-provider-holding-every-role)
-with nothing configured to fail over to. The second is **advisory-once** — a
+with nothing configured to fail over to. Beside them, and needing no `im:write`
+at all, [a provider nobody is logged into or nobody can reach](../reporting.md#a-provider-nobody-can-reach)
+is said once in the channel tagged to those same members by id, and once more
+when it answers again. The second is **advisory-once** — a
 fact said exactly once and never repeated, which today is a value the project's
 template has improved that this project never edited. The first two degraded
 states and the improvement are sent once rather than repeated, and at most one

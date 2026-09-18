@@ -425,8 +425,32 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		return nil, nil, fmt.Errorf("the %s backend is not installed", agent.Backend)
 	}
 	if !availability.Authenticated {
-		return nil, nil, fmt.Errorf("the %s backend is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
-			agent.Backend, account.Alias, accountLoginCommand(cfg, agent.Backend, account), availability.AuthMethod)
+		// A login nobody has renewed is a wait rather than a refusal, and it is
+		// recorded on the product before the conversation refuses to open: the
+		// process that meets it here is usually a scheduled firing nobody is
+		// watching, and the record is what tells the operator to log in.
+		refused := fmt.Errorf("%w: the %s backend is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
+			chat.ErrProviderAway, agent.Backend, account.Alias, accountLoginCommand(cfg, agent.Backend, account), availability.AuthMethod)
+		if _, recordErr := parts.outages.Notice(runstate.ProviderOutageObservation{
+			Cause:        domain.ProviderUnauthenticated,
+			Provider:     agent.Backend,
+			AccountAlias: account.Alias,
+			Detail:       refused.Error(),
+			Waiting:      fmt.Sprintf("the %s conversation", role.Title()),
+			At:           time.Now().UTC(),
+		}); recordErr != nil {
+			return nil, nil, errors.Join(refused, fmt.Errorf("record that the provider is answering nobody: %w", recordErr))
+		}
+		return nil, nil, refused
+	}
+	// A provider that reports itself logged in ends an outage of that kind, on
+	// the same evidence the scheduler clears one on. An unreachable one is left
+	// standing: this check reads a local record and says nothing about the
+	// network, which the first served turn settles.
+	if standing, found, err := parts.outages.Standing(); err == nil && found && standing.Cause == domain.ProviderUnauthenticated {
+		if _, _, err := parts.outages.Clear(); err != nil {
+			fmt.Fprintf(stderr, "warning: the provider is logged in again and the outage could not be cleared: %v\n", err)
+		}
 	}
 
 	store, err := runstate.NewConversationStore(parts.stateRoot, cfg.Product.ID)
@@ -523,6 +547,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// records one in, so an exhausted limit reaches the channel from wherever
 		// it was met rather than only from a run.
 		UsageLimits: parts.usageLimits,
+		// And where a provider answering nobody is recorded when a turn meets it
+		// and cleared when one is served, for the same reason: the wait is every
+		// process's for as long as it lasts.
+		ProviderOutages: parts.outages,
 		// The operator's switch over the work the harness chooses for itself, so
 		// holding intake is something they can do from the conversation they are
 		// already in rather than from a second tool.

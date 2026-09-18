@@ -139,6 +139,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -230,6 +231,11 @@ const (
 	// the caller re-executes, and the session that comes back is watching the
 	// same queue from the build that was deployed.
 	ScheduleRedeployed = "a build was deployed over the one this session was started from, and the session is restarting into it"
+	// ScheduleProviderAway reports a drain that stopped because the provider is
+	// answering nobody — a login nobody has renewed, an API nothing reaches. A
+	// watch waits it out instead; a drain is a command somebody is waiting on the
+	// return of, and one that slept through a login would be one that hung.
+	ScheduleProviderAway = "the provider is answering nobody, so nothing more was chosen"
 	// ScheduleSpendUnreadable reports a bounded session that stopped because it
 	// could not tell what it had spent. A budget measured against evidence
 	// nobody can read is not a smaller budget, it is no budget at all, so the
@@ -487,7 +493,41 @@ type Pull struct {
 	// lost are re-issued without a person prompting it. Optional; see
 	// ScheduleCorrections.
 	Corrections ScheduleCorrections
+	// Outages is the product's record of the provider answering nobody, and
+	// Provider is what a watch asks whether the login has been renewed. Both
+	// optional; see ScheduleOutages. A pull wired without them counts a dispatch
+	// the provider turned away toward nothing all the same — that is decided from
+	// the dispatch's own error — and loses only the wait between pulls.
+	Outages  ScheduleOutages
+	Provider ScheduleProvider
+	// OutageProbe is how long a provider nobody can reach is left before a pull
+	// is made into it again to find out whether it answers. It is
+	// execution.usage_limit_unknown_reset_pause as this pull read it, because
+	// that is the one interval the configuration states for "ask again rather
+	// than being told when". Zero reads as the login's interval: a pull every
+	// poll.
+	OutageProbe time.Duration
 	Start       Starter
+}
+
+// ScheduleOutages is the product's record of the provider answering nobody, as
+// a watch reads and clears it. It is satisfied by *runstate.ProviderOutageStore.
+//
+// A watch reads it before every pull. While it stands the session chooses
+// nothing and says why — the brake never counts a dispatch the provider turned
+// away, and a dispatch made into a login nobody has renewed would be turned
+// away again — and it is the watch that finds the login renewed: a login is
+// asked about cheaply, and a session polling every minute is what makes
+// re-authentication resume the line without anybody releasing anything.
+type ScheduleOutages interface {
+	Standing() (runstate.ProviderOutage, bool, error)
+	Clear() (runstate.ProviderOutage, bool, error)
+}
+
+// ScheduleProvider is the developer's provider, as a watch asks it one thing:
+// whether the machine is logged in. It is satisfied by backend.Backend.
+type ScheduleProvider interface {
+	CheckAvailability(ctx context.Context) (backend.Availability, error)
 }
 
 // pullNeeds is what this pass will actually ask of a pull, which is not the same
@@ -606,6 +646,11 @@ type Started struct {
 	// being available, which is the ordinary outcome of two schedulers running.
 	Declined string `json:"declined,omitempty"`
 	Failure  string `json:"failure,omitempty"`
+	// awayCause is set when Failure is the provider turning the dispatch away —
+	// a login nobody has renewed, an API nothing reaches — which the settle reads
+	// to count the start toward nothing. It is not on the record because the
+	// failure already is, in words that say the same thing.
+	awayCause domain.ProviderOutageCause
 }
 
 // Deferred is one pullable item this pass declined to start, and why.
@@ -724,6 +769,18 @@ type Schedule struct {
 	// unsaid, because a refusal nobody woke for is exactly the loss the wakeup
 	// exists to prevent.
 	CorrectionProblem string `json:"correction_problem,omitempty"`
+	// ProviderAway counts the dispatches this pass made that the provider turned
+	// away because nobody was logged into it or nobody could reach it, and
+	// ProviderOutage is the outage as the last pull found it standing, nil once
+	// the provider answered. Neither counts toward the brake: the item is exactly
+	// as startable as it was, and a brake that tripped on it would prescribe
+	// `yoyo release`, which lifts nothing here.
+	ProviderAway   int                      `json:"provider_away,omitempty"`
+	ProviderOutage *runstate.ProviderOutage `json:"provider_outage,omitempty"`
+	// OutageProblem names an outage that could not be read or cleared. It costs
+	// the pass its wait between pulls and nothing else, so it is reported beside
+	// the pull rather than stopping it.
+	OutageProblem string `json:"outage_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
 	// needs a person, which is the whole reason for holding it.
@@ -914,7 +971,18 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		// surface downstream of that store reads it as though the item was never
 		// tried — which is what it looked like on 2026-09-13, four hours into a
 		// capacity window, over a queue of seventy-four.
-		if unstartedAttempt(*started) {
+		// A dispatch the provider turned away — nobody logged in, nobody able to
+		// reach it — is the one ending that leaves everything as it was. Nothing is
+		// docketed, because the item has no stoppage; nothing is excluded, because
+		// the item is exactly as startable as it was and is started when the
+		// provider answers; and nothing is counted toward the brake below, because
+		// the brake's remedy lifts nothing here. What is recorded is the wait, so
+		// the next pull reads it before dispatching into the same refusal.
+		if unstartedAttempt(*started) && started.providerAway() {
+			schedule.ProviderAway++
+			delete(tried, started.WorkItemID)
+			held = false
+		} else if unstartedAttempt(*started) {
 			recorded, problem := recordAttempt(docket, *started, excluded, s.Watching)
 			excluded.reason = recorded
 			if problem != "" && schedule.AttemptProblem == "" {
@@ -936,6 +1004,11 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 			// The work went to another process, which is two schedulers doing
 			// exactly what they should. It says nothing about the machine and
 			// nothing about the item, so it neither counts nor clears.
+		case started.providerAway():
+			// The provider turned the dispatch away. It says nothing about the
+			// item and nothing about the machine that a run could fix, so it
+			// neither counts nor clears: three of these in a row on 2026-09-17 are
+			// what tripped the brake over a login.
 		case started.blockedRun():
 			blockedInARow++
 			if blockedInARow > schedule.BlockedInARow {
@@ -980,6 +1053,38 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		}
 		schedule.Polls++
 		return s.sleep(ctx, pull.Poll)
+	}
+
+	// awaitProvider waits out one interval of the provider answering nobody. It
+	// differs from wait in one way: a run of this session ending mid-wait is
+	// collected and the interval is waited out regardless, rather than the run
+	// ending being what wakes the pass. The runs in flight are each waiting on
+	// the same provider, on their own probes, and a login renewed while they wait
+	// has to be noticed at the next interval rather than when the last of them
+	// finishes.
+	awaitProvider := func(pull Pull, said account) bool {
+		session.enter(runstate.WatchIdle, said)
+		schedule.Polls++
+		if running == 0 {
+			return s.sleep(ctx, pull.Poll)
+		}
+		interval := make(chan struct{})
+		go func() {
+			defer close(interval)
+			s.sleep(ctx, pull.Poll)
+		}()
+		for {
+			select {
+			case done := <-completions:
+				running--
+				delete(mine, schedule.Started[done.index].WorkItemID)
+				settle(done)
+			case <-interval:
+				return ctx.Err() == nil
+			case <-ctx.Done():
+				return false
+			}
+		}
 	}
 
 	var failure error
@@ -1150,6 +1255,25 @@ pulling:
 		// a stoppage nobody delivers and a cadence nobody fires cost their whole
 		// pass. Like both of them it takes at most one turn; see Corrector.
 		s.correct(ctx, &schedule, pull)
+		// A provider answering nobody is read before the brake and before anything
+		// is chosen. It is read here rather than folded into the hold below because
+		// it is the opposite kind of stop: nothing a person placed and nothing
+		// `yoyo release` lifts, and a session that dispatched into it would count
+		// the refusals as blocked runs and place exactly that hold. While it stands
+		// the session chooses nothing and says why, and it is the session that
+		// finds the login renewed — which is what makes re-authentication resume
+		// the line without anybody releasing anything.
+		if outage, away := s.providerAway(ctx, &schedule, pull); away {
+			if !s.Watching {
+				schedule.Stopped = ScheduleProviderAway
+				break
+			}
+			if !awaitProvider(pull, account{reason: outage.Says(), running: running}) {
+				schedule.Stopped = ScheduleCancelled
+				break
+			}
+			continue
+		}
 		// The brake is applied before the hold is read, so the reading that
 		// follows is what stops the choosing whether the operator held intake or
 		// this session did. Nothing else in the loop knows the difference, which
@@ -1694,6 +1818,56 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 	schedule.Braked = &held
 }
 
+// providerAway reads whether the provider is answering nobody, and reports the
+// outage where one stands. A pull wired without the record reads none, and a
+// record that cannot be read is said on the schedule and read past: a session
+// that stopped choosing work because it could not open one file would be a
+// worse failure than dispatching into a refusal.
+//
+// The two causes are asked about differently, because what ends them is
+// different. A login is asked about cheaply — the provider's own availability
+// check reads its local record of being signed in — so while that stands the
+// session asks at every pull and clears the outage the moment the answer is
+// yes. Nothing cheaper than an invocation says whether the network is back, so
+// a provider nobody can reach is left the probe interval and then pulled into
+// again: the dispatch is the probe, and a run it starts waits on its own if the
+// answer is still no.
+func (s Scheduler) providerAway(ctx context.Context, schedule *Schedule, pull Pull) (runstate.ProviderOutage, bool) {
+	if pull.Outages == nil {
+		return runstate.ProviderOutage{}, false
+	}
+	outage, standing, err := pull.Outages.Standing()
+	if err != nil {
+		schedule.OutageProblem = fmt.Sprintf("whether the provider is answering could not be read, so the pull was made as though it were: %v", err)
+		return runstate.ProviderOutage{}, false
+	}
+	if !standing {
+		schedule.ProviderOutage = nil
+		return runstate.ProviderOutage{}, false
+	}
+	if outage.Cause == domain.ProviderUnauthenticated && pull.Provider != nil {
+		availability, err := pull.Provider.CheckAvailability(ctx)
+		if err == nil && availability.Installed && availability.Authenticated {
+			if _, _, err := pull.Outages.Clear(); err != nil {
+				schedule.OutageProblem = fmt.Sprintf("the provider is logged in again and the outage could not be cleared: %v", err)
+			}
+			schedule.ProviderOutage = nil
+			return runstate.ProviderOutage{}, false
+		}
+		schedule.ProviderOutage = &outage
+		return outage, true
+	}
+	// A provider nobody can reach, or a login nothing here can ask about: the
+	// pull is the probe, once the interval has passed since the provider was
+	// last met refusing.
+	if !s.now().Before(outage.LastSeen.Add(pull.OutageProbe)) {
+		schedule.ProviderOutage = nil
+		return runstate.ProviderOutage{}, false
+	}
+	schedule.ProviderOutage = &outage
+	return outage, true
+}
+
 // escalate puts the oldest stopped run the development manager has not been
 // shown in front of her, and records what came back on the schedule.
 //
@@ -1882,6 +2056,15 @@ func priceRun(spend ScheduleSpend, outcome Outcome) (float64, string) {
 // brake counts, and neither is a run somebody is owed a continuation of.
 func (s Started) blockedRun() bool {
 	return s.Failure != "" || s.Outcome.Blocked
+}
+
+// providerAway reports a start the provider turned away before any run was
+// recorded, because nobody was logged into it or nobody could reach it. It is
+// read from the failure the dispatch reported rather than from anything the
+// scheduler remembers, so a pull that met it counts it the same whether or not
+// an outage store was wired.
+func (s Started) providerAway() bool {
+	return s.awayCause != ""
 }
 
 // idlePoll is what one pull found while it started nothing, in the product
@@ -2341,6 +2524,10 @@ func (s *Started) record(done completed) {
 		s.Declined = fmt.Sprintf("another process is already running %s as %s", existing.State.WorkItemID, existing.State.RunID)
 	default:
 		s.Failure = done.err.Error()
+		var away ProviderOutageError
+		if errors.As(done.err, &away) {
+			s.awayCause = away.Cause
+		}
 	}
 }
 
@@ -2621,6 +2808,18 @@ func (s Schedule) Render() string {
 	}
 	if s.ReadProblem != "" && s.ReadFailure == "" {
 		fmt.Fprintf(&rendered, "the last of them: %s\n", s.ReadProblem)
+	}
+	// The provider answering nobody is said with what ends it rather than with
+	// a command, because there is none: the brake's remedy is the one an operator
+	// reaches for, and it lifts nothing here.
+	if s.ProviderOutage != nil {
+		fmt.Fprintf(&rendered, "%s\n", s.ProviderOutage.Says())
+	}
+	if s.ProviderAway > 0 {
+		fmt.Fprintf(&rendered, "%d dispatch(es) were turned away by the provider and counted toward nothing; the items are started when it answers\n", s.ProviderAway)
+	}
+	if s.OutageProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.OutageProblem)
 	}
 	if s.Braked != nil {
 		// The brake places a hold nobody chose, so the line that reports it carries

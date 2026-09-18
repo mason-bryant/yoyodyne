@@ -72,6 +72,11 @@ type Checker struct {
 	// waking for.
 	Holds  readmodel.OperatorHolds
 	Intake readmodel.IntakeHolds
+	// Outages is the provider answering nobody, read because a line of runs each
+	// waiting on a login is not a line that died. It is the one optional source:
+	// a checker built without it reads as it did before the wait was named, and
+	// what it costs is a page for a machine waiting correctly.
+	Outages readmodel.ProviderOutages
 	// Backlog is asked only where nothing else accounts for the quiet, which is
 	// what keeps a healthy idle product from spawning a tracker process on every
 	// check.
@@ -144,6 +149,14 @@ func (c Checker) Check(ctx context.Context) (Reading, error) {
 	if err != nil {
 		return Reading{}, fmt.Errorf("read the intake hold: %w", err)
 	}
+	var outage runstate.ProviderOutage
+	providerAway := false
+	if c.Outages != nil {
+		outage, providerAway, err = c.Outages.Standing()
+		if err != nil {
+			return Reading{}, fmt.Errorf("read whether the provider is answering: %w", err)
+		}
+	}
 
 	activity := readmodel.Activity{
 		Since: readmodel.LastStart(runs, sessions),
@@ -158,6 +171,8 @@ func (c Checker) Check(ctx context.Context) (Reading, error) {
 		// recorded: a session waiting out a usage window starts nothing over a ready
 		// queue and looks from here exactly like one that has died.
 		ProviderWindow: readmodel.WaitingOnProvider(sessions),
+		ProviderOutage: outage,
+		ProviderAway:   providerAway,
 		Watched:        len(sessions) > 0,
 		Threshold:      c.threshold(),
 		Now:            now,

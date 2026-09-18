@@ -55,7 +55,7 @@ func TestTheSuiteFailsAnAdapterThatDivergesOrSaysNothing(t *testing.T) {
 		if len(problems) != 1 || problems[0].Condition != AuthenticationRejected {
 			t.Fatalf("Verify() = %v, want one problem naming the condition with no sample", problems)
 		}
-		if !strings.Contains(problems[0].Detail, string(ResponseRefusalStands)) {
+		if !strings.Contains(problems[0].Detail, string(ResponseWaitForTheProvider)) {
 			t.Fatalf("the problem does not say what the adapter owes: %s", problems[0])
 		}
 	})
@@ -102,7 +102,7 @@ func TestEveryConditionRequiresAResponse(t *testing.T) {
 
 	for _, condition := range Conditions {
 		switch condition.Requires() {
-		case ResponseWaitForTheWindow, ResponseAskForAnotherModel, ResponseMakeAnotherAttempt, ResponseRefusalStands:
+		case ResponseWaitForTheWindow, ResponseAskForAnotherModel, ResponseMakeAnotherAttempt, ResponseRefusalStands, ResponseWaitForTheProvider:
 		default:
 			t.Errorf("condition %q requires %q, which is not a response the harness takes", condition, condition.Requires())
 		}

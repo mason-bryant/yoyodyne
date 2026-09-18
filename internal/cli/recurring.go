@@ -53,6 +53,9 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		// The same pause every run, turn, and delivery reads. A firing is a
 		// provider invocation, so `yoyo pause` covers it exactly as it covers them.
 		Holds: parts.holds,
+		// And the provider answering nobody, so a firing due while it stands
+		// records the wait rather than a turn that failed.
+		Outages: parts.outages,
 	}
 }
 
@@ -120,9 +123,10 @@ func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, messa
 // recorded about the firing says so rather than claiming a pass that produced
 // nothing. They are the same three the stopped-work delivery names, for the same
 // reasons: a provider with no capacity never put the message in front of the
-// role, a pause placed between the claim and the turn refused it before the
-// provider was reached, and a cancellation is the harness's own death rather than
-// anything about the role.
+// role, and neither did one nobody is logged into or nobody can reach; a pause
+// placed between the claim and the turn refused it before the provider was
+// reached; and a cancellation is the harness's own death rather than anything
+// about the role.
 //
 // Unlike the delivery, none of them gives anything back. A recurring task's
 // cadence is not a budget of attempts at one specific thing: the next firing
@@ -131,7 +135,7 @@ func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, messa
 // capacity.
 func notWoken(err error) error {
 	var held *chat.OperatorHoldError
-	if errors.Is(err, chat.ErrProviderCapacity) || errors.As(err, &held) || errors.Is(err, chat.ErrTurnAbandoned) {
+	if errors.Is(err, chat.ErrProviderCapacity) || errors.Is(err, chat.ErrProviderAway) || errors.As(err, &held) || errors.Is(err, chat.ErrTurnAbandoned) {
 		return fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
 	}
 	return err

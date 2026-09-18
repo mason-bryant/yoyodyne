@@ -67,6 +67,13 @@ const (
 	// ReasonNoCapacity is a machine with every developer slot taken. It is the one
 	// reason here that is the harness working rather than the harness stopped.
 	ReasonNoCapacity Reason = "capacity"
+	// ReasonProviderAway is the provider answering nobody: a login nobody has
+	// renewed, or an API nothing reaches. It is distinct from the window below
+	// because no clock ends it — a person logging in or the network returning is
+	// what does — and distinct from the intake hold because no switch lifts it.
+	// It is read ahead of a full machine because the runs holding the slots are
+	// waiting on the same provider.
+	ReasonProviderAway Reason = "provider-away"
 	// ReasonProviderWindow is a live session waiting out the provider's usage
 	// window. It is distinct from an idle session because an operator does nothing
 	// at all about it: the window lifts on the provider's clock, and a surface that
@@ -93,6 +100,7 @@ func Reasons() []Reason {
 	return []Reason{
 		ReasonOperatorHold,
 		ReasonIntakeHold,
+		ReasonProviderAway,
 		ReasonNoCapacity,
 		ReasonProviderWindow,
 		ReasonSessionIdle,
@@ -114,6 +122,8 @@ func (r Reason) Whose() string {
 		return "the operator's — nothing runs until `yoyo resume` lifts it"
 	case ReasonIntakeHold:
 		return "the operator's — nothing new is chosen until `yoyo release` lifts it"
+	case ReasonProviderAway:
+		return "the operator's — log in to the provider, or wait for the network; the harness resumes on its own once it answers, and nothing is released or restarted"
 	case ReasonNoCapacity:
 		return "nobody's — a slot frees as a run in flight finishes"
 	case ReasonProviderWindow:
@@ -136,6 +146,11 @@ type Conditions struct {
 	OperatorHeld bool
 	IntakeHold   runstate.IntakeHold
 	IntakeHeld   bool
+	// ProviderOutage is the provider answering nobody, and ProviderAway whether
+	// one stands. A caller that never read the record leaves both zero and gets
+	// the rest of the answer.
+	ProviderOutage runstate.ProviderOutage
+	ProviderAway   bool
 	// Running is how many developer runs are in flight, read against Capacity. A
 	// caller that has already decided a run in flight is not a stalled line leaves
 	// both at zero and gets the rest of the answer.
@@ -230,6 +245,12 @@ func (s Stall) Waiting() (Attention, bool) {
 			what += ", since " + s.Since.UTC().Format(time.RFC3339)
 		}
 		return Attention{What: what, Whose: s.Reason.Whose()}, true
+	case ReasonProviderAway:
+		// The provider answering nobody is waiting on a person in the one way a
+		// window is not, and it is the wait the attention line exists for: the
+		// only thing that fired on it in September was a brake naming the wrong
+		// remedy. Its sentence already says since when.
+		return Attention{What: s.Says, Whose: s.Reason.Whose()}, true
 	default:
 		return Attention{}, false
 	}
@@ -269,6 +290,15 @@ func WhyNothingStarts(conditions Conditions) Stall {
 			Says:   "intake is held, and " + singleLine(conditions.IntakeHold.Says(), maxRefusalBytes),
 			Clears: "`yoyo release` lifts it",
 			Since:  conditions.IntakeHold.HeldAt,
+		}
+	case conditions.ProviderAway:
+		// Said whole rather than as a clause, as the window is and for the same
+		// reason: the operator asked that when the harness is paused on the
+		// provider the cause be the first words of any message that reaches him.
+		return Stall{
+			Reason: ReasonProviderAway,
+			Says:   conditions.ProviderOutage.Says(),
+			Since:  conditions.ProviderOutage.Since,
 		}
 	case conditions.Capacity > 0 && conditions.Running >= conditions.Capacity:
 		return Stall{

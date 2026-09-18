@@ -19,15 +19,19 @@ import (
 // Condition is one thing a provider can do to an invocation, named in the terms
 // the harness reasons in rather than in any provider's own.
 //
-// The five here are the ones a wrong answer costs something. Capacity and the
+// The six here are the ones a wrong answer costs something. Capacity and the
 // model are the two refusals the harness has an answer to — a window to wait for
 // and another selector to ask — so reading either as anything else throws the
-// answer away. Authentication and a refusal that judges the work are the two
-// that stand however often they are asked, so reading either as weather spends a
-// run's whole relaunch budget on an answer that cannot change. And a network
-// failure is the reverse of both: it judged nothing and names no condition to
-// wait for, so reading it as a verdict fails a whole run on weather, which is
-// what a person spent a week reconciling by hand.
+// answer away. A refusal that judges the work stands however often it is asked,
+// so reading it as weather spends a run's whole relaunch budget on an answer
+// that cannot change. A network failure is the reverse: it judged nothing and
+// names no condition to wait for, so reading it as a verdict fails a whole run
+// on weather, which is what a person spent a week reconciling by hand. And
+// authentication and an unreachable provider are the two nothing but a person
+// or the network ends, so reading either as a death spends the relaunch budget
+// and then blocks a run that had nothing wrong with it — which happened to at
+// least two runs in the 2026-09-15..18 outage — and reading either as a refusal
+// that stands fails it outright.
 type Condition string
 
 const (
@@ -39,9 +43,13 @@ const (
 	// other.
 	ModelUnavailable Condition = "model-unavailable"
 	// AuthenticationRejected is the provider refusing the account the invocation
-	// was made under. Nothing about the work was judged and nothing will change
-	// by asking again.
+	// was made under. Nothing about the work was judged, and nothing changes
+	// until a person logs in.
 	AuthenticationRejected Condition = "authentication-rejected"
+	// ProviderUnreachable is nothing answering at the provider's API at all: the
+	// machine offline or asleep, a name that does not resolve, a connection
+	// refused. Nothing was judged, and nothing changes until the network is back.
+	ProviderUnreachable Condition = "provider-unreachable"
 	// NetworkFailure is the attempt dying in transit — a connection that went
 	// away mid-reply, a stream that stopped. It judged nothing and names no
 	// condition that lifts.
@@ -57,6 +65,7 @@ var Conditions = []Condition{
 	CapacityExhausted,
 	ModelUnavailable,
 	AuthenticationRejected,
+	ProviderUnreachable,
 	NetworkFailure,
 	WorkRefused,
 }
@@ -81,6 +90,9 @@ const (
 	// ResponseRefusalStands is a refusal with nothing to wait for and nothing to
 	// relaunch into.
 	ResponseRefusalStands Response = "take the refusal as standing"
+	// ResponseWaitForTheProvider is a provider nobody is logged into or nobody
+	// can reach: a wait that spends nothing and ends when the provider answers.
+	ResponseWaitForTheProvider Response = "wait for the provider to answer again, spending nothing"
 	// ResponseCarriedOn is an invocation the harness has no complaint about,
 	// which is the wrong answer to every condition here.
 	ResponseCarriedOn Response = "carry on as though nothing was refused"
@@ -96,7 +108,9 @@ func (c Condition) Requires() Response {
 		return ResponseAskForAnotherModel
 	case NetworkFailure:
 		return ResponseMakeAnotherAttempt
-	case AuthenticationRejected, WorkRefused:
+	case AuthenticationRejected, ProviderUnreachable:
+		return ResponseWaitForTheProvider
+	case WorkRefused:
 		return ResponseRefusalStands
 	default:
 		return ""
@@ -272,6 +286,10 @@ func responseTo(result backend.RunResult) (Response, []string) {
 	if result.TransientFailure != nil {
 		held = append(held, "a transient failure")
 		response = ResponseMakeAnotherAttempt
+	}
+	if result.ProviderOutage != nil {
+		held = append(held, "a provider nobody is logged into or can reach")
+		response = ResponseWaitForTheProvider
 	}
 	switch {
 	case len(held) > 1:

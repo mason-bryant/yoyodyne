@@ -81,8 +81,23 @@ func TestObserveAnswersWhatTheProviderSaid(t *testing.T) {
 		},
 		{
 			name:  "a status describing the request",
-			event: failedTerminal("401 Unauthorized: check your credentials"),
+			event: failedTerminal("403 Forbidden: this key may not use that endpoint"),
 			want:  backendapi.AnswerRefused,
+			said:  true,
+		},
+		{
+			// A login nobody has renewed is a wait that spends nothing rather than
+			// a refusal that stands, so it is read ahead of the client-error class
+			// its status belongs to.
+			name:  "an account the provider will not accept",
+			event: failedTerminal("401 Unauthorized: check your credentials"),
+			want:  backendapi.AnswerUnauthenticated,
+			said:  true,
+		},
+		{
+			name:  "nothing answering at the API",
+			event: failedTerminal("error sending request: dns error: failed to lookup address information"),
+			want:  backendapi.AnswerUnreachable,
 			said:  true,
 		},
 		{

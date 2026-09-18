@@ -159,6 +159,11 @@ type Result struct {
 	// judged is untouched by it — with the difference that what it asks the caller
 	// for is another invocation rather than a wait.
 	TransientFailure *backend.TransientFailure
+	// ProviderOutage is set when the provider refused the invocation because
+	// nobody is logged into it or nobody can reach it. It is carried for the
+	// reason the three above are — the review was never made — and what it asks
+	// the caller for is the one wait that spends nothing.
+	ProviderOutage *backend.ProviderOutage
 	// ProcessStatus is how the reviewer's own process ended, carried so a caller
 	// can tell a review the provider answered badly from one the harness stopped
 	// on time. A stopped review was never made either, and the change it was
@@ -285,6 +290,7 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 			UsageLimit:       providerResult.UsageLimit,
 			ServerOverload:   providerResult.ServerOverload,
 			TransientFailure: providerResult.TransientFailure,
+			ProviderOutage:   providerResult.ProviderOutage,
 			ProcessStatus:    providerResult.Process.Status,
 		}, fmt.Errorf("reviewer backend failed: %w", err)
 	}
@@ -314,6 +320,7 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 			UsageLimit:       providerResult.UsageLimit,
 			ServerOverload:   providerResult.ServerOverload,
 			TransientFailure: providerResult.TransientFailure,
+			ProviderOutage:   providerResult.ProviderOutage,
 			ProcessStatus:    providerResult.Process.Status,
 			Reports:          reported,
 			ReportProblem:    reportProblem,

@@ -824,6 +824,7 @@ var notAStep = map[string]string{
 	"holdForDependency":          "waits out work this item was made to depend on",
 	"pauseForUsageLimit":         "waits out a provider usage limit",
 	"pauseForServerOverload":     "waits out a provider that could not serve the invocation",
+	"pauseForProviderOutage":     "waits out a provider nobody is logged into or nobody can reach, spending nothing",
 	"awaitRecordedUsageLimit":    "serves a usage-limit deadline an earlier process recorded",
 	"clearDirectivePause":        "consumes a directive pause the run recorded",
 	"clearDependencyPause":       "consumes a dependency pause the run recorded",

@@ -73,6 +73,24 @@ func claudeCodeAdapter() Adapter {
 					ExitCode: 1,
 				},
 			},
+			ProviderUnreachable: {
+				{
+					// The CLI's own words when nothing answers at the API, recorded on
+					// the runs that died in the 2026-09-15..18 outage. It quotes no
+					// status because nothing answered, which is what separates it from
+					// the mid-reply drop below: that one reached the provider.
+					Name:     "nothing answering at the API, in the CLI's own words",
+					Stream:   lines(claudeInit, claudeTerminal("api_error", "API Error: Can't reach the API server")),
+					ExitCode: 1,
+				},
+				{
+					// The transport's own words for the same condition, which the CLI
+					// carries onto its terminal when Node reports the failure itself.
+					Name:     "a name that does not resolve",
+					Stream:   lines(claudeInit, claudeTerminal("api_error", "API Error: getaddrinfo ENOTFOUND api.anthropic.com")),
+					ExitCode: 1,
+				},
+			},
 			NetworkFailure: {{
 				// Byte for byte what the provider CLI wrote on the run that died
 				// developing yoyodyne-ifd.68.2 on 2026-08-19. It quotes no status
@@ -127,6 +145,15 @@ func codexAdapter() Adapter {
 			AuthenticationRejected: {{
 				Name:     "an account the API would not accept",
 				Stream:   lines(codexSessionConfigured, codexError("401 Unauthorized: check your credentials")),
+				ExitCode: 1,
+			}},
+			ProviderUnreachable: {{
+				// This provider has one error channel, so the transport's own words
+				// arrive on it exactly as an API's do. No recorded Codex stream carries
+				// one; the shape is the transport's documented answer for a name that
+				// does not resolve.
+				Name:     "a name that does not resolve",
+				Stream:   lines(codexSessionConfigured, codexError("error sending request: dns error: failed to lookup address information")),
 				ExitCode: 1,
 			}},
 			NetworkFailure: {{

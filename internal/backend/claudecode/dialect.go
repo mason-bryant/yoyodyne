@@ -78,7 +78,8 @@ var modelNotFound = regexp.MustCompile(`(?i)not_found_error|\bmodel:`)
 
 // notAuthenticated is this provider saying it will not accept the account the
 // invocation was made under: the CLI's own words for an account that is not
-// logged in, beside the API's names for the same refusal.
+// logged in, beside the API's names for the same refusal, and the status the API
+// answers it with.
 //
 // It is the one place the leftovers below are deliberately narrowed, so the
 // reason is worth stating. The trade those leftovers make — being wrong about a
@@ -86,15 +87,37 @@ var modelNotFound = regexp.MustCompile(`(?i)not_found_error|\bmodel:`)
 // stands costs the whole run — holds for weather and not for this: relaunching
 // into an account the provider will not accept spends a run's whole relaunch
 // budget on an answer that cannot change, and no attempt of it is any different
-// from the first. The same condition already stands as a refusal when the CLI
-// quotes the status instead, since 401 is a client error below, so what this
-// closes is one provider reporting one condition two ways and the harness
-// answering the two differently.
+// from the first. What it is read as is the contract's own answer for a login
+// nobody has renewed, which the harness waits out spending nothing rather than
+// failing the run over; the status form is matched here as well so that one
+// provider reporting one condition two ways earns one answer.
 //
 // It is read only off a terminal API error, like every other match here, so an
 // agent's own prose about being logged out is left where it was: what the
 // provider said about the request is on that envelope and nowhere else.
 var notAuthenticated = regexp.MustCompile(`(?i)not logged in|invalid api key|authentication_error|\bunauthorized\b`)
+
+// unauthenticatedStatus is the HTTP status the provider's API answers with when
+// it will not accept the credentials the request carried.
+const unauthenticatedStatus = "401"
+
+// unreachable is this provider saying nothing answered at its API at all: the
+// CLI's own words when the machine is offline or asleep, beside the transport
+// errors Node reports when a name does not resolve or a connection is refused.
+//
+// It is narrower than the leftovers on purpose, and the reason is the reverse of
+// the not-authenticated one above. A connection that dropped mid-reply reached
+// the provider and may well not drop again, so relaunching it is right; nothing
+// reaching the provider at all is not answered by asking twice more against a
+// budget and then blocking, which is what happened to at least two runs in the
+// 2026-09-15..18 outage. What it is read as is a wait that spends nothing, so a
+// message this version does not recognize keeps failing over into the relaunch
+// path rather than into a wait nobody can justify.
+//
+// The specimen is the CLI's own: "API Error: Can't reach the API server",
+// recorded on the runs that died during that outage, which quotes no status
+// because nothing answered.
+var unreachable = regexp.MustCompile(`(?i)can(?:'|’|no)?t reach the api|unable to reach the api|network is unreachable|getaddrinfo|\benotfound\b|\beconnrefused\b|\behostunreach\b|\benetunreach\b|fetch failed`)
 
 // clientErrorPrefix marks the API statuses that describe the request rather than
 // the server's ability to serve it. A relaunch would put the identical request in
@@ -243,10 +266,11 @@ func observeRateLimit(payload json.RawMessage) (backend.Observation, bool) {
 // observeFailedTerminal tells the ways this provider can end an invocation badly
 // apart. A server overload is a wait; a not-found naming a model is a refusal
 // about the selector, which the caller can answer by asking for another one; an
-// account this provider will not accept is a refusal that stands however it was
-// spelled; any other status describing the request is a refusal that stands too;
-// and everything else left in the API-error category is a death that judged
-// nothing about the work.
+// account this provider will not accept is a login nobody has renewed, however
+// it was spelled, and nothing answering at all is a provider nobody can reach —
+// both are waits that spend nothing; any other status describing the request is
+// a refusal that stands; and everything else left in the API-error category is a
+// death that judged nothing about the work.
 //
 // The model case is read ahead of the general client-error one it is a member
 // of, because it is the narrower reading of the same status and the general one
@@ -275,8 +299,10 @@ func observeFailedTerminal(event backend.ProviderEvent) (backend.Observation, bo
 		return backend.Observation{Answer: backend.AnswerUnavailable, Detail: event.Text}, true
 	case status != nil && status[1] == notFoundStatus && modelNotFound.MatchString(event.Text):
 		return backend.Observation{Answer: backend.AnswerModelUnavailable, Detail: described}, true
-	case notAuthenticated.MatchString(event.Text):
-		return backend.Observation{Answer: backend.AnswerRefused, Detail: described}, true
+	case notAuthenticated.MatchString(event.Text), status != nil && status[1] == unauthenticatedStatus:
+		return backend.Observation{Answer: backend.AnswerUnauthenticated, Detail: described}, true
+	case unreachable.MatchString(event.Text):
+		return backend.Observation{Answer: backend.AnswerUnreachable, Detail: described}, true
 	case status != nil && strings.HasPrefix(status[1], clientErrorPrefix):
 		return backend.Observation{Answer: backend.AnswerRefused, Detail: described}, true
 	default:

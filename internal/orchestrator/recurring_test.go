@@ -583,3 +583,49 @@ func (r *refusingReports) Append(recorded runstate.Sweep) error {
 	}
 	return r.store.Append(recorded)
 }
+
+// A firing due while the provider is answering nobody records the wait rather
+// than a turn that failed, asks the role nothing, and keeps its cadence: what a
+// week of passes then says about the outage is the outage, rather than a column
+// of zero turns nobody could read a login out of.
+func TestAFiringIntoAProviderAnsweringNobodyRecordsTheWait(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	outages, err := runstate.NewProviderOutageStore(t.TempDir(), "example")
+	if err != nil {
+		t.Fatalf("NewProviderOutageStore() error = %v", err)
+	}
+	if _, err := outages.Notice(runstate.ProviderOutageObservation{Cause: domain.ProviderUnauthenticated, Waiting: "the dispatch of an item"}); err != nil {
+		t.Fatal(err)
+	}
+	role := &wokenRole{}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Outages: outages, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(fired.Fired) != 1 || fired.Fired[0].Turns != 0 || len(role.messages) != 0 {
+		t.Fatalf("fired = %+v (messages=%d), want a firing recorded with no turn taken", fired.Fired, len(role.messages))
+	}
+	if !strings.Contains(fired.Fired[0].Problem, "The provider is not authenticated; the operator must log in") {
+		t.Errorf("problem = %q, want the login named as what the pass waited on", fired.Fired[0].Problem)
+	}
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].Result != nil || !strings.Contains(recorded[0].Problem, "the operator must log in") {
+		t.Errorf("recorded = %+v, want a durable record naming the wait", recorded)
+	}
+	// The cadence moved: the next pull does not fire the same task again into
+	// the same refusal.
+	again, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("second Fire() error = %v", err)
+	}
+	if len(again.Fired) != 0 {
+		t.Fatalf("second Fire() = %+v, want the task not due again for an hour", again.Fired)
+	}
+}

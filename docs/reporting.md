@@ -928,6 +928,53 @@ that makes a hold possible at all — every agent on one model with nothing to
 fail over to — is what [`yoyo doctor`](operations.md#checking-the-installation)
 names under `failover` before any window closes.
 
+### A provider nobody can reach
+
+The two states above have a reset. This one has none. From 2026-09-17 18:17
+local the Claude Code login on the operator's machine had expired: every
+dispatch was refused, every recurring pass recorded 0 turns, the runs already
+going spent their relaunch budgets and blocked, and the intake brake tripped
+over three of them — which was the one thing that did reach the channel, and it
+prescribed `yoyo release`, which lifts nothing here. The operator learned what
+had happened by asking, three days later.
+
+So the sink reads the product's own record of the provider answering nobody —
+written by whatever met it refusing, a dispatch, a run, or a conversation turn,
+and cleared by the first thing it serves again — and says it **once, the moment
+it is seen, tagged to the operators by member id**. It is both important and
+theirs to act on, which is the communication rule's own test for a tag: a login
+is nobody else's to renew.
+
+> @operator The provider is not authenticated; the operator must log in: every
+> role is waiting on it, and the harness asks again on its own until it
+> answers; 3 turns refused since 2026-09-17T15:17:00Z (claude-code, account
+> default). Every run in flight is waiting on it with its claim, its branch,
+> and its worktree kept, no relaunch or repair attempt is being spent, and the
+> intake brake is not tripping on it. The harness asks again on its own;
+> nothing to release, nothing to restart.
+>
+> Next: the operator's — log in to the provider, or wait for the network; the
+> harness resumes on its own once it answers, and nothing is released or
+> restarted.
+
+The other cause reads *The provider cannot be reached*, and the move is the
+network's. It is shaped the opposite way from the hold above on purpose: the
+hold is repeated every heartbeat because a person ends it early only by
+changing the configuration and needs reminding, and this is **not said again
+while it stands** — the four lines carry it as their banner, the stall alarm
+does not fire over it, and what a repeated message would buy is a reason to
+mute the channel. When the provider answers again the operators are told **once
+more, as a note**, because they were told the line had stopped and are owed
+being told it carried on by itself:
+
+> The provider is answering again after 3 days: a provider that is not
+> authenticated; the operator must log in. Every run that was waiting has
+> resumed where it stopped, and the queue is being pulled from again. Nothing
+> was released and nothing was restarted.
+
+What the wait does to the runs, the scheduler, the brake, and the recurring
+tasks is in [operations](operations.md#waiting-out-a-provider-nobody-can-reach).
+
 ### What arrives as a direct message
 
 Almost everything above is posted in the channel and nowhere else, because a

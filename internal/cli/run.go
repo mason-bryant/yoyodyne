@@ -131,6 +131,12 @@ type components struct {
 	// line stopping: the processes that meet one — a conversation, a review —
 	// have no run between them to write it on.
 	usageLimits *runstate.UsageLimitStore
+	// outages is the product's record of the provider answering nobody — a login
+	// nobody has renewed, an API nothing reaches. It is built under the product
+	// beside the usage limits and for the same reason: the processes that meet
+	// one have no run between them to write it on, and every surface that names
+	// the wait reads it from here.
+	outages *runstate.ProviderOutageStore
 	// spend is the cost log every provider invocation this process makes lands
 	// in. It is built under the product beside the usage limits, and for the
 	// mirror-image reason: that log says when the harness could not spend, and
@@ -228,6 +234,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	outages, err := runstate.NewProviderOutageStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	spendLog, err := runstate.NewSpendStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -273,6 +283,7 @@ func buildComponents(configPath string) (components, error) {
 		intake:        intake,
 		watch:         watch,
 		usageLimits:   usageLimits,
+		outages:       outages,
 		spend:         spendLog,
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
@@ -412,6 +423,11 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// the item. It stops nothing already under way, which is the whole reason
 		// it is a second switch rather than part of the first.
 		Intake: parts.intake,
+		// The product's record of the provider answering nobody, written by the run
+		// that meets it and cleared by the first the provider answers again. It is
+		// wired here so a run's wait is one every surface can name, and so the
+		// operator is told what ends it rather than sent to release a hold.
+		ProviderOutages: parts.outages,
 		// A change an agent proposes to a document it may not edit is recorded
 		// here, for the same reason and in the same way: the run that argued the
 		// design was wrong is over long before anybody decides what to do about it,

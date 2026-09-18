@@ -1972,10 +1972,14 @@ stops those too.
 
 **A watching session does not start the same item twice unless the item has
 changed.** The case that forces this is a run that fails *before it starts* —
-unreadable acceptance criteria, a provider that is not authenticated, a context
-bundle that will not assemble. Nothing is claimed and nothing is recorded, so the
-item is left exactly as ready as it was: a drain tries it once and returns, and a
-watch with no memory would retry it every interval forever.
+unreadable acceptance criteria, a context bundle that will not assemble. Nothing
+is claimed and nothing is recorded, so the item is left exactly as ready as it
+was: a drain tries it once and returns, and a watch with no memory would retry it
+every interval forever. A provider that is not authenticated used to be one of
+these and is not any more: that dispatch is
+[a wait](operations.md#waiting-out-a-provider-nobody-can-reach) the session
+holds the item through rather than an attempt it remembers, so the item is
+started when the login is renewed.
 
 The rule covers every item the session has started, not only the ones that failed
 that way, because the other cases that leave an item pullable with nothing
@@ -2001,7 +2005,11 @@ That many runs blocking one after another, with nothing landing between them,
 holds intake — the same hold you would place — and it stays held until you
 release it, with `yoyo release` or the conversation's `/release`. Any run that
 lands clears the count, and `0` turns the brake off, leaving you as the only
-thing that holds intake.
+thing that holds intake. A dispatch or a run the provider turned away because
+nobody is logged into it or nobody can reach it counts toward nothing: that is
+[a wait](operations.md#waiting-out-a-provider-nobody-can-reach) no run can end,
+and a brake tripped on it prescribes a release that lifts nothing — which is
+what happened on 2026-09-17 over an expired login.
 
 The hold records which of you placed it, and everything that reports one says
 so: "the harness's own brake placed it after 3 run(s) blocked in a row with
@@ -2550,6 +2558,13 @@ whichever is shorter, and then asks again; a probe into a window that is still
 closed costs one refused request and re-parks on whatever the provider now
 reports. Every probe spends the same budget as any other wait, so a provider
 that keeps refusing reaches the maximum rather than polling forever.
+
+The same interval is how often a run asks again when the provider is
+[not authenticated or cannot be reached](operations.md#waiting-out-a-provider-nobody-can-reach),
+and how long a watching `yoyo work` leaves a provider nobody can reach before
+pulling into it again to find out. That wait spends none of the budget below and
+has no maximum: nothing but a person logging in or the network returning ends
+it, so there is no bound a run could sensibly stop on.
 
 `usage_limit_max_pause` is the longest a single run will spend waiting **in
 total**, across every pause it takes. The budget is per run, not per pause,

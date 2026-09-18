@@ -13,7 +13,7 @@ package backend
 //
 // So the contract is the answers rather than a way to reach in and parse.
 // Whatever a provider said, in whatever shape it said it, what the harness needs
-// from a dialect is which of seven things happened, and -- for the one answer
+// from a dialect is which of nine things happened, and -- for the one answer
 // where it makes sense -- when the provider said the condition lifts. A dialect
 // describes; it never decides. There is deliberately no duration anywhere in
 // what a dialect returns: how long to wait, whether to wait at all, and against
@@ -33,18 +33,24 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // Answer is what a provider said about one attempt, in the only terms the
 // harness acts on. The set is closed on purpose: a dialect that cannot say which
 // of these happened is describing something the harness has no response to, and
-// saying nothing is the honest answer for that rather than inventing an eighth.
+// saying nothing is the honest answer for that rather than inventing a tenth.
 //
 // It grows only when the harness gains a response, which is what admitted the
 // seventh: a pinned model version needs a refusal it can answer by asking for a
-// different selector, and none of the other six is that. An answer nothing does
-// anything differently about does not belong here — it is evidence, and the
-// event log already keeps it.
+// different selector, and none of the other six is that. The eighth and ninth
+// were admitted together for the response they share: a provider nobody is
+// logged into, or nobody can reach, is a wait that spends nothing — no relaunch,
+// no repair attempt, no blocker — and ends when the provider answers again,
+// which none of the seven before them is. An answer nothing does anything
+// differently about does not belong here — it is evidence, and the event log
+// already keeps it.
 type Answer string
 
 const (
@@ -81,6 +87,25 @@ const (
 	// Nothing about the account is exhausted and no reset time is ever quoted,
 	// because a catalogue is not a window.
 	AnswerModelUnavailable Answer = "model-unavailable"
+	// AnswerUnauthenticated is the provider refusing the account the attempt was
+	// made under: a login that expired, a key it will not accept. Nothing about
+	// the work was judged, and no attempt of it will go differently until a
+	// person logs in — so it is neither a death to relaunch on nor a refusal that
+	// stands. What it asks for is a wait that spends nothing, ended by the
+	// provider answering again rather than by any clock.
+	//
+	// It was read as a refusal that stands until 2026-09-17, when a login expired
+	// under a running line: every dispatch failed, three runs blocked in a row,
+	// the intake brake tripped, and the brake's own remedy was the wrong one. The
+	// operator learned of it by asking.
+	AnswerUnauthenticated Answer = "unauthenticated"
+	// AnswerUnreachable is nothing answering at the provider's API at all: the
+	// machine is offline or asleep, or the network between it and the provider
+	// is not there. Like the answer above it judged nothing and names no reset,
+	// and unlike an interrupted attempt it is not weather one more invocation
+	// might outlast — the provider CLI has already spent its own retries before
+	// it says this. It asks for the same wait, ended the same way.
+	AnswerUnreachable Answer = "unreachable"
 	// AnswerRefused is a refusal that stands. The same request put in front of
 	// the same provider earns the same answer, so there is nothing to wait for
 	// and nothing to relaunch into.
@@ -95,6 +120,8 @@ var Answers = []Answer{
 	AnswerUnavailable,
 	AnswerInterrupted,
 	AnswerModelUnavailable,
+	AnswerUnauthenticated,
+	AnswerUnreachable,
 	AnswerRefused,
 }
 
@@ -267,6 +294,15 @@ func (o Observation) Record(result *RunResult) {
 		result.ModelUnavailable = &ModelUnavailable{Detail: o.Detail}
 		result.ServerOverload = nil
 		result.TransientFailure = nil
+	case AnswerUnauthenticated, AnswerUnreachable:
+		// A provider nobody is logged into or nobody can reach is a wait rather
+		// than a death, so it clears the two transient readings the way a refusal
+		// does: a result carrying both would leave which answer a run took to the
+		// order its caller read them, and the relaunch it would otherwise spend is
+		// exactly the spend this answer exists to stop.
+		result.ProviderOutage = &ProviderOutage{Cause: outageCauseOf(o.Answer), Detail: o.Detail}
+		result.ServerOverload = nil
+		result.TransientFailure = nil
 	case AnswerRefused:
 		// A refusal that stands is the ordinary failure the result already
 		// carries. It clears the two transient readings so that a dialect
@@ -276,4 +312,14 @@ func (o Observation) Record(result *RunResult) {
 		result.ServerOverload = nil
 		result.TransientFailure = nil
 	}
+}
+
+// outageCauseOf is the durable cause the two outage answers name. It is the
+// single conversion between the contract's vocabulary and the domain's, kept
+// beside Record because Record is the only place the answers become a result.
+func outageCauseOf(answer Answer) domain.ProviderOutageCause {
+	if answer == AnswerUnreachable {
+		return domain.ProviderUnreachable
+	}
+	return domain.ProviderUnauthenticated
 }
