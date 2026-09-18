@@ -4992,6 +4992,15 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			}
 			continue
 		}
+		// A review the provider answered — with a verdict, a refusal, or a death
+		// that reached it — is the provider answering again, and it is recorded
+		// here for the reason a developer attempt records it: a run that met the
+		// outage in review is the only invocation that would ever find out.
+		if reviewReachedProvider(reported, err) {
+			if servedErr := a.pipeline.noticeProviderServed(); servedErr != nil {
+				a.outcome.ProviderOutageProblem = servedErr.Error()
+			}
+		}
 		if limit, refused := refusedReviewForUsageLimit(reported.usageLimit, err); refused {
 			if pauseErr := a.pauseForUsageLimit(ctx, limit); pauseErr != nil {
 				return "", pauseErr
@@ -5175,6 +5184,24 @@ type providerEvidence struct {
 	transientFailure *backend.TransientFailure
 	providerOutage   *backend.ProviderOutage
 	processStatus    execution.ProcessStatus
+}
+
+// reviewReachedProvider reports a review attempt the provider actually
+// answered, however it answered: a verdict, a reply the contract could not
+// read, a limit, an overload, or a death that reached it and dropped. Every one
+// of those is the provider at the other end of the connection, which is what
+// ends an outage. A review the harness stopped on time, or one refused before
+// the provider was reached, says nothing either way.
+func reviewReachedProvider(reported providerEvidence, err error) bool {
+	if reported.providerOutage != nil {
+		return false
+	}
+	if err == nil || reported.usageLimit != nil || reported.serverOverload != nil || reported.transientFailure != nil {
+		return true
+	}
+	var undecodable review.UndecodableVerdictError
+	var incomplete review.IncompleteApprovalError
+	return errors.As(err, &undecodable) || errors.As(err, &incomplete)
 }
 
 // refusedReviewForUsageLimit reports a review the provider declined for want of

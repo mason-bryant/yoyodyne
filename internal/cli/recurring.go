@@ -54,8 +54,10 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		// provider invocation, so `yoyo pause` covers it exactly as it covers them.
 		Holds: parts.holds,
 		// And the provider answering nobody, so a firing due while it stands
-		// records the wait rather than a turn that failed.
-		Outages: parts.outages,
+		// records the wait rather than a turn that failed — and, once the probe
+		// interval has passed, fires into it to find out whether it still does.
+		Outages:     parts.outages,
+		OutageProbe: parts.config.Execution.UsageLimitUnknownResetPause.Duration(),
 	}
 }
 

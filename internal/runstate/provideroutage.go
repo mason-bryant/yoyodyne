@@ -141,18 +141,6 @@ func (o ProviderOutage) Says() string {
 	return said
 }
 
-// Whose is whose move it is. Both causes are the operator's in the end — a login
-// is nobody else's to renew, and a machine that cannot reach the provider is a
-// machine somebody has to look at — and neither is lifted by a switch, which is
-// what the sentence has to say because the brake's remedy is the one an operator
-// reaches for.
-func (o ProviderOutage) Whose() string {
-	if o.Cause == domain.ProviderUnreachable {
-		return "the operator's — the harness resumes on its own once the provider answers; nothing to release, nothing to restart"
-	}
-	return "the operator's — log in to the provider and the harness resumes on its own; nothing to release, nothing to restart"
-}
-
 // Mark names the outage durably, so a surface that says it once can say which
 // one it said and say a different one afresh. It is the cause and the moment it
 // began: a login that expired twice in a week is two things to say.
@@ -209,6 +197,14 @@ func count(n int, noun string) string {
 // ProviderOutageStore is where the outage is recorded: one file under the
 // product, beside the switches, because the provider a product's agents share
 // is a fact about the product.
+//
+// It writes with the same temporary-file-and-rename the intake hold, the
+// operator hold, and the run records beside it use, directly rather than
+// through the repository's confined-write primitive. That primitive confines
+// writes into the repository the harness works on, whose layout comes from a
+// project's configuration; the state root is the harness's own directory
+// outside every repository, named by nothing a project configures, and every
+// store in this package writes there the same way.
 type ProviderOutageStore struct {
 	root      string
 	productID domain.ProductID

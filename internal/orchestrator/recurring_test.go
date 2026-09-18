@@ -596,11 +596,11 @@ func TestAFiringIntoAProviderAnsweringNobodyRecordsTheWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderOutageStore() error = %v", err)
 	}
-	if _, err := outages.Notice(runstate.ProviderOutageObservation{Cause: domain.ProviderUnauthenticated, Waiting: "the dispatch of an item"}); err != nil {
+	if _, err := outages.Notice(runstate.ProviderOutageObservation{Cause: domain.ProviderUnauthenticated, Waiting: "the dispatch of an item", At: recurringNow}); err != nil {
 		t.Fatal(err)
 	}
 	role := &wokenRole{}
-	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Outages: outages, Clock: recurringClock{}}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Outages: outages, OutageProbe: 30 * time.Minute, Clock: recurringClock{}}
 
 	fired, err := trigger.Fire(context.Background())
 	if err != nil {
@@ -627,5 +627,39 @@ func TestAFiringIntoAProviderAnsweringNobodyRecordsTheWait(t *testing.T) {
 	}
 	if len(again.Fired) != 0 {
 		t.Fatalf("second Fire() = %+v, want the task not due again for an hour", again.Fired)
+	}
+}
+
+// Once the probe interval has passed since the provider was last met refusing,
+// a due firing is made into the outage rather than refused: the firing is the
+// only probe this path has, and a machine with nothing in its backlog and no
+// watch running — the laptop that was asleep — would otherwise never find the
+// network back.
+func TestAFiringPastTheProbeIntervalIsMadeIntoTheOutage(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	outages, err := runstate.NewProviderOutageStore(t.TempDir(), "example")
+	if err != nil {
+		t.Fatalf("NewProviderOutageStore() error = %v", err)
+	}
+	clock := recurringClock{}
+	if _, err := outages.Notice(runstate.ProviderOutageObservation{
+		Cause: domain.ProviderUnreachable, Waiting: "an earlier run", At: clock.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	role := &wokenRole{}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Outages: outages, OutageProbe: 30 * time.Minute, Clock: clock}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(fired.Fired) != 1 || fired.Fired[0].Turns != 1 || len(role.messages) != 1 {
+		t.Fatalf("fired = %+v (messages=%d), want the role woken as the probe", fired.Fired, len(role.messages))
+	}
+	if fired.Fired[0].Problem != "" && strings.Contains(fired.Fired[0].Problem, "cannot be reached") {
+		t.Fatalf("problem = %q, want the outage not recorded against a firing that was made", fired.Fired[0].Problem)
 	}
 }

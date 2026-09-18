@@ -456,7 +456,11 @@ What the wait costs is nothing, and that is the whole of the rule:
   while it stands moves its cadence, asks the role nothing, and its sweep record
   says the provider is not authenticated (or cannot be reached) — so `yoyo
   sweeps` over the outage reads as the outage rather than as a column of zero
-  turns.
+  turns. Once the probe interval has passed since the provider was last met
+  refusing, a due firing is made into it anyway: the firing is the one probe
+  this path has, so a machine with nothing in its backlog and no watch running
+  still finds the network back on its own. A served turn ends the wait; a
+  refused one re-records it, and the next firing waits the interval again.
 - **The brake does not trip.** The failure-storm brake counts runs that blocked
   with nothing landing between them, and a dispatch or a run the provider turned
   away is neither. Its remedy — `yoyo release` — lifts nothing here, which is
@@ -464,7 +468,9 @@ What the wait costs is nothing, and that is the whole of the rule:
 
 Where it stands is one record under the product, `provider-outage.json`,
 written by whatever meets the provider refusing everybody — a dispatch, a run,
-a conversation turn — and cleared by the first thing the provider serves again.
+a conversation turn — and cleared by the first thing the provider serves again:
+a developer attempt, a review, a conversation turn, or the watch's own login
+check finding the machine signed in.
 It is what `yoyo status` names the wait from: the banner above the four lines,
 and an entry on the attention line that says whose move it is.
 

@@ -127,9 +127,6 @@ func TestAProviderOutageSaysWhatTheOperatorDoesAboutIt(t *testing.T) {
 		!strings.Contains(said, "3 turns refused since 2026-09-17T18:17:00Z") || !strings.Contains(said, "claude-code, account default") {
 		t.Fatalf("Says() = %q, want the login named first, the count, and the endpoint", said)
 	}
-	if whose := unauthenticated.Whose(); !strings.Contains(whose, "log in") || !strings.Contains(whose, "nothing to release") {
-		t.Fatalf("Whose() = %q, want the login and that no release lifts it", whose)
-	}
 	unreachable := ProviderOutage{Cause: domain.ProviderUnreachable, Since: since, Refusals: 1}
 	if said := unreachable.Says(); !strings.HasPrefix(said, "The provider cannot be reached") || !strings.Contains(said, "1 turn refused") {
 		t.Fatalf("Says() = %q, want the network named first", said)

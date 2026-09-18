@@ -126,6 +126,13 @@ func TestRunWaitsOutAProviderNobodyCanReachSpendingNothing(t *testing.T) {
 	if finished.UsageLimitResetsAt != nil || finished.PauseCause != "" || finished.TransientRelaunches != 0 {
 		t.Fatalf("a finished run still reads as waiting or as relaunched: %#v", finished)
 	}
+	// Two hours of waiting against a ten-minute pause budget, and none of it
+	// committed: a later genuine limit on this run would otherwise block at once
+	// on a budget the outage spent. Asserted on the finished record rather than
+	// only on a mid-sleep snapshot, so every probe's exit path is covered.
+	if finished.UsageLimitPausedSeconds != 0 || finished.UsageLimitPaused() != 0 {
+		t.Fatalf("finished run committed %s to the pause budget, want nothing", finished.UsageLimitPaused())
+	}
 	// The attempt the provider served is what ends the outage for every surface.
 	if _, away, err := outages.Standing(); err != nil || away {
 		t.Fatalf("Standing() after the provider answered = %t, %v, want the outage cleared", away, err)
@@ -213,7 +220,8 @@ func TestRunWaitsOutAnExpiredLoginDuringReview(t *testing.T) {
 	pipeline = waiting(automatic(pipeline, provider), clock, 10*time.Minute, 10*time.Minute)
 	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 0
 	pipeline.Config.Execution.UsageLimitUnknownResetPause = config.Duration(30 * time.Minute)
-	pipeline.ProviderOutages = newOutageStore(t)
+	outages := newOutageStore(t)
+	pipeline.ProviderOutages = outages
 
 	var pausedState runstate.State
 	clock.onSleep = func() {
@@ -239,6 +247,13 @@ func TestRunWaitsOutAnExpiredLoginDuringReview(t *testing.T) {
 	}
 	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 2 {
 		t.Fatalf("review invocations = %d, want the refused one and the one that answered", reviews)
+	}
+	// The review the provider served is the provider answering again, and it is
+	// the only invocation this run makes after the outage: a run that landed with
+	// the product still saying the provider is away would leave every surface
+	// wrong until something else happened to be served.
+	if _, away, err := outages.Standing(); err != nil || away {
+		t.Fatalf("Standing() after the served review = %t, %v, want the outage cleared", away, err)
 	}
 }
 
