@@ -158,7 +158,7 @@ func (r Reconciler) refreshPublication(ctx context.Context, recorded runstate.St
 	refresh.Merged = answered.Merged
 	// A record the forge agrees with is the ordinary outcome and is left
 	// untouched, so a sweep over a long history writes nothing at all.
-	if answered == published {
+	if answered.Equal(published) {
 		return refresh
 	}
 
@@ -183,7 +183,7 @@ func (r Reconciler) refreshPublication(ctx context.Context, recorded runstate.St
 		return refresh
 	}
 	current := refreshedPublication(*state.PullRequest, observed)
-	if current == *state.PullRequest {
+	if current.Equal(*state.PullRequest) {
 		return refresh
 	}
 	state.PullRequest = &current
@@ -221,6 +221,7 @@ func refreshedPublication(recorded runstate.PullRequest, observed publish.PullRe
 	// path that expects to own everything about it.
 	if observed.Merged || !observed.AutoMerge {
 		refreshed.MergeQueued = false
+		refreshed.FailingChecks = nil
 	}
 	return refreshed
 }

@@ -270,6 +270,50 @@ func (c CheckFailure) Validate() error {
 	return errors.Join(problems...)
 }
 
+// ChecksPassed is the evidence that every configured check passed over the
+// change this run is carrying, bound to the change it passed over: the attempt
+// that produced it, and the commit the harness made of it where the project
+// publishes and so had made one. It is what the promotion reads before it moves
+// the target branch. Control flow already orders the checks in front of the
+// promotion, and that is not the same guarantee: an integration reached by any
+// route has to find this on the record, for exactly the attempt it is about to
+// promote, or refuse. A later attempt invalidates it by moving the attempt
+// count, and a failing check clears it, so it never describes a change the gate
+// has moved past.
+type ChecksPassed struct {
+	// Attempt is the repair attempt the checks ran over, which is the run's
+	// RepairAttempts at the time. The first attempt is zero.
+	Attempt int `json:"attempt"`
+	// Commit is the harness commit the worktree stood at when the checks ran,
+	// where the run had made one: a project that publishes commits each attempt
+	// before the checks run, and a replayed promotion records the rebased commit
+	// before the gate is re-earned. A project that does not publish commits
+	// nothing until the promotion itself, so on its ordinary path this is empty
+	// and the attempt above is the whole of the binding. The attempt is the
+	// binding that always holds; the commit tightens it where there is one.
+	Commit string `json:"commit,omitempty"`
+	// Commands are the configured checks that passed, in the order they ran.
+	Commands []string  `json:"commands,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// Validate rejects evidence that cannot describe checks that actually ran.
+func (c ChecksPassed) Validate() error {
+	var problems []error
+	if c.Attempt < 0 {
+		problems = append(problems, fmt.Errorf("attempt %d cannot be negative", c.Attempt))
+	}
+	if c.At.IsZero() {
+		problems = append(problems, errors.New("at is required"))
+	}
+	for i, command := range c.Commands {
+		if strings.TrimSpace(command) == "" {
+			problems = append(problems, fmt.Errorf("commands[%d] is blank", i))
+		}
+	}
+	return errors.Join(problems...)
+}
+
 // MaxRefusedPaths bounds how many protected paths a refusal carries into
 // durable state and into the developer's next attempt. A change that rewrote a
 // whole artifact home must not be able to fill either with a listing, and the
@@ -408,6 +452,38 @@ type PullRequest struct {
 	// the run outstanding until somebody knows which way that went, and is
 	// cleared when reconciliation observes the merge land or be dropped.
 	MergeQueued bool `json:"merge_queued,omitempty"`
+	// FailingChecks names the checks the forge reported failing on the request
+	// while its merge was queued, which is the one reason a queued merge stays
+	// queued: the forge performs it the moment the base branch's requirements are
+	// met, so a merge still queued on a sweep after a sweep is one whose
+	// requirement is unmet. It is written by the sweep that asks the forge and
+	// cleared by the same sweep when the checks pass, so a reader of the record —
+	// and a sink comparing two readings of it — can tell a merge waiting its turn
+	// from one nothing is going to perform. Empty is the ordinary state, and the
+	// only one a queued merge had until yoyodyne-ifd.362.
+	FailingChecks []string `json:"failing_checks,omitempty"`
+}
+
+// HeldByChecks reports a queued merge the forge is holding on failing checks.
+func (p PullRequest) HeldByChecks() bool {
+	return p.MergeQueued && !p.Merged && len(p.FailingChecks) > 0
+}
+
+// Equal reports two records that say the same thing about a pull request. It
+// is here because the record carries a list, which takes the struct out of
+// reach of ==, and a sweep decides whether to rewrite a record by comparing it.
+func (p PullRequest) Equal(other PullRequest) bool {
+	return p.Remote == other.Remote &&
+		p.Branch == other.Branch &&
+		p.Number == other.Number &&
+		p.URL == other.URL &&
+		p.HeadCommit == other.HeadCommit &&
+		p.State == other.State &&
+		p.Merged == other.Merged &&
+		p.MergeMethod == other.MergeMethod &&
+		p.MergeCommit == other.MergeCommit &&
+		p.MergeQueued == other.MergeQueued &&
+		slices.Equal(p.FailingChecks, other.FailingChecks)
 }
 
 // MergeDrop is the moment a promoted change stopped being something the forge
@@ -459,6 +535,18 @@ func (p PullRequest) Validate() error {
 	}
 	if !commitPattern.MatchString(p.HeadCommit) {
 		problems = append(problems, errors.New("pull_request head_commit is invalid"))
+	}
+	for i, check := range p.FailingChecks {
+		if strings.TrimSpace(check) == "" {
+			problems = append(problems, fmt.Errorf("pull_request failing_checks[%d] is blank", i))
+		}
+	}
+	// A failing check is only ever recorded against a merge the forge is still
+	// holding: the sweep that reads it off a queued merge is the one that clears
+	// it when the merge lands or is dropped, so a merged request naming one
+	// describes a reading nothing made.
+	if len(p.FailingChecks) > 0 && (p.Merged || !p.MergeQueued) {
+		problems = append(problems, errors.New("pull_request failing_checks require a queued, unmerged merge"))
 	}
 	return errors.Join(problems...)
 }
@@ -1186,6 +1274,12 @@ type State struct {
 	// describe a change the gate has already moved past, and passing checks
 	// clear the failure.
 	CheckFailure *CheckFailure `json:"check_failure,omitempty"`
+	// ChecksPassed is the other answer the checks give, kept for the opposite
+	// reason: it is what the promotion has to find on the record before it moves
+	// the target branch, bound to the attempt it is about to promote. Recording a
+	// failing check clears it, and recording it clears the failure, so at most one
+	// of the two describes the current attempt.
+	ChecksPassed *ChecksPassed `json:"checks_passed,omitempty"`
 	// PathRefusal carries the protected paths the gate refused before any check
 	// ran. It is the third kind of repair input and behaves as the other two do:
 	// at most one of the three describes the current attempt, and because this
@@ -1609,6 +1703,16 @@ func (s State) Validate() error {
 	if s.CheckFailure != nil {
 		if err := s.CheckFailure.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("check_failure: %w", err))
+		}
+	}
+	if s.ChecksPassed != nil {
+		if err := s.ChecksPassed.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("checks_passed: %w", err))
+		}
+		// The two are the opposite answers to one question about one attempt, so
+		// a record carrying both describes a gate that has not decided.
+		if s.CheckFailure != nil {
+			problems = append(problems, errors.New("checks_passed and check_failure cannot both describe the current attempt"))
 		}
 	}
 	if s.PathRefusal != nil {
