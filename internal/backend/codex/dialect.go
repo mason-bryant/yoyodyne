@@ -75,6 +75,25 @@ var (
 	modelNotFound  = regexp.MustCompile(`(?i)model_not_found|unknown model|\bmodel:`)
 )
 
+// notAuthenticated and unauthenticatedStatus are this provider refusing the
+// account the attempt was made under, in words and as the status the API answers
+// it with. Both are read ahead of the client-error class they belong to, because
+// the harness's answer to a login nobody has renewed is a wait that spends
+// nothing rather than a refusal that stands — the same reading the Claude Code
+// dialect gives the same condition, which is the whole of what the conformance
+// suite holds the two to.
+var (
+	notAuthenticated      = regexp.MustCompile(`(?i)not logged in|unauthenticated|invalid api key|authentication_error|\bunauthorized\b`)
+	unauthenticatedStatus = regexp.MustCompile(`\b401\b`)
+)
+
+// unreachable is nothing answering at this provider's API at all: the transport
+// errors a process reports when a name does not resolve, a connection is
+// refused, or there is no route. It is read as the same wait a login is, and
+// ahead of the leftovers, because asking twice more against a relaunch budget
+// and then blocking is not an answer to a machine that is offline.
+var unreachable = regexp.MustCompile(`(?i)can(?:'|’|no)?t reach|unable to reach|network is unreachable|getaddrinfo|\benotfound\b|\beconnrefused\b|\behostunreach\b|\benetunreach\b|dns error|no route to host`)
+
 // clientErrorStatus marks the statuses that describe the request rather than the
 // server's ability to serve it. A relaunch would put the identical request in
 // front of the provider again and earn the identical refusal, so nothing in this
@@ -117,8 +136,9 @@ func (Dialect) Observe(event backend.ProviderEvent) (backend.Observation, bool) 
 // observeFailedTerminal tells the ways this provider can end an invocation badly
 // apart. A limit is a wait on a deadline, an overloaded server is a much shorter
 // wait, a not-found naming a model is a refusal the caller answers by asking for
-// another selector, any other status describing the request is a refusal that
-// stands, and everything else is a death that judged nothing about the work.
+// another selector, an account it will not accept and an API nothing reaches are
+// waits that spend nothing, any other status describing the request is a refusal
+// that stands, and everything else is a death that judged nothing about the work.
 //
 // The leftovers are read as transient on purpose, which is the same trade the
 // Claude Code dialect makes and for the same recorded reason: being wrong about
@@ -145,6 +165,10 @@ func observeFailedTerminal(event backend.ProviderEvent) (backend.Observation, bo
 		return backend.Observation{Answer: backend.AnswerUnavailable, Detail: described}, true
 	case notFoundStatus.MatchString(event.Text) && modelNotFound.MatchString(event.Text):
 		return backend.Observation{Answer: backend.AnswerModelUnavailable, Detail: described}, true
+	case notAuthenticated.MatchString(event.Text) || unauthenticatedStatus.MatchString(event.Text):
+		return backend.Observation{Answer: backend.AnswerUnauthenticated, Detail: described}, true
+	case unreachable.MatchString(event.Text):
+		return backend.Observation{Answer: backend.AnswerUnreachable, Detail: described}, true
 	case clientErrorStatus.MatchString(event.Text):
 		return backend.Observation{Answer: backend.AnswerRefused, Detail: described}, true
 	default:

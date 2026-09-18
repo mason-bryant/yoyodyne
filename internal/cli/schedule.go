@@ -511,6 +511,7 @@ func openStallWatch(configPath string, threshold time.Duration, stderr io.Writer
 			Sessions:  parts.watch,
 			Holds:     parts.holds,
 			Intake:    parts.intake,
+			Outages:   parts.outages,
 			Backlog:   readyBacklog{tracker: parts.tracker()},
 			Stalls:    stalls,
 			Threshold: threshold,
@@ -692,6 +693,14 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		// harness is the only thing that invokes a role, and the pull is where it is
 		// already deciding what to do next.
 		Corrections: corrections,
+		// The provider answering nobody, read before anything is chosen so the
+		// brake never counts a dispatch the provider turned away, and the
+		// developer's provider, asked at every pull whether the login has been
+		// renewed. The probe interval is the one the configuration already states
+		// for asking again rather than being told when.
+		Outages:     parts.outages,
+		Provider:    pipelineFrom(parts).Backend,
+		OutageProbe: parts.config.Execution.UsageLimitUnknownResetPause.Duration(),
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record

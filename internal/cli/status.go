@@ -339,6 +339,9 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewUsageLimitStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.UsageLimits = store
 	}
+	if store, err := runstate.NewProviderOutageStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.ProviderOutages = store
+	}
 	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
 	if err != nil {
 		sources.Tracker = unreadableTracker{fmt.Errorf("resolve product repository: %w", err)}

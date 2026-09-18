@@ -28,7 +28,7 @@ how one is written.
 
 Not very much, and deliberately so. A provider says a great many things while a
 run is going; almost all of it is prose, tool calls, and accounting, and yoyo
-acts on none of it. What it has to know is which of seven things just happened.
+acts on none of it. What it has to know is which of nine things just happened.
 
 | Answer | What it means |
 |---|---|
@@ -38,9 +38,11 @@ acts on none of it. What it has to know is which of seven things just happened.
 | `unavailable` | The provider's own servers could not serve the attempt, transiently |
 | `interrupted` | The attempt died of something that judged nothing about the work |
 | `model-unavailable` | The provider has not got the model this attempt asked for |
+| `unauthenticated` | The provider will not accept the account the attempt was made under; a person has to log in |
+| `unreachable` | Nothing answers at the provider's API; the network has to come back |
 | `refused` | A refusal that stands; the same request earns the same answer |
 
-Those seven are the contract. Everything yoyo does about a provider refusing work
+Those nine are the contract. Everything yoyo does about a provider refusing work
 — parking a run, recording the deadline, probing, blocking when the wait no
 longer fits — is driven by them and by nothing provider-specific.
 
@@ -65,6 +67,17 @@ run that went wrong without it:
   answer above would throw away the one thing that makes it actionable. Nothing
   about the account is exhausted and no reset time is ever quoted, so it is not a
   limit either.
+- `unauthenticated` and `unreachable` are not `refused`, and not `interrupted`
+  either. A login that expired earns the identical answer on the next attempt,
+  so relaunching into it spends a run's whole relaunch budget on nothing; but
+  failing the run over it costs a finished change for a login the operator
+  renews in a minute. So both are [a wait that spends nothing](operations.md#waiting-out-a-provider-nobody-can-reach):
+  no relaunch, no repair attempt, no blocker, ended by the provider answering
+  again. They are two answers rather than one because the operator is told two
+  different things — log in, or wait for the network — and nothing else about
+  them differs. A dialect that cannot tell them from a mid-reply drop should
+  leave the drop as `interrupted`: that one reached the provider, and a relaunch
+  is right for it.
 
 ## Reset times: the two cases the contract owns
 
@@ -312,7 +325,7 @@ agents:
 
 | Field | Meaning |
 |---|---|
-| `answer` | Required. One of the seven answers above. |
+| `answer` | Required. One of the nine answers above. |
 | `type`, `subtype` | The provider's own names for the event, matched exactly. |
 | `terminal`, `failed` | Whether the event ends the invocation, and whether it ended badly. |
 | `match` | A regular expression the event's prose must contain. |

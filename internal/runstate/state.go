@@ -226,6 +226,44 @@ const (
 	PauseServerOverload = "server_overload"
 )
 
+// The two ways a provider answers nobody at all, and so the two waits a run
+// takes that spend nothing: no relaunch, no repair attempt, no pause budget, and
+// no blocker. They share the usage-limit pause's deadline and polling
+// discipline — the deadline is the next probe rather than a reset the provider
+// named — and none of its budgets, because every budget the harness keeps is
+// for something a run can do something about, and a login and a network are
+// not. The cause carries which of the two it is because that is what decides
+// what the operator is told to do.
+const (
+	PauseProviderUnauthenticated = "provider_unauthenticated"
+	PauseProviderUnreachable     = "provider_unreachable"
+)
+
+// PauseCauseForOutage is the pause a run takes on a provider outage of the
+// given cause. It is the one conversion between the domain's vocabulary and the
+// run record's, kept beside the causes it names.
+func PauseCauseForOutage(cause domain.ProviderOutageCause) string {
+	if cause == domain.ProviderUnreachable {
+		return PauseProviderUnreachable
+	}
+	return PauseProviderUnauthenticated
+}
+
+// PausedForProviderOutage reports a pause cause that is one of the two above,
+// and which. A run in one of them is waiting on the operator or the network
+// rather than on a clock, which is what every reader of the cause has to know
+// before it prices the wait or says what lifts it.
+func PausedForProviderOutage(cause string) (domain.ProviderOutageCause, bool) {
+	switch cause {
+	case PauseProviderUnauthenticated:
+		return domain.ProviderUnauthenticated, true
+	case PauseProviderUnreachable:
+		return domain.ProviderUnreachable, true
+	default:
+		return "", false
+	}
+}
+
 // DescribePause names what a paused run is waiting on, as the object of "paused
 // for" or "waiting out". kind is the provider's own name for an exhausted usage
 // limit and says nothing about any other cause.
@@ -235,6 +273,9 @@ func DescribePause(cause, kind string) string {
 	}
 	if cause == PauseServerOverload {
 		return "a transient provider server overload"
+	}
+	if outage, away := PausedForProviderOutage(cause); away {
+		return DescribeProviderOutage(outage)
 	}
 	if strings.TrimSpace(kind) == "" {
 		kind = "provider"
@@ -1713,7 +1754,8 @@ func (s State) Validate() error {
 			problems = append(problems, errors.New("usage_limit_resets_at requires a run that is still in flight"))
 		}
 	}
-	if s.PauseCause != "" && s.PauseCause != PauseUsageLimit && s.PauseCause != PauseServerOverload && s.PauseCause != PauseOperatorHold {
+	if _, outage := PausedForProviderOutage(s.PauseCause); s.PauseCause != "" && !outage &&
+		s.PauseCause != PauseUsageLimit && s.PauseCause != PauseServerOverload && s.PauseCause != PauseOperatorHold {
 		problems = append(problems, errors.New("pause_cause is invalid"))
 	}
 	if s.OperatorHeldSeconds < 0 {

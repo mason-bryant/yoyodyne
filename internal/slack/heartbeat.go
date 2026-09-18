@@ -114,6 +114,11 @@ type switches struct {
 	intakeHeld   bool
 	operator     runstate.OperatorHold
 	operatorHeld bool
+	// outage is the provider answering nobody, and away whether that stands. It
+	// is read with the switches because it is read the way they are, and because
+	// it answers the same question they do: what has stopped the line.
+	outage runstate.ProviderOutage
+	away   bool
 }
 
 // heartbeatDeliveries says a line that is choosing nothing over ready work, again
@@ -434,16 +439,22 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 	// with a run in flight is not a stalled line, which is the whole of what the
 	// read model's capacity reason would tell it.
 	stall := readmodel.WhyNothingStarts(readmodel.Conditions{
-		OperatorHold: held.operator,
-		OperatorHeld: held.operatorHeld,
-		IntakeHold:   held.intake,
-		IntakeHeld:   held.intakeHeld,
-		Sessions:     func() ([]runstate.WatchTransition, error) { return sessions, nil },
+		OperatorHold:   held.operator,
+		OperatorHeld:   held.operatorHeld,
+		IntakeHold:     held.intake,
+		IntakeHeld:     held.intakeHeld,
+		ProviderOutage: held.outage,
+		ProviderAway:   held.away,
+		Sessions:       func() ([]runstate.WatchTransition, error) { return sessions, nil },
 		// This pass's own moment, so a provider usage window the line reports as
 		// standing is one that had not lifted when the rest of the pass was read.
 		Now: now,
 	})
-	if stall.Reason == readmodel.ReasonUnwatched || stall.Reason == readmodel.ReasonProviderWindow {
+	// The provider answering nobody is left out for the reason the window is:
+	// this surface says it in its own message, once, tagged to the people who
+	// end it, and a line said again every hour about a wait they have been told
+	// about is the nagging that gets a channel muted.
+	if stall.Reason == readmodel.ReasonUnwatched || stall.Reason == readmodel.ReasonProviderWindow || stall.Reason == readmodel.ReasonProviderAway {
 		return readmodel.Stall{}
 	}
 	return stall

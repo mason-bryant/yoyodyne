@@ -116,6 +116,15 @@ type Activity struct {
 	// what bounds it — a window that has lifted accounts for nothing, which is what
 	// keeps this from being a way to silence the watchdog rather than to inform it.
 	ProviderWindow ProviderWindow
+	// ProviderOutage is the provider answering nobody — a login nobody has
+	// renewed, an API nothing reaches — and ProviderAway whether it stands. It
+	// accounts for the quiet the way the window does and for a stronger reason:
+	// the runs holding the slots are each waiting on the same provider, their
+	// records unmoved, and a watchdog that read that as a machine that died would
+	// wake somebody to restart what is already waiting correctly. What bounds it
+	// is the record itself, which the first served invocation clears.
+	ProviderOutage runstate.ProviderOutage
+	ProviderAway   bool
 	// Watched says a session has at some point watched this product. A product no
 	// session has ever watched is not a line that stopped — nothing was choosing
 	// work here, so nothing is failing to, and an operator running items by name
@@ -203,6 +212,8 @@ func (a Activity) explanation() string {
 		return "all harness activity is held by the operator"
 	case a.IntakeHeld:
 		return "intake is held"
+	case a.ProviderAway:
+		return a.ProviderOutage.Says()
 	case a.Running > 0:
 		return fmt.Sprintf("%d developer run(s) are in flight and still moving", a.Running)
 	case a.ProviderWindow.Standing(a.Now):

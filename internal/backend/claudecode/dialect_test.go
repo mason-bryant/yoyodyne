@@ -131,28 +131,58 @@ func TestTheClaudeDialectAnswersInTheContractsTerms(t *testing.T) {
 			name: "a status describing the request is a refusal that stands",
 			event: backend.ProviderEvent{
 				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
-				Text: "API Error: 401 Unauthorized",
+				Text: "API Error: 403 Forbidden",
 			},
 			said: true,
 			want: backend.Observation{
 				Answer: backend.AnswerRefused,
+				Detail: "api_error: API Error: 403 Forbidden",
+			},
+		},
+		{
+			// The API's status for credentials it will not accept is the same
+			// condition the CLI's own words below report, and earns the same wait.
+			name: "an unauthorized status is a login nobody has renewed",
+			event: backend.ProviderEvent{
+				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
+				Text: "API Error: 401 Unauthorized",
+			},
+			said: true,
+			want: backend.Observation{
+				Answer: backend.AnswerUnauthenticated,
 				Detail: "api_error: API Error: 401 Unauthorized",
 			},
 		},
 		{
 			// The CLI's own words for an account it will not accept, which quote
 			// no status at all. Reading it as weather would relaunch a run into an
-			// answer no attempt can change, and the same condition already stands
-			// as a refusal when the status is quoted instead.
-			name: "an account that is not logged in is a refusal that stands",
+			// answer no attempt can change, and reading it as a refusal that
+			// stands would fail a run over a login the operator renews in a minute.
+			name: "an account that is not logged in is a wait for the operator",
 			event: backend.ProviderEvent{
 				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
 				Text: "Not logged in",
 			},
 			said: true,
 			want: backend.Observation{
-				Answer: backend.AnswerRefused,
+				Answer: backend.AnswerUnauthenticated,
 				Detail: "api_error: Not logged in",
+			},
+		},
+		{
+			// The CLI's own words when nothing answers at the API, recorded on the
+			// runs that died in the 2026-09-15..18 outage. It quotes no status
+			// because nothing answered, and it is not the mid-reply drop below:
+			// that one reached the provider.
+			name: "nothing answering at the API is a wait for the provider",
+			event: backend.ProviderEvent{
+				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
+				Text: "API Error: Can't reach the API server",
+			},
+			said: true,
+			want: backend.Observation{
+				Answer: backend.AnswerUnreachable,
+				Detail: "api_error: API Error: Can't reach the API server",
 			},
 		},
 		{

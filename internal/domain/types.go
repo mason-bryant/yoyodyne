@@ -78,6 +78,44 @@ const (
 	ApprovalAutomatic ApprovalMode = "automatic"
 )
 
+// ProviderOutageCause is why a provider is answering nobody: the account it is
+// asked under is not logged in, or nothing reaches its API at all. It is the
+// vocabulary every surface that names the wait shares — the adapter contract
+// that classifies the provider's words, the durable record that says the
+// outage is standing, and the lines that tell the operator — and it lives here
+// so that none of them redeclares it.
+//
+// It is closed at two on purpose. Both are a wait no run can end and no reset
+// time bounds: a login is the operator's to renew, and a network is nobody's to
+// hurry. What separates them is only what the operator is told to do, which is
+// the whole reason there are two words rather than one.
+type ProviderOutageCause string
+
+const (
+	// ProviderUnauthenticated is the provider refusing the account the harness
+	// asks under. The remedy is a person logging in.
+	ProviderUnauthenticated ProviderOutageCause = "unauthenticated"
+	// ProviderUnreachable is nothing answering at the provider's API: the
+	// machine is offline, asleep, or behind a network that is not there. The
+	// remedy is the network coming back, which the harness finds by asking again.
+	ProviderUnreachable ProviderOutageCause = "unreachable"
+)
+
+// ProviderOutageCauses is every cause, in the order they are documented.
+func ProviderOutageCauses() []ProviderOutageCause {
+	return []ProviderOutageCause{ProviderUnauthenticated, ProviderUnreachable}
+}
+
+// Valid reports a cause this harness names.
+func (c ProviderOutageCause) Valid() bool {
+	for _, known := range ProviderOutageCauses() {
+		if c == known {
+			return true
+		}
+	}
+	return false
+}
+
 // WorkItemClass names a kind of work a project may treat differently at
 // admission. It exists because "ask about every work item" turned out to be
 // coarser than the operators who set it actually meant: work that only reads and

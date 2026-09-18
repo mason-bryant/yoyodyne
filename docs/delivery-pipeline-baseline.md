@@ -123,7 +123,12 @@ anything more has been spent.
 10. **Item readiness**, the context bundle, the invariants, and the repository's
     readiness for an isolated worktree — which is where a primary checkout
     somebody left uncommitted is refused, by name, file by file.
-11. **Provider availability.** Not installed, or not authenticated, refuses. It
+11. **Provider availability.** Not installed refuses. Not authenticated is
+    [a wait rather than a refusal](operations.md#waiting-out-a-provider-nobody-can-reach):
+    it is recorded on the product so every surface names it, and reported typed
+    so the scheduler counts the dispatch toward nothing — not the brake, not the
+    docket, not the session's exclusion of the item — and dispatches nothing
+    more until the login is renewed. It
     is asked here, after every question this repository can answer on its own,
     because it is the only refusal among them that is a fact about the machine:
     the ones ahead of it hold whether or not Claude Code is installed, so asking

@@ -301,6 +301,12 @@ type Pipeline struct {
 	// for by name: what it holds is the choosing, so a run this pipeline was told
 	// to make proceeds under it exactly as it would have.
 	Intake IntakeHolds
+	// ProviderOutages is the product's record of the provider answering nobody —
+	// a login nobody has renewed, an API nothing reaches — written by the run that
+	// meets it and cleared by the first the provider answers again. It is
+	// optional: a run wired without one waits exactly as it would have, and what
+	// is lost is the record every surface names the wait from.
+	ProviderOutages ProviderOutages
 	// Selection is why this pipeline is running what it runs: who chose the work
 	// and on what grounds. It is recorded with the run so that an operator reading
 	// what is in flight can see why each item was picked, which is the question
@@ -611,6 +617,11 @@ type Outcome struct {
 	// and CostProblem names why when something tried and could not.
 	Cost        *beads.Cost `json:"cost,omitempty"`
 	CostProblem string      `json:"cost_problem,omitempty"`
+	// ProviderOutageProblem names a provider outage this run met that could not
+	// be recorded on the product, or a provider answering again that could not be
+	// cleared from it. The run waited or carried on exactly as it would have;
+	// what was lost is the record the surfaces name the wait from.
+	ProviderOutageProblem string `json:"provider_outage_problem,omitempty"`
 	// Invariants names the architectural invariants this run delivered to its
 	// developer and to its reviewer. It is the audit record of which durable
 	// constraints the change was actually held to, which is the thing a
@@ -817,38 +828,6 @@ func (p Pipeline) validateDispatch() error {
 	return nil
 }
 
-// requireBackendReady refuses a dispatch the provider could not serve. It is
-// asked after every question this repository answers on its own — the operator's
-// hold, the work item, the state of the primary checkout — and deliberately so:
-// those refusals hold whatever is installed on the machine, and this one holds
-// only where the developer's provider is not. Asked first it replaces all of
-// them, so a newcomer who has not committed their adoption is told the provider
-// is missing rather than which files are dirty. Nothing between the hold and here
-// reserves a run, claims an item, or cuts a worktree, so asking late costs
-// nothing.
-//
-// The refusal names the backend the developer is configured for rather than one
-// provider for all of them. A run on Codex whose CLI is missing has to say so
-// about Codex: sending the operator to install or log into the other provider is
-// a remedy for a machine that is not the one in front of them. Which command
-// puts it right is `yoyo doctor`'s to name, because that is the surface that
-// knows how each provider is installed and logged into.
-func (p Pipeline) requireBackendReady(ctx context.Context) error {
-	availability, err := p.Backend.CheckAvailability(ctx)
-	if err != nil {
-		return err
-	}
-	named := p.developer().Backend
-	if !availability.Installed {
-		return fmt.Errorf("the %s backend is not installed; `yoyo doctor` names what to install", named)
-	}
-	if !availability.Authenticated {
-		return fmt.Errorf("the %s backend is not authenticated; `yoyo doctor` names the login that fixes it (auth method: %s)",
-			named, availability.AuthMethod)
-	}
-	return nil
-}
-
 func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err := p.validateDispatch(); err != nil {
 		return Outcome{}, err
@@ -973,7 +952,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	// not they have installed Claude Code, and it names the files they have to
 	// commit. Only now is the provider asked, and still before anything is
 	// reserved, claimed, or cut.
-	if err := p.requireBackendReady(ctx); err != nil {
+	if err := p.requireBackendReady(ctx, workItemID); err != nil {
 		return Outcome{}, err
 	}
 	// An automatic run is written against exactly the branch it will be promoted
@@ -1330,7 +1309,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// on the machines that lack it, and a run turned back by both should be told
 	// about the one it can act on. Nothing is charged here either — the run is
 	// still exactly as the process that stopped it left it.
-	if err := p.requireBackendReady(ctx); err != nil {
+	if err := p.requireBackendReady(ctx, state.WorkItemID); err != nil {
 		return Outcome{}, err
 	}
 	// An environmental refusal on the record belongs to a round that is over: a
@@ -2580,6 +2559,29 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 			return err
 		}
 		providerResult, err := a.attemptDevelopment(ctx, prompt, sessionID)
+		// A provider nobody is logged into or nobody can reach is answered before
+		// anything is counted, because what it asks for is the one wait that spends
+		// nothing: no relaunch, no repair attempt, no blocker. The refused attempt
+		// may still have established a session, which is kept for the reason a
+		// limit's is.
+		if outage, away := providerAway(providerResult, err); away {
+			sessionID = a.carrySession(providerResult.SessionID, sessionID)
+			if err := a.pauseForProviderOutage(ctx, outage); err != nil {
+				a.observeDevelopEnded(ctx, err)
+				return err
+			}
+			a.observe(ctx, deliveryDevelop, "reissued")
+			continue
+		}
+		// An attempt the provider served, however it went, is the provider
+		// answering again, and the process that finds that out is rarely the one
+		// that met it refusing. A record that would not clear is said on the
+		// outcome rather than allowed to end an attempt that was served.
+		if err == nil && providerResult.ProviderOutage == nil {
+			if servedErr := a.pipeline.noticeProviderServed(); servedErr != nil {
+				a.outcome.ProviderOutageProblem = servedErr.Error()
+			}
+		}
 		limit, refusedForLimit := refusedForUsageLimit(providerResult, err)
 		overload, refusedForOverload := refusedForServerOverload(providerResult, err)
 		transient, died := diedTransiently(providerResult.TransientFailure, providerResult.Process.Status, providerResult.IsError, err)
@@ -3184,6 +3186,12 @@ func (a *activeRun) pauseForServerOverload(ctx context.Context, overload backend
 // whole of its wait.
 func (a *activeRun) awaitRecordedUsageLimit(ctx context.Context) error {
 	p := a.pipeline
+	// A provider answering nobody shares the deadline field and the resume path
+	// and none of the budgets: the wait below charges every probe to the pause
+	// budget and blocks once it is spent, and an outage spends nothing.
+	if _, away := runstate.PausedForProviderOutage(a.state.PauseCause); away {
+		return a.awaitProviderOutage(ctx)
+	}
 	deadline := a.state.UsageLimitResetsAt.UTC()
 	a.outcome.UsageLimitKind = a.state.UsageLimitKind
 	a.outcome.PauseCause = a.state.PauseCause
@@ -4975,6 +4983,24 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			return "", err
 		}
 		decision, reported, err := a.attemptReview(ctx)
+		// A review the provider refused because nobody is logged into it or nobody
+		// can reach it was never made, and it is answered before anything is
+		// counted for the reason a developer attempt's is: the wait spends nothing.
+		if reported.providerOutage != nil && err != nil {
+			if pauseErr := a.pauseForProviderOutage(ctx, *reported.providerOutage); pauseErr != nil {
+				return "", pauseErr
+			}
+			continue
+		}
+		// A review the provider answered — with a verdict, a refusal, or a death
+		// that reached it — is the provider answering again, and it is recorded
+		// here for the reason a developer attempt records it: a run that met the
+		// outage in review is the only invocation that would ever find out.
+		if reviewReachedProvider(reported, err) {
+			if servedErr := a.pipeline.noticeProviderServed(); servedErr != nil {
+				a.outcome.ProviderOutageProblem = servedErr.Error()
+			}
+		}
 		if limit, refused := refusedReviewForUsageLimit(reported.usageLimit, err); refused {
 			if pauseErr := a.pauseForUsageLimit(ctx, limit); pauseErr != nil {
 				return "", pauseErr
@@ -5156,7 +5182,26 @@ type providerEvidence struct {
 	usageLimit       *backend.UsageLimit
 	serverOverload   *backend.ServerOverload
 	transientFailure *backend.TransientFailure
+	providerOutage   *backend.ProviderOutage
 	processStatus    execution.ProcessStatus
+}
+
+// reviewReachedProvider reports a review attempt the provider actually
+// answered, however it answered: a verdict, a reply the contract could not
+// read, a limit, an overload, or a death that reached it and dropped. Every one
+// of those is the provider at the other end of the connection, which is what
+// ends an outage. A review the harness stopped on time, or one refused before
+// the provider was reached, says nothing either way.
+func reviewReachedProvider(reported providerEvidence, err error) bool {
+	if reported.providerOutage != nil {
+		return false
+	}
+	if err == nil || reported.usageLimit != nil || reported.serverOverload != nil || reported.transientFailure != nil {
+		return true
+	}
+	var undecodable review.UndecodableVerdictError
+	var incomplete review.IncompleteApprovalError
+	return errors.As(err, &undecodable) || errors.As(err, &incomplete)
 }
 
 // refusedReviewForUsageLimit reports a review the provider declined for want of
@@ -5293,6 +5338,7 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 			usageLimit:       result.UsageLimit,
 			serverOverload:   result.ServerOverload,
 			transientFailure: result.TransientFailure,
+			providerOutage:   result.ProviderOutage,
 			processStatus:    result.ProcessStatus,
 		}, fmt.Errorf("independent review failed: %w", reviewErr)
 	}

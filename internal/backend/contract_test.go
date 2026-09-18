@@ -3,6 +3,8 @@ package backend
 import (
 	"testing"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 var contractNow = time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
@@ -162,5 +164,27 @@ func TestAModelTheProviderHasNotGotIsItsOwnAnswer(t *testing.T) {
 	Observation{Answer: AnswerModelUnavailable, Detail: "no such model"}.Record(&limited)
 	if limited.UsageLimit == nil {
 		t.Fatal("a limit reported beside a missing model was cleared, and it is what the caller waits on")
+	}
+}
+
+// A provider nobody is logged into or nobody can reach is recorded as a wait
+// that spends nothing, carrying which of the two it is, and it clears the
+// transient readings: a result that also asked for a relaunch would spend
+// exactly what the answer exists not to.
+func TestAProviderNobodyCanReachIsAWaitThatSpendsNothing(t *testing.T) {
+	t.Parallel()
+
+	for answer, cause := range map[Answer]domain.ProviderOutageCause{
+		AnswerUnauthenticated: domain.ProviderUnauthenticated,
+		AnswerUnreachable:     domain.ProviderUnreachable,
+	} {
+		result := RunResult{IsError: true, TransientFailure: &TransientFailure{Detail: "connection closed"}, ServerOverload: &ServerOverload{Detail: "529"}}
+		Observation{Answer: answer, Detail: "the provider's words"}.Record(&result)
+		if result.ProviderOutage == nil || result.ProviderOutage.Cause != cause || result.ProviderOutage.Detail != "the provider's words" {
+			t.Fatalf("%s: ProviderOutage = %#v, want cause %q with the provider's words", answer, result.ProviderOutage, cause)
+		}
+		if result.TransientFailure != nil || result.ServerOverload != nil {
+			t.Fatalf("%s: result = %#v, want the transient readings cleared by a wait that spends nothing", answer, result)
+		}
 	}
 }

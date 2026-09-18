@@ -2394,6 +2394,14 @@ type scheduleHarness struct {
 	// every project until one opts in.
 	firings int
 	fire    func(*scheduleHarness, int) (RecurringSweep, error)
+	// outages is the product's record of the provider answering nobody, and
+	// provider is what a watch asks whether the login has been renewed. A pull is
+	// wired with them only where a test asks for it, so every other test's pass
+	// reads no outage at all — which is what every pass did before the wait was
+	// named.
+	outages     ScheduleOutages
+	provider    ScheduleProvider
+	outageProbe time.Duration
 
 	pulls      int
 	order      []string
@@ -2523,6 +2531,9 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		BlockedRunsBeforeIntakeHold: blockedRuns,
 		Brake:                       h,
 		Spend:                       h,
+		Outages:                     h.outages,
+		Provider:                    h.provider,
+		OutageProbe:                 h.outageProbe,
 	}, nil
 }
 

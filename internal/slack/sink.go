@@ -587,6 +587,14 @@ func (s *Sink) pass(ctx context.Context) error {
 			if delivery.Direct {
 				into.direct = s.operators
 			}
+			// And the one class that is both important and the operators' to act
+			// on is said to them by name in the channel, which is what makes the
+			// workspace notify them: a provider nobody is logged into is ended by
+			// a person and nothing else.
+			into.tags = nil
+			if delivery.Tag {
+				into.tags = s.operators
+			}
 			if err := notification.Notify(ctx, notifier); err != nil {
 				if into.reached {
 					return err
@@ -846,6 +854,13 @@ type poster struct {
 	// shape: who a message is about is the record's, and how a workspace pokes
 	// somebody is this surface's.
 	mention string
+	// tags is the member ids this message names in the channel, empty for every
+	// message that is for whoever is reading it. It is set on the one class of
+	// message that is both important and the operators' to act on — the provider
+	// answering nobody — because the communication rule says a message that is
+	// theirs to act on is tagged to them, and a member id is what makes the
+	// workspace notify a person rather than only print their name.
+	tags []string
 	// direct is the member ids this message is also said to privately, empty for
 	// every message that is only for the channel. It is set on what is about the
 	// harness being degraded rather than about any work: the channel still carries
@@ -905,7 +920,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	emoji, url := icon(message.Identity.Avatar)
 	if _, err := sink.post(ctx, Message{
 		Channel:   sink.channel,
-		Text:      tagged(p.mention, renderText(message)),
+		Text:      tagged(p.mention, taggedAll(p.tags, renderText(message))),
 		ThreadTS:  threadTS,
 		Broadcast: broadcast(message.Reach),
 		Username:  message.Identity.Name,
@@ -1046,6 +1061,15 @@ func tagged(member, text string) string {
 		return text
 	}
 	return "<@" + trimmed + "> " + text
+}
+
+// taggedAll is tagged for every operator at once, for the one message that is
+// all of theirs to act on. An empty list leaves the text exactly as rendered.
+func taggedAll(members []string, text string) string {
+	for index := len(members) - 1; index >= 0; index-- {
+		text = tagged(members[index], text)
+	}
+	return text
 }
 
 // icon splits one avatar into the two fields Slack takes for it: a shortcode

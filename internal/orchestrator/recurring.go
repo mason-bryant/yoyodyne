@@ -174,7 +174,28 @@ type Trigger struct {
 	// Optional, and a trigger wired without one is one nothing can pause, which
 	// is what every provider invocation was before the switch existed.
 	Holds OperatorHolds
-	Clock execution.Clock
+	// Outages is the product's record of the provider answering nobody. Optional,
+	// and read for one thing: a firing due while it stands is recorded with that
+	// reason and asks the role nothing, so what a week of passes says about the
+	// outage is the outage rather than a column of zero turns. A trigger wired
+	// without one fires into the refusal and records the turn that failed, which
+	// is what every firing did until the wait was named.
+	Outages RecurringOutages
+	// OutageProbe is how long a standing outage is left before a due firing is
+	// made into it anyway to find out whether the provider answers. It is the
+	// same interval a run and a watch probe on. A firing is the one probe this
+	// path has: a served turn ends the outage for every surface, and a refused
+	// one re-records it, so a machine with nothing in its backlog and no watch
+	// running still finds the network back on its own. Zero fires into every
+	// due firing, which is what a trigger did before the wait was named.
+	OutageProbe time.Duration
+	Clock       execution.Clock
+}
+
+// RecurringOutages is the outage record as a firing reads it. It is satisfied
+// by *runstate.ProviderOutageStore.
+type RecurringOutages interface {
+	Standing() (runstate.ProviderOutage, bool, error)
 }
 
 // Fire wakes the first task that is due, and reports what came of it.
@@ -197,6 +218,14 @@ func (t Trigger) Fire(ctx context.Context) (RecurringSweep, error) {
 		return RecurringSweep{Paused: &hold}, nil
 	}
 	var problems []error
+	// Whether the provider is answering anybody is read once, before any task is
+	// claimed. A firing made into a login nobody has renewed spends a claim on a
+	// turn that cannot be served and records a turn that failed, which over three
+	// days reads as a schedule that is broken rather than a provider that is away.
+	outage, away, err := t.providerAway()
+	if err != nil {
+		problems = append(problems, err)
+	}
 	for _, name := range t.names() {
 		task := t.Tasks[name]
 		if !task.Enabled {
@@ -215,10 +244,55 @@ func (t Trigger) Fire(ctx context.Context) (RecurringSweep, error) {
 			problems = append(problems, fmt.Errorf("claim the firing of the recurring task %s: %w", name, err))
 			continue
 		}
+		if away {
+			fired := t.refuse(ctx, name, task, outage)
+			return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
+		}
 		fired := t.run(ctx, name, task)
 		return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
 	}
 	return RecurringSweep{}, errors.Join(problems...)
+}
+
+// providerAway reads whether the provider is answering nobody, and reports the
+// outage only while it is too fresh to probe: once the probe interval has
+// passed since the provider was last met refusing, the firing is made into it,
+// because the firing is the only thing on this path that can find out whether
+// the provider answers. A record that cannot be read is reported beside the
+// pass and the firing is made: a schedule that stopped firing because it could
+// not open one file would be a worse failure than a turn spent into a refusal.
+func (t Trigger) providerAway() (runstate.ProviderOutage, bool, error) {
+	if t.Outages == nil {
+		return runstate.ProviderOutage{}, false, nil
+	}
+	outage, standing, err := t.Outages.Standing()
+	if err != nil {
+		return runstate.ProviderOutage{}, false, fmt.Errorf("read whether the provider is answering before firing: %w", err)
+	}
+	if !standing || !t.now().Before(outage.LastSeen.Add(t.OutageProbe)) {
+		return runstate.ProviderOutage{}, false, nil
+	}
+	return outage, true, nil
+}
+
+// refuse records a firing the provider could not have served: the cadence is
+// moved exactly as a firing that failed moves it, no turn is taken, and what
+// the record says is the wait rather than a turn count of zero. The next
+// firing due once the probe interval has passed is made, and finds out.
+func (t Trigger) refuse(ctx context.Context, name string, task config.RecurringTask, outage runstate.ProviderOutage) Fired {
+	fired := Fired{Task: name, Role: task.Role}
+	recorded := runstate.Sweep{
+		Task:      name,
+		Role:      task.Role,
+		StartedAt: t.now(),
+	}
+	recorded.EndedAt = recorded.StartedAt
+	recorded.Problem = boundedProblem([]string{fmt.Sprintf(
+		"the recurring task %s was not put to the %s: %s; nothing was asked, and its next firing is at its next cadence",
+		name, task.Role, outage.Says())})
+	fired.Problem = recorded.Problem
+	t.settle(ctx, &fired, recorded)
+	return fired
 }
 
 // run takes one firing's turns and records what they came to. It never returns

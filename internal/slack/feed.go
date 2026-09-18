@@ -48,6 +48,11 @@ const (
 	// said once, and it is true at a time the stall's own record is silent.
 	capacityStream  = "capacity"
 	directiveStream = "directives"
+	// providerStream is the provider answering nobody, said once when it is seen
+	// and once when it answers again. It is a stream of its own for the reason
+	// the capacity stream is: a state said on a record rather than a crossing of
+	// one, and true at a time every other record is silent.
+	providerStream = "provider"
 	// improvementStream is what the project's template offers that the project
 	// has never edited. It is a stream of its own rather than a mark on the
 	// product's because what it holds is one mark per improvement rather than a
@@ -134,6 +139,12 @@ type Delivery struct {
 	// ids a reply is authorized against — and a feed that named them would be a
 	// reading of the durable records holding an opinion about a workspace.
 	Direct bool
+	// Tag asks for this delivery to name the operators by member id in the
+	// channel, so the workspace notifies them. It is set on the one class of
+	// message that is both important and theirs to act on: a provider nobody is
+	// logged into is ended by a person and nothing else. Like Direct it names
+	// nobody; who the operators are is the surface's.
+	Tag bool
 }
 
 // Silent reports a delivery selection had nothing to say about, which advances a
@@ -209,6 +220,12 @@ type HarnessFeed struct {
 	// is the only account there is of those refusals — a run says its own by
 	// parking, and nothing else says anything at all.
 	UsageLimits *runstate.UsageLimitStore
+	// Outages is the product's record of the provider answering nobody — a login
+	// nobody has renewed, an API nothing reaches. It is optional in the same sense
+	// the three above are, and what a feed assembled without one loses is the one
+	// message the 2026-09-17 outage needed: the operator told the moment it
+	// happened, and told when it ended.
+	Outages *runstate.ProviderOutageStore
 	// Backlog is how much admitted work the tracker calls ready, and it is read
 	// for one purpose: telling a line that is waiting on somebody from one that is
 	// honestly quiet. It is optional, and a feed assembled without one says
@@ -470,6 +487,13 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, holding...)
 
+	// Whether the provider is answering anybody at all, from the same reading of
+	// the record the switches were read with. It is beside the capacity hold
+	// rather than part of it because the two are opposite waits: the hold lifts
+	// on the provider's clock, and this lifts when a person logs in or the
+	// network returns.
+	batch.Deliveries = append(batch.Deliveries, f.outageDeliveries(ctx, cursors.Streams[providerStream], held, batch.Streams)...)
+
 	// What the project's template offers that this project never edited. It is
 	// last because it is the one reading here that is not about the work at all:
 	// nothing has happened, nothing is degraded, and nothing is waiting on
@@ -576,12 +600,20 @@ func (f *HarnessFeed) switches() (switches, error) {
 	if err != nil {
 		return switches{}, fmt.Errorf("read the operator hold: %w", err)
 	}
-	return switches{
+	read := switches{
 		intake:       intake,
 		intakeHeld:   intakeHeld,
 		operator:     operator,
 		operatorHeld: operatorHeld,
-	}, nil
+	}
+	if f.Outages != nil {
+		outage, away, err := f.Outages.Standing()
+		if err != nil {
+			return switches{}, fmt.Errorf("read whether the provider is answering: %w", err)
+		}
+		read.outage, read.away = outage, away
+	}
+	return read, nil
 }
 
 // watchDeliveries says what the sessions that choose work have been doing. It is

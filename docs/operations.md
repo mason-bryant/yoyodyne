@@ -185,9 +185,9 @@ where the reason for it can be recorded with it.
 ## Waiting out a provider usage limit
 
 None of what follows is specific to one provider. What a provider said is read by
-that provider's dialect and reduced to one of seven answers — served, retrying,
-limit-reached, unavailable, interrupted, model-unavailable, refused — and every
-wait below is driven
+that provider's dialect and reduced to one of nine answers — served, retrying,
+limit-reached, unavailable, interrupted, model-unavailable, unauthenticated,
+unreachable, refused — and every wait below is driven
 by those and by nothing provider-specific. A project that declares a provider of
 its own gets exactly this behaviour, including the two reset-time rules, without
 restating any of it: see [provider plugins](provider-plugins.md).
@@ -394,9 +394,101 @@ A refusal that *would* stand is not relaunched. A terminal `api_error` quoting a
 provider is enforcing — would earn the identical answer on the next attempt, so
 it fails the run exactly as it always did. So does a 529, which is
 [a wait](#waiting-out-an-overloaded-provider) rather than a relaunch, and so does
-any terminal the API did not report at all. The invocation ended twice is the one
+any terminal the API did not report at all. Two of the API's own errors are
+neither: a login the provider will not accept (`Not logged in`, a 401) and an
+API nothing reaches (`Can't reach the API server`, a name that does not resolve)
+are [a wait that spends nothing](#waiting-out-a-provider-nobody-can-reach)
+rather than a relaunch or a refusal. The invocation ended twice is the one
 thing outside the API's own errors that still relaunches, because it is not a
 verdict on anything — it is the provider failing to say what its verdict was.
+
+## Waiting out a provider nobody can reach
+
+The operator's directive of 2026-09-18, verbatim: *"I don't want a run killed
+just because the network is flaky, the laptop is asleep, or I need to re-auth a
+session."* Until then a run whose provider invocation failed on an expired login
+or an unreachable API was read as a transient death: it spent its two relaunches
+on an answer no relaunch could change, was recorded as blocked with its work
+preserved, and went on the development manager's docket. A dispatch refused at
+the availability check failed outright and counted toward the intake brake.
+From 2026-09-17 18:17 local the Claude Code login on the operator's machine had
+expired; three runs blocked in a row, the brake tripped, every recurring pass
+recorded 0 turns, and the maintenance job restarted the watch 158 times. Nothing
+told him. He learned by asking, three days later.
+
+**A provider that is not authenticated or cannot be reached is a named wait
+that spends nothing.** Two conditions earn it, and they are told apart only by
+what you do about them:
+
+- **Not authenticated** — the provider will not accept the account the harness
+  asks under. `claude auth status` says so before a dispatch; inside a run the
+  terminal says `Not logged in` or quotes a 401. The remedy is you logging in.
+- **Unreachable** — nothing answers at the provider's API: the machine is
+  offline or asleep, or a name does not resolve. The terminal says `Can't reach
+  the API server` or carries the transport's own error. The remedy is the
+  network coming back, which the harness finds by asking again.
+
+What the wait costs is nothing, and that is the whole of the rule:
+
+- **A run keeps everything and waits.** Its claim, its branch, its worktree, and
+  its developer session are all kept. No relaunch is counted, no repair attempt
+  is charged, the usage-limit pause budget is untouched, and nothing is docketed
+  or blocked. The run asks again every `execution.usage_limit_unknown_reset_pause`
+  — the one interval the configuration already states for "ask again rather
+  than being told when" — and carries on from exactly where it stopped when the
+  provider answers, with its relaunch and repair counters exactly as they were.
+  There is no in-process bound and no maximum: a login you renew in an hour is a
+  run that waited an hour. The next probe is durable on the run, so a process
+  that dies mid-wait leaves a run `yoyo run <beads-id>` resumes rather than one
+  that failed, and `yoyo resume <beads-id>` asks again now rather than at the
+  next probe, exactly as it does for a limit.
+- **The scheduler dispatches nothing into it.** A dispatch the provider turned
+  away counts toward nothing — not the brake, not the docket, not the session's
+  exclusion of the item — and `yoyo work --watch` chooses nothing while the wait
+  stands, saying why. It asks the provider at every poll whether the login has
+  been renewed, and the poll that finds it renewed resumes the line by itself:
+  **nothing is released and nothing is restarted.** A provider nobody can reach
+  is asked about by pulling into it again once the probe interval has passed,
+  because nothing cheaper says whether the network is back. A drain (`yoyo work`
+  without `--watch`) stops on the wait instead, since it is a command you are
+  waiting on the return of.
+- **A recurring task records the wait rather than a failed turn.** A firing due
+  while it stands moves its cadence, asks the role nothing, and its sweep record
+  says the provider is not authenticated (or cannot be reached) — so `yoyo
+  sweeps` over the outage reads as the outage rather than as a column of zero
+  turns. Once the probe interval has passed since the provider was last met
+  refusing, a due firing is made into it anyway: the firing is the one probe
+  this path has, so a machine with nothing in its backlog and no watch running
+  still finds the network back on its own. A served turn ends the wait; a
+  refused one re-records it, and the next firing waits the interval again.
+- **The brake does not trip.** The failure-storm brake counts runs that blocked
+  with nothing landing between them, and a dispatch or a run the provider turned
+  away is neither. Its remedy — `yoyo release` — lifts nothing here, which is
+  why tripping it on this turned one hand step into two.
+
+Where it stands is one record under the product, `provider-outage.json`,
+written by whatever meets the provider refusing everybody — a dispatch, a run,
+a conversation turn — and cleared by the first thing the provider serves again:
+a developer attempt, a review, a conversation turn, or the watch's own login
+check finding the machine signed in.
+It is what `yoyo status` names the wait from: the banner above the four lines,
+and an entry on the attention line that says whose move it is.
+
+```text
+The provider is not authenticated; the operator must log in: every role is waiting on it, and the harness asks again on its own until it answers; 3 turns refused since 2026-09-17T15:17:00Z (claude-code, account default)
+Running: nothing
+...
+Needs a human (1):
+  The provider is not authenticated; the operator must log in: … — the operator's — log in to the provider, or wait for the network; the harness resumes on its own once it answers, and nothing is released or restarted
+```
+
+The channel says it once the moment it is seen, tagged to the operators by
+member id, and once more when the provider answers again: see
+[reporting](reporting.md#a-provider-nobody-can-reach). The stall alarm does not
+fire over it — a line of runs each waiting on the same login is not a machine
+that died — and it does not repeat while it stands, because the banner carries
+it and a message repeated about a wait you have been told about is the nagging
+that gets a channel muted.
 
 ## Waiting out a network that dropped
 

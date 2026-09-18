@@ -155,6 +155,12 @@ type Reports interface {
 	Handlings() ([]report.Handling, error)
 }
 
+// ProviderOutages is the provider answering nobody, as a reading asks it. It is
+// satisfied by *runstate.ProviderOutageStore.
+type ProviderOutages interface {
+	Standing() (runstate.ProviderOutage, bool, error)
+}
+
 // Sources are the durable records one standing reading is assembled from, and
 // the two configured numbers it is read against. Every store is an interface so
 // that this derivation can be exercised without a state directory, which is the
@@ -191,6 +197,11 @@ type Sources struct {
 	// nothing about a hold rather than reporting none — a project whose every
 	// refusal went unread for five days is the reason this is here.
 	UsageLimits UsageLimits
+	// ProviderOutages is the product's record of the provider answering nobody.
+	// It is optional, and a reading without one says nothing about an outage
+	// rather than reporting none — three days of a login nobody was told had
+	// expired is the reason this is here.
+	ProviderOutages ProviderOutages
 	// Agents is every configured agent, as the configuration resolved it: what
 	// each asks for and what each may be served by instead. It is the other half
 	// of the hold above, because a refusal holds a role only against what that
@@ -285,6 +296,11 @@ type Standing struct {
 	// lines: the banner above says it in one sentence, and this is the reset, the
 	// count, and the models behind that sentence.
 	CapacityHold *CapacityHold `json:"capacity_hold,omitempty"`
+	// ProviderOutage is the provider answering nobody — a login nobody has
+	// renewed, an API nothing reaches — as the product's record says it, and nil
+	// where it is answering. It is carried whole for the surfaces that read the
+	// model rather than its lines; the banner above says it in one sentence.
+	ProviderOutage *runstate.ProviderOutage `json:"provider_outage,omitempty"`
 
 	Running        []RunningRun `json:"running"`
 	RunningProblem string       `json:"running_problem,omitempty"`
@@ -372,8 +388,18 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// The provider's usage window is read out of the same stall the refusals are
 	// worded from, rather than derived a second time here: one reading of one
 	// silence, said in two places, is the rule this whole package holds.
-	if stall.Reason == ReasonProviderWindow {
+	if stall.Reason == ReasonProviderWindow || stall.Reason == ReasonProviderAway {
 		standing.Paused = stall.Says
+	}
+	// The provider answering nobody is carried whole as well as said, and it is
+	// read again here rather than only through the stall: the stall is dropped
+	// where it stopped nothing, and a login that expired over an empty queue is
+	// still a login the operator has to renew before anything can happen.
+	if switches.providerAway {
+		standing.ProviderOutage = &switches.providerOutage
+		if standing.Paused == "" {
+			standing.Paused = switches.providerOutage.Says()
+		}
 	}
 	// The provider holding every role is the other pause, read from the refusal
 	// log rather than from the session choosing work: on 2026-09-08 that session
@@ -392,6 +418,12 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	standing.Reports, standing.ReportsProblem = readReports(sources, now)
 
 	needs, needsProblem := readNeedsHuman(sources, switches)
+	// The provider answering nobody is on the attention line whatever the queue
+	// holds, because what ends it is a person: it is added here where the stall
+	// did not already carry it, which is a stall over an empty queue.
+	if switches.providerAway && stall.Reason != ReasonProviderAway {
+		needs = append(needs, Attention{What: switches.providerOutage.Says(), Whose: ReasonProviderAway.Whose()})
+	}
 	// The hold is waiting on a person in the one way a window is not: the window
 	// lifts on the provider's clock, and the configuration that let it hold every
 	// role is the operator's to change.
@@ -562,6 +594,12 @@ type switches struct {
 	operatorHeld bool
 	intake       runstate.IntakeHold
 	intakeHeld   bool
+	// providerOutage is the provider answering nobody, and providerAway whether
+	// that stands. It is read with the switches because it is read the way they
+	// are — one file under the product, present or absent — and said the way
+	// they are: as what stops the choosing, and as something waiting on a person.
+	providerOutage runstate.ProviderOutage
+	providerAway   bool
 	// pausing are the unresolved directives that stop work, in the order they were
 	// recorded.
 	pausing []directive.Directive
@@ -587,6 +625,13 @@ func readSwitches(sources Sources) switches {
 		read.problems = append(read.problems, fmt.Sprintf("the intake hold could not be read: %v", err))
 	} else {
 		read.intake, read.intakeHeld = hold, held
+	}
+	if sources.ProviderOutages != nil {
+		if outage, standing, err := sources.ProviderOutages.Standing(); err != nil {
+			read.problems = append(read.problems, fmt.Sprintf("whether the provider is answering could not be read: %v", err))
+		} else {
+			read.providerOutage, read.providerAway = outage, standing
+		}
 	}
 	if sources.Directives == nil {
 		read.problems = append(read.problems, "nothing was wired to read the recorded directives")
@@ -707,12 +752,14 @@ func (h *heldWork) count(entry backlog.Entry) {
 // question an operator asks.
 func whyNothingStarts(sources Sources, held switches, running int, now time.Time) Stall {
 	conditions := Conditions{
-		OperatorHold: held.operator,
-		OperatorHeld: held.operatorHeld,
-		IntakeHold:   held.intake,
-		IntakeHeld:   held.intakeHeld,
-		Running:      running,
-		Capacity:     sources.Capacity,
+		OperatorHold:   held.operator,
+		OperatorHeld:   held.operatorHeld,
+		IntakeHold:     held.intake,
+		IntakeHeld:     held.intakeHeld,
+		ProviderOutage: held.providerOutage,
+		ProviderAway:   held.providerAway,
+		Running:        running,
+		Capacity:       sources.Capacity,
 		// The reading's own moment, so a provider's usage window this line reports
 		// as standing is one that had not lifted when the rest of these lines were
 		// read.
