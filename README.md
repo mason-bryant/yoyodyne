@@ -73,14 +73,15 @@ isolated worktree, the checks your project declared, an independent reviewer,
 that reviewer's findings handed back to the developer to repair, a fast-forward
 into your target branch, and — [where you have asked for it](#optional-publishing-and-auto-merge)
 — a pull request that merges itself once your required checks pass. `yoyo run`,
-`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, `yoyo resume`, and
-`yoyo release`
+`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, `yoyo resume`,
+`yoyo release`, and `yoyo gate`
 sit beside that conversation as administrative and recovery entry points — one
 named item, one branch judged as a whole, what became of the runs already made
 and why one of them failed, settling what a killed process left behind, stopping
 everything the harness would spend until you say otherwise, releasing a run
-waiting on a refusal the provider no longer makes, and letting the harness choose
-work again after intake was held — rather than as the way
+waiting on a refusal the provider no longer makes, letting the harness choose
+work again after intake was held, and recording a step only you can take so the
+work reserving it stops waiting — rather than as the way
 work normally happens.
 
 **Quick start.** With [Beads](https://github.com/gastownhall/beads) and

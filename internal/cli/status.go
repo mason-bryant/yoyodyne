@@ -314,6 +314,10 @@ func standingSources(configPath string) readmodel.Sources {
 		// held item says whether it waits on a decision or on the harness carrying
 		// one out rather than on both at once.
 		sources.Decisions = store.Triage()
+		// The same store answers both, and it is set twice rather than once
+		// because the two are different questions about different records: what
+		// the runs are doing, and what a person has recorded doing.
+		sources.Gates = store
 	}
 	if store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Conversations = store

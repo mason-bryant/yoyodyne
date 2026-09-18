@@ -1878,8 +1878,8 @@ happens at a time, and a change whose target moved while it was being reviewed i
 replayed onto where the target went and promoted by fast-forward, or blocked if
 it will not replay. Nothing is ever forced.
 
-Seven things keep an item out of a pass, reported at two different grains. Four are
-named against the item, because nothing else would report that this item was
+Eight things keep an item out of a pass, reported at two different grains. Five
+are named against the item, because nothing else would report that this item was
 passed over. An unresolved directive is named with the directive's own words: it
 needs a person. An item whose unfinished children already carry its execution is
 named with those children: a decomposed epic and the child doing its work are
@@ -1898,13 +1898,23 @@ by naming them after `conflict-surface:` on a line of its own, in its title,
 description, design guidance, or acceptance criteria; an item that declares
 nothing has those same fields read for the files it plainly names, and that
 inference takes only a path with a separator and an extension on the end, because
-a surface invented out of prose would hold unrelated work back. And an item the
+a surface invented out of prose would hold unrelated work back. An item the
 tree is not ready for — one that pinpoints a `file:line` or a package-qualified
 symbol the repository no longer has, or that says in its own authored words that
 something must land before it starts — is named with the unmet prerequisite and
 routed to the [triage docket](#triage-thresholds) rather than
 to a run; [how work flows](work.md#letting-the-harness-choose-the-work) says what
-the two readings are and who releases each. The tracker not
+the two readings are and who releases each. And an item that
+declares a step only a person can take — named after `human-gate:` on a line of
+its own, in those same authored fields — is passed over with that step and what
+records it both named, until somebody has recorded taking it with `yoyo gate
+record <name> --for <item>`. That one is neither a wait nor something any run
+clears: closing a work item does not pass it, which is the whole reason it
+exists. The act is recorded against the item that declared the gate and passes it
+there and nowhere else, so a name a later item declares again is a step somebody
+still has to take. See
+[a step only a person can take](work.md#letting-the-harness-choose-the-work) for
+what it replaced. The tracker not
 reporting an item as ready, a run for it
 already being in flight anywhere, and there being no free slot are facts about
 the pass rather than about any one item, so the pass reports them as such — the
@@ -1916,7 +1926,7 @@ on every pass and bury the deferrals worth reading. A pass that stopped before
 reading the queue at all — held intake, or every slot already taken — says
 nothing about the backlog rather than reporting zeroes it never looked up.
 
-A seventh thing deliberately keeps nothing out: an item whose goal was amended
+A ninth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, and what changed
 goes into the run's recorded reason instead. See
 [what a change upstream leaves stale](#what-a-change-upstream-leaves-stale) for
@@ -3301,7 +3311,13 @@ blocker rather than waiting for somebody to remember to reopen the item. What
 still refuses is unfinished work the item waits for, and an item that has left
 the backlog. The intake hold applies too, because the harness is the one
 choosing the work; a re-run under a hold starts nothing and claims nothing, so the
-stoppage keeps its re-run for after the hold is lifted. The fresh run records
+stoppage keeps its re-run for after the hold is lifted. A
+[step only a person can take](work.md#letting-the-harness-choose-the-work) that
+the item declares and nobody has recorded applies for the same reason and in the
+same way: the re-run is refused before the claim, in the words the queue holds
+the item with, and the stoppage keeps its re-run for after the act is recorded —
+the development manager deciding a re-run is not the operator taking the step the
+item reserved for them. The fresh run records
 the development manager as having chosen it, cites the decision it read that from
 — whose, which conversation, which turn — and carries the reasoning recorded with
 it, which is what `selected-work-passes-intake-and-records-why` asks of anything

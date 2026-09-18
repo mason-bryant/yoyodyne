@@ -7,6 +7,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/humangate"
 )
 
 func TestOrderIsPriorityFirstAndHoldsWhatTheProductManagerDidNotDecide(t *testing.T) {
@@ -20,7 +21,7 @@ func TestOrderIsPriorityFirstAndHoldsWhatTheProductManagerDidNotDecide(t *testin
 		{ID: "yoyodyne-ifd.3", Title: "The scheduler that runs it", Status: statusOpen, Priority: 0},
 		{ID: "yoyodyne-ifd.25", Title: "Approval moves up to the goals", Status: statusOpen, Priority: 2},
 		{ID: "yoyodyne-ifd.4", Title: "The development manager that pulls", Status: statusOpen, Priority: 1},
-	}, []string{"yoyodyne-ifd.26", "yoyodyne-ifd.3", "yoyodyne-ifd.25", "yoyodyne-ifd.4"}, ReadHolds(nil))
+	}, []string{"yoyodyne-ifd.26", "yoyodyne-ifd.3", "yoyodyne-ifd.25", "yoyodyne-ifd.4"}, ReadHolds(nil), nil)
 
 	var order []string
 	for _, entry := range queue.Entries {
@@ -57,7 +58,7 @@ func TestOnlyAdmittedUnfinishedWorkIsInTheBacklog(t *testing.T) {
 		},
 		// A tracker that reports a claimed or closed item as ready cannot put it
 		// back in the queue: what has left the backlog has left it.
-	}, []string{"yoyodyne-1", "yoyodyne-2", "yoyodyne-3", "yoyodyne-4"}, ReadHolds(nil))
+	}, []string{"yoyodyne-1", "yoyodyne-2", "yoyodyne-3", "yoyodyne-4"}, ReadHolds(nil), nil)
 
 	if len(queue.Entries) != 2 {
 		t.Fatalf("entries = %#v", queue.Entries)
@@ -99,7 +100,7 @@ func TestABlockedStatusWithEveryBlockerClosedDoesNotHideTheWork(t *testing.T) {
 		// The tracker offers only the open one, because its ready list is computed
 		// from the same status field. That is exactly why it is not asked about the
 		// blocked one.
-	}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil))
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil), nil)
 
 	released := queue.Entries[0]
 	if !released.Ready || len(released.WaitingOn) != 0 || released.Awaiting != "" {
@@ -128,7 +129,7 @@ func TestAGovernanceHoldIsNotReleasedByADependencyThatCleared(t *testing.T) {
 			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: beads.BlocksDependency}},
 		},
 		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 2},
-	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]Hold{"yoyodyne-ifd.153": {Reason: stoppage}}))
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]Hold{"yoyodyne-ifd.153": {Reason: stoppage}}), nil)
 
 	held := queue.Entries[0]
 	if held.Ready || held.Awaiting != stoppage {
@@ -162,7 +163,7 @@ func TestHoldsThatCouldNotBeReadHoldEveryBlockedItem(t *testing.T) {
 	queue := Order([]beads.WorkItem{
 		{ID: "yoyodyne-ifd.192", Title: "Blocked, nothing waiting", Status: statusBlocked, Priority: 0},
 		{ID: "yoyodyne-ifd.4", Title: "Open and pullable", Status: statusOpen, Priority: 1},
-	}, []string{"yoyodyne-ifd.4"}, Holds{})
+	}, []string{"yoyodyne-ifd.4"}, Holds{}, nil)
 
 	unread := queue.Entries[0]
 	if unread.Ready || unread.Hold() != unreadHold {
@@ -204,7 +205,7 @@ func TestAnItemWaitingOnUnfinishedWorkKeepsItsPlaceButIsNotPulled(t *testing.T) 
 		{ID: "yoyodyne-ifd.18", Title: "Give the product manager the backlog", Status: statusOpen, Priority: 1},
 		// The tracker holds the first one back and offers the second, which is
 		// what it does when a blocker is unfinished.
-	}, []string{"yoyodyne-ifd.18"}, ReadHolds(nil))
+	}, []string{"yoyodyne-ifd.18"}, ReadHolds(nil), nil)
 
 	waiting := queue.Entries[0]
 	if waiting.Ready || len(waiting.WaitingOn) != 1 || waiting.WaitingOn[0] != "yoyodyne-ifd.18" {
@@ -231,7 +232,7 @@ func TestADependencyOnFinishedWorkHoldsNothingBack(t *testing.T) {
 		// The blocker is closed, so it is not in the backlog any more. The
 		// dependency to it is still listed, exactly as Beads lists it.
 		Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.18", Type: beads.BlocksDependency}},
-	}}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil))
+	}}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil), nil)
 
 	entry := queue.Entries[0]
 	if !entry.Ready || len(entry.WaitingOn) != 0 {
@@ -259,7 +260,7 @@ func TestWorkAConversationCarriesIsNeverTheNextThingToPull(t *testing.T) {
 			Executor: domain.WorkItemExecutorConversation,
 		},
 		{ID: "yoyodyne-ifd.144", Title: "Mark the conversation items", Status: statusOpen, Priority: 1},
-	}, []string{"yoyodyne-ifd.138", "yoyodyne-ifd.144"}, ReadHolds(nil))
+	}, []string{"yoyodyne-ifd.138", "yoyodyne-ifd.144"}, ReadHolds(nil), nil)
 
 	held := queue.Entries[0]
 	if held.Ready {
@@ -301,7 +302,7 @@ func TestParkedWorkIsNeverPullableHoweverFarTheQueueDrains(t *testing.T) {
 			ID: "yoyodyne-ifd.6", Title: "The thin Codex backend", Status: statusOpen, Priority: 4,
 			Parking: "off the critical path by the scope decision; released when a second backend is wanted",
 		},
-	}, []string{"yoyodyne-ifd.188", "yoyodyne-ifd.6"}, ReadHolds(nil))
+	}, []string{"yoyodyne-ifd.188", "yoyodyne-ifd.6"}, ReadHolds(nil), nil)
 
 	parked := queue.Entries[1]
 	if parked.Ready {
@@ -321,7 +322,7 @@ func TestParkedWorkIsNeverPullableHoweverFarTheQueueDrains(t *testing.T) {
 	drained := Order([]beads.WorkItem{{
 		ID: "yoyodyne-ifd.6", Title: "The thin Codex backend", Status: statusOpen, Priority: 4,
 		Parking: "off the critical path by the scope decision",
-	}}, []string{"yoyodyne-ifd.6"}, ReadHolds(nil))
+	}}, []string{"yoyodyne-ifd.6"}, ReadHolds(nil), nil)
 	if next, ok := drained.Next(); ok {
 		t.Fatalf("a drained queue selected parked work: %#v", next)
 	}
@@ -353,7 +354,7 @@ func TestParkedWorkThatNoRunCouldCarryIsToldTheHoldThatWouldStillStand(t *testin
 		ID: "yoyodyne-ifd.138", Title: "Promote the brief", Status: statusOpen, Priority: 0,
 		Executor: domain.ConversationWith(domain.RoleArchitect),
 		Parking:  "waiting on the operator's answer about the goals",
-	}}, []string{"yoyodyne-ifd.138"}, ReadHolds(nil))
+	}}, []string{"yoyodyne-ifd.138"}, ReadHolds(nil), nil)
 
 	entry := queue.Entries[0]
 	if entry.Ready {
@@ -383,7 +384,7 @@ func TestAnItemTheTrackerDoesNotOfferIsNotPulledHoweverCleanItsListingLooks(t *t
 	queue := Order([]beads.WorkItem{
 		{ID: "yoyodyne-ifd.3", Title: "Blocked, but the listing does not say so", Status: statusOpen, Priority: 0},
 		{ID: "yoyodyne-ifd.4", Title: "Actually pullable", Status: statusOpen, Priority: 1},
-	}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil))
+	}, []string{"yoyodyne-ifd.4"}, ReadHolds(nil), nil)
 
 	held := queue.Entries[0]
 	if held.Ready {
@@ -402,7 +403,7 @@ func TestAnItemTheTrackerDoesNotOfferIsNotPulledHoweverCleanItsListingLooks(t *t
 	// The degenerate case is the one that matters most: a readiness answer that
 	// arrives empty makes the whole queue unready rather than making all of it
 	// pullable.
-	none := Order([]beads.WorkItem{{ID: "yoyodyne-ifd.3", Title: "Admitted", Status: statusOpen}}, nil, ReadHolds(nil))
+	none := Order([]beads.WorkItem{{ID: "yoyodyne-ifd.3", Title: "Admitted", Status: statusOpen}}, nil, ReadHolds(nil), nil)
 	if _, ok := none.Next(); ok || none.Ready() != 0 {
 		t.Fatalf("an empty ready set produced %#v", none.Entries)
 	}
@@ -420,7 +421,7 @@ func TestRenderSaysTheOrderWhatIsHeldBackAndWhatIsNext(t *testing.T) {
 		// unfinished work and the third stopped on a change nobody has decided about.
 	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]Hold{
 		"yoyodyne-ifd.9": {Reason: "run run-f4fbf60a stopped on it and its change is preserved"},
-	}))
+	}), nil)
 
 	rendered := queue.Render()
 	for _, required := range []string{
@@ -446,7 +447,7 @@ func TestRenderSaysTheOrderWhatIsHeldBackAndWhatIsNext(t *testing.T) {
 	// all, because "nothing is ready" and "nothing is queued" call for opposite
 	// responses from an operator.
 	stalled := Order([]beads.WorkItem{{ID: "yoyodyne-1", Title: "Blocked", Status: statusBlocked, Priority: 0}}, nil,
-		ReadHolds(map[string]Hold{"yoyodyne-1": {Reason: "its stoppage is in front of the development manager"}}))
+		ReadHolds(map[string]Hold{"yoyodyne-1": {Reason: "its stoppage is in front of the development manager"}}), nil)
 	if !strings.Contains(stalled.Render(), "nothing is ready to be pulled") {
 		t.Fatalf("stalled backlog = %q", stalled.Render())
 	}
@@ -466,7 +467,7 @@ func TestARenderedBacklogIsCutWhileItsCountsStayExact(t *testing.T) {
 		})
 		ready = append(ready, id)
 	}
-	rendered := Order(items, ready, ReadHolds(nil)).Render()
+	rendered := Order(items, ready, ReadHolds(nil), nil).Render()
 
 	if !strings.Contains(rendered, "backlog ("+strconv.Itoa(len(items))+" admitted") {
 		t.Fatalf("the count was cut with the list: %q", rendered)
@@ -496,7 +497,7 @@ func TestHeldEntriesCountApartByWhoseMoveTheyAreWaitingOn(t *testing.T) {
 	}, []string{"yoyodyne-ifd.4"}, ReadHolds(map[string]Hold{
 		"yoyodyne-ifd.150": {Reason: "run run-a stopped on it; the decision is recorded", Decided: true},
 		"yoyodyne-ifd.151": {Reason: "run run-b stopped on it; nobody has decided"},
-	}))
+	}), nil)
 
 	if queue.AwaitingCarryOut() != 1 || queue.AwaitingDecision() != 1 {
 		t.Fatalf("the queue counts %d awaiting carry-out and %d awaiting a decision, want one of each",
@@ -512,5 +513,207 @@ func TestHeldEntriesCountApartByWhoseMoveTheyAreWaitingOn(t *testing.T) {
 	// it is not being pulled, so it is never on either count.
 	if queue.Entries[2].AwaitingCarryOut {
 		t.Fatalf("a pullable item was counted as held: %#v", queue.Entries[2])
+	}
+}
+
+// The regression this machinery exists for, as it actually happened on
+// 2026-09-04.
+//
+// yoyodyne-ifd.209.6 was the parity soak, and its done condition reserved the
+// operator's own reading of that soak before the default flipped.
+// yoyodyne-ifd.209.7 was the flip. The only encoding available for "a person has
+// to judge this first" was an item-closed dependency, so the reservation went
+// into 209.6's text and 209.7 was made to depend on 209.6 — and when the run
+// that finished the soak closed 209.6, the tracker reported 209.7 ready and the
+// flip jumped the step the operator had kept for themselves.
+//
+// The first half below is that jump, reproduced: nothing about the dependency
+// encoding holds 209.7 once 209.6 has closed, and nothing in this package could
+// tell that from work that was genuinely finished. The second half is the gate
+// doing what the dependency could not.
+func TestAnItemClosureNeverPassesAStepReservedForAPerson(t *testing.T) {
+	t.Parallel()
+
+	// The soak has closed and has left the backlog, exactly as it did.
+	flip := beads.WorkItem{
+		ID: "yoyodyne-ifd.209.7", Title: "Declarative becomes the default",
+		Status: statusOpen, Priority: 1,
+		Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.209.6", Type: beads.BlocksDependency, Status: "closed"}},
+	}
+
+	jumped := Order([]beads.WorkItem{flip}, []string{flip.ID}, ReadHolds(nil), nil)
+	if !jumped.Entries[0].Ready {
+		t.Fatal("the dependency-only encoding is being reproduced here, and it must read as ready; " +
+			"if it does not, this test no longer describes the failure it guards against")
+	}
+
+	// The same flip, with the operator's step declared as a gate on the work it
+	// holds rather than as a clause in an item somebody closes.
+	flip.Description = "Flip the default once the soak has been judged.\n\n" +
+		humangate.DeclareMarker + " soak-reviewed — the operator has read a week of soak runs and is content to flip\n"
+
+	held := Order([]beads.WorkItem{flip}, []string{flip.ID}, ReadHolds(nil), nil)
+	entry := held.Entries[0]
+	if entry.Ready {
+		t.Fatal("the flip was pullable with the operator's step still untaken, which is the whole of the regression")
+	}
+	if len(entry.HumanGates.Gates) != 1 || entry.HumanGates.Gates[0].Name != "soak-reviewed" {
+		t.Fatalf("gates = %#v", entry.HumanGates)
+	}
+	// The queue says it is a person rather than a wait, and says so where the
+	// order is read.
+	if hold := entry.Hold(); !strings.Contains(hold, "waiting on a person") || !strings.Contains(hold, "closing an item") {
+		t.Fatalf("hold = %q", hold)
+	}
+	if _, ok := held.Next(); ok {
+		t.Fatal("Next() offered the gated item")
+	}
+	if held.Gated() != 1 {
+		t.Fatalf("Gated() = %d", held.Gated())
+	}
+	if !strings.Contains(held.Render(), "1 waiting on a person") {
+		t.Fatalf("rendered backlog = %q", held.Render())
+	}
+
+	// And once a person has recorded the act, the same item is pullable. The gate
+	// stops work; it does not end it.
+	passed := Order([]beads.WorkItem{flip}, []string{flip.ID}, ReadHolds(nil), map[string][]string{"yoyodyne-ifd.209.7": {"soak-reviewed"}})
+	if !passed.Entries[0].Ready {
+		t.Fatalf("the flip is still held after the act was recorded: %#v", passed.Entries[0])
+	}
+	if passed.Entries[0].HumanGates.Holds() {
+		t.Fatalf("a gate somebody passed is still reported as outstanding: %#v", passed.Entries[0].HumanGates)
+	}
+}
+
+// A gate outranks a wait on other work, because the other work will finish on
+// its own and the gate will not. An item told about its blocker instead would
+// have somebody watching for a moment that changes nothing.
+func TestAGateIsNamedAheadOfWorkThatWillClearOnItsOwn(t *testing.T) {
+	t.Parallel()
+
+	queue := Order([]beads.WorkItem{
+		{ID: "yoyodyne-ifd.209.6", Title: "The soak", Status: statusOpen, Priority: 0},
+		{
+			ID: "yoyodyne-ifd.209.7", Title: "The flip", Status: statusOpen, Priority: 1,
+			Description:  humangate.DeclareMarker + " soak-reviewed — the operator has judged the soak\n",
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.209.6", Type: beads.BlocksDependency}},
+		},
+	}, []string{"yoyodyne-ifd.209.6"}, ReadHolds(nil), nil)
+
+	flip := queue.Entries[1]
+	if !strings.Contains(flip.Hold(), "waiting on a person") {
+		t.Fatalf("hold = %q, want the gate named ahead of the blocker", flip.Hold())
+	}
+	// A parked item is still told about its parking: that is a decision somebody
+	// already took, and offering them a gate to record would be offering an act
+	// that changes nothing.
+	parked := Order([]beads.WorkItem{{
+		ID: "yoyodyne-ifd.209.7", Title: "The flip", Status: statusOpen, Priority: 1,
+		Description: humangate.DeclareMarker + " soak-reviewed — the operator has judged the soak\n",
+		Parking:     domain.WorkItemParking("waiting for the release to cut"),
+	}}, []string{"yoyodyne-ifd.209.7"}, ReadHolds(nil), nil)
+	if !strings.Contains(parked.Entries[0].Hold(), "parked") {
+		t.Fatalf("hold = %q", parked.Entries[0].Hold())
+	}
+}
+
+// A gate declaration nothing could read holds the item exactly as a gate does.
+//
+// This is the same regression arriving through the parser instead of through the
+// tracker. An author who writes `human-gate:` with a mistyped name, or with
+// nothing said about the act, meant to reserve a step for a person; a reader
+// that dropped what it could not parse would turn that intention into an item
+// with no gate at all, and the work would be pulled past a step nobody was ever
+// asked to take. So the typo stops the work, and says what is wrong with it.
+func TestADeclarationNothingCouldReadHoldsTheItemToo(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		declaration string
+		want        string
+	}{
+		{name: "a name nothing could record", declaration: humangate.DeclareMarker + " Soak Reviewed — the operator has judged the soak\n", want: "not a gate name"},
+		{name: "nothing said about the act", declaration: humangate.DeclareMarker + " soak-reviewed\n", want: "does not say what the person has to do"},
+		{name: "a marker with nothing after it", declaration: humangate.DeclareMarker + "\n", want: "has no name"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			item := beads.WorkItem{
+				ID: "yoyodyne-ifd.209.7", Title: "Declarative becomes the default",
+				Status: statusOpen, Priority: 1, Description: testCase.declaration,
+			}
+			queue := Order([]beads.WorkItem{item}, []string{item.ID}, ReadHolds(nil), nil)
+			entry := queue.Entries[0]
+			if entry.Ready {
+				t.Fatalf("a declaration nothing could read left the item pullable: %#v", entry)
+			}
+			if len(entry.HumanGates.Unreadable) != 1 {
+				t.Fatalf("unreadable = %#v", entry.HumanGates)
+			}
+			hold := entry.Hold()
+			if !strings.Contains(hold, testCase.want) {
+				t.Fatalf("hold = %q, want it to mention %q", hold, testCase.want)
+			}
+			// It says what actually clears it, which is not a command: there is no
+			// name for anybody to have recorded an act against.
+			if !strings.Contains(hold, "correcting the line") {
+				t.Fatalf("hold = %q, want it to say the author has to fix the declaration", hold)
+			}
+			// And no recorded act passes it, however many are on the record.
+			recorded := Order([]beads.WorkItem{item}, []string{item.ID}, ReadHolds(nil), map[string][]string{"yoyodyne-ifd.209.7": {"soak-reviewed", "soak"}})
+			if recorded.Entries[0].Ready {
+				t.Fatalf("a recorded act passed a declaration nothing could read: %#v", recorded.Entries[0])
+			}
+			if recorded.Gated() != 1 {
+				t.Fatalf("Gated() = %d, want the unreadable declaration counted as waiting on a person", recorded.Gated())
+			}
+		})
+	}
+}
+
+// A gate name recurs, and an act recorded against one item passes that item's
+// step and nobody else's.
+//
+// `release-signed` describes a step taken once per release. If the recorded name
+// alone decided it, the second release would be pullable on the strength of the
+// first release's signature — the same "gate reads satisfied with the step
+// untaken" failure this whole mechanism exists to end, arriving through the
+// namespace instead of through the tracker.
+func TestAnActPassesTheGateOnItsOwnItemAndNoOther(t *testing.T) {
+	t.Parallel()
+
+	items := []beads.WorkItem{
+		{
+			ID: "yoyodyne-ifd.300", Title: "Cut v0.3.0", Status: statusOpen, Priority: 0,
+			Description: humangate.DeclareMarker + " release-signed — the operator has signed this release off\n",
+		},
+		{
+			ID: "yoyodyne-ifd.400", Title: "Cut v0.4.0", Status: statusOpen, Priority: 1,
+			Description: humangate.DeclareMarker + " release-signed — the operator has signed this release off\n",
+		},
+	}
+	// The first release's sign-off is on the record, and nothing else is.
+	queue := Order(items, []string{"yoyodyne-ifd.300", "yoyodyne-ifd.400"}, ReadHolds(nil), map[string][]string{"yoyodyne-ifd.300": {"release-signed"}})
+
+	if !queue.Entries[0].Ready {
+		t.Fatalf("the signed release is still held: %#v", queue.Entries[0])
+	}
+	later := queue.Entries[1]
+	if later.Ready {
+		t.Fatal("the next release was pullable on the strength of the last release's signature")
+	}
+	if len(later.HumanGates.Gates) != 1 || later.HumanGates.Gates[0].Name != "release-signed" {
+		t.Fatalf("gates = %#v", later.HumanGates)
+	}
+	// And the line it prints names the item to record against, so the operator is
+	// not sent to type a command that would be refused as already passed.
+	if hold := later.Hold(); !strings.Contains(hold, "--for yoyodyne-ifd.400") {
+		t.Fatalf("hold = %q", hold)
+	}
+	if queue.Gated() != 1 {
+		t.Fatalf("Gated() = %d", queue.Gated())
 	}
 }

@@ -472,6 +472,10 @@ func buildRerunner(configPath string) (orchestrator.Rerunner, error) {
 		// the same tracker the fresh run starts on, so what refuses here is exactly
 		// what would otherwise have refused past the claim.
 		Items: parts.tracker(),
+		// The human acts on the record, from the same store every other surface
+		// reads them from, so a step the operator reserved refuses the re-run
+		// before the claim exactly as it refuses the scheduler's pull.
+		Gates: parts.store,
 		// The same limit the reservation enforces, read before the claim so a full
 		// harness leaves the decision standing rather than spending the stoppage's
 		// re-run on a run that would find no slot.

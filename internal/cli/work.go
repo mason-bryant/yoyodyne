@@ -210,13 +210,24 @@ func (w conversationWork) Backlog(ctx context.Context) (backlog.Queue, error) {
 	// conversation wired without the records holds every blocked item rather than
 	// releasing work whose hold it could not read.
 	var held backlog.Holds
+	var discharged map[string][]string
 	if w.store != nil {
 		held, err = readmodel.HeldForAPerson(w.store, w.store.Triage())
 		if err != nil {
 			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}
+		// The human gates a person has recorded passing come from the same store
+		// rather than from the tracker, which has no way to know about them: the
+		// only completion a tracker records is an item being closed, and closure
+		// passing a gate that reserved somebody's step is what this exists to stop.
+		// A conversation wired without the store holds every declared gate, for the
+		// same reason it holds every blocked item.
+		discharged, err = w.store.DischargedGates()
+		if err != nil {
+			return backlog.Queue{}, fmt.Errorf("read the human gates a person has passed: %w", err)
+		}
 	}
-	return backlog.Order(admitted, pullable, held), nil
+	return backlog.Order(admitted, pullable, held, discharged), nil
 }
 
 // Run executes one work item through the pipeline. The outcome is reported even

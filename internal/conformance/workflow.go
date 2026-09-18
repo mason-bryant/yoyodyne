@@ -304,8 +304,11 @@ func Assess(ctx context.Context, definition Definition, instances *runstate.Stor
 		Graph:     definition.Graph,
 		Instances: instances,
 		Grant:     grant,
-		Outcome:   Outcome,
-		Now:       func() time.Time { return now().UTC() },
+		// Wired for the reason the delivery trial's is: the assessment declares no
+		// gate, and a definition that declares one must meet the person's step.
+		Gates:   instances,
+		Outcome: Outcome,
+		Now:     func() time.Time { return now().UTC() },
 	}
 	instanceID := InstanceID(now())
 	if _, err := executor.Start(instanceID); err != nil {

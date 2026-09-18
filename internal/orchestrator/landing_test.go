@@ -435,7 +435,7 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 		// holds it back. Selection is asked about the axis the tracker does not know.
 		settled := tracker.item
 		for pull := 1; pull <= pulls; pull++ {
-			queue := backlog.Order([]beads.WorkItem{settled}, []string{settled.ID}, backlog.ReadHolds(nil))
+			queue := backlog.Order([]beads.WorkItem{settled}, []string{settled.ID}, backlog.ReadHolds(nil), nil)
 			if next, ok := queue.Next(); ok {
 				t.Fatalf("pull %d selected the item its own landing parked: %s", pull, next.ID)
 			}
@@ -447,7 +447,7 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 		// and the item is pulled the next time the queue is read.
 		released := settled
 		released.Parking = ""
-		queue := backlog.Order([]beads.WorkItem{released}, []string{released.ID}, backlog.ReadHolds(nil))
+		queue := backlog.Order([]beads.WorkItem{released}, []string{released.ID}, backlog.ReadHolds(nil), nil)
 		if next, ok := queue.Next(); !ok || next.ID != released.ID {
 			t.Fatalf("the released item was not pulled: %+v", queue.Entries)
 		}

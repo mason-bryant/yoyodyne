@@ -320,6 +320,62 @@ named item has no run in flight, or has one that is not waiting on the provider
 at all, because a release recorded against a run that is not waiting would be
 acted on by whatever pause that run took next.
 
+## Recording a step only you can take
+
+Some work must not start until you have actually done something — read a soak,
+signed a release off, checked a migration against production. Work that reserves
+such a step declares it as a gate, by naming it after `human-gate:` on a line of
+its own, and a workflow definition declares one on a state as `gate:`. Until the
+act is on the record, the item is never pulled and the workflow performs nothing
+at that state.
+
+What the gate holds is every route by which the harness chooses the work: the
+pull `yoyo work` makes, and a re-run the development manager decides, which
+`yoyo triage rerun` refuses before it claims anything, saying the stoppage keeps
+its re-run for after the act is recorded. What it does not hold is you naming the
+item: `yoyo run <id>` starts it as it starts a parked item, because the step the
+gate reserves is yours and naming the item is you deciding to take it or to waive
+it. So a gate on an item you then run by hand is a step you have chosen to pass
+without a record, and `yoyo gate list` goes on saying it is outstanding until
+you record one.
+
+The two are not equally visible yet, and it is worth knowing which you are
+looking at. A gated work item says it is waiting on a person wherever the queue
+is shown and on the needs-a-human line of `yoyo status`, with the step named. A
+workflow instance standing at a gated state says so only in the refusal raised
+when something tries to step it — no status surface lists it — so a gated
+definition is something to watch for rather than something the four lines will
+tell you about. Nothing shipped declares one today.
+
+```sh
+./bin/yoyo gate list
+./bin/yoyo gate record soak-reviewed --for yoyodyne-ifd.209.7 --by mason --did "read a week of soak runs; they diverge nowhere"
+```
+
+`yoyo gate record` is the only thing that passes a gate. No run passes one, no
+check passes one, and closing a work item does not pass one — which is the whole
+reason gates exist. Before them, the only way to write down "a person has to sign
+this off first" was an item somebody closes, and on 2026-09-04 machinery closed
+exactly such an item and the work behind it became pullable with the reserved
+step untaken.
+
+The record names who took the step and what they say they did, because a gate
+passed by nobody in particular and described by nothing is the flag that failed.
+A gate already passed on that subject is refused rather than overwritten, so the
+record keeps saying whose act it was. A gate whose record cannot be read is never
+treated as open.
+
+`--for` is required, and names the work item or workflow instance that declared
+the gate. The act passes it there and nowhere else, which is what makes a name
+reusable: `release-signed` is a step taken once per release, not once ever, so
+declaring it on the next release holds that release until you sign that one off,
+whatever you signed before. Were the name alone the identity, your first
+signature would pass every later declaration of the word, and you could not
+record the new act at all, because the gate would already read as passed. For a
+workflow the reason is sharper still — every instance of one definition reaches
+the same gated state, so an act against the name would approve one run's step and
+every run made after it.
+
 ## When the provider dies mid-run
 
 Not every way a provider ends an invocation is a refusal it names in advance.
@@ -1080,7 +1136,8 @@ Needs a human (3):
 - **Needs a human** is always present, and says either `nothing` or the list with
   whose move each one is: the operator's two switches, an unresolved directive, a
   proposed change nobody has decided, a run that ended still owing a step, work
-  marked for a conversation rather than for a run, a queue nothing is pulling
+  marked for a conversation rather than for a run, work held by a step only a
+  person can take, a queue nothing is pulling
   from — a session sitting idle over it, or no session at all — while admitted
   work waits behind that, the provider holding every role at once (below), and a
   [pile of collected reports](reporting.md#whether-the-pile-is-draining) whose

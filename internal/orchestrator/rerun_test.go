@@ -14,6 +14,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/humangate"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -106,6 +107,7 @@ func (h *rerunHarness) rerunner() Rerunner {
 		Reruns:    h.reruns,
 		Decisions: h.runs.Triage(),
 		Items:     h,
+		Gates:     h.runs,
 		Capacity:  h.capacity,
 		Preserved: h,
 		Clock:     docketClock{},
@@ -705,6 +707,69 @@ func TestARerunOfAnItemNoRunCanStartOnIsRefusedAndSpendsNothing(t *testing.T) {
 				t.Fatalf("a re-run refused on the item's own state spent the stoppage's claim")
 			}
 		})
+	}
+}
+
+// A step only a person can take refuses a re-run before the claim, exactly as
+// it refuses the scheduler's pull. A re-run is the harness choosing work, and the
+// development manager deciding one is not the operator taking the step the item
+// reserved for them: the docketed stoppage of the flip in the 209.6/209.7 shape,
+// re-run on her decision, would otherwise start with the operator's soak reading
+// still untaken — the same jump, arriving through triage instead of the tracker.
+func TestARerunOfAGatedItemIsRefusedUntilThePersonRecordsTheAct(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.item.Description = humangate.DeclareMarker + " soak-reviewed — the operator has read a week of soak runs and is content to flip\n"
+	_, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil {
+		t.Fatal("Rerun() started an item whose gate nobody has passed")
+	}
+	for _, want := range []string{"waiting on a person", "soak-reviewed", "keeps its re-run", "yoyo gate record <name> --for " + docketedItem} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not say %q", err, want)
+		}
+	}
+	if len(harness.started) != 0 {
+		t.Fatalf("started = %#v, want nothing started past the gate", harness.started)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+		t.Fatal("a re-run refused on a human gate spent the stoppage's claim")
+	}
+
+	// An act recorded against another item that happens to reuse the name passes
+	// nothing here: the gate is the item's own.
+	if err := harness.runs.RecordHumanAct(humanAct("yoyodyne-ifd.209.6", "soak-reviewed")); err != nil {
+		t.Fatalf("RecordHumanAct() error = %v", err)
+	}
+	if _, err := harness.rerunner().Rerun(context.Background(), rerunRequest()); err == nil || !strings.Contains(err.Error(), "waiting on a person") {
+		t.Fatalf("Rerun() error = %v, want the gate still holding after another item's act", err)
+	}
+
+	// The operator records the act against this item, and the same decision is
+	// carried out.
+	if err := harness.runs.RecordHumanAct(humanAct(docketedItem, "soak-reviewed")); err != nil {
+		t.Fatalf("RecordHumanAct() error = %v", err)
+	}
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() after the act error = %v", err)
+	}
+	if !result.Started || len(harness.started) != 1 {
+		t.Fatalf("result = %#v, started = %#v, want the decision carried out once the act is on the record", result, harness.started)
+	}
+}
+
+// humanAct is one recorded step, against the subject that declared the gate.
+func humanAct(subject, gate string) runstate.HumanAct {
+	return runstate.HumanAct{
+		SchemaVersion: runstate.HumanActSchemaVersion,
+		ProductID:     "yoyodyne",
+		Subject:       subject,
+		Gate:          gate,
+		Person:        "mason",
+		Statement:     "read the week of soak runs and is content to flip",
+		RecordedAt:    docketedNow,
 	}
 }
 
@@ -1358,6 +1423,7 @@ func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 			// record: a test that wired the action to a different item from the one
 			// the pipeline starts on would prove nothing about either.
 			Items: tracker,
+			Gates: store,
 			// The limit the pipeline reserves against, so the action's reading and
 			// the reservation's are one number rather than two.
 			Capacity: 1,
@@ -1471,7 +1537,7 @@ func TestARerunNobodyDecidedIsRefused(t *testing.T) {
 	started := 0
 	rerunner := Rerunner{
 		Docket: docket, Runs: runs, Intake: intake, Reruns: runs.Reruns(), Decisions: runs.Triage(),
-		Items: openWorkItem(docketedItem), Capacity: 1,
+		Items: openWorkItem(docketedItem), Gates: runs, Capacity: 1,
 		Start: func(context.Context, string, runstate.Selection) (Outcome, error) {
 			started++
 			return Outcome{}, nil
@@ -1550,7 +1616,7 @@ func TestARerunnerWithoutItsPartsRefuses(t *testing.T) {
 	if err == nil {
 		t.Fatal("Rerun() with nothing wired did not refuse")
 	}
-	for _, want := range []string{"triage docket", "intake hold", "one per docketed stoppage", "triage record", "work item", "start a run", "developer capacity"} {
+	for _, want := range []string{"triage docket", "intake hold", "one per docketed stoppage", "triage record", "work item", "human gates", "start a run", "developer capacity"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal is missing %q: %v", want, err)
 		}

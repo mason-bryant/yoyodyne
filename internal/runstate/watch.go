@@ -141,8 +141,14 @@ const (
 	// harness has still to act on. They are separate classes because they have
 	// separate next movers, and naming them apart is the whole of what tells an
 	// operator whether the gap is a decision or its execution.
-	PassedOverAwaitingDecision    PassedOverClass = "awaiting a decision"
-	PassedOverAwaitingCarryOut    PassedOverClass = "awaiting carry-out of a decision"
+	PassedOverAwaitingDecision PassedOverClass = "awaiting a decision"
+	PassedOverAwaitingCarryOut PassedOverClass = "awaiting carry-out of a decision"
+	// PassedOverWaitingOnAPerson is an item holding a step only a person can take
+	// and nobody has recorded taking. It is its own class rather than one of the
+	// two above because its next mover is neither the development manager nor the
+	// harness: nothing machinery does passes it, an item's closure included, and
+	// the act that does is the operator's own.
+	PassedOverWaitingOnAPerson    PassedOverClass = "waiting on a person"
 	PassedOverWaitingOnOtherWork  PassedOverClass = "waiting on other work"
 	PassedOverAlreadyTried        PassedOverClass = "already tried this session"
 	PassedOverAlreadyInFlight     PassedOverClass = "already in flight"
@@ -162,6 +168,7 @@ func PassedOverClasses() []PassedOverClass {
 		PassedOverHeldForAPerson,
 		PassedOverAwaitingDecision,
 		PassedOverAwaitingCarryOut,
+		PassedOverWaitingOnAPerson,
 		PassedOverWaitingOnOtherWork,
 		PassedOverAlreadyTried,
 		PassedOverAlreadyInFlight,

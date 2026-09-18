@@ -392,6 +392,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		IntakeHolds:   intake,
 		Sessions:      watch,
 		Reports:       reports,
+		Gates:         runs,
 		// The refusal log and the agents' configuration, read together for whether
 		// the provider is holding every role at once. The feed says that hold again
 		// while it stands, through these same sources, and the lines carry it as

@@ -353,3 +353,43 @@ func TestACatalogIsWhatAnActionRegistryRegistered(t *testing.T) {
 		t.Errorf("checking requires %v, want what the action declared", required)
 	}
 }
+
+// A gate name nothing could record an act against is refused where the
+// definition is read, rather than at the step it would have held. A workflow
+// stopping forever at a state whose gate name somebody mistyped is a wait
+// nobody can end, and the point of a gate is that the person it waits for can
+// find it.
+func TestAGateNameNobodyCouldRecordIsRefusedAtValidation(t *testing.T) {
+	t.Parallel()
+
+	definition := Definition{
+		Schema: SchemaVersion, ID: "gated", Initial: "integrate",
+		States: map[string]State{
+			"integrate": {
+				Action: "candidate.integrate",
+				Gate:   "Integration Approved!",
+				On:     map[string]string{"integrated": "delivered"},
+			},
+		},
+		Terminals: map[string]Terminal{"delivered": {}},
+	}
+	_, err := definition.Validate(deliveryCatalog(t))
+	if err == nil {
+		t.Fatal("Validate() accepted a gate nothing could be recorded against")
+	}
+	for _, want := range []string{"integrate", "not a gate name"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal = %v, want it to mention %q", err, want)
+		}
+	}
+
+	// A well-formed one is not a problem, and neither is a definition with none.
+	definition.States["integrate"] = State{
+		Action: "candidate.integrate",
+		Gate:   "integration-approved",
+		On:     map[string]string{"integrated": "delivered"},
+	}
+	if _, err := definition.Validate(deliveryCatalog(t)); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
