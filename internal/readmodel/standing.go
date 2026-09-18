@@ -302,6 +302,15 @@ type Standing struct {
 	// lines: the banner above says it in one sentence, and this is the reset, the
 	// count, and the models behind that sentence.
 	CapacityHold *CapacityHold `json:"capacity_hold,omitempty"`
+	// CapacityBlocked is what is parked or held on provider capacity, one run
+	// and one conversation at a time: the hold above is every role refused at
+	// once, and this is each thing the provider has stopped on its own, with
+	// its deadline and what a person can do about it. It is not a fifth line
+	// and is not rendered as one; it is carried for the surfaces that read the
+	// model rather than its lines — the JSON a script reads, and the capacity
+	// panel the dashboard design asks for — and it is always present, with each
+	// half saying so where its records could not be read.
+	CapacityBlocked CapacityBlocked `json:"capacity_blocked"`
 	// ProviderOutage is the provider answering nobody — a login nobody has
 	// renewed, an API nothing reaches — as the product's record says it, and nil
 	// where it is answering. It is carried whole for the surfaces that read the
@@ -420,6 +429,11 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 			standing.Paused = hold.Says()
 		}
 	}
+	// What is parked or held on capacity one at a time is read from the same
+	// records the hold and the running line are read from, and carried whole
+	// rather than said: a run asleep on a reset is still on the running line,
+	// and this is where a surface finds out that it is asleep.
+	standing.CapacityBlocked = CapacityBlockedOf(sources, now)
 
 	standing.Reports, standing.ReportsProblem = readReports(sources, now)
 

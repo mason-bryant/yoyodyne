@@ -15,6 +15,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -1212,6 +1213,64 @@ func TestStatusCarriesTheFourLinesInJSON(t *testing.T) {
 	}
 	if decoded.Standing.Running == nil || decoded.Standing.NeedsHuman == nil {
 		t.Fatalf("a line is absent rather than empty: %+v", decoded.Standing)
+	}
+}
+
+// What is parked or held on provider capacity is carried under the standing
+// too, read from the same run records and refusal log, so the capacity panel
+// and a script read one derivation of it. Nothing held is two empty lists
+// rather than an absent key, and a run asleep on a reset is listed as waiting
+// while it still counts as running.
+func TestStatusCarriesTheCapacityBlockedStateInJSON(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, `"capacity_blocked":{"runs":[],"conversations":[]}`) {
+		t.Fatalf("status JSON with nothing held does not carry two empty lists:\n%s", stdout)
+	}
+
+	store, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	started := time.Date(2026, 9, 18, 8, 0, 0, 0, time.UTC)
+	parked := recordedRun(t, store, runstate.StatusRunning, "yoyodyne-ifd.140", started)
+	parked.Phase = runstate.PhaseDeveloping
+	parked.WorktreePath = "/state/worktrees/yoyodyne-ifd-140"
+	parked.Branch = "yoyodyne/yoyodyne-ifd.140/0123abcd"
+	parked.BaseCommit = strings.Repeat("a", 40)
+	resetsAt := started.Add(5 * time.Hour)
+	parked.UsageLimitResetsAt = &resetsAt
+	parked.UsageLimitKind = "five_hour"
+	parked.UsageLimitPausedSeconds = 1800
+	parked.PauseCause = runstate.PauseUsageLimit
+	saveRun(t, store, parked)
+
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	var decoded statusOutput
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("decode status JSON: %v (%q)", err, stdout)
+	}
+	blocked := decoded.Standing.CapacityBlocked
+	if len(blocked.Runs) != 1 || blocked.Runs[0].RunID != parked.RunID || blocked.Runs[0].State != readmodel.CapacityStateWaiting {
+		t.Fatalf("capacity blocked = %+v, want the parked run listed as waiting", blocked)
+	}
+	if blocked.Runs[0].ResetsAt == nil || !blocked.Runs[0].ResetsAt.Equal(resetsAt) {
+		t.Fatalf("capacity blocked = %+v, want the recorded reset carried", blocked)
+	}
+	if blocked.Conversations == nil || blocked.ConversationsProblem != "" {
+		t.Fatalf("capacity blocked = %+v, want an empty conversation list read from an empty log", blocked)
+	}
+	if len(decoded.Standing.Running) != 1 {
+		t.Fatalf("running = %+v, want the parked run still counted as running", decoded.Standing.Running)
 	}
 }
 
