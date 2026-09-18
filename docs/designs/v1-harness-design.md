@@ -70,6 +70,10 @@ revisions:
       by: architect
       at: 2026-09-07T20:00:00Z
       reason: yoyodyne-ifd.348 - the Agent Model points at the configurable-workflows authority-model section as the owner of the management bundles' contents
+    - action: amended
+      by: architect
+      at: 2026-09-18T21:40:00Z
+      reason: the Agent Model's context-bundle sentence points at the repository-read capability configurable-workflows now grants the management bundles, per the architect's 2026-09-18 ruling on the operator's design question
 approvals:
     - revision: 0
       by: operator
@@ -189,7 +193,7 @@ An agent definition separates four concerns:
 - **Backend:** Claude Code or Codex execution mechanics.
 - **Policy:** model selection, permissions, timeouts, retries, and resource limits.
 
-The local Claude Code or Codex process is not the agent's durable identity. Each execution receives a context bundle reconstructed from canonical artifacts, active directives, the assigned Beads item, relevant decisions, and any resumable provider session. This bounds stale conversational memory and prepares the domain model for remote workers later.
+The local Claude Code or Codex process is not the agent's durable identity. Each execution receives a context bundle reconstructed from canonical artifacts, active directives, the assigned Beads item, relevant decisions, and any resumable provider session. The management roles may also have the harness read a named repository path for them, at a recorded commit and as evidence, under the capability [configurable-workflows](configurable-workflows.md#the-authority-model) grants; the reviewer may not. This bounds stale conversational memory and prepares the domain model for remote workers later.
 
 ### Default roles
 
