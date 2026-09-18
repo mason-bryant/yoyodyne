@@ -185,9 +185,13 @@ func (g Graph[S]) Capabilities() []capability.Capability { return slices.Clone(g
 // gate in it and nothing wired to read the record is refused there rather than
 // at the state it would have stopped at. No status surface reads it yet, and one
 // eventually should — an instance standing at a gated state is currently visible
-// only through the refusal of the step somebody tried to take. Nothing shipped
-// declares a gate, so there is no such instance to report; the surface belongs
-// with the first definition that does.
+// only through the refusal of the step somebody tried to take. Nor does a gate
+// hold a run while the definition observes the pipeline rather than performing
+// it: the observing instance stops at the gated state and the run records the
+// divergence, and the pipeline delivers regardless. A gate holds what the
+// executor performs. Nothing shipped declares a gate, so there is no such
+// instance to report; the surface, and the executor performing, belong with the
+// first definition that does.
 func (g Graph[S]) Gates() []string {
 	var gated []string
 	for _, state := range g.states {

@@ -326,7 +326,7 @@ Some work must not start until you have actually done something — read a soak,
 signed a release off, checked a migration against production. Work that reserves
 such a step declares it as a gate, by naming it after `human-gate:` on a line of
 its own, and a workflow definition declares one on a state as `gate:`. Until the
-act is on the record, the item is never pulled and the workflow performs nothing
+act is on the record, the item is never pulled and the executor performs nothing
 at that state.
 
 What the gate holds is every route by which the harness chooses the work: the
@@ -335,9 +335,13 @@ pull `yoyo work` makes, and a re-run the development manager decides, which
 its re-run for after the act is recorded. What it does not hold is you naming the
 item: `yoyo run <id>` starts it as it starts a parked item, because the step the
 gate reserves is yours and naming the item is you deciding to take it or to waive
-it. So a gate on an item you then run by hand is a step you have chosen to pass
-without a record, and `yoyo gate list` goes on saying it is outstanding until
-you record one.
+it. Naming it waives the gate for that run, and the waiver leaves no trace: the
+gate is listed only while its item is admitted, so it leaves `yoyo gate list` and
+the needs-a-human line the moment the run claims the item, and a run that lands
+closes the item with no act ever recorded and nothing afterwards saying the step
+was passed without one. If the step matters enough to be on the record, record
+the act first and then name the item — a gate you run past by hand is one only
+you remember.
 
 The two are not equally visible yet, and it is worth knowing which you are
 looking at. A gated work item says it is waiting on a person wherever the queue
@@ -345,7 +349,12 @@ is shown and on the needs-a-human line of `yoyo status`, with the step named. A
 workflow instance standing at a gated state says so only in the refusal raised
 when something tries to step it — no status surface lists it — so a gated
 definition is something to watch for rather than something the four lines will
-tell you about. Nothing shipped declares one today.
+tell you about. Nor does it hold a run today: under the delivery trial the
+definition observes the pipeline rather than performing it, so a `gate:` on a
+delivery state stops the observation at that state and records a
+`workflow_divergence`, while the run itself delivers. A gate on a state holds
+what the executor performs, and until the executor is what delivers, that is not
+the run. Nothing shipped declares one today.
 
 ```sh
 ./bin/yoyo gate list

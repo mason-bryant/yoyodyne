@@ -44,12 +44,11 @@ const (
 )
 
 // AdmittedStatuses is the tracker slices the backlog is assembled from, in the
-// order they are read. It is exported because more than one surface asks the
-// tracker for the queue's own work — the status reading and the gate listing
-// among them — and a surface reading a wider or narrower set than the queue is a
-// surface that answers the same question differently. Which is the disagreement
-// only the operator could adjudicate, and the one thing a single derivation is
-// for.
+// order they are read. It is exported because the read model assembles the queue
+// from the tracker and every operator surface projects that reading, and a reader
+// naming a wider or narrower set than this one would be a surface answering the
+// same question differently. Which is the disagreement only the operator could
+// adjudicate, and the one thing a single derivation is for.
 func AdmittedStatuses() []string { return []string{statusOpen, statusBlocked} }
 
 // maxRenderedEntries bounds how many entries a rendered backlog lists. What an

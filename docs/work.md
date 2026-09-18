@@ -738,8 +738,12 @@ work, which is why the intake hold applies to it, and the same classification
 puts it behind the gate, refused before the stoppage's one re-run is claimed and
 in the same words the queue holds the item with. Naming the item yourself is
 unaffected, exactly as with parking and the executor: `yoyo run <id>` is you
-deciding, and the step a gate reserves is yours to take or to waive. A gate you
-run past that way stays on the record as outstanding until you record the act.
+deciding, and the step a gate reserves is yours to take or to waive. Waiving it
+that way leaves no record. A gate is listed only while its item is admitted, so
+it leaves `yoyo gate list` and the needs-a-human line the moment your run claims
+the item, and a run that lands closes the item with no act recorded and nothing
+saying the step was passed without one. Record the act first if you want the
+record to say so.
 
 A declaration nothing could read — a mistyped name, no separator between the name
 and the sentence, nothing said about the act — holds the work in exactly the same
@@ -779,13 +783,20 @@ There the act is recorded against the instance rather than a work item, and for
 a sharper version of the same reason: every instance of one definition reaches
 that same state, so an act against the name alone would approve one run's step
 and every run the harness made afterwards.
-That half is less visible than this one: an instance held at a gated state says
-so in the refusal raised when something tries to step it, and no status surface
-lists it. Nothing shipped declares a gate on a state today, so there is no such
-instance to miss; a definition that declares the first one wants that surface
-with it.
+That half is less visible than this one, and it holds less than this one does
+today. An instance held at a gated state says so in the refusal raised when
+something tries to step it, and no status surface lists it. And a gate on a state
+holds what the executor performs — nothing more. Under the delivery trial the
+definition observes the run rather than performing it, so a `gate:` written on a
+delivery state in a project's own copy does not hold the run: the pipeline
+delivers as it always has, the observing instance stops being stepped at the
+gated state, and the run records a `workflow_divergence` saying so. That is this
+mechanism's own failure by another encoding, and it stays so until the executor
+is what delivers. Nothing shipped declares a gate on a state today, so there is
+no such instance to miss; a definition that declares the first one wants that
+surface, and the executor performing, with it.
 
-An eleventh thing deliberately keeps nothing out: an item whose goal was amended
+A twelfth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.

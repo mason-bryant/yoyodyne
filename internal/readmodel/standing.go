@@ -808,6 +808,21 @@ func alive(sessions []runstate.WatchTransition, keep func(runstate.WatchState) b
 	return kept
 }
 
+// Queue is the admitted work as the standing reading assembles it, for a surface
+// that lists the queue's own facts about an item rather than the four lines —
+// `yoyo gate list` reads which items are held by a step only a person can take
+// from here. It is exported so that such a surface is a projection of this
+// derivation rather than a parallel assembly of it: two readers each calling the
+// gate reader over their own choice of tracker slices agree only for as long as
+// nobody changes one of them. The problem it returns is readQueue's — what could
+// not be read about the gates, where that changed the answer.
+func Queue(ctx context.Context, sources Sources) (backlog.Queue, string, error) {
+	if sources.Tracker == nil {
+		return backlog.Queue{}, "", errors.New("nothing was wired to read the admitted work")
+	}
+	return readQueue(ctx, sources)
+}
+
 // readQueue assembles the admitted work in the product manager's order, from the
 // same four readings the scheduler makes: the listings that carry the order, the
 // tracker's own account of what can be pulled, what the harness is holding for a

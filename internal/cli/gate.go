@@ -31,8 +31,8 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
-	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/humangate"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -99,8 +99,19 @@ func runGate(args []string, stdout, stderr io.Writer) int {
 }
 
 // listGates says which steps are waiting on a person and which have been taken.
-// It reads the admitted work for the declarations and the harness's own store
-// for the acts, because those are the two halves and neither package holds both.
+//
+// The outstanding half is a projection of the read model's queue: the same
+// derivation `yoyo status` puts on its needs-a-human line, read once and shown
+// per gate here rather than per line there. It is deliberately not assembled
+// from the tracker by this command — two surfaces each reading the gate reader
+// over their own choice of tracker slices agree only until somebody changes one
+// of them, and two operator surfaces disagreeing about who has to move is the
+// thing one derivation exists to prevent.
+//
+// The passed half is the acts themselves, read from the store. The queue's
+// pending reading has already subtracted them, so an act is the only record a
+// passed gate has, and it is shown so the operator's own signatures stay readable
+// after the work that declared them has left the backlog.
 func listGates(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("gate list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -124,59 +135,19 @@ func listGates(args []string, stdout, stderr io.Writer) int {
 		return reportGateError(stdout, stderr, *jsonOutput, err)
 	}
 
-	// The declarations come from the admitted work, read from exactly the slices
-	// the queue is assembled from. A wider set here would report an item as
-	// waiting on a person that the status's own needs-a-human line says nothing
-	// about, and two operator surfaces disagreeing about who has to move is the
-	// thing one derivation exists to prevent.
-	//
-	// A gate on an item that has left the backlog is not listed as outstanding,
-	// because there is no longer anything for it to hold — what is listed instead
-	// is the act, if one was recorded, so the operator's own signatures stay
-	// readable.
-	declared := make(map[gateKey]gateEntry)
-	var unreadable []unreadableGate
-	tracker := parts.tracker()
-	unread := ""
-	for _, status := range backlog.AdmittedStatuses() {
-		items, err := listGateItems(tracker, status)
-		if err != nil {
-			// A tracker that will not answer costs the declarations and not the
-			// acts. What a person has already recorded is theirs and is readable
-			// without a tracker, and losing it because the work could not be listed
-			// would be losing the answer this command exists to give.
-			unread = err.Error()
-			continue
-		}
-		unreadable = collectGates(items, declared, unreadable)
+	// A queue that could not be read costs the declarations and not the acts.
+	// What a person has already recorded is theirs and is readable without a
+	// tracker, and losing it because the work could not be listed would be losing
+	// the answer this command exists to give. What could not be read about the
+	// gates themselves is the read model's own caveat, carried through unchanged.
+	ctx, cancel := context.WithTimeout(context.Background(), chatTrackerTimeout)
+	defer cancel()
+	queue, problem, err := readmodel.Queue(ctx, standingSources(*configPath))
+	unread := problem
+	if err != nil {
+		unread = err.Error()
 	}
-	for _, act := range acts {
-		key := gateKey{subject: act.Subject, gate: act.Gate}
-		entry, seen := declared[key]
-		if !seen {
-			entry = gateEntry{Subject: act.Subject, Name: act.Gate, Statement: act.Statement}
-		}
-		stored := act
-		entry.Act = &stored
-		declared[key] = entry
-	}
-
-	entries := make([]gateEntry, 0, len(declared))
-	for _, entry := range declared {
-		entries = append(entries, entry)
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Subject != entries[j].Subject {
-			return entries[i].Subject < entries[j].Subject
-		}
-		return entries[i].Name < entries[j].Name
-	})
-	sort.Slice(unreadable, func(i, j int) bool {
-		if unreadable[i].WorkItemID != unreadable[j].WorkItemID {
-			return unreadable[i].WorkItemID < unreadable[j].WorkItemID
-		}
-		return unreadable[i].Problem < unreadable[j].Problem
-	})
+	entries, unreadable := gateListing(queue, acts)
 
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, gateOutput{Gates: entries, Unreadable: unreadable, Unread: unread})
@@ -285,40 +256,56 @@ func recordGate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// collectGates reads what one slice of work items says about steps only a
-// person can take, adding to the gates found so far and returning the
-// declarations nothing could read.
+// gateListing is the listing itself, from the queue the read model assembled and
+// the acts the store holds: every gate still holding an admitted item, every
+// declaration holding one that nothing could read, and every act a person has
+// recorded. It is a pure function of the two so that what the listing shows is
+// checkable against what the queue says, entry for entry.
 //
-// The unreadable ones are collected rather than skipped because each is holding
-// its item exactly as a gate does, and this listing is where its author finds
-// out why. A listing that showed every gate but the one somebody has to fix
+// The unreadable declarations are listed rather than skipped because each is
+// holding its item exactly as a gate does, and this listing is where its author
+// finds out why. A listing that showed every gate but the one somebody has to fix
 // would leave them with a held item and no account of it.
-func collectGates(items []beads.WorkItem, into map[gateKey]gateEntry, unreadable []unreadableGate) []unreadableGate {
-	for _, item := range items {
-		reading := humangate.Of(item)
-		for _, gate := range reading.Gates {
-			into[gateKey{subject: item.ID, gate: gate.Name}] = gateEntry{
-				Subject: item.ID, Name: gate.Name, Statement: gate.Statement,
+func gateListing(queue backlog.Queue, acts []runstate.HumanAct) ([]gateEntry, []unreadableGate) {
+	declared := make(map[gateKey]gateEntry)
+	var unreadable []unreadableGate
+	for _, entry := range queue.Entries {
+		for _, gate := range entry.HumanGates.Gates {
+			declared[gateKey{subject: entry.ID, gate: gate.Name}] = gateEntry{
+				Subject: entry.ID, Name: gate.Name, Statement: gate.Statement,
 			}
 		}
-		for _, problem := range reading.Unreadable {
-			unreadable = append(unreadable, unreadableGate{WorkItemID: item.ID, Problem: problem})
+		for _, problem := range entry.HumanGates.Unreadable {
+			unreadable = append(unreadable, unreadableGate{WorkItemID: entry.ID, Problem: problem})
 		}
 	}
-	return unreadable
-}
-
-// listGateItems reads one tracker slice for the gates its items declare. The
-// bound is the same one every other tracker read here is given, so a tracker
-// that will not answer costs this command an error rather than hanging it.
-func listGateItems(tracker beads.Client, status string) ([]beads.WorkItem, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), chatTrackerTimeout)
-	defer cancel()
-	items, err := tracker.List(ctx, status)
-	if err != nil {
-		return nil, fmt.Errorf("list %s work items: %w", status, err)
+	for _, act := range acts {
+		// An act's own statement stands in for the declaration's, because the queue
+		// no longer carries a gate somebody has passed: the pending reading is what
+		// the queue holds, and a passed gate is not pending.
+		stored := act
+		declared[gateKey{subject: act.Subject, gate: act.Gate}] = gateEntry{
+			Subject: act.Subject, Name: act.Gate, Statement: act.Statement, Act: &stored,
+		}
 	}
-	return items, nil
+
+	entries := make([]gateEntry, 0, len(declared))
+	for _, entry := range declared {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Subject != entries[j].Subject {
+			return entries[i].Subject < entries[j].Subject
+		}
+		return entries[i].Name < entries[j].Name
+	})
+	sort.Slice(unreadable, func(i, j int) bool {
+		if unreadable[i].WorkItemID != unreadable[j].WorkItemID {
+			return unreadable[i].WorkItemID < unreadable[j].WorkItemID
+		}
+		return unreadable[i].Problem < unreadable[j].Problem
+	})
+	return entries, unreadable
 }
 
 func reportGateError(stdout, stderr io.Writer, jsonOutput bool, err error) int {
@@ -355,9 +342,9 @@ declaration of that word, with nobody having taken the step. So --for is
 required, and naming a different item is a different step to take.
 
 gate list shows every gate the admitted work declares, on which item, which of
-them a person has passed and when, and what is still waiting. It reads exactly
-the work the queue is assembled from, so it and `+"`yoyo status`"+` cannot
-disagree about who has to move.
+them a person has passed and when, and what is still waiting. What is waiting is
+read off the same queue `+"`yoyo status`"+` reads, so the two cannot disagree
+about who has to move.
 
 gate record writes one person's act, and is the only thing that passes a gate.
 It says who took the step and what they did, because a gate passed by nobody in
