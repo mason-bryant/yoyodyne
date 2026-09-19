@@ -96,6 +96,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runSlack(ctx, args[1:], stdout, stderr, version)
 	case "doctor":
 		return runDoctor(ctx, args[1:], stdout, stderr, version)
+	case "dashboard":
+		return serveDashboard(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n", args[0])
 		printUsage(stderr)
@@ -634,6 +636,7 @@ Commands:
   reconcile         settle interrupted runs, then converge local state on the forge
   slack             report what the harness is doing into a Slack channel
   doctor            check this installation, and say what would fix what is wrong
+  dashboard         serve the read model to a browser on this machine, read-only
   version           print version information
   help              show this help`)
 }

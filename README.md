@@ -832,7 +832,8 @@ a bundle, and migration from `.yoyodyne.yaml`.
 **When something goes wrong**
 
 - [Operations and recovery](docs/operations.md) — pausing and resuming, provider
-  limits and stalls, recovering interrupted runs, and following a run.
+  limits and stalls, recovering interrupted runs, following a run, and watching
+  from a browser with `yoyo dashboard`.
 
 **Reference**
 

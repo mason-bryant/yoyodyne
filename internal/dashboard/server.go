@@ -1,0 +1,339 @@
+// Package dashboard serves the read model over HTTP, to a browser on this
+// machine and to nothing else.
+//
+// It is the repository's first web service, and the observability-and-dashboard
+// design establishes the conventions it holds to here, so that the next web
+// surface starts from them rather than rediscovering each one:
+//
+//   - It binds loopback only, and loopback alone is not trusted: every request
+//     for the read model carries a bearer token the process generated at start
+//     and printed once, in the Authorization header and never in a URL, where
+//     it would reach a browser history, a referrer, and every log a proxy
+//     keeps. It is never in a cookie either: a cookie on 127.0.0.1 is sent to
+//     every other service on every other port of 127.0.0.1, so a cookie would
+//     hand the credential to whatever else the operator's browser visits on
+//     this machine. The page keeps it in the browser's session storage, which
+//     is scoped to this origin, port included.
+//   - The Host and Origin headers are validated against the address it bound,
+//     and anything else is refused. A page on some other origin that scripts a
+//     request at this port is refused on the Origin; a DNS name a browser is
+//     pointed at that resolves here is refused on the Host.
+//   - Every response carries a content-security policy that allows nothing but
+//     this origin's own script and style, so nothing is loaded from a CDN and no
+//     inline script runs — including one that reached the page through a value
+//     that was not escaped.
+//   - Every value that reaches HTML goes through html/template, so a product id
+//     renders as text; everything the read model says reaches the page through
+//     JSON and is written by the page's script as text.
+//   - Every failure fails closed. A missing or wrong token, a foreign Host, a
+//     foreign Origin, and durable state that cannot be read each produce a
+//     refusal that carries no part of the read model, never a page with a
+//     quarter of the answer on it.
+//
+// What is served without a token is the page shell and its own script and
+// style: static text compiled into the binary, with nothing of the read model
+// in it, which is what a browser needs before it can present a token at all.
+// Everything that reads state is behind the token.
+//
+// It is a projection, never an engine: it owns no workflow, conversation,
+// provider, or configuration state, and offers no write of any kind. The one
+// thing it holds is the token, in memory, for exactly as long as the process
+// runs. Restarting it changes nothing about the harness and loses no history,
+// because the history is in the durable records it reads.
+package dashboard
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html/template"
+	"io/fs"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+)
+
+//go:embed assets
+var assets embed.FS
+
+// shell is the page, parsed once. Every value the template is handed is escaped
+// by the package on the way into HTML, which is the whole reason the page is a
+// template rather than a string.
+var shell = template.Must(template.ParseFS(assets, "assets/shell.html"))
+
+// tokenBytes is the entropy behind one token. Thirty-two bytes is more than any
+// guess on a loopback port could ever cover, and it renders as sixty-four hex
+// characters, which is short enough to paste.
+const tokenBytes = 32
+
+// shutdownGrace bounds how long a stop waits for requests in flight. A reading
+// is bounded by the tracker timeout, so anything still open past this is stuck
+// rather than working.
+const shutdownGrace = 5 * time.Second
+
+// policy is the content-security policy every response carries, refusals
+// included. Nothing is allowed from anywhere but this origin, and inline script
+// and style are not allowed at all: a script that reaches the page through an
+// unescaped value has nowhere to run.
+const policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+// Reader is the read model as the server is handed it. It is an interface so
+// the security conventions can be driven without a state directory, which is
+// the only way a refusal nobody may weaken gets a test that holds it.
+type Reader interface {
+	// Standing reads the read model. An error is a refusal of the whole answer,
+	// never a partial one: what the read model could answer with a source missing
+	// it says inside the Standing, line by line.
+	Standing(ctx context.Context) (readmodel.Standing, error)
+}
+
+// Server is one dashboard process: the token it generated, the address it bound,
+// and the read model it projects.
+type Server struct {
+	// Product is the product id, for the page's title. It is repository-supplied
+	// text and is escaped like everything else.
+	Product string
+	reader  Reader
+	token   string
+
+	listener net.Listener
+	// hosts is every Host header that names the bound address, and origins every
+	// Origin header that does. Both are fixed at Listen and read on every request.
+	hosts   map[string]bool
+	origins map[string]bool
+}
+
+// New makes a server holding a fresh token for the read model it is handed. The
+// token is the process's whole credential, so a source of randomness that fails
+// is a server that does not start.
+func New(product string, reader Reader) (*Server, error) {
+	if reader == nil {
+		return nil, errors.New("dashboard: no read model to serve")
+	}
+	raw := make([]byte, tokenBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, fmt.Errorf("dashboard: generate token: %w", err)
+	}
+	return &Server{Product: product, reader: reader, token: hex.EncodeToString(raw)}, nil
+}
+
+// Token is the credential every request for the read model has to present. It
+// is for the process that started the server to print once; nothing here
+// writes it anywhere.
+func (s *Server) Token() string { return s.token }
+
+// Listen binds loopback on the port asked for, or on one the operating system
+// chooses when the port is zero, and returns the URL a browser is pointed at.
+// It binds 127.0.0.1 by name rather than "localhost", which on some machines
+// resolves to an IPv6 address the listener is not on.
+func (s *Server) Listen(port int) (string, error) {
+	if port < 0 || port > 65535 {
+		return "", fmt.Errorf("dashboard: port %d is not a port", port)
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return "", fmt.Errorf("dashboard: bind loopback: %w", err)
+	}
+	s.listener = listener
+	s.bound(listener.Addr().(*net.TCPAddr).Port)
+	return s.URL(), nil
+}
+
+// bound fixes the Host and Origin values that name this server, from the port
+// it is on. It is what Listen calls, and what a test calls in place of a
+// listener the sandbox it runs in will not grant.
+func (s *Server) bound(port int) {
+	bound := strconv.Itoa(port)
+	s.hosts = map[string]bool{"127.0.0.1:" + bound: true, "localhost:" + bound: true}
+	s.origins = map[string]bool{"http://127.0.0.1:" + bound: true, "http://localhost:" + bound: true}
+}
+
+// URL is where the server is listening, once it is. It carries no token: the
+// token is presented in a header, never in a URL.
+func (s *Server) URL() string {
+	if s.listener == nil {
+		return ""
+	}
+	return "http://" + s.listener.Addr().String() + "/"
+}
+
+// Serve answers requests until the context is cancelled, and then stops,
+// waiting shutdownGrace for anything in flight. It returns nil on a stop that
+// was asked for and the failure otherwise.
+func (s *Server) Serve(ctx context.Context) error {
+	if s.listener == nil {
+		return errors.New("dashboard: Serve before Listen")
+	}
+	server := &http.Server{
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		// The server's own log is left where it defaults, standard error, and
+		// nothing here logs a request: a request line is where a token would
+		// otherwise end up.
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- server.Serve(s.listener) }()
+	select {
+	case err := <-stopped:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		grace, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		if err := server.Shutdown(grace); err != nil {
+			return fmt.Errorf("dashboard: stop: %w", err)
+		}
+		<-stopped
+		return nil
+	}
+}
+
+// Handler is every route, behind the checks every request passes first.
+func (s *Server) Handler() http.Handler {
+	return http.HandlerFunc(s.serve)
+}
+
+// serve is the one entry every request takes. The order is deliberate: the
+// headers that make a refusal safe are set before anything can be refused, the
+// request's provenance is checked before anything is served, and the credential
+// is checked before anything is read.
+func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
+	header := writer.Header()
+	header.Set("Content-Security-Policy", policy)
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("X-Frame-Options", "DENY")
+	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("Cache-Control", "no-store")
+
+	// A Host that is not the bound address is a request that was not addressed
+	// here — a name a browser was pointed at that happens to resolve to loopback,
+	// or a rebinding attack that relies on exactly that. The refusal reflects
+	// nothing back, because the one thing known about the request is that it
+	// came from somewhere it should not have.
+	if !s.hosts[request.Host] {
+		refuse(writer, request, http.StatusForbidden, "this dashboard answers only to the address it was started on")
+		return
+	}
+	// An Origin is sent by a browser making a request from a page, and one from
+	// any origin but this one is a page elsewhere scripting requests at this
+	// port. A request with no Origin is a navigation or a tool, and the token
+	// decides those.
+	if origin := request.Header.Get("Origin"); origin != "" && !s.origins[origin] {
+		refuse(writer, request, http.StatusForbidden, "this dashboard refuses requests from any other origin")
+		return
+	}
+	// Read-only means read-only at the protocol: there is nothing to post.
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		refuse(writer, request, http.StatusMethodNotAllowed, "this dashboard is read-only")
+		return
+	}
+
+	switch {
+	case request.URL.Path == "/":
+		s.servePage(writer)
+	case strings.HasPrefix(request.URL.Path, "/assets/"):
+		s.serveAsset(writer, request)
+	case request.URL.Path == "/api/standing":
+		// The one route that reads state, and so the one the token guards.
+		if !s.presented(request) {
+			refuse(writer, request, http.StatusUnauthorized, "this dashboard requires the token it printed when it started, as a bearer token")
+			return
+		}
+		s.serveStanding(writer, request)
+	default:
+		refuse(writer, request, http.StatusNotFound, "nothing is served at that path")
+	}
+}
+
+// presented says whether the request carries the token in the Authorization
+// header, which is the one place it is accepted from: not a query string, and
+// not a cookie. The comparison is constant-time, because a comparison that stops
+// at the first wrong byte says how many bytes were right.
+func (s *Server) presented(request *http.Request) bool {
+	candidate, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+	if !found {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(candidate)), []byte(s.token)) == 1
+}
+
+// servePage is the shell: the page with its states — asking for the token,
+// loading, error, ready — and nothing of the read model in it. It is static
+// text the page's own script then fills from the JSON, so it is served to a
+// browser that has no token yet, which is every browser before it signs in.
+func (s *Server) servePage(writer http.ResponseWriter) {
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.WriteHeader(http.StatusOK)
+	_ = shell.Execute(writer, struct{ Product string }{Product: s.Product})
+}
+
+// serveStanding is the read model as JSON, whole or refused. What the model
+// could not read it says line by line inside the answer; what stops the model
+// being read at all is a refusal carrying the reason and nothing else.
+func (s *Server) serveStanding(writer http.ResponseWriter, request *http.Request) {
+	standing, err := s.reader.Standing(request.Context())
+	if err != nil {
+		refuse(writer, request, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.WriteHeader(http.StatusOK)
+	if request.Method == http.MethodHead {
+		return
+	}
+	encoder := json.NewEncoder(writer)
+	// The JSON is read by script and never written into HTML as markup, but a
+	// "<" in a title escaped here costs nothing and closes the case where some
+	// later reader does.
+	encoder.SetEscapeHTML(true)
+	_ = encoder.Encode(standing)
+}
+
+// serveAsset is the page's own script and style, from the binary. They are the
+// only script and style the policy allows, and like the shell they are static
+// text with nothing of the read model in them.
+func (s *Server) serveAsset(writer http.ResponseWriter, request *http.Request) {
+	name := strings.TrimPrefix(request.URL.Path, "/")
+	content, err := fs.ReadFile(assets, name)
+	if err != nil || strings.HasSuffix(name, ".html") {
+		refuse(writer, request, http.StatusNotFound, "nothing is served at that path")
+		return
+	}
+	switch {
+	case strings.HasSuffix(name, ".css"):
+		writer.Header().Set("Content-Type", "text/css; charset=utf-8")
+	case strings.HasSuffix(name, ".js"):
+		writer.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	default:
+		writer.Header().Set("Content-Type", "application/octet-stream")
+	}
+	writer.WriteHeader(http.StatusOK)
+	if request.Method != http.MethodHead {
+		_, _ = writer.Write(content)
+	}
+}
+
+// refuse is every refusal: JSON for a caller that asked for it or is at an API
+// path, and plain text otherwise. It reflects nothing from the request.
+func refuse(writer http.ResponseWriter, request *http.Request, status int, reason string) {
+	if strings.HasPrefix(request.URL.Path, "/api/") || strings.Contains(request.Header.Get("Accept"), "application/json") {
+		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		writer.WriteHeader(status)
+		_ = json.NewEncoder(writer).Encode(map[string]string{"error": reason})
+		return
+	}
+	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	writer.WriteHeader(status)
+	_, _ = fmt.Fprintln(writer, reason)
+}

@@ -119,6 +119,12 @@ var Classes = []Class{
 		Exercised:  "decoded in composition's repository test. What each file means belongs to the tool that reads it — Claude Code, Codex, the tracker — but a file none of them can parse is this repository's defect whoever owns the schema.",
 	},
 	{
+		ID:         "web-asset",
+		Extensions: []string{".html", ".css", ".js"},
+		Checks:     []string{"make test"},
+		Exercised:  "the dashboard's page, compiled into the binary by internal/dashboard. The HTML is html/template source, parsed when the package initializes, so a template that does not parse fails every test in it; and the package's tests serve each asset and hold the page to its own content-security policy — no inline script, no inline style, nothing from another origin — and hold every value that reaches it to being escaped. The script and the stylesheet are served whole and checked by nothing that reads their syntax: this module vendors no JavaScript or CSS parser, and what a browser makes of them is seen in a browser.",
+	},
+	{
 		ID:          "jsonl",
 		Extensions:  []string{".jsonl"},
 		Unexercised: "the tracker's derived exports. They are rewritten wholesale by `bd` from a store that is authoritative elsewhere, so a defect in one is fixed in the store rather than in the file, and a gate here would fail on churn nobody authored.",

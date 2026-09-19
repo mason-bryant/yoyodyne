@@ -456,11 +456,25 @@ func TestStatusFollowLatestDrainsTheStreamItLeaves(t *testing.T) {
 	// The stream being left behind writes once more, and then a later stream
 	// starts. With the poll an hour away, only the drain can emit that tail.
 	appendStreamEvent(t, store, first, 2, execution.EventAgentMessage, streamStart, map[string]any{"text": "the tail before the switch"})
-	// The successor's log is written in one append, because the look can fire
-	// between two of them and the poll that would have caught the second is an
-	// hour away.
-	second := recordedRun(t, store, runstate.StatusRunning, "yoyodyne-ifd.63", streamStart.Add(time.Minute)).RunID
-	appendStreamEvent(t, store, second, 1, execution.EventAgentMessage, streamStart, map[string]any{"text": "the successor's first words"})
+	// The successor's log is put in place whole, by a rename, rather than
+	// appended where the follow is looking. An append creates the log and then
+	// writes it, and a look that fires between those two reads an empty
+	// successor and then waits on the hour-long poll for its first words — a
+	// window a loaded machine widens well past the look. So the log is written
+	// under a store of its own, for the same run, and moved in with one rename.
+	successorRun := recordedRun(t, store, runstate.StatusRunning, "yoyodyne-ifd.63", streamStart.Add(time.Minute))
+	second := successorRun.RunID
+	staged, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	if err := staged.Create(successorRun); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendStreamEvent(t, staged, second, 1, execution.EventAgentMessage, streamStart, map[string]any{"text": "the successor's first words"})
+	if err := os.Rename(filepath.Join(staged.Root(), second+".events.jsonl"), filepath.Join(store.Root(), second+".events.jsonl")); err != nil {
+		t.Fatalf("Rename() error = %v", err)
+	}
 	// Newest is decided by when a log was last written to, and two logs written
 	// in one instant can tie on a coarse clock, so the successor is stamped later
 	// outright rather than left to the filesystem.

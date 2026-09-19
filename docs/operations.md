@@ -1589,6 +1589,88 @@ is. Reporting a failure is not itself a failure either — the exit status says
 whether the records could be read, so a script can read this without guarding
 against the answer.
 
+## Watching from a browser: the dashboard
+
+`yoyo dashboard` serves what `yoyo status` reads — the four lines, and the
+capacity state carried under them — to a browser on this machine, and keeps
+serving it until you stop it:
+
+```sh
+./bin/yoyo dashboard              # a port the operating system chooses
+./bin/yoyo dashboard --port 8765  # one you can bookmark
+```
+
+It prints two things when it starts, and the second of them once:
+
+```text
+dashboard for yoyodyne serving at http://127.0.0.1:52341/
+token: 9f2c41ab7e05…
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing
+it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c
+```
+
+Open the URL, paste the token into the page, and the page shows where the
+harness stands and asks again every ten seconds. The same answer is served as
+JSON at `/api/standing` to anything that sends the token as a bearer header —
+the `standing` object `yoyo status --json` carries, from the same derivation, so
+the page and the terminal cannot disagree about a number.
+
+**It is a projection and nothing else.** It reads the same durable records the
+terminal reads and writes none of them; there is no button, no form but the one
+that takes the token, and nothing but `GET` and `HEAD` is answered at all. Restarting it
+changes nothing about the harness and loses nothing, because the history it
+shows lives in the records rather than in the page. It is not a second control
+plane, and work is still directed from the conversation and the commands above.
+
+**What it will not do** is the part worth reading before leaving it running:
+
+- **It answers only on this machine.** It binds `127.0.0.1` and nothing else,
+  so nothing off the machine can reach it, and being on the machine is not
+  enough on its own: every request for the read model has to carry the token.
+  What is served without one is the page shell and its own script and
+  stylesheet — static text compiled into the binary, with nothing of the read
+  model in it, which a browser needs before it can present a token at all.
+  Everything that reads state is behind the token.
+- **The token is never in a URL, and never in a cookie.** A token in a URL
+  reaches the browser's history, the referrer of every link on the page, and
+  every log a proxy keeps, which is why the URL it prints carries none and the
+  page asks for it instead. A cookie would be worse than it looks: browsers key
+  cookies on the host and not the port, so a cookie on `127.0.0.1` is sent to
+  every other service on every other port of `127.0.0.1` the browser visits,
+  and two dashboards for two products would overwrite each other's. So the page
+  keeps the token in the tab's session storage, which is scoped to the origin
+  with its port, and sends it as `Authorization: Bearer` on each fetch; the
+  server accepts it from that header and from nowhere else. Session storage
+  ends with the tab, so a new tab asks again. A restarted dashboard generates
+  a new token, so a bookmark outlives the token and the page simply asks again.
+- **It refuses anything that did not come from its own address.** A request
+  whose `Host` is not the address it bound — a name somebody pointed at
+  loopback — and a request whose `Origin` is some other page scripting calls
+  at the port are both refused before anything is served, the shell included.
+- **It loads nothing from anywhere else.** Every response carries a
+  content-security policy that allows script and style from this origin only:
+  no CDN, no inline script, and no framing by another page. A value that reached
+  the page unescaped would have nowhere to run, and none does: the product's own
+  name is the one value the server writes into the page, escaped, and everything
+  the read model says — work-item titles, refusals, the reason a source could
+  not be read — reaches the page as JSON and is written by the page as text.
+- **Every failure is a refusal, never part of an answer.** No token, the wrong
+  token, a foreign `Host` or `Origin`, and durable state that cannot be read
+  each get a status and a one-line reason, and nothing of the read model beside
+  it; the page shows that reason in its error state and keeps asking. What the
+  read model could read with one source missing is a different thing, and is
+  said inside the answer line by line — the page says that line could not be
+  read in place of its count, as the terminal does, and lists the reason under
+  the counts, rather than counting an unreadable line as empty.
+
+`internal/dashboard`'s tests drive each of those refusals from the outside and
+are the evidence a reviewer is handed for the conventions; the
+[observability-and-dashboard design](designs/observability-and-dashboard.md)
+is where they are established, as the repository's first web-service
+conventions. The page's content — the five sections the design describes — is
+still to come; what is served today is the page's shell with its sign-in,
+loading, error, and ready states, and the JSON underneath it.
+
 ## Following a run, a conversation, or a branch review
 
 `yoyo status --follow` follows the normalized event stream a run, a
