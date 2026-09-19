@@ -305,8 +305,11 @@ type Artifacts interface {
 // permission to do its own job.
 //
 // The error goes to the caller, which names it on the run's outcome for the
-// operator. Nothing carries it back to the agent that wrote the entry, so a role
-// that misnames a document does not learn that it did.
+// operator and is expected to carry it back to the role that wrote the entry, so
+// a role that misnames a document is told rather than left believing somebody was
+// asked. It is worded for both readers: what a refusal says is what its author
+// has to answer to propose the change again. Nothing here decides who is told —
+// the caller knows which role it collected from, and this does not.
 func Collect(entries []Entry, attribution Attribution, artifacts Artifacts, now time.Time) ([]Proposal, error) {
 	collected := make([]Proposal, 0, len(entries))
 	var problems []error
@@ -414,4 +417,6 @@ To propose, end what you say with at most one block of this shape:
 {"proposals":[{"artifact":"artifact-id","change":"what should become true of the document","why":"what makes the case for it"}]}
 ` + "```" + `
 
-"artifact" is the id of an existing document — the file name of the artifact, without its extension. A proposal naming a document nobody records reaches nobody, because there is no owner to decide it. One block carries at most ` + maxProposalsPerReplyText + ` proposals, and each one takes an artifact, a change, and a reason and nothing else. If you are also reporting something, put this block before the report block, which is always last. Leave the block out entirely when you have nothing to propose, which is most of the time.`
+"artifact" is the id of an existing document — the file name of the artifact, without its extension. A proposal naming a document nobody records reaches nobody, because there is no owner to decide it. One block carries at most ` + maxProposalsPerReplyText + ` proposals, and each one takes an artifact, a change, and a reason and nothing else. If you are also reporting something, put this block before the report block, which is always last. Leave the block out entirely when you have nothing to propose, which is most of the time.
+
+Writing the block is not the same as the proposal being recorded. The harness refuses one that names a document it has no record of, and one against a document you own yourself, and it can only tell you so after the reply that carried it: if it invokes you again, that turn opens with the refusal in its own words and you propose again from there — and if it does not, the refusal is on the run for the operator and you never hear it. So nothing you write may assert that a proposal has been raised: at the moment you write it you do not know, and a document, a comment, or a note claiming a proposal nobody is holding is a false record that outlives this work. Say what you propose in your reply, where it is read beside the block that carried it.`

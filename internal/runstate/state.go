@@ -357,6 +357,53 @@ func (p PathRefusal) Validate() error {
 	return errors.Join(problems...)
 }
 
+// MaxCarriedAmendmentRefusals bounds how many refused amendment proposals a run
+// carries into a role's next invocation, and MaxAmendmentRefusalBytes bounds one
+// of them. Both are generous for what actually accumulates — one reply proposes
+// at most a handful of changes, and what one role is carrying is emptied by that
+// role's next reply — and they are here so a provider emitting nothing but
+// unreadable blocks cannot fill durable state or the next prompt with them.
+const (
+	MaxCarriedAmendmentRefusals = 10
+	MaxAmendmentRefusalBytes    = 1 << 10
+)
+
+// AmendmentRefusal is one proposed change the harness could not record, waiting
+// to be put in front of the agent that proposed it.
+//
+// The role is recorded with the words rather than left to be assumed from
+// whichever agent is invoked next. What refuses a proposal is per-role — a
+// proposal from the role that already owns the document is refused for being
+// that role's own to make — so a refusal that arrived without its proposer could
+// be shown to an agent that is then told not to claim something it never said,
+// while the agent that did say it is still never told. That is the same false
+// record this exists to end, one role over.
+type AmendmentRefusal struct {
+	// Role is the contract the proposer was working under when the harness
+	// refused what it proposed, and is what decides whose next invocation opens
+	// with this.
+	Role domain.AgentRole `json:"role"`
+	// Problem is the refusal in the harness's own words. It is carried verbatim:
+	// what is wrong with the block is the whole of what its author needs to write
+	// a different one, and a paraphrase is the harness guessing at that.
+	Problem string `json:"problem"`
+}
+
+// Validate reports every contract violation in the carried refusal at once.
+func (a AmendmentRefusal) Validate() error {
+	var problems []error
+	if err := domain.ValidateIdentifier("role", string(a.Role)); err != nil {
+		problems = append(problems, err)
+	}
+	if strings.TrimSpace(a.Problem) == "" {
+		problems = append(problems, errors.New("problem is required"))
+	}
+	if len(a.Problem) > MaxAmendmentRefusalBytes {
+		problems = append(problems, fmt.Errorf("problem is %d bytes, which exceeds the %d byte bound", len(a.Problem), MaxAmendmentRefusalBytes))
+	}
+	return errors.Join(problems...)
+}
+
 // ContextTruncation is what an item's notes lost to the context budget when the
 // run's context was assembled. It is recorded because the loss is otherwise
 // visible only inside the text an agent was handed, and it is the kind of thing
@@ -673,6 +720,28 @@ func RecordReviewSummary(summary string) string {
 // this is the first cut rather than a second one, so the record a reader would be
 // sent to is the copy they are already reading.
 const reviewSummaryCutNote = "\n[cut; the rest of this summary was not recorded]"
+
+// MaxChannelProblemBytes bounds the record of what a run's two side channels —
+// the reports its agents filed and the amendments they proposed — could not
+// read or could not keep. One lost entry is folded to a line by the caller
+// before it gets here, and a run accumulates one line per lost entry, so this
+// is a bound on a run whose every reply is an unreadable block rather than on
+// anything that ordinarily happens.
+const MaxChannelProblemBytes = 4 << 10
+
+// RecordChannelProblem makes a bounded record of what a run's report or
+// amendment channel could not keep. It is how State.ReportProblem and
+// State.AmendmentProblem are written, and it exists because those two were for a
+// long time written only to the outcome `yoyo run` prints: a proposal that was
+// refused, or that was made on a run whose process died before it reported,
+// read afterwards exactly as one that was never made. Three attempts on one run
+// proposed a change and the store held none of them, and nothing could say
+// afterwards whether they were refused or lost.
+func RecordChannelProblem(problem string) string {
+	return boundRecordedText(problem, MaxChannelProblemBytes, channelProblemCutNote)
+}
+
+const channelProblemCutNote = "\n[cut; the rest of what this channel could not keep was not recorded]"
 
 // boundRecordedText cuts one recorded reason to its bound and says that it was
 // cut, so nobody reads a clamped account as a complete one. The cut lands on a
@@ -1264,6 +1333,31 @@ type State struct {
 	// gate is decided before the checks, recording a refusal clears both of the
 	// others rather than competing with them for the next attempt.
 	PathRefusal *PathRefusal `json:"path_refusal,omitempty"`
+	// RefusedAmendments are the changes agents on this run proposed that the
+	// harness could not record, each with the role that proposed it, waiting to be
+	// put in front of that role. It is not a fourth kind of repair input and
+	// competes with none of the three: a refused proposal costs the run nothing and
+	// buys no attempt, it rides along with whatever prompt that role was going to
+	// be sent next, and the reply that is shown it drops what it was shown.
+	//
+	// It is durable because the refusal used to reach the operator and nobody
+	// else. A developer that named a document the repository does not record was
+	// never told, and went on to write into a checked-in file that it had raised a
+	// proposal nothing was holding — a false claim that outlived the run, which
+	// only `yoyo amendment list` disproved.
+	RefusedAmendments []AmendmentRefusal `json:"refused_amendments,omitempty"`
+	// ReportProblem and AmendmentProblem are the run's whole account of what its
+	// two side channels could not keep: every report that could not be read or
+	// collected, and every proposal that could not be read or recorded, each in
+	// the harness's own words and accumulated across the run's attempts. They
+	// are the durable twins of the two fields the outcome carries, and they are
+	// on the record because the outcome is printed once and gone — a refusal
+	// written only there was, after the fact, indistinguishable from a proposal
+	// never made, and one run's three lost proposals went unnoticed for four runs
+	// on exactly that account. Unlike RefusedAmendments above, nothing spends
+	// these: they are what an auditor reads, not what an agent is shown.
+	ReportProblem    string `json:"report_problem,omitempty"`
+	AmendmentProblem string `json:"amendment_problem,omitempty"`
 	// ContextTruncation is what the work item's own notes lost to the context
 	// budget when this run's context was assembled. It is not repair input and
 	// nothing is handed back for it: the run proceeds exactly as it would have,
@@ -1703,6 +1797,20 @@ func (s State) Validate() error {
 		if err := s.PathRefusal.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("path_refusal: %w", err))
 		}
+	}
+	if len(s.RefusedAmendments) > MaxCarriedAmendmentRefusals {
+		problems = append(problems, fmt.Errorf("%d refused amendments are carried, which exceeds the bound of %d", len(s.RefusedAmendments), MaxCarriedAmendmentRefusals))
+	}
+	for index, refused := range s.RefusedAmendments {
+		if err := refused.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("refused_amendments[%d]: %w", index, err))
+		}
+	}
+	if len(s.ReportProblem) > MaxChannelProblemBytes {
+		problems = append(problems, fmt.Errorf("report_problem is %d bytes, which exceeds the %d byte bound", len(s.ReportProblem), MaxChannelProblemBytes))
+	}
+	if len(s.AmendmentProblem) > MaxChannelProblemBytes {
+		problems = append(problems, fmt.Errorf("amendment_problem is %d bytes, which exceeds the %d byte bound", len(s.AmendmentProblem), MaxChannelProblemBytes))
 	}
 	if s.ContextTruncation != nil {
 		if err := s.ContextTruncation.Validate(); err != nil {

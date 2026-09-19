@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // ReportCollector is where collected reports are kept. It is satisfied by
@@ -86,13 +87,19 @@ const maxReportProblemBytes = 512
 // noteReportProblem records a report that did not reach the collected pile. It
 // accumulates rather than replaces, because losing the first report and then
 // losing a second is two facts.
+//
+// It is written to the run's state as well as to its outcome. The outcome is
+// what `yoyo run` prints and is gone with the process; the record is what
+// anybody reads afterwards, and a report lost only on the outcome was, after the
+// fact, a report nobody ever filed.
 func (a *activeRun) noteReportProblem(role domain.AgentRole, cause error) {
 	problem := fmt.Sprintf("a %s report was not collected: %s", role, singleLine(cause.Error(), maxReportProblemBytes))
 	if a.outcome.ReportProblem == "" {
 		a.outcome.ReportProblem = problem
-		return
+	} else {
+		a.outcome.ReportProblem += "; " + problem
 	}
-	a.outcome.ReportProblem += "; " + problem
+	a.state.ReportProblem = runstate.RecordChannelProblem(a.outcome.ReportProblem)
 }
 
 // agentNameForRole names the configured agent that fills a role, so a report

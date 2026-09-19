@@ -286,7 +286,7 @@ table](#what-the-configuration-guide-becomes) either.
 | `#what-init-proposes-for-checks` | yoyodyne-ifd.117.1 (open), and one intra-document link | **1** | stub stays; canonical `configuration/runs.md` |
 | `#where-the-tracker-syncs` | `README.md:344`, `:574` | 2 | `configuration/setup.md` |
 | `#when-the-repository-ignores-the-configuration` | `README.md:423` | 2 | `configuration/setup.md` |
-| `#extending-a-built-in-bundle` | `docs/reporting.md:727`, `docs/slack/setup.md:585` | 2 | `configuration/setup.md` |
+| `#extending-a-built-in-bundle` | `docs/reporting.md:727`, `docs/slack/setup.md:757` | 2 | `configuration/setup.md` |
 | `#how-long-a-check-may-take` | `README.md:398` | 2 | `configuration/runs.md` |
 | `#scheduling-ready-work` | `docs/work.md:374` | 2 | `configuration/runs.md` |
 | `#publishing-through-pull-requests` | `README.md:549`, `docs/work.md:651` | 2 | `configuration/publishing.md` |
@@ -300,8 +300,8 @@ table](#what-the-configuration-guide-becomes) either.
 | `#what-one-work-item-has-been-given` | `docs/conversation.md:996`, `docs/operations.md:1061` | 2 | `configuration/recovery.md` |
 | `#crossing-a-cap-the-operator-decides-to-cross` | `docs/conversation.md:998` | 2 | **no destination row yet**; its parent lands in `configuration/recovery.md` |
 | `#personas` | `docs/conversation.md:76` | 2 | `configuration/agents.md` |
-| `#operators` | `docs/slack/setup.md:212`, `:862` | 2 | `configuration/agents.md` |
-| `#avatars` | `docs/slack/setup.md:184` | 2 | `configuration/agents.md` |
+| `#operators` | `docs/slack/setup.md:231`, `:1176` | 2 | `configuration/agents.md` |
+| `#avatars` | `docs/slack/setup.md:203` | 2 | `configuration/agents.md` |
 | `#research-sources` | `docs/conversation.md:137` | 2 | `configuration/agents.md` |
 | `#how-long-one-role-may-ask-another` | `docs/conversation.md:879` | 2 | `configuration/agents.md` |
 | `#pooling-work-across-several-accounts` | `docs/multi-account-quickstart.md:7` | 2 | **no destination row yet**; its parent lands in `configuration/agents.md` |

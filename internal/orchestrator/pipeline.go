@@ -1421,6 +1421,12 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			// remote must say so on every pass, not only the first.
 			PullRequest:    state.PullRequest,
 			PublishSkipped: skipped,
+			// What the interrupted process could not keep of the agents' reports and
+			// proposals is carried into this outcome, so a problem noted by this
+			// process accumulates onto the record rather than writing over what the
+			// earlier one recorded.
+			ReportProblem:    state.ReportProblem,
+			AmendmentProblem: state.AmendmentProblem,
 		},
 	}
 	// A run resumed at its promotion carries the verdict that authorized it into
@@ -2674,6 +2680,14 @@ func (a *activeRun) blockOnRefusedPaths(refused pathRefusal, limit int) error {
 // session is what carries that work into the next attempt instead of asking a
 // developer to derive it a second time.
 func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
+	// A change this developer proposed that the harness refused opens the prompt,
+	// ahead of the contract and of whatever this invocation is actually for. It is
+	// prepended here rather than built into each kind of prompt because here is the
+	// one place every developer invocation passes through — the first attempt, both
+	// kinds of repair, a resumed attempt, and a granted continuation — and a
+	// refusal that reached only some of them would be a refusal the developer
+	// learns of depending on why it was asked again.
+	prompt = a.openWithDeveloperRefusals(prompt)
 	reasked := false
 	for {
 		// A stop is asked for before the hold, so a run the operator both stopped
@@ -2760,7 +2774,11 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 				if !reasked {
 					reasked = true
 					sessionID = a.carrySession(providerResult.SessionID, sessionID)
-					prompt = accountPrompt(a.deliveredInvariants().Text(), a.scratch, unaccounted.reason)
+					// The re-ask is a developer invocation like any other, and the
+					// account it asks for is exactly where a developer would say it had
+					// raised a proposal — so what the interim reply proposed and the
+					// harness refused opens this prompt too.
+					prompt = a.openWithDeveloperRefusals(accountPrompt(a.deliveredInvariants().Text(), a.scratch, unaccounted.reason))
 					a.observe(ctx, deliveryDevelop, "reissued")
 					continue
 				}
@@ -2989,6 +3007,11 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	a.state.UpdatedAt = p.clock().Now()
 	a.outcome.ProviderSessionID = providerResult.SessionID
 	a.outcome.ProviderResolvedModel = providerResult.ResolvedModel
+	// The attempt that produced this reply opened with whatever the harness had
+	// refused of the developer's own earlier proposals, so those are spent: they
+	// are cleared before the reply is read, and anything this reply proposes that
+	// is refused takes their place below.
+	a.clearCarriedAmendmentRefusals(domain.RoleDeveloper)
 	// What the developer claimed its change does to the item is read before the
 	// channels that decide nothing, because the contract puts its block ahead of
 	// theirs and an unreadable report block takes everything after its own fence
