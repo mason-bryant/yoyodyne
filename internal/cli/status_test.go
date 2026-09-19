@@ -577,6 +577,61 @@ func TestStatusSaysWhatBecameOfTheWorkRatherThanOneWordForEveryEnding(t *testing
 	}
 }
 
+// An approved change the environment stopped is said beside its reason, naming
+// the one verb that resumes it at no cost; and the run promoting again after
+// that says so in the read model's own phrase in place of the bare phase.
+func TestStatusNamesAnIntegrationStopAndARunResumingItsIntegration(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
+	stopped := runstate.RunSummary{
+		RunID:        "run-152784a8226c6b4d3601b858dd546acf",
+		WorkItemID:   "yoyodyne-ifd.309",
+		Status:       runstate.StatusFailed,
+		Outcome:      runstate.OutcomeFailed,
+		Phase:        runstate.PhaseIntegrating,
+		StartedAt:    completedAt,
+		CompletedAt:  &completedAt,
+		Branch:       "yoyodyne/yoyodyne-ifd-309/152784a8",
+		WorktreePath: "/state/worktrees/yoyodyne-ifd-309-152784a8",
+		Failure:      "integrate approved change: primary checkout is not ready for integration: primary repository has uncommitted changes: AGENTS.md",
+		IntegrationStop: &runstate.IntegrationStop{
+			Cause: runstate.CauseDirtyPrimary, Phase: runstate.PhaseIntegrating, RecordedAt: completedAt,
+		},
+	}
+	resuming := runstate.RunSummary{
+		RunID:               "run-152784a8226c6b4d3601b858dd546acf",
+		WorkItemID:          "yoyodyne-ifd.309",
+		Status:              runstate.StatusRunning,
+		Outcome:             runstate.RunOutcome(runstate.StatusRunning),
+		Phase:               runstate.PhaseIntegrating,
+		StartedAt:           completedAt,
+		ResumingIntegration: true,
+	}
+
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{stopped}}, "", true)
+	rendered := out.String()
+	for _, want := range []string{
+		"[failed, integrating, work preserved]",
+		"integration stop: approved, then stopped at the integrating phase by the environment: dirty-primary (the primary checkout carried state the harness does not own); `yoyo triage resume run-152784a8226c6b4d3601b858dd546acf` resumes it at no cost once the cause has cleared",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, want)
+		}
+	}
+
+	out.Reset()
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{resuming}}, "", false)
+	rendered = out.String()
+	if !strings.Contains(rendered, "[running, "+runstate.ResumingIntegrationSays+"]") {
+		t.Fatalf("rendered = %q, want the resumed run said in the read model's phrase", rendered)
+	}
+	if strings.Contains(rendered, "[running, integrating]") {
+		t.Fatalf("rendered = %q, want the bare phase replaced rather than repeated", rendered)
+	}
+}
+
 // The one run whose durable status and whose outcome disagree, listed. A sweep
 // that finds the target does not carry a promotion hands the item back and
 // leaves the status the run recorded for itself, so the listing is reading a

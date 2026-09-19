@@ -34,6 +34,15 @@ package cli
 // name and with their reason, and the guards that refused the decision then
 // permit it. It is the operator's hand and nothing else's, which is why it is a
 // terminal command rather than a word in any role's vocabulary.
+//
+// The fifth, `yoyo triage resume`, carries out no decision either, because there
+// is none to carry out: the change was approved, and what stopped it short of
+// the target branch was the environment -- a dirty primary checkout, a tracker
+// or a forge that did not answer. The run resumes at the promotion it stopped in
+// with its approval standing, and it charges the item nothing: no review round,
+// no repair grant, no re-run. Before it existed every verb here spent one of
+// those for such a stop, and four operator overrides on one approved change
+// paid for the environment rather than a verdict (yoyodyne-ifd.394).
 
 import (
 	"context"
@@ -50,11 +59,12 @@ import (
 )
 
 type triageOutput struct {
-	Rerun    *orchestrator.RerunResult          `json:"rerun,omitempty"`
-	Repair   *orchestrator.RepairContinueResult `json:"repair,omitempty"`
-	Rearm    *orchestrator.RearmResult          `json:"rearm,omitempty"`
-	Override *triageOverrideResult              `json:"override,omitempty"`
-	Error    string                             `json:"error,omitempty"`
+	Rerun    *orchestrator.RerunResult             `json:"rerun,omitempty"`
+	Repair   *orchestrator.RepairContinueResult    `json:"repair,omitempty"`
+	Rearm    *orchestrator.RearmResult             `json:"rearm,omitempty"`
+	Resume   *orchestrator.IntegrationResumeResult `json:"resume,omitempty"`
+	Override *triageOverrideResult                 `json:"override,omitempty"`
+	Error    string                                `json:"error,omitempty"`
 }
 
 // triageOverrideResult is what an override came to: the decision as it was
@@ -82,6 +92,8 @@ func runTriage(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return repairStoppage(ctx, args[1:], stdout, stderr)
 	case "rearm":
 		return rearmPublication(ctx, args[1:], stdout, stderr)
+	case "resume":
+		return resumeIntegration(ctx, args[1:], stdout, stderr)
 	case "override":
 		return overrideTriageCap(ctx, args[1:], stdout, stderr)
 	default:
@@ -164,6 +176,110 @@ func rearmPublication(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	result, err := rearmer.Rearm(ctx, orchestrator.RearmRequest{Run: positional[0], Reason: *reason})
 	return reportRearm(stdout, stderr, *jsonOutput, result, err)
+}
+
+func resumeIntegration(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("triage resume", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
+	reason := flags.String("reason", "", "reasoning to record beside the harness's own account of the stop (optional)")
+	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	positional, err := parseArguments(flags, args)
+	if err != nil {
+		return 2
+	}
+	if len(positional) != 1 {
+		fmt.Fprintln(stderr, "triage resume requires exactly one run identifier, the run the docket entry names")
+		printTriageUsage(stderr)
+		return 2
+	}
+
+	resumer, err := buildIntegrationResumer(*configPath)
+	if err != nil {
+		return reportResume(stdout, stderr, *jsonOutput, orchestrator.IntegrationResumeResult{}, err)
+	}
+	result, err := resumer.Resume(ctx, orchestrator.IntegrationResumeRequest{Run: positional[0], Reason: *reason})
+	return reportResume(stdout, stderr, *jsonOutput, result, err)
+}
+
+// buildIntegrationResumer wires the resume action over the same parts the repair
+// beside it acts on: the docket it reads and settles, the runs it proves the
+// stoppage from, the worktree it proves the change from, and the pipeline it
+// continues. No triage budget is wired, because the resumption spends none.
+func buildIntegrationResumer(configPath string) (orchestrator.IntegrationResumer, error) {
+	parts, err := buildComponents(configPath)
+	if err != nil {
+		return orchestrator.IntegrationResumer{}, err
+	}
+	return orchestrator.IntegrationResumer{
+		Docket: parts.docket,
+		Runs:   parts.store,
+		Intake: parts.intake,
+		// The item the stopped run holds, and the checkout and worktree a promotion
+		// is made from. All three are read before anything is written: the item
+		// because a closed one is not one a run may be resumed on, and the checkout
+		// because it is what stopped the run once already.
+		Items:     parts.tracker(),
+		Worktrees: parts.worktrees,
+		// The same limit the reservation enforces, read before the run is made live
+		// so a full harness leaves it stopped rather than live with no room to go.
+		Capacity: parts.config.Execution.MaxConcurrentDevelopers,
+		Start: func(ctx context.Context, workItemID, runID string) (orchestrator.Outcome, error) {
+			// The same entry point a repair takes, and for the same reason: what is
+			// dispatched is this run's promotion and nothing else, and a fresh run
+			// cannot satisfy it.
+			return pipelineFrom(parts).Continue(ctx, workItemID, runID)
+		},
+	}, nil
+}
+
+// reportResume describes what the action did. A refusal before anything was
+// written, an intake hold, a full harness, and a resumption whose run then
+// stopped again are four different things for an operator to do something about.
+func reportResume(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.IntegrationResumeResult, err error) int {
+	if jsonOutput {
+		output := triageOutput{}
+		if result.WorkItemID != "" || result.RunID != "" {
+			output.Resume = &result
+		}
+		if err != nil {
+			output.Error = err.Error()
+		}
+		if code := writeJSON(stdout, stderr, output); code != 0 {
+			return code
+		}
+		if err != nil {
+			return 1
+		}
+		return 0
+	}
+	if !result.Resumed {
+		if result.IntakeHeld != nil || result.CapacityFull != nil {
+			fmt.Fprint(stdout, result.Render())
+			return 0
+		}
+		fmt.Fprintf(stderr, "the integration was not resumed and nothing was written: %v\n", err)
+		switch {
+		case errors.Is(err, orchestrator.ErrCheckoutNotReady):
+			fmt.Fprintln(stderr, "the primary checkout is what stopped this run; commit or stash what it carries and ask again, and the same run resumes")
+		case errors.Is(err, orchestrator.ErrNotResumable):
+			fmt.Fprintln(stderr, "a resumption is for an approved change the environment stopped short of its promotion; `yoyo triage repair` and `yoyo triage rerun` are what a change that was not approved needs")
+		case errors.Is(err, orchestrator.ErrWorktreeNotAsLeft):
+			fmt.Fprintln(stderr, "nothing was spent and the run is still stopped: say what became of that worktree before its integration is resumed")
+		case errors.Is(err, orchestrator.ErrPreservedChangeMissing):
+			fmt.Fprintln(stderr, "nothing was spent and the run is still stopped: the run's branch is where the approved change is, so put that worktree back on the change before its integration is resumed")
+		}
+		return 1
+	}
+	fmt.Fprint(stdout, result.Render())
+	// The resumed run reports itself exactly as `yoyo run` reports one, because it
+	// is the same run: what it integrated and what its agents reported are the
+	// same facts however the run was picked up again.
+	code := reportRunResult(stdout, stderr, false, result.Outcome, err)
+	if result.RecordProblem != "" && code == 0 {
+		return 1
+	}
+	return code
 }
 
 // buildRearmer wires the re-arm action over the same parts every other command
@@ -558,11 +674,14 @@ func printTriageUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo triage rerun    [options] <run-id>
        yoyo triage repair   [options] <run-id>
        yoyo triage rearm    [options] <run-id>
+       yoyo triage resume   [options] <run-id>
        yoyo triage override [options] <beads-id>
 
 "rerun", "repair", and "rearm" carry out a decision the development manager
-recorded about a docketed entry. "override" is yours rather than theirs: it
-crosses one of a work item's triage caps so that a decision they could not record
+recorded about a docketed entry. "resume" carries out no decision, because the
+stoppage it answers asks for none: an approved change the environment stopped
+short of the target branch. "override" is yours rather than theirs: it crosses
+one of a work item's triage caps so that a decision they could not record
 becomes one they can.
 
 The first two are opposites. "rerun" starts a fresh run of the item, which
@@ -604,9 +723,34 @@ branch's promotion lease before it asks the forge anything and holds it across
 the pre-merge check and the merge together, so nothing moves the target between
 the check that authorizes the merge and the merge itself.
 
-The intake hold applies to the first two, because the harness is choosing work
-there. A re-arm chooses none: it finishes a publication of work that is already
-integrated.
+"resume" is about a stop that is not a stoppage at all: a change the reviewer
+approved, which the environment then stopped between that approval and its
+promotion -- the primary checkout carrying somebody's uncommitted edit, a tracker
+read that timed out under load, a forge or a network that went away. Nothing
+about that is a verdict, so nothing about it is a decision, and the other verbs
+each spend something for it -- a repair grant for a run with no findings, or a
+fresh run and a fresh review for a change nobody disputed. This one resumes the
+run at the promotion it stopped in, with the approval it already has, and
+charges the item nothing: no review round, no repair grant, no re-run. The run's
+record says which stop it was, read from the error that ended the run rather
+than from the prose afterwards -- a dirty checkout by its sentinel, a transport
+that did not answer by the recovery rule's closed reading of the error -- and a
+run whose record says anything else is refused naming what it is. It is refused
+while the primary checkout is still not one a promotion can be made from,
+refused to a person if the preserved worktree is not as the harness left it or
+holds none of the approved change, and it waits rather than refusing when the
+harness is full. A worktree the convergence sweep retired while the run stood
+stopped is put back from the branch at the reviewed commit, and the run resumed
+in it; a branch that moved past that commit, or a sweep that captured
+uncommitted work, refuses to a person. The one thing that leaves the
+resumed path is a replay onto a target that moved: that re-earns the checks and
+the review exactly as any replay does, and a replay that conflicts stops the run
+for a person exactly as it always did. "yoyo status" says "approved, resuming
+integration" of the run while it promotes.
+
+The intake hold applies to the first two and to "resume", because the harness
+is choosing to carry work on there. A re-arm chooses none: it finishes a
+publication of work that is already integrated.
 
 A harness with no free developer is not a refusal at all: nothing is claimed or
 granted, the decision stands, and asking again once a slot frees carries out the
@@ -646,8 +790,10 @@ spending it are two decisions and stay two.
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --reason <text>   repair/rearm: the development manager's recorded reasoning
-                    (required); override: why the cap is being crossed (required).
-                    "rerun" takes none: it reads the recorded decision instead
+                    (required); override: why the cap is being crossed (required);
+                    resume: reasoning recorded beside the harness's own account
+                    of the stop (optional). "rerun" takes none: it reads the
+                    recorded decision instead
   --budget <name>   override: which cap to cross -- "review round" (the default),
                     "repair grant", "re-run", or "merge re-arm"
   --cap <n>         override: the ceiling to raise that budget to

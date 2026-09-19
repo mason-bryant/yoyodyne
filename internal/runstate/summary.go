@@ -229,6 +229,19 @@ type RunSummary struct {
 	// so carrying it is what lets a reader say which of the two a run marked
 	// outstanding is waiting on, rather than only that it is waiting.
 	MergeQueued bool `json:"merge_queued,omitempty"`
+	// ResumingIntegration reports a run at its promotion again after the
+	// environment stopped it there, with its approval standing. It is carried so
+	// a listing says ResumingIntegrationSays in place of the bare phase: a run
+	// "integrating" after a stop and a run integrating for the first time are the
+	// same phase and different facts, and the difference is what an operator who
+	// signed overrides for the first kind is reading the listing for.
+	ResumingIntegration bool `json:"resuming_integration,omitempty"`
+	// IntegrationStop is the environment having stopped this run's approved
+	// change short of its promotion, when that is what stopped it. It is on the
+	// summary because it changes what the reason under the run means: the reason
+	// says what failed, and this says it was not the work and names the one verb
+	// that resumes it at no cost.
+	IntegrationStop *IntegrationStop `json:"integration_stop,omitempty"`
 	// Failure is the run's own reason for ending, and it is the only one of the
 	// four recorded reasons that is about the work itself. The three below
 	// happened around the work rather than to it, and are kept apart here for the
@@ -407,28 +420,29 @@ func (s *Store) History(query RunQuery) (RunHistory, error) {
 
 func (s *Store) summarize(state State) RunSummary {
 	summary := RunSummary{
-		RunID:             state.RunID,
-		WorkItemID:        state.WorkItemID,
-		Status:            state.Status,
-		Outcome:           state.Outcome(),
-		Phase:             state.Phase,
-		StartedAt:         state.StartedAt,
-		CompletedAt:       state.CompletedAt,
-		Branch:            state.Branch,
-		WorktreePath:      state.WorktreePath,
-		BranchRemoved:     state.BranchRemoved,
-		WorktreeRemoved:   state.WorktreeRemoved,
-		ProviderSessionID: state.ProviderSessionID,
-		ReviewFindings:    state.ReviewFindings,
-		Integrated:        state.Integration != nil,
-		Outstanding:       state.Outstanding(),
-		MergeQueued:       state.PullRequest != nil && state.PullRequest.MergeQueued,
-		AccountAlias:      state.AccountAlias,
-		ConfigRevision:    state.ConfigRevision,
-		Build:             state.Build,
-		Failure:           state.Failure,
-		PublishFailure:    state.PublishFailure,
-		CleanupFailure:    state.CleanupFailure,
+		RunID:               state.RunID,
+		WorkItemID:          state.WorkItemID,
+		Status:              state.Status,
+		Outcome:             state.Outcome(),
+		Phase:               state.Phase,
+		StartedAt:           state.StartedAt,
+		CompletedAt:         state.CompletedAt,
+		Branch:              state.Branch,
+		WorktreePath:        state.WorktreePath,
+		BranchRemoved:       state.BranchRemoved,
+		WorktreeRemoved:     state.WorktreeRemoved,
+		ProviderSessionID:   state.ProviderSessionID,
+		ReviewFindings:      state.ReviewFindings,
+		Integrated:          state.Integration != nil,
+		Outstanding:         state.Outstanding(),
+		MergeQueued:         state.PullRequest != nil && state.PullRequest.MergeQueued,
+		ResumingIntegration: state.ResumingIntegration(),
+		AccountAlias:        state.AccountAlias,
+		ConfigRevision:      state.ConfigRevision,
+		Build:               state.Build,
+		Failure:             state.Failure,
+		PublishFailure:      state.PublishFailure,
+		CleanupFailure:      state.CleanupFailure,
 
 		WorkflowInstanceID: state.WorkflowInstanceID,
 		WorkflowDivergence: state.WorkflowDivergence,
@@ -443,6 +457,10 @@ func (s *Store) summarize(state State) RunSummary {
 	if state.PathRefusal != nil {
 		refused := *state.PathRefusal
 		summary.RefusedPaths = &refused
+	}
+	if state.IntegrationStop != nil {
+		stopped := *state.IntegrationStop
+		summary.IntegrationStop = &stopped
 	}
 	if state.ContextTruncation != nil {
 		truncated := *state.ContextTruncation

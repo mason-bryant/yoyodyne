@@ -371,6 +371,41 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 	}
 }
 
+// A run promoting again after the environment stopped it says so on the running
+// line in the read model's own words, in place of the bare phase: the approval
+// stood and nothing was spent, which is what an operator who signed overrides
+// for such stops is reading the line for.
+func TestARunResumedAtItsPromotionSaysSoOnTheRunningLine(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	sources.Runs = fakeRuns{
+		incomplete: []runstate.State{{
+			RunID:           "run-a",
+			WorkItemID:      "yoyodyne-ifd.309",
+			Status:          runstate.StatusRunning,
+			Phase:           runstate.PhaseIntegrating,
+			StartedAt:       moment.Add(-3 * time.Hour),
+			ReviewDecision:  runstate.ReviewApprove,
+			ReviewSessionID: "reviewer-session",
+			IntegrationResumptions: []runstate.IntegrationResumption{{
+				Cause: runstate.CauseDirtyPrimary, Reason: "resumed", ResumedAt: moment.Add(-time.Minute),
+			}},
+		}},
+		prices: map[string]runstate.ItemPrice{
+			"yoyodyne-ifd.309": {Runs: []runstate.RunPrice{{RunID: "run-a", CostUSD: 12.50}}},
+		},
+	}
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.Running) != 1 || !standing.Running[0].ResumingIntegration {
+		t.Fatalf("running = %+v, want the resumed run marked as resuming its integration", standing.Running)
+	}
+	rendered := standing.Render()
+	want := "  yoyodyne-ifd.309 — " + runstate.ResumingIntegrationSays + ", 3h00m elapsed, $12.50 so far\n"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("rendered:\n%s\nmissing: %q", rendered, want)
+	}
+}
+
 // A conversation turn in flight is what no surface counted before this. It is
 // the lease that decides, so a recorded conversation nobody is holding is not
 // working.

@@ -310,6 +310,27 @@ type Environmental struct {
 	Problem string `json:"problem,omitempty"`
 }
 
+// IntegrationStop is the environment having stopped an approved change short
+// of its promotion: the reviewer approved it, nothing was integrated, and what
+// ended the run is a cause the environment answers for. It is the one stoppage
+// on this docket that asks the development manager for no decision — the
+// reviewer decided, and `yoyo triage resume` carries the change the rest of the
+// way at no cost to the item — so the entry says so rather than leaving her to
+// choose among verbs that each spend something for it.
+//
+// It is declared here rather than imported from the run record for the reason
+// Finding is: what reaches a development manager must not change shape because
+// the run record was refactored.
+type IntegrationStop struct {
+	Cause  string `json:"cause"`
+	Detail string `json:"detail,omitempty"`
+	// Phase is the phase the run stopped in, which is the step a resumption
+	// re-enters.
+	Phase string `json:"phase"`
+	// Title says what the cause is, in the words the run record gives it.
+	Title string `json:"title,omitempty"`
+}
+
 // Prerequisite is one thing an item's own statement asks of the tree that the
 // tree does not have. It is declared here rather than imported from the package
 // that reads it for the reason Finding is: what reaches a development manager
@@ -782,7 +803,13 @@ type Entry struct {
 	// decision made afterwards: it is settled as the run ends, which is before the
 	// entry exists.
 	Environmental *Environmental `json:"environmental,omitempty"`
-	Counters      Counters       `json:"counters"`
+	// IntegrationStop is the environment having stopped this run's approved
+	// change short of its promotion, when that is what stopped it. Like the
+	// environmental refusal beside it, it is written into the entry rather than
+	// joined where the docket is read: it is settled as the run ends, which is
+	// before the entry exists.
+	IntegrationStop *IntegrationStop `json:"integration_stop,omitempty"`
+	Counters        Counters         `json:"counters"`
 	// Rerun is the re-run already claimed against this entry's own stoppage, when
 	// there is one. It is joined to the entry where the docket is read rather
 	// than written into the log: an entry is recorded once as the work stops, and
@@ -992,6 +1019,20 @@ func (e Entry) Validate() error {
 			problems = append(problems, fmt.Errorf("environmental: account is %d bytes, limit is %d", len(e.Environmental.Account), MaxMessageBytes))
 		}
 	}
+	if e.IntegrationStop != nil {
+		if strings.TrimSpace(e.IntegrationStop.Cause) == "" {
+			problems = append(problems, errors.New("integration_stop: the cause is required, because it is what says the environment stopped the change rather than a verdict"))
+		}
+		if strings.TrimSpace(e.IntegrationStop.Phase) == "" {
+			problems = append(problems, errors.New("integration_stop: the phase is required, because it is the step a resumption re-enters"))
+		}
+		if len(e.IntegrationStop.Detail) > MaxMessageBytes {
+			problems = append(problems, fmt.Errorf("integration_stop: detail is %d bytes, limit is %d", len(e.IntegrationStop.Detail), MaxMessageBytes))
+		}
+		if e.Class != ClassStoppedRun {
+			problems = append(problems, fmt.Errorf("integration_stop: only a stopped run is an approved change the environment stopped, and this entry is a %s", e.Class))
+		}
+	}
 	// Each class is held to the evidence that makes it the thing it claims to
 	// be. An entry that cannot say what stopped is an entry nobody can act on,
 	// which is worse than no entry: it looks like coverage.
@@ -1190,6 +1231,7 @@ func (e Entry) Render() string {
 	// counters mean rather than a remark about them: a development manager who
 	// read the figures first has already decided how close this item is to its cap.
 	rendered.WriteString(e.renderEnvironmental())
+	rendered.WriteString(e.renderIntegrationStop())
 	rendered.WriteString(e.renderNextMover())
 	fmt.Fprintf(&rendered, "      Triage counters: %d of %s review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
 		e.Counters.ReviewRounds, capFigure(e.Counters.ReviewRoundsCap), roundsNote(e.Counters),
@@ -1292,6 +1334,32 @@ func (e Entry) renderAttempt() string {
 	return rendered.String()
 }
 
+// renderIntegrationStop says the change was approved and the environment is
+// what stopped it short of the target branch, and it says what that means for
+// the reader in the same breath: nothing here is theirs to decide. It is silent
+// on every other stoppage, which is nearly all of them.
+//
+// It names the verb and what the verb costs, because the verbs a reader would
+// otherwise reach for each spend something for this stoppage — a repair grant
+// for a run with no findings, or a fresh run and a fresh review for a change
+// nobody disputed — and that is what four operator overrides on one approved
+// change were paying for before this existed.
+func (e Entry) renderIntegrationStop() string {
+	stopped := e.IntegrationStop
+	if stopped == nil {
+		return ""
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      Approved, and stopped at the %s phase by the environment: %s (%s). Nothing here is a verdict on the change.\n",
+		stopped.Phase, stopped.Cause, nonEmpty(stopped.Title, "the environment rather than the work"))
+	fmt.Fprintf(&rendered, "      `yoyo triage resume %s` resumes the promotion with the approval standing once the cause has cleared, and charges no review round, repair grant, or re-run; this item's counters stay where the review left them.\n",
+		e.RunID)
+	if detail := strings.TrimSpace(stopped.Detail); detail != "" {
+		rendered.WriteString(indented("What the harness found", detail))
+	}
+	return rendered.String()
+}
+
 // renderNextMover says which of the two waits this entry is in and who has to
 // move next: a stoppage nobody has decided about is yours, and a decision
 // already recorded is the harness's to carry out.
@@ -1306,7 +1374,14 @@ func (e Entry) renderAttempt() string {
 // A record nobody could read says that instead of guessing, for the reason the
 // decisions below it do: an unreadable record read as an item nobody has decided
 // about is how one authorized recovery is nearly spent twice.
+//
+// An approved change the environment stopped is the one stoppage whose next
+// mover is neither: the harness resumes it, and what it waits on is the cause
+// clearing and somebody asking.
 func (e Entry) renderNextMover() string {
+	if e.IntegrationStop != nil {
+		return "      Next mover: the harness — this change is approved and the environment stopped it, so what it needs is `yoyo triage resume` once the cause has cleared, not a decision.\n"
+	}
 	if e.CountersProblem != "" {
 		return "      Next mover: unknown — this item's triage record could not be read, so whether anything is already decided about it cannot be said here.\n"
 	}

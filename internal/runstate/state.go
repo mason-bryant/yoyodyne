@@ -1292,6 +1292,22 @@ type State struct {
 	// own failures spending the item's budgets. Absent is every run nothing
 	// refused, which is nearly all of them. See environmental.go.
 	Environmental *EnvironmentalRefusal `json:"environmental,omitempty"`
+	// IntegrationStop is the environment having stopped this run after its change
+	// was approved and before that change was promoted: a dirty primary checkout,
+	// a tracker or a forge that did not answer, a network that went away. It is
+	// what says the run is resumable at the step it stopped in with its approval
+	// standing, and it is written where the run fails, from the error that ended
+	// it — a dirty checkout by its sentinel, a transport that did not answer by
+	// the recovery package's closed reading — so nothing decides it from the
+	// run's prose afterwards. Absent is every run
+	// the environment did not stop there, which is nearly all of them. See
+	// integrationresume.go.
+	IntegrationStop *IntegrationStop `json:"integration_stop,omitempty"`
+	// IntegrationResumptions are the continuations of this run's integration
+	// after an environmental stop: the run made live again at the promotion, with
+	// its approval standing and no attempt, round, or grant charged. Absent is
+	// every run nothing resumed, which is nearly all of them.
+	IntegrationResumptions []IntegrationResumption `json:"integration_resumptions,omitempty"`
 	// IntegrationRetries counts the promotions this run has re-prepared after
 	// losing a race for its target branch: the change replayed onto where the
 	// target went, re-checked, and re-reviewed. It is recorded before the retry
@@ -1714,6 +1730,7 @@ func (s State) Validate() error {
 			problems = append(problems, fmt.Errorf("environmental: %w", err))
 		}
 	}
+	problems = append(problems, s.validateIntegrationResume()...)
 	if s.ReviewRounds < 0 {
 		problems = append(problems, errors.New("review_rounds cannot be negative"))
 	}

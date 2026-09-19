@@ -249,6 +249,83 @@ func (m *Manager) RemovePreservedWorktree(ctx context.Context, worktree Worktree
 	return removal, nil
 }
 
+// RestoreWorktree puts a retired worktree back at the path the harness owns for
+// it, on the branch it was retired from, so a run whose checkout the convergence
+// sweep took can be resumed in it. It is the inverse of RemovePreservedWorktree
+// for the one case that inverse is sound: the branch still holds every commit
+// the checkout held, at the head the run recorded as the harness's own commit,
+// and nothing uncommitted was captured off the directory — a sweep that recorded
+// a preserved-work ref took work that is not on the branch, and a restore that
+// silently left it there would hand a promotion a checkout missing what the
+// developer left.
+//
+// Everything a creation proves is proved again here, and one thing more: the
+// branch head is exactly the commit the run recorded, so what comes back is the
+// reviewed change and not whatever the branch has become. The registry lease is
+// taken for the reason a creation takes it, and the restored checkout is
+// inspected before it is reported: registered, on the branch, and clean.
+func (m *Manager) RestoreWorktree(ctx context.Context, worktree Worktree) (Worktree, error) {
+	path, err := m.ownedPath(worktree)
+	if err != nil {
+		return Worktree{}, err
+	}
+	if !commitPattern.MatchString(worktree.HarnessCommit) {
+		return Worktree{}, errors.New("a worktree is restored at the commit the harness recorded, and this run recorded none")
+	}
+	if err := m.ValidateReady(ctx); err != nil {
+		return Worktree{}, err
+	}
+	head, err := m.resolveBranchCommit(ctx, worktree.Branch)
+	if err != nil {
+		return Worktree{}, fmt.Errorf("resolve the retired worktree's branch: %w", err)
+	}
+	if head != worktree.HarnessCommit {
+		return Worktree{}, fmt.Errorf("branch %s is at %s, not at the commit the harness recorded (%s); what is on it is not the change that was reviewed", worktree.Branch, head, worktree.HarnessCommit)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return Worktree{}, fmt.Errorf("worktree path already exists: %s", path)
+		}
+		return Worktree{}, fmt.Errorf("inspect worktree path: %w", err)
+	}
+	registered, _, err := m.registeredWorktree(ctx, path)
+	if err != nil {
+		return Worktree{}, err
+	}
+	if registered {
+		return Worktree{}, fmt.Errorf("worktree %s is still registered although its directory is gone; `git worktree prune` is what settles that", path)
+	}
+	if err := os.MkdirAll(m.worktreeRoot, 0o700); err != nil {
+		return Worktree{}, fmt.Errorf("create worktree root: %w", err)
+	}
+	lease, err := m.leaseRegistry(ctx)
+	if err != nil {
+		return Worktree{}, err
+	}
+	defer func() { _ = lease.release() }()
+
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "add", path, worktree.Branch)
+	if err != nil {
+		return Worktree{}, err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return Worktree{}, fmt.Errorf("restore worktree failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	restored := worktree
+	restored.Path = path
+	inspection, err := m.Inspect(ctx, restored)
+	if err != nil {
+		return restored, fmt.Errorf("verify restored worktree: %w", err)
+	}
+	if !inspection.Registered || inspection.Branch != worktree.Branch {
+		return restored, errors.New("restored worktree is not registered with the expected branch")
+	}
+	if inspection.Dirty {
+		return restored, errors.New("restored worktree already carries uncommitted changes")
+	}
+	return restored, nil
+}
+
 // capturePreservedWork records everything a checkout holds on a run-scoped ref
 // and reports that ref, so the directory can be removed without the work in it
 // becoming the one thing nobody can get back.

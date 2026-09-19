@@ -28,6 +28,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/landing"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/recovery"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
@@ -679,6 +680,12 @@ type Outcome struct {
 	// that reported the blocker without it would say an item had spent another
 	// round toward its cap when it had spent none.
 	Environmental *runstate.EnvironmentalRefusal `json:"environmental,omitempty"`
+	// IntegrationStop is the environment having stopped this run's approved
+	// change short of its promotion, when that is what stopped it: the one
+	// failure that is resumable at the step it stopped in, with the approval
+	// standing and nothing charged. A caller that reported the failure without it
+	// would send a reader to the verbs that each spend something for it.
+	IntegrationStop *runstate.IntegrationStop `json:"integration_stop,omitempty"`
 	// Paused reports a run that stopped short of finishing and is owed a
 	// continuation rather than having failed. The run is still in flight when it
 	// is set: its worktree, branch, claimed item, and developer session are all
@@ -1258,12 +1265,17 @@ func (p Pipeline) Continue(ctx context.Context, workItemID, runID string) (Outco
 				inFlight.RunID),
 		}
 	}
-	if !resumableRepair(inFlight) {
+	// Two shapes of run are re-entered here: one inside its repair loop, and one
+	// at the promotion its approval already authorized. The second is the
+	// integration resume, and it is the same entry point because it is the same
+	// act — the run named is adopted and carried on, and a fresh run can satisfy
+	// neither.
+	if !resumableRepair(inFlight) && !resumableIntegration(inFlight) {
 		return Outcome{}, ContinuationMismatchError{
 			WorkItemID: workItemID,
 			RunID:      runID,
 			InFlight:   inFlight.RunID,
-			Found: fmt.Sprintf("that run is in flight in status %s at the %s phase, which is not a repair loop this can re-enter",
+			Found: fmt.Sprintf("that run is in flight in status %s at the %s phase, which is not a repair loop or an approved promotion this can re-enter",
 				inFlight.Status, inFlight.Phase),
 		}
 	}
@@ -1313,8 +1325,16 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// on the machines that lack it, and a run turned back by both should be told
 	// about the one it can act on. Nothing is charged here either — the run is
 	// still exactly as the process that stopped it left it.
-	if err := p.requireBackendReady(ctx, state.WorkItemID); err != nil {
-		return Outcome{}, err
+	//
+	// A run resumed at its promotion is not asked. Nothing on that path invokes a
+	// provider — the developer's attempt is behind it and the reviewer's verdict is
+	// standing — so a provider that is logged out would refuse a promotion it has
+	// no part in. A replay that puts the change back through the gate meets the
+	// provider where the gate does, and is paused there exactly as any round is.
+	if !resumableIntegration(state) {
+		if err := p.requireBackendReady(ctx, state.WorkItemID); err != nil {
+			return Outcome{}, err
+		}
 	}
 	// An environmental refusal on the record belongs to a round that is over: a
 	// dispatch something turned away before it reached this run, or a round an
@@ -1403,6 +1423,14 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			PublishSkipped: skipped,
 		},
 	}
+	// A run resumed at its promotion carries the verdict that authorized it into
+	// the outcome it reports, because the steps past this point read the outcome:
+	// the independence check reads the two sessions off it, the notes recorded on
+	// the item and the closure read the verdict off it. A run resumed anywhere
+	// else earns a fresh verdict before any of those steps, and carries nothing.
+	if resumableIntegration(state) {
+		run.carryReviewEvidence()
+	}
 	// Whether this run is observed is read off its own record rather than off the
 	// configuration this process loaded. A run started on the legacy path names no
 	// instance and is served here exactly as it was before the definition existed,
@@ -1467,6 +1495,20 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// worktree lost it.
 	if err := run.verifyHandback(ctx); err != nil {
 		return run.stop(ctx, err)
+	}
+	// A run resumed at its promotion is promoted, and nothing before that is done
+	// again: the checks passed and the reviewer approved, and the environment is
+	// what stopped the change short of the target branch. What it is charged is
+	// nothing — no attempt, no review round, no repair grant — because there is no
+	// verdict here to charge for. The one thing that leaves this path is a replay
+	// whose target moved, and that re-earns the whole gate exactly as a first
+	// promotion that lost its race does, through the loop below.
+	if resumableIntegration(state) {
+		outcome, replayed, err := run.promoteApproved(ctx)
+		if !replayed {
+			return outcome, err
+		}
+		return run.verifyReviewAndFinish(ctx)
 	}
 	// A repair attempt that was in flight when the process stopped was already
 	// counted against the budget, so it is re-run rather than re-counted, with
@@ -1534,12 +1576,15 @@ func handedBackRepair(state runstate.State) bool {
 // one is not hypothetical: a repair round that reached a review and burned it on
 // an empty diff is one of the field instances this item was filed for.
 //
+// A run resumed at its promotion is the third: what it promotes is the approved
+// change, and a worktree that lost it would promote nothing or something else.
+//
 // The one resume this is false for is the run owed its first attempt — paused
 // before or during it, with no failure ever returned — and an empty worktree is
 // exactly what that attempt starts from.
 func resumesAnExistingChange(state runstate.State) bool {
 	switch state.Phase {
-	case runstate.PhaseChecking, runstate.PhaseReviewing:
+	case runstate.PhaseChecking, runstate.PhaseReviewing, runstate.PhaseIntegrating:
 		return true
 	case runstate.PhaseDeveloping:
 		return handedBackRepair(state)
@@ -1862,39 +1907,66 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 		if err := a.repairLoop(ctx); err != nil {
 			return a.stop(ctx, err)
 		}
-		// An approval only authorizes integration when it demonstrably came from a
-		// second invocation. Missing or reused provider identity means the
-		// independence the policy relies on was never established.
-		if err := validateIndependentInvocations(a.outcome); err != nil {
-			return a.fail(err, runstate.StatusFailed)
-		}
-		// The promotion is the last moment a directive can still stop this work,
-		// and the loop above can have spent hours in the provider since it last
-		// asked. Asking again here is what keeps a directive recorded mid-repair
-		// from reaching the run only after its change was already on the target
-		// branch, which is indistinguishable from it reaching nothing. A dependency
-		// link applied in that same stretch is the same fact and is asked the same
-		// way: promoting work somebody has just made wait on other work is the one
-		// outcome a link applied late must not still produce.
-		if err := a.holdForDirective(); err != nil {
-			return a.stop(ctx, err)
-		}
-		if err := a.holdForDependency(ctx); err != nil {
-			return a.stop(ctx, err)
-		}
-		err := a.integrate(ctx)
-		if err == nil {
-			a.observe(ctx, deliveryIntegrate, "integrated")
-			return a.finish(ctx)
-		}
-		retry, retryErr := a.prepareIntegrationRetry(ctx, err)
-		if retryErr != nil {
-			return a.fail(retryErr, failureStatus(ctx, retryErr))
-		}
-		if !retry {
-			return a.fail(err, failureStatus(ctx, err))
+		outcome, replayed, err := a.promoteApproved(ctx)
+		if !replayed {
+			return outcome, err
 		}
 	}
+}
+
+// promoteApproved is the promotion half of the gate: the approval the repair
+// loop just earned — or the one a resumed run already holds — is checked for
+// independence, the item is asked one last time what it waits on, and the change
+// is promoted onto the target branch. It reports whether the change was replayed
+// onto a target that moved instead, in which case nothing has ended and the
+// whole gate is to be re-earned by the caller; every other way out is the run's
+// own ending, returned as it is.
+//
+// It is one function rather than the tail of the loop above because two routes
+// reach it, and they must not be able to promote differently: the loop, where
+// the approval was just given, and the integration resume, where the approval
+// was given by a process that then stopped short of this step for a reason the
+// environment answers for.
+func (a *activeRun) promoteApproved(ctx context.Context) (Outcome, bool, error) {
+	// An approval only authorizes integration when it demonstrably came from a
+	// second invocation. Missing or reused provider identity means the
+	// independence the policy relies on was never established.
+	if err := validateIndependentInvocations(a.outcome); err != nil {
+		outcome, err := a.fail(err, runstate.StatusFailed)
+		return outcome, false, err
+	}
+	// The promotion is the last moment a directive can still stop this work,
+	// and the loop above can have spent hours in the provider since it last
+	// asked. Asking again here is what keeps a directive recorded mid-repair
+	// from reaching the run only after its change was already on the target
+	// branch, which is indistinguishable from it reaching nothing. A dependency
+	// link applied in that same stretch is the same fact and is asked the same
+	// way: promoting work somebody has just made wait on other work is the one
+	// outcome a link applied late must not still produce.
+	if err := a.holdForDirective(); err != nil {
+		outcome, err := a.stop(ctx, err)
+		return outcome, false, err
+	}
+	if err := a.holdForDependency(ctx); err != nil {
+		outcome, err := a.stop(ctx, err)
+		return outcome, false, err
+	}
+	err := a.integrate(ctx)
+	if err == nil {
+		a.observe(ctx, deliveryIntegrate, "integrated")
+		outcome, err := a.finish(ctx)
+		return outcome, false, err
+	}
+	retry, retryErr := a.prepareIntegrationRetry(ctx, err)
+	if retryErr != nil {
+		outcome, err := a.fail(retryErr, failureStatus(ctx, retryErr))
+		return outcome, false, err
+	}
+	if !retry {
+		outcome, err := a.fail(err, failureStatus(ctx, err))
+		return outcome, false, err
+	}
+	return Outcome{}, true, nil
 }
 
 // contendedIntegration reports a promotion refused because the target branch is
@@ -2477,6 +2549,62 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 	default:
 		return "", false
 	}
+}
+
+// integrationStopCauseOf reports the environmental cause a failure between an
+// approval and a promotion names, where it names one. It is wider than
+// environmentalCauseOf by exactly the class that stopped yoyodyne-ifd.309's
+// approved change the second time: a transport the harness depends on not
+// answering — a tracker read killed under load, a forge or a network that
+// reset — which is the class the recovery package already waits out at the
+// boundaries that have a window, and which reaches a step with no window as the
+// error that ends the run.
+//
+// Nothing here guesses either. The dirty checkout is named by the sentinel the
+// refusing package declares, and the transport class by the same closed reading
+// the recovery package applies to every boundary it retries — so a failure this
+// classifies is one the harness would have asked again somewhere else, and a
+// failure it does not is one somebody has to look at. A replay that conflicted,
+// a target that diverged, and an approval that could not be shown independent
+// are all the second kind, and none of them reaches here.
+func integrationStopCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
+	switch {
+	case errors.Is(failure, gitworktree.ErrPrimaryNotReady):
+		return runstate.CauseDirtyPrimary, true
+	case recovery.Recoverable(failure):
+		return runstate.CauseTransportFailure, true
+	default:
+		return "", false
+	}
+}
+
+// recordIntegrationStop notes on the run that the environment stopped an
+// approved change short of its promotion, where that is what the failure ending
+// it says. It is the classification that makes the run resumable at that step
+// with its approval standing, so it is written only where both halves hold: the
+// approval is standing with nothing promoted, and the cause is one the
+// environment answers for. A run stopped for anything else records nothing here
+// and is decided about as it always was.
+//
+// Nothing here is saved on its own. Every caller is a step away from the
+// terminal write that ends the run, and a second write would be one more chance
+// for the record and the item to disagree about what stopped it.
+func (a *activeRun) recordIntegrationStop(cause error) {
+	if !a.state.ApprovedAwaitingIntegration() {
+		return
+	}
+	named, environmental := integrationStopCauseOf(cause)
+	if !environmental {
+		return
+	}
+	stopped := &runstate.IntegrationStop{
+		Cause:      named,
+		Detail:     singleLine(cause.Error(), runstate.MaxEnvironmentalDetailBytes),
+		Phase:      a.state.Phase,
+		RecordedAt: a.pipeline.clock().Now().UTC(),
+	}
+	a.state.IntegrationStop = stopped
+	a.outcome.IntegrationStop = stopped
 }
 
 // refuseDispatchEnvironmentally records, on a run the harness turned away before
@@ -4615,6 +4743,12 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 			a.recordEnvironmentalRefusal(named, cause.Error(), ranAnyway)
 		}
 	}
+	// An approved change the environment stopped short of its promotion is
+	// recorded as exactly that, so what resumes it reads the classification off
+	// the record rather than deciding it from the failure's prose afterwards. It
+	// is asked here, of the error that ended the run, because here is the only
+	// place the sentinel that names the cause still exists.
+	a.recordIntegrationStop(cause)
 	// This is where a round settles, so it is where the environment refusing one
 	// is decided and paid back. It happens before the terminal write below, so the
 	// record that ends the run carries the classification, and before the docket
@@ -5418,6 +5552,73 @@ func resumableRepair(state runstate.State) bool {
 	default:
 		return false
 	}
+}
+
+// resumableIntegration reports an in-flight run standing at its promotion with
+// the approval that authorizes it, which is the other shape of run this
+// pipeline picks up: the integration resume, made live again by the triage
+// action after the environment stopped it short of the target branch. It needs
+// the worktree and the branch that hold the approved change, the developer
+// session the independence check pairs the reviewer's against, and the
+// resumption on its record that says the harness put it here on purpose — a run
+// at the integrating phase with none is one a process died in, and that is
+// reconciliation's to settle rather than something to promote from durable
+// state alone.
+func resumableIntegration(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.Phase != runstate.PhaseIntegrating {
+		return false
+	}
+	if state.WorktreePath == "" || state.Branch == "" || state.BaseCommit == "" || state.TargetBranch == "" {
+		return false
+	}
+	if state.ProviderSessionID == "" || len(state.IntegrationResumptions) == 0 {
+		return false
+	}
+	return state.ApprovedAwaitingIntegration()
+}
+
+// carryReviewEvidence puts the verdict the durable record holds onto the outcome
+// this process reports, for a run resumed past the review. Every step from the
+// promotion on reads the outcome rather than the record — the independence check,
+// the notes recorded on the item, the closure — and a resumed run that carried
+// nothing would be refused as unreviewed by the first of them and recorded as
+// unreviewed by the rest.
+func (a *activeRun) carryReviewEvidence() {
+	state := a.state
+	a.outcome.ReviewSessionID = state.ReviewSessionID
+	a.outcome.ReviewModel = state.ReviewModel
+	a.outcome.ReviewResolvedModel = state.ReviewResolvedModel
+	a.outcome.ReviewDecision = review.Decision(state.ReviewDecision)
+	a.outcome.ReviewApproves = review.Approval(state.ReviewApproves)
+	a.outcome.ReviewSummary = state.ReviewSummary
+	a.outcome.ReviewFindings = reportedFindings(state.ReviewFindingDetails)
+	// The landing travels with the verdict, because the closure is decided from
+	// both: a resumed run that lost the developer's claim would close an item the
+	// developer said its change does not discharge.
+	a.outcome.Landing = landing.Outcome(state.LandingOutcome)
+	a.outcome.LandingReason = state.LandingReason
+	a.outcome.LandingBlockedBy = state.LandingBlockedBy
+	a.outcome.LandingImpedimentProblem = state.LandingImpedimentProblem
+	a.outcome.LandingProblem = state.LandingProblem
+}
+
+// reportedFindings converts durable findings back into the reviewer's own
+// shape, which is what the outcome carries. It is the inverse of
+// durableFindings, and it is total: a durable finding with no file has no
+// location, exactly as it had none when it was recorded.
+func reportedFindings(findings []runstate.Finding) []review.Finding {
+	if len(findings) == 0 {
+		return nil
+	}
+	reported := make([]review.Finding, 0, len(findings))
+	for _, finding := range findings {
+		restored := review.Finding{Severity: review.Severity(finding.Severity), Message: finding.Message}
+		if finding.File != "" {
+			restored.Location = &review.Location{File: finding.File, Line: finding.Line}
+		}
+		reported = append(reported, restored)
+	}
+	return reported
 }
 
 // phaseError carries the run status a failed step must be recorded with, so a
@@ -6425,6 +6626,14 @@ func renderFailureNotes(outcome Outcome) string {
 	// its cap than it actually is.
 	if outcome.Environmental != nil {
 		lines = append(lines, "Round: "+outcome.Environmental.Describe())
+	}
+	// An approved change the environment stopped says so beside the failure, and
+	// says what that costs, because the item's notes are what the next reader
+	// decides from: every verb they would otherwise reach for spends something
+	// for this stop, and the one that spends nothing is named here.
+	if outcome.IntegrationStop != nil {
+		lines = append(lines, "Integration stop: "+outcome.IntegrationStop.Describe()+
+			"; `yoyo triage resume "+outcome.RunID+"` resumes the promotion with the approval standing once the cause has cleared, charging no review round, repair grant, or re-run")
 	}
 	if outcome.RepairAttempts > 0 {
 		lines = append(lines, "Repair attempts: "+strconv.Itoa(outcome.RepairAttempts))

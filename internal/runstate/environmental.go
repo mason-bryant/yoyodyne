@@ -80,6 +80,16 @@ const (
 	// of the causes above its symptom trips — which is how the field cases reached
 	// this class, as handback-missing-change.
 	CauseStaleBinaryDispatch EnvironmentalCause = "stale-binary-dispatch"
+	// CauseTransportFailure is something the harness speaks to having not
+	// answered: a tracker read that timed out or was killed under load, a forge or
+	// a network that reset, refused, or went away. It is the class the recovery
+	// package waits out and asks again at the boundaries that have a window, and
+	// the same class where it reaches a step that has none. Today only the
+	// integration stop records it — an approved change the environment stopped
+	// between its approval and its promotion — because that is the one place a
+	// transport failure has been found spending an item's budgets on a verdict
+	// nobody rendered (yoyodyne-ifd.394).
+	CauseTransportFailure EnvironmentalCause = "transport-failure"
 )
 
 // Valid reports a cause this harness recognizes. A record naming anything else
@@ -87,7 +97,7 @@ const (
 // declared is a budget nothing accounted for.
 func (c EnvironmentalCause) Valid() bool {
 	switch c {
-	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch:
+	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure:
 		return true
 	default:
 		return false
@@ -107,6 +117,8 @@ func (c EnvironmentalCause) Title() string {
 		return "the sandbox the agent runs in could not be entered"
 	case CauseStaleBinaryDispatch:
 		return "the build that dispatched it was older than the decision it carried out"
+	case CauseTransportFailure:
+		return "the tracker, the forge, or the network did not answer"
 	default:
 		return string(c)
 	}
