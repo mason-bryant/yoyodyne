@@ -1410,9 +1410,17 @@ recorded on it, and the run's blocker is cleared onto the continuation that
 supersedes it, keeping the words it was recorded in. So a repair does not need
 the reopening a re-run does.
 
-Six things refuse it, and every one of them is asked before either of those
+Seven things refuse it, and every one of them is asked before either of those
 writes, so a refused re-entry leaves the grant exactly where it was. The stopped
-run has to be really over. It has to have recorded a failure that was actually
+run has to be really over. **It must not be an approved change the environment
+stopped**: a run whose record carries an integration stop is refused first,
+ahead of everything else — an approving verdict can carry minor findings, and a
+repair re-entered on those would spend a grant to have an approved change
+repaired — and the refusal is one sentence saying the change is approved, what
+stopped it and at which step, and that `yoyo triage resume <run-id>` is what it
+needs once the cause has cleared. That is the same sentence the docket entry
+carries and the channel line ends on, so wherever you read about the stop, you
+are sent to the same command. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — because
 a run whose provider kept refusing has no repair loop to re-enter. The item must
 not be closed or waiting on other work. A grant of the development manager's has
@@ -1506,7 +1514,11 @@ a transport that did not answer by the same closed reading of the error's
 text the [recovery rule](operations.md#waiting-out-a-network-that-dropped)
 waits out elsewhere — and where the change was approved and nothing was
 promoted, it writes an *integration stop* on the run: the cause and the step. The docket entry carries
-it too, names the harness as the next mover, and prints the command. The
+it too, names the harness as the next mover, and prints the command — in one
+sentence saying the change is approved, what stopped it, and that `yoyo triage
+resume` is what it needs. The channel line for the stop ends on that same
+sentence, and so does the refusal `yoyo triage repair` gives if it is asked for
+such a run instead. The
 resume then makes the run live again at exactly that step, with the approval
 it already has, and the pipeline promotes — replay onto where the target now
 stands, push, merge request — without invoking anybody: no developer attempt,

@@ -180,6 +180,15 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	stoppageNow := !handedToAPerson(before) && handedToAPerson(after)
 	if endedNow || stoppageNow {
 		remains := Detail{Remains: after.Artifacts().Describe()}
+		// An approved change the environment stopped is the one ending here whose
+		// move is neither a decision nor nothing: the harness resumes it, by a verb,
+		// once the cause has cleared. The table's clauses for both kinds below say
+		// otherwise of it — a decision in triage, or nothing recorded for anybody —
+		// so the move is the record's own sentence instead, the one the docket entry
+		// carries and the repair verb refuses in.
+		if after.IntegrationStop != nil {
+			remains.Mover = resumeMove(after)
+		}
 		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
 			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, endingReason(after))
 		} else {
@@ -218,6 +227,15 @@ func endingReason(state runstate.State) string {
 		return reason
 	}
 	return "the record names no reason"
+}
+
+// resumeMove is whose move follows an approved change the environment stopped:
+// the harness's, by `yoyo triage resume`, in the sentence the run's record
+// words for every surface. It is derived beside the fact the message states
+// rather than worded again here, so the channel line, the docket entry, and the
+// repair verb's refusal cannot come to say different things about one run.
+func resumeMove(state runstate.State) string {
+	return "the harness's — " + state.IntegrationStop.ResumeSays(state.RunID)
 }
 
 // endingSeverity is how loudly a run ending without a blocker is said. A

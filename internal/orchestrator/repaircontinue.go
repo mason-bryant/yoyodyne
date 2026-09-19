@@ -528,12 +528,27 @@ func (c RepairContinuer) carriedOut(workItemID string) (int, error) {
 // state has to supply would be refused after the item's budget had been spent on
 // it.
 //
+// An approved change the environment stopped is asked about first, ahead of
+// everything a repair would otherwise need, because the answer is the same
+// whatever else the record holds: the reviewer approved it, and what it needs
+// is its integration resumed rather than a developer handed anything. It is
+// asked ahead of the repair input in particular because an approving verdict can
+// carry minor findings, which read here as a failure returned to the developer
+// — and a repair loop re-entered on those would spend a grant to have an
+// approved change repaired. The refusal says which verb the run needs and why,
+// in the docket's own sentence, because on yoyodyne-ifd.309 the refusal it
+// replaced said only that there was nothing to repair — true, and what sent the
+// development manager to a re-run of an undisputed change.
+//
 // The recorded repair input is the last of them and the one that makes this the
 // action it is. A run that stopped with no failure returned to it — a provider
 // that kept refusing, a replay that conflicted — has no repair loop to continue:
 // what it needs is a re-run or a person, and handing it another repair budget
 // would buy attempts at a failure nobody ever showed the developer.
 func continuableRepair(prior runstate.State) error {
+	if prior.IntegrationStop != nil {
+		return errors.New(prior.IntegrationStop.ResumeSays(prior.RunID))
+	}
 	if prior.WorktreePath == "" || prior.Branch == "" || prior.BaseCommit == "" || prior.TargetBranch == "" {
 		return fmt.Errorf("run %s recorded no preserved worktree to continue in, so there is no change to repair; a fresh run of the item is what it needs", prior.RunID)
 	}

@@ -552,6 +552,75 @@ func TestARepairRefusesAWorktreeThatIsNotAsTheHarnessLeftIt(t *testing.T) {
 	}
 }
 
+// The 309 shape: an approved change the environment stopped short of its
+// promotion, asked for a repair. The refusal it used to get was true — no
+// findings, no failing check, no refused paths — and pointed nowhere, and what
+// that bought was a re-run and four overrides for a change nobody disputed. So
+// the refusal says what the run is and names the verb that resumes it, with the
+// cause, in one sentence; and the docket entry the development manager read
+// before asking carries the same sentence, so the two cannot send her to
+// different places.
+func TestARepairOfAnApprovedChangeTheEnvironmentStoppedNamesTheResumeVerb(t *testing.T) {
+	t.Parallel()
+
+	stopped := approvedStoppedState()
+	harness := newContinueHarness(t, stopped)
+	_, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if err == nil {
+		t.Fatal("Continue() error = nil, want an approved change the environment stopped refused a repair")
+	}
+	refusal := err.Error()
+	want := "run " + docketedRunID + "'s change is approved and the environment stopped it at the integrating phase — dirty-primary (the primary checkout carried state the harness does not own) — so what it needs is `yoyo triage resume " + docketedRunID + "` once the cause has cleared, which resumes the promotion with the approval standing and charges no review round, repair grant, or re-run"
+	if refusal != want {
+		t.Fatalf("refusal = %q\nwant      %q", refusal, want)
+	}
+	// One sentence: it says what the run is, the cause, and the verb, and it does
+	// not say the true-and-useless thing it replaced.
+	if strings.Count(refusal, ". ") != 0 || strings.Contains(refusal, "no reviewer findings") || strings.Contains(refusal, "nothing to repair") {
+		t.Fatalf("refusal is not the one sentence naming the resume path: %q", refusal)
+	}
+	// The docket entry she read before asking says the same sentence, so what the
+	// entry told her to do and what the refusal tells her to do are one thing.
+	if len(harness.docket.entries) != 1 {
+		t.Fatalf("docket = %#v, want the one stopped run", harness.docket.entries)
+	}
+	if rendered := harness.docket.entries[0].Render(); !strings.Contains(rendered, want) {
+		t.Fatalf("the docket entry does not carry the refusal's sentence:\n%s", rendered)
+	}
+	// Nothing was spent and nothing was written: the grant is still the item's,
+	// the item is still where the stop left it, and the run is still stopped with
+	// its stop on the record for the resume to read.
+	if len(harness.started) != 0 || harness.tracker.claimed {
+		t.Fatalf("started = %#v, claimed = %t, want nothing continued", harness.started, harness.tracker.claimed)
+	}
+	if carried := harness.carried(t); carried != 0 {
+		t.Fatalf("carried out = %d, want the refusal to have spent nothing of the grant", carried)
+	}
+	if state := harness.reload(t); state.IntegrationStop == nil || !state.ResumableIntegration() {
+		t.Fatalf("a refused repair changed the stopped run: %#v", state)
+	}
+}
+
+// An approving verdict can carry minor findings, which read as a failure
+// returned to the developer. The stop is asked about ahead of them, because a
+// repair loop re-entered on them would spend a grant to have an approved change
+// repaired — and the answer is the same whatever else the record holds.
+func TestARepairIsRefusedForAnApprovedStopEvenWhereTheVerdictCarriedFindings(t *testing.T) {
+	t.Parallel()
+
+	stopped := approvedStoppedState()
+	stopped.ReviewFindings = 1
+	stopped.ReviewFindingDetails = []runstate.Finding{{Severity: "minor", Message: "a comment could be shorter"}}
+	harness := newContinueHarness(t, stopped)
+	_, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if err == nil || !strings.Contains(err.Error(), "`yoyo triage resume "+docketedRunID+"`") {
+		t.Fatalf("Continue() error = %v, want the resume verb named over the verdict's findings", err)
+	}
+	if len(harness.started) != 0 || harness.carried(t) != 0 {
+		t.Fatalf("started = %#v, carried = %d, want nothing continued and nothing spent", harness.started, harness.carried(t))
+	}
+}
+
 // The failure this item was filed for: a handback that arrives on a worktree
 // holding none of the change it is a repair of. It is refused rather than
 // carried out, because what a continued developer would be given is the

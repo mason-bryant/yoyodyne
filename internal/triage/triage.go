@@ -331,6 +331,28 @@ type IntegrationStop struct {
 	Title string `json:"title,omitempty"`
 }
 
+// ResumeIntegrationSays is the one sentence every surface says of an approved
+// change the environment stopped short of its promotion: that it is approved,
+// what stopped it, and the verb that resumes it. The repair verb refuses in it,
+// the docket entry carries it, and the channel line ends on it, so a development
+// manager sent from any one of them arrives at the same command.
+//
+// It is one sentence here rather than one per surface because of what the
+// surfaces said before it. On yoyodyne-ifd.309 the repair verb refused with a
+// sentence that was true — the run recorded no findings, failing check, or
+// refused paths — and pointed nowhere, and what that bought was a re-run and
+// four overrides for a change nobody disputed. A refusal that names what the
+// run needs is what turns the same stop into one command.
+//
+// It lives here rather than beside the run record because this is the package
+// both can reach: the record imports the docket, and the docket must not import
+// the record.
+func ResumeIntegrationSays(runID, phase, cause, title string) string {
+	return fmt.Sprintf(
+		"run %s's change is approved and the environment stopped it at the %s phase — %s (%s) — so what it needs is `yoyo triage resume %s` once the cause has cleared, which resumes the promotion with the approval standing and charges no review round, repair grant, or re-run",
+		runID, phase, cause, title, runID)
+}
+
 // Prerequisite is one thing an item's own statement asks of the tree that the
 // tree does not have. It is declared here rather than imported from the package
 // that reads it for the reason Finding is: what reaches a development manager
@@ -1343,17 +1365,17 @@ func (e Entry) renderAttempt() string {
 // otherwise reach for each spend something for this stoppage — a repair grant
 // for a run with no findings, or a fresh run and a fresh review for a change
 // nobody disputed — and that is what four operator overrides on one approved
-// change were paying for before this existed.
+// change were paying for before this existed. It says so in the sentence the
+// repair verb refuses in, so the entry and the refusal a reader gets for
+// ignoring it read the same.
 func (e Entry) renderIntegrationStop() string {
 	stopped := e.IntegrationStop
 	if stopped == nil {
 		return ""
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "      Approved, and stopped at the %s phase by the environment: %s (%s). Nothing here is a verdict on the change.\n",
-		stopped.Phase, stopped.Cause, nonEmpty(stopped.Title, "the environment rather than the work"))
-	fmt.Fprintf(&rendered, "      `yoyo triage resume %s` resumes the promotion with the approval standing once the cause has cleared, and charges no review round, repair grant, or re-run; this item's counters stay where the review left them.\n",
-		e.RunID)
+	fmt.Fprintf(&rendered, "      %s. Nothing here is a verdict on the change, and this item's counters stay where the review left them.\n",
+		ResumeIntegrationSays(e.RunID, stopped.Phase, stopped.Cause, nonEmpty(stopped.Title, "the environment rather than the work")))
 	if detail := strings.TrimSpace(stopped.Detail); detail != "" {
 		rendered.WriteString(indented("What the harness found", detail))
 	}
