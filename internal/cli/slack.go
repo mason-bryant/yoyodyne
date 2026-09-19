@@ -388,6 +388,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		Runs:          runs,
 		Stoppages:     runs,
 		Decisions:     runs.Triage(),
+		Remains:       standingRemains(resolved),
 		Conversations: conversations,
 		Tracker:       tracker,
 		Directives:    directives,

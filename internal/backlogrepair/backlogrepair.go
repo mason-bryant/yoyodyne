@@ -41,6 +41,19 @@
 // and the reading itself decides that: holds that could not be read hold
 // everything, because a reader that cannot tell a hold from a stale status must
 // not clear either.
+//
+// The survey and the act share one classification, which is the point of their
+// both asking Records.Held rather than each deciding for itself: an item the
+// survey lists as held is one the act refuses, with the same reason, and an item
+// the survey offers is one the act judges again against the records as they
+// stand then. What that classification says about a preserved change is the read
+// model's to derive — readmodel.HeldForAPerson looks for the stopped run's branch
+// and worktree in the repository rather than reading the run's removal flags —
+// and nothing here re-derives it. On 2026-09-19 the survey listed
+// yoyodyne-ifd.372 under the state a repair corrects while the item's own notes
+// said its run's branch and worktree were checked and there, and the clear that
+// followed was made on that listing; the misread was in the shared
+// classification, which is why the correction is there and not here.
 package backlogrepair
 
 import (

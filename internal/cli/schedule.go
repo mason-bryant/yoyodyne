@@ -670,6 +670,7 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		Runs:       parts.store,
 		Stoppages:  parts.store,
 		Decisions:  parts.store.Triage(),
+		Remains:    remainsOf(parts),
 		Intake:     parts.intake,
 		Directives: parts.directives,
 		Staleness: repositoryStaleness{

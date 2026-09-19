@@ -537,6 +537,10 @@ func standingSources(configPath string) readmodel.Sources {
 		// held item says whether it waits on a decision or on the harness carrying
 		// one out rather than on both at once.
 		sources.Decisions = store.Triage()
+		// And the repository, asked whether each stopped run's change is still
+		// there, so this surface holds the same items the scheduler holds and for
+		// the same reason rather than reading the run's flags where it looks.
+		sources.Remains = standingRemains(resolved)
 	}
 	if store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Conversations = store

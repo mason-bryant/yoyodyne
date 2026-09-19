@@ -186,7 +186,12 @@ type Sources struct {
 	// on the harness carrying her decision out. It is optional, and a reading
 	// without one reports every held item as one nobody has decided about, saying
 	// so in the refusal rather than guessing the other way.
-	Decisions     Decisions
+	Decisions Decisions
+	// Remains is the repository, asked whether each stopped run's change is still
+	// there; a hold on a preserved change is decided from that rather than from
+	// the run's removal flags. It is optional, and a reading without one decides
+	// from the record and says so in the hold.
+	Remains       Remains
 	Directives    Directives
 	Amendments    Amendments
 	OperatorHolds OperatorHolds
@@ -973,7 +978,7 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	}
 	var held backlog.Holds
 	if sources.Stoppages != nil {
-		held, err = HeldForAPerson(sources.Stoppages, sources.Decisions)
+		held, err = HeldForAPerson(ctx, sources.Stoppages, sources.Decisions, sources.Remains)
 		if err != nil {
 			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}

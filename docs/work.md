@@ -607,10 +607,16 @@ it was selected: what is judged is the state that is then claimed.
 
 What still holds a blocked item back is a **hold**, which is the harness's own
 durable record rather than a field: a run that stopped on the item and whose
-change is still on a branch, a stoppage put in front of the development
-manager that nobody has decided about, or a run that integrated the item's
-change and could not finish publishing it. None is released by a pass deciding
-to. Releasing a stoppage would start a fresh run on top of a change that is still
+change is still on a branch or in a checkout, a stoppage put in front of the
+development manager that nobody has decided about, a stopped run about which
+she has recorded a decision the harness has still to carry out, or a run that
+integrated the item's change and could not finish publishing it. Whether a
+stopped run's change is still there is looked for in the repository as the hold
+is read, not taken from the run's own removal flags — a flag is a field
+something has to remember to write, and on 2026-09-19 the product manager's
+repair cleared yoyodyne-ifd.372 on one while the item's own notes still said the
+run's branch and worktree were checked and there. None is released by a pass
+deciding to. Releasing a stoppage would start a fresh run on top of a change that is still
 there, and releasing an outstanding publication would start one over work the
 promotion has already put on the target branch — which is what
 [yoyodyne-ifd.295](operations.md#recovering-interrupted-runs)

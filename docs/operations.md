@@ -1204,8 +1204,8 @@ Working (1 conversation):
 Not startable (4 of 7 admitted items; 1 awaits the development manager's decision, 1 awaits the harness carrying out a decision already recorded):
   yoyodyne-ifd.200 — waiting on yoyodyne-ifd.199
   yoyodyne-ifd.212 — parked, so no pull selects it however far the queue drains: the design is being reworked
-  yoyodyne-ifd.153 — run run-5035c832 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has
-  yoyodyne-ifd.150 — run run-a17c9b40 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager has already decided what happens to it, so what is outstanding is the harness carrying that decision out rather than a decision
+  yoyodyne-ifd.153 — run run-5035c832 stopped on it and its change is preserved (branch and worktree checked and there), so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has
+  yoyodyne-ifd.150 — run run-a17c9b40 stopped on it and its change is preserved (branch checked and there), so a fresh run would start over on top of work that is still there; the development manager has already decided what happens to it, so what is outstanding is the harness carrying that decision out rather than a decision
 Needs a human (3):
   directive-4f2c… is unresolved: which branch does this land on? — the operator's — the work it affects waits until `yoyo directive resolve` settles it
   1 admitted item awaits the development manager's decision — the development manager's — nothing pulls a stopped item until she decides what happens to it
@@ -1244,9 +1244,15 @@ Needs a human (3):
 
   One of the queue's own accounts is an item **held**, which is the third and
   fourth not-startable lines in the example above: a run stopped on it and its
-  change is still on a branch, its stoppage is in front of the development
-  manager and nobody has decided about it, or a run promoted its change and could
-  not finish publishing it.
+  change is still on a branch or in a checkout, its stoppage is in front of the
+  development manager and nobody has decided about it, a decision about its
+  stoppage is recorded and not yet carried out, or a run promoted its change and
+  could not finish publishing it. The first is stated from the repository rather
+  than from the run's record — the parenthesis says what was found, `branch and
+  worktree checked and there` or only one of them — because the record's removal
+  flags are what a sweep remembered to write, and on 2026-09-19 a hold read off
+  them released yoyodyne-ifd.372 as no longer preserved. A look that could not
+  be made holds the item as preserved and says why.
 
   A held item says which of two waits it is in, because they are two different
   people to go to. **Awaiting a decision** is a stoppage the development manager

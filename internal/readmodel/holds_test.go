@@ -1,12 +1,14 @@
 package readmodel
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -33,6 +35,7 @@ func TestPreservedWorkAndUndecidedStoppagesAreHeldForAPerson(t *testing.T) {
 			Attempts: 1, DeliveredAt: &delivered,
 		}},
 		nothingDecided,
+		asRecorded,
 	)
 
 	for _, id := range []string{
@@ -80,6 +83,7 @@ func TestAStoppageWhoseWorkWasCleanedUpHoldsNothing(t *testing.T) {
 			Attempts: 1, DeliveredAt: &decided, Decision: "rerun", Reason: "the ground moved",
 		}},
 		nothingDecided,
+		asRecorded,
 	)
 
 	for _, id := range []string{"yoyodyne-ifd.78", "yoyodyne-ifd.243"} {
@@ -147,7 +151,7 @@ func TestAnUndecidedStoppageSaysWhichPersonItIsWaitingOn(t *testing.T) {
 		t.Run(stoppage.name, func(t *testing.T) {
 			t.Parallel()
 
-			held := heldForAPerson(nil, []runstate.Escalation{stoppage.escalation}, nothingDecided)
+			held := heldForAPerson(nil, []runstate.Escalation{stoppage.escalation}, nothingDecided, asRecorded)
 			reason := heldReason(t, held, stoppedItem)
 			if !strings.Contains(reason, stoppage.want) {
 				t.Fatalf("the hold says %q, want it to name %q", reason, stoppage.want)
@@ -166,7 +170,7 @@ func TestTheLatestStoppageDescribesAnItemThatStoppedTwice(t *testing.T) {
 	second := preservedRun("run-bbbbbbbb", "yoyodyne-ifd.100", time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC))
 
 	for _, order := range [][]runstate.State{{first, second}, {second, first}} {
-		reason := heldReason(t, heldForAPerson(order, nil, nothingDecided), "yoyodyne-ifd.100")
+		reason := heldReason(t, heldForAPerson(order, nil, nothingDecided, asRecorded), "yoyodyne-ifd.100")
 		if !strings.Contains(reason, "run-bbbbbbbb") {
 			t.Fatalf("the hold names %q, want the later run", reason)
 		}
@@ -180,10 +184,10 @@ func TestAFailedReadingIsAnErrorRatherThanNoHolds(t *testing.T) {
 	t.Parallel()
 
 	unreadable := errors.New("state root is not readable")
-	if _, err := HeldForAPerson(failingStoppages{runs: unreadable}, nil); !errors.Is(err, unreadable) {
+	if _, err := HeldForAPerson(context.Background(), failingStoppages{runs: unreadable}, nil, nil); !errors.Is(err, unreadable) {
 		t.Fatalf("HeldForAPerson() error = %v, want the run reading's failure", err)
 	}
-	if _, err := HeldForAPerson(failingStoppages{escalations: unreadable}, nil); !errors.Is(err, unreadable) {
+	if _, err := HeldForAPerson(context.Background(), failingStoppages{escalations: unreadable}, nil, nil); !errors.Is(err, unreadable) {
 		t.Fatalf("HeldForAPerson() error = %v, want the escalation reading's failure", err)
 	}
 }
@@ -197,7 +201,7 @@ func TestAFailedReadingIsAnErrorRatherThanNoHolds(t *testing.T) {
 func TestAnItemWhoseOnlyOutstandingStateIsAPublicationIsHeldForAPerson(t *testing.T) {
 	t.Parallel()
 
-	held := heldForAPerson([]runstate.State{publishedRun("run-55443d4c", "yoyodyne-ifd.295")}, nil, nothingDecided)
+	held := heldForAPerson([]runstate.State{publishedRun("run-55443d4c", "yoyodyne-ifd.295")}, nil, nothingDecided, asRecorded)
 	reason := heldReason(t, held, "yoyodyne-ifd.295")
 	for _, want := range []string{"run-55443d4c", "the forge merged it", "nothing here to implement"} {
 		if !strings.Contains(reason, want) {
@@ -221,7 +225,7 @@ func TestADroppedMergeIsHeldWithoutClaimingTheForgeMergedIt(t *testing.T) {
 	dropped.PullRequest.Merged = false
 	dropped.PublishFailure = "the forge dropped the queued merge of pull request 84: it is open and has no merge queued for it"
 
-	reason := heldReason(t, heldForAPerson([]runstate.State{dropped}, nil, nothingDecided), "yoyodyne-ifd.288")
+	reason := heldReason(t, heldForAPerson([]runstate.State{dropped}, nil, nothingDecided, asRecorded), "yoyodyne-ifd.288")
 	if !strings.Contains(reason, "the forge has not merged it") {
 		t.Errorf("the hold says %q, want the unmerged publication named", reason)
 	}
@@ -241,7 +245,7 @@ func TestAFinishedOrInFlightPublicationHoldsNothing(t *testing.T) {
 	inFlight := publishedRun("run-7d2e4cc1", "yoyodyne-ifd.302")
 	inFlight.Status = runstate.StatusRunning
 
-	held := heldForAPerson([]runstate.State{settled, inFlight}, nil, nothingDecided)
+	held := heldForAPerson([]runstate.State{settled, inFlight}, nil, nothingDecided, asRecorded)
 	for _, id := range []string{"yoyodyne-ifd.300", "yoyodyne-ifd.302"} {
 		if reason, ok := held.Reason(id); ok {
 			t.Fatalf("%s was held for %q, want nothing holding it", id, reason)
@@ -269,7 +273,7 @@ func TestABranchLeftBehindReadsAsThePublicationOnlyWhereTheMergeIsConfirmed(t *t
 	unmerged.PullRequest = &runstate.PullRequest{Number: 84, Branch: unmerged.Branch, State: "OPEN"}
 	unmerged.PublishFailure = "the forge dropped the queued merge of pull request 84"
 
-	held := heldForAPerson([]runstate.State{merged, unmerged}, nil, nothingDecided)
+	held := heldForAPerson([]runstate.State{merged, unmerged}, nil, nothingDecided, asRecorded)
 	if reason := heldReason(t, held, "yoyodyne-ifd.295"); !strings.Contains(reason, "the forge merged it") {
 		t.Errorf("the merged item is held for %q, want the publication rather than the preserved change", reason)
 	}
@@ -360,6 +364,7 @@ func TestAStoppageWithADecisionRecordedAwaitsItsCarryOutRatherThanADecision(t *t
 				Decision: runstate.TriageDecisionRerun, RunID: "run-aaaa1111",
 			}}},
 		}),
+		asRecorded,
 	)
 
 	decided := heldReason(t, held, "yoyodyne-ifd.150")
@@ -406,6 +411,7 @@ func TestAGrantThatHasBeenSpentIsNotAStoppageAwaitingCarryOut(t *testing.T) {
 				[]runstate.State{preservedRun("run-cccc3333", "yoyodyne-ifd.152", stopped)},
 				nil,
 				decisions(map[string]runstate.TriageCounters{"yoyodyne-ifd.152": granted.counters}),
+				asRecorded,
 			)
 			if reason := heldReason(t, held, "yoyodyne-ifd.152"); !strings.Contains(reason, granted.want) {
 				t.Fatalf("the hold says %q, want it to name %q", reason, granted.want)
@@ -436,6 +442,7 @@ func TestADecisionTheHarnessDoesNotCarryOutLeavesTheStoppageWaitingOnHer(t *test
 				decisions(map[string]runstate.TriageCounters{"yoyodyne-ifd.154": {
 					Decisions: []runstate.TriageDecision{{Decision: word, RunID: "run-dddd4444"}},
 				}}),
+				asRecorded,
 			)
 			if held.Decided("yoyodyne-ifd.154") {
 				t.Fatalf("a %q decision reads as one the harness has still to carry out", word)
@@ -456,6 +463,7 @@ func TestATriageRecordThatCouldNotBeReadHoldsTheItemAndSaysSo(t *testing.T) {
 		[]runstate.State{preservedRun("run-eeee5555", "yoyodyne-ifd.155", stopped)},
 		nil,
 		standingDecisions(failingDecisions{errors.New("open triage counters: permission denied")}),
+		asRecorded,
 	)
 	reason := heldReason(t, held, "yoyodyne-ifd.155")
 	for _, want := range []string{"its change is preserved", "could not be read", "permission denied"} {
@@ -479,6 +487,7 @@ func TestAHoldReadWithoutTheTriageRecordSaysNothingWasWiredToReadIt(t *testing.T
 		[]runstate.State{preservedRun("run-ffff6666", "yoyodyne-ifd.156", stopped)},
 		nil,
 		standingDecisions(nil),
+		asRecorded,
 	)
 	if reason := heldReason(t, held, "yoyodyne-ifd.156"); !strings.Contains(reason, "nothing was wired to read") {
 		t.Fatalf("the hold says %q, want the missing record named", reason)
@@ -507,4 +516,177 @@ type failingDecisions struct{ err error }
 
 func (f failingDecisions) Counters(string) (runstate.TriageCounters, error) {
 	return runstate.TriageCounters{}, f.err
+}
+
+// asRecorded looks at nothing and answers from each run's own record, which is
+// what every fixture above that predates the look was written against. The
+// tests below are the ones about the look itself.
+func asRecorded(run runstate.State) survival {
+	recorded := run.Artifacts()
+	return survival{Found: gitworktree.Survival{
+		BranchExists:    recorded.Branch != "" && !recorded.BranchRemoved,
+		WorktreePresent: recorded.WorktreePath != "" && !recorded.WorktreeRemoved,
+	}}
+}
+
+// remainsOf is a repository that holds exactly the artifacts it lists, by run,
+// and it keeps what it was asked about so a test can see the run's own
+// identifiers were what the look was made with.
+type remainsOf struct {
+	survives map[string]gitworktree.Survival
+	asked    []gitworktree.Worktree
+}
+
+func (r *remainsOf) Survives(_ context.Context, worktree gitworktree.Worktree) (gitworktree.Survival, error) {
+	r.asked = append(r.asked, worktree)
+	return r.survives[worktree.RunID], nil
+}
+
+type failingRemains struct{ err error }
+
+func (f failingRemains) Survives(context.Context, gitworktree.Worktree) (gitworktree.Survival, error) {
+	return gitworktree.Survival{}, f.err
+}
+
+// The yoyodyne-ifd.372 shape, 2026-09-19. The run stopped with its change
+// preserved, the item's own notes said the branch and worktree were checked and
+// there, and the product manager's repair cleared the blocked status as "no
+// longer held behind a preserved run" — because the hold was read off the run's
+// removal flags and never looked. Whether a stopped run's change is still there
+// is the repository's answer: a run whose branch or worktree exists is held
+// whatever its flags say, with the run named and what was found stated, and a
+// run whose flags say preserved over artifacts that are gone holds nothing.
+func TestAStoppedRunIsHeldOnWhatTheRepositoryHoldsRatherThanItsRecord(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 16, 10, 5, 41, 0, time.UTC)
+	sweptOnRecord := preservedRun("run-192522d8", "yoyodyne-ifd.372", stopped)
+	sweptOnRecord.BaseCommit = "449b375812b5f92a3d64efc33f7fcf26b41584e3"
+	sweptOnRecord.BranchRemoved = true
+	sweptOnRecord.WorktreeRemoved = true
+	preservedOnRecord := preservedRun("run-48216ea9", "yoyodyne-ifd.275", stopped)
+
+	repository := &remainsOf{survives: map[string]gitworktree.Survival{
+		"run-192522d8": {BranchExists: true, WorktreePresent: true},
+		"run-48216ea9": {},
+	}}
+	held := heldForAPerson(
+		[]runstate.State{sweptOnRecord, preservedOnRecord},
+		nil,
+		nothingDecided,
+		lookingFor(context.Background(), repository),
+	)
+
+	reason := heldReason(t, held, "yoyodyne-ifd.372")
+	for _, want := range []string{
+		"run-192522d8", "its change is preserved", "(branch and worktree checked and there)",
+	} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("yoyodyne-ifd.372 is held for %q, want it to say %q", reason, want)
+		}
+	}
+	if reason, ok := held.Reason("yoyodyne-ifd.275"); ok {
+		t.Errorf("yoyodyne-ifd.275 is held for %q, want nothing holding it: its record says preserved and the repository holds neither artifact", reason)
+	}
+	// The look was made with the run's own identifiers, which is what proves the
+	// answer is about this run's branch and directory rather than any other's.
+	if len(repository.asked) != 2 {
+		t.Fatalf("the repository was asked about %d run(s), want both stopped runs", len(repository.asked))
+	}
+	for _, asked := range repository.asked {
+		if asked.RunID != "run-192522d8" {
+			continue
+		}
+		if asked.WorkItemID != "yoyodyne-ifd.372" || asked.Branch != sweptOnRecord.Branch || asked.Path != sweptOnRecord.WorktreePath || asked.BaseCommit != sweptOnRecord.BaseCommit {
+			t.Errorf("the look was made with %#v, want the run's own identifiers", asked)
+		}
+	}
+}
+
+// A look that failed is not a look that found nothing. The run is held as if
+// its change were there, and the reason says what stopped the look, because
+// releasing on an answer nobody got is the same mistake as releasing on a flag.
+func TestAStoppedRunWhoseChangeCouldNotBeLookedForIsHeldAsPreserved(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 16, 10, 5, 41, 0, time.UTC)
+	swept := preservedRun("run-192522d8", "yoyodyne-ifd.372", stopped)
+	swept.BranchRemoved = true
+	swept.WorktreeRemoved = true
+
+	held := heldForAPerson(
+		[]runstate.State{swept},
+		nil,
+		nothingDecided,
+		lookingFor(context.Background(), failingRemains{errors.New("worktree base commit is invalid")}),
+	)
+	reason := heldReason(t, held, "yoyodyne-ifd.372")
+	for _, want := range []string{"run-192522d8", "could not be checked", "worktree base commit is invalid", "may still be there"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the hold says %q, want it to name %q", reason, want)
+		}
+	}
+}
+
+// A reading with nothing wired to look answers from the record and says so,
+// which is the one case the flags still decide: the surfaces that look and the
+// surface that cannot have to agree wherever the record is right, and the
+// reason has to say which of the two this was.
+func TestAReadingWithNothingWiredToLookAnswersFromTheRecordAndSaysSo(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 16, 10, 5, 41, 0, time.UTC)
+	held := heldForAPerson(
+		[]runstate.State{preservedRun("run-48216ea9", "yoyodyne-ifd.275", stopped)},
+		nil,
+		nothingDecided,
+		lookingFor(context.Background(), nil),
+	)
+	reason := heldReason(t, held, "yoyodyne-ifd.275")
+	for _, want := range []string{"its change is preserved", "as its record says", "nothing having been wired to look"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the hold says %q, want it to name %q", reason, want)
+		}
+	}
+}
+
+// The other half of the 372 repair. Once the development manager had recorded a
+// repair continuation on the stopped run, the item was held by that decision
+// whatever became of the run's artifacts: what the grant continues is the run,
+// in the session it preserved, and a fresh pull meanwhile would start over
+// beside it. So a stopped run about which a decision stands that the harness
+// has still to carry out is held with nothing of it surviving, and the hold
+// names the carry-out as what is outstanding.
+func TestAStoppedRunWithARecordedContinuationIsHeldWithNothingSurviving(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 16, 10, 5, 41, 0, time.UTC)
+	swept := preservedRun("run-192522d8", "yoyodyne-ifd.372", stopped)
+	swept.BranchRemoved = true
+	swept.WorktreeRemoved = true
+	gone := &remainsOf{survives: map[string]gitworktree.Survival{}}
+
+	continued := decisions(map[string]runstate.TriageCounters{"yoyodyne-ifd.372": {
+		RepairGrants: 1, CommittedRounds: 2, ReviewRounds: 0,
+		Decisions: []runstate.TriageDecision{{
+			Decision: runstate.TriageDecisionRepair, RunID: "run-192522d8",
+		}},
+	}})
+	held := heldForAPerson([]runstate.State{swept}, nil, continued, lookingFor(context.Background(), gone))
+	reason := heldReason(t, held, "yoyodyne-ifd.372")
+	for _, want := range []string{"run-192522d8", "not yet carried out", "carrying that decision out"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the hold says %q, want it to name %q", reason, want)
+		}
+	}
+	if !held.Decided("yoyodyne-ifd.372") {
+		t.Errorf("the hold does not name the harness as the next mover: %#v", held)
+	}
+
+	// And the same run with nothing decided about it holds nothing, which is what
+	// separates a continuation from a stoppage whose change is simply gone.
+	released := heldForAPerson([]runstate.State{swept}, nil, nothingDecided, lookingFor(context.Background(), gone))
+	if reason, ok := released.Reason("yoyodyne-ifd.372"); ok {
+		t.Errorf("with nothing decided and nothing surviving the item is held for %q, want nothing holding it", reason)
+	}
 }

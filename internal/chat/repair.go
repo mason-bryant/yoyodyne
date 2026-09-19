@@ -133,12 +133,24 @@ func (s *Session) carryOutRepair(ctx context.Context, outcome *TrackerOutcome) {
 		"\n\nWhat made the old state stale: " + repair.Stale
 	switch repair.Class {
 	case backlogrepair.ClassStatus:
-		if _, err := s.options.Tracker.Unblock(ctx, id, note); err != nil {
+		cleared, err := s.options.Tracker.Unblock(ctx, id, note)
+		if err != nil {
 			outcome.fail(err)
 			s.settleTrackerNote(ctx, outcome, id, note, "the account of why the blocked status was stale")
 			return
 		}
-		outcome.applied("cleared %s's blocked status, which nothing unfinished stood behind; it is open and in the order its priority puts it", id)
+		// What the outcome says about the item is the item as the write left it,
+		// not as the read before the write found it. That read is what put "cleared
+		// ...; it is blocked as the tracker holds it now" on one line twice in a
+		// week — 346 on 2026-09-18, 372 on 2026-09-19 — and a status the tracker
+		// does not read back as open after the write is a write that did not land,
+		// reported as the failure it is rather than as a clear.
+		if status := strings.TrimSpace(cleared.Status); status != openWorkItemStatus {
+			outcome.fail(fmt.Errorf("the tracker holds %s at %q after its blocked status was cleared, so the write did not land", id, status))
+			return
+		}
+		outcome.recordTarget(cleared)
+		outcome.applied("cleared %s's blocked status, which nothing unfinished stood behind; the tracker holds it open, in the order its priority puts it", id)
 	case backlogrepair.ClassDependency:
 		if err := s.options.Tracker.RemoveBlocker(ctx, id, repair.DependsOn); err != nil {
 			outcome.fail(err)

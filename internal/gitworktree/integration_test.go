@@ -1484,3 +1484,66 @@ func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
+
+// Survives is the narrow question the hold derivation asks of every stopped
+// run: is the branch there, is the checkout there. It answers from the
+// repository and the disk rather than from anything recorded, through the whole
+// life of the artifacts — both there, the checkout retired and the branch
+// standing, both gone — and it proves ownership first, so it never answers for
+// a directory or a branch that is not the run's.
+func TestManagerSurvivesReportsWhatIsActuallyThere(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-survives",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	both, err := manager.Survives(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("Survives() fresh error = %v", err)
+	}
+	if !both.BranchExists || !both.WorktreePresent || !both.Any() {
+		t.Fatalf("fresh survival = %#v, want the branch and the checkout both there", both)
+	}
+
+	// The checkout retired and the branch left standing, which is what the
+	// convergence sweep leaves of a stopped run past the tail: the work is still
+	// somebody's to pick up, on the branch.
+	if _, err := manager.RemovePreservedWorktree(context.Background(), worktree, CaptureUncommittedWork); err != nil {
+		t.Fatalf("RemovePreservedWorktree() error = %v", err)
+	}
+	branchOnly, err := manager.Survives(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("Survives() after the checkout went error = %v", err)
+	}
+	if !branchOnly.BranchExists || branchOnly.WorktreePresent || !branchOnly.Any() {
+		t.Fatalf("survival after the checkout went = %#v, want the branch alone", branchOnly)
+	}
+
+	if _, err := manager.RemoveMergedBranch(context.Background(), worktree.Branch, worktree.TargetBranch); err != nil {
+		t.Fatalf("RemoveMergedBranch() error = %v", err)
+	}
+	gone, err := manager.Survives(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("Survives() after the branch went error = %v", err)
+	}
+	if gone.Any() {
+		t.Fatalf("survival after both went = %#v, want nothing", gone)
+	}
+
+	// A record whose identifiers do not derive the path is refused rather than
+	// answered, because an answer about some other run's directory is worse than
+	// none.
+	foreign := worktree
+	foreign.Branch = "yoyodyne/somebody-else/" + testRunID
+	if _, err := manager.Survives(context.Background(), foreign); err == nil {
+		t.Fatal("Survives() answered for a branch the run does not own")
+	}
+}

@@ -1753,6 +1753,42 @@ func (m *Manager) Observe(ctx context.Context, worktree Worktree) (Observation, 
 	return observation, nil
 }
 
+// Survival is which of one run's recorded artifacts are actually there: the
+// branch in the repository, and the checkout on disk. It is the narrow half of
+// an Observation, answered without reading either.
+type Survival struct {
+	BranchExists    bool `json:"branch_exists"`
+	WorktreePresent bool `json:"worktree_present"`
+}
+
+// Any reports the run's change surviving in at least one of the two places.
+func (s Survival) Any() bool { return s.BranchExists || s.WorktreePresent }
+
+// Survives reports whether one run's branch and checkout still exist, looked at
+// rather than read off the run's record. The record's removal flags are what a
+// sweep or a cleanup remembered to write, and a hold decided from them alone
+// released yoyodyne-ifd.372 on 2026-09-19 as no longer preserved; this is the
+// check the hold is decided from instead. Ownership is proven first, as Observe
+// proves it, so this never reports on a directory or a branch that is not the
+// run's — and it stops there: one stat and one ref lookup, because it is asked
+// of every stopped run on every pull.
+func (m *Manager) Survives(ctx context.Context, worktree Worktree) (Survival, error) {
+	path, err := m.ownedPath(worktree)
+	if err != nil {
+		return Survival{}, err
+	}
+	_, statErr := os.Lstat(path)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return Survival{}, fmt.Errorf("inspect worktree path: %w", statErr)
+	}
+	survival := Survival{WorktreePresent: statErr == nil}
+	_, survival.BranchExists, err = m.optionalBranchCommit(ctx, worktree.Branch)
+	if err != nil {
+		return Survival{}, err
+	}
+	return survival, nil
+}
+
 // optionalBranchCommit resolves a branch that may legitimately be gone, which
 // is the ordinary case after cleanup deleted the run's branch.
 func (m *Manager) optionalBranchCommit(ctx context.Context, branch string) (string, bool, error) {
