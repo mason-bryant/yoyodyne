@@ -17,7 +17,10 @@
 # The provider step is opt-in because it spends real capacity: it hands an item
 # to a developer agent. Everything before it is free and deterministic.
 #
-# Requires go, git, bd, and python3.
+# Requires go, git, and python3, and bd -- which, where the machine has none,
+# is fetched from the tracker's one home at the version CI pins, into the
+# scratch root, so a walk on a fresh machine and the walk CI runs install the
+# tracker from the same place.
 #
 # No state an operator owns is written: the scratch project, the worktrees, the
 # binary `go install` produces, and the run state all live under one temporary
@@ -40,6 +43,10 @@ set -euo pipefail
 
 readme_clone_url="https://github.com/mason-bryant/yoyodyne"
 readme_install_module="github.com/mason-bryant/yoyodyne"
+# The one home Beads has, which the README names and every other document here
+# agrees with (TestEveryBeadsHomeThisRepositoryNamesIsTheCanonicalOne holds
+# them to it): where a walk with no bd fetches the tracker from.
+beads_home="https://github.com/gastownhall/beads"
 
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The default root is safe and needs nothing done to it: $TMPDIR is the user's
@@ -110,9 +117,44 @@ missing() {
   case "$1" in (*"$2"*) fail "$3 -- got: $1" ;; (*) pass "$3" ;; esac
 }
 
-for tool in go git bd python3; do
+for tool in go git python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "walk-adoption.sh needs $tool" >&2; exit 2; }
 done
+
+# The tracker is the one prerequisite the README cannot have `go install`
+# fetch, so a machine with none gets it the way the README's home for it says
+# to: a prebuilt release from $beads_home, at the version CI pins -- read from
+# the workflow, which is the one place that version is written -- into the
+# scratch root, which is removed on exit. Nothing an operator owns is touched.
+# A machine that already has bd walks with the one it has, as CI does after its
+# own pinned install.
+if ! command -v bd >/dev/null 2>&1; then
+  bd_version="$(sed -n 's/^ *BD_VERSION: *\([0-9][0-9.]*\) *$/\1/p' "$repository/.github/workflows/ci.yml" | head -1)"
+  if [ -z "$bd_version" ]; then
+    echo "walk-adoption.sh needs bd, and could not read the version CI pins (BD_VERSION in .github/workflows/ci.yml) to fetch one" >&2
+    exit 2
+  fi
+  case "$(uname -s)" in (Darwin) bd_os=darwin ;; (Linux) bd_os=linux ;;
+    (*) echo "walk-adoption.sh needs bd, and there is no prebuilt tracker to fetch for $(uname -s); install it from $beads_home" >&2; exit 2 ;; esac
+  case "$(uname -m)" in (x86_64|amd64) bd_arch=amd64 ;; (arm64|aarch64) bd_arch=arm64 ;;
+    (*) echo "walk-adoption.sh needs bd, and there is no prebuilt tracker to fetch for $(uname -m); install it from $beads_home" >&2; exit 2 ;; esac
+  bd_release="$beads_home/releases/download/v${bd_version}/beads_${bd_version}_${bd_os}_${bd_arch}.tar.gz"
+  printf 'bd is not on PATH; fetching the tracker CI pins, v%s, from %s\n' "$bd_version" "$bd_release"
+  mkdir -p "$scratch/bin" "$scratch/bd-release"
+  if ! curl -fsSL -o "$scratch/bd-release/beads.tar.gz" "$bd_release"; then
+    echo "walk-adoption.sh needs bd, and the pinned tracker v${bd_version} did not download from ${bd_release}; install it from $beads_home, or check BD_VERSION in .github/workflows/ci.yml" >&2
+    exit 2
+  fi
+  tar -xzf "$scratch/bd-release/beads.tar.gz" -C "$scratch/bd-release"
+  bd_binary="$(find "$scratch/bd-release" -maxdepth 2 -name bd -type f | head -1)"
+  if [ -z "$bd_binary" ]; then
+    echo "walk-adoption.sh needs bd, and the archive for the pinned tracker v${bd_version} carries no bd binary where this expects one" >&2
+    exit 2
+  fi
+  install -m 0755 "$bd_binary" "$scratch/bin/bd"
+  export PATH="$scratch/bin:$PATH"
+  printf 'bd fetched into %s: %s\n' "$scratch/bin" "$(bd version 2>&1 | head -1)"
+fi
 
 step "prerequisites: the build requirement the README states"
 go_directive="$(sed -n 's/^go \([0-9.]*\)$/\1/p' "$repository/go.mod")"

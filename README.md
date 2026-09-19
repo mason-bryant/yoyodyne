@@ -310,6 +310,18 @@ bd init
 yoyo init
 ```
 
+No `bd` yet? It has one home, [github.com/gastownhall/beads](https://github.com/gastownhall/beads),
+and its own installer there is the way in — the same command
+[`yoyo doctor`](docs/operations.md#checking-the-installation) prints when it
+finds the tracker missing:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash
+```
+
+The README that `bd init` writes into `.beads/` still links the repository's
+older name; GitHub redirects it, and it is the same project.
+
 `yoyo init` writes a complete `.yoyodyne/config.yaml` and copies the five
 personas into `.yoyodyne/personas/`, naming the product after the directory
 unless you pass `--product`. Nothing already there is overwritten without

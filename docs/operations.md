@@ -48,6 +48,25 @@ then what the project turns on — rather than worst first, because the first
 problem in the list is usually why the ones under it are problems too. `--quiet`
 drops the healthy ones and changes nothing else.
 
+The tracker finding above is the initialized-here half of two. A machine with no
+`bd` on it at all gets the other, and its remedy is the tracker's own installer,
+fetched from [the one home Beads has](https://github.com/gastownhall/beads):
+
+```text
+problem  tracker                bd is not installed, and every role reads and writes the tracker
+                                fix: curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash
+```
+
+That is the same repository the README, the install script, and the adoption
+walkthrough send you to, and it is deliberately not a `go install` line: the
+tracker moved to that home from `steveyegge/beads` and its released modules
+still declare the old path, so `go install` of a path under the new home fails
+on the mismatch, and a bare `go install` of the old one takes a build its own
+documentation calls unsupported — which is what turned every pull request here
+red on 2026-09-05. [The diagnosis](diagnoses/yoyodyne-ifd-125-6-beads-home.md)
+has the evidence. `yoyo setup` hands you the same command, since setup does not
+install tools.
+
 A healthy installation says so in as many words, because an empty list of
 complaints and a check that never ran read the same. It exits 1 when something
 would stop work running and 0 otherwise.

@@ -72,8 +72,9 @@ check: fmtcheck test race vet
 #
 # It stays out of `check` all the same. `check` is what a run applies to a
 # developer's worktree before review, and this needs a tool that worktree is not
-# given and a scratch clone it has no reason to cut; the merge gate belongs in
-# CI, where the tracker can be installed once.
+# given -- the walk fetches bd from the tracker's home where a machine has none,
+# which needs the network -- and a scratch clone it has no reason to cut; the
+# merge gate belongs in CI, where the tracker can be installed once.
 #
 #   make adoption                    every step that needs no provider
 #   WALK_PROVIDER=1 make adoption    also hand an item to a developer agent
