@@ -184,6 +184,18 @@ func TestThroughputSaysWhichSourceCouldNotBeRead(t *testing.T) {
 	if !strings.Contains(unwired.RunsProblem, "nothing was wired") || !strings.Contains(unwired.SpendProblem, "nothing was wired") {
 		t.Fatalf("an unwired reading reads as %+v", unwired)
 	}
+
+	// A source the caller could not open is named by the reason it gave, which
+	// is what the page's error state has to say: what failed, not that a wire
+	// was missing.
+	unopened := ReadThroughput(context.Background(), ThroughputSources{
+		RunsProblem:   "state root must be an absolute path",
+		LedgerProblem: "open streams: permission denied",
+		Now:           func() time.Time { return noon },
+	})
+	if unopened.RunsProblem != "the recorded runs could not be opened: state root must be an absolute path" || unopened.SpendProblem != "the spend could not be opened: open streams: permission denied" {
+		t.Fatalf("an unopened reading reads as %+v", unopened)
+	}
 	if len(unwired.Windows) != 2 || unwired.Windows[0].Kinds == nil {
 		t.Fatalf("an unwired reading still carries its windows, with empty rather than absent kinds: %+v", unwired.Windows)
 	}

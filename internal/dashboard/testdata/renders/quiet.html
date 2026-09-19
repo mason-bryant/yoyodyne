@@ -19,31 +19,6 @@
       </p>
     </header>
     <main id="page" data-state="ready">
-      <section class="state state-signin" aria-labelledby="signin-heading">
-        <h2 id="signin-heading">This dashboard needs its token</h2>
-        <p>
-          The token was printed once, in the terminal where
-          <code>yoyo dashboard</code>
-          was started. Paste it here; it is kept in this tab's session storage, scoped to this address and port, and is never put in a URL or a cookie.
-        </p>
-        <p id="signin-note" role="alert" class="note"></p>
-        <form id="signin">
-          <label for="token">Token</label>
-          <input id="token" name="token" type="password" autocomplete="off" required>
-          <button type="submit">Open the dashboard</button>
-        </form>
-      </section>
-      <section class="state state-loading" aria-live="polite">
-        <p class="waiting">
-          <span class="pulse" aria-hidden="true"></span>
-          Reading where the harness stands…
-        </p>
-      </section>
-      <section class="state state-error" role="alert">
-        <h2>The read model could not be read</h2>
-        <p id="problem" class="problem"></p>
-        <p id="remedy" class="remedy"></p>
-      </section>
       <div class="state state-ready">
         <p id="stale" class="stale" role="status" hidden></p>
         <p id="banner" class="banner" role="status" hidden></p>
@@ -56,22 +31,8 @@
               prints, and what landed
             </p>
           </div>
-          <div class="section-loading">
-            <p class="waiting">
-              <span class="pulse" aria-hidden="true"></span>
-              Reading…
-            </p>
-          </div>
-          <div class="section-error" role="alert">
-            <p id="band-problem" class="problem"></p>
-            <p id="band-remedy" class="remedy"></p>
-          </div>
           <div class="section-empty">
             <p id="band-empty" class="empty">The harness is idle: nothing is running, no conversation has a turn in flight, nothing is admitted, and nothing waits on a person.</p>
-          </div>
-          <div class="section-ready">
-            <dl id="tiles" class="tiles"></dl>
-            <ul id="band-problems" class="degraded"></ul>
           </div>
         </section>
         <section id="live" class="panel live" data-state="empty" aria-labelledby="live-heading">
@@ -79,23 +40,8 @@
             <h2 id="live-heading">Running now</h2>
             <p class="panel-note">each developer run and each conversation with a turn in flight</p>
           </div>
-          <div class="section-loading">
-            <p class="waiting">
-              <span class="pulse" aria-hidden="true"></span>
-              Reading…
-            </p>
-          </div>
-          <div class="section-error" role="alert">
-            <p id="live-problem" class="problem"></p>
-            <p id="live-remedy" class="remedy"></p>
-          </div>
           <div class="section-empty">
             <p id="live-empty" class="empty">Nothing is running, and no conversation has a turn in flight.</p>
-          </div>
-          <div class="section-ready">
-            <ul id="live-problems" class="degraded"></ul>
-            <ul id="cards" class="cards"></ul>
-            <p id="live-note" class="footnote" hidden></p>
           </div>
         </section>
         <section id="pipeline" class="panel pipeline" data-state="empty" aria-labelledby="pipeline-heading">
@@ -103,23 +49,8 @@
             <h2 id="pipeline-heading">Where the work stands</h2>
             <p class="panel-note">admitted work, what holds it, what is running, and what landed</p>
           </div>
-          <div class="section-loading">
-            <p class="waiting">
-              <span class="pulse" aria-hidden="true"></span>
-              Reading…
-            </p>
-          </div>
-          <div class="section-error" role="alert">
-            <p id="pipeline-problem" class="problem"></p>
-            <p id="pipeline-remedy" class="remedy"></p>
-          </div>
           <div class="section-empty">
             <p id="pipeline-empty" class="empty">The backlog is empty: nothing is admitted, and nothing is running.</p>
-          </div>
-          <div class="section-ready">
-            <ol id="stages" class="stages"></ol>
-            <ul id="pipeline-problems" class="degraded"></ul>
-            <p id="pipeline-note" class="footnote"></p>
           </div>
         </section>
         <section id="throughput" class="panel throughput" data-state="empty" aria-labelledby="throughput-heading">
@@ -131,23 +62,8 @@
               prints
             </p>
           </div>
-          <div class="section-loading">
-            <p class="waiting">
-              <span class="pulse" aria-hidden="true"></span>
-              Pricing the last seven days…
-            </p>
-          </div>
-          <div class="section-error" role="alert">
-            <p id="throughput-problem" class="problem"></p>
-            <p id="throughput-remedy" class="remedy"></p>
-          </div>
           <div class="section-empty">
             <p id="throughput-empty" class="empty">Nothing ran and nothing was spent in the last 7 days, from 2026-09-13.</p>
-          </div>
-          <div class="section-ready">
-            <p id="throughput-stale" class="stale" role="status" hidden></p>
-            <ul id="throughput-problems" class="degraded"></ul>
-            <div id="windows" class="windows"></div>
           </div>
         </section>
         <section id="capacity" class="panel capacity" data-state="empty" aria-labelledby="capacity-heading">
@@ -155,24 +71,8 @@
             <h2 id="capacity-heading">Provider capacity</h2>
             <p class="panel-note">what is parked or held on the provider's usage windows, and what to do about it</p>
           </div>
-          <div class="section-loading">
-            <p class="waiting">
-              <span class="pulse" aria-hidden="true"></span>
-              Reading…
-            </p>
-          </div>
-          <div class="section-error" role="alert">
-            <p id="capacity-problem" class="problem"></p>
-            <p id="capacity-remedy" class="remedy"></p>
-          </div>
           <div class="section-empty">
             <p id="capacity-empty" class="empty">No run or conversation is waiting on provider capacity, and no usage window is holding every role.</p>
-          </div>
-          <div class="section-ready">
-            <p id="capacity-hold" class="hold" hidden></p>
-            <ul id="capacity-problems" class="degraded"></ul>
-            <ul id="capacity-runs" class="held-list"></ul>
-            <ul id="capacity-conversations" class="held-list"></ul>
           </div>
         </section>
       </div>

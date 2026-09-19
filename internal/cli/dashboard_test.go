@@ -3,11 +3,43 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 )
+
+// A store the throughput reader cannot open costs the reading its half and
+// not the other, and the reason reaches the JSON the page reads: the error
+// state says what failed rather than that a source was absent.
+func TestDashboardThroughputNamesAStoreItCouldNotOpen(t *testing.T) {
+	t.Parallel()
+	// Both stores refuse a relative root, so both halves carry the refusal; a
+	// root only one of them refuses would cost only that half.
+	sources := throughputSources("relative/state", "yoyodyne")
+	if sources.Runs != nil || sources.Ledger != nil || sources.RunsProblem == "" || sources.LedgerProblem == "" {
+		t.Fatalf("sources over an unopenable root: %+v", sources)
+	}
+	reading := readmodel.ReadThroughput(context.Background(), sources)
+	encoded, err := json.Marshal(reading)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`"runs_problem":"the recorded runs could not be opened: state root must be an absolute path"`,
+		`"spend_problem":"the spend could not be opened: state root must be an absolute path"`,
+	} {
+		if !strings.Contains(string(encoded), expected) {
+			t.Fatalf("the JSON lacks %s: %s", expected, encoded)
+		}
+	}
+	if !strings.Contains(string(encoded), `"label":"today"`) {
+		t.Fatalf("the windows are missing from a reading with unopenable sources: %s", encoded)
+	}
+}
 
 // The verb refuses at the terminal, before it binds anything, when the state it
 // would serve cannot be read: a dashboard over an unreadable state root is a

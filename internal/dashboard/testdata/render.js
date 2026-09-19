@@ -20,7 +20,9 @@
 // checks is that the right words land in the right places.
 //
 // Usage: node render.js --out <directory>
-// Writes <directory>/<scenario>.html for every scenario below, and a
+// Writes <directory>/<scenario>.html for every scenario below — the document
+// as the page's script left it, with the one page state and the one state per
+// panel the stylesheet would show and the hidden ones dropped — and a
 // <directory>/matrix.json saying which state each section reached in each.
 
 "use strict";
@@ -356,6 +358,28 @@ async function run(scenario) {
       }
     }
   });
+
+  // What is written is what a viewer sees: the page's states and each panel's
+  // states are all in the document, and the stylesheet shows exactly one of
+  // each, so the render keeps the one that is shown and drops the rest. A
+  // render that carried every hidden state would say the same thing at three
+  // times the length, and be read by nobody.
+  const classes = (element) => element.className.split(/\s+/).filter(Boolean);
+  const prune = (parent, shown, prefix) => {
+    parent.childNodes.slice().forEach((child) => {
+      if (!(child instanceof Element)) {
+        return;
+      }
+      const states = classes(child).filter((name) => name.startsWith(prefix));
+      if (states.length > 0 && !states.includes(prefix + shown)) {
+        parent.removeChild(child);
+      }
+    });
+  };
+  sections.forEach((id) => {
+    prune(document.getElementById(id), matrix.sections[id], "section-");
+  });
+  prune(page, matrix.page, "state-");
 
   const html = document.root.childNodes
     .map((child) => (child instanceof Text ? child.data.trim() : child.serialize("")))

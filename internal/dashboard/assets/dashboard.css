@@ -262,12 +262,6 @@ input:focus-visible {
   color: var(--ink);
 }
 
-.banner::before {
-  content: "Paused — ";
-  font-weight: 700;
-  color: var(--held);
-}
-
 [hidden] {
   display: none !important;
 }

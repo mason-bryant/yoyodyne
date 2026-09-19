@@ -164,6 +164,13 @@
     return pad(when.getHours()) + ":" + pad(when.getMinutes()) + ":" + pad(when.getSeconds());
   }
 
+  // named says whether a moment was actually named: the field is absent where
+  // the model has none, and a zero time — Go's "0001-01-01" — is the other way a
+  // record says there was none.
+  function named(iso) {
+    return Boolean(iso) && iso.indexOf("0001-") !== 0;
+  }
+
   function dayAndClock(iso) {
     if (!iso) {
       return "—";
@@ -528,7 +535,7 @@
 
     listProblems("pipeline-problems", [standing.not_startable_problem, standing.running_problem, throughput ? throughput.runs_problem : ""]);
     var note = document.getElementById("pipeline-note");
-    var attention = standing.needs_human_problem ? "what waits on a person could not be read: " + standing.needs_human_problem : count(standing.needs_human.length, "thing") + " waiting on a person";
+    var attention = standing.needs_human_problem ? "what waits on a person could not be read: " + standing.needs_human_problem : (standing.needs_human.length === 0 ? "nothing" : count(standing.needs_human.length, "thing")) + " waiting on a person";
     note.textContent = "Needs a human: " + attention + ".";
     section("pipeline", "ready");
   }
@@ -700,7 +707,7 @@
 
     var holdLine = document.getElementById("capacity-hold");
     if (hold) {
-      var until = hold.resets_at && hold.resets_at.indexOf("0001-") !== 0 ? "until " + dayAndClock(hold.resets_at) : "and the provider named no reset";
+      var until = named(hold.resets_at) ? "until " + dayAndClock(hold.resets_at) : "and the provider named no reset";
       holdLine.textContent = "Every role is held: " + count(hold.agents ? hold.agents.length : 0, "agent") + " on " + (hold.models || []).join(", ") +
         (hold.alternates && hold.alternates.length ? ", failing over to " + hold.alternates.join(", ") : ", and none names an alternate") +
         "; " + count(hold.refusals || 0, "turn") + " refused since " + dayAndClock(hold.since) + ", " + until + ".";
@@ -718,7 +725,7 @@
         ["Refused by", run.refused_by],
         ["Phase", run.phase],
         ["Since", dayAndClock(run.since)],
-        ["Resets", run.resets_at ? dayAndClock(run.resets_at) : (run.state === "waiting" ? "no reset named; it asks again at the probe interval" : "no reset named, and nothing probes: the run stopped")],
+        ["Resets", named(run.resets_at) ? dayAndClock(run.resets_at) : (run.state === "waiting" ? "no reset named; it asks again at the probe interval" : "no reset named, and nothing probes: the run stopped")],
         ["Waited", age((run.waited_seconds || 0) * 1e9) + " of the pause budget"],
         ["Change", run.preserved ? "preserved" : "not preserved"],
         ["Run", run.run_id]
@@ -731,7 +738,7 @@
         ["Refused by", turn.refused_by],
         ["Model", turn.model],
         ["Since", dayAndClock(turn.since)],
-        ["Resets", turn.resets_at ? dayAndClock(turn.resets_at) : "no reset named; the next turn finds out"],
+        ["Resets", named(turn.resets_at) ? dayAndClock(turn.resets_at) : "no reset named; the next turn finds out"],
         ["Refusals", count(turn.refusals || 0, "turn") + " stopped and still refused"],
         ["Conversation", turn.conversation_id]
       ], turn.remedy));

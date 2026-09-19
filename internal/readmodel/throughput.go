@@ -49,11 +49,17 @@ type Ledger interface {
 // gets a fixture that holds it.
 type ThroughputSources struct {
 	// Runs is the durable run state, read for what each recorded run became and
-	// when. A reading without one says so rather than reporting nothing landed.
-	Runs Runs
-	// Ledger is the spend. A reading without one says so rather than reporting
-	// nothing spent.
-	Ledger Ledger
+	// when. A reading without one says so rather than reporting nothing landed,
+	// and says RunsProblem where the caller carries the reason it could not open
+	// the store: "permission denied" is what somebody acts on, and "nothing was
+	// wired" is not it.
+	Runs        Runs
+	RunsProblem string
+	// Ledger is the spend, and LedgerProblem the reason it could not be opened
+	// where the caller has one. A reading without one says so rather than
+	// reporting nothing spent.
+	Ledger        Ledger
+	LedgerProblem string
 	// Now stamps the reading and anchors the windows. It defaults to the wall
 	// clock and is injected so a test can pin a day.
 	Now func() time.Time
@@ -160,7 +166,7 @@ func ReadThroughput(ctx context.Context, sources ThroughputSources) Throughput {
 	var recorded []runstate.State
 	switch {
 	case sources.Runs == nil:
-		reading.RunsProblem = "nothing was wired to read the recorded runs"
+		reading.RunsProblem = absent("the recorded runs", sources.RunsProblem)
 	default:
 		states, err := sources.Runs.Recorded()
 		if err != nil {
@@ -179,7 +185,7 @@ func ReadThroughput(ctx context.Context, sources ThroughputSources) Throughput {
 	case ctx.Err() != nil:
 		reading.SpendProblem = fmt.Sprintf("the spend was not read: %v", ctx.Err())
 	case sources.Ledger == nil:
-		reading.SpendProblem = "nothing was wired to read the spend"
+		reading.SpendProblem = absent("the spend", sources.LedgerProblem)
 	default:
 		widest := 0
 		for _, window := range windows {
@@ -203,6 +209,16 @@ func ReadThroughput(ctx context.Context, sources ThroughputSources) Throughput {
 		}
 	}
 	return reading
+}
+
+// absent is what a reading says about a source it was not given: the reason
+// the caller could not open it where the caller carried one, and that nothing
+// was wired otherwise. The two are different things to do about.
+func absent(what, problem string) string {
+	if problem != "" {
+		return what + " could not be opened: " + problem
+	}
+	return "nothing was wired to read " + what
 }
 
 // countEndings counts the recorded runs into one window: by start for the

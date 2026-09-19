@@ -25,6 +25,7 @@ import (
 	"os"
 
 	"github.com/mason-bryant/yoyodyne/internal/dashboard"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -142,7 +143,6 @@ func (r dashboardReader) Throughput(ctx context.Context) (readmodel.Throughput, 
 	if err := r.ready(); err != nil {
 		return readmodel.Throughput{}, err
 	}
-	sources := readmodel.ThroughputSources{}
 	resolved, err := loadConfiguration(r.configPath)
 	if err != nil {
 		return readmodel.Throughput{}, err
@@ -151,16 +151,27 @@ func (r dashboardReader) Throughput(ctx context.Context) (readmodel.Throughput, 
 	if err != nil {
 		return readmodel.Throughput{}, err
 	}
-	// Either store failing to open is said inside the reading, as the standing
-	// sources say a store they could not open: the other half of the answer is
-	// still worth having, and the reading names what is missing from it.
-	if store, err := runstate.NewStore(stateRoot, resolved.Config.Product.ID); err == nil {
+	return readmodel.ReadThroughput(ctx, throughputSources(stateRoot, resolved.Config.Product.ID)), nil
+}
+
+// throughputSources opens the two stores the throughput is read from. Either
+// failing to open costs its half of the reading and not the other, and the
+// reason travels with the gap: the reading says "could not be opened: <why>"
+// under runs_problem or spend_problem, which is what the page's error state
+// shows, rather than that nothing was wired.
+func throughputSources(stateRoot string, productID domain.ProductID) readmodel.ThroughputSources {
+	sources := readmodel.ThroughputSources{}
+	if store, err := runstate.NewStore(stateRoot, productID); err != nil {
+		sources.RunsProblem = err.Error()
+	} else {
 		sources.Runs = store
 	}
-	if store, err := runstate.NewStreamStore(stateRoot, resolved.Config.Product.ID); err == nil {
+	if store, err := runstate.NewStreamStore(stateRoot, productID); err != nil {
+		sources.LedgerProblem = err.Error()
+	} else {
 		sources.Ledger = store
 	}
-	return readmodel.ReadThroughput(ctx, sources), nil
+	return sources
 }
 
 func printDashboardUsage(writer io.Writer) {

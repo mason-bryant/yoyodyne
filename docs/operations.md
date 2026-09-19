@@ -1716,7 +1716,9 @@ between them should not have to translate.
 
 **Seeing every state without a harness behind it.** `internal/dashboard/testdata/renders`
 holds the page as its own script renders it from the fixtures under
-`internal/dashboard/testdata/fixtures`, one file per scenario — `quiet`, `busy`,
+`internal/dashboard/testdata/fixtures` — the document as the script left it,
+keeping the one page state and the one state per section a browser would show
+and dropping the hidden ones — one file per scenario — `quiet`, `busy`,
 `held`, `degraded`, `unreadable`, `loading`, `throughput-pending`,
 `throughput-refused`, `throughput-stale`, `refused`, `unreachable`,
 `wrong-token`, `stale`, and `signin` — which together show every section in
