@@ -282,6 +282,75 @@ func TestAFindingForTheOperatorIsSaidToHimOnceDirectly(t *testing.T) {
 	harness.poll(t, cursors)
 }
 
+// A run stopping on a condition only a person can clear is recorded as the
+// development manager's escalation of that stoppage, and it is said to the
+// operator once, directly and tagged, the pass after the decision is recorded.
+// A later decision on the same run ends it; the mark goes with it.
+func TestAnEscalatedStoppageIsSaidToTheOperatorOnce(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	stopped := harness.run(t, runstate.StatusFailed)
+	stopped.Phase = runstate.PhaseIntegrating
+	stopped.Blocker = "Yoyodyne stopped this item: main on origin does not contain the local main, and only a person can say which history is right."
+	harness.record(t, stopped)
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksPassed, notify.KindBlockerRecorded)
+
+	decision := runstate.TriageDecision{
+		Decision:     runstate.TriageDecisionEscalate,
+		RunID:        stopped.RunID,
+		Reason:       "the target branch diverged from the forge; only the operator can say which history is right",
+		DecidedBy:    "development-manager",
+		Conversation: "chat-0123456789abcdef0123456789abcdef",
+		Turn:         7,
+		DecidedAt:    moment.Add(time.Hour),
+	}
+	if _, err := harness.runs.Triage().RecordDecision(context.Background(), stopped.WorkItemID, decision, decision.DecidedAt); err != nil {
+		t.Fatalf("RecordDecision() error = %v", err)
+	}
+	batch, err := harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	var findings []Delivery
+	for _, delivery := range batch.Deliveries {
+		if delivery.Stream == operatorActionStream && delivery.Posts() {
+			findings = append(findings, delivery)
+		}
+	}
+	if len(findings) != 1 || !findings[0].Direct || !findings[0].Tag {
+		t.Fatalf("findings = %#v, want the escalation said once, directly and tagged", findings)
+	}
+	message, err := notify.Render(findings[0].Notification.Topic, findings[0].Notification.Speaker, findings[0].Notification.Event)
+	if err != nil {
+		t.Fatalf("render the finding: %v", err)
+	}
+	for _, want := range []string{
+		"the target branch diverged from the forge; only the operator can say which history is right",
+		"the development manager, escalating the stopped run to the operator",
+		"escalation of run " + stopped.RunID,
+		"a later triage decision on the run, or the item being run again or retired, ends it",
+	} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("finding reads as %q, which does not say %q", message.Body, want)
+		}
+	}
+	cursors = harness.poll(t, cursors, notify.KindOperatorAction)
+	cursors = harness.poll(t, cursors)
+
+	// The development manager decides the run again: the escalation is
+	// superseded, the finding ends, and its mark is forgotten.
+	later := decision
+	later.Decision, later.DecidedAt = runstate.TriageDecisionWait, moment.Add(2*time.Hour)
+	if _, err := harness.runs.Triage().RecordDecision(context.Background(), stopped.WorkItemID, later, later.DecidedAt); err != nil {
+		t.Fatalf("RecordDecision() error = %v", err)
+	}
+	cursors = harness.poll(t, cursors)
+	if len(cursors.Streams[operatorActionStream].Delivered) != 0 {
+		t.Fatalf("cursor = %#v, want an ended escalation forgotten", cursors.Streams[operatorActionStream])
+	}
+}
+
 // A finding from before the watermark is history, exactly as the record it came
 // from is: it is marked and not said. Its moment is the record that made it, so
 // a handling made today of a report filed before the channel existed is news
@@ -1032,6 +1101,7 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 		Runs:          runs,
 		Conversations: chats,
 		Reports:       reports,
+		Decisions:     runs.Triage(),
 		Proposals:     amend,
 		Intake:        intake,
 		Holds:         holds,

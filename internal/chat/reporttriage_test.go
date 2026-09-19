@@ -299,6 +299,7 @@ func TestHandlingAReportAsNeedingTheOperatorIsRecordedAsAFinding(t *testing.T) {
 				`{"action":"handle","report":"report-00000000000000000000000000000002","needs":"operator","reason":"add the PreToolUse hook to .claude/settings.json; the harness may not write that file"}`),
 		},
 		{SessionID: "session-1", FinalText: "Recorded."},
+		{SessionID: "session-1", FinalText: "Nothing more."},
 	}}
 	options := testOptions(t, provider)
 	options.Reports = reports
@@ -321,6 +322,25 @@ func TestHandlingAReportAsNeedingTheOperatorIsRecordedAsAFinding(t *testing.T) {
 	if len(reports.handled) != 1 || !reports.handled[0].NeedsOperator ||
 		reports.handled[0].Reason != "add the PreToolUse hook to .claude/settings.json; the harness may not write that file" {
 		t.Fatalf("handlings = %#v, want one recorded as needing the operator", reports.handled)
+	}
+
+	// A handled report is not offered again, so the next turn lists the finding
+	// still standing with its identifier: that is what lets the role record the
+	// change made without being handed the id by a person.
+	if _, err := session.Send(context.Background(), "anything else?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	next := provider.requests[len(provider.requests)-1].Prompt
+	if strings.Contains(next, "Reports nobody has decided about") {
+		t.Fatalf("a handled report was offered again as unhandled:\n%s", next)
+	}
+	for _, want := range []string{
+		"Reports you handled as needing the operator's hand",
+		"report-00000000000000000000000000000002 on yoyodyne-ifd.19: add the PreToolUse hook to .claude/settings.json; the harness may not write that file",
+	} {
+		if !strings.Contains(next, want) {
+			t.Fatalf("the standing finding was not listed with its identifier; want %q in:\n%s", want, next)
+		}
 	}
 }
 

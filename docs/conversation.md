@@ -1272,7 +1272,10 @@ rather than another re-arm. **An escalation is a durable blocker on the item and
 waiting on a person, and the report reaches [the pile you
 read](reporting.md#what-agents-report-and-where-it-reaches-you). Prose alone is not an escalation, and the
 harness refuses one carrying no such report rather than blocking an item you
-were never told about. `rescope` and `wait` are the two that are a note and
+were never told about. The decision itself is
+[a finding that needs your hand](operations.md#where-a-finding-that-needs-your-hand-goes):
+it is said to you directly once, and named under `Needs a human` on
+`yoyo status` while it stands as the decision on the item's latest stopped run. `rescope` and `wait` are the two that are a note and
 nothing else — a re-scope's real work is the child item it creates beside the
 note, and a wait asks for nothing at all.
 

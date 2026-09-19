@@ -946,9 +946,14 @@ type Detail struct {
 	// read by KindOperatorAction. They are two fields because they are the two
 	// halves of the message the operator asked for: what is needed, and where to
 	// go and read it. FoundBy is who found it and how, read by the same kind.
+	// Ends is what ends the finding — a handling of the report, a later
+	// decision on the run — worded by the read model, and read by the same kind.
+	// Mover is read by it too, for whose move follows, so the terminal's
+	// attention line and this message close on one wording.
 	Needs      string `json:"needs,omitempty"`
 	RecordedIn string `json:"recorded_in,omitempty"`
 	FoundBy    string `json:"found_by,omitempty"`
+	Ends       string `json:"ends,omitempty"`
 	// Stops is the runs the brake counted on its way to tripping, already worded
 	// by the record, read by KindIntakeHeld. It is empty on the operator's own
 	// hold, which counts nothing, and the line leaves the clause out.

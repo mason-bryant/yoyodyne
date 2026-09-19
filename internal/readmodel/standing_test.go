@@ -240,6 +240,85 @@ func TestAPileBeingWorkedThroughWaitsOnNobody(t *testing.T) {
 	}
 }
 
+// A run stopping on a condition only a person can clear is recorded as the
+// development manager's escalation of that stoppage, and it is a finding for the
+// operator for as long as the escalation is the decision standing on the item's
+// latest stopped run and the item is still admitted. A later decision on the
+// run, a later run, and the item leaving the backlog each end it.
+func TestAnEscalatedStoppageIsAFindingForTheOperatorWhileItStands(t *testing.T) {
+	t.Parallel()
+
+	stopped := moment.Add(-24 * time.Hour)
+	decided := moment.Add(-20 * time.Hour)
+	sources := quietSources()
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"blocked": {
+			{ID: "yoyodyne-ifd.272", Title: "Escalated to a person", Status: "blocked"},
+			{ID: "yoyodyne-ifd.187", Title: "Decided again since", Status: "blocked"},
+			{ID: "yoyodyne-ifd.190", Title: "Run again since", Status: "blocked"},
+		}},
+	}}
+	sources.Stoppages = fakeStoppages{runs: []runstate.State{
+		heldRun("run-272a", "yoyodyne-ifd.272", stopped),
+		heldRun("run-187a", "yoyodyne-ifd.187", stopped),
+		heldRun("run-190a", "yoyodyne-ifd.190", stopped),
+		heldRun("run-190b", "yoyodyne-ifd.190", stopped.Add(time.Hour)),
+		// An item that has left the backlog: escalated, then retired.
+		heldRun("run-300a", "yoyodyne-ifd.300", stopped),
+	}}
+	escalate := func(run string) runstate.TriageDecision {
+		return runstate.TriageDecision{
+			Decision: runstate.TriageDecisionEscalate, RunID: run,
+			Reason:       "the target branch diverged from the forge and only a person can say which history is right",
+			DecidedBy:    "development-manager",
+			Conversation: "chat-dm", Turn: 12, DecidedAt: decided,
+		}
+	}
+	sources.Decisions = recordedDecisions{
+		"yoyodyne-ifd.272": {Decisions: []runstate.TriageDecision{escalate("run-272a")}},
+		// Escalated and then decided again: the later decision supersedes it.
+		"yoyodyne-ifd.187": {Decisions: []runstate.TriageDecision{escalate("run-187a"), {Decision: runstate.TriageDecisionRerun, RunID: "run-187a"}}},
+		// Escalated on an earlier run than the item's latest.
+		"yoyodyne-ifd.190": {Decisions: []runstate.TriageDecision{escalate("run-190a")}},
+		"yoyodyne-ifd.300": {Decisions: []runstate.TriageDecision{escalate("run-300a")}},
+	}
+
+	standing := ReadStanding(context.Background(), sources)
+	var named []Attention
+	for _, waiting := range standing.NeedsHuman {
+		if waiting.Named {
+			named = append(named, waiting)
+		}
+	}
+	if len(named) != 1 {
+		t.Fatalf("NeedsHuman = %#v, want the one standing escalation named", standing.NeedsHuman)
+	}
+	finding := named[0]
+	for _, want := range []string{
+		"yoyodyne-ifd.272 needs your hand: the target branch diverged from the forge",
+		"found by the development manager, escalating the stopped run to the operator",
+		"recorded in the development manager's escalation of run run-272a, recorded in chat-dm at turn 12, and the blocker on yoyodyne-ifd.272",
+	} {
+		if !strings.Contains(finding.What, want) {
+			t.Fatalf("finding = %q, want it to say %q", finding.What, want)
+		}
+	}
+	if !strings.HasPrefix(finding.Whose, "the operator's") || !strings.Contains(finding.Whose, "a later triage decision on the run") {
+		t.Fatalf("finding is %q, want the operator's move and what ends it", finding.Whose)
+	}
+	if standing.NeedsHumanProblem != "" {
+		t.Fatalf("NeedsHumanProblem = %q, want a fully read line", standing.NeedsHumanProblem)
+	}
+
+	// The same derivation without a queue to read admits every item, which is
+	// the feed's reading: an item that left the backlog is still said once
+	// rather than never.
+	escalated, problem := EscalatedOperatorActions(sources.Stoppages.(fakeStoppages).runs, sources.Decisions, nil)
+	if problem != "" || len(escalated) != 2 || escalated[0].Key != "run:run-272a" || escalated[1].Key != "run:run-300a" {
+		t.Fatalf("EscalatedOperatorActions() = %#v, %q, want the two standing escalations oldest first", escalated, problem)
+	}
+}
+
 // A finding only the operator can act on is named on the attention line, by
 // name, ahead of the undecided proposals, and is never folded into "and N
 // things not named here". Two records make one: a critical report nobody has

@@ -487,9 +487,24 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// apart could disagree about whether a report is handled.
 	reports, handlings, pileProblem := readPile(sources)
 	standing.Reports, standing.ReportsProblem = summarizePile(reports, handlings, pileProblem, now)
-	actions := readOperatorActions(reports, handlings, pileProblem)
+	// An escalated stoppage is a finding while its item is still admitted: an
+	// item the operator retired, or closed after doing what was asked, is read
+	// from the same queue the not-startable line was read from.
+	// A queue that could not be read admits nothing this reading can see, and
+	// that must not read as every escalation having ended: the findings are read
+	// as standing instead, which says one once rather than never.
+	var admitted func(string) bool
+	if notStartableProblem == "" || len(queue.Entries) > 0 {
+		inQueue := make(map[string]bool, len(queue.Entries))
+		for _, entry := range queue.Entries {
+			inQueue[entry.ID] = true
+		}
+		admitted = func(id string) bool { return inQueue[id] }
+	}
+	actions, actionsProblem := readOperatorActions(reports, handlings, pileProblem, sources, admitted)
 
 	needs, needsProblem := readNeedsHuman(sources, switches, actions)
+	needsProblem = joinProblems(needsProblem, actionsProblem)
 	// The provider answering nobody is on the attention line whatever the queue
 	// holds, because what ends it is a person: it is added here where the stall
 	// did not already carry it, which is a stall over an empty queue.

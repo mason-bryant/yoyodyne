@@ -305,6 +305,61 @@ func (s *Session) renderUnhandledReports() string {
 // for the same part of its turn.
 const reportSectionHeading = "# Reports nobody has decided about\n"
 
+// maxRenderedFindings bounds how many standing operator findings one turn
+// lists. They are few by construction — each is a change a person has to make —
+// and a listing that ran past this would be a pile of its own.
+const maxRenderedFindings = 20
+
+// renderOperatorFindings carries into the turn the reports this role handled as
+// needing the operator's hand and that still stand, with their identifiers.
+//
+// It exists because a handling takes a report out of the unhandled pile, so a
+// report handled as the operator's is never offered to this conversation again —
+// and ending the finding means handling the same report once more, by an
+// identifier the role would otherwise have to be given by a person. Listing
+// them is what lets the role record the change made without the operator
+// pasting an id out of a message. Nothing here is the operator's checklist:
+// what needs him is named on `yoyo status` and said to him directly, and this
+// is the role's view of what it has already handed over.
+func (s *Session) renderOperatorFindings() string {
+	if s.options.Reports == nil || !s.authority().MayAct(actionHandle) {
+		return ""
+	}
+	reports, err := s.options.Reports.List()
+	if err != nil {
+		return ""
+	}
+	handlings, err := s.options.Reports.Handlings()
+	if err != nil {
+		return ""
+	}
+	handled := report.Handled(handlings)
+	var standing []report.Report
+	for _, reported := range report.ByFiling(reports) {
+		if handling, done := handled[reported.ID]; done && handling.NeedsOperator {
+			standing = append(standing, reported)
+		}
+	}
+	if len(standing) == 0 {
+		return ""
+	}
+	var rendered strings.Builder
+	rendered.WriteString("# Reports you handled as needing the operator's hand\n")
+	rendered.WriteString("Each of these stands as a finding for the operator — named on `yoyo status` and said to him directly once — until you handle the same report again without \"needs\", which is what records the change made. They are listed here because a handled report is not offered to you again, and ending one means naming it. Do not handle one again until the operator has made the change; ask him where you do not know.\n\n")
+	listed := standing
+	if len(listed) > maxRenderedFindings {
+		listed = listed[:maxRenderedFindings]
+	}
+	for _, reported := range listed {
+		fmt.Fprintf(&rendered, "- %s%s: %s\n", reported.ID, reportedOn(reported), strings.Join(strings.Fields(handled[reported.ID].Reason), " "))
+	}
+	if len(standing) > len(listed) {
+		fmt.Fprintf(&rendered, "\n%d further finding(s) stand and are not listed here; `yoyo status` names every one of them.\n", len(standing)-len(listed))
+	}
+	rendered.WriteString("\n")
+	return rendered.String()
+}
+
 // markReportDelivered records that a report has been carried into a turn, in
 // this process and on the conversation. The durable list is bounded and keeps
 // the most recent ids: dropping the oldest costs one redelivery of a report that

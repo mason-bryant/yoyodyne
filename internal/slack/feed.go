@@ -223,9 +223,16 @@ type HarnessFeed struct {
 	// prevent, and every sink the harness builds is given one.
 	Conversations *runstate.ConversationStore
 	Reports       *runstate.ReportStore
-	Proposals     *runstate.AmendmentStore
-	Intake        *runstate.IntakeHoldStore
-	Holds         *runstate.OperatorHoldStore
+	// Decisions is what triage has decided about each item's stoppages, read for
+	// one thing: a stopped run the development manager escalated to the operator,
+	// which is a finding that needs his hand. It is optional, and a feed
+	// assembled without one names no escalated stoppage — which is silence
+	// exactly where a person was handed something, so every sink the harness
+	// builds is given one. It is satisfied by *runstate.TriageStore.
+	Decisions readmodel.Decisions
+	Proposals *runstate.AmendmentStore
+	Intake    *runstate.IntakeHoldStore
+	Holds     *runstate.OperatorHoldStore
 	// Watch is where a watch session says what it is doing. It is optional in the
 	// same sense the conversations are: a feed assembled without one reports
 	// everything else, and what is lost is the one thing nothing else in the
@@ -401,7 +408,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// It is read here rather than as the reports are because a finding is not a
 	// report: a report is said where it is filed, and a finding stands from the
 	// moment a handling makes one until a later handling ends it.
-	findings, err := f.operatorActionDeliveries(cursors.Streams[operatorActionStream], filed, cursors.Since, batch.Streams)
+	findings, err := f.operatorActionDeliveries(cursors.Streams[operatorActionStream], filed, states, cursors.Since, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -1049,13 +1056,28 @@ func (f *HarnessFeed) releaseOf(heldAt string) (runstate.IntakeRelease, bool) {
 // record filed before the channel was turned on is: what the handling of a
 // month-old report says today is said today, because the handling is today's,
 // and the finding's moment is the record that made it.
-func (f *HarnessFeed) operatorActionDeliveries(cursor Cursor, filed []report.Report, since time.Time, streams map[string]struct{}) ([]Delivery, error) {
+//
+// A stopped run the development manager escalated to the operator is read from
+// the same reading of the runs the crossings were selected from, and from what
+// triage decided about them. This surface cannot cheaply ask the tracker which
+// items are still admitted, so it reads every standing escalation as a finding:
+// what that costs is a mark kept for an item that left the backlog, and what it
+// buys is a finding said once rather than never.
+func (f *HarnessFeed) operatorActionDeliveries(cursor Cursor, filed []report.Report, states []runstate.State, since time.Time, streams map[string]struct{}) ([]Delivery, error) {
 	streams[operatorActionStream] = struct{}{}
 	handlings, err := f.Reports.Handlings()
 	if err != nil {
 		return nil, fmt.Errorf("read what became of the collected reports: %w", err)
 	}
 	actions := readmodel.OperatorActions(filed, handlings)
+	escalated, problem := readmodel.EscalatedOperatorActions(states, f.Decisions, nil)
+	if problem != "" {
+		// A triage record that cannot be read costs that item's finding this
+		// pass and is said here; the pass carries on, and the finding is read
+		// again next time.
+		f.say("an escalated stoppage could not be read and was not said this pass: %s", problem)
+	}
+	actions = append(actions, escalated...)
 	standing := make(map[string]struct{}, len(actions))
 	advanced := cursor
 	var deliveries []Delivery
@@ -1072,9 +1094,12 @@ func (f *HarnessFeed) operatorActionDeliveries(cursor Cursor, filed []report.Rep
 		}
 		notification, err := notify.FromOperatorAction(notify.OperatorAction{
 			WorkItemID: action.WorkItemID,
+			RunID:      action.RunID,
 			Needs:      action.Needs,
 			RecordedIn: action.RecordedIn,
 			FoundBy:    action.FoundBy,
+			Ends:       action.Ends,
+			Mover:      action.Whose(),
 			Since:      action.Since,
 		})
 		if err != nil {

@@ -1318,6 +1318,8 @@ func TestAFindingForTheOperatorSaysWhatIsNeededAndWhereItIsRecorded(t *testing.T
 		Needs:      "add the PreToolUse hook to .claude/settings.json; the harness may not write that file",
 		RecordedIn: "the handling of report-00000000000000000000000000000002 recorded in chat-1, over the developer's report from run-1",
 		FoundBy:    "the product manager, handling the report",
+		Ends:       "a later handling of the report records it done",
+		Mover:      "the operator's — only a person can act on this; a later handling of the report records it done",
 		Since:      moment,
 	})
 	if err != nil {
@@ -1338,10 +1340,16 @@ func TestAFindingForTheOperatorSaysWhatIsNeededAndWhereItIsRecorded(t *testing.T
 		"the product manager, handling the report",
 		"report-00000000000000000000000000000002",
 		"`yoyo status`",
+		"a later handling of the report records it done",
 	} {
 		if !strings.Contains(message.Body, want) {
 			t.Fatalf("body %q does not carry %q", message.Body, want)
 		}
+	}
+	// The clause it closes on is the read model's wording of whose move it is,
+	// so the terminal's attention line and this message agree.
+	if !strings.HasSuffix(message.Body, nextMoveLead+"the operator's — only a person can act on this; a later handling of the report records it done.") {
+		t.Fatalf("body %q does not close on the read model's clause", message.Body)
 	}
 	if message.Reach != ReachChannel {
 		t.Fatalf("a finding for the operator reaches %q, want the channel level", message.Reach)

@@ -389,10 +389,17 @@ func IntakeReleased(at time.Time, release runstate.IntakeRelease, recorded bool)
 // package speaks and does not read; the surface that reads hands it over.
 type OperatorAction struct {
 	WorkItemID string
+	// RunID is the stopped run the finding came from, where it came from one.
+	RunID      string
 	Needs      string
 	RecordedIn string
 	FoundBy    string
-	Since      time.Time
+	// Ends is what ends the finding, and Mover whose move it is with that
+	// ending, both worded by the read model so the attention line and this
+	// message close on the same words.
+	Ends  string
+	Mover string
+	Since time.Time
 }
 
 // FromOperatorAction says a finding that needs the operator's hand, once. It is
@@ -416,11 +423,13 @@ func FromOperatorAction(action OperatorAction) (Notification, error) {
 			Kind:     KindOperatorAction,
 			At:       action.Since,
 			Severity: report.SeverityWarning,
-			Refs:     Refs{WorkItemID: action.WorkItemID},
+			Refs:     Refs{RunID: action.RunID, WorkItemID: action.WorkItemID},
 			Detail: Detail{
 				Needs:      action.Needs,
 				RecordedIn: action.RecordedIn,
 				FoundBy:    action.FoundBy,
+				Ends:       action.Ends,
+				Mover:      action.Mover,
 			},
 		},
 	}, nil

@@ -219,21 +219,42 @@ them, and the finding it produced reached you a month after the first of them
 was filed, because you asked why.
 
 **A finding that needs your hand is a class the harness reads, and it goes to
-three places the moment it is recorded.** Three things make one:
+three places the moment it is recorded.** Four things make one:
 
 - **The product manager handling a report as yours.** Her `handle` action takes
   `"needs": "operator"` for a report whose answer is a change only you can make,
   with the reason saying what you have to do. That handling does not close the
   report; it records the finding, and a later handling of the same report
-  without `needs` is what records the change made.
+  without `needs` is what records the change made. She is not handed the report
+  again as unhandled, so her turns list the findings she has handed you, with
+  their identifiers, until she records each one done — tell her when you have
+  made the change, or she will see it.
 - **A report filed at critical severity** by any role, until somebody handles it.
   Critical is the severity that means action, in the reporting contract's own
   words; a critical report the product manager then handles as yours is the same
   finding, and one she handles any other way ends it.
+- **A run stopping on a condition only a person can clear.** The harness does
+  not judge a stoppage itself; the development manager does, on
+  [her docket](conversation.md#deciding-what-becomes-of-stopped-work), and her
+  `escalate` decision is the one typed record that says a stopped run needs a
+  person rather than a repair, a re-run, or a wait — a target branch that
+  diverged from the forge, a publication nothing asked the forge to merge, a
+  stop no budget answers. That decision is the finding, standing while it is
+  the decision on the item's latest stopped run and the item is still in the
+  backlog; a later decision on the run, a later run, or the item being retired
+  or closed ends it. (Her escalation already carries a warning-or-above report
+  into the pile; that report is what she may handle as yours, and the finding is
+  the decision rather than the report, so it is named once.)
 - **The failure-storm brake tripping.** The hold it places names the runs it
   counted — each with its item and what stopped it — and only you lift it, so
   it is a finding for you in the same sense. [The configuration guide](configuration.md#watching-instead-of-draining)
   says what the brake counts and what it does not.
+
+Two stops a run makes on its own are named to you elsewhere and are not
+findings of this class: a run parked on provider capacity the harness cannot
+wait for is on the attention line's capacity entry with its remedy, and a
+promotion the forge has not published is on the line as awaiting the forge, each
+with whose move it is.
 
 Where each goes:
 
@@ -247,15 +268,19 @@ Where each goes:
    [reporting](reporting.md#a-finding-that-needs-your-hand).
 2. **A named line under `Needs a human` on `yoyo status`**, ahead of the
    undecided proposals and never folded into `and N things not named here`:
-   `report-… needs your hand: <what> (found by …; recorded in …)`, and for the
-   brake `intake is held, since <trip time>: …; run … of … stopped: …`. It
-   stays until the finding ends — the change recorded made, the report handled,
-   the hold lifted. `--json` carries each such entry with `"named": true`.
+   `report-… needs your hand: <what> (found by …; recorded in …)`,
+   `yoyodyne-ifd.272 needs your hand: <the development manager's reason> (found
+   by the development manager, escalating the stopped run to the operator;
+   recorded in …)`, and for the brake `intake is held, since <trip time>: …;
+   run … of … stopped: …`. It stays until the finding ends — the change recorded
+   made, the report handled, the run decided again, the hold lifted. `--json`
+   carries each such entry with `"named": true`.
 3. **The durable records that made it** — the report and its handling in the
-   pile, read with `yoyo reports`; the hold in `intake-hold.json` under the
-   product, which the status line is read from. A finding is derived from those
-   and stored nowhere else, so there is nothing to clear by hand: what ends it
-   is the record that says it is done.
+   pile, read with `yoyo reports`; the triage decision on the item's record and
+   the blocker on the item; the hold in `intake-hold.json` under the product,
+   which the status line is read from. A finding is derived from those and
+   stored nowhere else, so there is nothing to clear by hand: what ends it is
+   the record that says it is done.
 
 What is deliberately not here is a list of your own. The product manager keeps
 none, and the harness keeps none apart from the records above: a checklist is

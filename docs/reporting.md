@@ -480,7 +480,11 @@ said to you once, directly, and named on `yoyo status` until a later handling of
 the same report records the change made. It is a field the harness reads rather
 than a sentence in the reason, because a sentence is what six such reports were
 for a month. A report filed at `critical` is the same kind of finding on its
-own, until somebody handles it.
+own, until somebody handles it. A report handled as yours counts as handled and
+is not offered to the product manager again, so her turns list the findings she
+has handed you, each with its identifier, until she records it done: tell her
+when the change is made, and she handles the same report once more, without
+`needs`.
 
 Where the decision is work, the admission can name the report it came from, and
 the item then records it. That citation is not bookkeeping: it is what a later
@@ -1039,25 +1043,30 @@ once, directly, tagged by member id** — the communication rule's own test for 
 tag, since it is both important and yours — the pass after it is recorded.
 [Operations](operations.md#where-a-finding-that-needs-your-hand-goes) says what
 makes one: the product manager handling a report with `"needs": "operator"`, a
-report filed at critical severity that nobody has handled, and the brake
-tripping. The message says what is needed, who found it, and where it is
-recorded, so you can go and read the whole of it:
+report filed at critical severity that nobody has handled, a stopped run the
+development manager escalated to you, and the brake tripping. The message says
+what is needed, who found it, where it is recorded, and what ends it, so you
+can go and read the whole of it:
 
 > @operator This needs your hand: add the PreToolUse hook to
 > `.claude/settings.json`; the harness may not write that file. Found by the
 > product manager, handling the report; recorded in the handling of
 > report-9f2c… recorded in chat-91253e0e…, over the developer's report from
 > run-4f2a…. Nothing here changes it, and this is not said again —
-> `yoyo status` names it until a later handling of the report records it done.
-> Next: the operator's — only a person can make this change; a later handling of
-> the report records it done.
+> `yoyo status` names it until it is done, and a later handling of the report
+> records it done. Next: the operator's — only a person can act on this; a later
+> handling of the report records it done.
 
 It is said once and never again while it stands. The sink marks each finding by
 name in its own durable cursors, so a second pass, a restarted sink, and every
 poll afterwards send nothing more; `yoyo status` names it under `Needs a human`
 until it ends, which is the record that says it is done — the report handled,
-the change recorded made — and the mark is dropped with it, so the same report
-handled as yours again later is a second finding, said once more. A finding
+the change recorded made, the escalated run decided again — and the mark is
+dropped with it, so the same report handled as yours again later is a second
+finding, said once more. An escalated stoppage is read here from the runs and
+the triage record alone, without asking the tracker whether the item is still
+admitted, so one that ended by the item leaving the backlog keeps its mark; it
+was said once either way, and `yoyo status` reads the queue and drops it. A finding
 whose report was filed before this channel was turned on is history like every
 other record from before the watermark, and is marked without being said; its
 moment is the record that made it, so a handling made today of a month-old

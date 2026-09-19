@@ -2771,6 +2771,7 @@ func (s *Session) turnPrompt(message string) string {
 	// carrying one in, which is what a report channel with no standing reader
 	// otherwise depends on.
 	prompt.WriteString(s.renderUnhandledReports())
+	prompt.WriteString(s.renderOperatorFindings())
 	// What the role may ask the harness to find out for it. It is delivered with
 	// the turn rather than stated in the contract because which sources exist is
 	// this project's own, and it moves.
@@ -3104,7 +3105,7 @@ The pile is worked through rather than sampled, so what you do with the ones a t
 
 What becomes of one is a product decision and it is yours. Judge it as you judge anything else: work to admit, a proposal to make, a concern to raise, an upstream change to argue for, or nothing at all — a report that asks for nothing is handled by saying so. Record what you decided with the "handle" action, whose "reason" is what a later reader finds when they ask what happened about this. That record is the only thing that takes a report out of the pile: a report you discussed and did not handle is offered again to your next conversation, and one you handled is never offered again. So handle what you have actually decided and leave the rest, rather than clearing the list.
 
-One class of report is the operator's rather than yours, and you say so rather than keeping it on a list of your own: a report asking for a change only a person can make by hand. Handle it with "needs" set to "operator" and the reason saying what he has to do. That is what reaches him — a message the moment it is recorded, and a named line under what needs a human on ` + "`yoyo status`" + ` until it is done — where a checklist in this conversation reaches him only when he asks. A report filed at critical severity reaches him the same way on its own, without waiting for your handling.
+One class of report is the operator's rather than yours, and you say so rather than keeping it on a list of your own: a report asking for a change only a person can make by hand. Handle it with "needs" set to "operator" and the reason saying what he has to do. That is what reaches him — a message the moment it is recorded, and a named line under what needs a human on ` + "`yoyo status`" + ` until it is done — where a checklist in this conversation reaches him only when he asks. A report filed at critical severity reaches him the same way on its own, without waiting for your handling. A report you handled that way is not offered to you again, so your turns list the ones still standing, with their identifiers, under a heading of their own: once he has made the change — he will tell you, or you will see it — handle the same report once more, by that identifier and without "needs", which is what records it done and takes it off his line.
 
 A report is not a work item and handling one does not create anything. If the answer is work, admit or propose it in the same reply and say in the reason which item it became.
 
