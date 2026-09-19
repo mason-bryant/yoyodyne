@@ -232,6 +232,7 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/runstate/conversation.go` | `(*ConversationStore).leaseFile` | Names the file a conversation's lease is taken on, so two agents on one role do not hold one conversation. |
 | `internal/runstate/lease.go` | `TryLeasePath` | The shared lease primitive that reports rather than waits. The promotion lease waits its turn and is `promotion.lease`. |
 | `internal/runstate/rotation.go` | `(*Store).LeaseRotation` | Serializes account rotation, which is capacity rather than authority. |
+| `internal/runstate/stream.go` | `(*StreamStore).currentConversations` | Reads which conversation each role is in now, and the identity it is held under, so a listing can ask the observed hold whether a turn is in flight. The role is the key the hold is filed by — attribution, never permission — and nothing here refuses anything. |
 | `internal/runstate/store.go` | `(*Store).leasePath` | Names the file a run's own lease is taken on. |
 | `internal/runstate/store.go` | `(*Store).takeLease` | Takes a run's own lease, so two processes do not act on one run. |
 | `internal/runstate/store.go` | `Lease` | The handle every lease here is held through. |

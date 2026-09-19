@@ -35,14 +35,6 @@ const (
 	repositoryConfigPath = "../../.yoyodyne/config.yaml"
 )
 
-// statusToolSuitePath is the status tool's own suite. It fabricates a state
-// directory holding runs, conversations, branch reviews, and exchanges and
-// reads it with YOYODYNE_STATE_HOME pointed there, so it needs no provider, no
-// repository, and never reads an operator's real state — which is what makes it
-// cheap enough to run from here. `bin/yoyo-status` is shell, so before this
-// nothing a run applied executed a line of it.
-const statusToolSuitePath = "../../scripts/yoyo-status-test.sh"
-
 // adoptionWalkthroughPath is the README's "Getting started" executed against a
 // throwaway project. `make adoption` runs the whole of it; what is run from
 // here is its refusal of a scratch root inside a git repository, which needs
@@ -82,9 +74,10 @@ func TestEveryShellFileInThisRepositoryParses(t *testing.T) {
 
 	requireTool(t, "bash")
 	shell := repositoryMembers(t, ShellClass)
-	// The scripts and the status tool are the shell this project has; a census
-	// that found none of it would report nothing wrong with all of it.
-	if !slices.Contains(shell, "scripts/cut-release.sh") || !slices.Contains(shell, "bin/yoyo-status") {
+	// The scripts and the account tool are the shell this project has; a census
+	// that found none of it would report nothing wrong with all of it. (The
+	// status tool used to be the other one, until `yoyo status` absorbed it.)
+	if !slices.Contains(shell, "scripts/cut-release.sh") || !slices.Contains(shell, "bin/yoyo-account") {
 		t.Fatalf("the shell this repository carries was not found; the census collected %v", shell)
 	}
 	for _, problem := range ShellSyntax(repositoryRoot, shell) {
@@ -136,22 +129,6 @@ func TestEveryWorkflowInThisRepositoryPinsWhatItInstalls(t *testing.T) {
 	}
 	for _, problem := range WorkflowVersionPins(repositoryRoot, workflows) {
 		t.Errorf("a workflow in this repository installs a tool at a version somebody else decides: %s", problem)
-	}
-}
-
-// TestTheStatusToolReportsWhatItClaims runs the status tool's suite, for the
-// same reason the release verb's and the notes writer's suites are run from Go:
-// the tool is shell, its claims are what the README and the operations guide
-// tell an operator they can rely on, and a suite that only runs in CI is one
-// whose failure arrives after the change was reviewed and integrated.
-func TestTheStatusToolReportsWhatItClaims(t *testing.T) {
-	t.Parallel()
-
-	requireTool(t, "bash")
-	suite := exec.Command("bash", statusToolSuitePath)
-	report, err := suite.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s did not pass (%v):\n%s", statusToolSuitePath, err, report)
 	}
 }
 

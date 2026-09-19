@@ -155,8 +155,9 @@ verb in the first place.
 Time a run spends held is accounted under its own kind, separately from what a
 provider's refusals are allowed to spend: a hold never eats a run's
 `execution.usage_limit_max_pause` budget, and nothing bounds it, because the
-thing that lifts it is you. Both `bin/yoyo-status` and the conversation's
-`/status` lead with a PAUSED banner naming when the pause was placed, because a
+thing that lifts it is you. `yoyo status` — on its "Needs a human" line, and as
+a banner over every one of [its live modes](#following-a-run-a-conversation-or-a-branch-review)
+— and the conversation's `/status` all say when the pause was placed, because a
 system somebody paused and forgot looks exactly like a system that died.
 
 This is the broad switch, and there is a narrow one beside it. `yoyo pause` stops
@@ -608,7 +609,7 @@ copy is the diagnostic beside it rather than the original. A command that keeps
 no such record says the rest was not retained instead, in those words, rather
 than sending you after a file nobody wrote.
 
-The truncation is said out loud in the same event stream `bin/yoyo-status`
+The truncation is said out loud in the same event stream `yoyo status --follow`
 follows, and it is on the result the record keeps, so it is visible both to
 somebody watching and to somebody reading back months later.
 
@@ -1575,65 +1576,102 @@ against the answer.
 
 ## Following a run, a conversation, or a branch review
 
-`bin/yoyo-status` follows the normalized event stream a run, a conversation, or
-a [branch review](work.md#reviewing-what-a-branch-adds-up-to) records, which is the
-closest thing there is to watching an agent work. It is a different thing from
-the `yoyo status` verb above despite the name: that reads back what the records
-hold now — a run still in flight as readily as one that finished — and this
-follows a run's events as they arrive. It is a shell script that
-lives in a checkout of this repository rather than part of the `yoyo` binary, so
-`go install` and a release download do not carry it; clone the repository, or
-copy the single file out of it, if you want it:
+`yoyo status --follow` follows the normalized event stream a run, a
+conversation, or a [branch review](work.md#reviewing-what-a-branch-adds-up-to)
+records, which is the closest thing there is to watching an agent work. It is
+the other half of the verb above: the recorded mode reads back what the records
+hold now — a run still in flight as readily as one that finished — and these
+modes follow a run's events as they arrive, list what has been recorded lately,
+and price it. They ship with the binary, so `go install` and a release download
+carry them; there is nothing to clone. Until yoyodyne-ifd.63 this was
+`bin/yoyo-status`, a shell script that lived only in a checkout of this
+repository, which for anybody who had never seen the internals meant the surface
+did not exist. The script is retired rather than kept as a wrapper: a wrapper
+would have to be installed to be useful, which is the gap the fold closes, and
+kept in the checkout it would be a second copy of every sentence the verb says,
+drifting from it — its banner had already drifted from the harness's own wording
+once. Nothing it did is missing from the verb, and two things it could not do are
+here: it needs no `jq`, and it prices a failed invocation, which cost money like
+any other.
 
 ```sh
-./bin/yoyo-status          # follow the newest of any kind
-./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
-./bin/yoyo-status -c       # report the last 7 days of spend, by day and in total
-./bin/yoyo-status -c 30    # report that many days instead of 7
+yoyo status --follow             # follow the newest of any kind
+yoyo status --follow --latest    # follow the newest, and move on when a later one starts
+yoyo status --follow 40b68275    # follow one by id or unique id prefix
+yoyo status --events             # print the newest stream's recent events and exit
+yoyo status --list               # list recent runs, conversations, and reviews and exit
+yoyo status --spend              # report the last 7 days of spend, by day and in total
+yoyo status --spend 30           # report that many days instead of 7
+yoyo status --spend 40b68275     # report spend for one run, conversation, review, or exchange, any day
 ```
 
 A conversation and a branch review each record the same kind of event stream a
 run does, and "is this alive" is the same question asked of all three, so every
 mode covers all of them and the default never asks which kind you meant.
-Selecting one by id or by a unique id prefix works the same for each. `--runs`,
-`--chats`, and `--reviews` narrow it to one kind when that is what you want.
+Selecting one by id or by a unique id prefix works the same for each. `--kind
+runs`, `--kind chats`, and `--kind reviews` narrow it to one kind when that is
+what you want. `--lines` says how many recorded events to replay before
+following, fifty by default and `0` for the whole log; `--raw` emits each event
+exactly as it was recorded, and `--all` keeps the thinking-token pings the
+default leaves out. An option that belongs to the other half of the verb —
+`--failed`, `--limit` outside a listing, `--lines` outside a follow — is refused
+rather than ignored, because a narrowing silently dropped reads as an answer to
+the question that was asked.
 
 An [exchange](conversation.md#roles-asking-each-other-things) is the fourth thing
 priced and the only one that is never followed: its record is the thread itself,
-revised as it goes, rather than a stream of events, so it appears in the cost
-report and in no other mode. Naming one by id prices it like anything else, and
-each of the three flags above narrows it out along with the kinds they exclude.
+revised as it goes, rather than a stream of events, so it appears in the spend
+report and in no other mode. Naming one by id prices it like anything else,
+`--kind exchanges` prices them alone, and narrowing to any of the three followed
+kinds narrows the exchanges out along with the kinds it excludes — somebody who
+asked what the runs cost is asking about the runs.
 
 A run's listed status is the status it recorded. A conversation has no such
 record of its own, so its status is derived and says what an operator is
 actually asking: `answering` while an agent is working on a turn, `waiting`
-between turns, and `ended` once the role has moved on to a later conversation. A
+between turns, and `ended` once the role has moved on to a later conversation.
+Whether a turn is in flight is read from the same observed hold the four lines'
+Working line reads — the process holding the conversation writes down which
+process it is, and the listing checks that it is still there — rather than from
+the event log, which cannot tell a turn in flight from one whose process died
+before it wrote a terminal; so `yoyo status` and `yoyo status --list` cannot
+disagree about the same conversation. A
 branch review has no state file either — its verdicts share one log rather than
 having a record each — so its status comes from its own events: `reviewing`
 while the verdict is being made, and `reviewed` once it has been.
 
-Every mode leads with a PAUSED banner while
+Every live mode leads with a PAUSED banner while
 [activity is paused](#pausing-everything-and-resuming-it), naming when the pause
-was placed: a quiet machine somebody paused and a quiet machine that died look
-identical, and this is the one place an operator is already looking.
+was placed, and an INTAKE HELD banner while intake is held, naming who held it
+and why: a quiet machine somebody paused and a quiet machine that died look
+identical, and this is the one place an operator is already looking. The banners
+go to standard error, so `--json` on standard output stays machine-readable and
+carries both holds as fields instead. The recorded mode carries the same two
+switches on its "Needs a human" line.
 
-It resolves the state directory the same way the harness does, so it keeps
-working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
-of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is every run, every conversation, every
-branch review, and every exchange, and a mixed total says how much of it was
-each — a conversation turn, a branch review, and a round of one role asking
-another something are each a provider invocation like any other, and leaving any
-of them out understated every total it belonged in. An exchange counts each round
-on the day it was answered, so a thread that ran over two days lands in both of
-their totals; its record keeps what the provider charged and not what it used, so
-its rows say nothing in the token columns rather than saying none. An exchange
-record that cannot be read is counted and named under the report rather than
-dropped: every exchange beside it is still priced, and the total it is missing
-from is marked `≥`. [`yoyo cost`](reporting.md#what-the-work-cost) answers the
-same way for the same record — it counts it in the ask row's `unpriced` column,
-prices the rest, and marks its own total — because two surfaces disagreeing about
-what an unknown figure is would be a disagreement only you could settle.
+A listing chooses from the directory and opens only the logs it prints — the
+newest twenty by default, one for `--follow --latest`'s look every few seconds —
+so a state directory holding hundreds of streams is not read through to print
+a screenful. It resolves the state directory the same way every other verb
+does, so it keeps working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`, and
+an empty answer
+names the directory it read and the kinds it was asked about — a machine with
+fifty runs and no branch reviews is told no branch reviews are recorded, never
+that nothing is. `yoyo status --help` lists the rest of the options. What
+`--spend` prices is every run, every conversation, every branch review, and
+every exchange, and a mixed total says how much of it was each — a conversation
+turn, a branch review, and a round of one role asking another something are each
+a provider invocation like any other, and leaving any of them out understated
+every total it belonged in. An exchange counts each round on the day it was
+answered, so a thread that ran over two days lands in both of their totals; its
+record keeps what the provider charged and not what it used, so its rows say
+nothing in the token columns rather than saying none. An exchange record that
+cannot be read is counted and named under the report rather than dropped: every
+exchange beside it is still priced, and the total it is missing from is marked
+`≥`. [`yoyo cost`](reporting.md#what-the-work-cost) answers the same way for the
+same record — it counts it in the ask row's `unpriced` column, prices the rest,
+and marks its own total — because two surfaces disagreeing about what an unknown
+figure is would be a disagreement only you could settle.
 
 The rows are grouped by the local-timezone day the money was spent on, each
 day's group closing with that day's spend and today's group coming last: what an
@@ -1643,12 +1681,14 @@ the log it was recorded in, so a conversation that has been open for a fortnight
 appears under today for the turn it was asked this morning and under each
 earlier day it spent on — one row per day it spent, each with the shape a row
 has always had. A report covers the last seven such days, today counting as the
-first of them. A number asks for a different count — `-c 30` — and naming a run,
-a conversation, a review, or an exchange prices that one whatever day it ran on,
-because an id has already chosen what to show; an id prefix that is all digits
-has to carry its `run-`, `chat-`, `review-`, or `exchange-` prefix to be read as
-an id rather than as a count of days. A window with nothing in it says so and
-says since when, rather than reading like a machine that spent nothing.
+first of them. A number asks for a different count — `--spend 30` — and naming a
+run, a conversation, a review, or an exchange prices that one whatever day it
+ran on, because an id has already chosen what to show; an id prefix that is all
+digits has to carry its `run-`, `chat-`, `review-`, or `exchange-` prefix to be
+read as an id rather than as a count of days. A window with nothing in it says so
+and says since when, rather than reading like a machine that spent nothing.
+`--json` carries the same rows and the same window, so a script reads the figures
+rather than the columns.
 
 [`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
@@ -1658,11 +1698,11 @@ of a branch that carried a dozen, cannot be attributed to any one of them. What 
 does not leave out of its total is what the roles spent asking each other, which
 sits on a row of its own above it.
 
-[`scripts/yoyo-status-test.sh`](../scripts/yoyo-status-test.sh) checks these claims
-against a fabricated state directory holding runs, conversations, branch reviews,
-and exchanges, without a provider or a repository and without reading your real
-state. `make test` runs it, so the tool is held to them by the same command as
-everything else in the repository rather than by one somebody remembers.
+The Go tests in `internal/cli` and `internal/runstate` check these claims against
+a fabricated state directory holding runs, conversations, branch reviews, and
+exchanges, without a provider or a repository and without reading your real
+state, so the verb is held to them by `make test` like everything else in the
+repository.
 
 ## Reading what the recurring tasks found
 

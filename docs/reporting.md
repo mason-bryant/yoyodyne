@@ -52,7 +52,7 @@ product, the repository, the two roles in it, and the conversation the asker
 spoke from, and nothing that identifies a piece of work, so there is nothing to
 attribute it to rather than a judgement declined. Neither is left out of
 what the harness has spent altogether —
-[`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) prices
+[`yoyo status --spend`](operations.md#following-a-run-a-conversation-or-a-branch-review) prices
 conversations, branch reviews, and exchanges beside runs, and `yoyo cost` carries
 the exchanges into its total on a row of their own, because a total that skipped
 any of them would be wrong rather than merely unattributed.

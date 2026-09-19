@@ -77,7 +77,8 @@ into your target branch, and — [where you have asked for it](#optional-publish
 `yoyo release`
 sit beside that conversation as administrative and recovery entry points — one
 named item, one branch judged as a whole, what became of the runs already made
-and why one of them failed, settling what a killed process left behind, stopping
+and why one of them failed — and what one of them is doing and spending right
+now — settling what a killed process left behind, stopping
 everything the harness would spend until you say otherwise, releasing a run
 waiting on a refusal the provider no longer makes, and letting the harness choose
 work again after intake was held — rather than as the way
@@ -720,7 +721,7 @@ ever served by an account that can sign its provider in.
 
 The state directory is `$YOYODYNE_STATE_HOME`, `$XDG_STATE_HOME/yoyodyne`,
 `~/Library/Application Support/Yoyodyne/state` on macOS, or
-`~/.local/state/yoyodyne` on Linux — the same one `bin/yoyo-status` reads. See
+`~/.local/state/yoyodyne` on Linux — the same one `yoyo status` reads. See
 [provider accounts](docs/configuration.md#provider-accounts) for what the pool
 does with a budget it has spent, why a run stays on the account it started on,
 and why conversations do not rotate.

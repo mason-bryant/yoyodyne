@@ -679,7 +679,7 @@ func TestStatusRefusesArgumentsItCannotHonor(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("code = %d, want 2; stderr = %q", code, stderr)
 	}
-	if !strings.Contains(stderr, "at most one Beads work item id") {
+	if !strings.Contains(stderr, "at most one id") {
 		t.Fatalf("stderr = %q", stderr)
 	}
 

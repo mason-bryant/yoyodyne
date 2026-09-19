@@ -300,7 +300,7 @@ type Standing struct {
 	// is happening — and the window said only as one item's refusal is the cause
 	// three lines down and possibly tenth in a list. It is not a fifth line: the
 	// four still render exactly as they did, and this is a banner above them, in
-	// the shape `bin/yoyo-status` already puts the operator's own pause in.
+	// the shape `yoyo status --list` already puts the operator's own pause in.
 	Paused string `json:"paused,omitempty"`
 	// CapacityHold is the provider holding every configured role at once, as the
 	// refusal log and the agents' configuration say it, and nil where it is not.
