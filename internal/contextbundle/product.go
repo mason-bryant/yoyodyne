@@ -47,7 +47,14 @@ import (
 // documents is the right thing to carry in full at all — a product question
 // rather than a constant, and the one this figure keeps being raised instead of
 // answering.
-const defaultMaxProductBytes = 768 << 10
+//
+// This is the third move, and it was the same wall for the third time: at
+// 768 KiB the shipped set stood 96 bytes under the budget on the day the work
+// item documenting the dashboard added its section to docs/operations.md, so
+// the gate failed on the one section the item required and would have failed
+// on a sentence. The step is the same 128 KiB as before, and the question above
+// is still open — it is worth answering before the fourth move.
+const defaultMaxProductBytes = 896 << 10
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.
