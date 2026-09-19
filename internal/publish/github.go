@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -25,6 +26,11 @@ const (
 	defaultGitBinary = "git"
 	defaultRemote    = "origin"
 	defaultTimeout   = 60 * time.Second
+	// maxListedOpenRequests bounds how many open pull requests one listing
+	// reads. The forge's own default is thirty, which is fewer than the
+	// repository has been found holding unnoticed; a repository with more open
+	// requests than this reaches the rest once the first are closed.
+	maxListedOpenRequests = 200
 	// maxBodyBytes bounds the description carried onto the forge. A pull request
 	// body summarizes a run; it is not a place to republish everything the run
 	// produced.
@@ -65,6 +71,12 @@ type PullRequest struct {
 	// have landed on top of it: the remote target's tip is then somebody else's
 	// merge commit, and this is the one that carried this request.
 	MergeCommit string `json:"merge_commit,omitempty"`
+	// HeadBranch and BaseBranch are the branch the request carries and the branch
+	// it is opened against, as the forge names them. They are reported by the
+	// listing of every open request, which is read without knowing any branch
+	// in advance: a request found by its branch already knows its head.
+	HeadBranch string `json:"head_branch,omitempty"`
+	BaseBranch string `json:"base_branch,omitempty"`
 }
 
 // Request describes the pull request a published run branch must have open.
@@ -561,6 +573,109 @@ func (g GitHub) State(ctx context.Context, head string) (PullRequest, error) {
 		return PullRequest{}, fmt.Errorf("no pull request exists for branch %s", head)
 	}
 	return found, nil
+}
+
+// ListOpen reports every pull request the forge holds open for the configured
+// repository, whichever branch each carries and whoever opened it. It is the
+// reading the forge-hygiene pass takes: what the harness knows about its own
+// requests is on the run records, and what has accumulated on the forge
+// regardless is only visible from here.
+//
+// The listing is bounded at maxListedOpenRequests rather than unbounded, and
+// the bound is deliberate: a repository holding more open requests than that
+// has a problem this reading reports the first two hundred of, and the rest are
+// reached as those are closed.
+func (g GitHub) ListOpen(ctx context.Context) ([]PullRequest, error) {
+	scope, err := g.repoArgs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := g.exec(ctx, append([]string{"pr", "list"}, append(scope,
+		"--state", "open",
+		"--limit", strconv.Itoa(maxListedOpenRequests),
+		"--json", "number,url,headRefName,baseRefName,headRefOid")...)...)
+	if err != nil {
+		return nil, fmt.Errorf("list open pull requests: %w", err)
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return nil, fmt.Errorf("list open pull requests failed with exit code %d: %s", result.ExitCode, g.redact(strings.TrimSpace(result.Stderr)))
+	}
+	var reported []struct {
+		Number      int    `json:"number"`
+		URL         string `json:"url"`
+		HeadRefName string `json:"headRefName"`
+		BaseRefName string `json:"baseRefName"`
+		HeadRefOid  string `json:"headRefOid"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &reported); err != nil {
+		return nil, fmt.Errorf("decode open pull requests: %w", err)
+	}
+	open := make([]PullRequest, 0, len(reported))
+	for _, one := range reported {
+		if one.Number <= 0 {
+			return nil, errors.New("an open pull request reported no number")
+		}
+		open = append(open, PullRequest{
+			Number:     one.Number,
+			URL:        one.URL,
+			State:      "OPEN",
+			HeadCommit: strings.TrimSpace(one.HeadRefOid),
+			HeadBranch: strings.TrimSpace(one.HeadRefName),
+			BaseBranch: strings.TrimSpace(one.BaseRefName),
+		})
+	}
+	return open, nil
+}
+
+// Contains reports whether a branch on the forge already carries a commit —
+// whether the commit is in the branch's history — which is what says a request
+// still open on the forge has nothing left to bring to its base. It is asked
+// of the forge rather than of a local checkout because the request and the
+// branch are both the forge's, and a checkout that has not fetched either has
+// no answer to give.
+//
+// The forge answers with how far the commit is ahead of the base; contained is
+// ahead by nothing. The comparison is asked for one commit of its listing, which
+// bounds what a request that is far ahead sends back without changing the count
+// that decides it.
+func (g GitHub) Contains(ctx context.Context, base, commit string) (bool, error) {
+	if err := validateArgument("base branch", base); err != nil {
+		return false, err
+	}
+	if !commitPattern.MatchString(commit) {
+		return false, fmt.Errorf("head commit %q is invalid", commit)
+	}
+	url, err := g.remoteURL(ctx, g.remoteName())
+	if err != nil {
+		return false, err
+	}
+	// The API verb takes no --repo flag; the repository it addresses is the one
+	// the environment names, so the configured remote is put there, and the
+	// placeholders in the endpoint are filled from it.
+	result, err := g.Runner.Run(ctx, execution.Command{
+		Name:     g.binary(),
+		Args:     []string{"api", "--method", "GET", "-F", "per_page=1", "repos/{owner}/{repo}/compare/" + base + "..." + commit},
+		Dir:      g.Dir,
+		Env:      append(os.Environ(), "GH_REPO="+url),
+		Timeout:  g.timeout(),
+		Redactor: execution.NewRedactor(g.RedactValues...),
+	}, nil)
+	if err != nil {
+		return false, fmt.Errorf("compare %s with %s: %w", base, commit, err)
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return false, fmt.Errorf("compare %s with %s failed with exit code %d: %s", base, commit, result.ExitCode, g.redact(strings.TrimSpace(result.Stderr)))
+	}
+	var compared struct {
+		AheadBy *int `json:"ahead_by"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &compared); err != nil {
+		return false, fmt.Errorf("decode the comparison of %s with %s: %w", base, commit, err)
+	}
+	if compared.AheadBy == nil {
+		return false, fmt.Errorf("the comparison of %s with %s did not say how far ahead the commit is", base, commit)
+	}
+	return *compared.AheadBy == 0, nil
 }
 
 // find lists the one pull request a run branch may have, in any state. Listing

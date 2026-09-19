@@ -1741,6 +1741,17 @@ these reports is read for: a repair that leaves its cause in place is a repair
 the next pass makes again, and a listing that could not tell the two apart could
 not show it either way.
 
+**Some findings on a development manager's pass are the harness's own.** Beside
+what the role reported, the harness lists the forge's open pull requests on every
+firing of that role's task and states each one held open for nothing: a request
+whose work item is closed, or whose head branch its target branch already
+contains. Those findings are always `left`, because noticing is all the harness
+does — it closes nothing — and each request is stated once, on the first pass
+that finds it, rather than once an hour. The `--json` form carries them a second
+time as `pull_requests` on the record, by number, which is what the next pass
+reads to know what was already said. [Recurring
+tasks](configuration.md#recurring-tasks) says when the reading is taken.
+
 Three outcomes look similar in a listing and are not the same thing:
 
 - **A pass that found nothing** shows its own summary and no findings. On a

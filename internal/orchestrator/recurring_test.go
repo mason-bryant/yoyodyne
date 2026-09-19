@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -584,6 +585,10 @@ func (r *refusingReports) Append(recorded runstate.Sweep) error {
 	return r.store.Append(recorded)
 }
 
+func (r *refusingReports) List() ([]runstate.Sweep, []runstate.UnreadableSweep, error) {
+	return r.store.List()
+}
+
 // A firing due while the provider is answering nobody records the wait rather
 // than a turn that failed, asks the role nothing, and keeps its cadence: what a
 // week of passes then says about the outage is the outage, rather than a column
@@ -661,5 +666,188 @@ func TestAFiringPastTheProbeIntervalIsMadeIntoTheOutage(t *testing.T) {
 	}
 	if fired.Fired[0].Problem != "" && strings.Contains(fired.Fired[0].Problem, "cannot be reached") {
 		t.Fatalf("problem = %q, want the outage not recorded against a firing that was made", fired.Fired[0].Problem)
+	}
+}
+
+// noticingForge is the harness's forge reading as a test drives it: a fixed set
+// of requests held open for nothing, and a record of what it was told had
+// already been reported.
+type noticingForge struct {
+	notices  []runstate.ForgeNotice
+	reported []map[int]bool
+	err      error
+}
+
+func (f *noticingForge) Notice(_ context.Context, reported map[int]bool) ([]runstate.ForgeNotice, error) {
+	f.reported = append(f.reported, reported)
+	var fresh []runstate.ForgeNotice
+	for _, notice := range f.notices {
+		if !reported[notice.Number] {
+			fresh = append(fresh, notice)
+		}
+	}
+	return fresh, f.err
+}
+
+// twoHeldOpen is the forge the work item describes, as the trigger sees it:
+// one request whose item is closed, one whose branch main already carries; the
+// live third is not a notice at all, which is the reading's own silence.
+func twoHeldOpen() *noticingForge {
+	return &noticingForge{notices: []runstate.ForgeNotice{
+		{Number: 445, URL: "https://forge.invalid/pull/445", HeadBranch: "yoyodyne/yoyodyne-ifd-283/aaaaaaaa", BaseBranch: "main", WorkItemID: "yoyodyne-ifd.283", ItemClosed: true},
+		{Number: 460, URL: "https://forge.invalid/pull/460", HeadBranch: "yoyodyne/yoyodyne-ifd-300/bbbbbbbb", BaseBranch: "main", WorkItemID: "yoyodyne-ifd.300", Contained: true},
+	}}
+}
+
+// The development manager's pass reads the forge and states what it holds open
+// for nothing as findings beside the role's own, keyed on the request; the
+// next pass over the same forge states nothing again.
+func TestTheForgeIsReadOnThePassAndEachRequestIsReportedOnce(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	forge := twoHeldOpen()
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("one dead claim, released", sweep.Finding{
+		Issue: "a claim on a run nothing is running", Disposition: sweep.DispositionFixed, Filed: []string{"yoyodyne-ifd.400"},
+	})}, {result: complete("nothing")}}}
+	clock := &movingRecurringClock{now: recurringNow}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Forge: forge, Clock: clock}
+
+	first, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("first Fire() error = %v", err)
+	}
+	if len(first.Fired) != 1 || first.Fired[0].Findings != 3 || first.Fired[0].PullRequests != 2 {
+		t.Fatalf("fired = %+v, want the role's finding and the two requests counted, and the two said to be the harness's", first.Fired)
+	}
+	if rendered := first.Render(); !strings.Contains(rendered, "2 of the findings are open pull requests the harness noticed") {
+		t.Errorf("the rendered pass does not say which findings are the harness's:\n%s", rendered)
+	}
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].Result == nil {
+		t.Fatalf("recorded = %+v, want one report with an account", recorded)
+	}
+	findings := recorded[0].Result.Findings
+	if len(findings) != 3 || findings[0].Issue != "a claim on a run nothing is running" {
+		t.Fatalf("findings = %+v, want the role's own first and the two requests after it", findings)
+	}
+	for i, want := range []string{"#445", "#460"} {
+		finding := findings[i+1]
+		if !strings.Contains(finding.Issue, want) || finding.Disposition != sweep.DispositionLeft {
+			t.Errorf("findings[%d] = %+v, want %s stated and left", i+1, finding, want)
+		}
+	}
+	if !strings.Contains(findings[1].Issue, "yoyodyne-ifd.283 is closed") {
+		t.Errorf("finding = %q, want the closed item named", findings[1].Issue)
+	}
+	if !strings.Contains(findings[2].Issue, "already contained in main") {
+		t.Errorf("finding = %q, want the contained branch named", findings[2].Issue)
+	}
+	if len(recorded[0].PullRequests) != 2 || recorded[0].PullRequests[0].Number != 445 || recorded[0].PullRequests[1].Number != 460 {
+		t.Errorf("pull requests = %+v, want the two requests keyed on the record", recorded[0].PullRequests)
+	}
+	if first.Fired[0].Problem != "" {
+		t.Errorf("problem = %q, want none on a pass that read the forge whole", first.Fired[0].Problem)
+	}
+
+	clock.now = recurringNow.Add(time.Hour)
+	second, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("second Fire() error = %v", err)
+	}
+	if len(second.Fired) != 1 || second.Fired[0].Findings != 0 {
+		t.Fatalf("fired = %+v, want a second pass over the same forge to report nothing again", second.Fired)
+	}
+	if len(forge.reported) != 2 || !forge.reported[1][445] || !forge.reported[1][460] {
+		t.Errorf("reported = %+v, want the second pass told which requests the first already reported", forge.reported)
+	}
+	recorded, _, err = store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 || len(recorded[1].PullRequests) != 0 || recorded[1].Result == nil || len(recorded[1].Result.Findings) != 0 {
+		t.Errorf("second record = %+v, want no request on it", recorded[1])
+	}
+}
+
+// A task of another role is not the forge's reader: the reading is the
+// development manager's and a product manager's pass leaves the forge alone.
+func TestOnlyTheDevelopmentManagersPassReadsTheForge(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	forge := twoHeldOpen()
+	tasks := hourlyTask("scan")
+	task := tasks["a-sweep"]
+	task.Role = domain.RoleProductManager
+	tasks["a-sweep"] = task
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
+	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Forge: forge, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(fired.Fired) != 1 || fired.Fired[0].Findings != 0 || len(forge.reported) != 0 {
+		t.Fatalf("fired = %+v (forge read %d times), want the forge left alone", fired.Fired, len(forge.reported))
+	}
+}
+
+// The forge is not the provider. A pass whose role could not be reached still
+// reads it, and what it found is stated in an account the harness writes,
+// beside the problem that says the role's own is missing.
+func TestTheForgeIsReadEvenWhenTheRoleCouldNotBe(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	forge := twoHeldOpen()
+	role := &wokenRole{failure: fmt.Errorf("%w: the operator is mid-turn", ErrRoleUnreachable)}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Forge: forge, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(fired.Fired) != 1 || fired.Fired[0].Turns != 0 || fired.Fired[0].Findings != 2 {
+		t.Fatalf("fired = %+v, want no turn and the two requests stated", fired.Fired)
+	}
+	if !strings.Contains(fired.Fired[0].Problem, "could not be put to the development-manager") {
+		t.Errorf("problem = %q, want the unreached role still said", fired.Fired[0].Problem)
+	}
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].Result == nil || !strings.Contains(recorded[0].Result.Summary, "harness's own reading") {
+		t.Fatalf("recorded = %+v, want an account the harness wrote for its own findings", recorded)
+	}
+}
+
+// A forge that could not be read is a problem on the record, never a lost
+// pass: the role's account stands and the next pass reads the forge again.
+func TestAForgeThatCouldNotBeReadIsSaidAndCostsNothingElse(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	forge := &noticingForge{err: errors.New("gh: not logged in")}
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Forge: forge, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(fired.Fired) != 1 || !strings.Contains(fired.Fired[0].Problem, "the forge could not be fully read") || !strings.Contains(fired.Fired[0].Problem, "not logged in") {
+		t.Fatalf("fired = %+v, want the forge's refusal on the record", fired.Fired)
+	}
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].Result == nil || recorded[0].Result.Summary != "nothing" {
+		t.Fatalf("recorded = %+v, want the role's own account kept", recorded)
 	}
 }
