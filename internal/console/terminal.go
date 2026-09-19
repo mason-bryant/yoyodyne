@@ -679,9 +679,16 @@ func (t *terminal) endPrompt(cause error) error {
 // that arrive in one read are two messages, in order.
 func (t *terminal) feed(data []byte) (string, bool, error) {
 	line, submitted, raised, err := t.consume(data)
-	// The signals a negotiated keyboard stopped the terminal raising are raised
-	// here, with the screen let go of: one of them stops this process, and doing
-	// that while holding the console would stop it mid-draw.
+	t.raiseAll(raised)
+	return line, submitted, err
+}
+
+// raiseAll raises the signals a negotiated keyboard stopped the terminal
+// raising, with the screen let go of: one of them stops this process, and doing
+// that while holding the console would stop it mid-draw. It is the same for a
+// line being composed and a list being chosen from, because the keys the
+// terminal reports instead of acting on are the same whatever is on screen.
+func (t *terminal) raiseAll(raised []signalKey) {
 	for _, pressed := range raised {
 		if pressed == signalSuspend {
 			// Stopping is the one that has to hand the terminal over first and take
@@ -691,7 +698,6 @@ func (t *terminal) feed(data []byte) (string, bool, error) {
 		}
 		t.raise(pressed)
 	}
-	return line, submitted, err
 }
 
 // suspend is Ctrl-Z where the terminal reports the key instead of stopping the
@@ -942,10 +948,22 @@ func (t *terminal) endChoice(cause error) error {
 
 // feedChoice applies input to the list and returns an answer once the operator
 // presses enter. Anything typed after that stays buffered, exactly as it does
-// for a line: what follows an answer belongs to whatever is asked next.
+// for a line: what follows an answer belongs to whatever is asked next. The
+// signal keys it met on the way are raised once the console is let go of, as
+// feed raises them for a line: a list on screen is no reason Ctrl-C should stop
+// interrupting.
 func (t *terminal) feedChoice(data []byte) (int, bool, error) {
+	index, chosen, raised, err := t.consumeChoice(data)
+	t.raiseAll(raised)
+	return index, chosen, err
+}
+
+// consumeChoice is feedChoice under the lock: everything that changes what is
+// on screen, and the signal keys it met on the way.
+func (t *terminal) consumeChoice(data []byte) (int, bool, []signalKey, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	var raised []signalKey
 	t.keys = append(t.keys, data...)
 	for len(t.keys) > 0 {
 		pressed, size, complete := decodeKey(t.keys)
@@ -953,6 +971,10 @@ func (t *terminal) feedChoice(data []byte) (int, bool, error) {
 			break
 		}
 		t.keys = t.keys[size:]
+		if pressed.code == keySignal {
+			raised = append(raised, pressed.signal)
+			continue
+		}
 		if pressed.code != keyEnter {
 			t.move(pressed)
 			continue
@@ -970,14 +992,14 @@ func (t *terminal) feedChoice(data []byte) (int, bool, error) {
 		// What was asked and what was picked join the transcript above, so the
 		// answer is still legible once the list it came from is gone.
 		if err := t.render([]string{t.promptText + answer}); err != nil {
-			return 0, false, err
+			return 0, false, raised, err
 		}
-		return chosen, true, nil
+		return chosen, true, raised, nil
 	}
 	if err := t.redraw(); err != nil {
-		return 0, false, err
+		return 0, false, raised, err
 	}
-	return 0, false, nil
+	return 0, false, raised, nil
 }
 
 // move is one keystroke's effect on which answer the marker is against.

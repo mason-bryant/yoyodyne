@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // choosing is one Choose running in a goroutine, so a test can watch the list
@@ -195,6 +196,98 @@ func TestADifferentQuestionStartsAtTheTop(t *testing.T) {
 	}
 	keys.Write([]byte("\r"))
 	if answer := answers.line(t); answer != "Write the goal it serves" {
+		t.Fatalf("answer = %q", answer)
+	}
+}
+
+// TestASignalKeyDuringAChoiceIsRaised covers the terminal that has agreed to
+// report Ctrl-C rather than raise it. A list on screen is answered with the
+// same keys a line is read with, so the key it reports has to reach the
+// process exactly as it does while a line is being composed: an operator who
+// cannot interrupt from a question is one the question has trapped.
+func TestASignalKeyDuringAChoiceIsRaised(t *testing.T) {
+	t.Parallel()
+
+	console, keys, out := terminalUnderTest(t, 60)
+	raised := make(chan signalKey, 1)
+	console.raise = func(pressed signalKey) { raised <- pressed }
+	answers := choosing(context.Background(), console, "answer c1.1? ", testOptions, nil)
+	out.await(t, "the answers on offer", func(s *screen) bool {
+		return strings.Contains(s.text(), chosenMarker+"1. Write the goal it serves")
+	})
+
+	// Ctrl-C, as a negotiated keyboard reports it rather than as a signal the
+	// terminal raised.
+	keys.Write([]byte("\x1b[99;5u"))
+	select {
+	case pressed := <-raised:
+		if pressed != signalInterrupt {
+			t.Fatalf("raised %v, want the interrupt", pressed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Ctrl-C during a choice was not raised")
+	}
+	// The key was a signal and not a keystroke: the list is still there, still
+	// answerable, and the marker has not moved.
+	if listed := out.screen().text(); !strings.Contains(listed, chosenMarker+"1. Write the goal it serves") {
+		t.Fatalf("the list was disturbed by a signal key:\n%s", listed)
+	}
+	keys.Write([]byte("\r"))
+	if answer := answers.line(t); answer != "Write the goal it serves" {
+		t.Fatalf("answer = %q", answer)
+	}
+}
+
+// TestSuspendingDuringAChoiceTakesTheListDownAndPutsItBack is the stop from a
+// question rather than from a line: the shell that takes the foreground finds
+// no list on the screen, and the conversation that comes back finds the list
+// where it was, with the marker where the operator had moved it.
+func TestSuspendingDuringAChoiceTakesTheListDownAndPutsItBack(t *testing.T) {
+	t.Parallel()
+
+	console, keys, out := terminalUnderTest(t, 60)
+	stopped := make(chan string, 1)
+	console.raise = func(pressed signalKey) {
+		if pressed != signalSuspend {
+			t.Errorf("raised %v, want the suspend", pressed)
+		}
+		// What the screen holds at the moment the process stops: this is what the
+		// shell is about to be handed.
+		stopped <- out.screen().text()
+	}
+	// The terminal answers the negotiation the resumed conversation makes.
+	go func() {
+		for !strings.Contains(out.raw(), kittyQuery) {
+			time.Sleep(time.Millisecond)
+		}
+		keys.Write([]byte("\x1b[?0u\x1b[?62;c"))
+	}()
+	answers := choosing(context.Background(), console, "answer c1.1? ", testOptions, nil)
+	out.await(t, "the answers on offer", func(s *screen) bool {
+		return strings.Contains(s.text(), chosenMarker+"1. Write the goal it serves")
+	})
+	keys.Write([]byte("\x1b[B"))
+	out.await(t, "the marker on the second answer", func(s *screen) bool {
+		return strings.Contains(s.text(), chosenMarker+"2. Retire the work")
+	})
+
+	// Ctrl-Z, as a negotiated keyboard reports it.
+	keys.Write([]byte("\x1b[122;5u"))
+	select {
+	case screen := <-stopped:
+		if strings.Contains(screen, "Retire the work") || strings.Contains(screen, choiceKeys) {
+			t.Fatalf("the list was still on screen when the process stopped:\n%s", screen)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Ctrl-Z during a choice did not stop the conversation")
+	}
+
+	// Resumed: the list is drawn back with the marker where it was left.
+	out.await(t, "the list drawn again", func(s *screen) bool {
+		return strings.Contains(s.text(), chosenMarker+"2. Retire the work")
+	})
+	keys.Write([]byte("\r"))
+	if answer := answers.line(t); answer != "Retire the work" {
 		t.Fatalf("answer = %q", answer)
 	}
 }
