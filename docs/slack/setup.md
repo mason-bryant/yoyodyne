@@ -973,7 +973,7 @@ which has been answered without any of them being read:
 | Mark | What it means |
 | --- | --- |
 | :thinking_face: | Recorded, and not settled yet. It goes on as the reply arrives and stays while the directive stands. |
-| :white_check_mark: | The directive is answered — carried out, decided, answered, or withdrawn. It lands when the outcome is said in the thread, not when the directive was written down. |
+| :white_check_mark: | The directive is answered — carried out, decided, resolved, or withdrawn. It lands when the outcome is said in the thread, not when the directive was written down. |
 | :no_entry_sign: | Nothing was recorded. The thread says why. |
 
 The mark is about the directive rather than about the harness having read you:
