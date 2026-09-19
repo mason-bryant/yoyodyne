@@ -113,7 +113,7 @@ func TestCarryingOutAStandingInstructionLeavesItInForceForEveryProcess(t *testin
 	}
 	// Withdrawal is the one act that ends it, and it is still available: a
 	// disposition that had ended the directive would have taken this with it.
-	withdrawn, err := reader.Withdraw(standing.ID, "the operator, at a command line",
+	withdrawn, err := reader.Withdraw(standing.ID, "the operator, at a command line", "",
 		"the change it asked for has shipped", time.Now())
 	if err != nil {
 		t.Fatalf("Withdraw() error = %v", err)
@@ -140,7 +140,7 @@ func TestWithdrawingADirectiveTakesItOutOfForceForEveryProcess(t *testing.T) {
 	if err := store.Record(standing); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
-	withdrawn, err := store.Withdraw(standing.ID, "the operator, at a command line",
+	withdrawn, err := store.Withdraw(standing.ID, "the operator, at a command line", "",
 		"recorded in error: this was a question, not an instruction", time.Now())
 	if err != nil {
 		t.Fatalf("Withdraw() error = %v", err)
@@ -162,7 +162,7 @@ func TestWithdrawingADirectiveTakesItOutOfForceForEveryProcess(t *testing.T) {
 	if loaded.Text != standing.Text || loaded.WithdrawnBy != "the operator, at a command line" {
 		t.Fatalf("loaded = %#v, want the operator's words kept and who withdrew it recorded", loaded)
 	}
-	if _, err := reader.Withdraw(standing.ID, "the operator, at a command line", "again", time.Now()); err == nil {
+	if _, err := reader.Withdraw(standing.ID, "the operator, at a command line", "", "again", time.Now()); err == nil {
 		t.Fatal("Withdraw() on a withdrawn directive error = nil, want a refusal")
 	}
 }
@@ -178,7 +178,7 @@ func TestWithdrawingAPausingDirectiveStopsItHoldingWork(t *testing.T) {
 	if err := store.Record(recorded); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
-	if _, err := store.Withdraw(recorded.ID, "the operator, at a command line",
+	if _, err := store.Withdraw(recorded.ID, "the operator, at a command line", "",
 		"never mind: the question no longer arises", time.Now()); err != nil {
 		t.Fatalf("Withdraw() error = %v", err)
 	}

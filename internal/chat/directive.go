@@ -28,6 +28,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
@@ -57,8 +58,10 @@ type Directives interface {
 	// who did it and why. It is the only thing that ends a directive that paused
 	// nothing, and it settles nothing: what the record says was said, and
 	// whatever became of it, are kept. The reference may be any prefix that names
-	// exactly one directive.
-	Withdraw(ctx context.Context, reference, by, reason string) (directive.Directive, error)
+	// exactly one directive. The role is the one whose conversation the withdrawal
+	// was made in, so a surface answering the thread it came from can answer in
+	// that voice.
+	Withdraw(ctx context.Context, reference, by string, role domain.AgentRole, reason string) (directive.Directive, error)
 }
 
 // DirectiveRequest is what the operator asked to have recorded. The harness
@@ -288,7 +291,7 @@ func (s *Session) WithdrawDirective(ctx context.Context, reference, reason strin
 	if len(trimmed) > MaxOperatorMessageBytes {
 		return DirectiveWithdrawn{}, fmt.Errorf("reason is %d bytes, limit is %d", len(trimmed), MaxOperatorMessageBytes)
 	}
-	withdrawn, err := s.options.Directives.Withdraw(ctx, strings.TrimSpace(reference), s.withdrawnBy(), trimmed)
+	withdrawn, err := s.options.Directives.Withdraw(ctx, strings.TrimSpace(reference), s.withdrawnBy(), s.state.Role, trimmed)
 	if err != nil {
 		return DirectiveWithdrawn{}, fmt.Errorf("withdraw the directive: %w", err)
 	}
@@ -307,6 +310,8 @@ func (s *Session) WithdrawDirective(ctx context.Context, reference, reason strin
 // conversation writes does, because the record has to trace back to the moment
 // the operator decided it: a withdrawal is the one act that ends a standing
 // instruction, and "somebody withdrew it" is not an account anybody can follow.
+// The conversation's role travels beside it, as the role the withdrawal was made
+// under.
 func (s *Session) withdrawnBy() string {
 	return fmt.Sprintf("the operator, from conversation %s, after turn %d", s.state.ConversationID, s.state.Turns)
 }

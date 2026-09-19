@@ -406,6 +406,11 @@ func TestAnOperatorWithdrawsADirectiveFromTheConversation(t *testing.T) {
 	if !strings.Contains(settled.WithdrawnBy, "the operator") {
 		t.Fatalf("withdrawn by = %q, want the operator and where they did it", settled.WithdrawnBy)
 	}
+	// And under which role, so a thread the directive came from is answered in
+	// the voice of the conversation that took it back.
+	if settled.WithdrawnRole != domain.RoleProductManager {
+		t.Fatalf("withdrawn role = %q, want this conversation's role", settled.WithdrawnRole)
+	}
 	// And the listing has nothing left in force, with the record itself under
 	// what is over rather than gone from the page.
 	listing := transcript[strings.LastIndex(transcript, "in force: none"):]
@@ -636,9 +641,9 @@ func (f *fakeDirectives) CarryOut(_ context.Context, reference, outcome string) 
 	})
 }
 
-func (f *fakeDirectives) Withdraw(_ context.Context, reference, by, reason string) (directive.Directive, error) {
+func (f *fakeDirectives) Withdraw(_ context.Context, reference, by string, role domain.AgentRole, reason string) (directive.Directive, error) {
 	return f.settle(reference, func(candidate directive.Directive) (directive.Directive, error) {
-		return candidate.Withdraw(by, reason, settledAt)
+		return candidate.Withdraw(by, role, reason, settledAt)
 	})
 }
 

@@ -843,6 +843,43 @@ func acknowledged(topic notify.Topic, kind notify.Kind, recorded directive.Direc
 	}
 }
 
+// withdrawn is the message that says a directive somebody asked for in a thread
+// was taken back, and why. It is the one account of a directive that is not a
+// settlement: nothing was carried out and nothing was answered, and saying it
+// as either would claim something the record refuses to. What the thread is owed
+// is the withdrawal's own words — and, where what was taken back was holding
+// more than this item, that it was.
+//
+// It is said in the voice of the role the withdrawal was made under, which is
+// the conversation the operator took it back in or the agent that took it back
+// at a command line; one the operator made at a terminal was made under nobody's
+// persona and is said by the harness, as the operator's own switches are.
+func withdrawn(topic notify.Topic, recorded directive.Directive) notify.Notification {
+	text := recorded.Withdrawal
+	if reach := reached(recorded); reach != "" {
+		text += " " + reach
+	}
+	speaker := notify.Harness()
+	if recorded.WithdrawnRole != "" {
+		speaker = notify.Persona(recorded.WithdrawnRole, "")
+	}
+	return notify.Notification{
+		Topic:   topic,
+		Speaker: speaker,
+		Event: notify.Event{
+			Kind:     notify.KindDirectiveWithdrawn,
+			At:       recorded.WithdrawnAt.UTC(),
+			Severity: report.SeverityNote,
+			Refs:     notify.Refs{WorkItemID: workItemOf(topic), DirectiveID: recorded.ID},
+			Detail: notify.Detail{
+				ReceivedBy: recorded.ReceivedBy.Title(),
+				Artifact:   recorded.Artifact,
+			},
+			Text: text,
+		},
+	}
+}
+
 // refused is the message that says a reply recorded nothing, and why. It is said
 // in the thread rather than only in the sink's log for the reason the whole
 // inbound half is acknowledged: a person who steers from a phone has nothing else

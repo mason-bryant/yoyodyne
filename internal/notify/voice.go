@@ -192,6 +192,7 @@ var harnessVoice = voice{
 		KindDirectiveResolved:        "That is settled: {text}",
 		KindDirectiveCarriedOut:      "That was carried out: {text}",
 		KindDirectiveRefused:         "Nothing was recorded from that reply: {why}",
+		KindDirectiveWithdrawn:       "That was withdrawn, and no longer applies: {text}",
 		KindIntakeHeld:               "Intake is held for this product: {why}",
 		KindIntakeReleased:           "Intake is released for this product.",
 		KindHoldPlaced:               "All harness activity is held.",
@@ -257,6 +258,7 @@ var developerVoice = voice{
 		KindDirectiveResolved:        "That is settled: {text}. I pick the change up from where it stopped.",
 		KindDirectiveCarriedOut:      "What was asked for is done: {text}. Nothing about this item was waiting on it.",
 		KindDirectiveRefused:         "That reply changed nothing about what I'm building: {why}",
+		KindDirectiveWithdrawn:       "That was taken back, so I'm no longer building under it and nothing about this item waits on it: {text}",
 		KindIntakeHeld:               "Intake is held, so nothing new reaches me: {why}",
 		KindIntakeReleased:           "Intake is open again; I'll take what I'm given.",
 		KindHoldPlaced:               "Held before my next provider call. Nothing of the change is lost.",
@@ -322,6 +324,7 @@ var reviewerVoice = voice{
 		KindDirectiveResolved:        "That is settled: {text}. What I judge against is settled with it.",
 		KindDirectiveCarriedOut:      "That was carried out: {text}. It stood while I judged this and it stands now.",
 		KindDirectiveRefused:         "Nothing in that reply reaches what I judge this against: {why}",
+		KindDirectiveWithdrawn:       "That was taken back, so I no longer judge the change against it; what I judged while it stood was judged against it: {text}",
 		KindIntakeHeld:               "Intake is held, so nothing new will arrive for review: {why}",
 		KindIntakeReleased:           "Intake is open; work will reach me again.",
 		KindHoldPlaced:               "Held before my next review. Nothing already judged changes.",
@@ -386,6 +389,7 @@ var developmentManagerVoice = voice{
 		KindDirectiveResolved:        "That is settled: {text}. The item it held moves again.",
 		KindDirectiveCarriedOut:      "That was carried out: {text}. It held nothing up, so this is what came of it rather than the queue moving.",
 		KindDirectiveRefused:         "That reply is not direction anything can act on, so nothing about this item moved: {why}",
+		KindDirectiveWithdrawn:       "That was taken back, so it is no longer direction this item is under and anything it was holding moves again: {text}",
 		KindIntakeHeld:               "Intake is held, so I pull nothing new until it lifts: {why}",
 		KindIntakeReleased:           "Intake is released; I'm pulling from the top of the backlog again.",
 		KindHoldPlaced:               "Everything is held. Nothing new starts, and nothing in flight is lost.",
@@ -451,6 +455,7 @@ var productManagerVoice = voice{
 		KindDirectiveResolved:        "The operator settled it: {text}",
 		KindDirectiveCarriedOut:      "It was carried out, and this is what came of what the operator asked for: {text}",
 		KindDirectiveRefused:         "The operator said something here the harness would not record as a directive rather than guess at it: {why}",
+		KindDirectiveWithdrawn:       "The operator took that back, so it no longer applies; what was directed while it stood stays on the record: {text}",
 		KindIntakeHeld:               "Intake is held, so nothing new is chosen until somebody lifts it: {why}",
 		KindIntakeReleased:           "The operator released intake; the backlog is being pulled from again.",
 		KindHoldPlaced:               "The operator holds all harness activity.",
@@ -516,6 +521,7 @@ var architectVoice = voice{
 		KindDirectiveResolved:        "That is settled: {text}. The pause it held is lifted where it stood, rather than the work restarting.",
 		KindDirectiveCarriedOut:      "That was carried out: {text}. A directive that pauses nothing still has a disposition, and this is it recorded rather than remembered.",
 		KindDirectiveRefused:         "The channel refused that reply rather than inferring a directive from it: {why}",
+		KindDirectiveWithdrawn:       "That was taken back and kept rather than deleted, so what was done while it stood stays explicable: {text}",
 		KindIntakeHeld:               "Intake is held, which stops selection and nothing already running: {why}",
 		KindIntakeReleased:           "Intake is released; selection resumes.",
 		KindHoldPlaced:               "All harness activity is held, at the provider-call boundary rather than mid-generation.",
@@ -668,6 +674,12 @@ var nextMoves = map[Kind]string{
 	// answer somebody was owed has just arrived.
 	KindDirectiveCarriedOut: "nobody's — what was asked for is done, and nothing was waiting on it.",
 	KindDirectiveRefused:    "the operator's — nothing was recorded, so nothing about the work has changed.",
+	// A withdrawn directive is over, and nobody has to do anything for that to be
+	// so: one that paused work stops holding it, and one that paused nothing was
+	// holding nothing. The clause covers both rather than naming a wait, because
+	// the person reading it has just been told the thing they asked about was
+	// taken back.
+	KindDirectiveWithdrawn: "nobody's — the directive no longer applies, and any work it was holding carries on from where it stopped.",
 	// The operator's switches and the session that chooses work. These are about
 	// the whole line rather than one item, and every one of them is waiting on
 	// somebody by name.

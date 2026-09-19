@@ -152,17 +152,20 @@ var reaches = map[Kind]Reach{
 	KindProposalRaised: ReachChannel,
 	KindExchangeTurn:   ReachChannel,
 	KindExchangeClosed: ReachChannel,
-	// What a reply in a thread did. All four are addressed to the person who typed
-	// the words being read back to them, and all four reach that person by name
-	// wherever they are posted — so the channel level buys them nothing, and the
-	// three that settle something belong in the thread that asked. The one
-	// exception is a directive that left something unresolved, which pauses the
-	// work it affects until somebody settles it: that one is promoted below, from
-	// what the record left unsettled rather than from the kind.
+	// What a reply in a thread did, and what later became of it. All five are
+	// addressed to the person who typed the words being read back to them, and all
+	// five reach that person by name wherever they are posted — so the channel
+	// level buys them nothing, and the four that answer something belong in the
+	// thread that asked. The one exception is a directive that left something
+	// unresolved, which pauses the work it affects until somebody settles it: that
+	// one is promoted below, from what the record left unsettled rather than from
+	// the kind. A withdrawal is the answer the thread's reader asked for, in the
+	// communication rule's sense, and nothing about it is anybody's to act on.
 	KindDirectiveRecorded:   ReachThread,
 	KindDirectiveResolved:   ReachThread,
 	KindDirectiveCarriedOut: ReachThread,
 	KindDirectiveRefused:    ReachThread,
+	KindDirectiveWithdrawn:  ReachThread,
 	// The operator's two switches, which are about the whole line and are his own
 	// to lift.
 	KindIntakeHeld:     ReachChannel,

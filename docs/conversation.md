@@ -771,10 +771,13 @@ that pauses work lifts that pause without answering what it was waiting for,
 which is what taking a question back means.
 
 From a conversation, who is you: the record names the conversation and the turn
-you did it on. From the command line it is asked for rather than assumed —
-`--by` is required, because agents run `yoyo` too and a command line does not say
-who typed at it. Putting "the operator" on a withdrawal an agent made would be a
-false answer to the one question that record exists to answer.
+you did it on, and the conversation's role beside them. From the command line it
+is asked for rather than assumed — `--by` is required, because agents run `yoyo`
+too and a command line does not say who typed at it, and an agent names its role
+with `--as`. Putting "the operator" on a withdrawal an agent made would be a
+false answer to the one question that record exists to answer. The role is what
+a Slack thread the directive was asked for in is answered in the voice of, when
+the withdrawal is said there.
 
 From the command line the same records are reachable, which is how a directive
 you gave to an agent other than the product manager gets written down:

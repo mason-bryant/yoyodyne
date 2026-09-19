@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -75,6 +76,10 @@ const (
 	// asked for in a thread. It names the directive, because a directive is
 	// settled once and what settled it is said once.
 	outcomeMark = "outcome:"
+	// withdrawalMark records having said that one such directive was taken back.
+	// It is a mark of its own rather than the outcome's because a directive can
+	// be both — carried out and later withdrawn — and each is said once.
+	withdrawalMark = "withdrawal:"
 	// buildMark names the build a running session is standing on, so a restart
 	// onto a different binary re-arms rather than inheriting the last one's clock.
 	buildMark = "build:"
@@ -678,6 +683,17 @@ func (f *HarnessFeed) usageLimitDeliveries(cursors Cursors, streams map[string]s
 // said in the thread, by the reply that made it, and the two halves post from
 // different goroutines and cannot share a memory of what they have said.
 //
+// A withdrawal is read here as well, and it is the one thing said from this
+// stream that is not a settlement. Withdrawing is deliberately not a
+// disposition, so a thread-recorded directive the operator took back was never
+// answered by the settlement reading: its reply wore the thinking face forever,
+// in a thread that had been told the directive was heard and was never told it
+// was taken back. It is said once, in the voice of whoever took it back, and it
+// moves the mark exactly as a settlement does — there is an answer to read.
+// Nothing the connection does withdraws a directive, so nothing here defers to
+// it. A directive can be both carried out and later withdrawn, and each is said
+// once under a mark of its own.
+//
 // What was settled before the watermark is history, exactly as it is on every
 // stream that reads a record. The per-directive mark alone would not hold that
 // line: the marks live in the cursors, the steer map does not, and the setup
@@ -706,20 +722,14 @@ func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]st
 	}
 	var deliveries []Delivery
 	advanced := cursor
-	for _, directed := range recorded {
-		steer, found := steers.Lookup(directed.ID)
-		if !found || steer.Said || !directed.Resolved() {
-			continue
-		}
-		if predates(cursors.Since, *directed.ResolvedAt) {
-			// Settled before this product's reporting began, or before it began
-			// again. It is read past on age rather than marked, because a mark is
-			// what a cursor reset just threw away and this has to hold without one.
-			continue
-		}
-		mark := outcomeMark + directed.ID
-		if advanced.Has(mark) {
-			continue
+	// answer says one thing that became of a directive in the thread it was asked
+	// in, under one mark, and reports whether it was said now. What was settled or
+	// withdrawn before the watermark is read past on age rather than marked,
+	// because a mark is what a cursor reset just threw away and this has to hold
+	// without one.
+	answer := func(directed directive.Directive, steer Steer, mark string, at time.Time, said func(notify.Topic) notify.Notification) {
+		if predates(cursors.Since, at) || advanced.Has(mark) {
+			return
 		}
 		topic, err := notify.ParseTopic(steer.Topic)
 		if err != nil {
@@ -729,21 +739,37 @@ func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]st
 			f.say("directive %s is remembered against %q, which names no thread, so what became of it was not said there: %v", directed.ID, steer.Topic, err)
 			advanced = advanced.With(mark)
 			deliveries = append(deliveries, Delivery{Stream: directiveStream, Cursor: advanced})
-			continue
+			return
 		}
 		advanced = advanced.With(mark)
 		deliveries = append(deliveries, Delivery{
-			Stream:  directiveStream,
-			Cursor:  advanced,
-			Mention: steer.Member,
-			Reply:   steer.Message,
-			// How it was settled decides how it is said. A directive that paused
-			// work is reported as resolved and a directive that paused nothing as
-			// carried out, because the reader of the second one was never waiting
-			// for work to resume — they were waiting to hear what came of what they
-			// asked for.
-			Notification: acknowledged(topic, settledKind(directed), directed, *directed.ResolvedAt),
+			Stream:       directiveStream,
+			Cursor:       advanced,
+			Mention:      steer.Member,
+			Reply:        steer.Message,
+			Notification: said(topic),
 		})
+	}
+	for _, directed := range recorded {
+		steer, found := steers.Lookup(directed.ID)
+		if !found {
+			continue
+		}
+		if directed.Resolved() && !steer.Said {
+			answer(directed, steer, outcomeMark+directed.ID, *directed.ResolvedAt, func(topic notify.Topic) notify.Notification {
+				// How it was settled decides how it is said. A directive that paused
+				// work is reported as resolved and a directive that paused nothing as
+				// carried out, because the reader of the second one was never waiting
+				// for work to resume — they were waiting to hear what came of what they
+				// asked for.
+				return acknowledged(topic, settledKind(directed), directed, *directed.ResolvedAt)
+			})
+		}
+		if directed.Withdrawn() {
+			answer(directed, steer, withdrawalMark+directed.ID, *directed.WithdrawnAt, func(topic notify.Topic) notify.Notification {
+				return withdrawn(topic, directed)
+			})
+		}
 	}
 	return deliveries, nil
 }

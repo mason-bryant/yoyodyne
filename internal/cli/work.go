@@ -131,8 +131,8 @@ func (d conversationDirectives) CarryOut(_ context.Context, reference, outcome s
 // the same reason: whether the operator still means a directive is a fact about
 // the product, and one withdrawn in a conversation has to stop reaching the runs
 // every other process makes.
-func (d conversationDirectives) Withdraw(_ context.Context, reference, by, reason string) (directive.Directive, error) {
-	return d.store.Withdraw(reference, by, reason, time.Now())
+func (d conversationDirectives) Withdraw(_ context.Context, reference, by string, role domain.AgentRole, reason string) (directive.Directive, error) {
+	return d.store.Withdraw(reference, by, role, reason, time.Now())
 }
 
 // Survey reads what the harness has in flight from durable run state and what

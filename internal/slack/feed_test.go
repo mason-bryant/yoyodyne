@@ -569,6 +569,122 @@ func TestWhatBecameOfAnOperationalDirectiveIsSaidInTheThreadThatAskedForIt(t *te
 	harness.poll(t, cursors)
 }
 
+// A directive asked for in a thread and later taken back was never answered
+// there, because withdrawing is deliberately not a settlement and the outcome
+// reading reads settlements. The reply sat wearing the thinking face for as long
+// as the record stood, in a thread told the directive was heard and never told
+// it was taken back. So the withdrawal is said where they asked, in the voice of
+// the role it was taken back under, carrying the reply so its mark moves — once.
+func TestAWithdrawnDirectiveSaidInAThreadIsAnsweredInThatThread(t *testing.T) {
+	t.Parallel()
+
+	const member = "U0OPERATOR"
+	const askTS = "1750000001.000200"
+	harness := newTestHarness(t, time.Time{})
+	recorded := harness.directive(t, "yoyodyne-ifd.68.3", member, askTS)
+	cursors := harness.poll(t, harness.start())
+
+	if _, err := harness.directives.Withdraw(recorded.ID, "the operator, from conversation chat-91253e0e, after turn 557",
+		domain.RoleProductManager, "never mind: the work went the other way and the question no longer arises", moment); err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	batch, err := harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	said := 0
+	for _, delivery := range batch.Deliveries {
+		if delivery.Stream != directiveStream {
+			continue
+		}
+		said++
+		cursors.Streams[delivery.Stream] = delivery.Cursor
+		if delivery.Notification.Event.Kind != notify.KindDirectiveWithdrawn {
+			t.Fatalf("said %q, want the directive said as withdrawn rather than as settled", delivery.Notification.Event.Kind)
+		}
+		if delivery.Notification.Topic.Key() != "work-item:yoyodyne-ifd.68.3" {
+			t.Fatalf("said in %q, want the thread the directive was asked for in", delivery.Notification.Topic.Key())
+		}
+		// In the voice of the conversation that took it back, not the harness's.
+		if delivery.Notification.Speaker.Role != domain.RoleProductManager {
+			t.Fatalf("speaker = %#v, want the role the withdrawal was made under", delivery.Notification.Speaker)
+		}
+		if delivery.Mention != member || delivery.Reply != askTS {
+			t.Fatalf("delivery = %#v, want the person who asked tagged and their message carried, so its mark stops saying the directive is open", delivery)
+		}
+		if !strings.HasPrefix(delivery.Notification.Event.Text, "never mind: the work went the other way") {
+			t.Fatalf("said %q, want why it was withdrawn", delivery.Notification.Event.Text)
+		}
+		if delivery.Notification.Event.Refs.DirectiveID != recorded.ID {
+			t.Fatalf("refs = %#v, want the directive it is about", delivery.Notification.Event.Refs)
+		}
+		if !delivery.Posts() {
+			t.Fatalf("delivery = %#v, want a withdrawal posted to the person who asked", delivery)
+		}
+	}
+	if said != 1 {
+		t.Fatalf("said %d withdrawals, want exactly one", said)
+	}
+	// Said once, like every other crossing.
+	harness.poll(t, cursors)
+}
+
+// A directive that was carried out and later taken back is both things, and the
+// thread hears both: what came of it when it did, and that it no longer applies
+// when the operator says so. Each is said once, and the second is not swallowed
+// by the mark that says the first was said. One taken back by the operator at a
+// terminal was taken back under nobody's persona, and the harness says so.
+func TestADirectiveCarriedOutAndThenWithdrawnIsAnsweredTwice(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	recorded := harness.operationalDirective(t, "yoyodyne-ifd.68.3", "U0OPERATOR", "1750000001.000200")
+	if _, err := harness.directives.CarryOut(recorded.ID, "admitted yoyodyne-ifd.171 to the backlog", moment); err != nil {
+		t.Fatalf("CarryOut() error = %v", err)
+	}
+	cursors := harness.poll(t, harness.start(), notify.KindDirectiveCarriedOut)
+
+	if _, err := harness.directives.Withdraw(recorded.ID, "Mason, at a terminal", "",
+		"we open small documentation pull requests again", moment.Add(time.Hour)); err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	batch, err := harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	said := 0
+	for _, delivery := range batch.Deliveries {
+		if delivery.Stream != directiveStream {
+			continue
+		}
+		said++
+		cursors.Streams[delivery.Stream] = delivery.Cursor
+		if delivery.Notification.Event.Kind != notify.KindDirectiveWithdrawn {
+			t.Fatalf("said %q, want the withdrawal and not the outcome again", delivery.Notification.Event.Kind)
+		}
+		if !delivery.Notification.Speaker.IsHarness() {
+			t.Fatalf("speaker = %#v, want the harness for a withdrawal made under nobody's persona", delivery.Notification.Speaker)
+		}
+	}
+	if said != 1 {
+		t.Fatalf("said %d withdrawals, want exactly one", said)
+	}
+	harness.poll(t, cursors)
+}
+
+// A withdrawal from before the watermark is history, exactly as a settlement is.
+func TestAWithdrawalFromBeforeTheWatermarkIsNotSaid(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment.Add(time.Hour))
+	recorded := harness.directive(t, "yoyodyne-ifd.68.3", "U0OPERATOR", "1750000001.000200")
+	if _, err := harness.directives.Withdraw(recorded.ID, "Mason, at a terminal", "",
+		"withdrawn long before the channel existed", moment); err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	harness.poll(t, harness.start())
+}
+
 // A settlement that happened before this product's reporting began is history,
 // exactly as everything else read from a record is. The per-directive marks live
 // in the cursors and the steer map does not, so an operator who starts the

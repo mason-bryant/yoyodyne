@@ -1240,6 +1240,49 @@ func TestAnOutcomeThePassSaysTagsWhoAskedAndSettlesTheMarkOnTheirReply(t *testin
 	}
 }
 
+// A withdrawal is not a settlement, and the pass must not need it to be one to
+// move the mark: the reply that asked has worn the thinking face since the
+// directive was recorded, and it stops doing so at the moment the withdrawal is
+// said in its thread, exactly as it would for an outcome. The mark is decided by
+// the delivery carrying the reply rather than by any table keyed on the kind, so
+// what this pins is that the withdrawal delivery carries it and the pass acts on
+// it — the reply starts wearing the thinking face here, and ends wearing the
+// settled mark alone.
+func TestAWithdrawalThePassSaysTagsWhoAskedAndSettlesTheMarkOnTheirReply(t *testing.T) {
+	t.Parallel()
+
+	const member = "U0OPERATOR"
+	const askTS = "1750000001.000200"
+	posts := &recordedPosts{wearing: map[string]map[string]bool{
+		askTS: {notify.ReceiptUnderConsideration.Symbol(): true},
+	}}
+	feed := &fixedFeed{deliveries: []Delivery{withdrawal(1, member, askTS)}}
+	if err := newTestSink(t, t.TempDir(), feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %#v, want the thread opened and the withdrawal said in it", posts.requests)
+	}
+	said := posts.requests[1]
+	if !strings.HasPrefix(said.Text, "<@"+member+"> ") {
+		t.Fatalf("said %q, want the withdrawal to reach the person who asked by name", said.Text)
+	}
+	if !strings.Contains(said.Text, "never mind: the work went the other way") {
+		t.Fatalf("said %q, want why it was withdrawn", said.Text)
+	}
+	if !strings.HasPrefix(said.Text, "<@"+member+"> The operator took that back") {
+		t.Fatalf("said %q, want it in the voice of the role it was withdrawn under", said.Text)
+	}
+	worn := posts.wearing[askTS]
+	if worn[notify.ReceiptUnderConsideration.Symbol()] {
+		t.Fatalf("the reply that asked still wears %#v, want the thinking face cleared once the withdrawal was said", worn)
+	}
+	if !worn[notify.ReceiptSettled.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply that asked wears %#v, want the settled mark alone once the withdrawal was said", worn)
+	}
+}
+
 // A recorded directive is demoted to its thread, and the whole of what makes that
 // safe is that it reaches the person by name from inside the thread. Nothing in
 // the reach table says that — it is a fact about how these deliveries are built —
@@ -1344,6 +1387,37 @@ func outcome(position uint64, member, replyTS string) Delivery {
 		Mention:      member,
 		Reply:        replyTS,
 		Notification: acknowledged(topic, notify.KindDirectiveResolved, recorded, settled),
+	}
+}
+
+// withdrawal is what the feed hands the sink when the record says a directive
+// somebody asked for in a thread was taken back: the same shape as an outcome,
+// built by the same constructor the feed uses, so what the sink is tested
+// against is the delivery it actually gets.
+func withdrawal(position uint64, member, replyTS string) Delivery {
+	withdrawnAt := moment
+	recorded := directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            "directive-" + strings.Repeat("e", 32),
+		ProductID:     testProduct,
+		Kind:          directive.KindAmbiguous,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    moment,
+		Text:          "ambiguous: which of the two branches did you mean",
+		Unresolved:    "which of the two branches did you mean",
+		Scope:         []string{"yoyodyne-ifd.68.3"},
+		Withdrawal:    "never mind: the work went the other way and the question no longer arises",
+		WithdrawnBy:   "the operator, from conversation chat-91253e0e, after turn 557",
+		WithdrawnAt:   &withdrawnAt,
+		WithdrawnRole: domain.RoleProductManager,
+	}
+	topic := notify.Topic{Kind: notify.TopicWorkItem, ID: "yoyodyne-ifd.68.3"}
+	return Delivery{
+		Stream:       directiveStream,
+		Cursor:       Cursor{Position: position},
+		Mention:      member,
+		Reply:        replyTS,
+		Notification: withdrawn(topic, recorded),
 	}
 }
 
