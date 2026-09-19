@@ -190,9 +190,17 @@ var conversationAuthorities = map[domain.AgentRole]conversationAuthority{
 // waits on nobody unless she escalates it (yoyodyne-ifd.427), and it is the
 // same authority as triage — deciding what becomes of work that stopped moving
 // — one level up, held under the same capability.
+//
+// Both roles' `label` puts one of the tracker's own labels on an item or takes
+// it off. It is the operator's 2026-09-19 admission practice under the
+// reliability directive (yoyodyne-ifd.419) — a label on every item admitted
+// under it — which the product manager could not follow without an action that
+// sets one. A label is one of the item's own fields, so it is held under the
+// same capability as updating the item, which is why the development manager
+// has it too.
 var grantedSinceTheConversion = map[domain.AgentRole][]string{
-	domain.RoleProductManager:     {"repair"},
-	domain.RoleDevelopmentManager: {"brake"},
+	domain.RoleProductManager:     {"repair", "label"},
+	domain.RoleDevelopmentManager: {"brake", "label"},
 }
 
 func TestConversationAuthorityDecidesWhatItDecidedBeforeTheConversion(t *testing.T) {

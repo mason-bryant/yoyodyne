@@ -102,8 +102,8 @@ It has no tools: no filesystem, no commands, no network. What it has instead are
 capabilities the harness performs on its behalf. The first is the work tracker,
 through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
-goal, update, reparent, reprioritize, park and unpark, link and unlink a
-dependency, repair state the records have made stale, close, and
+goal, update, label and unlabel, reparent, reprioritize, park and unpark, link
+and unlink a dependency, repair state the records have made stale, close, and
 retire. One further operation is about none of that: `handle` records
 what became of a report another role filed, which is how the pile it is shown
 [stops being asked about](reporting.md#who-reads-them-and-what-became-of-each-one). Every
@@ -513,6 +513,24 @@ On 2026-08-27 one drained to the bottom, started work a scope decision had
 deferred months earlier, and the run failed having cost $34.38. Parking is not
 retroactive either: an item parked by convention stays selectable until it is
 parked in fact.
+
+An item also carries the tracker's own labels, and they are how an admission
+practice is written where it can be checked. The practice that provoked this is
+the reliability directive of 2026-09-19: every item admitted under it, every
+bug, and every stall or mistake fix carries a `reliability` label, and a seat
+that watches for the label has work only where the label is there. `labels` on
+a creation applies them in the same write as the admission, so the item never
+exists unlabelled — for the reason `parked` and `executor` are set there — and
+`label` puts one on an item already in the queue with `add` or takes one off
+with `remove`, one label per action, with the reason recorded on the item
+beside the change. A label is an identifier, one word such as `reliability`,
+and an action naming anything else is refused whole; a child created under a
+labelled parent inherits the parent's labels, which is Beads' own behaviour.
+Labels are listed beside each item's executor wherever the queue is shown, so
+a survey says which items carry which. The development manager has the same
+two, because a label is one of the item's fields and she may already update an
+item. Nothing here migrates the queue: the items that qualified before the
+action existed were labelled by hand.
 
 Work it will not attach to a goal is not proposed and not quietly dropped
 either — it stops and asks you, and the three cases stay apart because you
@@ -927,9 +945,9 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Its own documents |
 | --- | --- | --- | --- |
-| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, parks and releases, closes, retires, [repairs stale state](#backlog-state-that-has-stopped-being-true) | brief and goals: proposes, never writes |
+| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, labels, parks and releases, closes, retires, [repairs stale state](#backlog-state-that-has-stopped-being-true) | brief and goals: proposes, never writes |
 | architect | yes | nothing | designs, decisions, invariants: decides, and you record |
-| development manager | yes | creates and links **only underneath admitted work**; records triage decisions on stopped work | none |
+| development manager | yes | creates and links **only underneath admitted work**; updates and labels items; records triage decisions on stopped work | none |
 | developer, reviewer | yes | nothing | none |
 
 The product manager's admitting is the one row a setting moves, and it moves in
