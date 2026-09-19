@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2502,17 +2503,42 @@ func TestAReadoptionThePipelineDidNotTakeIsTriedAgainAtTheNextPull(t *testing.T)
 }
 
 // A run at its promotion is the one the bound does not stop. It holds the
-// target branch's lease and is minutes from its end, and a promotion cancelled
-// part-way is the one boundary durable state cannot describe — so the session
-// waits it out past the bound, and the restart follows it.
-func TestTheDrainBoundLeavesARunAtItsPromotionToFinish(t *testing.T) {
+// target branch's lease, and a promotion cancelled part-way is the one boundary
+// durable state cannot describe — so the session waits it out past the bound,
+// and the restart follows it. The wait is the session's ordinary loop rather
+// than a silence: its recurring tasks fire on their cadence, and only new
+// starts are declined, each declined pull saying so. A forge outage can hold a
+// promotion for hours, and those hours must not be the 07:35Z shape again.
+func TestTheDrainBoundLeavesARunAtItsPromotionToFinishAndKeepsFiring(t *testing.T) {
 	t.Parallel()
 
 	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.capacity = 2
 	harness.drainLimit = 20 * time.Millisecond
 	harness.poll = 5 * time.Millisecond
 	deployment := &deployedOver{}
+	sessions := &recordedSessions{}
 	finished := make(chan struct{})
+	// The cadence comes due only once the bound has run out, which is the moment
+	// under test, and a second item is admitted then for the free seat.
+	pastTheBound := func() bool {
+		for _, transition := range sessions.recorded() {
+			if transition.draining != nil && transition.draining.BoundReached {
+				return true
+			}
+		}
+		return false
+	}
+	var firedPastTheBound atomic.Int32
+	harness.fire = func(h *scheduleHarness, _ int) (RecurringSweep, error) {
+		if !pastTheBound() {
+			return RecurringSweep{}, nil
+		}
+		if firedPastTheBound.Add(1) == 1 {
+			h.admit(readyItems("yoyodyne-two")...)
+		}
+		return RecurringSweep{Fired: []Fired{{Task: "development-manager-sweep", Role: domain.RoleDevelopmentManager, Turns: 1}}}, nil
+	}
 	harness.hostedRun = func(ctx context.Context, h *scheduleHarness, id string) (Outcome, error) {
 		deployment.deploy()
 		h.mu.Lock()
@@ -2527,13 +2553,19 @@ func TestTheDrainBoundLeavesARunAtItsPromotionToFinish(t *testing.T) {
 			return h.complete(id), nil
 		}
 	}
-	// The promotion finishes on its own clock, well after the bound.
+	// The promotion finishes on its own clock, once the session has fired its
+	// task past the bound and declined the seat the second item would take.
 	go func() {
-		time.Sleep(60 * time.Millisecond)
-		close(finished)
+		for {
+			if firedPastTheBound.Load() >= 2 {
+				close(finished)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}()
 
-	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Deployment: deployment}
 	schedule, err := scheduler.Schedule(context.Background())
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
@@ -2541,11 +2573,66 @@ func TestTheDrainBoundLeavesARunAtItsPromotionToFinish(t *testing.T) {
 	if schedule.Stopped != ScheduleRedeployed {
 		t.Fatalf("stopped = %q, want the restart once the promotion finished: %s", schedule.Stopped, schedule.Render())
 	}
-	if len(schedule.Started) != 1 || schedule.Started[0].Outcome.Status != runstate.StatusSucceeded {
-		t.Fatalf("started = %#v, want the promotion carried to its end rather than cancelled", schedule.Started)
+	// The promotion was carried to its end, and nothing was pulled into the
+	// free seat past the bound: the second item is left for the session that
+	// comes back.
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-one" || schedule.Started[0].Outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("started = %#v, want the promotion carried to its end rather than cancelled, and nothing started beside it", schedule.Started)
 	}
-	if schedule.Drain == nil || !schedule.Drain.BoundReached || len(schedule.Drain.Stopped) != 0 {
-		t.Fatalf("drain = %#v, want the bound reached and nothing stopped for it", schedule.Drain)
+	if schedule.Drain == nil || !schedule.Drain.BoundReached || len(schedule.Drain.Stopped) != 0 || schedule.Drain.Skipped == 0 {
+		t.Fatalf("drain = %#v, want the bound reached, nothing stopped for it, and the declined pulls counted", schedule.Drain)
+	}
+	// The recurring task fired past the bound, from the pull the session went
+	// on making while it waited on the promotion.
+	if len(schedule.Fired) < 2 {
+		t.Fatalf("fired = %#v, want the recurring task fired while the promotion was waited out past the bound", schedule.Fired)
+	}
+	// And the declined pull says what it declined for, marked on the drain so
+	// `yoyo status` names the session as restarting rather than idle.
+	declined := false
+	for _, transition := range sessions.recorded() {
+		if transition.state == runstate.WatchIdle && transition.draining != nil && transition.draining.PullSkipped &&
+			strings.Contains(transition.reason, "still going at its promotion, or still being stopped") && strings.Contains(transition.reason, "1 free seat(s)") {
+			declined = true
+		}
+	}
+	if !declined {
+		t.Fatalf("no idle transition said the seat was declined for the promotion being waited out: %#v", sessions.recorded())
+	}
+}
+
+// A held intake lets what is running finish, and a run the session before this
+// one put down for its redeploy is running work: it is re-adopted at the first
+// pull whether or not intake is held, because continuing it chooses nothing.
+func TestAHeldIntakeDoesNotStopAReadoption(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-two")...)
+	harness.capacity = 2
+	held := runstate.IntakeHold{SchemaVersion: runstate.IntakeHoldSchemaVersion, ProductID: "yoyodyne", HeldAt: harness.clock(), HeldBy: runstate.IntakeHolderOperator, Reason: "let what is running finish"}
+	harness.held = &held
+	harness.inFlight["yoyodyne-one"] = runstate.State{
+		RunID:        "run-one",
+		WorkItemID:   "yoyodyne-one",
+		Status:       runstate.StatusRunning,
+		Phase:        runstate.PhaseChecking,
+		RedeployStop: &runstate.RedeployStop{At: harness.clock(), Phase: runstate.PhaseChecking, BoundSeconds: 900},
+	}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+	sessions := &recordedSessions{}
+
+	schedule, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if order := harness.pullOrder(); len(order) != 1 || order[0] != "yoyodyne-one" {
+		t.Fatalf("pulled = %v, want the stopped run re-adopted and nothing new chosen under the hold", order)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].Readopted != "run-one" || schedule.Started[0].Outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("started = %#v, want the re-adoption carried to its end", schedule.Started)
+	}
+	if _, braked := sessions.entered(runstate.WatchBraked); !braked {
+		t.Fatalf("states = %v, want the session braked by the hold after the re-adoption", sessions.states())
 	}
 }
 

@@ -1181,6 +1181,17 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		}
 	}
 
+	// recheckSoon marks a drain bound applied with a hosted run still before its
+	// claim, which the next look at the top of the loop stops. The wait below
+	// comes back sooner than a poll while it is set.
+	recheckSoon := false
+	// wake is how long a wait on a hosted run lasts before the loop looks again.
+	wake := func() time.Duration {
+		if recheckSoon {
+			return min(poll, drainRecheck)
+		}
+		return poll
+	}
 	// wait is what a watch does instead of concluding the queue is empty: it
 	// collects a run of its own if one is still going, because a run finishing
 	// changes the answer sooner than any interval would, and otherwise sleeps out
@@ -1189,7 +1200,7 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	wait := func(pull Pull, state runstate.WatchState, said account) bool {
 		session.enter(state, said)
 		if running > 0 {
-			return collect(poll)
+			return collect(wake())
 		}
 		schedule.Polls++
 		return s.sleep(ctx, pull.Poll)
@@ -1358,36 +1369,28 @@ pulling:
 				schedule.Stopped = ScheduleRedeployed
 				break
 			}
-			// Past the bound the session hosts nothing more and waits for nothing
-			// more. The runs still going are stopped where they are — each at a
-			// phase the session that comes back can continue from — and preserved,
-			// and nothing is pulled or fired until that session takes over. A run at
-			// its promotion is the one exception: it holds the target branch's lease
-			// and is minutes from its end, and stopping it would leave a promotion
-			// only the repository could say the outcome of.
+			// Past the bound the session hosts nothing more. The runs still going
+			// are stopped where they are — each at a phase the session that comes
+			// back can continue from — and preserved. A run at its promotion is the
+			// one exception: it holds the target branch's lease, and stopping it
+			// would leave a promotion only the repository could say the outcome of,
+			// so it is waited out — and the wait is the session's ordinary loop,
+			// not a silence: the pull below is still opened, its recurring tasks
+			// still fire on their cadence, and only new starts are declined. A
+			// forge outage can hold a promotion for hours, and a session that
+			// stopped everything to wait on it would be the 07:35Z silence again
+			// with a different run at the bottom of it.
 			if drain.expired(s.now()) {
-				// Marked as reached before it is said, so the line that says it
-				// carries the mark `yoyo status` names the restart from — whichever
+				// Marked as reached before it is said, so the lines that say it
+				// carry the mark `yoyo status` names the restart from — whichever
 				// of the timer and the clock found the bound out.
 				drain.reached()
 				session.draining(drain.record(running))
-				session.enter(runstate.WatchIdle, account{reason: "the watch session is " + drain.record(running).Says(), running: running})
-				unstopped := s.stopHosted(&schedule, &drain, hosted, mine, runs)
-				// A run still before its claim has no phase to read and nothing yet to
-				// preserve, so it is left to reach one and stopped at the next look
-				// rather than cancelled into a dispatch that never became a run — and
-				// the look comes sooner than a poll. A run that has already ended and
-				// not been collected is the other thing with no record, and is
-				// collected here.
-				wake := poll
-				if unstopped > 0 {
-					wake = min(poll, drainRecheck)
-				}
-				if !collect(wake) {
-					schedule.Stopped = ScheduleCancelled
-					break
-				}
-				continue
+				// A run still before its claim has no phase to read and nothing yet
+				// to preserve, so it is left to reach one and stopped at the next
+				// look rather than cancelled into a dispatch that never became a
+				// run — and the look comes sooner than a poll.
+				recheckSoon = s.stopHosted(&schedule, &drain, hosted, mine, runs) > 0
 			}
 		}
 		pull, err := s.Open(ctx)
@@ -1467,42 +1470,6 @@ pulling:
 			s.brake(&schedule, pull, blockedInARow)
 			blockedInARow = 0
 		}
-		// The intake hold is read before anything is chosen, because choosing is
-		// the whole of what it holds. It is asked again on every pull rather than
-		// once for the pass: the hold that matters is the one the operator places
-		// while the scheduler is running, and a pass that answered from its first
-		// reading would keep choosing work for as long as it lasted.
-		hold, held, err := pull.Intake.Held()
-		if err != nil {
-			if !unreadable(fmt.Errorf("read whether intake is held: %w", err)) {
-				break
-			}
-			continue
-		}
-		if held {
-			schedule.IntakeHeld = &hold
-			if !s.Watching {
-				schedule.Stopped = ScheduleIntakeHeld
-				break
-			}
-			// A held intake is a brake rather than a stop: the session keeps
-			// polling and chooses nothing, and resumes in place when it is
-			// released. That is what makes holding intake something an operator
-			// can do to a session they are not sitting at.
-			if !wait(pull, runstate.WatchBraked, account{
-				reason: brakedReason(hold),
-				// This session's own runs: a held intake stops the choosing and
-				// interrupts nothing, and the reader has to be able to tell those apart.
-				// What another process has going is not read until after the hold is.
-				running: running,
-			}) {
-				schedule.Stopped = ScheduleCancelled
-				break
-			}
-			continue
-		}
-		schedule.IntakeHeld = nil
-
 		occupied, inFlight, err := occupiedItems(pull.Runs)
 		if err != nil {
 			if !unreadable(err) {
@@ -1511,10 +1478,12 @@ pulling:
 			continue
 		}
 		// The runs a session before this one stopped for its own redeploy are
-		// picked up here, before anything new is chosen: each already holds a
-		// seat, so continuing it costs the queue nothing, and it is exactly the
-		// work the restart was made to preserve. Nothing is pulled into a seat a
-		// re-adopted run holds, because the seat was never free.
+		// picked up here, before anything new is chosen and before the intake hold
+		// is read: each already holds a seat and a claim, so continuing it chooses
+		// no work — a held intake lets what is running finish, and a stopped run is
+		// running work put down for a moment — and it is exactly the work the
+		// restart was made to preserve. Nothing is pulled into a seat a re-adopted
+		// run holds, because the seat was never free.
 		if s.Watching {
 			for id, state := range inFlight {
 				if _, ours := mine[id]; ours || state.RedeployStop == nil {
@@ -1541,6 +1510,41 @@ pulling:
 				s.host(ctx, pull, id, index, selection, hosted, completions)
 			}
 		}
+		// The intake hold is read before anything is chosen, because choosing is
+		// the whole of what it holds. It is asked again on every pull rather than
+		// once for the pass: the hold that matters is the one the operator places
+		// while the scheduler is running, and a pass that answered from its first
+		// reading would keep choosing work for as long as it lasted.
+		hold, held, err := pull.Intake.Held()
+		if err != nil {
+			if !unreadable(fmt.Errorf("read whether intake is held: %w", err)) {
+				break
+			}
+			continue
+		}
+		if held {
+			schedule.IntakeHeld = &hold
+			if !s.Watching {
+				schedule.Stopped = ScheduleIntakeHeld
+				break
+			}
+			// A held intake is a brake rather than a stop: the session keeps
+			// polling and chooses nothing, and resumes in place when it is
+			// released. That is what makes holding intake something an operator
+			// can do to a session they are not sitting at.
+			if !wait(pull, runstate.WatchBraked, account{
+				reason: brakedReason(hold),
+				// This session's own runs: a held intake stops the choosing and
+				// interrupts nothing, and the reader has to be able to tell those apart.
+				running: running,
+			}) {
+				schedule.Stopped = ScheduleCancelled
+				break
+			}
+			continue
+		}
+		schedule.IntakeHeld = nil
+
 		for id := range mine {
 			// A run this session started and that has not reserved yet is in flight
 			// with no identifier to name; one that has reserved is already here under
@@ -1554,7 +1558,7 @@ pulling:
 		free := pull.Capacity - len(occupied)
 		if free < 1 {
 			if running > 0 {
-				if !collect(poll) {
+				if !collect(wake()) {
 					schedule.Stopped = ScheduleCancelled
 					break
 				}
@@ -1575,23 +1579,26 @@ pulling:
 		}
 
 		// A draining session pulls into its free seats right up to the restart,
-		// with one exception it says out loud: a pull made with the bound closer
+		// with two exceptions it says out loud. A pull made with the bound closer
 		// than one poll away would start a run only to stop it, so the seat is
-		// left for the session that comes back. Skipped rather than found empty,
-		// and said as skipped, because the two are otherwise the same silence.
-		if remaining, near := drain.nearBound(pull.Poll, s.now()); near {
+		// left for the session that comes back; and past the bound, while a run
+		// at its promotion is waited out, a run started now would be stopped at
+		// the next look. Skipped rather than found empty, and said as skipped,
+		// because the two are otherwise the same silence — and marked on the
+		// drain as well as said, so the read model names the poll as the session
+		// restarting rather than as an idle session over a queue with work in it.
+		if remaining, declined := drain.declinesStarts(pull.Poll, s.now()); declined {
 			schedule.Drain.Skipped++
-			// Marked on the drain as well as said, so the read model names this
-			// poll as the session restarting rather than as an idle session over a
-			// queue with work in it.
 			skipped := drain.record(running)
 			skipped.PullSkipped = true
 			session.draining(skipped)
-			if !wait(pull, runstate.WatchIdle, account{
-				reason: fmt.Sprintf("nothing more is pulled into the %d free seat(s): the drain bound is %s away, which is less than one poll, so the session that comes back pulls them; %s",
-					free, remaining.Round(time.Second), drain.record(running).Says()),
-				running: len(occupied),
-			}) {
+			reason := fmt.Sprintf("nothing more is pulled into the %d free seat(s): the drain bound is %s away, which is less than one poll, so the session that comes back pulls them; %s",
+				free, remaining.Round(time.Second), skipped.Says())
+			if drain.boundReached {
+				reason = fmt.Sprintf("nothing more is pulled into the %d free seat(s): the drain bound has run out and %s still going at its promotion, or still being stopped, is waited out rather than joined, so the session that comes back pulls them; %s",
+					free, plural(running, "run", "runs"), skipped.Says())
+			}
+			if !wait(pull, runstate.WatchIdle, account{reason: reason, running: len(occupied)}) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -2752,12 +2759,16 @@ func (d redeployDrain) expired(now time.Time) bool {
 	return d.boundReached || !now.Before(d.deadline())
 }
 
-// nearBound reports the bound being closer than one poll interval away, which
-// is when a pull into a free seat would start a run only to stop it, and how
-// close it is.
-func (d redeployDrain) nearBound(poll time.Duration, now time.Time) (time.Duration, bool) {
+// declinesStarts reports the drain being too close to its bound, or past it,
+// for a pull into a free seat to be worth making — a run started now would only
+// be stopped — and how far off the bound is, which is nothing once it has run
+// out.
+func (d redeployDrain) declinesStarts(poll time.Duration, now time.Time) (time.Duration, bool) {
 	if !d.active || d.limit <= 0 {
 		return 0, false
+	}
+	if d.boundReached {
+		return 0, true
 	}
 	remaining := d.deadline().Sub(now)
 	if remaining > poll {

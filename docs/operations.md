@@ -466,9 +466,11 @@ What the wait costs is nothing, and that is the whole of the rule:
   been renewed, and the poll that finds it renewed resumes the line by itself:
   **nothing is released and nothing is restarted.** A provider nobody can reach
   is asked about by pulling into it again once the probe interval has passed,
-  because nothing cheaper says whether the network is back. A drain (`yoyo work`
-  without `--watch`) stops on the wait instead, since it is a command you are
-  waiting on the return of.
+  because nothing cheaper says whether the network is back. A draining pass
+  (`yoyo work` without `--watch` — the pass that returns when the queue empties,
+  not the [redeploy drain](#a-session-draining-to-restart-into-a-deployed-build)
+  below) stops on the wait instead, since it is a command you are waiting on
+  the return of.
 - **A recurring task records the wait rather than a failed turn.** A firing due
   while it stands moves its cadence, asks the role nothing, and its sweep record
   says the provider is not authenticated (or cannot be reached) — so `yoyo
@@ -714,9 +716,19 @@ minutes rather than hours on purpose. Past that it restarts anyway:
   `yoyo run <beads-id>` continues one the same way if no session does, and
   `yoyo reconcile` leaves it alone as a run its own pipeline can continue.
 - A run at its promotion is the one exception: it holds the target branch's
-  lease and is minutes from its end, and a promotion cancelled part-way is the
-  one boundary durable state cannot describe, so the session waits it out past
-  the bound and restarts after it.
+  lease, and a promotion cancelled part-way is the one boundary durable state
+  cannot describe, so the session waits it out past the bound and restarts
+  after it. The wait is the session's ordinary loop and not a silence — the
+  pull is still opened every poll and every recurring task still fires on its
+  cadence; only new starts are declined, and each declined pull says so. A
+  forge outage can hold a promotion for hours, and those hours cost the
+  scheduler nothing but the seat the promotion holds.
+- No recurring task is ever skipped for the drain, so the sweep record has
+  nothing to carry: a firing already under way when the bound runs out is
+  finished, a firing due while a promotion is waited out is made, and a firing
+  due in the moment the session restarts is made by the session that comes
+  back at its first pull, because the cadence is claimed durably and the
+  restart takes a minute.
 - A run the bound stops **before it recorded anything a continuation could pick
   up** — no developer session yet — is not held with a marker nothing can act
   on. It is recorded as cancelled, with its branch and worktree preserved and
@@ -732,12 +744,17 @@ with no bound.
 
 **`yoyo status` names the drain throughout.** The session's line says it is
 draining, since when, under what bound, and until when, on every transition it
-writes while the drain lasts; once the bound has run out the not-startable line
-names the restart as its own state — whose move is nobody's, because the
-session comes back on its own — rather than reporting an idle session or no
-session, either of which would send you to start one that is already on its way
-back. The pass's own report, when the session returns, says the same: when the
-deploy was found, the bound, and which runs it stopped for it.
+writes while the drain lasts; once the bound has run out, or a pull has been
+declined for being within a poll of it, the not-startable line names the
+restart as its own state — whose move is nobody's, because the session comes
+back on its own — rather than reporting an idle session or no session, either
+of which would send you to start one that is already on its way back. The stop
+recorded as a restart reads that way for two minutes, which is the minute the
+re-execution is given plus slack: a new build that dies in its own startup
+after the exec writes nothing, and past that it reads as the ending it was —
+no session running, and yours to start. The pass's own report, when the
+session returns, says the same: when the deploy was found, the bound, and
+which runs it stopped for it.
 
 ## Recovering interrupted runs
 

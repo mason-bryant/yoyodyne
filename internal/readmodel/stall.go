@@ -278,6 +278,16 @@ func (s Stall) Mark() string {
 	return string(s.Reason) + ":" + s.Since.UTC().Format(time.RFC3339Nano)
 }
 
+// RestartGrace is how long a stop the session recorded as a restart is read as
+// a session on its way back. The re-execution is given a minute and happens in
+// milliseconds when it happens at all, and a restart that the operating system
+// refuses writes a second stop that is an ending — but a new build that exits
+// during its own startup, after the exec, writes nothing, and that is exactly
+// the build a self-developing harness deploys over itself. Past this the stop
+// is read as the ending it turned out to be, and the reader is told to start a
+// session.
+const RestartGrace = 2 * time.Minute
+
 // WhyNothingStarts is the one derivation of what has stopped the choosing.
 //
 // The order is the order an operator acts in: the switch that stops everything,
@@ -348,13 +358,17 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 	}
 	// Live is newest first, so the first idle session it holds is the latest one.
 	live := Live(sessions)
-	// A session whose drain has run out is stopping the runs it hosts and is
-	// seconds from restarting, and one within a poll of that bound has declined
-	// to pull into a free seat on purpose. Both are answered ahead of everything
-	// else the log says, because from every other record each is a live session
-	// choosing nothing, and the one thing that must not be said about either is
-	// that it wants looking at.
-	if len(live) > 0 && live[0].Draining != nil && (live[0].Draining.BoundReached || live[0].Draining.PullSkipped) {
+	// A session whose drain has run out has stopped the runs it hosts and is
+	// restarting as soon as it hosts nothing, and one within a poll of that bound
+	// has declined to pull into a free seat on purpose. Both are answered ahead
+	// of everything else the log says, because from every other record each is a
+	// live session choosing nothing, and the one thing that must not be said
+	// about either is that it wants looking at. A skip is read that way only
+	// while the bound it was declined for is near: past it, the session either
+	// stopped — which its own later lines say — or died, and a dead session must
+	// not go on reading as one on its way back.
+	if len(live) > 0 && live[0].Draining != nil &&
+		(live[0].Draining.BoundReached || (live[0].Draining.PullSkipped && now.Before(live[0].Draining.Until.Add(RestartGrace)))) {
 		return Stall{
 			Reason: ReasonRedeploying,
 			Says:   "the watch session is " + live[0].Draining.Says(),
@@ -389,10 +403,11 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 		}
 	}
 	// A stop the session recorded as a restart is a session on its way back
-	// rather than a line that went down: a restart that then did not happen
-	// writes a second, later stop that says so, and that one is read here
-	// instead.
-	if stopped.Restarting {
+	// rather than a line that went down — for as long as a restart takes. A
+	// restart that then did not happen writes a second, later stop that says
+	// so, and that one is read here instead; a new build that died in its own
+	// startup writes nothing, and is read past the grace as the ending it was.
+	if stopped.Restarting && now.Before(stopped.At.Add(RestartGrace)) {
 		return Stall{
 			Reason: ReasonRedeploying,
 			Says:   "the watch session stopped to restart into the build deployed over it and is on its way back",

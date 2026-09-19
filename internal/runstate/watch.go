@@ -350,9 +350,10 @@ type WatchDrain struct {
 	// Hosting is how many of the session's own runs it was waiting out when it
 	// recorded this. Zero is a session on the point of restarting.
 	Hosting int `json:"hosting,omitempty"`
-	// BoundReached marks the drain having run out: the session is stopping the
-	// runs it hosts, pulls nothing and fires nothing, and restarts as soon as
-	// they are preserved.
+	// BoundReached marks the drain having run out: the session has stopped and
+	// preserved the runs it hosts, pulls nothing more into a free seat, and
+	// restarts as soon as it hosts nothing — which, for a run at its promotion,
+	// is when that promotion ends. Its recurring tasks go on firing meanwhile.
 	BoundReached bool `json:"bound_reached,omitempty"`
 	// PullSkipped marks a poll that declined to pull into a free seat because
 	// the bound was less than one poll away — a run started then would only be
@@ -372,7 +373,7 @@ func (d WatchDrain) Says() string {
 	said := fmt.Sprintf("draining to restart into the build deployed over it since %s, bounded at %s (until %s)",
 		d.Since.UTC().Format(time.RFC3339), d.Bound(), d.Until.UTC().Format(time.RFC3339))
 	if d.BoundReached {
-		return said + "; the bound has run out, so the runs it hosts are being stopped and preserved for the session that comes back, and nothing is pulled or fired until it does"
+		return said + "; the bound has run out, so the runs it hosts are stopped and preserved for the session that comes back, nothing more is pulled into a free seat until it does, and its recurring tasks go on firing"
 	}
 	if d.PullSkipped {
 		return said + "; the bound is less than one poll away, so nothing more is pulled into a free seat and the session that comes back pulls it"

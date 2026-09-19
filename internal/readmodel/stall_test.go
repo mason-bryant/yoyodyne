@@ -110,7 +110,7 @@ func TestASessionRestartingIntoADeployedBuildIsNeitherIdleNorAbsent(t *testing.T
 	since := moment.Add(-20 * time.Minute)
 	drained := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-time.Minute),
 		Draining: &runstate.WatchDrain{Since: since, BoundSeconds: 900, Until: since.Add(15 * time.Minute), Hosting: 1, BoundReached: true}}
-	stall := WhyNothingStarts(Conditions{Sessions: held(drained)})
+	stall := WhyNothingStarts(Conditions{Sessions: held(drained), Now: moment})
 	if stall.Reason != ReasonRedeploying || !strings.Contains(stall.Says, "bounded at 15m0s") || !stall.Since.Equal(since) {
 		t.Fatalf("stall = %+v, want the drain named with its bound, since the deploy was found", stall)
 	}
@@ -123,21 +123,35 @@ func TestASessionRestartingIntoADeployedBuildIsNeitherIdleNorAbsent(t *testing.T
 
 	// A poll that declined to pull into a free seat because the bound was under
 	// a poll away is the session's own decision, not a queue nobody is pulling.
-	skipped := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-2 * time.Minute),
-		Draining: &runstate.WatchDrain{Since: since, BoundSeconds: 900, Until: since.Add(15 * time.Minute), Hosting: 1, PullSkipped: true}}
-	if stall := WhyNothingStarts(Conditions{Sessions: held(skipped)}); stall.Reason != ReasonRedeploying || !strings.Contains(stall.Says, "less than one poll away") {
+	nearSince := moment.Add(-14 * time.Minute)
+	skipped := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-time.Second),
+		Draining: &runstate.WatchDrain{Since: nearSince, BoundSeconds: 900, Until: nearSince.Add(15 * time.Minute), Hosting: 1, PullSkipped: true}}
+	if stall := WhyNothingStarts(Conditions{Sessions: held(skipped), Now: moment}); stall.Reason != ReasonRedeploying || !strings.Contains(stall.Says, "less than one poll away") {
 		t.Fatalf("stall = %+v, want the skipped pull named as the session restarting", stall)
+	}
+	// A skip whose bound is long past belongs to a session that has since
+	// stopped or died, and reads as the idle line it is.
+	if stall := WhyNothingStarts(Conditions{Sessions: held(skipped), Now: moment.Add(time.Hour)}); stall.Reason != ReasonSessionIdle {
+		t.Fatalf("stall = %+v, want a stale skip read as an idle session", stall)
 	}
 
 	restarting := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchStopped, At: moment.Add(-time.Minute), Restarting: true}
-	stall = WhyNothingStarts(Conditions{Sessions: held(drained, restarting)})
+	stall = WhyNothingStarts(Conditions{Sessions: held(drained, restarting), Now: moment})
 	if stall.Reason != ReasonRedeploying {
 		t.Fatalf("reason = %q (%q), want a stop recorded as a restart read as the session coming back", stall.Reason, stall.Says)
+	}
+	// A restart that took longer than a restart takes is not a restart: a new
+	// build that died in its own startup after the exec writes nothing, and the
+	// reader is owed the dead session rather than one forever on its way back.
+	stale := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchStopped, At: moment.Add(-RestartGrace - time.Second), Restarting: true}
+	stall = WhyNothingStarts(Conditions{Sessions: held(stale), Now: moment})
+	if stall.Reason != ReasonNoWatchSession {
+		t.Fatalf("reason = %q, want a stale restart read as no session running", stall.Reason)
 	}
 	// A restart that then did not happen writes a later stop that is an ending,
 	// and that one is what the log says.
 	ended := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchStopped, At: moment}
-	stall = WhyNothingStarts(Conditions{Sessions: held(drained, restarting, ended)})
+	stall = WhyNothingStarts(Conditions{Sessions: held(drained, restarting, ended), Now: moment})
 	if stall.Reason != ReasonNoWatchSession {
 		t.Fatalf("reason = %q, want the restart that did not happen read as no session", stall.Reason)
 	}
