@@ -78,6 +78,10 @@ revisions:
       by: architect
       at: 2026-09-19T00:30:00Z
       reason: 'approved amendment 49e40071 from yoyodyne-ifd.357 (97f5e780 declined as superseded) - the after-merge check becomes containment of the unrewritten promoted commit under the recorded merge commit, which batched merges satisfy; the swept-in-content guarantee is retained at merge-commit granularity, with the per-merge change comparison recorded as the half still to implement'
+    - action: amended
+      by: architect
+      at: 2026-09-19T14:10:00Z
+      reason: 'approved amendment f26b54b5 from yoyodyne-ifd.63 - the status entry prices four kinds, inter-role exchanges included, and the retired bin/yoyo-status goes unreferenced'
 approvals:
     - revision: 0
       by: operator
@@ -507,7 +511,7 @@ yoyo init                 validate repository, Beads, Git, and providers
 yoyo chat                 talk with the product manager
 yoyo run <beads-id>       execute or resume a specific ready item
 yoyo work                 schedule ready development work
-yoyo status               what became of recent runs and what remains to be done, in the shipped four-line report; follow, list, and price the live event streams of runs, conversations, and branch reviews
+yoyo status               what became of recent runs and what remains to be done, in the shipped four-line report; follow, list, and price the live event streams of runs, conversations, branch reviews, and inter-role exchanges
 yoyo pause / resume       hold intake and stop or release the harness's spending
 yoyo work /stop           stop one run, or everything, cooperatively
 yoyo directive ...        record and inspect durable user directives

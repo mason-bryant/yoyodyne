@@ -14,6 +14,10 @@ revisions:
       by: architect
       at: 2026-09-19T00:30:00Z
       reason: 'approved amendment 608138f6 from yoyodyne-ifd.141.1 (591e0ae5 declined as superseded by the repair round''s rename) - the capacity-blocked state landed as a read-model query; the deviation-to-implement recorded at promotion is discharged'
+    - action: amended
+      by: architect
+      at: 2026-09-19T14:10:00Z
+      reason: 'operator direction of 2026-09-19 (directive-6de828a8) - the bind address and allowed hosts become configuration with loopback defaults; a non-loopback bind is an opt-in requiring a supplied token, with Host and Origin validated against the configured set and every other rule unchanged; the read-only, no-write-path property recorded as what makes the opt-in safe, and plain-HTTP transport stated honestly'
 ---
 
 # One observability read model, and the read-only dashboard that projects it
@@ -44,9 +48,15 @@ A locally hosted, read-only page with five visually distinct sections: a top sta
 
 The dashboard is a projection, never an engine: it owns no workflow, conversation, provider, or configuration state, and offers no write of any kind. This is the boundary [the v1 non-goals] now record, and this design binds to it.
 
-## Web security *(established here, as the repository's first web-service conventions)*
+## Web security *(the repository's web-service conventions, established here)*
 
-Bind to loopback; loopback alone is insufficient — a high-entropy session or bearer token is required, presented in a header or cookie and never in a URL or a log; Host and Origin are validated; the content-security policy is restrictive and CDN-free; all user-, model-, repository-, and Slack-supplied text is untrusted and escaped, so work-item text renders as text and cannot execute; missing or invalid authorization fails closed. No secret, credential, or private provider identifier appears in the read model or the page — the account *alias* is exactly what makes that possible.
+The bind address and the allowed hosts are configuration; the defaults are loopback and the loopback Host, and a project that says nothing gets exactly the behavior it had. An explicit non-loopback bind is an operator opt-in that keeps every other rule intact:
+
+- **A token is required on every request**, presented in a header or cookie and never in a URL or a log; a request without one, or with a wrong one, fails closed. Under the loopback default the token is generated per start and printed where the operator can read it. **Under a non-loopback bind the token must be supplied** — from the per-project secret store or the environment, never from `.yoyodyne` — because a generated token printed to one terminal is unusable from another device; a non-loopback bind with no supplied token, or a supplied token below the minimum entropy, is refused at load.
+- **Host and Origin are validated against the configured address and allowed hosts**, not hard-wired to loopback. A request naming a host outside the configured set fails closed exactly as it did before.
+- The content-security policy stays restrictive and CDN-free; all user-, model-, repository-, and Slack-supplied text stays untrusted and escaped; nothing secret, credential, or private-identifier enters the read model or the page.
+- **What a wider bind exposes is a read-only projection.** The dashboard has no write path at any bind address; the opt-in widens who can read observability data, never who can direct work.
+- **Transport is plain HTTP in V1.** A non-loopback bind sends the token and the page in clear over the operator's network; TLS termination is deferred, and the opt-in is for networks the operator trusts. Binding to a specific interface address is preferred over a wildcard, which reaches every interface the machine has.
 
 ## Process shape
 
