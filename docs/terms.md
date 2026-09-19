@@ -1,8 +1,6 @@
 # Terms
 
-Every word this project coined that a reader can still meet, with what it means
-in ordinary words and where it is met. This is the one list; a coined term that
-is not here is one nothing defines.
+Every word this project coined that a reader can still meet, with what it means in ordinary words and where it is met. This is the one list; a coined term that is not here is one nothing defines.
 
 The rule it serves is the legibility goal's, in
 [the v1 goals](product/goals/v1-goals.md): *user-facing language chooses the
@@ -29,18 +27,20 @@ the prose the check reads, every one of them a term with a row below.
 
 ## The register
 
-| Term | In plain words | Where it is used |
-| --- | --- | --- |
-| `brake` | the automatic stop after a set number of blocked runs in a row | the scheduler's own messages about why it stopped choosing work; `internal/orchestrator`; the guides under `docs/` |
-| `discharge` | to be the work an item asked for, so the item closes on it — as against landing evidence, which does not | the developer's contract and the reviewer's; a work item's own notes after a run; `internal/landing` and `internal/orchestrator`; [how work flows](work.md) |
-| `docket` | the list of stopped runs, of runs that died before they started, and of items dispatch would not start, waiting on the development manager | `yoyo reconcile` and `yoyo triage` output, and the product manager's context bundle; `internal/runstate`; [management and supervision](designs/management-and-supervision.md) |
-| `handback` | handing the work back to the developer that made it | `internal/orchestrator` and `internal/runstate` only — it names no command output and no document |
-| `heartbeat` | how often to repeat | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md) |
-| `in force` | active, or still applies | [the prose governing how invariants are amended](decisions/invariants/README.md), which only the architect changes |
-| `minute zero` | before development begins | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes — written there both spaced and as `minute-zero`, which this one row covers |
-| `posture` | which tools a role may use — written as *tool posture* | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide |
-| `sink` | the process that posts to Slack | `yoyo slack` and `yoyo doctor` output; `internal/slack`; [the Slack reporting design](designs/slack-reporting-design.md) |
-| `steer` | direct the work, or change what is being worked on | `yoyo chat` help and the Slack thread replies; `internal/chat`; [the Slack reporting design](designs/slack-reporting-design.md) |
+
+| Term          | In plain words                                                                                                                             | Where it is used                                                                                                                                                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brake`       | the automatic stop after a set number of blocked runs in a row                                                                             | the scheduler's own messages about why it stopped choosing work; `internal/orchestrator`; the guides under `docs/`                                                                                                                       |
+| `discharge`   | to be the work an item asked for, so the item closes on it — as against landing evidence, which does not                                   | the developer's contract and the reviewer's; a work item's own notes after a run; `internal/landing` and `internal/orchestrator`; [how work flows](work.md)                                                                              |
+| `docket`      | the list of stopped runs, of runs that died before they started, and of items dispatch would not start, waiting on the development manager | `yoyo reconcile` and `yoyo triage` output, and the product manager's context bundle; `internal/runstate`; [management and supervision](designs/management-and-supervision.md)                                                            |
+| `handback`    | handing the work back to the developer that made it                                                                                        | `internal/orchestrator` and `internal/runstate` only — it names no command output and no document                                                                                                                                        |
+| `heartbeat`   | how often to repeat                                                                                                                        | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md)                                                                                                                         |
+| `in force`    | active, or still applies                                                                                                                   | [the prose governing how invariants are amended](decisions/invariants/README.md), which only the architect changes                                                                                                                       |
+| `minute zero` | before development begins                                                                                                                  | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes — written there both spaced and as `minute-zero`, which this one row covers |
+| `posture`     | which tools a role may use — written as *tool posture*                                                                                     | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide                                                            |
+| `sink`        | the process that posts to Slack                                                                                                            | `yoyo slack` and `yoyo doctor` output; `internal/slack`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                                 |
+| `steer`       | direct the work, or change what is being worked on                                                                                         | `yoyo chat` help and the Slack thread replies; `internal/chat`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                          |
+
 
 Three entries are here because the word is still written somewhere no other role
 may edit. `in force`, `minute zero` and `posture` are the sweep's decoration
@@ -66,19 +66,23 @@ check does not read frontmatter, for that reason. Either way the check below
 refuses any of them coming back into the prose of a governed document without an
 entry.
 
-| Term | Write instead |
-| --- | --- |
-| `cadence` | how often it repeats — still in the `yoyo slack` refusal *heartbeat must be positive; it is a cadence rather than a switch*, which is a shipped string rather than a document |
-| `one pane of glass` | one window |
-| `re-arm` | repeat the merge request |
-| `seam` | the boundary, named for what attaches to what |
-| `sidecar` | a separate directory outside the repository |
-| `soak` | a trial run kept alongside the old path for comparison |
-| `starving` | stopping |
-| `supersession pile` | the list of superseded pull requests |
-| `tranche` | stage, or part 1 of 4 |
-| `wedged` | stuck, or the condition said outright |
-| `whose-move` | waiting on you |
+
+| Term                | Write instead                                                                                                                                                                 |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cadence`           | how often it repeats — still in the `yoyo slack` refusal *heartbeat must be positive; it is a cadence rather than a switch*, which is a shipped string rather than a document |
+| `one pane of glass` | one window                                                                                                                                                                    |
+| `re-arm`            | repeat the merge request                                                                                                                                                      |
+| `seam`              | the boundary, named for what attaches to what                                                                                                                                 |
+| `sidecar`           | a separate directory outside the repository                                                                                                                                   |
+| `soak`              | a trial run kept alongside the old path for comparison                                                                                                                        |
+| `starving`          | stopping                                                                                                                                                                      |
+| `supersession pile` | the list of superseded pull requests                                                                                                                                          |
+| `tranche`           | stage, or part 1 of 4                                                                                                                                                         |
+| `wedged`            | stuck, or the condition said outright                                                                                                                                         |
+| `whose-move`        | waiting on you                                                                                                                                                                |
+
+
+
 
 ## Adding an entry
 
