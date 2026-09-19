@@ -1291,7 +1291,7 @@ func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 	// The file the per-file bound dropped is recorded by name, with the size it
 	// actually is and the bound it exceeded, so what a reviewer is handed says
 	// "delivered but too large to show" rather than nothing at all.
-	wantOversized := []OmittedFile{{Path: "big.txt", Bytes: 4400, Reason: OmittedTooLarge, Bound: 64}}
+	wantOversized := []OmittedFile{{Path: "big.txt", Bytes: 4400, Reason: OmittedTooLarge, Class: FileClassSource, Bound: 64}}
 	if !perFile.Truncated || !reflect.DeepEqual(perFile.OmittedFiles, wantOversized) {
 		t.Fatalf("per-file bound = %#v", perFile)
 	}
@@ -1306,7 +1306,7 @@ func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnifiedChanges() file-count error = %v", err)
 	}
-	wantCounted := []OmittedFile{{Path: "small.txt", Bytes: 6, Reason: OmittedTooManyFiles, Bound: 1}}
+	wantCounted := []OmittedFile{{Path: "small.txt", Bytes: 6, Reason: OmittedTooManyFiles, Class: FileClassSource, Bound: 1}}
 	if len(counted.UntrackedFiles) != 1 || !counted.Truncated || !reflect.DeepEqual(counted.OmittedFiles, wantCounted) {
 		t.Fatalf("file-count bound = %#v", counted)
 	}
@@ -1383,7 +1383,7 @@ func TestManagerUnifiedChangesAccountsForEveryDeliveredFile(t *testing.T) {
 	// The size is the file's own and the bound is the one it was measured
 	// against, so a reviewer reads how far over the ceiling the file is rather
 	// than being told a name and left to guess.
-	want := OmittedFile{Path: "corpus.txt", Bytes: int64(len(oversized)), Reason: OmittedTooLarge, Bound: DefaultMaxDiffFileBytes}
+	want := OmittedFile{Path: "corpus.txt", Bytes: int64(len(oversized)), Reason: OmittedTooLarge, Class: FileClassSource, Bound: DefaultMaxDiffFileBytes}
 	if omissions["corpus.txt"] != want {
 		t.Errorf("oversized omission = %#v, want %#v", omissions["corpus.txt"], want)
 	}
@@ -1429,7 +1429,7 @@ func TestManagerUnifiedChangesMarksBinaryContentIncomplete(t *testing.T) {
 	if tracked := changes.OmittedFiles[0]; tracked.Path != "README.txt" || tracked.Bytes != 15 || tracked.Reason != OmittedBinary || tracked.DiffBytes == 0 {
 		t.Fatalf("tracked binary omission = %#v, want README.txt named as binary with its diff measured", tracked)
 	}
-	if changes.OmittedFiles[1] != (OmittedFile{Path: "new.bin", Bytes: 11, Reason: OmittedBinary}) {
+	if changes.OmittedFiles[1] != (OmittedFile{Path: "new.bin", Bytes: 11, Reason: OmittedBinary, Class: FileClassSource}) {
 		t.Fatalf("untracked binary omission = %#v, want new.bin", changes.OmittedFiles[1])
 	}
 	for _, unreviewable := range []string{"Binary files", "new.bin"} {
@@ -1443,8 +1443,8 @@ func TestManagerUnifiedChangesMarksBinaryContentIncomplete(t *testing.T) {
 	if len(changes.Files) != 2 {
 		t.Fatalf("files = %#v, want both files of the change listed", changes.Files)
 	}
-	if changes.Files[0] != (ChangedFile{Path: "README.txt", Status: "M", Bytes: 15, Binary: true}) ||
-		changes.Files[1] != (ChangedFile{Path: "new.bin", Status: "??", Bytes: 11, Binary: true}) {
+	if changes.Files[0] != (ChangedFile{Path: "README.txt", Status: "M", Bytes: 15, Binary: true, Class: FileClassSource}) ||
+		changes.Files[1] != (ChangedFile{Path: "new.bin", Status: "??", Bytes: 11, Binary: true, Class: FileClassSource}) {
 		t.Fatalf("files = %#v, want each named as binary with its size", changes.Files)
 	}
 }
@@ -1500,7 +1500,7 @@ func TestManagerUnifiedChangesClipsTrackedWorkWholeFileByFile(t *testing.T) {
 	if strings.Contains(bounded.Patch, "a-large.txt") || strings.Contains(bounded.Patch, "committed content") {
 		t.Errorf("the file the bound dropped is partly in the patch:\n%s", bounded.Patch)
 	}
-	want := []OmittedFile{{Path: "a-large.txt", Bytes: 5600, Reason: OmittedTooLarge, Bound: 600, DiffBytes: int64(len(whole.Patch) - len(bounded.Patch))}}
+	want := []OmittedFile{{Path: "a-large.txt", Bytes: 5600, Reason: OmittedTooLarge, Class: FileClassSource, Bound: 600, DiffBytes: int64(len(whole.Patch) - len(bounded.Patch))}}
 	if !reflect.DeepEqual(bounded.OmittedFiles, want) {
 		t.Fatalf("omitted files = %#v, want %#v", bounded.OmittedFiles, want)
 	}
@@ -1562,8 +1562,8 @@ func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
 		t.Fatalf("patch does not carry both deletions whole:\n%s", changes.Patch)
 	}
 	want := []ChangedFile{
-		{Path: "README.txt", Status: "D", Bytes: 0},
-		{Path: "obsolete.txt", Status: "D", Bytes: 0, Committed: true},
+		{Path: "README.txt", Status: "D", Bytes: 0, Class: FileClassSource},
+		{Path: "obsolete.txt", Status: "D", Bytes: 0, Committed: true, Class: FileClassSource},
 	}
 	if !reflect.DeepEqual(changes.Files, want) {
 		t.Fatalf("files = %#v, want %#v", changes.Files, want)
@@ -1626,8 +1626,8 @@ func TestManagerUnifiedChangesCarriesAFileThatBecameASymlink(t *testing.T) {
 	// Listed once, with Git's own status for it. A symlink is not a regular
 	// file the harness measures, so it is listed at zero bytes.
 	want := []ChangedFile{
-		{Path: "README.txt", Status: "T", Bytes: 0, Committed: true},
-		{Path: "other.txt", Status: "A", Bytes: 10, Committed: true},
+		{Path: "README.txt", Status: "T", Bytes: 0, Committed: true, Class: FileClassSource},
+		{Path: "other.txt", Status: "A", Bytes: 10, Committed: true, Class: FileClassSource},
 	}
 	if !reflect.DeepEqual(changes.Files, want) {
 		t.Fatalf("files = %#v, want %#v", changes.Files, want)
@@ -1682,10 +1682,10 @@ func TestManagerUnifiedChangesListsEveryFileOfTheChangeWithItsSize(t *testing.T)
 	// the worktree; the icon is on the branch and binary; the two new files are
 	// the worktree's own, one of them binary.
 	want := []ChangedFile{
-		{Path: "README.txt", Status: "M", Bytes: 18},
-		{Path: "docs/icon.png", Status: "A", Bytes: int64(len(icon)), Binary: true, Committed: true},
-		{Path: "later.bin", Status: "??", Bytes: 11, Binary: true},
-		{Path: "later.txt", Status: "??", Bytes: 14},
+		{Path: "README.txt", Status: "M", Bytes: 18, Class: FileClassSource},
+		{Path: "docs/icon.png", Status: "A", Bytes: int64(len(icon)), Binary: true, Committed: true, Class: FileClassSource},
+		{Path: "later.bin", Status: "??", Bytes: 11, Binary: true, Class: FileClassSource},
+		{Path: "later.txt", Status: "??", Bytes: 14, Class: FileClassSource},
 	}
 	if !reflect.DeepEqual(changes.Files, want) {
 		t.Fatalf("files = %#v, want %#v", changes.Files, want)
@@ -1763,7 +1763,7 @@ func TestManagerUnifiedChangesPresentsAReductionAnEarlierAttemptCommitted(t *tes
 	if len(changes.Commits) != 2 || changes.Commits[0].Commit != reduction {
 		t.Errorf("commits = %#v, want the reduction named first", changes.Commits)
 	}
-	if len(changes.Files) != 3 || changes.Files[0] != (ChangedFile{Path: "README.md", Status: "M", Bytes: int64(len(reduced)), Committed: true}) {
+	if len(changes.Files) != 3 || changes.Files[0] != (ChangedFile{Path: "README.md", Status: "M", Bytes: int64(len(reduced)), Committed: true, Class: FileClassSource}) {
 		t.Errorf("files = %#v, want the README listed as committed with its reduced size", changes.Files)
 	}
 }

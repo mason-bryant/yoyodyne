@@ -339,6 +339,16 @@ type DiffLimits struct {
 // shown in full or listed in OmittedFiles with its size and the bound that
 // dropped it, and Files names every file the change touches whether or not the
 // patch could show it.
+//
+// The patch presents the files in class order — source first, then tests, then
+// test data and generated or golden files — rather than in the order Git lists
+// them, which is alphabetical. Spent alphabetically, the bound falls wherever
+// the paths happen to sort: a change whose committed fixtures sort before its
+// code (five and a half thousand lines of internal/dashboard/testdata ahead of
+// the internal/readmodel derivation the page depends on) spent the whole bound
+// on renders and sent the code to review unseen, and that cost yoyodyne-ifd.141.3
+// two rounds. Spent in class order, the bound falls on the tail — on the
+// fixtures — and the code that matters is what is presented whole.
 type ChangeDiff struct {
 	Status         string        `json:"status"`
 	DiffStat       string        `json:"diff_stat,omitempty"`
@@ -411,6 +421,162 @@ const (
 	OmittedUnreadable OmissionReason = "unreadable"
 )
 
+// FileClass is which of three kinds of file a path in a change is, for the
+// order the patch presents them in and for what a reader is told about a file
+// the patch could not show: source, a test, or test data — fixtures, golden
+// files, renders, generated code, lock files — that a test consumes rather than
+// a reader reviews line by line. It is decided from the path and, for a file
+// whose diff has been rendered, from a generated-code marker in it, because a
+// generated file announces itself in its own first line and nowhere else.
+type FileClass string
+
+const (
+	// FileClassSource is everything that is neither of the two below: the code,
+	// and the documents beside it, that a review is for.
+	FileClassSource FileClass = "source"
+	// FileClassTest is a test file: named `_test`, `.test`, `_spec`, or `.spec`
+	// before its extension, or living in a directory named for tests.
+	FileClassTest FileClass = "test"
+	// FileClassFixture is test data and generated content: anything under a
+	// `testdata`, `fixtures`, `golden`, or `snapshots` directory, a `.golden` or
+	// `.snap` file, a lock file a package manager writes, a Go file named as
+	// generated, or a file whose rendered diff carries the generated-code marker.
+	FileClassFixture FileClass = "fixture"
+)
+
+// Describe is the words a reader is given for the class.
+func (c FileClass) Describe() string {
+	switch c {
+	case FileClassTest:
+		return "test"
+	case FileClassFixture:
+		return "test data or generated"
+	}
+	return "source"
+}
+
+// order is the position of the class in the patch: source first, then tests,
+// then fixtures, so a bound spent in this order falls on the tail.
+func (c FileClass) order() int {
+	switch c {
+	case FileClassTest:
+		return 1
+	case FileClassFixture:
+		return 2
+	}
+	return 0
+}
+
+var (
+	// fixtureDirectories are the directory names that make everything beneath
+	// them test data. `testdata` is Go's own convention; the rest are the
+	// conventions of the ecosystems a project here has actually shipped.
+	fixtureDirectories = map[string]bool{
+		"testdata": true, "fixtures": true, "fixture": true, "golden": true,
+		"snapshots": true, "__snapshots__": true, "__fixtures__": true,
+	}
+	// testDirectories are the directory names that make everything beneath them
+	// a test.
+	testDirectories = map[string]bool{
+		"test": true, "tests": true, "__tests__": true, "spec": true, "specs": true, "e2e": true,
+	}
+	// lockFiles are what a package manager writes and nobody reviews by hand.
+	lockFiles = map[string]bool{
+		"go.sum": true, "package-lock.json": true, "yarn.lock": true, "pnpm-lock.yaml": true,
+		"Cargo.lock": true, "Gemfile.lock": true, "poetry.lock": true, "composer.lock": true,
+	}
+	// generatedLine is the line a generated file carries at its head, in the
+	// form Go specifies — `// Code generated ... DO NOT EDIT.` — and the same
+	// sentence behind another comment leader. generatedMarker matches it in a
+	// rendered diff, where the line arrives prefixed by the diff's own `+` or
+	// space and a removed line is the file's past; generatedHead matches it in
+	// the file itself.
+	generatedLine   = `\S{0,3} ?Code generated .* DO NOT EDIT\.$`
+	generatedMarker = regexp.MustCompile(`(?m)^[+ ]` + generatedLine)
+	generatedHead   = regexp.MustCompile(`(?m)^` + generatedLine)
+)
+
+// ClassifyPath decides a file's class from its path alone: the directories it
+// is under and the name it has. A file whose content is to hand is classed by
+// classifySection or classifyUntracked, which read the generated-code marker
+// as well; this is what the tree listing uses, which describes a path rather
+// than a rendering.
+func ClassifyPath(path string) FileClass {
+	path = filepath.ToSlash(path)
+	directory, name := "", path
+	if cut := strings.LastIndexByte(path, '/'); cut >= 0 {
+		directory, name = path[:cut], path[cut+1:]
+	}
+	for _, component := range strings.Split(directory, "/") {
+		if fixtureDirectories[component] {
+			return FileClassFixture
+		}
+	}
+	if lockFiles[name] {
+		return FileClassFixture
+	}
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	switch {
+	case strings.HasSuffix(name, ".golden"), strings.HasSuffix(name, ".snap"):
+		return FileClassFixture
+	case strings.HasSuffix(name, ".pb.go"), strings.HasSuffix(name, ".gen.go"), strings.HasSuffix(name, "_gen.go"),
+		strings.HasSuffix(name, "_generated.go"), strings.HasPrefix(name, "zz_generated"):
+		return FileClassFixture
+	case strings.HasSuffix(stem, "_test"), strings.HasSuffix(stem, ".test"),
+		strings.HasSuffix(stem, "_spec"), strings.HasSuffix(stem, ".spec"):
+		return FileClassTest
+	}
+	for _, component := range strings.Split(directory, "/") {
+		if testDirectories[component] {
+			return FileClassTest
+		}
+	}
+	return FileClassSource
+}
+
+// classifySection decides a rendered file's class: its path first, and then the
+// generated-code marker its diff would carry if the file were generated. The
+// marker is only looked for in a file the path calls source, since the path has
+// already settled the other two.
+func classifySection(path, patch string) FileClass {
+	class := ClassifyPath(path)
+	if class == FileClassSource && generatedMarker.MatchString(patch) {
+		return FileClassFixture
+	}
+	return class
+}
+
+// classifyUntracked decides an untracked file's class the way classifySection
+// decides a rendered one's, reading the marker from the head of the file
+// itself because its diff is rendered only once the bounds have admitted it.
+// A file that cannot be read is classed by its path: what becomes of it is
+// the omission record's to say, not this.
+func (m *Manager) classifyUntracked(path, relative string) FileClass {
+	class := ClassifyPath(relative)
+	if class != FileClassSource {
+		return class
+	}
+	// Only a regular file is opened: a symlink is named as unreadable by the
+	// omission record and is not followed here either.
+	if _, regular, err := m.untrackedSize(path, relative); err != nil || !regular {
+		return class
+	}
+	file, err := os.Open(filepath.Join(path, filepath.FromSlash(filepath.Clean(relative))))
+	if err != nil {
+		return class
+	}
+	defer file.Close()
+	head := make([]byte, binarySniffBytes)
+	n, err := file.Read(head)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return class
+	}
+	if generatedHead.Match(head[:n]) {
+		return FileClassFixture
+	}
+	return class
+}
+
 // OmittedFile is one file a change delivers that the bounds kept out of the
 // patch. It carries the path, the size, and the bound that dropped it, because
 // a name on its own leaves the reviewer unable to tell an oversized file from a
@@ -421,6 +587,13 @@ type OmittedFile struct {
 	Path   string         `json:"path"`
 	Bytes  int64          `json:"bytes,omitempty"`
 	Reason OmissionReason `json:"reason"`
+	// Class is what kind of file was kept out, so a reader told the patch is
+	// missing something knows whether it is missing code or a fixture. The
+	// patch is presented in class order, so what the bound drops is the tail of
+	// that order — fixtures before tests, and tests before source — and a
+	// source file here means the change is too large for the bound even before
+	// its test data.
+	Class FileClass `json:"class,omitempty"`
 	// Bound is the limit that dropped it — bytes for the size bounds, a file
 	// count for the file bound, and zero where the reason is not a bound at all.
 	// It is recorded beside the size so a reader sees the comparison that was
@@ -461,9 +634,15 @@ func (f OmittedFile) Describe() string {
 	return fmt.Sprintf("%s: delivered but not shown.", f.sized())
 }
 
-// sized is the path with the file's size at the tip beside it.
+// sized is the path with the file's size at the tip beside it, and its class
+// where the class is not the source a reader assumes: a reviewer told that a
+// fixture was kept out reads the omission differently from one told that code
+// was.
 func (f OmittedFile) sized() string {
-	return fmt.Sprintf("%s (%d bytes)", f.Path, f.Bytes)
+	if f.Class == "" || f.Class == FileClassSource {
+		return fmt.Sprintf("%s (%d bytes)", f.Path, f.Bytes)
+	}
+	return fmt.Sprintf("%s (%d bytes, %s)", f.Path, f.Bytes, f.Class.Describe())
 }
 
 // ChangedFile is one entry of a change's tree listing: a path the change
@@ -485,11 +664,18 @@ type ChangedFile struct {
 	// branch — work an earlier attempt published — rather than only by what
 	// is still uncommitted in the worktree.
 	Committed bool `json:"committed,omitempty"`
+	// Class is what kind of file it is, decided from the path: the listing is
+	// where a reader sees how much of a change is code and how much is the test
+	// data beside it.
+	Class FileClass `json:"class,omitempty"`
 }
 
 // Describe is the one line a reader is given about a file in the listing.
 func (f ChangedFile) Describe() string {
 	var qualities []string
+	if f.Class != "" && f.Class != FileClassSource {
+		qualities = append(qualities, f.Class.Describe())
+	}
 	if f.Binary {
 		qualities = append(qualities, "binary")
 	}
@@ -843,86 +1029,98 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 		return ChangeDiff{}, err
 	}
 
-	// Every file leaves the two loops below one of two ways: written into the
-	// patch whole, or recorded as an omission that names it, its size, and the
-	// bound that dropped it. There is no third way out, and the accounting below
+	// Every file leaves the loop below one of two ways: written into the patch
+	// whole, or recorded as an omission that names it, its size, and the bound
+	// that dropped it. There is no third way out, and the accounting below
 	// refuses a change where one appears — a file that is neither shown nor named
 	// is exactly what a reviewer cannot know it is missing.
+	//
+	// The bound is spent file by file rather than cut at the bound. A patch cut
+	// at a byte count keeps whichever files Git rendered first and loses the
+	// rest with nothing naming them, so a reviewer handed one could not say which
+	// files its verdict covered. Here a file's diff is in the patch whole or it
+	// is named, and the scan carries on past a diff that does not fit so a
+	// smaller file after it is still shown.
+	//
+	// It is spent in class order — source, then tests, then test data — over the
+	// tracked and untracked halves together, so the bound falls on the tail of
+	// the change rather than wherever the paths sort. Git lists both halves
+	// alphabetically, and a change whose fixtures sort ahead of its code would
+	// otherwise spend the whole bound on them (yoyodyne-ifd.141.3).
+	candidates := make([]patchCandidate, 0, len(sections)+len(untracked))
+	for _, section := range sections {
+		candidates = append(candidates, patchCandidate{
+			path: section.path, class: classifySection(section.path, section.patch), tracked: true, patch: section.patch,
+		})
+	}
+	for _, relative := range untracked {
+		candidates = append(candidates, patchCandidate{path: relative, class: m.classifyUntracked(path, relative)})
+	}
+	orderForPresentation(candidates)
+
 	var patch strings.Builder
 	remaining := limits.MaxTotalBytes
-	omit := func(relative string, size int64, reason OmissionReason, bound int64) {
-		changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
-			Path: relative, Bytes: size, Reason: reason, Bound: bound,
-		})
-		changes.Truncated = true
-	}
-	// The tracked half is spent file by file rather than cut at the bound. A
-	// patch cut at a byte count keeps whichever files Git rendered first and
-	// loses the rest with nothing naming them, so a reviewer handed one could
-	// not say which files its verdict covered. Here a file's diff is in the
-	// patch whole or it is named, and the scan carries on past a diff that does
-	// not fit so a smaller file after it is still shown.
-	for _, section := range sections {
-		size, _, err := m.untrackedSize(path, section.path)
+	// The file-count bound and the accounting below are over new files alone: a
+	// tracked file the bound names is not one the untracked half owes.
+	newFiles, omittedNew := 0, 0
+	for _, candidate := range candidates {
+		size, regular, err := m.untrackedSize(path, candidate.path)
 		if err != nil {
 			return ChangeDiff{}, err
 		}
-		record := func(reason OmissionReason, bound int64) {
+		omit := func(reason OmissionReason, bound int64, diffBytes int) {
 			changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
-				Path: section.path, Bytes: size, Reason: reason, Bound: bound, DiffBytes: int64(len(section.patch)),
+				Path: candidate.path, Bytes: size, Reason: reason, Class: candidate.class, Bound: bound, DiffBytes: int64(diffBytes),
 			})
 			changes.Truncated = true
+			if !candidate.tracked {
+				omittedNew++
+			}
 		}
+		if candidate.tracked {
+			switch {
+			case containsBinaryDiff(candidate.patch):
+				omit(OmittedBinary, 0, len(candidate.patch))
+			case len(candidate.patch) > limits.MaxTotalBytes:
+				omit(OmittedTooLarge, int64(limits.MaxTotalBytes), len(candidate.patch))
+			case len(candidate.patch) > remaining:
+				omit(OmittedPatchFull, int64(limits.MaxTotalBytes), len(candidate.patch))
+			default:
+				patch.WriteString(candidate.patch)
+				remaining -= len(candidate.patch)
+			}
+			continue
+		}
+		newFiles++
 		switch {
-		case containsBinaryDiff(section.patch):
-			record(OmittedBinary, 0)
-		case len(section.patch) > limits.MaxTotalBytes:
-			record(OmittedTooLarge, int64(limits.MaxTotalBytes))
-		case len(section.patch) > remaining:
-			record(OmittedPatchFull, int64(limits.MaxTotalBytes))
-		default:
-			patch.WriteString(section.patch)
-			remaining -= len(section.patch)
-		}
-	}
-	// The file-count bound and the accounting below are over new files alone: a
-	// tracked file the bound named above is not one the untracked half owes.
-	trackedOmissions := len(changes.OmittedFiles)
-	newFiles := func() int { return len(changes.UntrackedFiles) + len(changes.OmittedFiles) - trackedOmissions }
-	for _, relative := range untracked {
-		size, regular, err := m.untrackedSize(path, relative)
-		if err != nil {
-			return ChangeDiff{}, err
-		}
-		switch {
-		case newFiles() >= limits.MaxFiles:
-			omit(relative, size, OmittedTooManyFiles, int64(limits.MaxFiles))
+		case newFiles > limits.MaxFiles:
+			omit(OmittedTooManyFiles, int64(limits.MaxFiles), 0)
 			continue
 		case !regular:
-			omit(relative, size, OmittedUnreadable, 0)
+			omit(OmittedUnreadable, 0, 0)
 			continue
 		case size > int64(limits.MaxFileBytes):
-			omit(relative, size, OmittedTooLarge, int64(limits.MaxFileBytes))
+			omit(OmittedTooLarge, int64(limits.MaxFileBytes), 0)
 			continue
 		}
-		filePatch, err := m.untrackedPatch(ctx, path, relative)
+		filePatch, err := m.untrackedPatch(ctx, path, candidate.path)
 		if err != nil {
 			return ChangeDiff{}, err
 		}
 		switch {
 		case containsBinaryDiff(filePatch):
-			omit(relative, size, OmittedBinary, 0)
+			omit(OmittedBinary, 0, 0)
 		case len(filePatch) > remaining:
-			omit(relative, size, OmittedPatchFull, int64(limits.MaxTotalBytes))
+			omit(OmittedPatchFull, int64(limits.MaxTotalBytes), 0)
 		default:
 			patch.WriteString(filePatch)
 			remaining -= len(filePatch)
-			changes.UntrackedFiles = append(changes.UntrackedFiles, relative)
+			changes.UntrackedFiles = append(changes.UntrackedFiles, candidate.path)
 		}
 	}
-	if newFiles() != len(untracked) {
+	if accounted := len(changes.UntrackedFiles) + omittedNew; accounted != len(untracked) {
 		return ChangeDiff{}, fmt.Errorf("assembled change accounts for %d of %d new files; a file dropped without being named is not reviewable",
-			newFiles(), len(untracked))
+			accounted, len(untracked))
 	}
 	changes.Patch = patch.String()
 
@@ -1199,6 +1397,30 @@ type trackedSection struct {
 	patch string
 }
 
+// patchCandidate is one file the bound is offered, from either half of a
+// change. A tracked file arrives with its diff already rendered; an untracked
+// file is rendered only once the per-file bounds have admitted it, so it
+// arrives with its path and its class and no patch yet.
+type patchCandidate struct {
+	path    string
+	class   FileClass
+	tracked bool
+	patch   string
+}
+
+// orderForPresentation puts the candidates in the order the patch presents
+// them: source first, then tests, then test data and generated files, and
+// within a class in path order, which is the order Git gave. It is a stable
+// sort on the class, so two files of one class keep the order they arrived in.
+func orderForPresentation(candidates []patchCandidate) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].class.order() != candidates[j].class.order() {
+			return candidates[i].class.order() < candidates[j].class.order()
+		}
+		return candidates[i].path < candidates[j].path
+	})
+}
+
 // trackedSections renders the tracked change as one section per file, so the
 // bounds can be spent a whole file at a time. An empty head is the working
 // tree, which is what a worktree's change is measured to; a commit is the
@@ -1368,7 +1590,7 @@ func (m *Manager) listChangedFiles(ctx context.Context, path, baseCommit, headCo
 		}
 		files = append(files, ChangedFile{
 			Path: entry.path, Status: entry.status, Bytes: size,
-			Binary: binary[entry.path], Committed: committed[entry.path],
+			Binary: binary[entry.path], Committed: committed[entry.path], Class: ClassifyPath(entry.path),
 		})
 	}
 	for _, relative := range untracked {
@@ -1376,7 +1598,7 @@ func (m *Manager) listChangedFiles(ctx context.Context, path, baseCommit, headCo
 		if err != nil {
 			return nil, 0, err
 		}
-		file := ChangedFile{Path: relative, Status: "??", Bytes: size}
+		file := ChangedFile{Path: relative, Status: "??", Bytes: size, Class: ClassifyPath(relative)}
 		if regular {
 			file.Binary, err = sniffBinary(filepath.Join(path, filepath.FromSlash(filepath.Clean(relative))))
 			if err != nil {

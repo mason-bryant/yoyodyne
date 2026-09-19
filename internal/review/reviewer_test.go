@@ -843,6 +843,88 @@ func TestReviewNamesOmittedFilesEvenWhereNothingElseWasTruncated(t *testing.T) {
 	}
 }
 
+// The yoyodyne-ifd.141.3 shape: a change whose committed fixtures outgrow the
+// bound. The reviewer is told what kind of file each omission is, that the
+// bound was spent source first so what it kept out is the tail, and where a
+// person can open the fixture it did not see — and the run's record names the
+// same files, so what the verdict could not have covered is read back rather
+// than reconstructed from the prompt.
+func TestReviewSaysWhatKindOfFileTheBoundKeptOutAndWhereItIsOpenable(t *testing.T) {
+	t.Parallel()
+
+	var events []execution.Event
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"the renders are unreviewed","findings":[{"severity":"major","message":"show the renders"}]}`}
+	request := newRequest(func(event execution.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	request.WorktreePath = "/worktrees/yoyodyne-ifd-141-3"
+	request.Changes = gitworktree.ChangeDiff{
+		Patch:      "diff --git a/internal/readmodel/throughput.go b/internal/readmodel/throughput.go\n+the derivation\n",
+		BaseCommit: "d2f8d6a0244ffa176193e82a22807e5170e0fe3c",
+		HeadCommit: "2a24a7dc178713d4148da156b8b043895f5fb2b5",
+		Commits:    []gitworktree.Commit{{Commit: "2a24a7dc178713d4148da156b8b043895f5fb2b5", Subject: "yoyodyne: the page"}},
+		Files: []gitworktree.ChangedFile{
+			{Path: "internal/dashboard/testdata/renders/stale.html", Status: "A", Bytes: 22126, Committed: true, Class: gitworktree.FileClassFixture},
+			{Path: "internal/readmodel/throughput.go", Status: "A", Bytes: 13216, Committed: true, Class: gitworktree.FileClassSource},
+			{Path: "internal/readmodel/throughput_test.go", Status: "A", Bytes: 15189, Committed: true, Class: gitworktree.FileClassTest},
+		},
+		OmittedFiles: []gitworktree.OmittedFile{{
+			Path: "internal/dashboard/testdata/renders/stale.html", Bytes: 22126, Reason: gitworktree.OmittedPatchFull,
+			Class: gitworktree.FileClassFixture, Bound: 262144, DiffBytes: 22189,
+		}},
+		Truncated: true,
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		"- A internal/dashboard/testdata/renders/stale.html (22126 bytes) — test data or generated, already committed on this branch\n",
+		"- A internal/readmodel/throughput.go (13216 bytes) — already committed on this branch\n",
+		"- A internal/readmodel/throughput_test.go (15189 bytes) — test, already committed on this branch\n",
+		"- internal/dashboard/testdata/renders/stale.html (22126 bytes, test data or generated): delivered but not shown; its diff is 22189 bytes and the 262144-byte patch bound had no room left for it.\n",
+		"delivered whole outside this patch, where a person can open it",
+		"The worktree at /worktrees/yoyodyne-ifd-141-3 holds every one of them as the change leaves it, and a file already committed is at tip commit 2a24a7dc178713d4148da156b8b043895f5fb2b5 as `git show 2a24a7dc178713d4148da156b8b043895f5fb2b5:<path>`.",
+		"The patch presents source files first, then tests, then test data and generated or golden files, and the bound is spent in that order",
+		"A source or test file named above means the change outgrew the bound before its test data was reached.",
+	} {
+		if !strings.Contains(provider.request.Prompt, want) {
+			t.Errorf("prompt is missing %q:\n%s", want, provider.request.Prompt)
+		}
+	}
+	if !strings.Contains(provider.request.SystemPrompt, "The patch presents source files first, then tests, then test data and generated files") {
+		t.Errorf("the contract does not say the order the bound is spent in: %q", provider.request.SystemPrompt)
+	}
+	if len(events) == 0 || events[0].Type != execution.EventReviewStarted {
+		t.Fatalf("events = %#v, want review.started first", events)
+	}
+	if want := `"omitted_files":["internal/dashboard/testdata/renders/stale.html"]`; !strings.Contains(string(events[0].Payload), want) {
+		t.Errorf("review.started payload is missing %q: %s", want, events[0].Payload)
+	}
+
+	// A branch review's omissions are openable at the branch's tip in the
+	// repository, which is the only place an accumulated change is.
+	branch := &fakeBackend{finalText: `{"decision":"repair","summary":"the renders are unreviewed","findings":[{"severity":"major","message":"show the renders"}]}`}
+	accumulated := newRequest(nil)
+	accumulated.Scope = ScopeBranch
+	accumulated.WorkItemID = ""
+	accumulated.WorktreePath = "/repository"
+	accumulated.Branch = BranchScope{Name: "main", BaseCommit: "d2f8d6a0244ffa176193e82a22807e5170e0fe3c", HeadCommit: "8c10fa5e1b2c3d4e5f60718293a4b5c6d7e8f901",
+		Commits: []gitworktree.Commit{{Commit: "8c10fa5e1b2c3d4e5f60718293a4b5c6d7e8f901", Subject: "merge the page"}}}
+	accumulated.Changes = gitworktree.ChangeDiff{
+		Patch:        "diff --git a/internal/readmodel/throughput.go b/internal/readmodel/throughput.go\n+the derivation\n",
+		OmittedFiles: request.Changes.OmittedFiles,
+		Truncated:    true,
+	}
+	if _, err := (Reviewer{Backend: branch, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), accumulated); err != nil {
+		t.Fatalf("Review() branch error = %v", err)
+	}
+	if want := "Each is at the branch's tip commit 8c10fa5e1b2c3d4e5f60718293a4b5c6d7e8f901, in the repository at /repository, as `git show 8c10fa5e1b2c3d4e5f60718293a4b5c6d7e8f901:<path>`."; !strings.Contains(branch.request.Prompt, want) {
+		t.Errorf("branch prompt is missing %q:\n%s", want, branch.request.Prompt)
+	}
+}
+
 // An empty patch under commits that undid one another is the one emptiness a
 // reviewer cannot read on its own, and reading it as missing evidence is a
 // finding about the harness rather than about the change. The evidence says

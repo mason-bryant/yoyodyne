@@ -119,9 +119,36 @@ reviewable diff — delivered but too large to show, rather than absent. A new
 file that is not a readable regular file is named with neither size, because
 there is nothing to measure. A reviewer that cannot tell a file the change delivers from
 one it never wrote judges the delivery blind, and an absence it is told about is
-one it can hold the change to. Above the patch is also a listing of every file
+one it can hold the change to.
+
+The bound is spent in class order rather than in the order Git lists the files,
+which is alphabetical: source files first, then tests, then test data and
+generated or golden files — anything under a `testdata`, `fixtures`, `golden`,
+or `snapshots` directory, a `.golden` or `.snap` file, a lock file, a Go file
+named as generated, or a file whose first line carries Go's `Code generated ...
+DO NOT EDIT.` marker. Within a class the files are in path order. So the cut
+falls at the tail: a change whose committed fixtures sort ahead of its code —
+5,500 lines of `internal/dashboard/testdata/renders` ahead of the 850 lines of
+`internal/readmodel` the page depends on — presents the read model whole and
+lets the bound fall on the renders, where spent alphabetically it spent the
+whole bound on renders and sent the code to review unseen, which cost
+`yoyodyne-ifd.141.3` two rounds. Each omission says what kind of file it is, so
+a reviewer told the patch is missing test data reads that differently from one
+told it is missing code, and a source or test file among the omissions means
+the change outgrew the bound before its test data was reached. Each omission
+is also delivered whole outside the patch, and the evidence says where: the
+run's worktree, and for a committed file the tip commit as `git show
+<tip>:<path>`. The reviewer has no tools and cannot open one — it judges an
+omitted file as unreviewed, and a truncated change still cannot be approved —
+so what the location is for is the person following the review, who can open
+the fixture the reviewer did not see; the run's `review.started` event names
+the omitted files too, so what a verdict could not have covered is read back
+from the record rather than reconstructed from the prompt.
+
+Above the patch is also a listing of every file
 the change touches, with Git's status, the file's size at the tip, whether it is
-binary, and whether it is already committed on the branch. That listing is where
+binary, what kind of file it is where it is a test or test data, and whether it
+is already committed on the branch. That listing is where
 a binary asset is seen to be delivered — a text diff never shows one — so an item
 that ships an icon is not approved on a link checker's say-so
 (`yoyodyne-ifd.68.9`), and it is where a reviewer tells a file an earlier attempt
@@ -1065,10 +1092,11 @@ branch against the base it grew from:
 
 It describes every commit the branch carries over that base and diffs the whole
 range as one patch, under the same bounds a single change is described within: a
-range too large to show in full is clipped whole file by whole file, with each
-file the bound kept out named above the patch with the size of its diff, it is
-reported as truncated, and a truncated change cannot be approved, because what
-was not shown was not reviewed. The base must
+range too large to show in full is clipped whole file by whole file and in the
+same class order — source, then tests, then test data — with each file the
+bound kept out named above the patch with the size of its diff and where it can
+be opened at the branch's tip, it is reported as truncated, and a truncated
+change cannot be approved, because what was not shown was not reviewed. The base must
 be an ancestor of the branch — a base that has moved on is a reconciliation
 rather than an accumulated change, and the command says so instead of quietly
 reviewing a range you did not name.
