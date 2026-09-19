@@ -1045,12 +1045,18 @@ func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (ru
 // completed one; saveTerminalFailure is the failed one and the blocked one
 // both, because blockRun writes its terminal record through it. So a run the
 // sweep blocks with its instance still mid-graph records the gap exactly as the
-// other two do, and TestASweepRecordsTheGapAnInterruptedObservationLeaves
-// measures it over a blocked settlement as well as a completed one. What is
-// recorded is the gap and not the settlement: the recorded baseline's blocked
-// trace carries no divergence because the developer's ending sent its instance
-// to the `abandoned` terminal before the sweep looked, which is the
-// observation having finished rather than this path having been skipped.
+// other two do, and the "settled as blocked" case of
+// TestASweepRecordsTheGapAnInterruptedObservationLeaves measures it: remove the
+// call from saveTerminalFailure and that case fails on the missing divergence
+// while the completed one still passes. What is recorded is the gap and not the
+// settlement: the recorded baseline's blocked trace,
+// `reconciliation-blocks-a-run-interrupted-while-developing`, carries no
+// divergence because the developer's ending sent its instance to the
+// `abandoned` terminal before the sweep looked, which is the observation having
+// finished rather than this path having been skipped.
+// TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal measures
+// that half, and docs/delivery-pipeline-baseline.md discloses it beside the
+// trace.
 func (r Reconciler) noteUnfinishedObservation(state *runstate.State) {
 	if divergence := unfinishedObservation(r.Store, *state); divergence != "" {
 		state.WorkflowDivergence = divergence
