@@ -473,8 +473,12 @@ and the reviewer decides it as a verdict:
 
 Whichever raises it, the run ends in the round it was raised in. Nothing further
 is bought: a developer's escalation runs no checks, buys no review, and publishes
-nothing, and a reviewer's hands nothing back, so it costs the one review round it
-was raised in and no repair attempt. The run is recorded as having succeeded,
+nothing, and a reviewer's hands nothing back, so it costs no repair attempt — and
+no review round against the item's cap either, because the cap counts only a
+verdict requiring repair and an escalation is the reviewer saying the item cannot
+be met rather than arguing with the change (see
+[what spends a round and what does not](configuration.md#what-spends-a-round-and-what-does-not)).
+The run is recorded as having succeeded,
 because it did what it was for — recording it as a failure would count honesty
 about an unmeetable item in the same tally as a broken toolchain, and the
 failure-storm brake counts that tally. `yoyo status` says **succeeded**, which

@@ -4535,8 +4535,9 @@ func (escalationRaised) Error() string {
 // not are the closure and the cleanup, because there is nothing to close the item
 // against and nothing integrated to clean up after.
 //
-// The run succeeds. It cost the round it was raised in and produced exactly what
-// the verb is for, and recording it as a failure would put honesty about an
+// The run succeeds. It spent the review the verb was raised in, charged the item
+// no round for it, and produced exactly what the verb is for, and recording it
+// as a failure would put honesty about an
 // unmeetable item into the same count as a broken toolchain — which is the
 // failure-storm brake counting the one thing it must not.
 //
@@ -5268,10 +5269,12 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // against: a run's own repair budget starts again at zero each time, so nothing
 // inside a run says what the item has already cost.
 //
-// Three verdicts are recorded and charge nothing, and the rule they add up to is
+// Four verdicts are recorded and charge nothing, and the rule they add up to is
 // yoyodyne-ifd.391's: the cap counts only rounds that ended in a verdict
-// requiring repair against a change that was present. A verdict that approved
-// the change is one: the cap this feeds exists to stop an item buying the same
+// requiring repair against a change that was present. An escalation is one: the
+// reviewer said the item cannot be met and handed nothing back, which is no turn
+// of any argument. A verdict that approved
+// the change is another: the cap this feeds exists to stop an item buying the same
 // argument another round, and an approval is the end of that argument rather than
 // another turn of it — what happens to an approved change afterwards, a promotion
 // that lost its race or a merge the forge dropped, is not the change disputing
@@ -5340,14 +5343,14 @@ func (a *activeRun) recordReviewVerdict(ctx context.Context, decision review.Dec
 	// before every review and written from the reply that produced this decision,
 	// so what is asked about is what the reviewer just said rather than anything an
 	// earlier attempt left behind.
-	// An escalation charges the round it was raised in and never falls into the
-	// uncharged case below, whatever findings it happened to carry. The trivial
-	// residue is an exemption for a repair — one small note is not the reviewer
-	// still arguing, so the item is not charged for another turn of an argument
-	// that ended — and an escalation is not a turn of an argument at all. A review
-	// happened and it is the round the verb costs, which is the whole of what
-	// "spends at most the round it is raised in" promises.
-	if !changePresent || decision == review.DecisionApprove ||
+	// An escalation charges nothing, whatever findings it happened to carry. It is
+	// not a turn of the argument the cap bounds — the reviewer said the item
+	// cannot be met as it stands and handed nothing back — so under
+	// yoyodyne-ifd.391's rule it is not a round, and "spends at most the round it
+	// is raised in" is satisfied by spending none. Until that item it was charged,
+	// which walked an item at 3 of 4 to 4 of 4 on the honest answer and refused
+	// the re-run recorded once the escalation was decided.
+	if !changePresent || decision == review.DecisionApprove || decision == review.DecisionEscalate ||
 		(decision == review.DecisionRepair && review.TrivialResidue(a.outcome.ReviewFindings)) {
 		if _, err := counters.RecordUnchargedVerdict(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
 			return fmt.Errorf("record the verdict that cost attempt %s nothing: %w", attempt, err)
