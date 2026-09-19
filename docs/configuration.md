@@ -4665,7 +4665,10 @@ task whose role is `development-manager`, and only that role's, the harness
 itself lists the open pull requests of the repository the project publishes into
 and adds a finding for each one the forge is holding open for nothing: a request
 whose work item is closed, and a request whose head branch is already contained
-in the branch it targets. The finding names the request, the work item, and which
+in the branch it targets. Which work is closed is read from the tracker whole
+rather than from the first page of its listing, so a request superseded long ago
+is reported as such and not passed over as live because its item fell past a
+page. The finding names the request, the work item, and which
 of the two holds, and it is `left` rather than `fixed` — the harness closes
 nothing, and neither does the role on its account; the request is there for
 somebody to decide about. Each request is reported once, keyed on its number,

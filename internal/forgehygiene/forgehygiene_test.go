@@ -2,11 +2,15 @@ package forgehygiene
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -200,6 +204,115 @@ func TestAReadingThatCannotBeMadeIsAnErrorNotSilence(t *testing.T) {
 	unread := Sweeper{Forge: threeRequests(), Tracker: &fakeTracker{err: errors.New("bd: database locked")}}
 	if _, err := unread.Notice(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "database locked") {
 		t.Errorf("Notice() over an unreadable tracker error = %v, want the tracker's refusal", err)
+	}
+}
+
+// pagingBD stands in for the bd binary as `bd list` behaves on a terminal or in
+// what it takes for an agent session: it holds every closed item, newest first,
+// and hands back the first fifty of them unless the command line says otherwise
+// — `--limit=0` being its word for the whole set, which the real bd was seen to
+// honour in docs/diagnoses/yoyodyne-ifd-283-2-forge-hygiene-reads.md. The real
+// bd also lifts its cap on its own when piped; this fake does not, because the
+// client is not to depend on that. It is the tracker the real beads.Client is
+// put over here, so what this pins is the client's command line and not a
+// fake's generosity.
+type pagingBD struct {
+	closed []bdRow
+	args   [][]string
+}
+
+// bdRow is a work item as `bd list --json` emits it, in the fields the pass reads.
+type bdRow struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+// bdDefaultListLimit is the page `bd list` returns when nothing lifts it.
+const bdDefaultListLimit = 50
+
+func (p *pagingBD) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	p.args = append(p.args, append([]string(nil), command.Args...))
+	if len(command.Args) == 0 || command.Args[0] != "list" {
+		return execution.ProcessResult{}, fmt.Errorf("unexpected bd command %v", command.Args)
+	}
+	limit := bdDefaultListLimit
+	status := ""
+	for _, arg := range command.Args[1:] {
+		switch {
+		case strings.HasPrefix(arg, "--limit="):
+			parsed, err := strconv.Atoi(strings.TrimPrefix(arg, "--limit="))
+			if err != nil {
+				return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "invalid --limit"}, nil
+			}
+			limit = parsed
+		case strings.HasPrefix(arg, "--status="):
+			status = strings.TrimPrefix(arg, "--status=")
+		}
+	}
+	if status != "closed" {
+		return execution.ProcessResult{}, fmt.Errorf("only the closed work is read, not %q", status)
+	}
+	page := p.closed
+	if limit > 0 && len(page) > limit {
+		page = page[:limit]
+	}
+	encoded, err := json.Marshal(page)
+	if err != nil {
+		return execution.ProcessResult{}, err
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: string(encoded)}, nil
+}
+
+// The tracker is read whole rather than by its first page. The forge holds a
+// request superseded long ago — its item is closed, and it is the oldest of more
+// closed items than bd lists by default — and the pass names it as held open for
+// nothing rather than passing over it as live. A pass that took bd's default page
+// would miss it, and say so again every hour: the request is never reported,
+// so nothing records it as reported, so every pass looks at it afresh.
+func TestTheWholeClosedSetIsReadSoAnOldSupersededRequestIsNotTakenForLive(t *testing.T) {
+	t.Parallel()
+
+	const closedItems = 3 * bdDefaultListLimit
+	closed := make([]bdRow, 0, closedItems)
+	// Newest first, as a listing sorts them, so the request's item is the last
+	// one a page would reach.
+	for i := closedItems; i >= 1; i-- {
+		closed = append(closed, bdRow{ID: fmt.Sprintf("yoyodyne-ifd.%d", i), Title: "closed work", Status: "closed"})
+	}
+	bd := &pagingBD{closed: closed}
+	forge := &fakeForge{
+		open: []publish.PullRequest{
+			{Number: 12, URL: "https://forge.invalid/pull/12", HeadBranch: "yoyodyne/yoyodyne-ifd-1/ffffffff", BaseBranch: "main", HeadCommit: staleCommit},
+			{Number: 470, URL: "https://forge.invalid/pull/470", HeadBranch: "yoyodyne/yoyodyne-ifd-310/cccccccc", BaseBranch: "main", HeadCommit: liveCommit},
+		},
+	}
+	sweeper := Sweeper{Forge: forge, Tracker: beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}}
+
+	notices, err := sweeper.Notice(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Notice() error = %v", err)
+	}
+	if len(notices) != 1 || notices[0].Number != 12 || !notices[0].ItemClosed || notices[0].WorkItemID != "yoyodyne-ifd.1" {
+		t.Fatalf("notices = %+v, want the superseded #12 reported for its closed item yoyodyne-ifd.1, which is past bd's default page", notices)
+	}
+	for _, notice := range notices {
+		if notice.Number == 470 {
+			t.Errorf("the live request #470 was reported: %+v", notice)
+		}
+	}
+	if len(bd.args) != 1 {
+		t.Fatalf("bd was run %d times with %v, want one listing of the closed work", len(bd.args), bd.args)
+	}
+
+	// A later pass, given what this one reported, has nothing left to say about
+	// #12 — and would have had, every hour, off a page.
+	later, err := sweeper.Notice(context.Background(), map[int]bool{12: true})
+	if err != nil {
+		t.Fatalf("Notice() on the later pass error = %v", err)
+	}
+	if len(later) != 0 {
+		t.Fatalf("later pass notices = %+v, want nothing: #12 was reported and #470 is live", later)
 	}
 }
 
