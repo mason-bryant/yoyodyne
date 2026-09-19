@@ -651,7 +651,11 @@ func (g GitHub) Contains(ctx context.Context, base, commit string) (bool, error)
 	}
 	// The API verb takes no --repo flag; the repository it addresses is the one
 	// the environment names, so the configured remote is put there, and the
-	// placeholders in the endpoint are filled from it.
+	// placeholders in the endpoint are filled from it. The remote's URL goes in
+	// as git reports it: gh reads GH_REPO through the parser --repo uses, which
+	// takes the ssh and https forms alike, and the placeholders come out as
+	// OWNER and REPO — shown against gh itself in
+	// docs/diagnoses/yoyodyne-ifd-283-2-forge-hygiene-reads.md.
 	result, err := g.Runner.Run(ctx, execution.Command{
 		Name:     g.binary(),
 		Args:     []string{"api", "--method", "GET", "-F", "per_page=1", "repos/{owner}/{repo}/compare/" + base + "..." + commit},

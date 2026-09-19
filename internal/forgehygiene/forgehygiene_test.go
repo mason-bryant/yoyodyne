@@ -207,11 +207,15 @@ func TestAReadingThatCannotBeMadeIsAnErrorNotSilence(t *testing.T) {
 	}
 }
 
-// pagingBD stands in for the bd binary as `bd list` actually behaves: it holds
-// every closed item, newest first, and hands back the first fifty of them unless
-// the command line says otherwise — `--limit=0` being its word for the whole set.
-// It is the tracker the real beads.Client is put over here, so what this pins
-// is the client's command line and not a fake's generosity.
+// pagingBD stands in for the bd binary as `bd list` behaves on a terminal or in
+// what it takes for an agent session: it holds every closed item, newest first,
+// and hands back the first fifty of them unless the command line says otherwise
+// — `--limit=0` being its word for the whole set, which the real bd was seen to
+// honour in docs/diagnoses/yoyodyne-ifd-283-2-forge-hygiene-reads.md. The real
+// bd also lifts its cap on its own when piped; this fake does not, because the
+// client is not to depend on that. It is the tracker the real beads.Client is
+// put over here, so what this pins is the client's command line and not a
+// fake's generosity.
 type pagingBD struct {
 	closed []bdRow
 	args   [][]string
