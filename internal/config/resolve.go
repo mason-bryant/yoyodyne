@@ -212,6 +212,8 @@ func newResolution() *resolution {
 				UsageLimitUnknownResetPause:       defaultUsageLimitUnknownResetPause,
 				ServerOverloadPause:               defaultServerOverloadPause,
 				CheckTimeout:                      defaultCheckTimeout,
+				CheckStageTimeout:                 defaultCheckStageTimeout,
+				LandingCheckTimeout:               defaultLandingCheckTimeout,
 				WorkPoll:                          defaultWorkPoll,
 				BlockedRunsBeforeIntakeHold:       defaultBlockedRunsBeforeIntakeHold,
 				// The declarative path is what a new run executes unless the project
@@ -274,6 +276,8 @@ func newResolution() *resolution {
 			"execution.usage_limit_max_pause":                     OriginDefault,
 			"execution.usage_limit_in_process_pause":              OriginDefault,
 			"execution.check_timeout":                             OriginDefault,
+			"execution.check_stage_timeout":                       OriginDefault,
+			"execution.landing_check_timeout":                     OriginDefault,
 			"execution.work_poll":                                 OriginDefault,
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,
 			"execution.declarative_delivery":                      OriginDefault,
@@ -313,6 +317,8 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.usage_limit_unknown_reset_pause", execution.UsageLimitUnknownResetPause, &r.config.Execution.UsageLimitUnknownResetPause, applied.origin)
 		setValue(r.origins, "execution.server_overload_pause", execution.ServerOverloadPause, &r.config.Execution.ServerOverloadPause, applied.origin)
 		setValue(r.origins, "execution.check_timeout", execution.CheckTimeout, &r.config.Execution.CheckTimeout, applied.origin)
+		setValue(r.origins, "execution.check_stage_timeout", execution.CheckStageTimeout, &r.config.Execution.CheckStageTimeout, applied.origin)
+		setValue(r.origins, "execution.landing_check_timeout", execution.LandingCheckTimeout, &r.config.Execution.LandingCheckTimeout, applied.origin)
 		setValue(r.origins, "execution.work_poll", execution.WorkPoll, &r.config.Execution.WorkPoll, applied.origin)
 		setValue(r.origins, "execution.blocked_runs_before_intake_hold", execution.BlockedRunsBeforeIntakeHold, &r.config.Execution.BlockedRunsBeforeIntakeHold, applied.origin)
 		// The declarative path carries a harness default like the values above it,
@@ -428,6 +434,10 @@ func (r *resolution) apply(applied layer) error {
 	if document.Checks != nil {
 		r.config.Checks = append([]string(nil), (*document.Checks)...)
 		r.origins["checks"] = applied.origin
+	}
+	if document.LandingChecks != nil {
+		r.config.LandingChecks = append([]string(nil), (*document.LandingChecks)...)
+		r.origins["landing_checks"] = applied.origin
 	}
 
 	for _, name := range sortedAgentNames(document.Agents) {

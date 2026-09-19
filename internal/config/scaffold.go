@@ -238,6 +238,16 @@ execution:
   # multiplying the cores it runs on, so either this scales with
   # max_concurrent_developers or the checks are left to serialize themselves.
   check_timeout: %s
+  # The budget the whole check stage of one run gets -- every check below
+  # together, from the first starting to the last ending. A stage that reaches
+  # it ends as a stoppage naming the bound and the check it stopped, and "yoyo
+  # status" shows how much of it a run has spent while its checks run. Keep it
+  # in minutes: a stage that can take hours holds a developer seat for hours.
+  check_stage_timeout: %s
+  # The budget each landing check gets -- the list under "landing_checks" below,
+  # run once per landing over the integrated commit. It is its own budget with
+  # no stage bound, because what goes there is the suite too long for the gate.
+  landing_check_timeout: %s
   # "yoyo work --watch" stays open instead of returning when the queue is empty,
   # and this is how long it waits before reading the queue again. Nothing is
   # cached between readings, so this is also the delay on work you admit or
@@ -340,6 +350,8 @@ approvals:
 		renderScaffoldDuration(effective.Execution.UsageLimitUnknownResetPause),
 		renderScaffoldDuration(effective.Execution.ServerOverloadPause),
 		renderScaffoldDuration(effective.Execution.CheckTimeout),
+		renderScaffoldDuration(effective.Execution.CheckStageTimeout),
+		renderScaffoldDuration(effective.Execution.LandingCheckTimeout),
 		renderScaffoldDuration(effective.Execution.WorkPoll),
 		effective.Execution.BlockedRunsBeforeIntakeHold,
 		effective.Execution.DeclarativeDelivery,
@@ -632,6 +644,38 @@ checks: []
 	listed := len(detection.Checks) > 0
 	renderScaffoldCandidates(builder, detection.Candidates, listed)
 	renderScaffoldAlternatives(builder, detection.Alternatives)
+	renderScaffoldLandingChecks(builder)
+}
+
+// renderScaffoldLandingChecks writes the landing checks commented out: what to
+// run once per landing on the target branch, over the integrated commit, after
+// a run has integrated. Nothing is proposed for it, because what belongs here is
+// the suite too expensive for every attempt -- a race detector, a long
+// integration suite -- and detection cannot tell which of a project's commands
+// that is. The narrowing variable is named beside it, because the two are
+// halves of one arrangement: the per-run gate runs the suite over what the
+// change touches, and this runs it whole over what landed.
+func renderScaffoldLandingChecks(builder *strings.Builder) {
+	builder.WriteString(`
+# Landing checks run once per landing on the target branch, over the integrated
+# commit, after a run has integrated and closed its item. A failure is reported
+# as a red landing that files its own work item; it never blocks the run that
+# landed the change. Each check gets landing_check_timeout above and the list
+# has no stage bound; a check stopped at its budget leaves the landing
+# unverified rather than red. This is where a suite too expensive for every
+# attempt goes whole -- a race detector, a long integration suite -- while the per-run gate
+# above runs it narrowed: every check is given YOYODYNE_CHANGED_GO_PACKAGES,
+# the Go packages the change touches as "./dir" patterns, "./..." where the
+# harness cannot narrow, and empty where the change touches no package. Read it
+# with the shell's unset-only default, so the same line run outside the harness
+# -- by a developer for its own evidence, or by hand -- tests the whole module:
+#
+#   checks:
+#     - 'set -- ${YOYODYNE_CHANGED_GO_PACKAGES-./...}; [ $# -eq 0 ] || go test -race "$@"'
+#   landing_checks:
+#     - go test -race ./...
+landing_checks: []
+`)
 }
 
 // renderScaffoldCandidates writes what detection found and would not choose

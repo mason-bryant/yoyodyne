@@ -409,10 +409,18 @@ complaint and exits 0 is not a gate. Prefer the pinned, non-daemon,
 non-interactive form of each tool, so the same commit checks the same way twice.
 
 Each check also gets a wall-clock budget, `execution.check_timeout`, thirty
-minutes by default. Raise it as your suite grows, and raise it again if you run
-several developers at once: concurrent runs share the machine, so each suite's
-wall clock grows without its work doing so. See
-[How long a check may take](docs/configuration.md#how-long-a-check-may-take).
+minutes by default, and the whole list gets one of its own,
+`execution.check_stage_timeout`, thirty minutes too: a stage that reaches it
+ends the run as a stoppage naming the bound and the check it stopped, and
+`yoyo status` says how much of it a run has spent while its checks run. Raise
+the per-check budget as your suite grows, and raise it again if you run several
+developers at once: concurrent runs share the machine, so each suite's wall
+clock grows without its work doing so. Keep the stage bound in minutes, and fit
+the stage inside it by running the expensive suite narrowed to what a change
+touches per run and whole once per landing, with `landing_checks`, which run
+under a budget of their own (`execution.landing_check_timeout`, two hours). See
+[How long a check may take](docs/configuration.md#how-long-a-check-may-take)
+and [Where the whole suite runs](docs/configuration.md#where-the-whole-suite-runs).
 
 **Then validate what you wrote:**
 

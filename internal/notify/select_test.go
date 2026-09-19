@@ -284,6 +284,101 @@ func TestAFailingCheckIsSaidAsAWarningInTheChecksOwnWords(t *testing.T) {
 	}
 }
 
+// Passing checks are said with what the stage spent of its bound, because the
+// bound is the number that says whether a stage was slow, and a thread that
+// said only "passed" left an operator to work out from timestamps that the
+// checks had taken two hours.
+func TestPassingChecksAreSaidWithWhatTheStageSpentOfItsBound(t *testing.T) {
+	before := running()
+	after := before
+	after.Phase = runstate.PhaseReviewing
+	finished := moment.Add(14 * time.Minute)
+	after.CheckStage = &runstate.CheckStage{
+		StartedAt: moment, BoundSeconds: 1800, Command: "make vet",
+		FinishedAt: &finished, ElapsedSeconds: 14 * 60,
+	}
+	kinds, notifications := crossed(t, before, after)
+	if len(kinds) != 1 || kinds[0] != KindChecksPassed {
+		t.Fatalf("passing checks crossed %v", kinds)
+	}
+	passed := only(t, notifications, KindChecksPassed)
+	message, err := Render(passed.Topic, passed.Speaker, passed.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(message.Body, "in 14m0s of the 30m0s bound") {
+		t.Fatalf("body %q does not say what the stage spent of its bound", message.Body)
+	}
+}
+
+// A landing is said once its checks have ended: green stays in the thread as a
+// note, red is a warning carrying the item it filed, and one whose checks did
+// not run is said as that rather than as either. None is said again while the
+// record stands, and none is said while the checks are still running.
+func TestALandingIsSaidOnceWhicheverWayItWent(t *testing.T) {
+	commit := strings.Repeat("c", 40)
+	finished := moment.Add(20 * time.Minute)
+	for _, test := range []struct {
+		name     string
+		landing  runstate.LandingChecks
+		kind     Kind
+		severity report.Severity
+		body     string
+	}{
+		{
+			name: "green",
+			landing: runstate.LandingChecks{Commit: commit, StartedAt: moment, FinishedAt: &finished, BoundSeconds: 1800, Ran: true, Green: true,
+				Checks: []runstate.LandingCheckResult{{Command: "make race", Passed: true}}},
+			kind: KindLandingGreen, severity: report.SeverityNote, body: "green landing: 1 landing check passed over cccccccccccc",
+		},
+		{
+			name: "red",
+			landing: runstate.LandingChecks{Commit: commit, StartedAt: moment, FinishedAt: &finished, BoundSeconds: 1800, Ran: true,
+				Checks: []runstate.LandingCheckResult{{Command: "make race", ExitCode: 1}}, FiledWorkItem: "yoyodyne-ifd.500"},
+			kind: KindLandingRed, severity: report.SeverityWarning, body: "red landing: make race exited 1 over cccccccccccc; filed as yoyodyne-ifd.500",
+		},
+		{
+			name:    "unverified",
+			landing: runstate.LandingChecks{Commit: commit, StartedAt: moment, FinishedAt: &finished, BoundSeconds: 1800, Problem: "no checkout of the integrated commit could be cut"},
+			kind:    KindLandingUnverified, severity: report.SeverityWarning, body: "unverified landing: the landing checks did not run to the end over cccccccccccc (no checkout of the integrated commit could be cut)",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := running()
+			before.Status = runstate.StatusSucceeded
+			before.Phase = runstate.PhaseComplete
+			running := before
+			started := test.landing
+			started.FinishedAt = nil
+			running.LandingChecks = &started
+			if kinds, _ := crossed(t, before, running); len(kinds) != 0 {
+				t.Fatalf("landing checks still running crossed %v", kinds)
+			}
+			after := before
+			landing := test.landing
+			after.LandingChecks = &landing
+			kinds, notifications := crossed(t, running, after)
+			if len(kinds) != 1 || kinds[0] != test.kind {
+				t.Fatalf("a %s landing crossed %v", test.name, kinds)
+			}
+			said := only(t, notifications, test.kind)
+			if said.Event.Severity != test.severity {
+				t.Fatalf("a %s landing is a %s, want %s", test.name, said.Event.Severity, test.severity)
+			}
+			message, err := Render(said.Topic, said.Speaker, said.Event)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if !strings.Contains(message.Body, test.body) {
+				t.Fatalf("body %q does not carry %q", message.Body, test.body)
+			}
+			if again, _ := crossed(t, after, after); len(again) != 0 {
+				t.Fatalf("the landing was said twice: %v", again)
+			}
+		})
+	}
+}
+
 func TestTheVerdictIsTheReviewersOwnAccount(t *testing.T) {
 	before := running()
 	before.Phase = runstate.PhaseReviewing

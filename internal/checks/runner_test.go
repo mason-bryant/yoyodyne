@@ -20,10 +20,7 @@ func TestRunnerStopsAfterFailedCheck(t *testing.T) {
 	var events []execution.Event
 	results, lastSequence, err := (Runner{Process: execution.OSProcessRunner{}}).Run(
 		context.Background(),
-		"run-0123456789abcdef0123456789abcdef",
-		t.TempDir(),
-		[]string{"printf 'ok\\n'", "exit 3", "exit 0"},
-		5,
+		Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"printf 'ok\\n'", "exit 3", "exit 0"}, LastSequence: 5},
 		func(event execution.Event) error {
 			events = append(events, event)
 			return nil
@@ -46,10 +43,7 @@ func TestRunnerUsesANonLoginShell(t *testing.T) {
 	process := &recordingRunner{}
 	_, _, err := (Runner{Process: process}).Run(
 		context.Background(),
-		"run-0123456789abcdef0123456789abcdef",
-		t.TempDir(),
-		[]string{"true"},
-		0,
+		Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"true"}, LastSequence: 0},
 		nil,
 	)
 	if err != nil {
@@ -76,10 +70,7 @@ func TestRunnerReturnsOnlyLastAcceptedEventSequence(t *testing.T) {
 			t.Parallel()
 			_, lastSequence, err := (Runner{Process: execution.OSProcessRunner{}}).Run(
 				context.Background(),
-				"run-0123456789abcdef0123456789abcdef",
-				t.TempDir(),
-				[]string{"printf 'output\\n'"},
-				5,
+				Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"printf 'output\\n'"}, LastSequence: 5},
 				func(event execution.Event) error {
 					if event.Type == test.rejectType {
 						return errors.New("event rejected")
@@ -107,10 +98,7 @@ func TestRunnerRedactsSensitiveCheckOutputBeforeEvents(t *testing.T) {
 		RedactValues: []string{secret},
 	}).Run(
 		context.Background(),
-		"run-0123456789abcdef0123456789abcdef",
-		t.TempDir(),
-		[]string{"printf 'check-secret-value\\n'"},
-		0,
+		Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"printf 'check-secret-value\\n'"}, LastSequence: 0},
 		func(event execution.Event) error {
 			events = append(events, event)
 			return nil
@@ -143,12 +131,12 @@ func TestRunnerGivesEveryCheckTheConfiguredBudget(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			process := &recordingRunner{}
-			results, _, err := (Runner{Process: process, Timeout: test.configure}).Run(
+			// The stage bound is kept out of the way, because what is under test
+			// is the per-check budget and the stage bound cuts a check to what the
+			// stage has left.
+			results, _, err := (Runner{Process: process, Timeout: test.configure, StageTimeout: 2 * time.Hour}).Run(
 				context.Background(),
-				"run-0123456789abcdef0123456789abcdef",
-				t.TempDir(),
-				[]string{"true"},
-				0,
+				Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"true"}, LastSequence: 0},
 				nil,
 			)
 			if err != nil {
@@ -177,10 +165,7 @@ func TestRunnerReportsElapsedAgainstTheBudgetOnEveryCheck(t *testing.T) {
 	var completed []execution.Event
 	results, _, err := (Runner{Process: process, Timeout: 10 * time.Minute}).Run(
 		context.Background(),
-		"run-0123456789abcdef0123456789abcdef",
-		t.TempDir(),
-		[]string{"make test"},
-		0,
+		Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"make test"}, LastSequence: 0},
 		func(event execution.Event) error {
 			if event.Type == execution.EventCommandCompleted {
 				completed = append(completed, event)
@@ -219,10 +204,7 @@ func TestEveryCheckIsGivenABuildCacheTheRunMayWrite(t *testing.T) {
 	process := &recordingRunner{}
 	if _, _, err := (Runner{Process: process}).Run(
 		context.Background(),
-		"run-0123456789abcdef0123456789abcdef",
-		directory,
-		[]string{"true"},
-		0,
+		Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: directory, Commands: []string{"true"}, LastSequence: 0},
 		nil,
 	); err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -250,10 +232,7 @@ func TestACheckTooVerboseToRetainStillPassesAndSaysItWasCut(t *testing.T) {
 	var events []execution.Event
 	results, _, err := (Runner{Process: process}).Run(
 		context.Background(),
-		runID,
-		t.TempDir(),
-		[]string{"noisy-check"},
-		0,
+		Request{RunID: runID, Directory: t.TempDir(), Commands: []string{"noisy-check"}, LastSequence: 0},
 		func(event execution.Event) error {
 			events = append(events, event)
 			return nil
@@ -290,4 +269,206 @@ func (r *recordingRunner) Run(_ context.Context, command execution.Command, _ ex
 		return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
 	}
 	return r.result, nil
+}
+
+// A stage is bounded as a whole, not only check by check. With three checks
+// each inside its own budget, the stage still ends where its bound is: the
+// check running when the bound arrives is given only what the stage has left,
+// and a check the stage has nothing left for is recorded as stopped without
+// being started — so the record says which check the bound stopped rather than
+// showing a check that ran for no time.
+func TestTheStageBoundStopsTheCheckItArrivesDuringAndStartsNothingAfterIt(t *testing.T) {
+	t.Parallel()
+
+	clock := &steppingClock{now: time.Date(2026, 9, 19, 6, 0, 0, 0, time.UTC)}
+	process := &advancingRunner{clock: clock, runs: 12 * time.Minute}
+	var started []string
+	results, _, err := (Runner{Process: process, Clock: clock, Timeout: 30 * time.Minute, StageTimeout: 30 * time.Minute}).Run(
+		context.Background(),
+		Request{
+			RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(),
+			Commands: []string{"make fmtcheck", "make test", "make race", "make vet"},
+			Started:  func(command string, _ time.Duration) { started = append(started, command) },
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// 12m, 12m, and then only 6m of the 30m stage remain for the third check.
+	// Each check is given what the stage has left where that is less than its
+	// own budget, so the second is cut to 18m and passes inside it, and the
+	// third is cut to 6m and stopped there.
+	if len(results) != 3 {
+		t.Fatalf("results = %d, want the stage to end at the third check: %#v", len(results), results)
+	}
+	if got := process.budgets; !reflect.DeepEqual(got, []time.Duration{30 * time.Minute, 18 * time.Minute, 6 * time.Minute}) {
+		t.Fatalf("budgets given = %v, want each check cut to what the stage had left", got)
+	}
+	third := results[2]
+	if third.Passed || third.Process.Status != execution.ProcessTimedOut || !third.StoppedByStage {
+		t.Fatalf("third result = %#v, want it stopped by the stage", third)
+	}
+	if third.StageTimeout != 30*time.Minute || third.StageElapsed != 30*time.Minute {
+		t.Fatalf("stage figures = %s of %s, want the stage recorded as spent whole", third.StageElapsed, third.StageTimeout)
+	}
+	if results[0].StoppedByStage || results[1].StoppedByStage || results[1].StageElapsed != 24*time.Minute {
+		t.Fatalf("earlier results = %#v, want them passed with the stage's running spend on each", results[:2])
+	}
+	if !reflect.DeepEqual(started, []string{"make fmtcheck", "make test", "make race"}) {
+		t.Fatalf("started = %v, want the fourth check never started", started)
+	}
+}
+
+func TestACheckTheStageHasNothingLeftForIsRecordedAsStoppedWithoutRunning(t *testing.T) {
+	t.Parallel()
+
+	clock := &steppingClock{now: time.Date(2026, 9, 19, 6, 0, 0, 0, time.UTC)}
+	process := &advancingRunner{clock: clock, runs: 10 * time.Minute}
+	var completed []execution.Event
+	results, _, err := (Runner{Process: process, Clock: clock, Timeout: 10 * time.Minute, StageTimeout: 10 * time.Minute}).Run(
+		context.Background(),
+		Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"make test", "make race"}},
+		func(event execution.Event) error {
+			if event.Type == execution.EventCommandCompleted {
+				completed = append(completed, event)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(results) != 2 || len(process.budgets) != 1 {
+		t.Fatalf("results = %#v with %d processes run, want the second check recorded and never run", results, len(process.budgets))
+	}
+	second := results[1]
+	if !second.StoppedByStage || second.Process.Status != execution.ProcessTimedOut || second.Elapsed() != 0 {
+		t.Fatalf("second result = %#v, want it stopped by the stage with no elapsed time", second)
+	}
+	if len(completed) != 2 {
+		t.Fatalf("completion events = %d, want one per recorded check", len(completed))
+	}
+	payload := string(completed[1].Payload)
+	for _, want := range []string{`"stopped_by_stage":true`, `"stage_timeout":"10m0s"`, `"stage_elapsed":"10m0s"`} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("completion payload = %s, want it to contain %s", payload, want)
+		}
+	}
+}
+
+// A check killed at its own budget with the stage still to spare is the
+// per-check bound's doing, and raising the stage bound would not have saved it.
+func TestACheckStoppedAtItsOwnBudgetIsNotStoppedByTheStage(t *testing.T) {
+	t.Parallel()
+
+	clock := &steppingClock{now: time.Date(2026, 9, 19, 6, 0, 0, 0, time.UTC)}
+	process := &advancingRunner{clock: clock, runs: 10 * time.Minute, status: execution.ProcessTimedOut}
+	results, _, err := (Runner{Process: process, Clock: clock, Timeout: 10 * time.Minute, StageTimeout: time.Hour}).Run(
+		context.Background(),
+		Request{RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"make race"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(results) != 1 || results[0].StoppedByStage || results[0].Process.Status != execution.ProcessTimedOut {
+		t.Fatalf("results = %#v, want a check stopped at its own budget", results)
+	}
+}
+
+// What the harness knows about the change reaches every check through its
+// environment, beside the build cache it is already given.
+func TestEveryCheckIsToldWhatTheRequestCarries(t *testing.T) {
+	t.Parallel()
+
+	process := &recordingRunner{}
+	if _, _, err := (Runner{Process: process}).Run(
+		context.Background(),
+		Request{
+			RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(), Commands: []string{"true"},
+			Env: []string{ChangedGoPackagesVariable + "=./internal/checks"},
+		},
+		nil,
+	); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !slices.Contains(process.command.Env, ChangedGoPackagesVariable+"=./internal/checks") {
+		t.Fatalf("the check's environment does not carry the narrowing: %v", process.command.Env)
+	}
+	if !slices.ContainsFunc(process.command.Env, func(entry string) bool { return strings.HasPrefix(entry, "PATH=") }) {
+		t.Fatal("the check's environment lost this process's own")
+	}
+}
+
+// steppingClock is a clock the test moves, so a stage's arithmetic is checked
+// against known spans rather than against wall-clock sleeps.
+type steppingClock struct {
+	now time.Time
+}
+
+func (c *steppingClock) Now() time.Time { return c.now }
+
+func (c *steppingClock) advance(by time.Duration) { c.now = c.now.Add(by) }
+
+// advancingRunner stands in for a check that takes a known time: each run moves
+// the clock by `runs`, cut to the budget it was given, and reports timed out
+// where the budget was what stopped it.
+type advancingRunner struct {
+	clock   *steppingClock
+	runs    time.Duration
+	status  execution.ProcessStatus
+	budgets []time.Duration
+}
+
+func (r *advancingRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	r.budgets = append(r.budgets, command.Timeout)
+	started := r.clock.Now()
+	took := r.runs
+	status := execution.ProcessSucceeded
+	if r.status != "" {
+		status = r.status
+	}
+	if command.Timeout > 0 && took > command.Timeout {
+		took = command.Timeout
+		status = execution.ProcessTimedOut
+	}
+	r.clock.advance(took)
+	exitCode := 0
+	if status != execution.ProcessSucceeded {
+		exitCode = -1
+	}
+	return execution.ProcessResult{Status: status, ExitCode: exitCode, StartedAt: started, FinishedAt: r.clock.Now()}, nil
+}
+
+// A request may run with a budget of its own and no stage bound, which is what
+// a landing asks for: the suite moved to the landing is the one too long for
+// the gate's stage bound, so each landing check is given its own budget whole
+// and the list may take the sum of them.
+func TestARequestMayRunUnboundedWithItsOwnBudget(t *testing.T) {
+	t.Parallel()
+
+	clock := &steppingClock{now: time.Date(2026, 9, 19, 6, 0, 0, 0, time.UTC)}
+	process := &advancingRunner{clock: clock, runs: 50 * time.Minute}
+	results, _, err := (Runner{Process: process, Clock: clock, Timeout: 10 * time.Minute, StageTimeout: 30 * time.Minute}).Run(
+		context.Background(),
+		Request{
+			RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(),
+			Commands: []string{"make race", "make test"},
+			Timeout:  2 * time.Hour, Unbounded: true,
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(results) != 2 || !results[0].Passed || !results[1].Passed {
+		t.Fatalf("results = %#v, want both checks run whole past the runner's own bounds", results)
+	}
+	if got := process.budgets; !reflect.DeepEqual(got, []time.Duration{2 * time.Hour, 2 * time.Hour}) {
+		t.Fatalf("budgets given = %v, want the request's own budget each", got)
+	}
+	if results[1].StoppedByStage || results[1].StageTimeout != 0 || results[1].StageElapsed != 100*time.Minute {
+		t.Fatalf("second result = %#v, want no stage bound and the list's spend recorded", results[1])
+	}
 }

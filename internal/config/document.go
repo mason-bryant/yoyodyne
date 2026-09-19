@@ -19,16 +19,21 @@ import (
 // silently ignored, so a typo in an override fails closed instead of leaving
 // the inherited value quietly in place.
 type configDocument struct {
-	Version   *int                     `yaml:"version"`
-	Extends   *string                  `yaml:"extends"`
-	Product   *productDocument         `yaml:"product"`
-	Execution *executionDocument       `yaml:"execution"`
-	Triage    *triageDocument          `yaml:"triage"`
-	Exchange  *exchangeDocument        `yaml:"exchange"`
-	Research  *researchDocument        `yaml:"research"`
-	Approvals *approvalsDocument       `yaml:"approvals"`
-	Checks    *[]string                `yaml:"checks"`
-	Agents    map[string]agentDocument `yaml:"agents"`
+	Version   *int               `yaml:"version"`
+	Extends   *string            `yaml:"extends"`
+	Product   *productDocument   `yaml:"product"`
+	Execution *executionDocument `yaml:"execution"`
+	Triage    *triageDocument    `yaml:"triage"`
+	Exchange  *exchangeDocument  `yaml:"exchange"`
+	Research  *researchDocument  `yaml:"research"`
+	Approvals *approvalsDocument `yaml:"approvals"`
+	Checks    *[]string          `yaml:"checks"`
+	// LandingChecks replaces an inherited list entirely rather than merging into
+	// it, for the reason Checks does: what runs after a landing is one
+	// statement, and a list half from a bundle and half from a project is not the
+	// list either layer wrote.
+	LandingChecks *[]string                `yaml:"landing_checks"`
+	Agents        map[string]agentDocument `yaml:"agents"`
 	// Operators replaces an inherited mapping entirely rather than merging into
 	// it, for the reason the check list does and the allow-list it absorbed did:
 	// who may act is a decision, and a mapping silently assembled from two layers
@@ -85,6 +90,8 @@ type executionDocument struct {
 	UsageLimitUnknownResetPause            *Duration `yaml:"usage_limit_unknown_reset_pause"`
 	ServerOverloadPause                    *Duration `yaml:"server_overload_pause"`
 	CheckTimeout                           *Duration `yaml:"check_timeout"`
+	CheckStageTimeout                      *Duration `yaml:"check_stage_timeout"`
+	LandingCheckTimeout                    *Duration `yaml:"landing_check_timeout"`
 	WorkPoll                               *Duration `yaml:"work_poll"`
 	BlockedRunsBeforeIntakeHold            *int      `yaml:"blocked_runs_before_intake_hold"`
 	// DeclarativeDelivery is absent from every file written before it existed and

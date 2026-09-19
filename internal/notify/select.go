@@ -90,7 +90,7 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 		say(KindRunContinued, report.SeverityNote, Harness(), Detail{})
 	}
 	if !checksBehind(before) && checksBehind(after) {
-		say(KindChecksPassed, report.SeverityNote, Harness(), Detail{})
+		say(KindChecksPassed, report.SeverityNote, Harness(), Detail{Checks: stageSpend(after)})
 	}
 	// A failing check is said whenever the recorded failure changes, so a second
 	// repair attempt that fails differently is news rather than silence. A repeat
@@ -155,6 +155,21 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 			PullRequest: describePullRequest(after.PullRequest),
 			Cause:       after.MergeDrop.Reason,
 		})
+	}
+	// A landing is said once its checks have ended, whichever way, and never
+	// while they run: what a thread wants of it is the result, and a red one is
+	// the one fact about a landed change that the run's own ending does not
+	// carry. It is read from the record's own sentence rather than worded here,
+	// so the channel, `yoyo status`, and the item's note say one thing about it.
+	if landed(after) && !landed(before) {
+		kind, severity := KindLandingGreen, report.SeverityNote
+		switch {
+		case after.LandingChecks.Red():
+			kind, severity = KindLandingRed, report.SeverityWarning
+		case after.LandingChecks.Unverified():
+			kind, severity = KindLandingUnverified, report.SeverityWarning
+		}
+		say(kind, severity, Harness(), Detail{Landing: after.LandingChecks.Describe()})
 	}
 	if !parked(before) && parked(after) {
 		say(KindRunParked, parkSeverity(after), Harness(), Detail{Cause: causeOf(after)})
@@ -940,6 +955,23 @@ func checksBehind(state runstate.State) bool {
 	default:
 		return false
 	}
+}
+
+// stageSpend is what the check stage spent of its bound, for a record that
+// carries one, in the words the message says it in. A record written before
+// the stage was recorded carries none, and says so through the placeholder's
+// own absence rather than as a spend of nothing.
+func stageSpend(state runstate.State) string {
+	stage := state.CheckStage
+	if stage == nil || stage.Running() {
+		return ""
+	}
+	return fmt.Sprintf("%s of the %s bound", stage.Elapsed().Round(time.Second), stage.Bound())
+}
+
+// landed reports a record whose landing checks have ended, one way or another.
+func landed(state runstate.State) bool {
+	return state.LandingChecks != nil && state.LandingChecks.Finished()
 }
 
 // verdictGiven reports a record that holds a reviewer's verdict at all. The
