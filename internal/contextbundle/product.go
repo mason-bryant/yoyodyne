@@ -47,7 +47,13 @@ import (
 // documents is the right thing to carry in full at all — a product question
 // rather than a constant, and the one this figure keeps being raised instead of
 // answering.
-const defaultMaxProductBytes = 768 << 10
+//
+// This is the third move, for the same reason again: at 768 KiB the set was
+// within 40 bytes, and the work item that wrote the rule that a test never
+// bounds a wait in wall-clock time found it by adding that section to
+// docs/developing-yoyo.md. The question above is still open, and each move
+// that stands in for its answer is recorded here so the count is visible.
+const defaultMaxProductBytes = 896 << 10
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.

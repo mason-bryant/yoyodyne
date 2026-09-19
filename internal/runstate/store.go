@@ -52,6 +52,11 @@ type Store struct {
 	// only so a test can drive the bound without spending it; every store the
 	// harness builds gets promotionQueueWait.
 	promotionWait time.Duration
+	// promotionQueued is told, once per lease, that a promotion found the
+	// branch's lease held and is waiting its turn. It is nil in every store the
+	// harness builds and is a test's signal, for the reason the conversation
+	// store carries one.
+	promotionQueued func()
 }
 
 type ExistingWorkItemError struct {

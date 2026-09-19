@@ -419,7 +419,7 @@ func TestAStartedSinkOutlivesThePassAndWritesToItsOwnLog(t *testing.T) {
 		t.Fatalf("Launch() = %d, want the process it started", pid)
 	}
 
-	if got := startedSinkWrote(t, log, 1); got != "yoyodyne" {
+	if got := startedSinkWrote(t, pid, log); got != "yoyodyne" {
 		t.Fatalf("the started process recorded %q, want the namespace it was launched with", got)
 	}
 	if info, err := os.Stat(log); err != nil || info.Mode().Perm() != 0o600 {
@@ -441,7 +441,7 @@ func TestAStartedSinkCarriesTheGitMaintenanceFence(t *testing.T) {
 	relative := "products/yoyodyne/slack/" + sinkLogFile
 	// The constructed environment carries no Git configuration of its own, so
 	// the fence is the whole of what the sink was given: two settings, first.
-	_, err := DetachedLauncher{}.Launch(Launch{
+	pid, err := DetachedLauncher{}.Launch(Launch{
 		Program: "/bin/sh",
 		Args:    []string{"-c", "printenv GIT_CONFIG_COUNT; printenv GIT_CONFIG_KEY_0; printenv GIT_CONFIG_KEY_1"},
 		Dir:     t.TempDir(),
@@ -454,26 +454,31 @@ func TestAStartedSinkCarriesTheGitMaintenanceFence(t *testing.T) {
 	}
 
 	want := "2\ngc.auto\nmaintenance.auto"
-	if got := startedSinkWrote(t, filepath.Join(root, filepath.FromSlash(relative)), 3); got != want {
+	if got := startedSinkWrote(t, pid, filepath.Join(root, filepath.FromSlash(relative))); got != want {
 		t.Fatalf("the started process recorded %q, want %q", got, want)
 	}
 }
 
-// startedSinkWrote reads back the lines a launched sink said, waiting for all of
-// them: the launcher returns without the process having run, which is the point
-// of it, and a log read while it is still writing is a partial answer rather
-// than a wrong one.
-func startedSinkWrote(t *testing.T, log string, lines int) string {
+// startedSinkWrote reads back what a launched sink said, once it has said all
+// of it: the launcher returns without the process having run, which is the
+// point of it, and a log read while it is still writing is a partial answer
+// rather than a wrong one. The process is waited for rather than the log
+// polled against a clock — it is this process's child, in a session of its own
+// but reaped here all the same — so what is read is what it wrote by the time
+// it exited, however long a loaded machine took to run it.
+func startedSinkWrote(t *testing.T, pid int, log string) string {
 	t.Helper()
 
-	deadline := time.Now().Add(5 * time.Second)
-	var written []byte
-	for time.Now().Before(deadline) {
-		written, _ = os.ReadFile(log)
-		if said := strings.TrimSpace(string(written)); said != "" && len(strings.Split(said, "\n")) >= lines {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	started, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("FindProcess(%d) error = %v", pid, err)
+	}
+	if _, err := started.Wait(); err != nil {
+		t.Fatalf("Wait() on the started process error = %v", err)
+	}
+	written, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", log, err)
 	}
 	return strings.TrimSpace(string(written))
 }

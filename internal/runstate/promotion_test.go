@@ -28,8 +28,7 @@ func TestPromotionsIntoOneTargetBranchHappenOneAtATime(t *testing.T) {
 	// concerned, which is the contention the lease exists for.
 	root := t.TempDir()
 	first, second := newPromotionStore(t, root), newPromotionStore(t, root)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 
 	held, err := first.LeasePromotion(ctx, "main")
 	if err != nil {
@@ -37,7 +36,11 @@ func TestPromotionsIntoOneTargetBranchHappenOneAtATime(t *testing.T) {
 	}
 
 	// The second promotion is admitted only once the first has settled, so the
-	// release has to be what unblocks it rather than merely precede it.
+	// release has to be what unblocks it rather than merely precede it. The
+	// store says when the second has found the lease held and queued, and the
+	// second says when it got through; the test waits on those and on no clock.
+	queued := make(chan struct{})
+	second.promotionQueued = func() { close(queued) }
 	admitted := make(chan error, 1)
 	released := make(chan struct{})
 	go func() {
@@ -53,22 +56,17 @@ func TestPromotionsIntoOneTargetBranchHappenOneAtATime(t *testing.T) {
 	}()
 
 	select {
+	case <-queued:
 	case err := <-admitted:
 		t.Fatalf("second LeasePromotion() returned %v while the first was held", err)
-	case <-time.After(100 * time.Millisecond):
 	}
 
 	close(released)
 	if err := held.Release(); err != nil {
 		t.Fatalf("first Release() error = %v", err)
 	}
-	select {
-	case err := <-admitted:
-		if err != nil {
-			t.Fatalf("second LeasePromotion() error = %v", err)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("the second promotion was never admitted after the first released")
+	if err := <-admitted; err != nil {
+		t.Fatalf("second LeasePromotion() error = %v", err)
 	}
 }
 
@@ -80,8 +78,7 @@ func TestPromotionsIntoDifferentTargetBranchesDoNotQueue(t *testing.T) {
 	// `release-1.2` are here because they are different branches that a lease
 	// file named by flattening the slash would collapse into one.
 	root := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	for _, branch := range []string{"main", "release/1.2", "release-1.2"} {
 		lease, err := newPromotionStore(t, root).LeasePromotion(ctx, branch)
 		if err != nil {
@@ -107,8 +104,7 @@ func TestPromotionLeaseWaitIsBounded(t *testing.T) {
 	holder := newPromotionStore(t, root)
 	waiter := newPromotionStore(t, root)
 	waiter.promotionWait = 50 * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 
 	lease, err := holder.LeasePromotion(ctx, "main")
 	if err != nil {
@@ -135,8 +131,7 @@ func TestPromotionLeaseStopsWaitingWithTheRun(t *testing.T) {
 	// cancelled rather than reporting a queue that never drained.
 	root := t.TempDir()
 	holder, waiter := newPromotionStore(t, root), newPromotionStore(t, root)
-	background, cancelBackground := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelBackground()
+	background := context.Background()
 	lease, err := holder.LeasePromotion(background, "main")
 	if err != nil {
 		t.Fatalf("LeasePromotion() error = %v", err)
@@ -175,8 +170,7 @@ func TestPromotionLeaseDiesWithItsHolder(t *testing.T) {
 		t.Fatalf("the holder never took the promotion lease: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	store := newPromotionStore(t, root)
 	store.promotionWait = 100 * time.Millisecond
 	if _, err := store.LeasePromotion(ctx, "main"); err == nil {

@@ -871,8 +871,7 @@ func TestARefusalOnlyAPersonCanClearIsSaidOnceAndThenWaitedOut(t *testing.T) {
 	sink.api = newTestAPI(t, posts.handle)
 	// The waits are driven rather than spent: what is being tested is how often
 	// the sink speaks, not how long it sleeps between attempts.
-	sink.poll = time.Millisecond
-	sink.refusal = time.Millisecond
+	passes := stepPasses(sink)
 
 	var mutex sync.Mutex
 	var refusals int
@@ -890,12 +889,15 @@ func TestARefusalOnlyAPersonCanClearIsSaidOnceAndThenWaitedOut(t *testing.T) {
 		defer close(done)
 		sink.deliver(ctx)
 	}()
-	// Wait until the workspace has refused several times over, so a sink that
-	// said it every pass would have said it several times.
-	waitFor(t, func() bool { return posts.attempts() >= 4 })
+	// Let the workspace refuse several times over, so a sink that said it every
+	// pass would have said it several times.
+	passes.run(4)
 	cancel()
 	<-done
 
+	if attempts := posts.attempts(); attempts != 4 {
+		t.Fatalf("the workspace was asked %d time(s), want one attempt per pass over 4 passes", attempts)
+	}
 	mutex.Lock()
 	defer mutex.Unlock()
 	if refusals != 1 {
@@ -914,8 +916,7 @@ func TestReportingSaysSoWhenItStartsWorkingAgain(t *testing.T) {
 		milestone(1, notify.KindRunStarted),
 	}}, &recordedPosts{})
 	sink.api = newTestAPI(t, posts.handle)
-	sink.poll = time.Millisecond
-	sink.refusal = time.Millisecond
+	passes := stepPasses(sink)
 
 	var mutex sync.Mutex
 	var recovered int
@@ -933,36 +934,41 @@ func TestReportingSaysSoWhenItStartsWorkingAgain(t *testing.T) {
 		defer close(done)
 		sink.deliver(ctx)
 	}()
-	waitFor(t, func() bool { return posts.attempts() >= 2 })
+	passes.run(2)
 	posts.invite() // the operator invites the app to the channel
-	waitFor(t, func() bool {
-		mutex.Lock()
-		defer mutex.Unlock()
-		return recovered == 1
-	})
+	passes.run(1)
 	cancel()
 	<-done
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if recovered != 1 {
+		t.Fatalf("reporting coming back was said %d time(s) over %d attempts, want it said once on the pass after the invitation", recovered, posts.attempts())
+	}
 }
 
 // The process an operator leaves running has to stop when they stop it. A sink
 // that kept its terminal until a read deadline passed would look hung at exactly
 // the moment somebody had decided to intervene.
+//
+// How promptly it stops is read off what it did rather than off a clock: a sink
+// stopped before it started reads its context before the lease, the identity
+// call, and the presence record, so the workspace is never asked anything. The
+// five seconds this used to allow was a guess at how long those took on a
+// loaded machine, and a wrong one.
 func TestStoppingTheSinkStopsIt(t *testing.T) {
 	t.Parallel()
 
-	sink := newTestSink(t, t.TempDir(), &fixedFeed{}, &recordedPosts{})
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{}, posts)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	done := make(chan error, 1)
-	go func() { done <- sink.Run(ctx) }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run() error = %v, want a stopped sink to be a clean exit", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run() did not return after its context ended")
+	if err := sink.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v, want a stopped sink to be a clean exit", err)
+	}
+	if asked := posts.identified(); asked != 0 {
+		t.Fatalf("the workspace was asked who this app is %d time(s), want a sink stopped before it started to ask nothing", asked)
 	}
 }
 
@@ -1594,6 +1600,9 @@ type recordedPosts struct {
 	// transient refusal is retried inside the call.
 	allow int
 	count int
+	// asked is how many times the workspace was asked who this app is, which a
+	// sink does once at startup and a sink stopped before it started never does.
+	asked int
 }
 
 func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request) {
@@ -1603,6 +1612,7 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 	// that call carries no body at all. The member id in the answer is what a
 	// message has to name to be addressed to this app.
 	if request.Body == nil {
+		r.asked++
 		writeJSON(writer, map[string]any{"ok": true, "team": "test", "user": "yoyodyne", "user_id": testApp})
 		return
 	}
@@ -1714,17 +1724,68 @@ func (r *refusingPosts) invite() {
 	r.code = ""
 }
 
-// waitFor spends real time rather than fake time, because what these tests are
-// about is a loop running repeatedly. The bound is generous and the condition is
-// reached in milliseconds when the code is right.
-func waitFor(t *testing.T, condition func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !condition() {
-		if time.Now().After(deadline) {
-			t.Fatal("the sink never reached the state this test is about")
+// identified is how many times the workspace was asked who this app is.
+func (r *recordedPosts) identified() int {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	return r.asked
+}
+
+// passStepper drives a sink's delivery loop one pass at a time. It stands in
+// for the wait between passes, so the loop runs a pass, reports that it ended,
+// and holds until the test lets the next one through — which is how a test
+// about what happens over several passes says exactly how many there were.
+//
+// It replaces a poll at a millisecond against a wall-clock bound, which was a
+// loop fsyncing as fast as it could and a test that gave up after ten seconds:
+// on a machine running another suite beside this one, ten seconds was reached
+// with the sink working and the test failing, on changes that never touched
+// this package.
+type passStepper struct {
+	// ended carries one send per pass the loop has finished.
+	ended chan struct{}
+	// next carries one receive per pass the test allows after the first, which
+	// the loop runs without being asked.
+	next chan struct{}
+	// first is whether the pass the loop runs unasked is still to be waited for.
+	first bool
+}
+
+// stepPasses puts a stepper between a sink's passes. It is called before the
+// loop starts, because the wait it replaces is read from the sink on each pass.
+func stepPasses(sink *Sink) *passStepper {
+	stepper := &passStepper{ended: make(chan struct{}), next: make(chan struct{}), first: true}
+	sink.wait = stepper.wait
+	return stepper
+}
+
+// wait is what the loop calls between passes. Both halves give way to the
+// context ending, so a test that cancels the sink is never left with a loop
+// blocked on a stepper nobody is driving.
+func (p *passStepper) wait(ctx context.Context, _ time.Duration) bool {
+	select {
+	case p.ended <- struct{}{}:
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case <-p.next:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// run lets the loop through the given number of passes and returns once the
+// last of them has ended. It waits on the loop and on nothing else.
+func (p *passStepper) run(passes int) {
+	for ; passes > 0; passes-- {
+		if p.first {
+			p.first = false
+		} else {
+			p.next <- struct{}{}
 		}
-		time.Sleep(time.Millisecond)
+		<-p.ended
 	}
 }
 

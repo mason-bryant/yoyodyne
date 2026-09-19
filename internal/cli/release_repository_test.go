@@ -19,6 +19,7 @@ package cli
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"testing"
@@ -61,7 +62,7 @@ func TestTheReleaseVerbRefusesWhatItShould(t *testing.T) {
 			t.Skipf("%s needs %s, which is not on PATH", cutReleaseTestPath, tool)
 		}
 	}
-	suite := exec.Command("bash", cutReleaseTestPath)
+	suite := shellSuite(t, cutReleaseTestPath)
 	// The suite runs make against the repositories it fabricates. Reached
 	// through `make test`, those invocations would otherwise inherit this
 	// make's jobserver, which is not theirs to join.
@@ -85,11 +86,30 @@ func TestAReleasesNotesSayWhatLanded(t *testing.T) {
 			t.Skipf("%s needs %s, which is not on PATH", releaseNotesTestPath, tool)
 		}
 	}
-	suite := exec.Command("bash", releaseNotesTestPath)
+	suite := shellSuite(t, releaseNotesTestPath)
 	report, err := suite.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s did not pass (%v):\n%s", releaseNotesTestPath, err, report)
 	}
+}
+
+// shellSuite is a shell suite run from a scratch directory of its own rather
+// than from this package's. The suites find this repository from their own
+// path, so the working directory is nothing to them — but it is something to
+// the shell: bash 3.2 writes a here-document to a scratch file, in the working
+// directory when TMPDIR is not writable, which a sandbox without a usable /tmp
+// is. Run from here, that file was listed by the composition census a moment
+// before the shell unlinked it, and reported as content no class recognizes.
+func shellSuite(t *testing.T, script string) *exec.Cmd {
+	t.Helper()
+
+	path, err := filepath.Abs(script)
+	if err != nil {
+		t.Fatalf("Abs(%q) error = %v", script, err)
+	}
+	suite := exec.Command("bash", path)
+	suite.Dir = t.TempDir()
+	return suite
 }
 
 // TestTheReleaseVerbHousekeepsOnlyExportsARunAllows holds the cut's list inside

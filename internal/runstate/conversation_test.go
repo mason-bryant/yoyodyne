@@ -431,6 +431,14 @@ func TestReleasingAConversationThatIsAlreadyDownIsANoOp(t *testing.T) {
 // beside the first, were both turned away by a turn that was over moments
 // later. What the conversation serializes is turns, so an arriving claim queues
 // behind one rather than failing on it.
+//
+// Nothing in it is a clock. The store says when the claim has found the
+// conversation held and queued, and the claim itself is what says when it got
+// through — so the test waits on each of those and on nothing else. It used to
+// give the claim fifty milliseconds to wrongly take the conversation and thirty
+// seconds to rightly take it, and under the race detector beside another suite
+// the second of those was still too short: the polling goroutine was starved
+// past it and took the conversation after the test had given up.
 func TestAFirstClaimWaitsForAnInFlightTurnRatherThanRefusing(t *testing.T) {
 	t.Parallel()
 
@@ -442,51 +450,44 @@ func TestAFirstClaimWaitsForAnInFlightTurnRatherThanRefusing(t *testing.T) {
 		t.Fatalf("Claim() error = %v", err)
 	}
 
-	claimed := make(chan *ConversationHold, 1)
-	failed := make(chan error, 1)
+	queued := make(chan struct{})
+	store := newConversationStore(t, root)
+	store.queued = func() { close(queued) }
+	claimed := make(chan claimOutcome, 1)
 	go func() {
-		hold, err := newConversationStore(t, root).Claim(context.Background(), identity)
-		if err != nil {
-			failed <- err
-			return
-		}
-		claimed <- hold
+		hold, err := store.Claim(context.Background(), identity)
+		claimed <- claimOutcome{hold: hold, err: err}
 	}()
 	select {
-	case hold := <-claimed:
-		hold.Release()
+	case <-queued:
+	case outcome := <-claimed:
+		if outcome.err != nil {
+			t.Fatalf("a second claim was refused rather than queued: %v", outcome.err)
+		}
+		outcome.hold.Release()
 		t.Fatal("a second claim took the conversation while a turn was in flight")
-	case err := <-failed:
-		t.Fatalf("a second claim was refused rather than queued: %v", err)
-	case <-time.After(50 * time.Millisecond):
 	}
 
 	if err := mine.Release(); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
-	select {
-	case hold := <-claimed:
-		if !hold.Held() {
-			t.Fatal("the claim that waited does not have the conversation")
-		}
-		if err := hold.Release(); err != nil {
-			t.Fatalf("Release() error = %v", err)
-		}
-	case err := <-failed:
-		t.Fatalf("Claim() error = %v after the turn in flight ended", err)
-	case <-time.After(claimHangGuard):
-		t.Fatal("Claim() did not return after the turn in flight ended")
+	outcome := <-claimed
+	if outcome.err != nil {
+		t.Fatalf("Claim() error = %v after the turn in flight ended", outcome.err)
+	}
+	if !outcome.hold.Held() {
+		t.Fatal("the claim that waited does not have the conversation")
+	}
+	if err := outcome.hold.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
 	}
 }
 
-// claimHangGuard bounds how long a test waits for a queued claim to notice the
-// conversation was put down. It is a guard against a claim that never returns
-// and not a measure of how quickly one should: the claim polls the lock every
-// ten milliseconds, and under the race detector on a machine running other
-// suites beside this one that goroutine has been starved past five seconds and
-// then taken the conversation after the test had already given up on it. A
-// bound that only a genuine hang reaches costs a working claim nothing.
-const claimHangGuard = 30 * time.Second
+// claimOutcome is what a claim made on another goroutine came back with.
+type claimOutcome struct {
+	hold *ConversationHold
+	err  error
+}
 
 // The caller that has something better to do than wait still gets its refusal.
 // A background delivery has asked the agent nothing yet, so it comes back later
@@ -580,7 +581,10 @@ func TestTakingAConversationBackWaitsForWhoeverHasIt(t *testing.T) {
 
 	root := t.TempDir()
 	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
-	hold, err := newConversationStore(t, root).Claim(context.Background(), identity)
+	queued := make(chan struct{})
+	store := newConversationStore(t, root)
+	store.queued = func() { close(queued) }
+	hold, err := store.Claim(context.Background(), identity)
 	if err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
@@ -592,24 +596,21 @@ func TestTakingAConversationBackWaitsForWhoeverHasIt(t *testing.T) {
 		t.Fatalf("Hold() error = %v", err)
 	}
 
+	// As for the first claim above: the store says when the retake has queued,
+	// and the retake says when it got through.
 	retaken := make(chan error, 1)
 	go func() { retaken <- hold.Retake(context.Background()) }()
 	select {
+	case <-queued:
 	case err := <-retaken:
 		t.Fatalf("Retake() returned %v while another process held the conversation", err)
-	case <-time.After(50 * time.Millisecond):
 	}
 
 	if err := other.Release(); err != nil {
 		t.Fatalf("other Release() error = %v", err)
 	}
-	select {
-	case err := <-retaken:
-		if err != nil {
-			t.Fatalf("Retake() error = %v", err)
-		}
-	case <-time.After(claimHangGuard):
-		t.Fatal("Retake() did not return after the other process released the conversation")
+	if err := <-retaken; err != nil {
+		t.Fatalf("Retake() error = %v", err)
 	}
 	if err := hold.Release(); err != nil {
 		t.Fatalf("final Release() error = %v", err)

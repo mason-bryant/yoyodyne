@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-// How long a test waits for something that happens as soon as a goroutine is
-// scheduled. Long enough that a loaded machine does not fail the test, short
-// enough that a genuine failure is not a timeout somebody waits out.
-const settle = 2 * time.Second
+// What happens as soon as a goroutine is scheduled is waited for here and never
+// bounded: two seconds was the bound, and it is the kind a loaded machine under
+// the race detector reaches with the goroutine still to be scheduled. The one
+// wait below that keeps a clock is the negative one, which a slow machine can
+// only pass wrongly and never fail wrongly.
 
 // A stop signal cancels the work and puts the operating system's disposition
 // back in the same moment.
@@ -32,16 +33,10 @@ func TestAStopSignalCancelsTheWorkAndGivesTheSignalBack(t *testing.T) {
 	defer stop()
 
 	signals <- syscall.SIGTERM
-	select {
-	case <-ctx.Done():
-	case <-time.After(settle):
-		t.Fatal("the signal did not cancel the work")
-	}
-	select {
-	case <-restored:
-	case <-time.After(settle):
-		t.Fatal("the signal was not given back, so a second one would be swallowed exactly as the first was")
-	}
+	<-ctx.Done()
+	// Given back, or a second signal would be swallowed exactly as the first
+	// was.
+	<-restored
 }
 
 // A process that does not stop within its grace exits where it stands.
@@ -60,11 +55,7 @@ func TestAProcessThatDoesNotStopWithinItsGraceExits(t *testing.T) {
 	defer stop()
 
 	signals <- syscall.SIGTERM
-	select {
-	case <-exited:
-	case <-time.After(settle):
-		t.Fatal("the process was asked to stop, did not, and went on running anyway")
-	}
+	<-exited
 }
 
 // A process that stops on the cancellation is not exited by the grace measured
@@ -81,11 +72,7 @@ func TestAProcessThatStopsIsNotExitedBehindIt(t *testing.T) {
 		func() { close(exited) })
 
 	signals <- syscall.SIGTERM
-	select {
-	case <-ctx.Done():
-	case <-time.After(settle):
-		t.Fatal("the signal did not cancel the work")
-	}
+	<-ctx.Done()
 	// The work returning, which is the whole of what a stopping process is
 	// expected to do.
 	stop()

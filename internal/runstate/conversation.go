@@ -533,6 +533,11 @@ func (i ConversationIdentity) validate() error {
 type ConversationStore struct {
 	root      string
 	productID domain.ProductID
+	// queued is told, once per take, that a claim found the conversation held
+	// and is waiting its turn. It is nil in every store the harness builds and
+	// is a test's signal, so a test about queueing waits on the claim having
+	// tried rather than on a length of time it hopes was long enough.
+	queued func()
 }
 
 func NewConversationStore(root string, productID domain.ProductID) (*ConversationStore, error) {
@@ -587,7 +592,7 @@ func (s *ConversationStore) take(ctx context.Context, identity ConversationIdent
 		return nil, fmt.Errorf("open conversation lease: %w", err)
 	}
 	if wait {
-		if err := lockStateFile(ctx, file); err != nil {
+		if err := queueForStateFile(ctx, file, s.queued); err != nil {
 			file.Close()
 			return nil, fmt.Errorf("take up the %s conversation: %w", identity, err)
 		}

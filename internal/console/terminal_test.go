@@ -52,13 +52,8 @@ func prompting(ctx context.Context, console *terminal, prompt string, interrupt 
 func (p prompted) result(t *testing.T) (string, error) {
 	t.Helper()
 
-	select {
-	case answer := <-p:
-		return answer.line, answer.err
-	case <-time.After(2 * time.Second):
-		t.Fatal("Prompt() did not return")
-		return "", nil
-	}
+	answer := <-p
+	return answer.line, answer.err
 }
 
 func (p prompted) line(t *testing.T) string {
@@ -588,16 +583,11 @@ func TestSuspendingHandsTheTerminalOverAndTakesItBack(t *testing.T) {
 	// terminal raised.
 	keys.Write([]byte("\x1b[122;5u"))
 
-	select {
-	case screen := <-stopped:
-		if !strings.HasSuffix(screen, kittyPop) {
-			t.Fatalf("the keyboard was still this conversation's when the process stopped: %q", screen)
-		}
-		if handedBack.Load() != 1 {
-			t.Fatalf("the terminal's own modes were not restored before the stop")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Ctrl-Z did not stop the conversation")
+	if left := <-stopped; !strings.HasSuffix(left, kittyPop) {
+		t.Fatalf("the keyboard was still this conversation's when the process stopped: %q", left)
+	}
+	if handedBack.Load() != 1 {
+		t.Fatalf("the terminal's own modes were not restored before the stop")
 	}
 
 	// Resumed: the modes are taken again, the keyboard is negotiated again
