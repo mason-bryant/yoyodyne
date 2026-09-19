@@ -53,15 +53,20 @@ test: cachecheck
 # check as YOYODYNE_CHANGED_GO_PACKAGES:
 #
 #   checks:
-#     - make race RACE_PACKAGES="$YOYODYNE_CHANGED_GO_PACKAGES"
+#     - make race RACE_PACKAGES="${YOYODYNE_CHANGED_GO_PACKAGES-./...}"
 #   landing_checks:
 #     - make race
 #
-# An explicitly empty RACE_PACKAGES is a change that touches no Go package, and
-# the target says so and passes rather than testing the module root, which
-# holds no Go files and would fail on that alone. `check` below keeps the whole
-# module: it is what a person runs before handing work over, and it does not
-# know what the change touches.
+# The shell's unset-only default is the point of that line. The variable is set
+# only by the harness's check runner, so the same line run anywhere else -- a
+# developer executing the declared checks in its worktree for its probe and its
+# evidence, a person running the list by hand -- tests the whole module rather
+# than reading an unset variable as "nothing to test" and passing on that. Set
+# and empty is different: it is the harness saying the change touches no Go
+# package, and the target says so and passes rather than testing the module
+# root, which holds no Go files and would fail on that alone. `check` below
+# keeps the whole module: it is what a person runs before handing work over, and
+# it does not know what the change touches.
 RACE_PACKAGES ?= ./...
 
 race: cachecheck

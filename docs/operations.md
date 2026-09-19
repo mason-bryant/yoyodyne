@@ -717,16 +717,23 @@ of the 30m0s bound" rather than only "passed".
 by running the expensive suite narrowed per run and whole per landing. Every
 check is handed `YOYODYNE_CHANGED_GO_PACKAGES`, the Go packages the change
 touches, and a check written to read it — `make race
-RACE_PACKAGES="$YOYODYNE_CHANGED_GO_PACKAGES"` here — runs over those alone.
+RACE_PACKAGES="${YOYODYNE_CHANGED_GO_PACKAGES-./...}"` here, with the shell's
+unset-only default so the same line tests the whole module wherever the
+harness did not set the variable — runs over those alone.
 `landing_checks` is then what runs whole, once per landing on the target
 branch: after a run has integrated, closed its item, and removed its worktree,
 the harness cuts a detached checkout of the integrated commit under the
 worktree root, runs the list there, and removes the checkout. The landing has
 a budget of its own, `execution.landing_check_timeout` (two hours by default,
 per check, with no stage bound over the list), because what is moved there is
-the suite the gate's stage bound cannot hold; nothing waits on it, since the
-run is over and its seat is free. What the landing made of the commit is
-recorded on the run and said on the item and in the thread:
+the suite the gate's stage bound cannot hold. The run is over before they
+start, so they hold no seat, no claim, and no place in the queue, and the next
+run starts beside them; what they do hold is the process that ran the landing —
+`yoyo run` reports only once they end, a `yoyo work` drain or `--limit` returns
+only once every run it started has landed, and a deploy's restart waits them
+out with the runs — for up to the budget times the number of landing checks.
+What the landing made of the commit is recorded on the run and said on the
+item and in the thread:
 
 ```text
 green landing: 1 landing check passed over 3d3d367a1b2c in 18m
@@ -742,12 +749,15 @@ stopped and at what budget, and raising `landing_check_timeout` is the remedy.
 **A red landing files its own item and blocks nothing.** The run that landed
 the change passed its gate and was approved, so the run stays succeeded and its
 item stays closed. What the harness does is admit a bug at priority 0 — the
-front of the queue — the target branch, the commit, the failing check and its
-bounded output, the run and the item that landed it — under the goal the
-landed item served, because every run after it is cut from that commit. The
-red landing reaches the channel as a warning naming the item it filed; a green
-one stays in the thread; an unverified one reaches the channel too, because a
-landing nobody verified reads as green to anybody who was not told.
+front of the queue — naming the target branch, the commit, the failing check,
+and the run and the item that landed it, with the check's bounded output in
+the item's notes, under the goal the landed item served, because every run
+after it is cut from that commit. A branch that stays red is one such item:
+a later red landing of the same check finds it open, notes the later commit on
+it, and files nothing. The red landing reaches the channel as a warning naming
+the item it filed; a green one stays in the thread; an unverified one reaches
+the channel too, because a landing nobody verified reads as green to anybody
+who was not told.
 
 **A process that dies inside the landing checks is settled by the sweep.** It
 leaves a run that is over with a landing the record says is still running, and

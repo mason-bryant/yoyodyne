@@ -666,10 +666,12 @@ func renderScaffoldLandingChecks(builder *strings.Builder) {
 # attempt goes whole -- a race detector, a long integration suite -- while the per-run gate
 # above runs it narrowed: every check is given YOYODYNE_CHANGED_GO_PACKAGES,
 # the Go packages the change touches as "./dir" patterns, "./..." where the
-# harness cannot narrow, and empty where the change touches no package.
+# harness cannot narrow, and empty where the change touches no package. Read it
+# with the shell's unset-only default, so the same line run outside the harness
+# -- by a developer for its own evidence, or by hand -- tests the whole module:
 #
 #   checks:
-#     - '[ -z "$YOYODYNE_CHANGED_GO_PACKAGES" ] || go test -race $YOYODYNE_CHANGED_GO_PACKAGES'
+#     - 'set -- ${YOYODYNE_CHANGED_GO_PACKAGES-./...}; [ $# -eq 0 ] || go test -race "$@"'
 #   landing_checks:
 #     - go test -race ./...
 landing_checks: []

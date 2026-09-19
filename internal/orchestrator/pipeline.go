@@ -234,6 +234,11 @@ type LandingCheckouts interface {
 // standing order that a red landing files its own item.
 type WorkFiler interface {
 	Create(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, error)
+	// List is what a landing reads before it files: an open item the harness
+	// already filed for the same check on the same branch is noted rather than
+	// filed again, so a target branch left red for several landings is one item
+	// at the front of the queue and not one per landing.
+	List(ctx context.Context, status string) ([]beads.WorkItem, error)
 }
 
 // Directives is what the operator has told the harness, as a run reads it.
@@ -4556,18 +4561,41 @@ func (a *activeRun) fileRedLanding(ctx context.Context, landed *runstate.Landing
 	}
 	target := a.outcome.Integration.TargetBranch
 	what := fmt.Sprintf("%s exited %d", failing.Command, failing.ExitCode)
+	marker := redLandingMarker(target, failing.Command)
+	// A red target branch that stays red is one item, not one per landing: an
+	// open item the harness filed for the same check on the same branch is told
+	// about this landing instead of a second being filed beside it, which the
+	// scheduler would otherwise start concurrently with the first.
+	existing, err := a.openRedLandingItem(ctx, marker)
+	if err != nil {
+		landed.FilingProblem = fmt.Sprintf("could not read whether a red-landing item is already open: %v", err)
+		return
+	}
+	if existing != "" {
+		landed.FiledWorkItem = existing
+		landed.FiledEarlier = true
+		note := fmt.Sprintf("Red again at %s on %s, after %s (%s) integrated: %s.", commit, target, a.state.WorkItemID, a.state.RunID, what)
+		if _, err := p.Tracker.RecordOutcome(ctx, existing, note); err != nil {
+			landed.FilingProblem = fmt.Sprintf("the open item %s could not be told about this landing: %v", existing, err)
+		}
+		return
+	}
+	// The title and the description are the harness's own words and nothing
+	// else. Both are fields the protected-path gate reads grants from, so what a
+	// check printed — text a change can shape — goes in the notes, which the gate
+	// deliberately never reads.
 	description := fmt.Sprintf("Red landing on %s at %s, after %s (%s) integrated: %s.\n\n"+
 		"The per-run gate passed on the change and the reviewer approved it; the landing checks then ran the whole suite over the integrated commit and this one failed. "+
 		"So %s is red at %s, and every run cut from it starts on a red base until this is fixed or the landing is shown to have been the suite's fault. "+
-		"Reproduce with `%s` at %s.",
+		"Reproduce with `%s` at %s. What the check said is in this item's notes.",
 		target, commit, a.state.WorkItemID, a.state.WorkItemTitle, what, target, commit, failing.Command, landed.Commit)
-	if output := strings.TrimSpace(failing.Output); output != "" {
-		description += "\n\nWhat the check said (bounded):\n\n" + output
-	}
-	notes := fmt.Sprintf("Filed by the harness for the red landing of %s (%s) at %s on %s, under the operator's standing order that a red landing files its own item.",
-		a.state.WorkItemID, a.state.RunID, commit, target)
+	notes := fmt.Sprintf("Filed by the harness for the red landing of %s (%s) at %s on %s, under the operator's standing order that a red landing files its own item.\n%s",
+		a.state.WorkItemID, a.state.RunID, commit, target, marker)
 	if statement, named := goal.NamedIn(a.item.Notes); named {
 		notes += "\n\n" + goal.Note(statement)
+	}
+	if output := strings.TrimSpace(failing.Output); output != "" {
+		notes += "\n\nWhat the check said (bounded):\n\n" + output
 	}
 	// Priority 0 is where this project puts an operator's order, and a red
 	// target branch is that: every run until it is fixed is cut from it.
@@ -4584,6 +4612,35 @@ func (a *activeRun) fileRedLanding(ctx context.Context, landed *runstate.Landing
 		return
 	}
 	landed.FiledWorkItem = created.ID
+}
+
+// redLandingMarker is the line a red-landing item's notes carry naming the
+// branch and the check, which is what a later landing reads to find it. It is
+// in the notes rather than the title because a title is prose somebody may
+// edit, and the notes are what the harness appends to and never rewrites.
+func redLandingMarker(target, command string) string {
+	return "Red-landing check: " + command + " on " + target
+}
+
+// openRedLandingItem is the identifier of an unfinished item the harness filed
+// for the same check on the same branch, or nothing. It reads the queue's
+// three unfinished statuses, because an item somebody has claimed or that is
+// blocked is still the item that answers this branch being red.
+func (a *activeRun) openRedLandingItem(ctx context.Context, marker string) (string, error) {
+	for _, status := range []string{"open", "in_progress", "blocked"} {
+		items, err := a.pipeline.Filer.List(ctx, status)
+		if err != nil {
+			return "", err
+		}
+		for _, item := range items {
+			for _, line := range strings.Split(item.Notes, "\n") {
+				if strings.TrimSpace(line) == marker {
+					return item.ID, nil
+				}
+			}
+		}
+	}
+	return "", nil
 }
 
 // landingCheckOutput is what a failing landing check said, cut as a repair

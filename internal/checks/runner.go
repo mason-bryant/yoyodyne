@@ -26,8 +26,8 @@ const DefaultStageTimeout = 30 * time.Minute
 
 // DefaultLandingCheckTimeout is what a landing check is given where the
 // configuration names no execution.landing_check_timeout, matching that
-// default: a landing runs the suite the gate's stage cannot hold, once, with
-// nothing waiting on it.
+// default: a landing runs the suite the gate's stage cannot hold, once, after
+// the run is over and its seat is free.
 const DefaultLandingCheckTimeout = 2 * time.Hour
 
 type Result struct {

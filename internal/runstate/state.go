@@ -466,8 +466,11 @@ type LandingChecks struct {
 	Green bool `json:"green,omitempty"`
 	// FiledWorkItem is the item a red landing filed, and FilingProblem is why
 	// none could be, so a red landing whose item the tracker refused is read as
-	// exactly that rather than as one nobody filed for.
+	// exactly that rather than as one nobody filed for. FiledEarlier reports
+	// that the item was filed by an earlier landing of the same check on the
+	// same branch and this landing was noted on it rather than filed again.
 	FiledWorkItem string `json:"filed_work_item,omitempty"`
+	FiledEarlier  bool   `json:"filed_earlier,omitempty"`
 	FilingProblem string `json:"filing_problem,omitempty"`
 	// Problem is what went wrong around the checks rather than in them — no
 	// checkout could be cut, they could not be run, the checkout would not go
@@ -589,6 +592,8 @@ func (l LandingChecks) Describe() string {
 		failing, _ := l.Failing()
 		said = fmt.Sprintf("red landing: %s exited %d over %s", failing.Command, failing.ExitCode, commit)
 		switch {
+		case l.FiledWorkItem != "" && l.FiledEarlier:
+			said += "; red again on " + l.FiledWorkItem + ", filed by an earlier landing"
 		case l.FiledWorkItem != "":
 			said += "; filed as " + l.FiledWorkItem
 		case l.FilingProblem != "":

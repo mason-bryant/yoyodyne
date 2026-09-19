@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +99,9 @@ func TestARedLandingFilesItsOwnItemAndBlocksNothing(t *testing.T) {
 	pipeline.Landings = pipeline.Worktrees.(*gitworktree.Manager)
 	filer := &recordingFiler{}
 	pipeline.Filer = filer
-	pipeline.Config.LandingChecks = []string{"echo 'a race in package x'; test -f missing.txt", "true"}
+	// The output the check prints is not a substring of the command that prints
+	// it, so where the output went is checkable apart from where the command is.
+	pipeline.Config.LandingChecks = []string{"printf 'DATA %s in package x\\n' RACE; test -f missing.txt", "true"}
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
 	if err != nil {
@@ -124,13 +127,21 @@ func TestARedLandingFilesItsOwnItemAndBlocksNothing(t *testing.T) {
 			t.Fatalf("filed title = %q, want it to carry %q", filed.Title, want)
 		}
 	}
-	for _, want := range []string{"yoyodyne-task (Task)", "a race in package x", "Reproduce with", outcome.Integration.TargetCommit} {
+	for _, want := range []string{"yoyodyne-task (Task)", "Reproduce with", outcome.Integration.TargetCommit} {
 		if !strings.Contains(filed.Description, want) {
 			t.Fatalf("filed description = %q, want it to carry %q", filed.Description, want)
 		}
 	}
-	if !strings.Contains(filed.Notes, "Goal served: [reliable-delivery] Run development nearly autonomously.") || !strings.Contains(filed.Notes, outcome.RunID) {
-		t.Fatalf("filed notes = %q, want the landed item's goal and the run named", filed.Notes)
+	// What the check printed is text a change can shape, and the title and
+	// description are fields the protected-path gate reads grants from: the
+	// output goes in the notes, which the gate never reads, and nowhere else.
+	if strings.Contains(filed.Description, "DATA RACE") || strings.Contains(filed.Title, "DATA RACE") {
+		t.Fatalf("the check's output reached a grant-bearing field: title %q, description %q", filed.Title, filed.Description)
+	}
+	for _, want := range []string{"Goal served: [reliable-delivery] Run development nearly autonomously.", outcome.RunID, "DATA RACE in package x", "Red-landing check: printf 'DATA %s in package x\\n' RACE; test -f missing.txt on main"} {
+		if !strings.Contains(filed.Notes, want) {
+			t.Fatalf("filed notes = %q, want them to carry %q", filed.Notes, want)
+		}
 	}
 	if filed.Type != "bug" || filed.Priority == nil || *filed.Priority != 0 {
 		t.Fatalf("filed as %s at %v, want a bug at the front of the queue", filed.Type, filed.Priority)
@@ -143,8 +154,50 @@ func TestARedLandingFilesItsOwnItemAndBlocksNothing(t *testing.T) {
 		t.Fatalf("state = %#v, want the red landing and its item on the run", state.LandingChecks)
 	}
 	notes := strings.Join(tracker.noteRecords, "\n")
-	if !strings.Contains(notes, "Landing checks: red landing: echo 'a race in package x'; test -f missing.txt exited 1 over "+commit+"; filed as yoyodyne-red-1") {
+	if !strings.Contains(notes, "Landing checks: red landing: printf 'DATA %s in package x\\n' RACE; test -f missing.txt exited 1 over "+commit+"; filed as yoyodyne-red-1") {
 		t.Fatalf("item notes do not say the landing was red and what it filed:\n%s", notes)
+	}
+}
+
+// A target branch left red is one item, not one per landing. A second landing
+// whose landing check fails the same way finds the item the first filed still
+// open, notes the later commit on it, and files nothing — so the front of the
+// queue holds one red-landing item the scheduler starts once, rather than one
+// per landing started concurrently.
+func TestASecondRedLandingOfTheSameCheckIsNotedOnTheOpenItemRatherThanFiledAgain(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
+	pipeline.Landings = pipeline.Worktrees.(*gitworktree.Manager)
+	filer := &recordingFiler{open: []beads.WorkItem{{
+		ID: "yoyodyne-red-earlier", Status: "open",
+		Notes: "Filed by the harness for the red landing of yoyodyne-other.\n" + redLandingMarker("main", "false"),
+	}}}
+	pipeline.Filer = filer
+	pipeline.Config.LandingChecks = []string{"false"}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("Run() = %#v, %v, want a succeeded run", outcome, err)
+	}
+	landed := outcome.LandingChecks
+	if landed == nil || !landed.Red() || landed.FiledWorkItem != "yoyodyne-red-earlier" || !landed.FiledEarlier || landed.FilingProblem != "" {
+		t.Fatalf("landing = %#v, want the earlier item named and nothing filed", landed)
+	}
+	if len(filer.filed) != 0 {
+		t.Fatalf("filed = %#v, want nothing filed beside the open item", filer.filed)
+	}
+	notes := strings.Join(tracker.noteRecords, "\n")
+	if !strings.Contains(notes, "Red again at "+outcome.Integration.TargetCommit[:12]+" on main, after yoyodyne-task ("+outcome.RunID+") integrated: false exited 1.") {
+		t.Fatalf("the open item was not told about the later landing:\n%s", notes)
+	}
+	if !strings.Contains(notes, "red again on yoyodyne-red-earlier, filed by an earlier landing") {
+		t.Fatalf("the landed item's note does not name the earlier item:\n%s", notes)
 	}
 }
 
@@ -326,9 +379,10 @@ func TestTheSweepSettlesALandingWhoseProcessDiedAsUnverified(t *testing.T) {
 }
 
 // recordingFiler is a tracker that takes the items a red landing files, or
-// refuses them.
+// refuses them, and lists what it has taken as open work.
 type recordingFiler struct {
 	filed  []beads.NewWorkItem
+	open   []beads.WorkItem
 	refuse error
 }
 
@@ -337,7 +391,16 @@ func (f *recordingFiler) Create(_ context.Context, item beads.NewWorkItem) (bead
 		return beads.WorkItem{}, f.refuse
 	}
 	f.filed = append(f.filed, item)
-	return beads.WorkItem{ID: "yoyodyne-red-1", Title: item.Title}, nil
+	created := beads.WorkItem{ID: fmt.Sprintf("yoyodyne-red-%d", len(f.filed)), Title: item.Title, Notes: item.Notes, Status: "open"}
+	f.open = append(f.open, created)
+	return created, nil
+}
+
+func (f *recordingFiler) List(_ context.Context, status string) ([]beads.WorkItem, error) {
+	if status != "open" {
+		return nil, nil
+	}
+	return f.open, nil
 }
 
 // A run killed inside its checks leaves a record saying the stage is running.

@@ -399,7 +399,8 @@ const (
 	defaultCheckStageTimeout = Duration(30 * time.Minute)
 	// defaultLandingCheckTimeout is what the whole race suite took under load
 	// on 2026-09-19 with room to spare: a landing runs once per landing rather
-	// than once per attempt, and nothing waits on it, so it can be given what
+	// than once per attempt, and holds no seat, claim, or place in the queue
+	// while it runs — only the process that landed — so it can be given what
 	// the suite actually takes rather than what a developer seat can spare.
 	defaultLandingCheckTimeout = Duration(2 * time.Hour)
 	// defaultServerOverloadPause is long enough to be worth waiting — the

@@ -2002,9 +2002,21 @@ The budget is the landing's rather than the gate's on purpose. What is moved
 to the landing is exactly the suite the gate's stage bound cannot hold, so a
 landing held to `check_stage_timeout` would be stopped on every landing of the
 repository that needed it; each landing check gets `landing_check_timeout`
-whole, the list may take the sum, and nothing waits on it — the run is over
-and its seat is free. The default is two hours, which is what the whole race
-suite took under load on 2026-09-19 with room to spare.
+whole, and the list may take the sum. The default is two hours, which is what
+the whole race suite took under load on 2026-09-19 with room to spare.
+
+**What waits on a landing, and what does not.** The landing checks are run by
+the process that made the landing, after the run is terminal, its item
+settled, and its worktree removed — so the run's developer seat is free and
+`yoyo work` can start the next run beside them, and the run reads as succeeded
+everywhere while they run. What does wait is whatever waits on that process
+returning from the run: `yoyo run` prints its result only once the landing has
+ended, a `yoyo work` drain or a `--limit` returns only once every run it
+started has landed, and the restart a deployed build causes waits out every run
+the session started, landing included. So a landing holds those for up to
+`landing_check_timeout` times the number of landing checks — two hours a check
+by default — and a project that cannot afford that on a drain lowers the
+budget or shortens the list; it does not hold a seat, a claim, or the queue.
 
 A landing whose checks all pass on their own exit is **green**; one where a
 check fails on its own exit is **red**; one whose checks did not run to a
@@ -2021,13 +2033,21 @@ the change succeeded on the gate it was given and was approved; a red landing
 is news about the target branch, not a verdict on that run, so nothing is
 reopened, failed, or blocked. What happens instead is that the harness admits a
 bug at priority 0 — the front of the queue, where this project puts an
-operator's order — naming the target branch, the commit, the check that failed
-and its output, and the run and item that landed it, under the goal the landed
-item served, because every run after it is cut from that commit and a red
-target branch is the thing to fix first. The item is named on the run
-(`filed as yoyodyne-ifd.402`) and on the landed item's notes. A red landing the
-tracker would not take an item for is still recorded and said as red, with the
-refusal beside it. This is the operator's standing order of 2026-09-19, and it
+operator's order — naming the target branch, the commit, the check that failed,
+and the run and item that landed it, under the goal the landed item served,
+because every run after it is cut from that commit and a red target branch is
+the thing to fix first. What the check printed goes in that item's notes and
+nowhere else: the title and the description are fields the
+[protected-path gate](#protected-paths-in-a-developers-change) reads grants
+from, and check output is text a change can shape, so the harness keeps those
+two to its own words. The item is named on the run (`filed as
+yoyodyne-ifd.402`) and on the landed item's notes. A target branch that stays
+red is one item rather than one per landing: a later red landing of the same
+check on the same branch finds the item still open — by the
+`Red-landing check:` line its notes carry — notes the later commit on it, and
+files nothing (`red again on yoyodyne-ifd.402, filed by an earlier landing`).
+A red landing the tracker would not take an item for is still recorded and
+said as red, with the refusal beside it. This is the operator's standing order of 2026-09-19, and it
 is the one place the harness admits work on its own account: it goes straight
 to the tracker under either `approvals.work_items` value, which
 [what reaches the queue](#what-reaches-the-queue) states as the exception it
@@ -2041,12 +2061,24 @@ one:
 checks:
   - make fmtcheck
   - make test
-  - make race RACE_PACKAGES="$YOYODYNE_CHANGED_GO_PACKAGES"
+  - make race RACE_PACKAGES="${YOYODYNE_CHANGED_GO_PACKAGES-./...}"
   - make vet
 
 landing_checks:
   - make race
 ```
+
+**Read the variable with the shell's unset-only default, `${…-./...}`.** The
+variable is set only by the harness's check runner, and the declared checks
+are run in other places too: a developer executes them in its worktree for its
+minute-zero probe and its submission evidence, and a person runs them by hand.
+A line that read an unset variable as "nothing to test" would print that and
+pass, which is a green race check nobody ran. With the unset-only default those
+runs test the whole module, while inside the harness the variable is always
+set — to the packages, to `./...`, or to nothing at all for a change touching
+no Go package, which the Makefile's `race` target says and passes on. A check
+written directly against the Go command wants the same shape:
+`set -- ${YOYODYNE_CHANGED_GO_PACKAGES-./...}; [ $# -eq 0 ] || go test -race "$@"`.
 
 A project that names no landing checks lands exactly as it did before they
 existed, and a check list that never reads the variable is a gate that runs
