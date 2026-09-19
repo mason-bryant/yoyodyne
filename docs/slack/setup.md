@@ -802,8 +802,11 @@ the top of the channel, whatever severity it was filed at.
 Concretely: a held intake, a braked line, a parked run, a provider that ran out of
 capacity, a merge the forge will not make, a directive that paused work, a stall,
 a stale session, a refused block of tracker actions, a change an agent proposed to
-a document it does not own, and every turn of an ask exchange are all at the
-channel level — the last because an exchange is a question waiting on you, and a
+a document it does not own, a cap the development manager crossed on his own
+authority, and every turn of an ask exchange are all at the
+channel level — the crossing because it is a veto by reading, in force as it is
+recorded and yours to undo only if you see it; the last because an exchange is a
+question waiting on you, and a
 question shown only inside a thread while its answer is shown at the top would be
 the two ends of one ask surfaced opposite ways round. A run starting, checks
 passing, a review approving, a promotion, a publication, a merge completing, the

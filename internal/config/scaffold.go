@@ -264,8 +264,9 @@ execution:
 # this long -- an age rather than a deadline, because what makes it stuck is
 # that nothing happened to it. The rounds cap is the total review rounds one
 # work item may accumulate before triage stops handing it back for repair;
-# past it triage may still escalate the item or re-scope it, and "0" means an
-# item that reaches triage is never repaired again.
+# past it triage may still escalate the item, re-scope it, or cross the cap on
+# a recorded reason, and "0" means an item that reaches triage is never
+# repaired again without a crossing.
 #
 # There is a third setting, "repair_grant_attempts": how many repair attempts
 # triage hands an item worth another go. It is left out deliberately, the way

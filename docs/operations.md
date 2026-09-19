@@ -1493,9 +1493,10 @@ triage of yoyodyne-ifd.90: triage has spent 2 passes on it
 
 Every figure here is a budget, and the first line counts what has been spent
 rather than how many times somebody looked. Only three of the development
-manager's six decisions spend anything — a repair grant, a re-run, a merge
+manager's seven decisions spend anything — a repair grant, a re-run, a merge
 re-arm — so an item it escalated or told to wait shows `triage has spent nothing
-on it` and zeroes across the rest. **That is not evidence nobody looked.** The
+on it` and zeroes across the rest; a cap it crossed moves a ceiling rather than
+a count, and is reported on the crossing lines beside these. **That is not evidence nobody looked.** The
 decision itself is recorded on the work item, which is where to read whether
 stopped work has been decided and what was decided; an escalated item is blocked
 there as well.

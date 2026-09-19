@@ -95,6 +95,11 @@ var reaches = map[Kind]Reach{
 	KindWorkHandedOff:  ReachThread,
 	KindWorkPickedUp:   ReachThread,
 	KindWorkCarriedOut: ReachThread,
+	// A cap the development manager crossed on his own authority. The delegation
+	// was made on the condition that the operator reads each crossing as it
+	// happens, so that a veto by reading is a veto at all: a crossing carried only
+	// to the item's thread is one he learns about from the work it bought.
+	KindCapCrossed: ReachChannel,
 	// One run's own arc, which is the largest block of narration there is. A run
 	// starting, its checks passing or failing, a verdict, a promotion, a
 	// publication and its merge are the thread's whole story and none of them is a

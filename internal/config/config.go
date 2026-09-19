@@ -398,11 +398,13 @@ type Triage struct {
 	StuckMergeAge Duration `yaml:"stuck_merge_age" json:"stuck_merge_age"`
 	// ReviewRoundsCap bounds the review rounds one work item may accumulate in
 	// total — across repairs, across runs — past which triage may no longer hand
-	// it back for another repair. Past the cap triage still has both of its other
-	// actions: escalate the item, or re-scope it. What it may not do is buy the
-	// same argument another round. Zero is a deliberate choice rather than an
-	// error, which is why it is accepted: it says an item that reaches triage is
-	// never repaired again, only escalated or re-scoped.
+	// it back for another repair. Past the cap triage still has three things it
+	// may do: escalate the item, re-scope it, or cross the cap — the development
+	// manager's own crossing, one step and five times per item, or the operator's
+	// override. What it may not do is buy the same argument another round without
+	// one of those. Zero is a deliberate choice rather than an error, which is why
+	// it is accepted: it says an item that reaches triage is never repaired again
+	// unless a crossing says so.
 	ReviewRoundsCap int `yaml:"review_rounds_cap" json:"review_rounds_cap"`
 	// RepairGrantAttempts is how many repair attempts triage hands an item when
 	// it decides the work is worth another go. A project that states nothing

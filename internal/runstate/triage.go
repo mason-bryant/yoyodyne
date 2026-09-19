@@ -495,6 +495,43 @@ func (r TriageCapRefusal) Describe() string {
 	return fmt.Sprintf("%d of %d permitted %s(s) are spent", r.Spent, r.Cap, r.Budget)
 }
 
+// triageBudgetSpend is what one item has spent against one budget, in the figure
+// that budget's own refusal reports.
+//
+// It is one function rather than a figure written out at each refusal because two
+// things read it and they must not disagree: the refusal, which tells a reader
+// what would permit the decision, and the delegated crossing, which puts that
+// ceiling in force. A crossing measured from a different figure than the refusal
+// quoted is a crossing that does not answer the refusal that produced it.
+//
+// The round budget answers with what the item is committed to rather than what it
+// has cost, for the reason the refusal states: a grant recorded and not yet spent
+// has already promised its rounds, so the rounds counted would name room the cap
+// does not have.
+//
+// The re-arm budget is the one whose refusal does not read this, because that
+// refusal is made per publication and names the one publication in front of it.
+// A crossing has no publication in hand — it raises the ceiling every publication
+// of the item is held to — so it measures from the publication that has spent the
+// most, which is the one that refused whenever any did: one more than that is
+// exactly the ceiling the refusal quoted, and never less.
+func triageBudgetSpend(counters TriageCounters, budget string) int {
+	switch budget {
+	case TriageReviewRoundBudget:
+		return counters.committed()
+	case TriageRepairGrantBudget:
+		return counters.RepairGrants
+	case TriageRerunBudget:
+		return counters.Reruns
+	default:
+		most := 0
+		for _, rearms := range counters.RearmedPublications {
+			most = larger(most, rearms)
+		}
+		return most
+	}
+}
+
 // TriageCapError names the action that was refused and every budget that refused
 // it, each with what was already spent against it. The action and the budgets are
 // separate because they are frequently not the same thing: a re-run is refused
@@ -914,7 +951,7 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, decisi
 		if counters.RepairGrants >= permitted.RepairGrants {
 			refusals = append(refusals, TriageCapRefusal{
 				Budget: TriageRepairGrantBudget,
-				Spent:  counters.RepairGrants,
+				Spent:  triageBudgetSpend(*counters, TriageRepairGrantBudget),
 				Cap:    permitted.RepairGrants,
 			})
 		}
@@ -930,7 +967,7 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, decisi
 				// What refused it is what it is committed to, so that is the figure
 				// reported: naming the rounds counted would leave a reader looking for
 				// room the cap does not have.
-				Spent: counters.committed(),
+				Spent: triageBudgetSpend(*counters, TriageReviewRoundBudget),
 				Cap:   permitted.ReviewRounds,
 			})
 		}
@@ -1008,7 +1045,7 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, decisi
 		if counters.Reruns >= permitted.Reruns {
 			refusals = append(refusals, TriageCapRefusal{
 				Budget: TriageRerunBudget,
-				Spent:  counters.Reruns,
+				Spent:  triageBudgetSpend(*counters, TriageRerunBudget),
 				Cap:    permitted.Reruns,
 			})
 		}
@@ -1018,7 +1055,7 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, decisi
 		if counters.RoundsUncommitted(permitted.ReviewRounds) == 0 {
 			refusals = append(refusals, TriageCapRefusal{
 				Budget: TriageReviewRoundBudget,
-				Spent:  counters.committed(),
+				Spent:  triageBudgetSpend(*counters, TriageReviewRoundBudget),
 				Cap:    permitted.ReviewRounds,
 			})
 		}

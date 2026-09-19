@@ -288,6 +288,14 @@ func (d conversationDocketLog) Close(_ context.Context, closure chat.DocketClosu
 	return closed, errors.Join(problems...)
 }
 
+// CrossCap records a crossing under the one role the delegation belongs to. The
+// role is named here rather than by the conversation for the same reason the caps
+// and the clock are: whose authority a record is written under is a fact about
+// the wiring, and a conversation that could state it could state any of them.
+func (b conversationTriageBudgets) CrossCap(ctx context.Context, workItemID, budget, reason string) (runstate.TriageCrossing, error) {
+	return b.store.CrossCap(ctx, workItemID, domain.RoleDevelopmentManager, budget, reason, b.clock.Now(), b.caps)
+}
+
 // conversationStoppages wires the durable run records a triage decision is
 // checked against, and that a decomposition's substrate gate is decided from,
 // for the role that does both and for no other. It is the same store the docket

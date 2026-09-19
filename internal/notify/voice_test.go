@@ -94,6 +94,10 @@ func fullyRecorded(kind Kind) Event {
 			Accumulated:     37,
 			Ending:          string(runstate.OutcomeTimedOut),
 			Remains:         "work preserved",
+			Budget:          runstate.TriageReviewRoundBudget,
+			Cap:             5,
+			Crossing:        2,
+			Crossings:       runstate.MaxDelegatedCapCrossings,
 		},
 		Text: "the developer's own words, carried through",
 	}
