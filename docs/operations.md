@@ -1605,7 +1605,7 @@ It prints two things when it starts, and the second of them once:
 ```text
 dashboard for yoyodyne serving at http://127.0.0.1:52341/
 token: 9f2c41ab7e05…
-the page asks for the token once and keeps it for the browser session; a tool sends it as `Authorization: Bearer <token>` to /api/standing
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing
 it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c
 ```
 
@@ -1617,50 +1617,58 @@ the page and the terminal cannot disagree about a number.
 
 **It is a projection and nothing else.** It reads the same durable records the
 terminal reads and writes none of them; there is no button, no form but the one
-that takes the token, and no route that changes anything. Restarting it changes
-nothing about the harness and loses nothing, because the history it shows lives
-in the records rather than in the page. It is not a second control plane, and
-work is still directed from the conversation and the commands above.
+that takes the token, and nothing but `GET` is answered at all. Restarting it
+changes nothing about the harness and loses nothing, because the history it
+shows lives in the records rather than in the page. It is not a second control
+plane, and work is still directed from the conversation and the commands above.
 
 **What it will not do** is the part worth reading before leaving it running:
 
 - **It answers only on this machine.** It binds `127.0.0.1` and nothing else,
   so nothing off the machine can reach it, and being on the machine is not
-  enough on its own: every request has to carry the token.
-- **The token is never in the URL.** A token in a URL reaches the browser's
-  history, the referrer of every link on the page, and every log a proxy keeps,
-  which is why the URL it prints carries none and the page asks for it instead.
-  The page keeps it in a cookie confined to this origin, kept from script, and
-  sent on no request from any other site; closing the browser forgets it. A
-  restarted dashboard generates a new token, so a bookmark outlives the token
-  and the page simply asks again.
+  enough on its own: every request for the read model has to carry the token.
+  What is served without one is the page shell and its own script and
+  stylesheet — static text compiled into the binary, with nothing of the read
+  model in it, which a browser needs before it can present a token at all.
+  Everything that reads state is behind the token.
+- **The token is never in a URL, and never in a cookie.** A token in a URL
+  reaches the browser's history, the referrer of every link on the page, and
+  every log a proxy keeps, which is why the URL it prints carries none and the
+  page asks for it instead. A cookie would be worse than it looks: browsers key
+  cookies on the host and not the port, so a cookie on `127.0.0.1` is sent to
+  every other service on every other port of `127.0.0.1` the browser visits,
+  and two dashboards for two products would overwrite each other's. So the page
+  keeps the token in the tab's session storage, which is scoped to the origin
+  with its port, and sends it as `Authorization: Bearer` on each fetch; the
+  server accepts it from that header and from nowhere else. Session storage
+  ends with the tab, so a new tab asks again. A restarted dashboard generates
+  a new token, so a bookmark outlives the token and the page simply asks again.
 - **It refuses anything that did not come from its own address.** A request
   whose `Host` is not the address it bound — a name somebody pointed at
   loopback — and a request whose `Origin` is some other page scripting calls
-  at the port are both refused before the token is even looked at.
+  at the port are both refused before anything is served, the shell included.
 - **It loads nothing from anywhere else.** Every response carries a
   content-security policy that allows script and style from this origin only:
   no CDN, no inline script, and no framing by another page. A value that reached
-  the page unescaped would have nowhere to run, and none does: everything the
-  page shows — work-item titles, refusals, the product's own name — is written
-  as text.
-- **Every failure is a refusal, never part of a page.** No token, the wrong
+  the page unescaped would have nowhere to run, and none does: the product's own
+  name is the one value the server writes into the page, escaped, and everything
+  the read model says — work-item titles, refusals, the reason a source could
+  not be read — reaches the page as JSON and is written by the page as text.
+- **Every failure is a refusal, never part of an answer.** No token, the wrong
   token, a foreign `Host` or `Origin`, and durable state that cannot be read
   each get a status and a one-line reason, and nothing of the read model beside
-  it. State that cannot be read is refused on the page as well as on the JSON,
-  because a shell whose every fetch will fail is a page that looks like a
-  dashboard and is not one. What the read model could read with one source
-  missing is a different thing, and is said inside the answer line by line —
-  the page shows those beside the counts rather than counting an unreadable
-  line as empty.
+  it; the page shows that reason in its error state and keeps asking. What the
+  read model could read with one source missing is a different thing, and is
+  said inside the answer line by line — the page shows those beside the counts
+  rather than counting an unreadable line as empty.
 
 `internal/dashboard`'s tests drive each of those refusals from the outside and
 are the evidence a reviewer is handed for the conventions; the
 [observability-and-dashboard design](designs/observability-and-dashboard.md)
 is where they are established, as the repository's first web-service
 conventions. The page's content — the five sections the design describes — is
-still to come; what is served today is the page's shell with its loading, error,
-and sign-in states, and the JSON underneath it.
+still to come; what is served today is the page's shell with its sign-in,
+loading, error, and ready states, and the JSON underneath it.
 
 ## Following a run, a conversation, or a branch review
 

@@ -11,7 +11,17 @@
   <h1>{{.Product}}</h1>
   <p class="observed">observed <time id="observed-at">—</time></p>
 </header>
-<main data-state="loading">
+<main data-state="signin">
+  <section class="state state-signin">
+    <h2>This dashboard needs its token</h2>
+    <p>The token was printed once, in the terminal where <code>yoyo dashboard</code> was started. Paste it here; it is kept in this tab's session storage, scoped to this address and port, and is never put in a URL or a cookie.</p>
+    <p id="signin-note" role="alert" class="note"></p>
+    <form id="signin">
+      <label for="token">Token</label>
+      <input id="token" name="token" type="password" autocomplete="off" required>
+      <button type="submit">Open the dashboard</button>
+    </form>
+  </section>
   <section class="state state-loading" aria-live="polite">
     <p>Reading where the harness stands…</p>
   </section>

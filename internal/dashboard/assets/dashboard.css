@@ -64,17 +64,16 @@ h2 {
 }
 
 /* One state is shown at a time, chosen by the script through data-state on
-   main. Nothing is shown before the script has an answer except the loading
-   state, and nothing of the read model is in the markup to begin with. */
+   main. The markup opens asking for the token, and nothing of the read model
+   is in it to begin with. */
 .state {
   display: none;
 }
 
+main[data-state="signin"] .state-signin,
 main[data-state="loading"] .state-loading,
 main[data-state="error"] .state-error,
-main[data-state="ready"] .state-ready,
-main[data-state="signin"] .state-signin,
-main[data-state="unreadable"] .state-error {
+main[data-state="ready"] .state-ready {
   display: block;
 }
 

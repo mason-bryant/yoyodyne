@@ -12,9 +12,10 @@ package cli
 //
 // What it prints when it starts is the whole of what an operator needs and the
 // one thing that is printed once: the URL, and beside it the token every request
-// has to carry. The token is never put in the URL, where it would reach a
-// browser history and every log a proxy keeps; the page asks for it, once, and
-// keeps it in a cookie for the browser session.
+// for the read model has to carry. The token is never put in the URL, where it
+// would reach a browser history and every log a proxy keeps, and never in a
+// cookie, which on 127.0.0.1 is sent to every port of 127.0.0.1; the page asks
+// for it and keeps it in the tab's session storage, scoped to this port.
 
 import (
 	"context"
@@ -48,7 +49,7 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 	// dashboard left running for a week must not go on serving a state root
 	// that has since stopped being readable.
 	reader := dashboardReader{configPath: *configPath}
-	if err := reader.Ready(ctx); err != nil {
+	if err := reader.ready(); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -70,7 +71,7 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 
 	fmt.Fprintf(stdout, "dashboard for %s serving at %s\n", resolved.Config.Product.ID, url)
 	fmt.Fprintf(stdout, "token: %s\n", server.Token())
-	fmt.Fprintln(stdout, "the page asks for the token once and keeps it for the browser session; a tool sends it as `Authorization: Bearer <token>` to /api/standing")
+	fmt.Fprintln(stdout, "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing")
 	fmt.Fprintln(stdout, "it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c")
 
 	if err := server.Serve(ctx); err != nil {
@@ -89,11 +90,11 @@ type dashboardReader struct {
 	configPath string
 }
 
-// Ready opens what the reading needs and closes nothing else: the configuration,
+// ready opens what the reading needs and closes nothing else: the configuration,
 // the state root, and the run store that every other record sits beside. A
-// failure here is the state being unreadable, which the dashboard refuses on
-// rather than serving a shell over.
-func (r dashboardReader) Ready(context.Context) error {
+// failure here is the state being unreadable, which the verb refuses to start
+// on and the read model is refused on afterwards.
+func (r dashboardReader) ready() error {
 	resolved, err := loadConfiguration(r.configPath)
 	if err != nil {
 		return err
@@ -113,7 +114,7 @@ func (r dashboardReader) Ready(context.Context) error {
 // line, exactly as the terminal says it; what refuses the whole answer is the
 // state being unreadable at all.
 func (r dashboardReader) Standing(ctx context.Context) (readmodel.Standing, error) {
-	if err := r.Ready(ctx); err != nil {
+	if err := r.ready(); err != nil {
 		return readmodel.Standing{}, err
 	}
 	return readmodel.ReadStanding(ctx, standingSources(r.configPath)), nil
@@ -124,12 +125,15 @@ func printDashboardUsage(writer io.Writer) {
 
 Serves the read model -- the same four lines and capacity state `+"`yoyo status`"+`
 reads -- to a browser on this machine, at a loopback port, until stopped. It
-prints the URL and, once, the token every request has to carry: the page asks
-for it and keeps it in a cookie for the browser session, and a tool sends it as
-`+"`Authorization: Bearer <token>`"+`. It serves the page shell at / and the read
-model as JSON at /api/standing, and refuses everything else: a request with no
-token or the wrong one, a Host or Origin that is not the address it bound, and
-durable state it cannot read each get a refusal and never part of a page.
+prints the URL and, once, the token every request for the read model has to
+carry as `+"`Authorization: Bearer <token>`"+`: the page asks for it and keeps it in
+the tab's session storage, scoped to this port, and never in a URL or a cookie.
+It serves the read model as JSON at /api/standing behind the token; the page
+shell at / and its own script and style are static text with nothing of the
+read model in them, served to the browser before it has a token. Everything
+else is refused: a request for the read model with no token or the wrong one, a
+Host or Origin that is not the address it bound, and durable state it cannot
+read each get a refusal and never part of an answer.
 
 It is a projection. It owns no state, offers no write, and restarting it changes
 nothing about the harness.

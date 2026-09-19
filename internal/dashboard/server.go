@@ -6,9 +6,14 @@
 // surface starts from them rather than rediscovering each one:
 //
 //   - It binds loopback only, and loopback alone is not trusted: every request
-//     carries a bearer token the process generated at start and printed once,
-//     presented in a header or in a cookie and never in a URL, where it would
-//     reach a browser history, a referrer, and every log a proxy keeps.
+//     for the read model carries a bearer token the process generated at start
+//     and printed once, in the Authorization header and never in a URL, where
+//     it would reach a browser history, a referrer, and every log a proxy
+//     keeps. It is never in a cookie either: a cookie on 127.0.0.1 is sent to
+//     every other service on every other port of 127.0.0.1, so a cookie would
+//     hand the credential to whatever else the operator's browser visits on
+//     this machine. The page keeps it in the browser's session storage, which
+//     is scoped to this origin, port included.
 //   - The Host and Origin headers are validated against the address it bound,
 //     and anything else is refused. A page on some other origin that scripts a
 //     request at this port is refused on the Origin; a DNS name a browser is
@@ -17,12 +22,18 @@
 //     this origin's own script and style, so nothing is loaded from a CDN and no
 //     inline script runs — including one that reached the page through a value
 //     that was not escaped.
-//   - Every value that reaches HTML goes through html/template, so work-item
-//     text, an error message, and a product id render as text.
+//   - Every value that reaches HTML goes through html/template, so a product id
+//     renders as text; everything the read model says reaches the page through
+//     JSON and is written by the page's script as text.
 //   - Every failure fails closed. A missing or wrong token, a foreign Host, a
 //     foreign Origin, and durable state that cannot be read each produce a
 //     refusal that carries no part of the read model, never a page with a
 //     quarter of the answer on it.
+//
+// What is served without a token is the page shell and its own script and
+// style: static text compiled into the binary, with nothing of the read model
+// in it, which is what a browser needs before it can present a token at all.
+// Everything that reads state is behind the token.
 //
 // It is a projection, never an engine: it owns no workflow, conversation,
 // provider, or configuration state, and offers no write of any kind. The one
@@ -54,19 +65,10 @@ import (
 //go:embed assets
 var assets embed.FS
 
-// shell is the page and the two refusals a browser is shown, parsed once. Every
-// value a template is handed is escaped by the package on the way into HTML,
-// which is the whole reason the pages are templates rather than strings.
-var shell = template.Must(template.ParseFS(assets, "assets/*.html"))
-
-// cookieName is the cookie the token is presented in once the page has it. It is
-// a session cookie on purpose: the token is printed once and lives as long as
-// the process, and a browser closed and opened again is asked for it again.
-const cookieName = "yoyo_dashboard"
-
-// stylesheet is the page's style, and the one path served without a token; see
-// the route for why.
-const stylesheet = "/assets/dashboard.css"
+// shell is the page, parsed once. Every value the template is handed is escaped
+// by the package on the way into HTML, which is the whole reason the page is a
+// template rather than a string.
+var shell = template.Must(template.ParseFS(assets, "assets/shell.html"))
 
 // tokenBytes is the entropy behind one token. Thirty-two bytes is more than any
 // guess on a loopback port could ever cover, and it renders as sixty-four hex
@@ -88,10 +90,6 @@ const policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src
 // the security conventions can be driven without a state directory, which is
 // the only way a refusal nobody may weaken gets a test that holds it.
 type Reader interface {
-	// Ready says whether the durable records the read model is served from can
-	// be opened now. An error is why they cannot, and the page is refused on it
-	// rather than served over state nothing can read.
-	Ready(ctx context.Context) error
 	// Standing reads the read model. An error is a refusal of the whole answer,
 	// never a partial one: what the read model could answer with a source missing
 	// it says inside the Standing, line by line.
@@ -128,8 +126,9 @@ func New(product string, reader Reader) (*Server, error) {
 	return &Server{Product: product, reader: reader, token: hex.EncodeToString(raw)}, nil
 }
 
-// Token is the credential every request has to present. It is for the process
-// that started the server to print once; nothing here writes it anywhere.
+// Token is the credential every request for the read model has to present. It
+// is for the process that started the server to print once; nothing here
+// writes it anywhere.
 func (s *Server) Token() string { return s.token }
 
 // Listen binds loopback on the port asked for, or on one the operating system
@@ -159,7 +158,7 @@ func (s *Server) bound(port int) {
 }
 
 // URL is where the server is listening, once it is. It carries no token: the
-// token is presented in a header or a cookie, never in a URL.
+// token is presented in a header, never in a URL.
 func (s *Server) URL() string {
 	if s.listener == nil {
 		return ""
@@ -207,8 +206,8 @@ func (s *Server) Handler() http.Handler {
 
 // serve is the one entry every request takes. The order is deliberate: the
 // headers that make a refusal safe are set before anything can be refused, the
-// request's provenance is checked before its credential, and its credential is
-// checked before anything is read.
+// request's provenance is checked before anything is served, and the credential
+// is checked before anything is read.
 func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
 	header := writer.Header()
 	header.Set("Content-Security-Policy", policy)
@@ -234,89 +233,49 @@ func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
 		refuse(writer, request, http.StatusForbidden, "this dashboard refuses requests from any other origin")
 		return
 	}
+	// Read-only means read-only at the protocol: there is nothing to post.
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		refuse(writer, request, http.StatusMethodNotAllowed, "this dashboard is read-only")
+		return
+	}
 
 	switch {
-	case request.URL.Path == "/session" && request.Method == http.MethodPost:
-		s.serveSession(writer, request)
-	case request.Method != http.MethodGet && request.Method != http.MethodHead:
-		refuse(writer, request, http.StatusMethodNotAllowed, "this dashboard is read-only")
-	case request.URL.Path == stylesheet:
-		// The one route without a token: the sign-in page is shown to a browser
-		// that has none yet, and the policy lets it take style from this origin
-		// only. The stylesheet is text compiled into the binary and reads nothing.
-		s.serveAsset(writer, request)
-	case !s.presented(request):
-		s.refuseToken(writer, request, "")
 	case request.URL.Path == "/":
-		s.servePage(writer, request)
-	case request.URL.Path == "/api/standing":
-		s.serveStanding(writer, request)
+		s.servePage(writer)
 	case strings.HasPrefix(request.URL.Path, "/assets/"):
 		s.serveAsset(writer, request)
+	case request.URL.Path == "/api/standing":
+		// The one route that reads state, and so the one the token guards.
+		if !s.presented(request) {
+			refuse(writer, request, http.StatusUnauthorized, "this dashboard requires the token it printed when it started, as a bearer token")
+			return
+		}
+		s.serveStanding(writer, request)
 	default:
 		refuse(writer, request, http.StatusNotFound, "nothing is served at that path")
 	}
 }
 
-// presented says whether the request carries the token, in the header a tool
-// sends or in the cookie the page has once it signed in. The comparison is
-// constant-time, because a comparison that stops at the first wrong byte says
-// how many bytes were right.
+// presented says whether the request carries the token in the Authorization
+// header, which is the one place it is accepted from: not a query string, and
+// not a cookie. The comparison is constant-time, because a comparison that stops
+// at the first wrong byte says how many bytes were right.
 func (s *Server) presented(request *http.Request) bool {
-	if candidate, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer "); found {
-		if s.matches(strings.TrimSpace(candidate)) {
-			return true
-		}
+	candidate, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+	if !found {
+		return false
 	}
-	if cookie, err := request.Cookie(cookieName); err == nil && s.matches(cookie.Value) {
-		return true
-	}
-	return false
+	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(candidate)), []byte(s.token)) == 1
 }
 
-func (s *Server) matches(candidate string) bool {
-	return subtle.ConstantTimeCompare([]byte(candidate), []byte(s.token)) == 1
-}
-
-// serveSession is the one thing a browser may post: the token, from the sign-in
-// form, which becomes a cookie so the page can fetch without holding the token
-// in script. A browser sends an Origin with every form post, so one without is
-// not a browser's form and is refused; one with a foreign Origin was refused
-// before this. The cookie is confined to this origin, kept from script, and sent
-// on no cross-site request at all.
-func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request) {
-	if request.Header.Get("Origin") == "" {
-		refuse(writer, request, http.StatusForbidden, "a sign-in has to come from the dashboard's own page")
-		return
-	}
-	if err := request.ParseForm(); err != nil {
-		refuse(writer, request, http.StatusBadRequest, "the sign-in form could not be read")
-		return
-	}
-	if !s.matches(strings.TrimSpace(request.PostForm.Get("token"))) {
-		s.refuseToken(writer, request, "that is not the token this dashboard printed when it started")
-		return
-	}
-	http.SetCookie(writer, &http.Cookie{
-		Name:     cookieName,
-		Value:    s.token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-	})
-	http.Redirect(writer, request, "/", http.StatusSeeOther)
-}
-
-// servePage is the shell: the page with its states and nothing of the read model
-// in it, which the page's own script then fetches. It is refused outright when
-// the durable records cannot be opened, because a shell whose every fetch will
-// fail is a page that looks like a dashboard and is not one.
-func (s *Server) servePage(writer http.ResponseWriter, request *http.Request) {
-	if err := s.reader.Ready(request.Context()); err != nil {
-		s.renderPage(writer, http.StatusServiceUnavailable, "unreadable.html", err.Error())
-		return
-	}
-	s.renderPage(writer, http.StatusOK, "shell.html", "")
+// servePage is the shell: the page with its states — asking for the token,
+// loading, error, ready — and nothing of the read model in it. It is static
+// text the page's own script then fills from the JSON, so it is served to a
+// browser that has no token yet, which is every browser before it signs in.
+func (s *Server) servePage(writer http.ResponseWriter) {
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.WriteHeader(http.StatusOK)
+	_ = shell.Execute(writer, struct{ Product string }{Product: s.Product})
 }
 
 // serveStanding is the read model as JSON, whole or refused. What the model
@@ -342,9 +301,8 @@ func (s *Server) serveStanding(writer http.ResponseWriter, request *http.Request
 }
 
 // serveAsset is the page's own script and style, from the binary. They are the
-// only script and style the policy allows. The script is behind the token like
-// everything else; the stylesheet is the one exception, above, and is the only
-// unauthenticated route there is.
+// only script and style the policy allows, and like the shell they are static
+// text with nothing of the read model in them.
 func (s *Server) serveAsset(writer http.ResponseWriter, request *http.Request) {
 	name := strings.TrimPrefix(request.URL.Path, "/")
 	content, err := fs.ReadFile(assets, name)
@@ -366,31 +324,8 @@ func (s *Server) serveAsset(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
-// refuseToken is the refusal for a request with no valid token. A browser asking
-// for the page is shown the sign-in form under the refusal's status, because the
-// form is how it gets a token; everything else is told in the form it asked for.
-func (s *Server) refuseToken(writer http.ResponseWriter, request *http.Request, note string) {
-	if request.URL.Path == "/" || request.URL.Path == "/session" {
-		s.renderPage(writer, http.StatusUnauthorized, "signin.html", note)
-		return
-	}
-	refuse(writer, request, http.StatusUnauthorized, "this dashboard requires the token it printed when it started, as a bearer token")
-}
-
-// renderPage writes one of the templates with the product and a message, both
-// escaped by the template on the way in.
-func (s *Server) renderPage(writer http.ResponseWriter, status int, name, message string) {
-	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	writer.WriteHeader(status)
-	_ = shell.ExecuteTemplate(writer, name, struct {
-		Product string
-		Message string
-	}{Product: s.Product, Message: message})
-}
-
-// refuse is every refusal that is not a page: JSON for a caller that asked for
-// it or is at an API path, and plain text otherwise. It reflects nothing from
-// the request.
+// refuse is every refusal: JSON for a caller that asked for it or is at an API
+// path, and plain text otherwise. It reflects nothing from the request.
 func refuse(writer http.ResponseWriter, request *http.Request, status int, reason string) {
 	if strings.HasPrefix(request.URL.Path, "/api/") || strings.Contains(request.Header.Get("Accept"), "application/json") {
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")

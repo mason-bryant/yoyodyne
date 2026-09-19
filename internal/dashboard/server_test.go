@@ -32,12 +32,9 @@ const port = "45123"
 
 // stubReader is a read model that answers with what the test put in it.
 type stubReader struct {
-	ready    error
 	standing readmodel.Standing
 	failure  error
 }
-
-func (r stubReader) Ready(context.Context) error { return r.ready }
 
 func (r stubReader) Standing(context.Context) (readmodel.Standing, error) {
 	return r.standing, r.failure
@@ -62,9 +59,9 @@ func serve(t *testing.T, reader Reader) *world {
 
 // request makes one request with the bound Host, shaped as the test wants, and
 // returns the response with its body read.
-func (w *world) request(method, path string, body io.Reader, shape func(*http.Request)) (*http.Response, string) {
+func (w *world) request(method, path string, shape func(*http.Request)) (*http.Response, string) {
 	w.t.Helper()
-	request := httptest.NewRequest(method, "http://127.0.0.1:"+port+path, body)
+	request := httptest.NewRequest(method, "http://127.0.0.1:"+port+path, nil)
 	if shape != nil {
 		shape(request)
 	}
@@ -81,7 +78,7 @@ func (w *world) request(method, path string, body io.Reader, shape func(*http.Re
 
 func (w *world) get(path string, shape func(*http.Request)) (*http.Response, string) {
 	w.t.Helper()
-	return w.request(http.MethodGet, path, nil, shape)
+	return w.request(http.MethodGet, path, shape)
 }
 
 func bearer(token string) func(*http.Request) {
@@ -116,9 +113,10 @@ func standingWith(text string) readmodel.Standing {
 	}
 }
 
-// The verb's whole contract from the outside: a token is generated, and with
-// it the read model is served as JSON and as the page shell.
-func TestServesTheReadModelAsJSONAndAsTheShellToTheToken(t *testing.T) {
+// The verb's whole contract from the outside: a token is generated, the read
+// model is served as JSON to it, and the page shell is served with its states
+// and nothing of the read model in it.
+func TestServesTheReadModelAsJSONToTheTokenAndTheShellAsItsStates(t *testing.T) {
 	t.Parallel()
 	w := serve(t, stubReader{standing: standingWith("ordinary title")})
 
@@ -137,22 +135,28 @@ func TestServesTheReadModelAsJSONAndAsTheShellToTheToken(t *testing.T) {
 		t.Fatalf("JSON does not carry the standing: %s", body)
 	}
 
-	response, body = w.get("/", bearer(w.server.Token()))
+	response, body = w.get("/", nil)
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("shell with the token: %d %s", response.StatusCode, body)
+		t.Fatalf("shell: %d %s", response.StatusCode, body)
 	}
-	if !strings.Contains(body, `<main data-state="loading">`) || !strings.Contains(body, `/assets/dashboard.js`) {
-		t.Fatalf("shell is not the page with its states: %s", body)
+	for _, state := range []string{`<main data-state="signin">`, "state-loading", "state-error", "state-ready", `/assets/dashboard.js`} {
+		if !strings.Contains(body, state) {
+			t.Fatalf("shell lacks %q: %s", state, body)
+		}
 	}
-	// The shell is a shell: nothing of the read model is in it, so a page served
-	// to the wrong hands by some later mistake would still carry nothing.
-	if strings.Contains(body, "ordinary title") {
+	// The shell is a shell: nothing of the read model is in it. It is served to
+	// a browser that has no token yet, so this is what makes that safe.
+	if strings.Contains(body, "ordinary title") || strings.Contains(body, "2026-09-18") {
 		t.Fatalf("the shell carries read-model text: %s", body)
 	}
 	for _, asset := range []string{"/assets/dashboard.js", "/assets/dashboard.css"} {
-		if response, body := w.get(asset, bearer(w.server.Token())); response.StatusCode != http.StatusOK {
+		response, body := w.get(asset, nil)
+		if response.StatusCode != http.StatusOK || strings.Contains(body, "ordinary title") {
 			t.Fatalf("%s: %d %s", asset, response.StatusCode, body)
 		}
+	}
+	if response, _ := w.get("/assets/shell.html", nil); response.StatusCode != http.StatusNotFound {
+		t.Fatalf("the template source is served raw: %d", response.StatusCode)
 	}
 }
 
@@ -184,9 +188,9 @@ func TestListenBindsLoopbackWithoutTheTokenInTheURL(t *testing.T) {
 	}
 }
 
-// A request with no token is refused, on every route that serves anything. The
-// page's refusal is the sign-in form, because that is how a browser gets a
-// token; the API's is JSON; neither carries a byte of the read model.
+// A request for the read model with no token is refused, and the refusal
+// carries no byte of the read model. A wrong token is a missing one, and so is
+// one anywhere but the Authorization header.
 func TestRefusesAMissingToken(t *testing.T) {
 	t.Parallel()
 	w := serve(t, stubReader{standing: standingWith("secret title")})
@@ -198,27 +202,50 @@ func TestRefusesAMissingToken(t *testing.T) {
 	if !strings.Contains(body, `"error"`) || strings.Contains(body, "secret title") {
 		t.Fatalf("JSON refusal is not a bare refusal: %s", body)
 	}
-
-	response, body = w.get("/", nil)
-	if response.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("shell without a token: %d %s", response.StatusCode, body)
-	}
-	if !strings.Contains(body, `action="/session"`) || strings.Contains(body, "dashboard.js") || strings.Contains(body, "secret title") {
-		t.Fatalf("shell refusal is not the sign-in form alone: %s", body)
-	}
-
-	if response, _ := w.get("/assets/dashboard.js", nil); response.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("script without a token: %d", response.StatusCode)
-	}
-	// A wrong token is a missing one. Same length as the real one, so the
-	// refusal is not a length check.
+	// Same length as the real one, so the refusal is not a length check.
 	wrong := strings.Repeat("0", len(w.server.Token()))
 	if response, _ := w.get("/api/standing", bearer(wrong)); response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("JSON with a wrong token: %d", response.StatusCode)
 	}
-	// Nor does the token work in the URL, which is where it must never be.
 	if response, _ := w.get("/api/standing?token="+w.server.Token(), nil); response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("JSON with the token in the URL: %d", response.StatusCode)
+	}
+	if response, _ := w.get("/api/standing", func(r *http.Request) { r.Header.Set("Authorization", w.server.Token()) }); response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("JSON with the token in the header but not as a bearer: %d", response.StatusCode)
+	}
+}
+
+// The token is never a cookie, in either direction: no response sets one, and
+// a cookie carrying the token is no credential. A cookie on 127.0.0.1 is sent
+// to every port of 127.0.0.1, so a cookie would hand the credential to every
+// other loopback service the operator's browser visits, and two dashboards
+// would overwrite each other's; session storage in the page is scoped to the
+// port, which is why the credential lives there and in the header only.
+func TestTheTokenIsNeverACookie(t *testing.T) {
+	t.Parallel()
+	w := serve(t, stubReader{standing: standingWith("secret title")})
+
+	for _, path := range []string{"/", "/api/standing", "/assets/dashboard.js", "/assets/dashboard.css", "/nothing"} {
+		response, _ := w.get(path, bearer(w.server.Token()))
+		if len(response.Cookies()) != 0 || response.Header.Get("Set-Cookie") != "" {
+			t.Fatalf("%s set a cookie: %v", path, response.Header)
+		}
+	}
+	for _, name := range []string{"yoyo_dashboard", "token", "yoyo-dashboard-token", "session"} {
+		response, body := w.get("/api/standing", func(r *http.Request) {
+			r.AddCookie(&http.Cookie{Name: name, Value: w.server.Token()})
+		})
+		if response.StatusCode != http.StatusUnauthorized || strings.Contains(body, "secret title") {
+			t.Fatalf("a cookie %q carrying the token was accepted: %d %s", name, response.StatusCode, body)
+		}
+	}
+	// The page's own script keeps it in session storage and nowhere else.
+	_, script := w.get("/assets/dashboard.js", nil)
+	if !strings.Contains(script, "sessionStorage") || strings.Contains(script, "document.cookie") || strings.Contains(script, "localStorage") {
+		t.Fatalf("the script does not keep the token in session storage alone:\n%s", script)
+	}
+	if !strings.Contains(script, `Authorization: "Bearer " + current`) {
+		t.Fatalf("the script does not present the token as a bearer:\n%s", script)
 	}
 }
 
@@ -229,13 +256,13 @@ func TestRefusesAForeignHost(t *testing.T) {
 	w := serve(t, stubReader{standing: standingWith("secret title")})
 
 	for _, host := range []string{"dashboard.example.com", "127.0.0.1:1", "127.0.0.1", "evil.test:" + port, ""} {
-		for _, path := range []string{"/", "/api/standing"} {
+		for _, path := range []string{"/", "/api/standing", "/assets/dashboard.css"} {
 			response, body := w.get(path, all(bearer(w.server.Token()), withHost(host)))
 			if response.StatusCode != http.StatusForbidden {
 				t.Fatalf("Host %q on %s: %d %s", host, path, response.StatusCode, body)
 			}
-			if strings.Contains(body, "secret title") || (host != "" && strings.Contains(body, host)) {
-				t.Fatalf("Host %q on %s: refusal carries the read model or reflects the host: %s", host, path, body)
+			if strings.Contains(body, "secret title") || strings.Contains(body, "<main") || (host != "" && strings.Contains(body, host)) {
+				t.Fatalf("Host %q on %s: refusal carries the read model, the page, or the host: %s", host, path, body)
 			}
 		}
 	}
@@ -255,17 +282,21 @@ func TestRefusesAForeignOrigin(t *testing.T) {
 	w := serve(t, stubReader{standing: standingWith("secret title")})
 
 	for _, origin := range []string{"http://evil.test", "https://127.0.0.1:" + port, "http://127.0.0.1:1", "null"} {
-		response, body := w.get("/api/standing", all(bearer(w.server.Token()), withOrigin(origin)))
-		if response.StatusCode != http.StatusForbidden {
-			t.Fatalf("Origin %q: %d %s", origin, response.StatusCode, body)
-		}
-		if strings.Contains(body, "secret title") || strings.Contains(body, origin) {
-			t.Fatalf("Origin %q: refusal carries the read model or reflects the origin: %s", origin, body)
+		for _, path := range []string{"/", "/api/standing"} {
+			response, body := w.get(path, all(bearer(w.server.Token()), withOrigin(origin)))
+			if response.StatusCode != http.StatusForbidden {
+				t.Fatalf("Origin %q on %s: %d %s", origin, path, response.StatusCode, body)
+			}
+			if strings.Contains(body, "secret title") || strings.Contains(body, "<main") || strings.Contains(body, origin) {
+				t.Fatalf("Origin %q on %s: refusal carries the read model, the page, or the origin: %s", origin, path, body)
+			}
 		}
 	}
-	response, body := w.get("/api/standing", all(bearer(w.server.Token()), withOrigin("http://127.0.0.1:"+port)))
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("own origin: %d %s", response.StatusCode, body)
+	for _, origin := range []string{"http://127.0.0.1:" + port, "http://localhost:" + port} {
+		response, body := w.get("/api/standing", all(bearer(w.server.Token()), withOrigin(origin)))
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("own origin %q: %d %s", origin, response.StatusCode, body)
+		}
 	}
 }
 
@@ -280,66 +311,62 @@ func TestEveryResponseCarriesTheContentSecurityPolicy(t *testing.T) {
 		path  string
 		shape func(*http.Request)
 	}{
-		{"/", bearer(w.server.Token())},
-		{"/api/standing", bearer(w.server.Token())},
 		{"/", nil},
+		{"/api/standing", bearer(w.server.Token())},
 		{"/api/standing", nil},
 		{"/assets/dashboard.css", nil},
-		{"/nothing-here", bearer(w.server.Token())},
+		{"/assets/dashboard.js", nil},
+		{"/nothing-here", nil},
 		{"/", withHost("evil.test")},
+		{"/", withOrigin("http://evil.test")},
 	} {
 		response, _ := w.get(probe.path, probe.shape)
 		csp := response.Header.Get("Content-Security-Policy")
-		for _, directive := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "base-uri 'none'"} {
+		for _, directive := range []string{"default-src 'none'", "script-src 'self'", "style-src 'self'", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'"} {
 			if !strings.Contains(csp, directive) {
 				t.Fatalf("%s (%d): policy %q lacks %q", probe.path, response.StatusCode, csp, directive)
 			}
 		}
-		for _, forbidden := range []string{"unsafe-inline", "unsafe-eval", "https:", "http:", "cdn"} {
+		for _, forbidden := range []string{"unsafe-inline", "unsafe-eval", "https:", "http:", "cdn", "*"} {
 			if strings.Contains(csp, forbidden) {
 				t.Fatalf("%s: policy %q allows %q", probe.path, csp, forbidden)
 			}
 		}
-		if response.Header.Get("X-Content-Type-Options") != "nosniff" || response.Header.Get("Cache-Control") != "no-store" {
+		if response.Header.Get("X-Content-Type-Options") != "nosniff" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("X-Frame-Options") != "DENY" {
 			t.Fatalf("%s: headers %v", probe.path, response.Header)
 		}
 	}
 }
 
-// The shell carries no inline script and no inline style, because the policy
-// would refuse them and a page that depended on either would be blank.
+// The shell carries no inline script and no inline style, and loads nothing
+// from anywhere else, because the policy would refuse them and a page that
+// depended on any of them would be blank.
 func TestTheShellNeedsNothingThePolicyRefuses(t *testing.T) {
 	t.Parallel()
 	w := serve(t, stubReader{standing: standingWith("title")})
-	for _, page := range []struct {
-		path  string
-		shape func(*http.Request)
-	}{{"/", bearer(w.server.Token())}, {"/", nil}} {
-		_, body := w.get(page.path, page.shape)
-		if strings.Contains(body, "<script>") || strings.Contains(body, "<style") || strings.Contains(body, " style=") || strings.Contains(body, "onload=") || strings.Contains(body, "https://") {
-			t.Fatalf("the page depends on something the policy refuses:\n%s", body)
+	_, body := w.get("/", nil)
+	for _, forbidden := range []string{"<script>", "<style", " style=", "onload=", "onsubmit=", "https://", "http://"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("the page depends on %q, which the policy refuses:\n%s", forbidden, body)
 		}
 	}
 }
 
 // A value that reaches HTML reaches it as text. The product id is repository
-// text, the unreadable-state message is whatever a store said, and the JSON
-// carries work-item text; the injected script appears in none of them as
-// markup.
+// text and the one value the server writes into the page; everything the read
+// model says reaches the page as JSON, where a tag is escaped as well, and the
+// page's script writes it as text.
 func TestEscapesEveryValueReachingHTML(t *testing.T) {
 	t.Parallel()
 	w := serve(t, stubReader{standing: standingWith(injected)})
 	w.server.Product = injected
 
-	response, body := w.get("/", bearer(w.server.Token()))
+	response, body := w.get("/", nil)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("shell: %d", response.StatusCode)
 	}
-	if strings.Contains(body, injected) || !strings.Contains(body, "&lt;script&gt;") {
-		t.Fatalf("the product id reached the shell unescaped:\n%s", body)
-	}
-	if _, body = w.get("/", nil); strings.Contains(body, injected) {
-		t.Fatalf("the product id reached the sign-in page unescaped:\n%s", body)
+	if strings.Contains(body, injected) || strings.Count(body, "&lt;script&gt;alert(&#34;owned&#34;)&lt;/script&gt;") != 2 {
+		t.Fatalf("the product id reached the shell unescaped, or not in both places:\n%s", body)
 	}
 
 	_, body = w.get("/api/standing", bearer(w.server.Token()))
@@ -347,115 +374,58 @@ func TestEscapesEveryValueReachingHTML(t *testing.T) {
 		t.Fatalf("the JSON carries a raw tag:\n%s", body)
 	}
 
-	broken := serve(t, stubReader{ready: errors.New("open run store: " + injected)})
-	response, body = broken.get("/", bearer(broken.server.Token()))
-	if response.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("unreadable state: %d", response.StatusCode)
+	// The failure a refusal carries is JSON, never HTML, so a store's message
+	// carrying a tag reaches the page as text too.
+	broken := serve(t, stubReader{failure: errors.New("open run store: " + injected)})
+	response, body = broken.get("/api/standing", bearer(broken.server.Token()))
+	if response.StatusCode != http.StatusServiceUnavailable || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("unreadable state: %d %s", response.StatusCode, response.Header.Get("Content-Type"))
 	}
-	if strings.Contains(body, injected) || !strings.Contains(body, "open run store: &lt;script&gt;") {
-		t.Fatalf("the failure reached the refusal unescaped:\n%s", body)
+	if strings.Contains(body, "<script>") {
+		t.Fatalf("the failure reached the refusal as markup:\n%s", body)
 	}
 
-	// The sign-in's own note is the one message a browser's post can provoke,
-	// and the form field it came from is never echoed into it.
-	form := url.Values{"token": {injected}}
-	response, body = w.request(http.MethodPost, "/session", strings.NewReader(form.Encode()), all(
-		withOrigin("http://127.0.0.1:"+port),
-		func(r *http.Request) { r.Header.Set("Content-Type", "application/x-www-form-urlencoded") },
-	))
-	if response.StatusCode != http.StatusUnauthorized || strings.Contains(body, injected) {
-		t.Fatalf("a wrong token was reflected: %d\n%s", response.StatusCode, body)
+	// The page's script writes every value as text, never as markup.
+	_, script := w.get("/assets/dashboard.js", nil)
+	for _, forbidden := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("the script writes markup through %q:\n%s", forbidden, script)
+		}
 	}
 }
 
-// Durable state that cannot be read is a refusal, on the page and on the API,
-// never a shell over records nothing can read.
+// Durable state that cannot be read is a refusal of the read model, carrying
+// the reason and nothing else — never a partial answer.
 func TestRefusesUnreadableState(t *testing.T) {
 	t.Parallel()
-	w := serve(t, stubReader{
-		ready:   errors.New("the state root could not be resolved"),
-		failure: errors.New("the state root could not be resolved"),
-	})
+	w := serve(t, stubReader{failure: errors.New("the state root could not be resolved")})
 
-	response, body := w.get("/", bearer(w.server.Token()))
-	if response.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("shell over unreadable state: %d %s", response.StatusCode, body)
-	}
-	if strings.Contains(body, "dashboard.js") || !strings.Contains(body, "the state root could not be resolved") {
-		t.Fatalf("refusal is a partial page or names no cause: %s", body)
-	}
-	response, body = w.get("/api/standing", bearer(w.server.Token()))
+	response, body := w.get("/api/standing", bearer(w.server.Token()))
 	if response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("JSON over unreadable state: %d %s", response.StatusCode, body)
 	}
 	if !strings.Contains(body, `"error":"the state root could not be resolved"`) || strings.Contains(body, "observed_at") {
 		t.Fatalf("JSON refusal is not a bare refusal: %s", body)
 	}
-}
-
-// The sign-in is the one thing a browser may post. With the token it sets a
-// cookie confined to this origin and kept from script, and the cookie is then
-// the credential; without an Origin, or with the wrong token, it sets nothing.
-func TestSignInSetsTheCookieThatThenPresentsTheToken(t *testing.T) {
-	t.Parallel()
-	w := serve(t, stubReader{standing: standingWith("title")})
-	own := "http://127.0.0.1:" + port
-
-	post := func(token string, shape func(*http.Request)) *http.Response {
-		t.Helper()
-		form := url.Values{"token": {token}}
-		response, _ := w.request(http.MethodPost, "/session", strings.NewReader(form.Encode()), all(
-			func(r *http.Request) { r.Header.Set("Content-Type", "application/x-www-form-urlencoded") },
-			func(r *http.Request) {
-				if shape != nil {
-					shape(r)
-				}
-			},
-		))
-		return response
-	}
-
-	if response := post(w.server.Token(), nil); response.StatusCode != http.StatusForbidden || len(response.Cookies()) != 0 {
-		t.Fatalf("sign-in with no Origin: %d, cookies %v", response.StatusCode, response.Cookies())
-	}
-	if response := post(w.server.Token(), withOrigin("http://evil.test")); response.StatusCode != http.StatusForbidden || len(response.Cookies()) != 0 {
-		t.Fatalf("sign-in from a foreign origin: %d, cookies %v", response.StatusCode, response.Cookies())
-	}
-	wrong := strings.Repeat("0", len(w.server.Token()))
-	if response := post(wrong, withOrigin(own)); response.StatusCode != http.StatusUnauthorized || len(response.Cookies()) != 0 {
-		t.Fatalf("sign-in with the wrong token: %d, cookies %v", response.StatusCode, response.Cookies())
-	}
-
-	response := post(w.server.Token(), withOrigin(own))
-	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/" {
-		t.Fatalf("sign-in: %d to %q", response.StatusCode, response.Header.Get("Location"))
-	}
-	cookies := response.Cookies()
-	if len(cookies) != 1 || cookies[0].Name != cookieName || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode || cookies[0].MaxAge != 0 || cookies[0].Path != "/" {
-		t.Fatalf("cookie %+v", cookies)
-	}
-	present := func(r *http.Request) { r.AddCookie(cookies[0]) }
-	if response, body := w.get("/api/standing", present); response.StatusCode != http.StatusOK || !strings.Contains(body, "observed_at") {
-		t.Fatalf("JSON on the cookie: %d %s", response.StatusCode, body)
-	}
-	if response, body := w.get("/", present); response.StatusCode != http.StatusOK || !strings.Contains(body, "dashboard.js") {
-		t.Fatalf("shell on the cookie: %d %s", response.StatusCode, body)
-	}
-	// A cookie carrying some other value is no credential.
-	stale := func(r *http.Request) { r.AddCookie(&http.Cookie{Name: cookieName, Value: wrong}) }
-	if response, _ := w.get("/api/standing", stale); response.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("JSON on a stale cookie: %d", response.StatusCode)
+	// Without the token the refusal is the token's, and says nothing about the
+	// state: what stopped the state being read is for whoever holds the token.
+	response, body = w.get("/api/standing", nil)
+	if response.StatusCode != http.StatusUnauthorized || strings.Contains(body, "state root") {
+		t.Fatalf("unreadable state said to no token: %d %s", response.StatusCode, body)
 	}
 }
 
-// The dashboard is read-only: every method but the sign-in's post is refused.
+// The dashboard is read-only at the protocol: every method but GET and HEAD
+// is refused, on every path, with or without the token.
 func TestRefusesEveryWrite(t *testing.T) {
 	t.Parallel()
 	w := serve(t, stubReader{standing: standingWith("title")})
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
-		response, _ := w.request(method, "/api/standing", nil, bearer(w.server.Token()))
-		if response.StatusCode != http.StatusMethodNotAllowed {
-			t.Fatalf("%s: %d", method, response.StatusCode)
+		for _, path := range []string{"/", "/api/standing", "/session"} {
+			response, _ := w.request(method, path, bearer(w.server.Token()))
+			if response.StatusCode != http.StatusMethodNotAllowed {
+				t.Fatalf("%s %s: %d", method, path, response.StatusCode)
+			}
 		}
 	}
 }
