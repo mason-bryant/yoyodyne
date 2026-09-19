@@ -542,3 +542,41 @@ func TestHoldKindNamesThePileTheHoldSentenceDescribes(t *testing.T) {
 		}
 	}
 }
+
+// Awaits is read off the same derivation as HoldKind, so an entry counts as
+// held for a person exactly when its kind says so. The queue itself makes four
+// other refusals, and each is tried here beside a hold: the executor and the
+// parking win over the hold, and the hold wins over the wait and over blocked
+// work whose holds could not be read. A directive pause and the pass-level
+// stall are not the queue's to make, so no entry here can carry them.
+func TestAwaitsIsReadOffTheHoldKind(t *testing.T) {
+	t.Parallel()
+
+	for _, tried := range []struct {
+		name     string
+		entry    Entry
+		kind     HoldKind
+		held     bool
+		carryOut bool
+	}{
+		{"a conversation carries it", Entry{Executor: domain.ConversationWith(domain.RoleArchitect), Awaiting: "run run-a stopped on it", AwaitingCarryOut: true}, HeldByConversation, false, false},
+		{"parked", Entry{Parking: "later", Awaiting: "run run-a stopped on it", AwaitingCarryOut: true}, HeldParked, false, false},
+		{"held and waiting on other work", Entry{Awaiting: "run run-a stopped on it", WaitingOn: []string{"yoyodyne-ifd.1"}}, HeldForAPerson, true, false},
+		{"held, decided, and blocked", Entry{Status: statusBlocked, Awaiting: "run run-a stopped on it; the decision is recorded", AwaitingCarryOut: true}, HeldForAPerson, true, true},
+		{"held alone", Entry{Awaiting: "run run-a stopped on it"}, HeldForAPerson, true, false},
+		{"waiting alone", Entry{WaitingOn: []string{"yoyodyne-ifd.1"}}, HeldWaitingOn, false, false},
+		{"blocked and unread", Entry{Status: statusBlocked, AwaitingCarryOut: true}, HeldUnread, false, false},
+		{"pullable", Entry{Status: statusOpen, Ready: true}, HeldUnread, false, false},
+	} {
+		if kind := tried.entry.HoldKind(); kind != tried.kind {
+			t.Errorf("%s: kind %q, want %q", tried.name, kind, tried.kind)
+		}
+		held, carryOut := tried.entry.Awaits()
+		if held != tried.held || carryOut != tried.carryOut {
+			t.Errorf("%s: Awaits() = %v, %v, want %v, %v", tried.name, held, carryOut, tried.held, tried.carryOut)
+		}
+		if held != (tried.entry.HoldKind() == HeldForAPerson) {
+			t.Errorf("%s: Awaits() says held %v but the kind is %q", tried.name, held, tried.entry.HoldKind())
+		}
+	}
+}

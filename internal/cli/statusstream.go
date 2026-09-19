@@ -421,20 +421,11 @@ func renderSpendMoment(moment time.Time) string {
 	return moment.Local().Format("01 02 2006 15:04")
 }
 
+// printSpendTotals prints what the report adds up to. The adding is the
+// report's own, so the total and the split here are the figures every other
+// surface that reads the report prints.
 func printSpendTotals(writer io.Writer, report runstate.SpendReport) {
-	total := runstate.SpendRow{Usage: &runstate.TokenUsage{}}
-	byKind := map[runstate.StreamKind]runstate.SpendRow{}
-	for _, row := range report.Rows {
-		total.Calls += row.Calls
-		total.CostUSD += row.CostUSD
-		if row.Usage != nil {
-			total.Usage.Merge(*row.Usage)
-		}
-		summed := byKind[row.Kind]
-		summed.Calls += row.Calls
-		summed.CostUSD += row.CostUSD
-		byKind[row.Kind] = summed
-	}
+	total := report.Totals()
 	window := ""
 	if report.Days > 0 {
 		window = fmt.Sprintf(" (last %d days)", report.Days)
@@ -462,11 +453,13 @@ func printSpendTotals(writer io.Writer, report runstate.SpendReport) {
 	} else {
 		fmt.Fprintf(writer, "\ncost: %s; no token usage is recorded for what this covers\n", money)
 	}
-	if split := renderKindSplit(byKind); split != "" {
+	if split := renderKindSplit(total); split != "" {
 		fmt.Fprintln(writer, split)
 	}
-	if asks, spent := byKind[runstate.StreamExchange]; spent && asks.Calls > 0 {
-		fmt.Fprintln(writer, "an exchange records what the provider charged and not what it used, so its rows carry no tokens")
+	for _, share := range total.ByKind {
+		if share.Kind == runstate.StreamExchange && share.Calls > 0 {
+			fmt.Fprintln(writer, "an exchange records what the provider charged and not what it used, so its rows carry no tokens")
+		}
 	}
 }
 
@@ -476,23 +469,26 @@ func printSpendTotals(writer io.Writer, report runstate.SpendReport) {
 // a round of one role asking another are each a provider invocation like any
 // other and are priced beside the runs: a total that skipped any of them would
 // be wrong rather than unattributed.
-func renderKindSplit(byKind map[runstate.StreamKind]runstate.SpendRow) string {
+//
+// The kinds come in the order the report sums them, which is the order they are
+// priced; only the wording is this surface's.
+func renderKindSplit(total runstate.SpendTotals) string {
+	words := map[runstate.StreamKind]struct{ name, unit string }{
+		runstate.StreamRun:          {"runs", "invocation(s)"},
+		runstate.StreamConversation: {"conversations", "turn(s)"},
+		runstate.StreamReview:       {"branch reviews", "invocation(s)"},
+		runstate.StreamExchange:     {"exchanges", "round(s)"},
+	}
 	var parts []string
-	for _, kind := range []struct {
-		kind runstate.StreamKind
-		name string
-		unit string
-	}{
-		{runstate.StreamRun, "runs", "invocation(s)"},
-		{runstate.StreamConversation, "conversations", "turn(s)"},
-		{runstate.StreamReview, "branch reviews", "invocation(s)"},
-		{runstate.StreamExchange, "exchanges", "round(s)"},
-	} {
-		summed, spent := byKind[kind.kind]
-		if !spent || summed.Calls == 0 {
+	for _, share := range total.ByKind {
+		if share.Calls == 0 {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s: $%.2f from %d %s", kind.name, summed.CostUSD, summed.Calls, kind.unit))
+		wording, known := words[share.Kind]
+		if !known {
+			wording = struct{ name, unit string }{string(share.Kind), "invocation(s)"}
+		}
+		parts = append(parts, fmt.Sprintf("%s: $%.2f from %d %s", wording.name, share.CostUSD, share.Calls, wording.unit))
 	}
 	if len(parts) < 2 {
 		return ""
