@@ -49,6 +49,12 @@ its closed item yoyodyne-ifd.1, which is past bd's default page`.
 
 ## 2. `GH_REPO` holds the remote's URL, and gh resolves it
 
+*Since yoyodyne-ifd.283.3 the harness no longer relies on this: `GH_REPO` is
+derived from the URL as `[HOST/]OWNER/REPO`, the form gh documents, and the
+client asks a listing again without `--limit` where bd refuses the flag. See
+`yoyodyne-ifd-283-3-forge-hygiene-resolution.md`. What follows is what was true
+of the merged 283.2 change.*
+
 `publish.GitHub.Contains` asks the forge whether a base already carries a head
 through `gh api repos/{owner}/{repo}/compare/<base>...<head>`. The `api` verb
 takes no `--repo` flag, so the repository is named in `GH_REPO`, and what is put

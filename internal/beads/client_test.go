@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -335,6 +337,58 @@ func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	// A status is a filter, never an argument smuggled onto the command line.
 	if _, err := (Client{Runner: &fakeRunner{}}).List(context.Background(), "--dangerous"); err == nil {
 		t.Fatal("List() invalid status error = nil")
+	}
+}
+
+// A bd release without --limit refuses every listing for the flag, before it
+// opens the store, and a harness whose every listing fails makes no runs. So
+// the listing is asked again without the flag, and only for that refusal: this
+// puts the client over a bd that is a real process and rejects the flag the way
+// cobra does, and checks that the rows come back, that the flag was tried
+// first, and that a bd failing for any other reason is not asked twice.
+func TestClientListsWithoutTheLimitFlagWhereBDRefusesIt(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	calls := filepath.Join(directory, "calls")
+	bd := filepath.Join(directory, "bd")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + calls + "\n" +
+		"for arg in \"$@\"; do\n" +
+		"  case \"$arg\" in\n" +
+		"    --status=blocked) echo 'Error: failed to open database: locked' >&2; exit 1 ;;\n" +
+		"  esac\n" +
+		"done\n" +
+		"for arg in \"$@\"; do\n" +
+		"  case \"$arg\" in\n" +
+		"    --limit=*) echo 'Error: unknown flag: --limit' >&2; exit 1 ;;\n" +
+		"  esac\n" +
+		"done\n" +
+		"echo '[{\"id\":\"yoyodyne-1\",\"title\":\"First\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\"}]'\n"
+	if err := os.WriteFile(bd, []byte(script), 0o700); err != nil {
+		t.Fatalf("WriteFile(bd) error = %v", err)
+	}
+	client := Client{Runner: execution.OSProcessRunner{}, Binary: bd, Dir: directory, Timeout: 30 * time.Second}
+
+	items, err := client.List(context.Background(), "open")
+	if err != nil {
+		t.Fatalf("List() over a bd without --limit error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "yoyodyne-1" {
+		t.Fatalf("List() over a bd without --limit = %#v, want the one row it holds", items)
+	}
+	if _, err := client.List(context.Background(), "blocked"); err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("List() over a bd refusing for the store error = %v, want the store's refusal", err)
+	}
+	recorded, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatalf("ReadFile(calls) error = %v", err)
+	}
+	want := "list --json --limit=0 --status=open\n" +
+		"list --json --status=open\n" +
+		"list --json --limit=0 --status=blocked\n"
+	if string(recorded) != want {
+		t.Fatalf("bd was invoked as:\n%swant:\n%s", recorded, want)
 	}
 }
 
