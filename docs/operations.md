@@ -1277,6 +1277,28 @@ question about one piece of work is a different question. `--json` carries the
 same derivation under `standing`, so a second surface reads the answer rather
 than parsing the rendering.
 
+One thing is carried there that the four lines do not print: what is parked or
+held on provider capacity, one run and one conversation at a time, under
+`standing.capacity_blocked`. The hold above is every role refused at once; this
+is each thing the provider has stopped on its own. `runs` lists each work item's
+latest run that is either `waiting` — in flight and asleep on a recorded
+deadline, still counted on the running line — or `capacity-blocked`, which is a
+run the provider refused and the harness would not wait for, so it stopped with
+a blocker on its item. Each says what refused it, since when, the reset it is
+waiting out or none, how much of `execution.usage_limit_max_pause` it has spent
+(`waited_seconds`), whether its change is preserved, and what a person can do about it — for a
+waiting run, that nothing needs doing. `conversations` lists each conversation
+the provider is still refusing, read from
+[the refusals recorded outside a run](#a-provider-refusal-outside-a-run): one
+entry per conversation however many turns were stopped, since the earliest
+standing refusal, until the latest reset any of them named, with the turns an
+alternate served through not counted. A run waiting on a login or a network is
+not capacity and is not here; the outage banner says it. Both lists are always
+present, and each says under `runs_problem` or `conversations_problem` when
+its records could not be read rather than reporting an empty list. It is not
+printed as a fifth line: it is the read model's capacity query, carried for the
+capacity panel and for scripts.
+
 ## When nothing happened at all
 
 Under the four lines, `yoyo status` reads back every stretch in which this
