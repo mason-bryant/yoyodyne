@@ -33,7 +33,7 @@ revisions:
     - action: amended
       by: architect
       at: 2026-09-18T21:40:00Z
-      reason: operator design question of 2026-09-18 ruled: a harness-mediated read-only repository read for the management bundles, at a recorded commit, bounded, redacted, recorded, evidence-framed, product-manager content labeled as description, reviewer excluded; a distinct action from research; freshness discipline retained and recommended mechanical for yoyodyne-ifd.382
+      reason: 'operator design question of 2026-09-18 ruled: a harness-mediated read-only repository read for the management bundles, at a recorded commit, bounded, redacted, recorded, evidence-framed, product-manager content labeled as description, reviewer excluded; a distinct action from research; freshness discipline retained and recommended mechanical for yoyodyne-ifd.382'
 ---
 
 # Configurable workflows: a declarative runtime over trusted actions
