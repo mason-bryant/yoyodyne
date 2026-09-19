@@ -1142,10 +1142,29 @@ is being asked follows from the document rather than from anything the agent
 claims. A proposal naming a document nobody records is refused, because there is
 no owner to decide a change to a document that does not exist, and a proposal
 from the role that already owns the document is refused too: that role amends
-it. **The refusal reaches you and not the agent that wrote it** — it is named on
-the run's outcome beside the proposals that were kept, and nothing carries it
-back into the agent's next attempt, so a role that misnames a document is not
-told and will misname it the same way again. The artifact ids are what
+it. **The refusal reaches you, and it reaches the agent that wrote it on that
+agent's next invocation in the same run, if there is one.** It is named on the
+run's outcome beside the proposals that were kept, and it is carried on the run's
+own state, tagged with the role that proposed it, so that role's next invocation
+on the run — a repair attempt, a continuation triage granted, the re-ask an
+interim reply earns — opens with it in the harness's own words: nothing was
+recorded, nobody was asked, do not describe the proposal as raised, take the
+claim back out of anything already written, and propose it again if it is still
+worth proposing. That role's next reply spends it, so an agent is told once, and
+a refusal is only ever shown to the role that earned it. Since the developer is
+the only role carrying the block today, the developer is the only role that earns
+one.
+
+The condition is the whole of it, and it is worth reading plainly: **a
+developer invoked once, whose only reply carried the refused block, is never
+told.** The harness cannot read a proposal before the reply that carries it, and
+a run whose one attempt succeeds asks that developer nothing afterwards, so the
+refusal is on the run for you alone. What covers that case is the contract rather
+than the carry-back — every developer is told in advance that writing the block
+is not the proposal being recorded, that the harness can only answer afterwards,
+and that nothing it writes may therefore assert a proposal has been raised. The
+carry-back is what repairs a claim the contract did not stop; the contract is
+what stops it where nothing can carry anything back. The artifact ids are what
 `yoyo artifact list` prints.
 
 **Nothing an unapproved proposal contains reaches the document, and neither does
@@ -1160,6 +1179,20 @@ would have, and a proposal the harness cannot read or cannot keep is named on th
 outcome rather than failing the attempt it arrived with. It is durable in the
 same place and for the same reason — the run that argued the design was wrong is
 finished and cleaned up long before anybody decides what to do about it.
+
+**What could not be kept is durable too**, on the run's record rather than only
+on the outcome `yoyo run` prints. Every proposal the harness could not read or
+record, and every report it could not read or collect, is written onto the run's
+state in the harness's own words — `amendment_problem` and `report_problem`, the
+same two fields the outcome carries — and `yoyo status <beads-id>` prints each
+under the run as `proposal not kept:` and `report not kept:`. They were for a
+long time on the outcome alone, which is printed once by the process that made
+it and gone with it, so a proposal that was refused, or that was made on a run
+whose process died before it reported, read afterwards exactly as one never
+made: one run's three lost proposals went unnoticed for four runs on that
+account, and could no longer be diagnosed when they were. Nothing spends these
+— the carried refusal above is emptied by the developer's next reply, and the
+record stays for whoever audits later.
 
 ```sh
 yoyo amendment list                       # what is waiting to be decided

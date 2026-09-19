@@ -271,8 +271,16 @@ type RunSummary struct {
 	// handed: an item's notes only ever grow, so the loss arrives without anybody
 	// deciding it and stays until somebody sees it.
 	ContextTruncation *ContextTruncation `json:"context_truncation,omitempty"`
-	PublishFailure    string             `json:"publish_failure,omitempty"`
-	CleanupFailure    string             `json:"cleanup_failure,omitempty"`
+	// ReportProblem and AmendmentProblem are what the run's agents reported or
+	// proposed that the harness could not read or could not keep. Neither says
+	// anything about the work — the run delivered exactly as it would have — and
+	// they are here because the outcome that used to be their only home is
+	// printed once and gone: without them a refused proposal reads afterwards as
+	// a proposal never made.
+	ReportProblem    string `json:"report_problem,omitempty"`
+	AmendmentProblem string `json:"amendment_problem,omitempty"`
+	PublishFailure   string `json:"publish_failure,omitempty"`
+	CleanupFailure   string `json:"cleanup_failure,omitempty"`
 	// CompletionRecordingFailure is on the summary for the reason it is on the
 	// state: the run record is the one durable home this failure class has.
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
@@ -441,6 +449,8 @@ func (s *Store) summarize(state State) RunSummary {
 		ConfigRevision:      state.ConfigRevision,
 		Build:               state.Build,
 		Failure:             state.Failure,
+		ReportProblem:       state.ReportProblem,
+		AmendmentProblem:    state.AmendmentProblem,
 		PublishFailure:      state.PublishFailure,
 		CleanupFailure:      state.CleanupFailure,
 

@@ -1002,6 +1002,19 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 			run.ContextTruncation.DroppedNotes, run.ContextTruncation.DroppedBytes)
 		printed = true
 	}
+	// Nor is a report or a proposal the harness could not keep: the run delivered
+	// exactly as it would have, and what was lost is beside it. They are printed
+	// because this record is the only place they survive the run — a refused
+	// proposal that reached only the run's printed outcome was, afterwards, one
+	// nobody could tell from a proposal never made.
+	if run.ReportProblem != "" {
+		fmt.Fprintf(writer, "  report not kept: %s\n", singleLine(run.ReportProblem))
+		printed = true
+	}
+	if run.AmendmentProblem != "" {
+		fmt.Fprintf(writer, "  proposal not kept: %s\n", singleLine(run.AmendmentProblem))
+		printed = true
+	}
 	// A divergence is not a reason the run ended and is never read as one: the run
 	// delivered exactly as it would have, and what diverged is the observation
 	// beside it. It is printed because every run executes the definition by

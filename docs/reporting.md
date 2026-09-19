@@ -556,12 +556,49 @@ proposal can produce on its own is a decision.
 
 Like a report, it costs the run nothing. The run integrates exactly as it would
 have, and a proposal the harness cannot read or cannot keep is named on the
-outcome rather than failing the attempt it arrived with — that naming reaches
-you and not the agent, so a role that misnames a document is not told and
-repeats the mistake. It is durable in the same place and for the same reason:
-the run that argued the design was wrong is long finished before anybody decides
-what to do about it. A developer that makes the same argument again on a repair
-attempt raises one proposal rather than one per attempt.
+outcome rather than failing the attempt it arrived with. It is durable in the
+same place and for the same reason: the run that argued the design was wrong is
+long finished before anybody decides what to do about it. A developer that makes
+the same argument again on a repair attempt raises one proposal rather than one
+per attempt.
+
+That naming reaches the agent as well as you **when the same role is invoked
+again on the same run**, and reaches you alone when it is not. A refusal used to
+reach you alone in every case, which is how a developer whose proposal named a
+document nobody records went on to write into a checked-in file that it had
+raised one — a false claim durable in prose, which only `yoyo amendment list`
+disproved. So the refusal is carried on the run's own state, tagged with the role
+that proposed it, and that role's next invocation on the run — a repair attempt,
+a continuation triage granted, the re-ask an interim reply earns — opens with it
+in the harness's own words: nothing was recorded, nobody was asked, do not
+describe it as raised, take the claim back out of anything already written, and
+propose it again if it is still worth proposing. That role's next reply spends
+it, so a refusal is carried once and no further, and it is never shown to a role
+that did not earn it. The developer carries the block today, so the developer is
+the role this runs for; the tagging is what keeps it correct when another role
+gets the block.
+
+The condition matters because the ordinary run fails it: a developer invoked
+once, whose only reply carried the refused block, is asked nothing afterwards and
+is never told. The harness cannot read the block before the reply that carries
+it, and there is no later invocation to open with the refusal. What covers that
+run is the contract rather than the carry-back — every developer is told in
+advance that writing the block is not the proposal being recorded, that the
+harness can only answer after the reply, and that nothing it writes may therefore
+claim a proposal has been raised. The carry-back repairs a claim the contract did
+not stop; the contract is what stops it where nothing can carry anything back.
+
+**What could not be kept is on the run's record, not only on the outcome.** A
+proposal the harness could not read or record, and a report it could not read or
+collect, are each written onto the run's state in the harness's own words —
+`amendment_problem` and `report_problem`, the same two fields the outcome carries
+— and `yoyo status <beads-id>` prints them under the run as `proposal not kept:`
+and `report not kept:`. They were for a long time on the outcome alone, which
+`yoyo run` prints once and which is gone with the process, so a refused proposal
+and one made on a run that died before it reported both read afterwards as a
+proposal never made; one run's three lost proposals went unnoticed for four runs
+on exactly that account. The carried refusal above is spent by the developer's
+next reply and this is not: it is what an auditor reads once the run is over.
 
 The owner hears it where it works, and you are the one who decides. Proposals
 against the brief and the goals are carried into the product manager's

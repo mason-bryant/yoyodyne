@@ -100,7 +100,7 @@ func TestAReportThatCannotBeCollectedNeverFailsTheRun(t *testing.T) {
 	provider.developerFinalText = "implemented the work item\n\n" +
 		reportBlock(`{"severity":"note","message":"worth knowing"}`)
 	collector := &fakeReports{err: errors.New("the report log is read-only")}
-	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Reports = collector
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
@@ -112,6 +112,16 @@ func TestAReportThatCannotBeCollectedNeverFailsTheRun(t *testing.T) {
 	}
 	if len(outcome.Reports) != 0 || !strings.Contains(outcome.ReportProblem, "read-only") {
 		t.Fatalf("outcome report evidence = %#v, %q", outcome.Reports, outcome.ReportProblem)
+	}
+	// And on the run's record, in the same words. The outcome is printed once by
+	// the process that made it; a report lost only there was, afterwards, a report
+	// nobody ever filed.
+	recorded, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.ReportProblem != outcome.ReportProblem {
+		t.Fatalf("the record says %q of the lost report, the outcome %q", recorded.ReportProblem, outcome.ReportProblem)
 	}
 }
 

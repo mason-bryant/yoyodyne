@@ -883,6 +883,7 @@ var notAStep = map[string]string{
 	"recordCheckFailure":           "records the failing check as the run's outstanding repair input",
 	"recordPathRefusal":            "records the refused paths as the run's outstanding repair input",
 	"recordDevelopment":            "records what a developer invocation produced and cost",
+	"openWithDeveloperRefusals":    "reads back the developer's own refused proposals into the prompt it is about to be sent, inside candidate.develop",
 	"carryReviewEvidence":          "puts the verdict the record holds onto the outcome a run resumed at its promotion reports",
 	"deliveredInvariants":          "selects the invariants a developer is given",
 	"repairBudget":                 "reads how many repair attempts this run may still make",

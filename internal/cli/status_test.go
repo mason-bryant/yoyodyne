@@ -343,6 +343,44 @@ func TestStatusNamesARunNothingObserved(t *testing.T) {
 	}
 }
 
+// A proposal or a report the harness could not keep is named on the run, because
+// this record is the only place it survives: the outcome that used to carry it
+// alone was printed by `yoyo run` and gone, so a refused proposal read afterwards
+// as one never made. Neither is a reason the run ended.
+func TestStatusNamesWhatARunCouldNotKeepOfItsReportsAndProposals(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{
+		Matched:  1,
+		Recorded: 1,
+		Runs: []runstate.RunSummary{{
+			RunID:            "run-0123456789abcdef0123456789abcdef",
+			WorkItemID:       "yoyodyne-ifd.255",
+			Status:           runstate.StatusSucceeded,
+			Outcome:          runstate.OutcomeSucceeded,
+			Phase:            runstate.PhaseComplete,
+			StartedAt:        completedAt,
+			CompletedAt:      &completedAt,
+			Integrated:       true,
+			ReportProblem:    "a developer report was not collected: severity \"loud\" is not one of critical, warning, note",
+			AmendmentProblem: "a change the developer proposed was not recorded: invented: no artifact answers to that id",
+			CostUSD:          1.5,
+		}},
+	}, "", false)
+	rendered := out.String()
+	if !strings.Contains(rendered, "report not kept: a developer report was not collected: severity") {
+		t.Fatalf("rendered = %q, want the lost report named", rendered)
+	}
+	if !strings.Contains(rendered, "proposal not kept: a change the developer proposed was not recorded: invented: no artifact answers to that id") {
+		t.Fatalf("rendered = %q, want the refused proposal named", rendered)
+	}
+	if strings.Contains(rendered, "reason:") {
+		t.Fatalf("a lost report or proposal was reported as the reason a run ended: %q", rendered)
+	}
+}
+
 // A run marked outstanding with nothing under it is the "go and read the run's
 // JSON" case this verb exists to remove, and the marker has two causes worth
 // telling apart: cleanup that never finished, and a merge the forge queued and
