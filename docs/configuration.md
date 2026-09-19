@@ -3858,7 +3858,11 @@ granted and never executed; and when a promotion after an approval conflicted
 on replay, which reached no verdict and leaves the approval standing on the
 stopped run for the conflict path to re-enter through. What bounds a developer
 that delivers nothing is the run's own repair budget, exactly as it bounds a
-trivial residue.
+trivial residue. Whether a diff is empty is measured against the run's recorded
+base commit, not against what happens to be uncommitted: under
+`approvals.publishing: automatic` the harness commits each attempt before the
+reviewer sees it, so a published change judged with a clean status is a change
+that was present, and a repair verdict on it spends a round.
 
 The last two are about the reservation a grant makes rather than about a
 verdict. A repair grant reserves its rounds against the cap the moment it is
