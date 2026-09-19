@@ -30,6 +30,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -689,6 +690,99 @@ func TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal(t *testing
 	if settled.WorkflowDivergence != "" {
 		t.Errorf("the observation reached the terminal %q and the run was still settled carrying the divergence %q",
 			instance.State, settled.WorkflowDivergence)
+	}
+}
+
+// TestABlockedSettlementRecordsTheGapItsInstanceLeaves asks the blocked
+// settlement itself, at the function every route into it shares.
+//
+// The two sweep-driven tests above reach blockRun through abandon, which is one
+// of its three callers; a recorded integration the repository contradicts
+// reaches it too. A divergence recorded on one route and not another is exactly
+// the defect the blocked settlement was suspected of, so it is measured at
+// blockRun directly rather than inferred from the route the pipeline happened
+// to take: over a run whose instance still stands mid-graph, which has to
+// record the gap in the words the live pipeline uses, and over one whose
+// instance reached a terminal, which has to record nothing. The second is the
+// recorded baseline's blocked trace with no pipeline in front of it.
+func TestABlockedSettlementRecordsTheGapItsInstanceLeaves(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		standing string
+		terminal bool
+	}{
+		{name: "instance still mid-graph", standing: deliveryReview, terminal: false},
+		{name: "instance on a terminal", standing: "abandoned", terminal: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+			if err != nil {
+				t.Fatalf("runstate.NewStore() error = %v", err)
+			}
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
+			now := time.Now()
+			state := runstate.State{
+				SchemaVersion:      runstate.StateSchemaVersion,
+				RunID:              "run-abcdef0123456789abcdef0123456789",
+				ProductID:          "yoyodyne",
+				RepositoryID:       "yoyodyne",
+				WorkItemID:         tracker.item.ID,
+				Backend:            "claude-code",
+				Status:             runstate.StatusRunning,
+				Phase:              runstate.PhaseReviewing,
+				StartedAt:          now,
+				UpdatedAt:          now,
+				WorkflowInstanceID: "run-abcdef0123456789abcdef0123456789-delivery",
+			}
+			if err := store.Create(state); err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			instance := runstate.WorkflowInstance{
+				SchemaVersion:    runstate.WorkflowInstanceSchemaVersion,
+				InstanceID:       state.WorkflowInstanceID,
+				WorkflowID:       "delivery",
+				DefinitionSchema: 1,
+				Digest:           "wf-" + strings.Repeat("0", 64),
+				State:            test.standing,
+				Terminal:         test.terminal,
+				Checkpoints: []runstate.WorkflowCheckpoint{
+					{Sequence: 0, State: deliveryClaim, At: now},
+					{Sequence: 1, State: test.standing, Terminal: test.terminal, From: deliveryClaim, Outcome: "claimed", At: now},
+				},
+			}
+			if err := store.CreateWorkflowInstance(instance); err != nil {
+				t.Fatalf("CreateWorkflowInstance() error = %v", err)
+			}
+
+			result, err := Reconciler{Tracker: tracker, Store: store}.blockRun(context.Background(), state, tracker.item.Status, gitworktree.Observation{}, "interrupted while reviewing")
+			if err != nil {
+				t.Fatalf("blockRun() error = %v", err)
+			}
+			if result.Action != ActionBlocked {
+				t.Fatalf("blockRun() action = %q, want %q", result.Action, ActionBlocked)
+			}
+			settled, err := store.Load(state.RunID)
+			if err != nil {
+				t.Fatalf("Load() settled state error = %v", err)
+			}
+			if !settled.Status.Terminal() || settled.Blocker == "" {
+				t.Fatalf("settled state = status %s, blocker %q; this measures the blocked settlement and the run was not settled as one", settled.Status, settled.Blocker)
+			}
+			if test.terminal {
+				if settled.WorkflowDivergence != "" {
+					t.Errorf("the observation reached the terminal %q and the blocked settlement still recorded the divergence %q", test.standing, settled.WorkflowDivergence)
+				}
+				return
+			}
+			want := unfinishedInstance(settled.Status, test.standing).Error()
+			if settled.WorkflowDivergence != want {
+				t.Errorf("the blocked settlement recorded the divergence %q, want %q — the words a live pipeline records for the same gap", settled.WorkflowDivergence, want)
+			}
+		})
 	}
 }
 
