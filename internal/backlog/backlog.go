@@ -371,16 +371,17 @@ func (q Queue) Parked() int {
 }
 
 // Awaits reports a hold as the thing that actually stops this entry, and which
-// of the two waits that hold is. It applies the precedence Hold() states below:
-// an executor no run can be and a parking both answer ahead of a hold, so an
-// item that is both is not one of these — what its reader is told is the thing
-// that would still refuse it once the hold was lifted, and counting it here
-// would put it on a total nothing under the line accounts for.
+// of the two waits that hold is. It reads the precedence off the same derivation
+// Hold and HoldKind read it from, rather than restating it: an executor no run
+// can be and a parking both answer ahead of a hold, so an item that is both is
+// not one of these — what its reader is told is the thing that would still
+// refuse it once the hold was lifted, and counting it here would put it on a
+// total nothing under the line accounts for.
 //
 // It is exported because more than one surface counts held work, and two of them
 // counting it differently is the disagreement one derivation exists to prevent.
 func (e Entry) Awaits() (held bool, carryOut bool) {
-	if !e.Executor.DeveloperRun() || e.Parking.Parked() || e.Awaiting == "" {
+	if kind, _ := e.hold(); kind != HeldForAPerson {
 		return false, false
 	}
 	return true, e.AwaitingCarryOut

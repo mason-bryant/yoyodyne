@@ -2,6 +2,7 @@ package readmodel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -79,6 +80,9 @@ func TestThroughputCountsEachEndingIntoTheWindowItEndedIn(t *testing.T) {
 		// Started yesterday, landed today: an ending counts where it ended, a start
 		// where it started.
 		terminal("j", runstate.StatusSucceeded, -26*time.Hour, -20*time.Minute, true, ""),
+		// Died two days in without writing a completion: it ended when its record
+		// last moved, which was today.
+		{RunID: "k", WorkItemID: "yoyodyne-ifd.k", Status: runstate.StatusFailed, StartedAt: noon.Add(-40 * time.Hour), UpdatedAt: noon.Add(-time.Hour)},
 	}
 	ledger := &fakeLedger{}
 	reading := ReadThroughput(context.Background(), ThroughputSources{
@@ -93,14 +97,14 @@ func TestThroughputCountsEachEndingIntoTheWindowItEndedIn(t *testing.T) {
 	if today.Days != 1 || today.Since != runstate.LocalDay(noon) {
 		t.Fatalf("today's window is %+v", today)
 	}
-	if today.Started != 4 || today.Landed != 2 || today.Succeeded != 1 || today.Stopped != 1 || today.Cancelled+today.TimedOut+today.Failed != 0 {
+	if today.Started != 4 || today.Landed != 2 || today.Succeeded != 1 || today.Stopped != 1 || today.Failed != 1 || today.Cancelled+today.TimedOut != 0 {
 		t.Fatalf("today counted %+v", today)
 	}
 	week := window(t, reading, "last 7 days")
 	if week.Days != 7 || week.Since != runstate.LocalDay(noon.AddDate(0, 0, -6)) {
 		t.Fatalf("the week's window is %+v", week)
 	}
-	if week.Started != 9 || week.Landed != 3 || week.Succeeded != 1 || week.Stopped != 1 || week.Cancelled != 1 || week.TimedOut != 1 || week.Failed != 1 {
+	if week.Started != 10 || week.Landed != 3 || week.Succeeded != 1 || week.Stopped != 1 || week.Cancelled != 1 || week.TimedOut != 1 || week.Failed != 2 {
 		t.Fatalf("the week counted %+v", week)
 	}
 }
@@ -166,6 +170,15 @@ func TestThroughputSaysWhichSourceCouldNotBeRead(t *testing.T) {
 	}
 	if window(t, unpriced, "today").Landed != 1 {
 		t.Fatalf("the runs were lost with the ledger: %+v", unpriced.Windows)
+	}
+	// The problem reaches the JSON a page reads under its own name, and the
+	// source that was read is not reported as one.
+	encoded, err := json.Marshal(unpriced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"spend_problem":"the spend could not be read: open streams: permission denied"`) || strings.Contains(string(encoded), "runs_problem") {
+		t.Fatalf("an unreadable ledger encodes as %s", encoded)
 	}
 
 	uncounted := ReadThroughput(context.Background(), ThroughputSources{

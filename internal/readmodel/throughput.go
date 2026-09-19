@@ -103,8 +103,11 @@ type Window struct {
 	// Landed is the run whose work reached the target branch — `succeeded` with a
 	// promotion recorded — which is what the design's integrated-work total
 	// counts. A run that succeeded without promoting anything, which is what an
-	// escalation or an evidence landing looks like in the record, is counted
-	// under Succeeded and not here, because nothing reached the branch.
+	// escalation or a bootstrap run looks like in the record, is counted under
+	// Succeeded and not here, because nothing reached the branch. An evidence
+	// landing is not one of those: its change integrates exactly as a discharge
+	// does, so it is counted here, and that the item stayed open is the tracker's
+	// to say rather than this figure's.
 	Landed    int `json:"landed"`
 	Succeeded int `json:"succeeded"`
 	Stopped   int `json:"stopped"`
