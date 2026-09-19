@@ -44,6 +44,11 @@ type ReconcileWorktrees interface {
 	// only unregisters checkouts that are no longer on disk.
 	RemovePreservedWorktree(ctx context.Context, worktree gitworktree.Worktree, uncommitted gitworktree.UncommittedWork) (gitworktree.WorktreeRemoval, error)
 	PruneRegistrations(ctx context.Context) (gitworktree.Prune, error)
+	// PushRemote names the remote run branches are published to, which is the
+	// one fact a recovered publication record needs that the forge cannot
+	// answer: the forge knows the request and the branch, and the record says
+	// which remote carries that branch.
+	PushRemote() string
 }
 
 // ReconcilePullRequests is the forge access reconciliation needs: what the

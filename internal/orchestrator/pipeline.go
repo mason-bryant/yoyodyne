@@ -167,10 +167,11 @@ type StateStore interface {
 	LeaseRotation(ctx context.Context) (*runstate.Lease, error)
 	Save(state runstate.State) error
 	// Load reads one run's record back. A run holding its own lease has no reason
-	// to ask what is on disk — its own state is ahead of it — with one exception:
+	// to ask what is on disk — its own state is ahead of it — with two exceptions:
 	// a save the store refused leaves the record behind what this process holds,
 	// and the ending has to be written onto what is actually there rather than
-	// onto the record that was refused.
+	// onto the record that was refused; and a run about to report a pull request
+	// reads the record back to confirm the request is on it before it completes.
 	Load(runID string) (runstate.State, error)
 	AppendEvent(event execution.Event) error
 	// ReleasedWait reports whether the operator has said that a run's recorded
@@ -4400,6 +4401,14 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 // rather than a closed item behind a run nothing finished.
 func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	p := a.pipeline
+	// The pull request the run is about to report is on its record, read back
+	// from the store, before anything about the run is recorded as finished. A
+	// summary naming a request the record does not hold is a change on the forge
+	// nothing afterwards can see waiting, and the run is refused completion over
+	// it rather than recorded succeeded.
+	if err := a.publicationRecorded(); err != nil {
+		return a.fail(err, runstate.StatusFailed)
+	}
 	// Where the landing does not discharge the item, where that item goes is
 	// decided before the outcome is recorded rather than as part of the settlement
 	// below. The notes recorded there name the disposition, and it is derived from

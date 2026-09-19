@@ -1484,7 +1484,7 @@ func docketCheck(failure *runstate.CheckFailure) *triage.Check {
 }
 
 func docketArtifacts(state runstate.State) triage.Artifacts {
-	return triage.Artifacts{
+	artifacts := triage.Artifacts{
 		Branch:          state.Branch,
 		WorktreePath:    state.WorktreePath,
 		TargetBranch:    state.TargetBranch,
@@ -1492,6 +1492,16 @@ func docketArtifacts(state runstate.State) triage.Artifacts {
 		BranchRemoved:   state.BranchRemoved,
 		WorktreeRemoved: state.WorktreeRemoved,
 	}
+	// The request the run published through is an artifact of the run the way
+	// its branch is: a stopped or escalated run leaves it open on the forge, and
+	// the entry is where the development manager learns that without going to
+	// the forge for it.
+	if state.PullRequest != nil {
+		artifacts.PullRequest = state.PullRequest.Number
+		artifacts.PullRequestURL = state.PullRequest.URL
+		artifacts.PullRequestMerged = state.PullRequest.Merged
+	}
+	return artifacts
 }
 
 func (d Docketer) validate() error {

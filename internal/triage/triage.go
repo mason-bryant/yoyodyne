@@ -236,6 +236,17 @@ type Artifacts struct {
 	// harness already removed.
 	BranchRemoved   bool `json:"branch_removed,omitempty"`
 	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
+	// PullRequest and PullRequestURL name the request the run published its
+	// branch through, where the project publishes, and PullRequestMerged what
+	// the run's record last said the forge did with it. They are on every entry
+	// about a run that published rather than only on a publication entry, because
+	// a stopped or escalated run leaves its request open on the forge exactly as
+	// it leaves its branch, and an entry that named the branch and not the
+	// request sent the development manager after the one and left the other for a
+	// person to find: yoyodyne-ifd.402 is what that cost.
+	PullRequest       int    `json:"pull_request,omitempty"`
+	PullRequestURL    string `json:"pull_request_url,omitempty"`
+	PullRequestMerged bool   `json:"pull_request_merged,omitempty"`
 }
 
 // Publication is an unfinished publication as the harness recorded it. There
@@ -1736,6 +1747,16 @@ func (e Entry) renderArtifacts() string {
 	}
 	if e.Artifacts.TargetBranch != "" {
 		fmt.Fprintf(&rendered, "      Integration target: %s\n", e.Artifacts.TargetBranch)
+	}
+	// A publication entry says everything about its request below, so the line
+	// here is for the other classes: the request a stopped or escalated run left
+	// open on the forge, which a decision about the run has to account for.
+	if e.Artifacts.PullRequest > 0 && e.Class != ClassPublication {
+		state := "open on the forge, unmerged"
+		if e.Artifacts.PullRequestMerged {
+			state = "merged"
+		}
+		fmt.Fprintf(&rendered, "      Pull request (%s): #%d %s\n", state, e.Artifacts.PullRequest, e.Artifacts.PullRequestURL)
 	}
 	return rendered.String()
 }

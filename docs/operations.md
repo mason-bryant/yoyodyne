@@ -1089,6 +1089,32 @@ not take back. A record left alone for a reason, such as a branch the forge
 answers about with some other request, is reported and is not a failure; a forge
 that could not be reached is, and the next sweep asks the same question again.
 
+Before either of those, the sweep looks for the one publication neither can see:
+**a promoted run whose record names no pull request at all.** Everything above
+starts from the request on the record — the docket keys a publication entry to
+it, the heartbeat counts what awaits the forge from it, the re-arm repeats it —
+so a publishing run that promoted a change and recorded no request would be a
+change the forge holds that no surface reports. Two things close that. The run
+itself refuses to be that record: a publishing run that reaches its promotion
+with no request on its record writes a `Publication outstanding` line naming the
+branch and saying nothing was asked of the forge, rather than finishing quietly,
+and a run whose summary names a request its durable record does not hold is
+refused completion outright and recorded as failed. And the sweep asks the forge
+by the run's branch, which is the one durable handle it has left, and writes the
+request the forge holds onto the record — number, state, and whether a merge is
+queued for it, but no merge method, because the run never asked for a merge and
+a recorded method says it did. From there it is an ordinary publication: on the
+docket, counted as awaiting the forge with the merge as your move, settled by
+the finishing above once the forge records a merge. What it is not is re-armed
+by the sweep: reconcile never merges, and a merge request the run never made is
+not one `yoyo triage rearm` repeats either — a request recovered this way is
+merged by hand, or by a decision still to be admitted. A forge that holds no
+request for the branch leaves the record as the run wrote it, and the sweep says
+so on every pass it stands.
+docs/diagnoses/yoyodyne-ifd-402-publication-record-not-lost.md is the account
+of the two runs this was built on, neither of which turned out to have lost
+anything.
+
 The same sweep recovers the [exchanges the roles have put to each
 other](conversation.md#roles-asking-each-other-things), for the reason it settles
 the runs: a process died holding something, and this is what finds out. Each

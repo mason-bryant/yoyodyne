@@ -45,6 +45,17 @@ package orchestrator
 // it — merge commit recorded, local target caught up, item settled by its own
 // landing, consumed branch deleted, docket entry closed — and every surface that
 // read the outstanding publication stops reading one.
+//
+// # A promotion whose record holds no request
+//
+// Both of those start from the request on the record, and so does everything
+// else that reads a publication: the docket keys an entry to the request, the
+// status line counts what awaits the forge from it, the re-arm repeats it. A
+// promoted run that recorded no request is therefore a change the forge holds
+// and nothing reports, and RecoverPublications is what puts it back in view. It
+// runs first, selects on the run's own record of the loss, asks the forge by the
+// run's branch — the one durable handle it has left — and writes the answer onto
+// the record, after which the two sweeps above read it as they read any other.
 
 import (
 	"context"
@@ -56,6 +67,165 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
+
+// PublicationRecovery is what one sweep did about a promoted run whose record
+// names no pull request. It reports the branch the forge was asked by and what
+// it answered, because the branch is the whole of what the record had to ask
+// with, and a reader acts on whether the answer was written: a recovered
+// request is one every later sweep and surface can read, and one the forge
+// could not be asked about is still a promotion nothing can see waiting.
+type PublicationRecovery struct {
+	RunID      string `json:"run_id"`
+	WorkItemID string `json:"work_item_id"`
+	Branch     string `json:"branch"`
+	// Number and URL are the request the forge answered with, and are empty on a
+	// run the forge could not be asked about or answered nothing for.
+	Number int    `json:"number,omitempty"`
+	URL    string `json:"url,omitempty"`
+	// Recovered reports the request having actually been written onto the run's
+	// record, which is what separates a run this sweep put back in view from one
+	// it only asked about.
+	Recovered bool `json:"recovered"`
+	// Kept is why a run the forge answered about was deliberately left where it
+	// stands: a live process holds it, or something settled it in the meantime.
+	Kept    string `json:"kept,omitempty"`
+	Failure string `json:"failure,omitempty"`
+}
+
+// RecoverPublications asks the forge, by branch, about every promoted run whose
+// record says it published and holds no request, and writes what the forge
+// answers onto the run.
+//
+// This is the sweep half of the rule publishIntegration's own check is the run
+// half of: a promotion with no request on its record is a change the forge holds
+// and no surface reports, because the docket keys a publication to its request,
+// the status line counts what awaits the forge from the request, and the refresh
+// and finish sweeps below select on it. The run's own record of the loss — the
+// outstanding publication it wrote instead of asking the forge — is what selects
+// a run here, and the branch is what the forge is asked by; nothing about the
+// promotion is touched, and nothing is merged.
+//
+// It runs before RefreshPublications, which is what the recovered record is then
+// read by: a request the forge reports merged is finished by the sweep after
+// that, and one it reports open is docketed as the unmerged publication it is.
+func (r Reconciler) RecoverPublications(ctx context.Context) ([]PublicationRecovery, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	recorded, err := r.Store.Recorded()
+	if err != nil {
+		return nil, fmt.Errorf("discover recorded runs: %w", err)
+	}
+	lost := make([]runstate.State, 0, len(recorded))
+	for _, state := range recorded {
+		if lostPublicationRecord(state) {
+			lost = append(lost, state)
+		}
+	}
+	recovered := make([]PublicationRecovery, 0, len(lost))
+	if len(lost) == 0 {
+		return recovered, nil
+	}
+	if r.Publisher == nil {
+		return recovered, fmt.Errorf(
+			"%d promoted run(s) record no pull request for a publication they made, and reconciliation has no forge access to look the requests up", len(lost))
+	}
+	for _, state := range lost {
+		if err := ctx.Err(); err != nil {
+			return recovered, err
+		}
+		recovered = append(recovered, r.recoverPublication(ctx, state))
+	}
+	return recovered, nil
+}
+
+// lostPublicationRecord reports a run that promoted a change, said it was
+// publishing, and holds no request. The outstanding publication is what says the
+// run published at all — a purely local run promotes and records no request and
+// no failure, and is not this — and the terminal status is what says the run
+// itself is not going to write one.
+func lostPublicationRecord(state runstate.State) bool {
+	return state.Status.Terminal() &&
+		state.Integration != nil &&
+		state.PullRequest == nil &&
+		strings.TrimSpace(state.PublishFailure) != "" &&
+		strings.TrimSpace(state.Branch) != ""
+}
+
+// recoverPublication asks about one run's branch and records the answer under
+// that run's own lease, so the record that is rewritten is the record that was
+// read. What is written is what the forge reported and nothing more: no merge
+// method, because the run never asked for a merge and a recorded method says it
+// did, and the request's head as the forge holds it rather than as the promotion
+// would have it, because a request that moved is exactly what the merge gate
+// afterwards has to be able to refuse.
+func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.State) PublicationRecovery {
+	recovery := PublicationRecovery{
+		RunID:      recorded.RunID,
+		WorkItemID: recorded.WorkItemID,
+		Branch:     recorded.Branch,
+	}
+	observed, err := r.Publisher.State(ctx, recorded.Branch)
+	if err != nil {
+		recovery.Failure = fmt.Errorf("ask the forge for the pull request of branch %s, published by run %s: %w",
+			recorded.Branch, recorded.RunID, err).Error()
+		return recovery
+	}
+	if observed.Number <= 0 {
+		recovery.Failure = fmt.Sprintf("the forge reports no pull request for branch %s, published by run %s, so its publication is still unrecorded",
+			recorded.Branch, recorded.RunID)
+		return recovery
+	}
+	recovery.Number = observed.Number
+	recovery.URL = observed.URL
+
+	state, lease, err := r.Store.AdoptRun(ctx, recorded.RunID)
+	switch {
+	case errors.Is(err, runstate.ErrRunHeld):
+		recovery.Kept = fmt.Sprintf("a live process holds run %s, so the pull request the forge reports for its branch is that process's to record", recorded.RunID)
+		return recovery
+	case err != nil:
+		recovery.Failure = fmt.Errorf("adopt run %s to record pull request %d for its branch: %w",
+			recorded.RunID, observed.Number, err).Error()
+		return recovery
+	}
+	defer lease.Release()
+
+	if !lostPublicationRecord(state) {
+		recovery.Kept = fmt.Sprintf("run %s was settled while the forge was being asked, so its publication record is what settled it wrote", recorded.RunID)
+		return recovery
+	}
+	head := strings.TrimSpace(observed.HeadCommit)
+	if head == "" {
+		// A forge that did not name the head leaves the commit the harness itself
+		// pushed there, which is the promotion's source: the request was opened on
+		// it and the promotion refused anything else.
+		head = state.Integration.SourceCommit
+	}
+	published := runstate.PullRequest{
+		Remote:     r.Worktrees.PushRemote(),
+		Branch:     state.Branch,
+		Number:     observed.Number,
+		URL:        observed.URL,
+		HeadCommit: head,
+		State:      observed.State,
+		Merged:     observed.Merged,
+		// A merge the forge is holding for it — somebody armed the request by hand
+		// — is recorded as queued, which puts the run back where the sweep that
+		// settles queued merges finds it and finishes the publication on the
+		// forge's answer.
+		MergeQueued: observed.AutoMerge && !observed.Merged,
+	}
+	state.PullRequest = &published
+	state.UpdatedAt = r.clock().Now()
+	if err := r.Store.Save(state); err != nil {
+		recovery.Failure = fmt.Errorf("record pull request %d for branch %s on run %s: %w",
+			observed.Number, state.Branch, state.RunID, err).Error()
+		return recovery
+	}
+	recovery.Recovered = true
+	return recovery
+}
 
 // PublicationRefresh is what one recorded publication's state turned out to be.
 // It reports both halves of the comparison rather than the answer alone, because

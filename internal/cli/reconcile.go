@@ -18,6 +18,12 @@ import (
 
 type reconcileOutput struct {
 	Runs []orchestrator.Reconciliation `json:"runs"`
+	// Recoveries is what this sweep did about the promoted runs whose record
+	// named no pull request: the request the forge holds for the run's branch,
+	// written back onto the record so the refresh, the settlement, the docket,
+	// and the status line can read it. It is reported first because it is what
+	// the rest of the publication sweep then reads.
+	Recoveries []orchestrator.PublicationRecovery `json:"recoveries"`
 	// Publications is what the forge now says about the pull requests the harness
 	// recorded and nothing settled. It is reported beside the runs rather than
 	// folded into them because it is about records of finished work: nothing here
@@ -59,6 +65,7 @@ type reconcileOutput struct {
 // the sweep rather than a growing list of positional arguments.
 type reconcileSweep struct {
 	Runs         []orchestrator.Reconciliation
+	Recoveries   []orchestrator.PublicationRecovery
 	Publications []orchestrator.PublicationRefresh
 	Settlements  []orchestrator.PublicationSettlement
 	Convergence  orchestrator.Convergence
@@ -111,6 +118,12 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 	reconciler := reconcilerFrom(parts)
 	results, err := reconciler.Reconcile(ctx)
+	// A promoted run whose record names no pull request is asked about first, by
+	// its branch, and the request the forge holds is written onto the record: the
+	// refresh, the settlement, the docket, and every status surface start from
+	// the request, so a record without one is a publication none of them can see.
+	recoveries, recoveryErr := reconciler.RecoverPublications(ctx)
+	err = errors.Join(err, recoveryErr)
 	// The publications of runs nothing is going to settle are refreshed next, and
 	// before the docket is built: a record frozen at its run's death is what the
 	// docket, the orphan sweep and every status surface read, so a sweep that
@@ -159,6 +172,7 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	stall, stallProblem := checkForStall(ctx, parts, *stallAfter)
 	return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{
 		Runs:         results,
+		Recoveries:   recoveries,
 		Publications: publications,
 		Settlements:  settlements,
 		Convergence:  convergence,
@@ -240,6 +254,14 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 	if convergence.Registrations.Failure != "" {
 		failed = true
 	}
+	// A promotion whose request could not be looked up or written is a record
+	// still saying nothing about a change the forge holds, which is the state
+	// this sweep exists to end; one left where it stands for a reason is not.
+	for _, recovery := range sweep.Recoveries {
+		if recovery.Failure != "" {
+			failed = true
+		}
+	}
 	// A publication left where it stands for a reason is not a failure; one the
 	// forge could not be asked about, or whose corrected record could not be
 	// written, is a record still disagreeing with the forge.
@@ -259,6 +281,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 	if jsonOutput {
 		output := reconcileOutput{
 			Runs:         results,
+			Recoveries:   sweep.Recoveries,
 			Publications: publications,
 			Settlements:  sweep.Settlements,
 			Convergence:  convergence,
@@ -272,6 +295,9 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		}
 		if output.Supervision == nil {
 			output.Supervision = []orchestrator.SupervisionResult{}
+		}
+		if output.Recoveries == nil {
+			output.Recoveries = []orchestrator.PublicationRecovery{}
 		}
 		if output.Publications == nil {
 			output.Publications = []orchestrator.PublicationRefresh{}
@@ -344,6 +370,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 				fmt.Fprintf(stderr, "  not docketed: %s\n", result.DocketProblem)
 			}
 		}
+		printRecoveries(stdout, stderr, sweep.Recoveries)
 		printPublications(stdout, stderr, publications)
 		printSettlements(stdout, stderr, sweep.Settlements)
 		printConvergence(stdout, stderr, convergence)
@@ -431,6 +458,25 @@ func supervisionActed(outcome orchestrator.SupervisionOutcome) bool {
 		// An outcome nothing classifies is printed rather than swallowed: a sweep
 		// that acted and said nothing is the worse of the two failures.
 		return true
+	}
+}
+
+// printRecoveries reports the promoted runs this sweep found a pull request for
+// and wrote it onto, and the ones it could not. A run kept where it stands for a
+// reason is not printed, for the reason the other publication sweeps do not print
+// what they left alone. A run the forge could not answer for is said on every
+// sweep it stands, because it is still a change the forge holds that nothing
+// reports, and a sweep that went quiet about it would read as one that had
+// recovered it.
+func printRecoveries(stdout, stderr io.Writer, recoveries []orchestrator.PublicationRecovery) {
+	for _, recovery := range recoveries {
+		switch {
+		case recovery.Failure != "":
+			fmt.Fprintf(stderr, "pull request of %s (run %s) not recovered: %s\n", recovery.WorkItemID, recovery.RunID, recovery.Failure)
+		case recovery.Recovered:
+			fmt.Fprintf(stdout, "pull request #%d of %s recovered from the forge by branch %s and recorded on run %s, which had none\n",
+				recovery.Number, recovery.WorkItemID, recovery.Branch, recovery.RunID)
+		}
 	}
 }
 

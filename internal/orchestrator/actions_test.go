@@ -889,5 +889,6 @@ var notAStep = map[string]string{
 	"repairBudget":                 "reads how many repair attempts this run may still make",
 	"recordPrice":                  "prices the item against what this run spent, inside run.complete",
 	"mergeQueued":                  "reads whether the forge only queued the merge, which is what run.complete waits for before closing the item",
+	"publicationRecorded":          "reads the record back to confirm the pull request the run reports is on it, inside run.complete, and refuses the completion where it is not",
 	"applyUndischargedDisposition": "records on the run where its item was actually settled, inside run.complete",
 }
