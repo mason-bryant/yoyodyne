@@ -360,7 +360,14 @@ func FromProposal(proposal amendment.Proposal) (Notification, error) {
 // and a channel that named one for the other is a channel that sent somebody to
 // look at the wrong state.
 func FromIntakeHold(hold runstate.IntakeHold) Notification {
-	return productNotification(KindIntakeHeld, hold.HeldAt, Detail{Reason: hold.Says()})
+	detail := Detail{Reason: hold.Account()}
+	// A hold the brake is working itself is the development manager's or the
+	// harness's, and the record says which; the fixed clause names the operator,
+	// which is right for the operator's hold and for nothing else.
+	if hold.Braked() {
+		detail.Mover = hold.Whose()
+	}
+	return productNotification(KindIntakeHeld, hold.HeldAt, detail)
 }
 
 func IntakeReleased(at time.Time) Notification {
@@ -410,6 +417,10 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 		// looks exactly like a poll passed over for an empty queue, so the clause
 		// would send the reader to admit work the harness could not start anyway.
 		ProviderWindow: transition.ProviderWindow,
+		// Whose move a braked poll is, where the hold's own record says: a hold
+		// the brake placed is the development manager's or the harness's until
+		// she escalates it, and the fixed clause names the operator.
+		Mover: transition.Mover,
 	})
 	notification.Event.Severity = severity
 	return notification, nil

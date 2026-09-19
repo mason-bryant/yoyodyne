@@ -471,6 +471,10 @@ type fakeIntake struct {
 	heldBy runstate.IntakeHolder
 	reason string
 	err    error
+	// brake is the brake's record on a hold it placed, and decisions is every
+	// brake decision recorded onto it, in order.
+	brake     *runstate.IntakeBrake
+	decisions []runstate.IntakeBrake
 }
 
 func (f *fakeIntake) Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error) {
@@ -508,6 +512,25 @@ func (f *fakeIntake) Release() (runstate.IntakeHold, bool, error) {
 	return held, lifted, nil
 }
 
+// DecideBrake records the development manager's decision onto the brake's own
+// hold, refusing every other hold exactly as the store does.
+func (f *fakeIntake) DecideBrake(decision runstate.IntakeBrakeDecision, reason, by string, at time.Time) (runstate.IntakeHold, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return runstate.IntakeHold{}, f.err
+	}
+	if !f.held || f.heldBy != runstate.IntakeHolderBrake || f.brake == nil {
+		return f.hold(), runstate.ErrNoBrakeHold
+	}
+	decidedAt := at.UTC()
+	revised := *f.brake
+	revised.Decision, revised.DecidedAt, revised.DecidedBy, revised.DecisionReason = decision, &decidedAt, by, reason
+	f.brake = &revised
+	f.decisions = append(f.decisions, revised)
+	return f.hold(), nil
+}
+
 func (f *fakeIntake) hold() runstate.IntakeHold {
 	return runstate.IntakeHold{
 		SchemaVersion: runstate.IntakeHoldSchemaVersion,
@@ -515,6 +538,7 @@ func (f *fakeIntake) hold() runstate.IntakeHold {
 		HeldAt:        f.heldAt,
 		HeldBy:        f.heldBy,
 		Reason:        f.reason,
+		Brake:         f.brake,
 	}
 }
 

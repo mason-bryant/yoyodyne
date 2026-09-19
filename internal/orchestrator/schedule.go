@@ -100,9 +100,13 @@ package orchestrator
 // a queue the harness cannot get past is one it would otherwise re-pull every
 // interval for as long as it ran. Runs blocking one after another with nothing
 // landing between them hold intake, because systemic breakage left overnight
-// would otherwise put the whole backlog through a failed run each. And a session
-// says what it is doing where somebody who is not at its terminal can read it,
-// because an idle session and a dead one are the same silence.
+// would otherwise put the whole backlog through a failed run each — and the
+// hold is then worked rather than waited on: the development manager is
+// summoned at once to decide it, and a probe run decides it on evidence if she
+// does not, so the one brake hold that waits on a person is one she escalated
+// (see brake, workBrake, and settleProbe). And a session says what it is doing
+// where somebody who is not at its terminal can read it, because an idle
+// session and a dead one are the same silence.
 //
 // # A session that redeploys itself
 //
@@ -277,12 +281,35 @@ type ScheduleStaleness interface {
 // operator places, placed by the harness when runs keep blocking with nothing
 // landing between them. It is satisfied by runstate.IntakeHoldStore.
 //
-// Only the placing is here. Nothing in this package releases a hold, whoever
-// placed it: a brake the harness could lift by itself would stop the line
-// exactly as long as it took the next run to fail, and what a held queue needs
-// is a person, which is the whole reason for tripping it.
+// What the harness releases is its own hold and never the operator's. A brake
+// hold used to wait on a person exactly as the operator's does, and that was
+// the stall the operator ended on 2026-09-19: five trips in seventeen days,
+// each held until somebody noticed. Now the brake summons the development
+// manager the moment it trips, releases on her decision, and — where she has
+// decided nothing by the cooldown — probes the line with one run and releases
+// on that run landing. The one brake hold that waits on a person is one she
+// has escalated. ReleaseBrake is here for those two releases; ReviseBrake is how
+// the summons, the decision's carry-out, and the probe are written onto the
+// hold's own record, so every surface reading the hold says what is deciding
+// it. The operator's hold is never touched by any of them: ReleaseBrake and
+// ReviseBrake both refuse any hold that is not the brake's own.
 type ScheduleBrake interface {
-	Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error)
+	Brake(trip runstate.IntakeBrake, reason string, at time.Time) (runstate.IntakeHold, error)
+	ReviseBrake(revise func(*runstate.IntakeBrake) error) (runstate.IntakeHold, error)
+	ReleaseBrake() (runstate.IntakeHold, bool, error)
+}
+
+// ScheduleSummons is how the brake puts its trip in front of the development
+// manager at once: her sweep fired out of its cadence, with the runs that
+// blocked and the reason each did in the message that wakes her. It is
+// satisfied by *Trigger.
+//
+// It is optional, and a session wired without one still brakes and still
+// releases itself: what is lost is the summons, so the hold is decided by the
+// cooldown's probe rather than by her, and the hold's record says she could not
+// be summoned.
+type ScheduleSummons interface {
+	Summon(ctx context.Context, summons BrakeSummons) (Fired, error)
 }
 
 // ScheduleSpend prices what a session has spent, from the same recorded run
@@ -352,6 +379,12 @@ type SessionState struct {
 	// already on its way back, which is the standing chore this whole mechanism
 	// exists to end rather than reproduce once per deploy.
 	Restarting bool
+	// Mover is whose move follows a braked poll, worded by the hold's own record
+	// where the hold carries one. It travels for the reason the executor does:
+	// the clause a channel closes a braked message on used to name the operator
+	// whatever held the line, and a brake hold is the development manager's or
+	// the harness's until she escalates it.
+	Mover string
 }
 
 // WatchSessions is where a watch session says what it is doing, for the reader
@@ -469,10 +502,18 @@ type Pull struct {
 	// this pull read it: how many runs may block in a row, with nothing landing
 	// between them, before the brake holds intake. Zero never brakes.
 	BlockedRunsBeforeIntakeHold int
-	// Brake places that hold. It is optional, and a session wired without one
-	// counts the storm and reports it without stopping the line, because a brake
-	// nothing can apply must not be reported as applied.
+	// BrakeCooldown is execution.brake_cooldown as this pull read it: how long a
+	// tripped brake waits for the development manager's decision before it
+	// probes the line by itself. Zero waits for her summoned turn and no longer,
+	// because the summons is taken before the cooldown is read.
+	BrakeCooldown time.Duration
+	// Brake places that hold and works it. It is optional, and a session wired
+	// without one counts the storm and reports it without stopping the line,
+	// because a brake nothing can apply must not be reported as applied.
 	Brake ScheduleBrake
+	// Summons puts the trip in front of the development manager the moment the
+	// brake trips. Optional; see ScheduleSummons.
+	Summons ScheduleSummons
 	// Spend prices what the session has spent. It is required of a pass that was
 	// given a budget and of no other; see ScheduleSpend.
 	Spend ScheduleSpend
@@ -646,11 +687,22 @@ type Started struct {
 	// being available, which is the ordinary outcome of two schedulers running.
 	Declined string `json:"declined,omitempty"`
 	Failure  string `json:"failure,omitempty"`
+	// Probe marks the run the brake started under its own hold to find out
+	// whether the line is fine. It is on the record because what became of it
+	// decided the hold, and a reader of the schedule has to be able to see which
+	// run that was.
+	Probe bool `json:"probe,omitempty"`
 	// awayCause is set when Failure is the provider turning the dispatch away —
 	// a login nobody has renewed, an API nothing reaches — which the settle reads
 	// to count the start toward nothing. It is not on the record because the
 	// failure already is, in words that say the same thing.
 	awayCause domain.ProviderOutageCause
+	// environmental is set when the run stopped for a cause the environment
+	// answers for rather than a verdict on the change — a dirty checkout, a
+	// transport that did not answer, a sandbox that would not spawn — which the
+	// settle reads to count the stop toward nothing. It is not on the record
+	// because the outcome already carries the classification.
+	environmental bool
 }
 
 // Deferred is one pullable item this pass declined to start, and why.
@@ -782,15 +834,23 @@ type Schedule struct {
 	// the pull rather than stopping it.
 	OutageProblem string `json:"outage_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
-	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
-	// needs a person, which is the whole reason for holding it.
+	// and BlockedInARow is what tripped it. What lifts it is on the hold's own
+	// record: the development manager's decision, or a probe run that lands.
 	Braked        *runstate.IntakeHold `json:"braked,omitempty"`
 	BlockedInARow int                  `json:"blocked_in_a_row,omitempty"`
-	// BrakeProblem names a brake that could not be applied — no way to place the
-	// hold, or a hold that would not be written. The storm is still counted and
-	// still reported, because a brake that failed is exactly the thing an
-	// operator must not find out about by inferring it from the silence.
+	// BrakeProblem names a brake that could not be applied or worked — no way to
+	// place the hold, a hold that would not be written, a summons that did not
+	// reach the development manager, a probe that could not be recorded. The
+	// storm is still counted and still reported, because a brake that failed is
+	// exactly the thing an operator must not find out about by inferring it from
+	// the silence.
 	BrakeProblem string `json:"brake_problem,omitempty"`
+	// Released is the brake's own hold this session lifted, and why: the
+	// development manager decided to, or the probe run landed. It is on the
+	// schedule for the reason the brake is — a session that stopped the line and
+	// started it again did both, and a reader must not have to infer the second
+	// from the runs that followed.
+	Released []BrakeRelease `json:"released,omitempty"`
 	// SpentUSD is what this pass spent, as the provider reported it: the runs it
 	// started, and the turns it took itself putting stopped work in front of the
 	// development manager. Budget is what it was allowed. Both are absent from a
@@ -920,8 +980,11 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// blockedInARow counts the runs that ended blocked with nothing landing
 	// between them. It is the storm the brake watches for, and it is reset by any
 	// run that finishes: one item failing is not a systemic failure, and the
-	// per-item guard above is what that case is for.
+	// per-item guard above is what that case is for. storm is those same runs
+	// by name, with the reason each blocked, because a brake that trips puts
+	// them in front of the development manager rather than telling her a number.
 	blockedInARow := 0
+	var storm []runstate.BrakeBlockedRun
 	// spend is how the runs this session started are priced, taken from the last
 	// pull that could be opened. It is held outside the loop because a run
 	// collected after the final pull still cost what it cost.
@@ -931,6 +994,13 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// fails after the final pull failed just as much, and the record of it is the
 	// only thing that will ever say so.
 	var docket ScheduleTriage
+	// brake is the hold the brake works, and summons how it reaches the
+	// development manager, both taken from the same pull and held outside the
+	// loop for the same reason again: the probe run is collected wherever it
+	// ends, and what it decides about the hold has to be written when it does.
+	var brake ScheduleBrake
+	var summons ScheduleSummons
+	var cooldown time.Duration
 	// redeploying is the session having found a build deployed over the one it is
 	// executing. From that point it claims nothing more and waits out what it
 	// already started, which is the whole of how a restart reaches the machine
@@ -1009,20 +1079,36 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 			// item and nothing about the machine that a run could fix, so it
 			// neither counts nor clears: three of these in a row on 2026-09-17 are
 			// what tripped the brake over a login.
+		case started.environmental:
+			// The environment stopped the run — a dirty checkout, a transport that
+			// did not answer, a sandbox that would not spawn — which is a verdict
+			// on nothing. It neither counts nor clears, for the reason the provider
+			// turning a dispatch away does not: two of the three stops that tripped
+			// the brake on 2026-09-19 were of this class, and a brake tripped on
+			// them summons a decision about a change nobody judged.
 		case started.blockedRun():
 			blockedInARow++
 			if blockedInARow > schedule.BlockedInARow {
 				schedule.BlockedInARow = blockedInARow
 			}
+			storm = append(storm, started.blockedEntry())
 		case started.Outcome.Paused:
 			// A parked run is owed a continuation rather than having failed.
 		default:
 			blockedInARow = 0
+			storm = nil
 		}
 		if cost, problem := priceRun(spend, started.Outcome); problem != "" {
 			schedule.SpendProblem = problem
 		} else {
 			schedule.SpentUSD += cost
+		}
+		// What became of the probe decides the hold, and it is decided here
+		// because here is where the probe's ending is in hand: a landing releases
+		// the hold, a blocking keeps it and puts the question to the development
+		// manager again, and anything else leaves the cooldown to decide.
+		if started.Probe {
+			s.settleProbe(ctx, &schedule, brake, summons, cooldown, *started)
 		}
 	}
 
@@ -1234,6 +1320,7 @@ pulling:
 		}
 		spend = pull.Spend
 		docket = pull.Triage
+		brake, summons, cooldown = pull.Brake, pull.Summons, pull.BrakeCooldown
 		// Stopped work reaches the development manager here, rather than by
 		// somebody carrying it to her. It is done before the brake and before the
 		// hold, because it chooses nothing and starts nothing: what it produces is
@@ -1280,8 +1367,9 @@ pulling:
 		// is the point: a brake that stopped the line by its own separate path
 		// would be a second account of a rule that already has one.
 		if s.Watching && blockedInARow > 0 && pull.BlockedRunsBeforeIntakeHold > 0 && blockedInARow >= pull.BlockedRunsBeforeIntakeHold {
-			s.brake(&schedule, pull, blockedInARow)
+			s.brake(ctx, &schedule, pull, session, running, blockedInARow, storm)
 			blockedInARow = 0
+			storm = nil
 		}
 		// The intake hold is read before anything is chosen, because choosing is
 		// the whole of what it holds. It is asked again on every pull rather than
@@ -1295,29 +1383,48 @@ pulling:
 			}
 			continue
 		}
+		// probing is this pull starting the brake's probe run under the hold: one
+		// item, chosen exactly as any other would be, and named on the hold's own
+		// record before it starts so the pipeline lets it through the hold.
+		probing := false
 		if held {
 			schedule.IntakeHeld = &hold
 			if !s.Watching {
 				schedule.Stopped = ScheduleIntakeHeld
 				break
 			}
-			// A held intake is a brake rather than a stop: the session keeps
-			// polling and chooses nothing, and resumes in place when it is
-			// released. That is what makes holding intake something an operator
-			// can do to a session they are not sitting at.
-			if !wait(pull, runstate.WatchBraked, account{
-				reason: brakedReason(hold),
-				// This session's own runs: a held intake stops the choosing and
-				// interrupts nothing, and the reader has to be able to tell those apart.
-				// What another process has going is not read until after the hold is.
-				running: running,
-			}) {
-				schedule.Stopped = ScheduleCancelled
-				break
+			// The brake's own hold is worked rather than waited on: released where
+			// its record says to release it, probed where its record says a probe
+			// is due, and waited on otherwise — which is the development manager
+			// deciding, a probe in flight, or her having escalated it.
+			switch s.workBrake(&schedule, pull, hold, mine) {
+			case brakeReleased:
+				schedule.IntakeHeld = nil
+				session.resume("the brake's hold was released on the development manager's decision")
+				continue
+			case brakeProbing:
+				probing = true
+			default:
+				// A held intake is a brake rather than a stop: the session keeps
+				// polling and chooses nothing, and resumes in place when it is
+				// released. That is what makes holding intake something an operator
+				// can do to a session they are not sitting at.
+				if !wait(pull, runstate.WatchBraked, account{
+					reason: brakedReason(hold),
+					// This session's own runs: a held intake stops the choosing and
+					// interrupts nothing, and the reader has to be able to tell those apart.
+					// What another process has going is not read until after the hold is.
+					running: running,
+					mover:   brakedMover(hold),
+				}) {
+					schedule.Stopped = ScheduleCancelled
+					break pulling
+				}
+				continue
 			}
-			continue
+		} else {
+			schedule.IntakeHeld = nil
 		}
-		schedule.IntakeHeld = nil
 
 		occupied, err := occupiedItems(pull.Runs)
 		if err != nil {
@@ -1337,6 +1444,12 @@ pulling:
 		schedule.Capacity = pull.Capacity
 		schedule.Occupied = len(occupied)
 		free := pull.Capacity - len(occupied)
+		// A probe is one run, whatever the capacity leaves free: what it is for is
+		// finding out whether the line is fine, and two of them would be two runs
+		// spent on one question.
+		if probing && free > 1 {
+			free = 1
+		}
 		if free < 1 {
 			if running > 0 {
 				if !collect() {
@@ -1528,7 +1641,19 @@ pulling:
 				By:     runstate.SelectedByScheduler,
 				Reason: scheduleReason(entry, queue, free, pull.Capacity, stale[entry.ID], ordering),
 			}
-			schedule.Started = append(schedule.Started, Started{WorkItemID: entry.ID, Reason: selection.Reason})
+			if probing {
+				// The probe is named on the hold's own record before it starts,
+				// because that record is what the pipeline reads to let this one run
+				// through the hold: a selection that merely said it was the probe
+				// would be a hold any caller could talk its way past. A record that
+				// will not take it starts nothing, and says so.
+				selection = runstate.Selection{By: runstate.SelectedByBrake, Reason: probeReason(hold, selection.Reason)}
+				if !s.recordProbe(&schedule, pull, entry.ID) {
+					delete(tried, entry.ID)
+					break
+				}
+			}
+			schedule.Started = append(schedule.Started, Started{WorkItemID: entry.ID, Reason: selection.Reason, Probe: probing})
 			flight.take(read.items[entry.ID], "")
 			mine[entry.ID] = index
 			running++
@@ -1538,12 +1663,38 @@ pulling:
 				completions <- completed{index: index, outcome: outcome, err: err}
 			}(entry.ID)
 		}
+		if probing && started == 0 {
+			// Nothing was startable under the hold, so the probe found nothing to
+			// probe with. That is said on the hold and the cooldown is restarted,
+			// so a queue with nothing pullable is asked again once per cooldown
+			// rather than once per poll — and it is not a landing, because nothing
+			// landed. The session is still braked, and waits as one.
+			s.recordNoProbe(&schedule, pull, readmodel.IdleLine(poll.passedOver(queue), len(occupied)))
+			unprobed, stillHeld, err := pull.Intake.Held()
+			if err != nil || !stillHeld {
+				unprobed = hold
+			}
+			if !wait(pull, runstate.WatchBraked, account{reason: brakedReason(unprobed), running: running, mover: brakedMover(unprobed)}) {
+				schedule.Stopped = ScheduleCancelled
+				break
+			}
+			continue
+		}
 		if started > 0 {
 			// A run the provider accepted is the provider serving again, whatever
 			// deadline it last named. Keeping the window would have the session go on
 			// reporting itself held while it works, which is the false half of the same
 			// misreading this exists to end.
 			window = providerWindow{}
+			if probing {
+				// The line is still held: what started is the probe, and the session
+				// says so rather than saying it is choosing again. The hold is read
+				// back rather than remembered, because recording the probe changed it.
+				if probed, held, err := pull.Intake.Held(); err == nil && held {
+					session.enter(runstate.WatchBraked, account{reason: brakedReason(probed), running: running, mover: brakedMover(probed)})
+				}
+				continue
+			}
 			session.resume(fmt.Sprintf("%d item(s) pulled from a backlog of %d admitted, %d of them ready", started, len(queue.Entries), queue.Ready()))
 			continue
 		}
@@ -1785,15 +1936,17 @@ func fingerprint(item beads.WorkItem) string {
 }
 
 // brake holds intake because runs kept blocking with nothing landing between
-// them. What it places is the operator's own switch, which is deliberate: an
-// operator arriving at a stopped line finds one thing to understand and one
-// thing to lift, rather than a second mechanism that stops work in a way only
-// this package knows how to undo.
-// What it records is the cause alone — who placed it is the holder beside it —
-// because every surface that prints a hold composes those two itself, and a
-// reason that also named the holder is what stacked three accounts of one hold
-// into a line nobody could read.
-func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
+// them, and summons the development manager to decide what happens to it. What
+// it places is the operator's own switch, which is deliberate: an operator
+// arriving at a stopped line finds one thing to understand and one thing to
+// lift, rather than a second mechanism that stops work in a way only this
+// package knows how to undo.
+// What it records as the reason is the cause alone — who placed it is the
+// holder beside it — because every surface that prints a hold composes those
+// two itself, and a reason that also named the holder is what stacked three
+// accounts of one hold into a line nobody could read. The runs that blocked
+// ride the hold's own record, which is what the summons puts in front of her.
+func (s Scheduler) brake(ctx context.Context, schedule *Schedule, pull Pull, session *watchSession, running, blocked int, storm []runstate.BrakeBlockedRun) {
 	reason := fmt.Sprintf("%d run(s) blocked in a row with nothing landing between them, which is the configured brake at %d",
 		blocked, pull.BlockedRunsBeforeIntakeHold)
 	if pull.Brake == nil {
@@ -1802,7 +1955,8 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 		return
 	}
 	at := s.now().UTC()
-	held, err := pull.Brake.Hold(runstate.IntakeHolderBrake, reason, at)
+	trip := runstate.IntakeBrake{Blocked: storm, CooldownEndsAt: at.Add(pull.BrakeCooldown)}
+	held, err := pull.Brake.Brake(trip, reason, at)
 	if err != nil {
 		schedule.BrakeProblem = fmt.Sprintf("intake could not be held after %d run(s) blocked in a row, so the line is still choosing work: %v", blocked, err)
 		return
@@ -1811,11 +1965,342 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 	// this session's brake only when this call is what placed it. A pass that
 	// took an operator's standing hold for its own would report the line as
 	// braked to a reader whose queue was stopped for an entirely different
-	// reason.
+	// reason — and would summon the development manager over a hold that is
+	// the operator's to lift.
 	if !held.HeldAt.Equal(at) || held.HeldBy != runstate.IntakeHolderBrake {
 		return
 	}
 	schedule.Braked = &held
+	// The trip is said before the summons is made, so the log carries the line
+	// stopping — which is what a channel wakes somebody over — whether or not
+	// her turn releases it a moment later.
+	session.enter(runstate.WatchBraked, account{reason: brakedReason(held), running: running, mover: brakedMover(held)})
+	s.summon(ctx, schedule, pull.Brake, pull.Summons, held)
+}
+
+// summon puts the brake's hold in front of the development manager at once,
+// and writes onto the hold whether it reached her. Nothing here waits on the
+// answer: what she decides is written by her conversation onto the same
+// record, and the next poll reads it there.
+//
+// A summons that could not be made is recorded on the hold and does not stop
+// anything. The cooldown is what makes that safe: a hold she was never asked
+// about is probed by the harness exactly as one she left undecided, so the line
+// is released or kept on evidence either way, and what is lost is her judgment
+// rather than the release.
+func (s Scheduler) summon(ctx context.Context, schedule *Schedule, brake ScheduleBrake, summons ScheduleSummons, held runstate.IntakeHold) {
+	if brake == nil {
+		return
+	}
+	var problem string
+	if summons == nil {
+		problem = "nothing was wired to summon the development manager, so the hold is decided by the cooldown's probe rather than by her"
+	} else {
+		fired, err := summons.Summon(ctx, BrakeSummons{Hold: held})
+		// What the summons cost is the session's spend, exactly as a firing's is
+		// and for the same reason.
+		schedule.SpentUSD += fired.CostUSD
+		switch {
+		case err != nil:
+			problem = fmt.Sprintf("the development manager could not be summoned, so the hold is decided by the cooldown's probe rather than by her: %v", err)
+		case fired.Turns == 0:
+			problem = fmt.Sprintf("the summons did not reach the development manager, so the hold is decided by the cooldown's probe rather than by her: %s", fired.Problem)
+			schedule.Fired = append(schedule.Fired, fired)
+		default:
+			schedule.Fired = append(schedule.Fired, fired)
+		}
+	}
+	at := s.now().UTC()
+	// A hold lifted while her turn was being taken — by her own decision, or by
+	// `yoyo release` — has no record to write onto, and that is not a failure:
+	// the summons did what it was for.
+	if _, err := brake.ReviseBrake(func(trip *runstate.IntakeBrake) error {
+		if problem != "" {
+			trip.SummonProblem = runstate.BoundBrakeText(problem)
+			return nil
+		}
+		trip.SummonedAt = &at
+		trip.SummonProblem = ""
+		return nil
+	}); err != nil && !errors.Is(err, runstate.ErrNoBrakeHold) {
+		problem = appendProblem(problem, fmt.Sprintf("and whether the development manager was summoned could not be recorded on the hold: %v", err))
+	}
+	if problem != "" {
+		schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, problem)
+	}
+}
+
+// What one poll under the brake's hold does.
+type brakeAction int
+
+const (
+	// brakeWaiting is the hold standing: the development manager deciding, a
+	// probe in flight, or the hold escalated to the operator. The session waits
+	// as it always did under a held intake.
+	brakeWaiting brakeAction = iota
+	// brakeReleased is the hold lifted by this poll, on her decision to release
+	// it. The session chooses work again at once.
+	brakeReleased
+	// brakeProbing is a probe due: on her decision, or on the cooldown running
+	// out with none. The poll chooses one item and starts it under the hold.
+	brakeProbing
+)
+
+// workBrake reads what the brake's own record says to do about its hold on
+// this poll. The operator's hold, and a brake hold from before the brake
+// worked its own holds, are waited on: nothing here decides about a hold the
+// harness did not place, and nothing here revises a record it did not write.
+//
+// A probe another process recorded in flight and no process is running is a
+// session that died holding it. It is settled here as a probe that ended
+// without a record, which restarts the cooldown rather than starting a second
+// probe on the spot: the ending is unknown, and an unknown ending is not a
+// landing.
+func (s Scheduler) workBrake(schedule *Schedule, pull Pull, hold runstate.IntakeHold, mine map[string]int) brakeAction {
+	if !hold.Braked() || pull.Brake == nil {
+		return brakeWaiting
+	}
+	trip := *hold.Brake
+	now := s.now().UTC()
+	switch {
+	case trip.Escalated():
+		return brakeWaiting
+	case trip.Decision == runstate.BrakeDecisionRelease:
+		if _, released, err := pull.Brake.ReleaseBrake(); err != nil {
+			schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, fmt.Sprintf(
+				"the development manager decided to release the brake's hold and it could not be lifted: %v", err))
+			return brakeWaiting
+		} else if released {
+			schedule.Released = append(schedule.Released, BrakeRelease{
+				At:     now,
+				Reason: "the development manager decided to release it: " + singleLine(trip.DecisionReason, maxScheduleReasonBytes),
+			})
+		}
+		return brakeReleased
+	case trip.Probing():
+		if _, ours := mine[trip.Probe.WorkItemID]; ours {
+			return brakeWaiting
+		}
+		occupied, err := occupiedItems(pull.Runs)
+		if err != nil {
+			return brakeWaiting
+		}
+		if _, running := occupied[trip.Probe.WorkItemID]; running {
+			return brakeWaiting
+		}
+		s.settleLostProbe(schedule, pull, now)
+		return brakeWaiting
+	case trip.ProbeDue(now):
+		return brakeProbing
+	default:
+		return brakeWaiting
+	}
+}
+
+// settleLostProbe closes a probe whose session died before its ending was
+// written: the record says a probe is in flight, and nothing is running it.
+func (s Scheduler) settleLostProbe(schedule *Schedule, pull Pull, now time.Time) {
+	if _, err := pull.Brake.ReviseBrake(func(trip *runstate.IntakeBrake) error {
+		if trip.Probe == nil || !trip.Probe.InFlight() {
+			return nil
+		}
+		ended := now
+		trip.Probe.EndedAt = &ended
+		trip.Probe.Reason = "its ending was never recorded, and no run of it is in flight; the session that started it died holding it"
+		trip.CooldownEndsAt = now.Add(pull.BrakeCooldown)
+		return nil
+	}); err != nil {
+		schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, fmt.Sprintf(
+			"a probe nothing is running could not be settled on the hold: %v", err))
+	}
+}
+
+// recordProbe names the item about to be started as the brake's probe on the
+// hold's own record, and reports whether it was recorded. The record is what
+// the pipeline reads to let the run through the hold, so a record that will
+// not take it is a probe that does not start.
+func (s Scheduler) recordProbe(schedule *Schedule, pull Pull, workItemID string) bool {
+	now := s.now().UTC()
+	if _, err := pull.Brake.ReviseBrake(func(trip *runstate.IntakeBrake) error {
+		trip.Probe = &runstate.IntakeProbe{WorkItemID: workItemID, StartedAt: now}
+		trip.Probes++
+		// A decision on a probe is carried out by this, and cleared so the next
+		// poll does not read it as a second probe owed.
+		if trip.Decision == runstate.BrakeDecisionProbe {
+			trip.Decision = ""
+			trip.DecidedAt = nil
+		}
+		return nil
+	}); err != nil {
+		schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, fmt.Sprintf(
+			"the probe run of %s could not be recorded on the hold, so it was not started: %v", workItemID, err))
+		return false
+	}
+	return true
+}
+
+// recordNoProbe says on the hold that a probe was due and nothing was startable,
+// and restarts the cooldown so the question is asked again once per cooldown.
+func (s Scheduler) recordNoProbe(schedule *Schedule, pull Pull, found string) {
+	now := s.now().UTC()
+	if _, err := pull.Brake.ReviseBrake(func(trip *runstate.IntakeBrake) error {
+		if trip.Decision == runstate.BrakeDecisionProbe {
+			trip.Decision = ""
+			trip.DecidedAt = nil
+		}
+		trip.CooldownEndsAt = now.Add(pull.BrakeCooldown)
+		return nil
+	}); err != nil {
+		schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, fmt.Sprintf(
+			"a probe was due and nothing was startable, and the cooldown could not be restarted on the hold: %v", err))
+	}
+	schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, fmt.Sprintf(
+		"a probe run was due and nothing was startable under the hold, so none was made and the cooldown was restarted: %s", found))
+}
+
+// settleProbe decides the hold on what became of the probe. A landing releases
+// it: the line is fine. A blocking keeps it, restarts the cooldown, and puts the
+// question to the development manager again with the probe's own stoppage in
+// front of her — so a machine that is still broken is probed once per cooldown
+// and decided by her each time, rather than by nobody. Every other ending — the
+// work going to another process, the run parked on the provider, the
+// environment stopping it — is a verdict on nothing, and leaves the cooldown to
+// ask again.
+func (s Scheduler) settleProbe(ctx context.Context, schedule *Schedule, brake ScheduleBrake, summons ScheduleSummons, cooldown time.Duration, started Started) {
+	if brake == nil {
+		return
+	}
+	now := s.now().UTC()
+	// revise rewrites the probe on the hold's record and reports what stopped
+	// it, except a hold lifted while the probe ran — by the development
+	// manager's decision, or by `yoyo release` — which has no record to write
+	// onto and is not a failure: the probe was a run like any other, and the
+	// hold it was for is gone.
+	revise := func(what string, change func(*runstate.IntakeBrake)) (runstate.IntakeHold, bool) {
+		revised, err := brake.ReviseBrake(func(trip *runstate.IntakeBrake) error {
+			if trip.Probe == nil {
+				trip.Probe = &runstate.IntakeProbe{WorkItemID: started.WorkItemID, StartedAt: now}
+			}
+			change(trip)
+			return nil
+		})
+		switch {
+		case errors.Is(err, runstate.ErrNoBrakeHold):
+			return revised, false
+		case err != nil:
+			schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, fmt.Sprintf("%s could not be recorded on the hold: %v", what, err))
+			return revised, false
+		}
+		return revised, true
+	}
+	switch {
+	case started.Declined != "":
+		// Another process took the item, so the probe never ran. The record is
+		// cleared rather than settled, and the next poll makes another.
+		revise("the declined probe", func(trip *runstate.IntakeBrake) { trip.Probe = nil })
+	case started.landed():
+		revise("the landed probe", func(trip *runstate.IntakeBrake) {
+			trip.Probe.EndedAt = &now
+			trip.Probe.RunID = started.Outcome.RunID
+			trip.Probe.Landed = true
+		})
+		if _, released, err := brake.ReleaseBrake(); err != nil {
+			schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, fmt.Sprintf(
+				"the probe run of %s landed and the brake's hold could not be lifted: %v", started.WorkItemID, err))
+		} else if released {
+			schedule.Released = append(schedule.Released, BrakeRelease{
+				At:     now,
+				Reason: fmt.Sprintf("the probe run%s of %s landed", namedRun(started.Outcome.RunID), started.WorkItemID),
+			})
+		}
+	case started.blockedRun() && !started.environmental && !started.providerAway():
+		revised, recorded := revise("the blocked probe", func(trip *runstate.IntakeBrake) {
+			trip.Probe.EndedAt = &now
+			trip.Probe.RunID = started.Outcome.RunID
+			trip.Probe.Blocked = true
+			trip.Probe.Reason = runstate.BoundBrakeText(started.blockedEntry().Reason)
+			trip.Decision, trip.DecidedAt, trip.DecidedBy, trip.DecisionReason = "", nil, "", ""
+			trip.SummonedAt, trip.SummonProblem = nil, ""
+			trip.CooldownEndsAt = now.Add(cooldown)
+		})
+		if recorded {
+			s.summon(ctx, schedule, brake, summons, revised)
+		}
+	default:
+		revise("the probe's ending", func(trip *runstate.IntakeBrake) {
+			trip.Probe.EndedAt = &now
+			trip.Probe.RunID = started.Outcome.RunID
+			trip.Probe.Reason = runstate.BoundBrakeText("it ended neither landed nor blocked, which decides nothing about the line: " + started.ending())
+			if trip.Decision == runstate.BrakeDecisionProbe {
+				trip.Decision = ""
+				trip.DecidedAt = nil
+			}
+			trip.CooldownEndsAt = now.Add(cooldown)
+		})
+	}
+}
+
+// namedRun is " <run id>" where the run recorded one and nothing otherwise, so
+// a sentence about a run the record does not name does not carry a hole.
+func namedRun(runID string) string {
+	if strings.TrimSpace(runID) == "" {
+		return ""
+	}
+	return " " + strings.TrimSpace(runID)
+}
+
+// BrakeRelease is one release of the brake's own hold this session made, and
+// why.
+type BrakeRelease struct {
+	At     time.Time `json:"at"`
+	Reason string    `json:"reason"`
+}
+
+// landed reports a run whose work reached the target branch, which is the one
+// ending of a probe that says the line is fine.
+func (s Started) landed() bool {
+	return s.Failure == "" && s.Declined == "" && !s.Outcome.Blocked && !s.Outcome.Paused &&
+		s.Outcome.Status == runstate.StatusSucceeded
+}
+
+// ending is one line saying how a run that neither landed nor blocked ended.
+func (s Started) ending() string {
+	switch {
+	case s.Failure != "":
+		return s.Failure
+	case s.Outcome.Paused:
+		return "the run is paused and owed a continuation"
+	default:
+		return fmt.Sprintf("the run ended %s", s.Outcome.Status)
+	}
+}
+
+// blockedEntry is this run as the brake's record names it: the run, the item,
+// and the reason it blocked in the run's own words.
+func (s Started) blockedEntry() runstate.BrakeBlockedRun {
+	reason := s.Failure
+	if strings.TrimSpace(reason) == "" {
+		reason = s.Outcome.Failure
+	}
+	if strings.TrimSpace(reason) == "" && s.Outcome.ReviewDecision != "" {
+		reason = fmt.Sprintf("independent review ended %s: %s", s.Outcome.ReviewDecision, s.Outcome.ReviewSummary)
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "stopped on a durable blocker the run recorded on the item"
+	}
+	return runstate.BrakeBlockedRun{
+		RunID:      strings.TrimSpace(s.Outcome.RunID),
+		WorkItemID: s.WorkItemID,
+		Reason:     runstate.BoundBrakeText(reason),
+	}
+}
+
+// probeReason is the recorded reason the brake's probe exists: that it is the
+// probe, whose hold it runs under, and the selection the queue would have made
+// anyway, so the run's own account says why this item and not another.
+func probeReason(hold runstate.IntakeHold, selected string) string {
+	return fmt.Sprintf("the intake brake's probe run: intake is held since %s (%s), and this is the one run started under it to find out whether the line is fine — a landing reopens intake, a blocking keeps it held. %s",
+		hold.HeldAt.UTC().Format(time.RFC3339), hold.Says(), selected)
 }
 
 // providerAway reads whether the provider is answering nobody, and reports the
@@ -2260,9 +2745,21 @@ func unreadyReason(unmet []readiness.Unmet) string {
 // tripped.
 func brakedReason(hold runstate.IntakeHold) string {
 	// What the surfaces reading this already say is that the session is choosing
-	// nothing, so this adds the one thing they do not: the hold does not clear
-	// itself, whichever of the two placed it.
-	return hold.Says() + ", and it stays held until somebody releases it"
+	// nothing, so this adds the one thing they do not: what lifts the hold. The
+	// operator's does not clear itself; the brake's says who is deciding it and
+	// what the harness does if nobody does.
+	return hold.Says() + ", and " + hold.Standing()
+}
+
+// brakedMover is whose move a braked poll is, where the hold's own record says.
+// It is empty for the operator's hold and for a brake hold from before the
+// brake worked its own holds, so the surfaces reading it fall back to what they
+// said about a held intake before: that it is the operator's.
+func brakedMover(hold runstate.IntakeHold) string {
+	if !hold.Braked() {
+		return ""
+	}
+	return hold.Whose()
 }
 
 // opening says what the session was started to do, which is the first thing its
@@ -2344,6 +2841,9 @@ type account struct {
 	// has to answer a question about the queue reads the answer this poll already
 	// came to, rather than deriving a second one from the silence around it.
 	passedOver runstate.PassedOver
+	// mover is whose move a braked poll is, in the hold's own words, where the
+	// hold carries them. It is empty everywhere else.
+	mover string
 }
 
 // same reports two accounts as the same account, which is what makes a poll that
@@ -2353,7 +2853,7 @@ type account struct {
 func (a account) same(other account) bool {
 	if a.reason != other.reason || a.running != other.running ||
 		a.executor != other.executor || a.unreadable != other.unreadable ||
-		a.window != other.window {
+		a.window != other.window || a.mover != other.mover {
 		return false
 	}
 	if a.passedOver.Admitted != other.passedOver.Admitted ||
@@ -2451,6 +2951,7 @@ func (w *watchSession) enter(state runstate.WatchState, said account) {
 		Executor:   said.executor,
 		Unreadable: said.unreadable,
 		PassedOver: said.passedOver,
+		Mover:      said.mover,
 	}
 	if said.window.waiting {
 		transition.ProviderWindow = true
@@ -2511,6 +3012,7 @@ type completed struct {
 // a failure would make ordinary concurrency look like breakage.
 func (s *Started) record(done completed) {
 	s.Outcome = done.outcome
+	s.environmental = environmentalStop(done.outcome)
 	if done.err == nil {
 		return
 	}
@@ -2528,7 +3030,29 @@ func (s *Started) record(done completed) {
 		if errors.As(done.err, &away) {
 			s.awayCause = away.Cause
 		}
+		// A dispatch the environment turned away before any run recorded it — a
+		// worktree that could not be cut from a dirty checkout, a process the
+		// machine would not start — is the environment's stop as much as one a
+		// run classified, and it is read off the error because the error is all
+		// there is.
+		if _, environmental := environmentalCauseOf(done.err); environmental {
+			s.environmental = true
+		}
 	}
+}
+
+// environmentalStop reports a run that stopped for a cause the environment
+// answers for rather than a verdict on its change: a round the settle refused
+// as environmental, a round nothing of ran, or an approved change the
+// environment stopped short of its promotion. It is the class the brake does
+// not count, because a brake tripped on it summons a decision about a change
+// nobody judged and prescribes a release that fixes nothing.
+func environmentalStop(outcome Outcome) bool {
+	if outcome.IntegrationStop != nil {
+		return true
+	}
+	refusal := outcome.Environmental
+	return refusal != nil && (refusal.Refused || refusal.NothingRan)
 }
 
 // occupiedItems names the work items with a run in flight anywhere, each
@@ -2752,6 +3276,9 @@ func (s Schedule) Render() string {
 	}
 	for _, started := range s.Started {
 		fmt.Fprintf(&rendered, "%s: %s\n", started.WorkItemID, started.state())
+		if started.Probe {
+			fmt.Fprintln(&rendered, "  the intake brake's probe run, started under its hold")
+		}
 		fmt.Fprintf(&rendered, "  chosen because %s\n", started.Reason)
 		if started.Outcome.Integration != nil {
 			fmt.Fprintf(&rendered, "  integrated into %s: %s\n",
@@ -2790,7 +3317,7 @@ func (s Schedule) Render() string {
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s: %s\n",
-			s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"), s.IntakeHeld.Says())
+			s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"), s.IntakeHeld.Account())
 	}
 	// A session that waited says how long it was alive for, because the whole
 	// point of watching is that nothing happening is not the same as nothing
@@ -2822,10 +3349,14 @@ func (s Schedule) Render() string {
 		fmt.Fprintf(&rendered, "%s\n", s.OutageProblem)
 	}
 	if s.Braked != nil {
-		// The brake places a hold nobody chose, so the line that reports it carries
-		// the command that lifts it: whoever meets this is reading a terminal, and
-		// a remedy they cannot run from there is no remedy.
-		fmt.Fprintf(&rendered, "this session's own brake held intake after %d run(s) blocked in a row; `yoyo release` lifts it and the line carries on\n", s.BlockedInARow)
+		// The brake places a hold nobody chose, so the line that reports it says
+		// what lifts it: the development manager's decision, or the probe run the
+		// harness makes if she records none. `yoyo release` still lifts it from a
+		// terminal, for whoever would rather not wait for either.
+		fmt.Fprintf(&rendered, "this session's own brake held intake after %d run(s) blocked in a row and summoned the development manager; the hold is released on her decision or on a probe run that lands, and `yoyo release` lifts it sooner\n", s.BlockedInARow)
+	}
+	for _, released := range s.Released {
+		fmt.Fprintf(&rendered, "the brake's hold was released at %s: %s\n", released.At.UTC().Format(time.RFC3339), released.Reason)
 	}
 	if s.BrakeProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.BrakeProblem)

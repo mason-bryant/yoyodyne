@@ -611,6 +611,10 @@ func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 		// a stopped machine or as a queue nobody has admitted work to.
 		Running:  transition.Running,
 		Executor: transition.Executor,
+		// Whose move a braked poll is, in the hold's own words, so the channel's
+		// closing clause names the development manager or the harness rather than
+		// the operator over a hold the brake is working itself.
+		Mover: transition.Mover,
 		// The same account the reason states, in classes rather than in prose, so
 		// the alarm that wakes somebody names the cause the poll already found
 		// instead of deriving its own.
@@ -649,6 +653,18 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 	if err != nil {
 		return orchestrator.Pull{}, err
 	}
+	// What the configuration schedules on a cadence, and — the same trigger —
+	// what the brake summons out of it. Both are wired into the pull for the
+	// same reason the delivery below is, and for one more: the harness is the
+	// only thing that invokes a role, so a schedule that lived in a cron entry
+	// or a launchd job would be a second invoker of one. A project that
+	// schedules nothing gets neither, and its brake is decided by the cooldown's
+	// probe rather than by a summons.
+	recurring := recurringTrigger(parts, configPath, stderr)
+	var summons orchestrator.ScheduleSummons
+	if trigger, scheduled := recurring.(*orchestrator.Trigger); scheduled {
+		summons = trigger
+	}
 	return orchestrator.Pull{
 		Tracker:    tracker,
 		Runs:       parts.store,
@@ -664,9 +680,13 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		Capacity:                    parts.config.Execution.MaxConcurrentDevelopers,
 		Poll:                        parts.config.Execution.WorkPoll.Duration(),
 		BlockedRunsBeforeIntakeHold: parts.config.Execution.BlockedRunsBeforeIntakeHold,
+		BrakeCooldown:               parts.config.Execution.BrakeCooldown.Duration(),
 		// The brake places the operator's own switch, so it is the same store
-		// the hold is read from. Nothing here releases it.
-		Brake: parts.intake,
+		// the hold is read from. What it releases is its own hold and never the
+		// operator's: on the development manager's decision, or on a probe run
+		// that lands.
+		Brake:   parts.intake,
+		Summons: summons,
 		// What a session has spent is read from the same recorded run evidence
 		// `yoyo cost` prices items from, so a bounded session and a ledger can
 		// never disagree about what a run cost.
@@ -681,13 +701,9 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		// rather than a worktree, because what the check is about is what a run cut
 		// from here would find; and it is built per pull, which is what bounds the
 		// source it caches to one reading of a queue that is re-read every interval.
-		Tree:   &readiness.Repository{Root: parts.repository},
-		Triage: docketerFrom(parts),
-		// What the configuration schedules on a cadence. It is wired into the pull
-		// for the same reason the delivery above is, and for one more: the harness
-		// is the only thing that invokes a role, so a schedule that lived in a cron
-		// entry or a launchd job would be a second invoker of one.
-		Recurring: recurringTrigger(parts, configPath, stderr),
+		Tree:      &readiness.Repository{Root: parts.repository},
+		Triage:    docketerFrom(parts),
+		Recurring: recurring,
 		// And where a role whose tracker block the harness refused is woken to
 		// re-issue it. It is wired here for the same reason the two above are: the
 		// harness is the only thing that invokes a role, and the pull is where it is
@@ -792,9 +808,10 @@ execution.work_poll and reads the queue again, until you stop it with Ctrl-C.
 Nothing is cached between readings, so work you admit or reorder is picked up at
 the next poll, and an idle session costs one tracker read per interval and no
 provider call at all, unless it has a stopped run to put in front of the
-development manager, a recurring task come due, or a refused tracker block to
-wake a role for. Holding intake brakes a watching session in place -- it
-keeps polling and chooses nothing -- and "yoyo release" resumes it.
+development manager, a recurring task come due, a refused tracker block to
+wake a role for, or its own brake to summon her over.
+Holding intake brakes a watching session in place -- it keeps polling and
+chooses nothing -- and "yoyo release" resumes it.
 
 Every pull also puts stopped work in front of the development manager: a run
 that ended with its independent reviewer still requiring repair after every
@@ -864,8 +881,17 @@ its status, what it depends on, its notes -- so a start the harness cannot get
 past is not retried every interval, and a blocker you release is picked up
 because releasing it changed the item. Runs blocking one after another with
 nothing landing between them hold intake at
-execution.blocked_runs_before_intake_hold, and it stays held until "yoyo release"
-lifts it.
+execution.blocked_runs_before_intake_hold -- verdicts and check failures on
+changes that were present; a stop the environment made counts toward nothing --
+and the same poll summons the development manager's sweep out of its cadence
+with the blocked runs and the reason each blocked in front of her. She decides
+what happens to the hold: release it, keep it and probe the line with one run,
+or escalate it to you. Where she records nothing by execution.brake_cooldown,
+the session probes by itself: one run started under the hold, whose landing
+reopens intake and whose blocking keeps it held and summons her again. The
+only brake hold that waits on a person is one she escalated; "yoyo release"
+lifts any of them sooner. The hold's own record says who is deciding it and
+what the harness does next, and "yoyo status" reads it back.
 And what the session is doing -- watching, idle, braked, resumed, stopped -- is
 recorded where "yoyo status" and the Slack sink read it, because an idle session
 and a dead one are otherwise the same silence.
@@ -900,8 +926,8 @@ session watches without this and is restarted by hand for a deploy.
 
 --budget fails closed, and it bounds everything the session spends: the runs it
 starts, the turns it takes putting stopped work to the development manager, the
-turns a recurring task spends, and the turn it spends waking a role to re-issue a
-refused tracker block. A
+turns a recurring task spends, the turns a summoned sweep spends, and the turn
+it spends waking a role to re-issue a refused tracker block. A
 pass with no way to price itself is refused before anything starts, and a session
 that meets a run whose recorded evidence will not price stops and says which run
 it was rather than counting it as free and carrying on inside a bound it can no

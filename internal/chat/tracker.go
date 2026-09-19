@@ -187,6 +187,14 @@ const (
 	// pile the product manager is shown, so a report nobody decides about keeps
 	// coming back.
 	actionHandle = "handle"
+	// actionBrake records what the development manager decided about the intake
+	// brake's own hold: release it, probe the line, or keep it for the operator.
+	// Its subject is neither an item nor a run but the hold the brake placed,
+	// which is why it names no item and why it is not a triage decision: a
+	// decision about a run does not decide the hold, and a decision about the
+	// hold does not decide a run. It is the one write a conversation makes to
+	// that record; everything else on it is the watching session's.
+	actionBrake = "brake"
 )
 
 // trackerActionArguments names the optional arguments each operation accepts.
@@ -210,6 +218,7 @@ var trackerActionArguments = map[string][]string{
 	actionRetire:       {},
 	actionTriage:       {"run", "decision", "budget"},
 	actionHandle:       {"report"},
+	actionBrake:        {"decision"},
 }
 
 // trackerCapabilities is which authority each operation belongs to. It is the
@@ -246,6 +255,9 @@ var trackerCapabilities = map[string]capability.Capability{
 	actionRetire:       capability.BacklogAdmit,
 	actionTriage:       capability.WorkTriage,
 	actionHandle:       capability.BacklogAdmit,
+	// Deciding the brake's hold is deciding what becomes of work that stopped
+	// moving, one level up: the same authority, held by the same role.
+	actionBrake: capability.WorkTriage,
 }
 
 // trackerActionNames lists the operations in the order the contract states them,
@@ -253,7 +265,7 @@ var trackerCapabilities = map[string]capability.Capability{
 var trackerActionNames = []string{
 	actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate, actionReparent,
 	actionReprioritize, actionPark, actionUnpark, actionLink, actionUnlink, actionRepair,
-	actionClose, actionRetire, actionTriage, actionHandle,
+	actionClose, actionRetire, actionTriage, actionHandle, actionBrake,
 }
 
 // providerPathClause is what every role that writes an item's text is told
@@ -785,6 +797,13 @@ func (a TrackerAction) validateSubject() error {
 			return errors.New("handle does not take an id; it names the report it settles in \"report\", and it changes no work item")
 		}
 		return nil
+	case a.Action == actionBrake:
+		// The other one. Its subject is the brake's hold on intake, and an id
+		// would be an item nothing was going to be done to.
+		if id != "" {
+			return errors.New("brake does not take an id; it decides the brake's hold on intake, and it changes no work item")
+		}
+		return nil
 	case id == "":
 		return fmt.Errorf("%s requires the id of the item to act on", a.Action)
 	default:
@@ -796,7 +815,7 @@ func (a TrackerAction) validateSubject() error {
 // is every operation but admitting new work and surveying the queue.
 func (a TrackerAction) actsOnExistingItem() bool {
 	switch a.Action {
-	case actionCreate, actionSurvey, actionHandle:
+	case actionCreate, actionSurvey, actionHandle, actionBrake:
 		return false
 	default:
 		return true
@@ -893,6 +912,14 @@ func (a TrackerAction) validateArguments() []error {
 			problems = append(problems, errors.New("handle requires \"report\", the report it says what became of"))
 		case !report.ValidID(reported):
 			problems = append(problems, fmt.Errorf("handle report %q is not a report identifier; a report is named exactly as it was listed to you", reported))
+		}
+	case actionBrake:
+		switch decision := runstate.IntakeBrakeDecision(strings.TrimSpace(a.Decision)); {
+		case decision == "":
+			problems = append(problems, fmt.Errorf("brake requires \"decision\", one of %s", strings.Join(runstate.IntakeBrakeDecisionVocabulary(), ", ")))
+		case !decision.Valid():
+			problems = append(problems, fmt.Errorf("brake decision %q is not a decision; the decisions are %s",
+				decision, strings.Join(runstate.IntakeBrakeDecisionVocabulary(), ", ")))
 		}
 	}
 	// A grant naming a path the provider refuses is refused wherever an item's
@@ -1600,6 +1627,8 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		s.carryOutTriage(ctx, outcome)
 	case actionHandle:
 		s.recordReportHandling(outcome)
+	case actionBrake:
+		s.decideBrake(outcome)
 	default:
 		// Validation admits nothing else, so reaching this is a harness bug rather
 		// than a badly formed request; it is reported as a failure all the same.

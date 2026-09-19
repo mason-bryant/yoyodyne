@@ -196,11 +196,45 @@ It is the same record `/release` lifts — one file under the product — so it 
 not matter which surface placed the hold or which lifts it. It is here because a
 hold you did not place is the one you are most likely to meet with no
 conversation open: the failure-storm brake holds intake itself when runs keep
-blocking, and every report of a held intake at a terminal now names this command
+blocking, and every report of a held intake at a terminal names this command
 beside `/release`. Releasing what is not held is not an error, an item you name
 with `yoyo run` was never subject to the hold, and a watching `yoyo work` session
 starts choosing again at its next poll. Placing a hold stays in the conversation,
 where the reason for it can be recorded with it.
+
+**A hold the brake placed asks a person for nothing unless the development
+manager has escalated it.** That was not always so: the brake tripped on
+2026-09-02, 09-05, 09-13, 09-17, and 09-19, and each time the line sat held
+until somebody noticed — on the last of them for about two hours, with a free
+developer slot idle. The operator's decision that day, recorded as a directive,
+was that the brake may trip so long as the development manager is always
+invoked at once to sort it out and nothing waits. So the poll that trips the
+brake also summons her [sweep](configuration.md#recurring-tasks) out of its
+cadence, with the runs that blocked and the reason each blocked in the message
+that wakes her, and she decides what happens to the hold: release it, keep it
+and probe the line, or keep it and escalate it to you. The watching session
+acts on her decision at its next poll. Where she records none by
+`execution.brake_cooldown` — thirty minutes by default — the session decides on
+evidence instead: it starts one probe run under the hold, and the probe landing
+reopens intake while the probe blocking keeps it held, restarts the cooldown,
+and puts the question to her again with the probe's own stoppage. A broken
+machine is therefore probed once per cooldown and put to her each time; a
+machine that was fine is choosing again within a cooldown of the trip whether or
+not anybody answered; and the one brake hold that waits on you is one she
+escalated, which she does by recording the decision and reporting it at
+`warning` severity so it reaches you. Only verdicts and check failures against
+a change that was present count toward the trip — an environmental stop, a
+dirty checkout or a transport that did not answer, is a verdict on nothing and
+counts toward nothing, and neither does a provider answering nobody.
+
+The hold's own record says where it stands, and every surface reads it from
+there: `yoyo status` names the hold on its "Needs a human" line with whose move
+it is — the development manager's while she decides, with when the probe
+starts if she has not; the harness's while a probe runs, naming the probe; and
+yours only once she has escalated it — the watch log and the channel say the
+same, `yoyo sweeps` shows the summoned pass as summoned, and the run the probe
+made records the brake as what chose it. `yoyo release` still lifts a brake
+hold sooner, and says what the harness was in the middle of when it did.
 
 ## Waiting out a provider usage limit
 
@@ -499,8 +533,9 @@ What the wait costs is nothing, and that is the whole of the rule:
   refused one re-records it, and the next firing waits the interval again.
 - **The brake does not trip.** The failure-storm brake counts runs that blocked
   with nothing landing between them, and a dispatch or a run the provider turned
-  away is neither. Its remedy — `yoyo release` — lifts nothing here, which is
-  why tripping it on this turned one hand step into two.
+  away is neither. A brake tripped on this would summon the development manager
+  over a change nobody judged, and prescribe a probe into a provider that is
+  still away, which is why tripping it on this turned one hand step into two.
 
 Where it stands is one record under the product, `provider-outage.json`,
 written by whatever meets the provider refusing everybody — a dispatch, a run,
@@ -1233,7 +1268,11 @@ Needs a human (3):
   months ago — and reading that word as a refusal is what hid two-thirds of the
   backlog on 2026-09-04.
 - **Needs a human** is always present, and says either `nothing` or the list with
-  whose move each one is: the operator's two switches, an unresolved directive, a
+  whose move each one is: the operator's two switches — a held intake with whose
+  it is, which for [a hold the brake placed](#pausing-everything-and-resuming-it)
+  is the development manager's or the harness's rather than yours until she
+  escalates it, and names the probe run while one is in flight — an unresolved
+  directive, a
   proposed change nobody has decided, a run that ended still owing a step, a
   promotion the forge has not published, work
   marked for a conversation rather than for a run, a queue nothing is pulling

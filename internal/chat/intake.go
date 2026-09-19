@@ -29,10 +29,16 @@ import (
 // IntakeHolds is the operator's switch over what the harness starts by itself,
 // as a conversation reads and writes it. It is satisfied by
 // runstate.IntakeHoldStore.
+//
+// DecideBrake is the one write here that is not the operator's: the
+// development manager recording what becomes of a hold the harness's own brake
+// placed. It refuses every other hold, so a conversation can never decide the
+// operator's switch on their behalf.
 type IntakeHolds interface {
 	Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error)
 	Held() (runstate.IntakeHold, bool, error)
 	Release() (runstate.IntakeHold, bool, error)
+	DecideBrake(decision runstate.IntakeBrakeDecision, reason, by string, at time.Time) (runstate.IntakeHold, error)
 }
 
 // errNoIntake reports a conversation with no intake switch wired to it. Such a
@@ -124,6 +130,53 @@ func (s *Session) ReleaseIntake() (IntakeReport, error) {
 	return report, nil
 }
 
+// decideBrake records the development manager's decision about the brake's own
+// hold, which is the one thing a conversation writes onto that record. The
+// harness acts on it at the watching session's next poll: a release lifts the
+// hold, a probe starts one run under it, and an escalation keeps it for the
+// operator. Nothing is lifted or started here, for the reason a triage
+// decision carries nothing out: recording is this role's, and acting is the
+// harness's own hand.
+//
+// A hold the brake did not place is refused rather than decided about. The
+// operator's hold waits on the operator, and a record saying she decided about
+// it would be a decision about a switch she does not hold; the failure says so
+// in those words, so she can tell the operator what stands rather than trying
+// again.
+func (s *Session) decideBrake(outcome *TrackerOutcome) {
+	if s.options.Intake == nil {
+		outcome.fail(errNoIntake)
+		return
+	}
+	decision := runstate.IntakeBrakeDecision(strings.TrimSpace(outcome.Action.Decision))
+	by := fmt.Sprintf("%s conversation %s, turn %d", s.state.Role, s.state.ConversationID, s.state.Turns)
+	held, err := s.options.Intake.DecideBrake(decision, strings.TrimSpace(outcome.Action.Reason), by, s.options.clock().Now())
+	if err != nil {
+		if errors.Is(err, runstate.ErrNoBrakeHold) {
+			outcome.fail(fmt.Errorf("nothing was recorded: %w; a hold the operator placed is theirs to lift, and no hold at all needs no decision", err))
+			return
+		}
+		outcome.fail(err)
+		return
+	}
+	// An escalation asks a person for something, so it is said as one: the
+	// harness's next poll leaves the hold where it is, and what the operator
+	// reads is that she decided it should.
+	switch decision {
+	case runstate.BrakeDecisionRelease:
+		outcome.applied("recorded the decision to release the brake's hold on intake, held since %s; the watching session lifts it at its next poll",
+			held.HeldAt.UTC().Format(time.RFC3339))
+	case runstate.BrakeDecisionProbe:
+		outcome.applied("recorded the decision to probe the line under the brake's hold, held since %s; the watching session starts one probe run at its next poll, and intake reopens if it lands",
+			held.HeldAt.UTC().Format(time.RFC3339))
+	case runstate.BrakeDecisionEscalate:
+		outcome.applied("recorded the escalation of the brake's hold on intake, held since %s, to the operator; it stays held until `yoyo release` or /release lifts it",
+			held.HeldAt.UTC().Format(time.RFC3339))
+	default:
+		outcome.applied("recorded the brake decision %q on the hold held since %s", decision, held.HeldAt.UTC().Format(time.RFC3339))
+	}
+}
+
 // intakeNote is what a hold records about why. The conversation and the turn are
 // named for the same reason a stopped item's note names them: the hold has to
 // trace back to the intent that placed it, and an operator coming back to a quiet
@@ -164,7 +217,7 @@ func (s *Session) intakeBanner() string {
 		return ""
 	}
 	banner := "INTAKE HELD since " + report.Hold.HeldAt.Format(time.RFC3339) + ": " +
-		singleLine(report.Hold.Says(), MaxOperatorMessageBytes) + "."
+		singleLine(report.Hold.Account(), MaxOperatorMessageBytes) + "."
 	return banner + "\nThe harness starts nothing more on its own. Work already running carries on. /release lifts it, and /work <beads-id> still runs an item you name.\n\n"
 }
 
@@ -185,7 +238,7 @@ func (r IntakeReport) Render() string {
 			r.Hold.HeldAt.Format(time.RFC3339), singleLine(r.Hold.Says(), MaxOperatorMessageBytes))
 	case r.Held:
 		fmt.Fprintf(&rendered, "intake is held, since %s, so the harness starts nothing on its own: %s.\n",
-			r.Hold.HeldAt.Format(time.RFC3339), singleLine(r.Hold.Says(), MaxOperatorMessageBytes))
+			r.Hold.HeldAt.Format(time.RFC3339), singleLine(r.Hold.Account(), MaxOperatorMessageBytes))
 		rendered.WriteString(indent("this was already the case, so nothing changed. /release lifts it."))
 	default:
 		rendered.WriteString("intake is not held: the harness may choose work from the backlog on its own.\n")

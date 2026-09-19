@@ -930,9 +930,14 @@ cannot get past is not retried every minute forever, and a blocker you release i
 picked up because releasing it changed the item. Runs blocking one after another
 with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
-whole backlog through a failed run overnight — and what reports that hold
+whole backlog through a failed run overnight — and the same poll summons the
+development manager to decide what happens to the hold, with the blocked runs
+in front of her, and probes the line by itself with one run if she has not
+decided by `execution.brake_cooldown`, so a hold the brake placed
+[waits on nobody unless she escalates it](operations.md#pausing-everything-and-resuming-it).
+Stops the environment made count toward nothing. What reports that hold
 names the brake rather than you, because the hold records which of the two
-placed it. And it records what it is doing — watching, idle, braked, resumed,
+placed it, and says who is deciding it. And it records what it is doing — watching, idle, braked, resumed,
 stopped — where `yoyo status` and the Slack sink read it, because an idle
 session and a dead one are otherwise the same silence. A
 poll that starts nothing names the runs going and what it passed over. It records

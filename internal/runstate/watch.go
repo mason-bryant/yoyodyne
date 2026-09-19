@@ -264,6 +264,14 @@ type WatchTransition struct {
 	// harness is nonetheless moving. Zero is a session with nothing going, which is
 	// the ordinary idle.
 	Running int `json:"running,omitempty"`
+	// Mover is whose move a braked poll is, in the words of the hold's own
+	// record, where the hold carries one. It travels for the reason the executor
+	// does: the clause a channel closes a braked message on used to name the
+	// operator whatever held the line, and a hold the brake placed is the
+	// development manager's or the harness's until she escalates it. It is
+	// empty on every other transition, and on a braked one over the operator's
+	// own hold, which is theirs as it always was.
+	Mover string `json:"mover,omitempty"`
 	// Executor is the conversation that carries the work this session passed over,
 	// where the work it passed over is carried by one. It is the marker an item
 	// itself is marked with, so the role named here is the role the tracker names

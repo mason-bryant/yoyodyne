@@ -343,6 +343,12 @@ func renderSweep(recorded runstate.Sweep) string {
 		fmt.Fprintf(&rendered, ", $%.4f", recorded.CostUSD)
 	}
 	rendered.WriteString("\n")
+	// A summoned pass is said as one before anything it found: it is the pass
+	// that ran because the line stopped, and a reader scanning the log for why
+	// the hourly cadence has an extra entry in it is owed the answer first.
+	if recorded.Summoned != "" {
+		fmt.Fprintf(&rendered, "  summoned out of its cadence by %s\n", recorded.Summoned)
+	}
 	if recorded.Result == nil {
 		fmt.Fprintf(&rendered, "  no account of this pass was recorded: %s\n", nonEmptySweepProblem(recorded.Problem))
 		return rendered.String()
@@ -402,6 +408,11 @@ Three outcomes look alike and are not: a pass that found nothing shows its own
 summary and no findings, which on a healthy harness is most of them; a pass that
 produced no account says so and names what stopped it; and a pass stopped by its
 turn bound is recorded as partial, so it is never mistaken for a finished one.
+
+A pass the intake brake summoned out of its cadence says so under its header,
+naming what tripped the brake. It is the development manager's sweep fired the
+moment the line stopped, with the blocked runs in front of her, and it counts as
+a firing: the cadence runs on from it.
 
 The twenty most recent passes are shown by default, which for an hourly task is
 under a day. "--limit 200" reads further back and "--limit 0" reads every pass

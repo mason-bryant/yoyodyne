@@ -78,6 +78,9 @@ import (
 // It is satisfied by runstate.SweepStore.
 type RecurringClaims interface {
 	Claim(ctx context.Context, task string, every time.Duration, now time.Time) (runstate.SweepClaim, error)
+	// Summon claims a firing out of cadence, which is what the intake brake asks
+	// for: the development manager's sweep now, rather than at its next pass.
+	Summon(ctx context.Context, task string, now time.Time) (runstate.SweepClaim, error)
 	Settle(ctx context.Context, task, problem string) (runstate.SweepClaim, error)
 }
 
@@ -161,6 +164,8 @@ type Fired struct {
 	// out. It is the one thing a reader cannot infer from a short report, and
 	// leaving it unsaid would make a bounded pass look like a finished one.
 	Truncated bool `json:"truncated,omitempty"`
+	// Summoned is what fired this pass out of its cadence, where something did.
+	Summoned string `json:"summoned,omitempty"`
 	// Problem is what stopped or spoiled the firing.
 	Problem string `json:"problem,omitempty"`
 }
@@ -274,10 +279,92 @@ func (t Trigger) Fire(ctx context.Context) (RecurringSweep, error) {
 			fired := t.refuse(ctx, name, task, outage)
 			return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
 		}
-		fired := t.run(ctx, name, task)
+		fired := t.run(ctx, name, task, wakeMessage(name, task), "")
 		return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
 	}
 	return RecurringSweep{}, errors.Join(problems...)
+}
+
+// BrakeSummons is what the intake brake puts in front of the development
+// manager when it summons her: the hold as the brake placed it, with the runs
+// that tripped it on its own record.
+type BrakeSummons struct {
+	Hold runstate.IntakeHold
+}
+
+// ErrNoSummonableTask reports a configuration that schedules no enabled task
+// for the development manager, so there is no sweep of hers to summon. The
+// brake records it on the hold and the cooldown probes the line regardless: a
+// summons that cannot be made is not a hold that waits.
+var ErrNoSummonableTask = errors.New("no enabled recurring task wakes the development manager, so there is no sweep to summon")
+
+// Summon fires the development manager's sweep now, out of its cadence, with
+// the brake's trip in front of her. It is the delivery the brake was missing:
+// until it existed the trip reached her at her next scheduled pass, an hour
+// away at most and with nothing in the wake saying the line had stopped.
+//
+// Everything about the firing is the cadence's own — the same claim, the same
+// role conversation, the same turn bound, the same durable report — with two
+// differences. The claim is made whether or not the task is due, and the wake
+// message carries the trip: which runs blocked and why, what she may decide,
+// and when the brake probes the line by itself if she decides nothing. The
+// entries ride the wake rather than the conversation's opening briefing,
+// because the briefing is assembled when the conversation opens and what she
+// has to look at is what arrived with the message.
+//
+// A provider answering nobody refuses it exactly as it refuses a scheduled
+// firing, and for the same reason: a summons made into a login nobody renewed
+// asks her nothing and spends a claim doing it. The pause covers it as it
+// covers every turn.
+func (t Trigger) Summon(ctx context.Context, summons BrakeSummons) (Fired, error) {
+	if err := t.validate(); err != nil {
+		return Fired{}, err
+	}
+	if _, held, err := t.paused(); err != nil {
+		return Fired{}, err
+	} else if held {
+		return Fired{}, errors.New("the operator has paused harness activity, so the development manager was not summoned")
+	}
+	name, task, found := t.developmentManagerTask()
+	if !found {
+		return Fired{}, ErrNoSummonableTask
+	}
+	outage, away, err := t.providerAway()
+	if err != nil {
+		return Fired{}, err
+	}
+	if away {
+		return Fired{}, fmt.Errorf("the provider is answering nobody, so the development manager was not summoned: %s", outage.Says())
+	}
+	if _, err := t.Claims.Summon(ctx, name, t.now()); err != nil {
+		return Fired{}, fmt.Errorf("claim the summoned firing of the recurring task %s: %w", name, err)
+	}
+	summoned := summonedBy(summons.Hold)
+	fired := t.run(ctx, name, task, summonsMessage(name, task, summons.Hold), summoned)
+	return fired, nil
+}
+
+// developmentManagerTask is the first enabled task, in name order, that wakes
+// the development manager. A project that schedules two of them gets the first
+// summoned, which is the same choice the cadence makes about which fires first.
+func (t Trigger) developmentManagerTask() (string, config.RecurringTask, bool) {
+	for _, name := range t.names() {
+		task := t.Tasks[name]
+		if task.Enabled && task.Role == domain.RoleDevelopmentManager {
+			return name, task, true
+		}
+	}
+	return "", config.RecurringTask{}, false
+}
+
+// summonedBy is what the sweep record says summoned it, bounded to what the
+// record accepts.
+func summonedBy(hold runstate.IntakeHold) string {
+	said := "the intake brake, after " + strings.TrimSpace(hold.Reason)
+	if hold.Brake != nil && hold.Brake.Probe != nil && hold.Brake.Probe.Blocked {
+		said = fmt.Sprintf("the intake brake, after its probe run of %s blocked", hold.Brake.Probe.WorkItemID)
+	}
+	return boundedProblem([]string{said})
 }
 
 // providerAway reads whether the provider is answering nobody, and reports the
@@ -332,16 +419,16 @@ func (t Trigger) refuse(ctx context.Context, name string, task config.RecurringT
 // run takes one firing's turns and records what they came to. It never returns
 // an error: a firing that failed is a fact about the schedule that belongs in the
 // record and beside the pass, rather than something that stops the pull.
-func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask) Fired {
-	fired := Fired{Task: name, Role: task.Role}
+func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask, message, summoned string) Fired {
+	fired := Fired{Task: name, Role: task.Role, Summoned: summoned}
 	recorded := runstate.Sweep{
 		Task:      name,
 		Role:      task.Role,
 		StartedAt: t.now(),
+		Summoned:  summoned,
 	}
 	var merged *sweep.Result
 	var problems []string
-	message := wakeMessage(name, task)
 	for turn := 0; turn < task.Turns(); turn++ {
 		answered, err := t.Roles.Wake(ctx, task.Role, message)
 		// What the turn cost is carried whichever way it went, because the provider
@@ -640,6 +727,56 @@ func wakeMessage(name string, task config.RecurringTask) string {
 	}, "\n")
 }
 
+// summonsMessage is what the harness says when the intake brake summons the
+// development manager out of her cadence. It is the ordinary wake — the same
+// preamble, the same task, the same contract — with the trip in front of it,
+// because a summoned pass is her sweep with one thing added rather than a
+// different conversation: what stopped the line, what she may decide about the
+// hold, and what the brake does if she decides nothing.
+//
+// The entries are in the message rather than left to the conversation's opening
+// briefing, deliberately. The briefing is assembled when her conversation opens
+// and lists the docket as it stands; the runs that tripped the brake are on it
+// too, among everything else, and a summons that pointed at the docket would be
+// asking her to find the three entries this turn is about.
+func summonsMessage(name string, task config.RecurringTask, hold runstate.IntakeHold) string {
+	lines := []string{
+		fmt.Sprintf("The intake brake summoned you now, ahead of the cadence of %q: %s, and intake is held since %s. Nobody is waiting at a terminal for this: what you produce is recorded and read later.",
+			name, strings.TrimSpace(hold.Reason), hold.HeldAt.UTC().Format(time.RFC3339)),
+		"Your authority here is exactly the authority your role already holds — this turn grants you nothing extra.",
+		"",
+		"What tripped it, in the order the runs blocked:",
+	}
+	if hold.Brake != nil {
+		for _, entry := range hold.Brake.Entries() {
+			lines = append(lines, "- "+entry)
+		}
+		if probe := hold.Brake.Probe; probe != nil && probe.Blocked {
+			run := "a probe run"
+			if strings.TrimSpace(probe.RunID) != "" {
+				run = "probe run " + probe.RunID
+			}
+			lines = append(lines, fmt.Sprintf("- and since then %s of %s, started under the hold to find out whether the line is fine, blocked as well: %s",
+				run, probe.WorkItemID, strings.TrimSpace(probe.Reason)))
+		}
+	}
+	cooldown := "the configured cooldown"
+	if hold.Brake != nil {
+		cooldown = hold.Brake.CooldownEndsAt.UTC().Format(time.RFC3339)
+	}
+	lines = append(lines,
+		"",
+		"Decide what happens to the hold, and record it as a brake decision in your tracker block: \"release\" if the line is fine or what stopped it is dealt with, so the harness chooses work again now; \"probe\" to keep the hold and have one probe run start now, which reopens intake if it lands and keeps it held if it blocks; or \"escalate\" to keep the hold for the operator, which is the only decision under which it waits on a person — say why in the reason and report it at warning severity, so it reaches them.",
+		"Triage the runs themselves as their docket entries warrant — repair, re-run, re-scope, or escalate each — exactly as you would on any pass; a decision about a run does not decide the hold, and a decision about the hold does not decide a run.",
+		fmt.Sprintf("If you record no brake decision, a probe run starts by itself at %s, and the hold is released or kept on what becomes of it.", cooldown),
+		"",
+		strings.TrimSpace(task.Prompt),
+		"",
+		sweep.Contract(),
+	)
+	return strings.Join(lines, "\n")
+}
+
 // continueMessage is what a pass that said it had more to do is given next. It
 // deliberately says nothing about what to look at: the role has the whole of its
 // own previous turn in the conversation, and repeating the task here would be a
@@ -716,6 +853,9 @@ func (s RecurringSweep) Render() string {
 		default:
 			fmt.Fprintf(&rendered, "the recurring task %s woke the %s, which found %d thing(s) in %d turn(s)\n",
 				fired.Task, fired.Role, fired.Findings, fired.Turns)
+		}
+		if fired.Summoned != "" {
+			fmt.Fprintf(&rendered, "  summoned out of its cadence by %s\n", fired.Summoned)
 		}
 		if fired.SilentRepairs > 0 {
 			fmt.Fprintf(&rendered, "  %d of its fixes filed nothing for their root cause\n", fired.SilentRepairs)

@@ -40,6 +40,12 @@ const (
 	SelectedByOperator           = "operator"
 	SelectedByDevelopmentManager = "development manager"
 	SelectedByScheduler          = "scheduler"
+	// SelectedByBrake is the intake brake's probe: the one run the scheduler
+	// starts under the brake's own hold to find out whether the line is fine.
+	// It is named apart from the scheduler because it is the one harness
+	// selection an intake hold lets through, and only where the hold's own
+	// record names the item as its probe — see IntakeHold.Probing.
+	SelectedByBrake = "intake brake"
 )
 
 // MaxSelectionReasonBytes bounds the recorded reason. It is generous enough for

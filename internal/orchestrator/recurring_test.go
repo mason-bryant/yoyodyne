@@ -851,3 +851,102 @@ func TestAForgeThatCouldNotBeReadIsSaidAndCostsNothingElse(t *testing.T) {
 		t.Fatalf("recorded = %+v, want the role's own account kept", recorded)
 	}
 }
+
+// A summons is the development manager's sweep fired out of its cadence with
+// the brake's trip in front of her: the three runs and the reason each blocked
+// in the message that wakes her, her three decisions named, and when the brake
+// probes by itself if she records none. It is a firing like any other — claimed
+// whether or not the task is due, recorded as summoned, and paced from.
+func TestASummonsFiresTheSweepOutOfCadenceWithTheTripInTheWake(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	// The scheduled pass fired a minute ago, so the cadence would refuse.
+	if _, err := store.Claim(context.Background(), "a-sweep", time.Hour, recurringNow.Add(-time.Minute)); err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("released the hold: three verdicts on three changes"), cost: 0.4}}}
+	trigger := Trigger{Tasks: hourlyTask("sweep for unresolved issues"), Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+	trippedAt := recurringNow.Add(-30 * time.Second)
+	hold := runstate.IntakeHold{
+		SchemaVersion: runstate.IntakeHoldSchemaVersion,
+		ProductID:     "example",
+		HeldAt:        trippedAt,
+		HeldBy:        runstate.IntakeHolderBrake,
+		Reason:        "3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3",
+		Brake: &runstate.IntakeBrake{
+			Blocked: []runstate.BrakeBlockedRun{
+				{RunID: "run-398", WorkItemID: "yoyodyne-ifd.398", Reason: "independent review still required repair after every permitted attempt"},
+				{RunID: "run-353", WorkItemID: "yoyodyne-ifd.353", Reason: "a configured check still failed after every permitted attempt"},
+				{RunID: "run-404", WorkItemID: "yoyodyne-ifd.404", Reason: "independent review still required repair after every permitted attempt"},
+			},
+			CooldownEndsAt: trippedAt.Add(30 * time.Minute),
+		},
+	}
+
+	fired, err := trigger.Summon(context.Background(), BrakeSummons{Hold: hold})
+	if err != nil {
+		t.Fatalf("Summon() error = %v", err)
+	}
+	if fired.Turns != 1 || fired.CostUSD != 0.4 || fired.Task != "a-sweep" || fired.Summoned == "" {
+		t.Fatalf("fired = %+v, want one summoned turn of the development manager's task", fired)
+	}
+	if len(role.messages) != 1 {
+		t.Fatalf("messages = %d, want one", len(role.messages))
+	}
+	message := role.messages[0]
+	for _, want := range []string{
+		"The intake brake summoned you now",
+		"run-398 of yoyodyne-ifd.398: independent review still required repair",
+		"run-353 of yoyodyne-ifd.353: a configured check still failed",
+		"run-404 of yoyodyne-ifd.404",
+		`"release"`, `"probe"`, `"escalate"`,
+		"a probe run starts by itself at " + trippedAt.Add(30*time.Minute).Format(time.RFC3339),
+		"sweep for unresolved issues",
+		"authority your role already holds",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the summons does not say %q:\n%s", want, message)
+		}
+	}
+	recorded, _, err := store.List()
+	if err != nil || len(recorded) != 1 {
+		t.Fatalf("List() = %d record(s), %v; want the summoned pass recorded", len(recorded), err)
+	}
+	if !strings.Contains(recorded[0].Summoned, "the intake brake") {
+		t.Fatalf("recorded summoned = %q, want the brake named as what summoned the pass", recorded[0].Summoned)
+	}
+	// The cadence runs on from the summons rather than from the pass before it.
+	if _, err := store.Claim(context.Background(), "a-sweep", time.Hour, recurringNow.Add(59*time.Minute)); !errors.Is(err, runstate.ErrSweepNotDue) {
+		t.Fatalf("Claim() an hour after the earlier pass error = %v, want the cadence paced from the summons", err)
+	}
+	// A second summons — a probe that blocked — carries the probe beside the trip.
+	blockedAt := recurringNow.Add(40 * time.Minute)
+	hold.Brake.Probe = &runstate.IntakeProbe{WorkItemID: "yoyodyne-ifd.410", RunID: "run-410", StartedAt: recurringNow.Add(31 * time.Minute), EndedAt: &blockedAt, Blocked: true, Reason: "a configured check still failed"}
+	role.answers = []scriptedTurn{{result: complete("escalated: the same check fails on every change")}}
+	if _, err := trigger.Summon(context.Background(), BrakeSummons{Hold: hold}); err != nil {
+		t.Fatalf("second Summon() error = %v", err)
+	}
+	if again := role.messages[1]; !strings.Contains(again, "probe run run-410 of yoyodyne-ifd.410") || !strings.Contains(again, "blocked as well: a configured check still failed") {
+		t.Errorf("the second summons does not name the blocked probe:\n%s", again)
+	}
+}
+
+// A project that schedules no development manager's sweep has nothing to
+// summon, and says so rather than waking a role under a task that does not
+// exist.
+func TestASummonsWithNoDevelopmentManagerTaskIsRefused(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	role := &wokenRole{}
+	tasks := map[string]config.RecurringTask{"pm-scan": {Role: domain.RoleProductManager, Every: config.Duration(time.Hour), Enabled: true, Prompt: "scan", MaxTurns: 1}}
+	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+	hold := runstate.IntakeHold{HeldBy: runstate.IntakeHolderBrake, Brake: &runstate.IntakeBrake{Blocked: []runstate.BrakeBlockedRun{{WorkItemID: "x", Reason: "blocked"}}, CooldownEndsAt: recurringNow}}
+	if _, err := trigger.Summon(context.Background(), BrakeSummons{Hold: hold}); !errors.Is(err, ErrNoSummonableTask) {
+		t.Fatalf("Summon() error = %v, want %v", err, ErrNoSummonableTask)
+	}
+	if len(role.messages) != 0 {
+		t.Fatalf("messages = %v, want nobody woken", role.messages)
+	}
+}
