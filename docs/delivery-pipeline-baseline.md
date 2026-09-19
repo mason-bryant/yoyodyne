@@ -667,7 +667,10 @@ them.
   `TestASweepRecordsTheGapAnInterruptedObservationLeaves` and
   `TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal` hold both
   halves of that, the first of them over a blocked settlement as well as a
-  completed one. Where each instance *went* is not read off these traces:
+  completed one, and `TestABlockedSettlementRecordsTheGapItsInstanceLeaves`
+  holds both halves at the blocked settlement itself — at `blockRun`, which
+  every route into it shares, so a gap recorded on one route and missed on
+  another cannot pass. Where each instance *went* is not read off these traces:
   `internal/orchestrator/declarative_test.go` drives the eight paths the parity
   harness holds a transcript for and compares the instance's own sequence
   against it.
