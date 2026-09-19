@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
-	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // The provider's own names for the events this dialect reads. Everything else in
@@ -83,8 +82,14 @@ var (
 // nothing rather than a refusal that stands — the same reading the Claude Code
 // dialect gives the same condition, which is the whole of what the conformance
 // suite holds the two to.
+//
+// The remedy the CLI names beside its refusal, `codex login`, is matched as
+// well: a process that told somebody to log in has refused the account it was
+// run under, whatever it titled the refusal. No recorded Codex process carries
+// it; it is the CLI's documented remedy, and the first recorded occurrence is
+// the evidence that should replace this sentence.
 var (
-	notAuthenticated      = regexp.MustCompile(`(?i)not logged in|unauthenticated|invalid api key|authentication_error|\bunauthorized\b`)
+	notAuthenticated      = regexp.MustCompile(`(?i)not logged in|unauthenticated|invalid api key|authentication_error|\bunauthorized\b|codex login`)
 	unauthenticatedStatus = regexp.MustCompile(`\b401\b`)
 )
 
@@ -124,20 +129,46 @@ func (Dialect) Name() string { return sourceName }
 // about capacity on a completed task, so reading one as evidence that a limit
 // has lifted would be this dialect inventing a fact the provider never stated.
 //
-// Stderr is not an answer either, and the case is stated rather than left to
-// the default so that it is a decision. The Claude Code dialect reads a login
-// refusal and an unreachable API off stderr because that CLI can refuse before
-// it writes an envelope; no recorded Codex process has done so, its adapter
-// hands this dialect no stderr, and a reading nobody has a specimen for is a
-// guess about diagnostics. The first recorded occurrence is the case for one.
+// The process's plain output — stderr, and stdout where what it wrote there was
+// not an envelope — is read for two things and nothing else, exactly as the
+// Claude Code dialect reads it: a login this provider will not accept, and an
+// API nothing reaches. Until yoyodyne-ifd.400 this dialect read nothing off
+// stderr, by decision, because no recorded Codex process had refused before
+// writing an envelope and a reading nobody had a specimen for was a guess about
+// diagnostics. That decision was reversed without a specimen, deliberately: the
+// cost of the guess being wrong is a wait a person ends by logging in, and the
+// cost of not reading it is the shape yoyodyne-ifd.377 closed for Claude Code
+// replayed on this provider — a login expiry relaunched into the same login
+// until the budget is spent, then blocked. The first recorded occurrence is
+// still the evidence that should replace the words matched here.
 func (Dialect) Observe(event backend.ProviderEvent) (backend.Observation, bool) {
 	switch {
-	case event.Channel == domain.ProviderChannelStderr:
-		return backend.Observation{}, false
+	case event.Channel.Plain():
+		return observePlainOutput(event.Text)
 	case event.Type == eventStreamError:
 		return backend.Observation{Answer: backend.AnswerRetrying}, true
 	case event.Terminal && event.Failed:
 		return observeFailedTerminal(event)
+	default:
+		return backend.Observation{}, false
+	}
+}
+
+// observePlainOutput reads what the process wrote as prose, which the adapter
+// hands over one channel at a time and only when the stream ended without a
+// terminal of its own. Prose names no ending and no status, so nothing but the
+// two waits that spend nothing is read off it: a limit, an overload, or a
+// refused request said there would be a guess about diagnostics, and a process
+// that died without a terminal for any other reason keeps being the process
+// failure it always was. The status forms are not matched here because a
+// refusal made before the API is called quotes none, and a bare number in a
+// process's diagnostics is not the API answering.
+func observePlainOutput(text string) (backend.Observation, bool) {
+	switch {
+	case notAuthenticated.MatchString(text):
+		return backend.Observation{Answer: backend.AnswerUnauthenticated, Detail: backend.DescribeFailure("", text)}, true
+	case unreachable.MatchString(text):
+		return backend.Observation{Answer: backend.AnswerUnreachable, Detail: backend.DescribeFailure("", text)}, true
 	default:
 		return backend.Observation{}, false
 	}

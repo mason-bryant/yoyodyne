@@ -431,18 +431,19 @@ what you do about them:
   network coming back, which the harness finds by asking again.
 
 Both are read off the terminal the provider ends its stream with, and off the
-process's stderr when there is no terminal: a CLI that refuses an expired login
-before it writes a single envelope has only stderr to say so on, and an attempt
-that died that way used to end as a process failure nobody had classified —
-which is relaunched, spends the budget, and blocks, the 2026-09-17 stall
-replayed. Stderr is read only for those two refusals and only when the stream
-ended without a terminal of its own; a terminal the provider did write is never
-second-guessed by its diagnostics, and a process that died for any other reason
-stays the failure it was. Which channel the refusal came on is recorded on the
-run (`provider_outage_channel`, `envelope` or `stderr`, kept as evidence after
-the wait ends the way the limit's kind is) and on the product's outage record
+process's prose when there is no terminal — its stderr, or plain text on stdout
+where the stream should have been: a CLI that refuses an expired login before
+writing any envelope says so there, and an attempt that died so used to end as
+a process failure nobody classified — relaunched, spending the budget, and
+blocked, the 2026-09-17 stall replayed. Prose is read by both adapters, only
+for those two refusals, and only when the stream ended without a terminal,
+stderr first; a terminal the provider did write is never second-guessed by its
+diagnostics, and a process that died any other way stays the failure it was.
+The channel the refusal came on is recorded on the run
+(`provider_outage_channel`: `envelope`, `stderr`, or `stdout`, kept as evidence
+after the wait, like the limit's kind) and on the product's outage record
 (`channel`), so a run that waited says whether its provider wrote an ending or
-died before it could.
+died first.
 
 What the wait costs is nothing, and that is the whole of the rule:
 

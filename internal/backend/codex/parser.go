@@ -170,6 +170,18 @@ type streamParser struct {
 	reply       func(string)
 	result      backend.RunResult
 	sawTerminal bool
+	// stderr is what the process wrote to its error stream, and stdout is what
+	// it wrote to its output stream before any envelope without its being one,
+	// each kept bounded so it can be handed to the dialect once the stream has
+	// ended. Both are read only when no terminal arrived — see
+	// ObservePlainOutput — so for every invocation that ended the way the
+	// provider ends one they are held and never consulted.
+	stderr strings.Builder
+	stdout strings.Builder
+	// sawEnvelope says the stream has carried at least one line this parser
+	// could read as an event. An unreadable line before that is held as plain
+	// stdout above as well as recorded; one after it is only recorded.
+	sawEnvelope bool
 }
 
 func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string), dialect backend.Dialect) *streamParser {
@@ -196,16 +208,27 @@ func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, c
 // banner or a warning would otherwise fail a run whose work was fine. Nothing is
 // lost by being lenient here, because Run still requires a terminal it can read
 // — an invocation whose whole stream is unreadable fails with exactly that.
+//
+// An unreadable line before any event is also held as plain stdout, for the
+// same reason stderr is held: a CLI that refuses an expired login before it
+// writes anything structured may say so there, and what it said is read once
+// the stream has ended without a terminal — see ObservePlainOutput.
 func (p *streamParser) ParseLine(line string) error {
 	if strings.TrimSpace(line) == "" {
 		return nil
 	}
 	message, readable := decodeMessage(line)
 	if !readable {
+		text := p.redactor.Redact(line)
+		if !p.sawEnvelope {
+			keepPlain(&p.stdout, text)
+		}
 		return p.emit(execution.EventProcessOutput, map[string]any{
-			"text": truncate(p.redactor.Redact(line)),
+			"stream": execution.StreamStdout,
+			"text":   truncate(text),
 		})
 	}
+	p.sawEnvelope = true
 	p.redactMessage(&message)
 	if streamedFragment(message.Type) {
 		return nil
@@ -258,10 +281,71 @@ func (p *streamParser) ParseLine(line string) error {
 }
 
 func (p *streamParser) EmitProcessOutput(output execution.Output) error {
+	text := p.redactor.Redact(output.Text)
+	if output.Stream == execution.StreamStderr {
+		keepPlain(&p.stderr, text)
+	}
 	return p.emit(execution.EventProcessOutput, map[string]any{
 		"stream": output.Stream,
-		"text":   truncate(p.redactor.Redact(output.Text)),
+		"text":   truncate(text),
 	})
+}
+
+// keepPlain holds one redacted line of a plain channel for ObservePlainOutput,
+// up to the same bound an event's text is held to. A refusal the CLI makes
+// before it writes anything structured is one short line at the front, so what
+// the bound cuts is the tail of a process that had a great deal else to say.
+func keepPlain(held *strings.Builder, text string) {
+	if held.Len() >= maxEventTextBytes {
+		return
+	}
+	if held.Len() > 0 {
+		held.WriteByte('\n')
+	}
+	held.WriteString(text)
+}
+
+// ObservePlainOutput hands the dialect what the process wrote as prose — its
+// stderr, and then the plain stdout it wrote before any event — as one event
+// per channel, and records whatever it answers. It is for the stream that
+// ended without a terminal of its own: a CLI that refuses an expired login
+// before it writes a single event says so on one of the two and exits, and a
+// dialect that read only events left that invocation an unclassified process
+// failure — which relaunches into the same login, spends the budget, and
+// blocks, the shape yoyodyne-ifd.377 closed for Claude Code. The caller asks
+// this only in that case, so a terminal the provider did write is never
+// second-guessed by its diagnostics, and a process that wrote nothing is asked
+// nothing.
+//
+// Stderr is read first, and stdout only when stderr answered nothing, so that
+// a CLI which said the same thing on both leaves one channel on the record
+// rather than whichever was recorded last.
+func (p *streamParser) ObservePlainOutput() {
+	if p.observePlain(domain.ProviderChannelStderr, p.stderr.String()) {
+		return
+	}
+	p.observePlain(domain.ProviderChannelStdout, p.stdout.String())
+}
+
+// observePlain hands one plain channel to the dialect and reports whether it
+// answered with a wait. A channel that carried only whitespace is one the
+// dialect is never asked about.
+func (p *streamParser) observePlain(channel domain.ProviderChannel, text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	before := p.result.ProviderOutage
+	p.observe(backend.ProviderEvent{Channel: channel, Text: text})
+	return p.result.ProviderOutage != before
+}
+
+// SawUsageLimit reports a stream that told the dialect a limit is refusing
+// work. A stream that said so and then ended without a terminal has already
+// been answered, and is not one whose plain output should be read for a second
+// one.
+func (p *streamParser) SawUsageLimit() bool {
+	return p.result.UsageLimit != nil
 }
 
 // RecordTruncatedLine records a cut line loudly and reads nothing off it.

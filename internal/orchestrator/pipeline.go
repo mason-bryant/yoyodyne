@@ -738,8 +738,8 @@ type Outcome struct {
 	PauseCause string `json:"pause_cause,omitempty"`
 	// ProviderOutageChannel is where the provider's refusal was read on a run
 	// waiting out an outage: the terminal of its stream, or its process's stderr
-	// because it refused before writing one. Evidence, reported for the reason
-	// the kind above is.
+	// or plain stdout because it refused before writing one. Evidence, reported
+	// for the reason the kind above is.
 	ProviderOutageChannel domain.ProviderChannel `json:"provider_outage_channel,omitempty"`
 	// ProviderStop names why the harness stopped a provider invocation on time
 	// rather than the provider ending it: runstate.ProviderStopStalled when it

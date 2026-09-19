@@ -172,8 +172,8 @@ func TestADialectThatWouldSilentlyDoNothingIsRefused(t *testing.T) {
 		},
 		{
 			name: "a channel the contract does not name",
-			rule: DialectRule{Answer: AnswerUnauthenticated, Channel: "stdout", Match: "not logged in"},
-			want: "names channel \"stdout\", which is not one of",
+			rule: DialectRule{Answer: AnswerUnauthenticated, Channel: "tty", Match: "not logged in"},
+			want: "names channel \"tty\", which is not one of",
 		},
 		{
 			// Stderr has no type, no subtype, and no payload, so a rule reading it
@@ -181,6 +181,13 @@ func TestADialectThatWouldSilentlyDoNothingIsRefused(t *testing.T) {
 			name: "a stderr rule with nothing to match",
 			rule: DialectRule{Answer: AnswerUnauthenticated, Channel: string(domain.ProviderChannelStderr), Terminal: truth(true)},
 			want: "reads stderr without a match expression",
+		},
+		{
+			// Plain stdout is prose exactly as stderr is, and is refused on the
+			// same terms.
+			name: "a plain-stdout rule with nothing to match",
+			rule: DialectRule{Answer: AnswerUnauthenticated, Channel: string(domain.ProviderChannelStdout), Terminal: truth(true)},
+			want: "reads stdout without a match expression",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -326,6 +333,26 @@ func TestStderrReachesOnlyARuleThatAskedForIt(t *testing.T) {
 	}
 	if observation, said := envelopeOnly.Observe(stderr); said {
 		t.Fatalf("Observe(stderr) = %#v, said, want a rule that named no channel to read the envelope alone", observation)
+	}
+	// Plain stdout is its own channel: the stderr rule does not read it, and a
+	// rule that names it does. The two are prose under the same rule, but which
+	// one a refusal came on is the record's evidence, so a rule says which it
+	// reads.
+	stdout := ProviderEvent{Channel: domain.ProviderChannelStdout, Text: "fatal: not signed in; run my-harness login"}
+	if observation, said := dialect.Observe(stdout); said {
+		t.Fatalf("Observe(stdout) = %#v, said, want a stderr rule to leave plain stdout alone", observation)
+	}
+	stdoutRule, err := NewDeclarativeDialect("declared", DialectSpec{Rules: []DialectRule{
+		{Answer: AnswerUnauthenticated, Channel: string(domain.ProviderChannelStdout), Match: "(?i)not signed in"},
+	}})
+	if err != nil {
+		t.Fatalf("NewDeclarativeDialect() error = %v", err)
+	}
+	if observation, said := stdoutRule.Observe(stdout); !said || observation.Answer != AnswerUnauthenticated {
+		t.Fatalf("Observe(stdout) = %#v, %t, want a rule naming plain stdout to read it", observation, said)
+	}
+	if observation, said := stdoutRule.Observe(stderr); said {
+		t.Fatalf("Observe(stderr) = %#v, said, want a plain-stdout rule to leave stderr alone", observation)
 	}
 	// A rule that spells the envelope out is the same rule as one that named
 	// none.

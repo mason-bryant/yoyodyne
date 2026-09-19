@@ -1468,9 +1468,9 @@ type State struct {
 	PauseCause string `json:"pause_cause,omitempty"`
 	// ProviderOutageChannel is where the provider's refusal was read on the
 	// outage pause this run took: on the terminal of its stream, or on its
-	// process's stderr because the provider refused before it wrote a terminal
-	// at all. It is kept beside UsageLimitKind as evidence and outlives the
-	// deadline like it, because which channel a refusal came on is what says
+	// process's stderr or plain stdout because the provider refused before it
+	// wrote a terminal at all. It is kept beside UsageLimitKind as evidence and
+	// outlives the deadline like it, because which channel a refusal came on says
 	// whether the dialect read an ending the provider wrote or a process that
 	// died before writing one — the shape yoyodyne-ifd.377 could not see. It is
 	// empty on a run that never waited on an outage, and on one whose wait was

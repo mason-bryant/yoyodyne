@@ -72,10 +72,11 @@ type ProviderOutage struct {
 	// evidence rather than interpreted.
 	Detail string `json:"detail,omitempty"`
 	// Channel is where the latest refusal was read: the terminal of the
-	// provider's stream, or its process's stderr because it refused before
-	// writing one. It is empty when the refusal was met somewhere other than an
-	// invocation — the availability check before a dispatch reads the
-	// provider's own record of being signed in and neither channel.
+	// provider's stream, or its process's stderr or plain stdout because it
+	// refused before writing one. It is empty when the refusal was met
+	// somewhere other than an invocation — the availability check before a
+	// dispatch reads the provider's own record of being signed in and none of
+	// the channels.
 	Channel domain.ProviderChannel `json:"channel,omitempty"`
 	// Waiting names what the latest refusal stopped, in words: a run of an item,
 	// a role's conversation, a dispatch. It is prose because the things that can

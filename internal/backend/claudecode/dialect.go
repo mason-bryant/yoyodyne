@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
-	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // The provider's own names for the events this dialect reads. Everything else in
@@ -65,11 +64,11 @@ const overloadedStatus = "529"
 //
 // What this cannot reach is a CLI that refuses the selector before it calls the
 // API at all. That ends the process without a terminal envelope, so the only
-// place the refusal could be read is the process's stderr — which this dialect
-// is now handed, but reads only for the two refusals below that a person or the
-// network ends. A pinned version rejected up front therefore still fails the
-// turn rather than falling back; the case for reading it off stderr is a
-// recorded occurrence.
+// place the refusal could be read is the process's plain output — which this
+// dialect is now handed, but reads only for the two refusals below that a
+// person or the network ends. A pinned version rejected up front therefore
+// still fails the turn rather than falling back; the case for reading it off
+// plain output is a recorded occurrence.
 const notFoundStatus = "404"
 
 // modelNotFound is the API's own name for the not-found it answers with, and the
@@ -94,9 +93,10 @@ var modelNotFound = regexp.MustCompile(`(?i)not_found_error|\bmodel:`)
 // provider reporting one condition two ways earns one answer.
 //
 // It is read off a terminal API error, like every other match here, and off
-// the process's stderr when the stream ended without a terminal at all. An
-// agent's own prose about being logged out is left where it was either way:
-// what the provider said about the request is on that envelope or on stderr
+// the process's plain output — stderr, or stdout where what it wrote there was
+// not an envelope — when the stream ended without a terminal at all. An agent's
+// own prose about being logged out is left where it was either way: what the
+// provider said about the request is on that envelope or in that plain output
 // and nowhere else.
 //
 // The words are the CLI's own. Claude Code 2.1.276 titles the refusals it
@@ -246,8 +246,8 @@ func (Dialect) Name() string { return domainBackend }
 // stated.
 func (Dialect) Observe(event backend.ProviderEvent) (backend.Observation, bool) {
 	switch {
-	case event.Channel == domain.ProviderChannelStderr:
-		return observeStderr(event.Text)
+	case event.Channel.Plain():
+		return observePlainOutput(event.Text)
 	case event.Type == rateLimitEventType:
 		return observeRateLimit(event.Payload)
 	case event.Type == systemEventType && event.Subtype == apiRetrySubtype:
@@ -259,23 +259,30 @@ func (Dialect) Observe(event backend.ProviderEvent) (backend.Observation, bool) 
 	}
 }
 
-// observeStderr reads what the process wrote to stderr, which the adapter hands
-// over only when the stream ended without a terminal of its own. It reads two
-// things off it and nothing else: the account this provider will not accept,
-// and an API nothing reaches. Both are waits that spend nothing, and both are
-// refusals a CLI can make before it has written a single envelope — which is
-// the shape yoyodyne-ifd.377 could not see, and the one that would replay the
-// 2026-09-17 stall through the gap it left: a process failure nobody
-// classified relaunches into the same login, spends the budget, and blocks.
+// observePlainOutput reads what the process wrote as prose — to stderr, or to
+// stdout in place of the envelopes it was asked for — which the adapter hands
+// over one channel at a time and only when the stream ended without a terminal
+// of its own. It reads two things off it and nothing else: the account this
+// provider will not accept, and an API nothing reaches. Both are waits that
+// spend nothing, and both are refusals a CLI can make before it has written a
+// single envelope — which is the shape yoyodyne-ifd.377 could not see, and the
+// one that would replay the 2026-09-17 stall through the gap it left: a
+// process failure nobody classified relaunches into the same login, spends the
+// budget, and blocks. The stdout form is the gap yoyodyne-ifd.393 left in turn:
+// a refusal written there as plain text was a stream the parser could not
+// decode, and it failed the invocation before stderr was ever read.
 //
-// Everything else stderr says is left where it was. A terminal is read into
-// five answers because the provider named the ending and the status; stderr
+// Everything else the prose says is left where it was. A terminal is read into
+// five answers because the provider named the ending and the status; prose
 // names neither, so an overload, a refused request, or a transient death read
 // off it would be a guess about diagnostics, and a process that died without a
 // terminal for any other reason keeps being the process failure it always was.
 // The match is on the CLI's own words rather than on any status, because a
-// refusal made before the API is called quotes none.
-func observeStderr(text string) (backend.Observation, bool) {
+// refusal made before the API is called quotes none. The two channels are read
+// by one rule because the CLI chooses between them and the words are the same
+// whichever it chose; which one it was is the event's fact, written onto the
+// record by the caller.
+func observePlainOutput(text string) (backend.Observation, bool) {
 	switch {
 	case notAuthenticated.MatchString(text):
 		return backend.Observation{Answer: backend.AnswerUnauthenticated, Detail: backend.DescribeFailure("", text)}, true

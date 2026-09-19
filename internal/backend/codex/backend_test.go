@@ -560,6 +560,173 @@ func TestAnUnreadableLineIsRecordedRatherThanFatal(t *testing.T) {
 	}
 }
 
+// loginRefusedByCodex is a login refusal in this CLI's own shape: the title and
+// the remedy it names. No recorded Codex process carries one; it is what a CLI
+// that refuses before writing any event has to say on one of its two plain
+// channels.
+const loginRefusedByCodex = "Not logged in. Run `codex login` to authenticate."
+
+// runProcessFailure runs a process that wrote the given stream, said the given
+// things on stderr, and exited 1, and returns what the adapter made of it
+// beside every event it recorded.
+func runProcessFailure(t *testing.T, stream, stderr string) (backendapi.RunResult, []execution.Event) {
+	t.Helper()
+	var events []execution.Event
+	result, err := (Backend{
+		Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stdout: stream, Stderr: stderr}}},
+		Clock:  fixedClock{},
+	}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	return result, events
+}
+
+// A CLI that refuses an expired login before it writes any event hands the
+// dialect no terminal, and until yoyodyne-ifd.400 this adapter ended that
+// attempt as a process failure nobody classified — by decision, pending a
+// recorded occurrence — which is the relaunch-and-block shape yoyodyne-ifd.377
+// closed for Claude Code, replayed on this provider. The refusal is read off
+// whichever plain channel carried it, stderr or stdout, as the same wait the
+// terminal form earns, with the channel recorded beside it.
+func TestRunClassifiesARefusalMadeAsProseBeforeAnyEvent(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		stream  string
+		stderr  string
+		cause   domain.ProviderOutageCause
+		channel domain.ProviderChannel
+		words   string
+	}{
+		{name: "a login refused on stderr", stderr: loginRefusedByCodex + "\n", cause: domain.ProviderUnauthenticated, channel: domain.ProviderChannelStderr, words: "Not logged in"},
+		{name: "a login refused as plain text on stdout", stream: loginRefusedByCodex + "\n", cause: domain.ProviderUnauthenticated, channel: domain.ProviderChannelStdout, words: "Not logged in"},
+		{
+			// A banner ahead of the refusal is more prose, and the refusal has to
+			// be found behind it.
+			name:    "a login refused behind a banner on stdout",
+			stream:  "Reading prompt from stdin...\n" + loginRefusedByCodex + "\n",
+			cause:   domain.ProviderUnauthenticated,
+			channel: domain.ProviderChannelStdout,
+			words:   "Not logged in",
+		},
+		{name: "nothing answering, said on stderr", stderr: "error sending request: dns error: failed to lookup address information\n", cause: domain.ProviderUnreachable, channel: domain.ProviderChannelStderr, words: "dns error"},
+		{name: "nothing answering, said as plain text on stdout", stream: "error sending request: dns error: failed to lookup address information\n", cause: domain.ProviderUnreachable, channel: domain.ProviderChannelStdout, words: "dns error"},
+		{
+			// A CLI that said it on both leaves one channel on the record, and it
+			// is stderr.
+			name:    "a login refused on both channels names stderr",
+			stream:  loginRefusedByCodex + "\n",
+			stderr:  loginRefusedByCodex + "\n",
+			cause:   domain.ProviderUnauthenticated,
+			channel: domain.ProviderChannelStderr,
+			words:   "Not logged in",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, events := runProcessFailure(t, testCase.stream, testCase.stderr)
+			if result.ProviderOutage == nil {
+				t.Fatalf("Run() reported no provider outage: %#v", result)
+			}
+			if result.ProviderOutage.Cause != testCase.cause {
+				t.Fatalf("outage cause = %q, want %q", result.ProviderOutage.Cause, testCase.cause)
+			}
+			if result.ProviderOutage.Channel != testCase.channel {
+				t.Fatalf("outage channel = %q, want %q: the record has to say where the provider said it", result.ProviderOutage.Channel, testCase.channel)
+			}
+			if !strings.Contains(result.ProviderOutage.Detail, testCase.words) {
+				t.Fatalf("outage detail = %q, want the CLI's own words %q", result.ProviderOutage.Detail, testCase.words)
+			}
+			// The process still ended the way it ended: the exit is the stop reason
+			// and the failure stands beside the wait.
+			if !result.IsError || result.StopReason != "process_exit_1" {
+				t.Fatalf("Run() = IsError %t, StopReason %q, want the process failure kept beside the wait", result.IsError, result.StopReason)
+			}
+			// A wait that spends nothing is never also a death to relaunch on.
+			if result.TransientFailure != nil || result.ServerOverload != nil || result.UsageLimit != nil {
+				t.Fatalf("a refusal read off prose also became something to relaunch or wait on a clock for: %#v", result)
+			}
+			// What the process said is in the record whether or not the dialect
+			// read anything off it, and the record says which stream it was on.
+			var recorded bool
+			for _, event := range events {
+				if event.Type == execution.EventProcessOutput && strings.Contains(string(event.Payload), `"stream":"`+string(testCase.channel)+`"`) && strings.Contains(string(event.Payload), testCase.words) {
+					recorded = true
+				}
+			}
+			if !recorded {
+				t.Fatalf("the plain channel was read and not recorded: %#v", events)
+			}
+		})
+	}
+}
+
+// Prose is read narrowly and only when nothing else answered. A process that
+// died with a terminal has been answered by the terminal, whatever its
+// diagnostics say; one whose prose says something the dialect does not read for
+// — a limit, a crash, a banner — stays the process failure it always was
+// rather than becoming a wait nobody can justify; and a refusal that arrives
+// after an event is a stream that broke rather than a CLI that refused before
+// writing one.
+func TestRunReadsProseOnlyForAProcessNothingElseAnswered(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		stream string
+		stderr string
+		// wantOutage is the outage the terminal earns, and nil for a process
+		// failure that stays unclassified.
+		wantOutage *backendapi.ProviderOutage
+	}{
+		{name: "a limit said on stderr is not a wait", stderr: "You've hit your usage limit\n"},
+		{name: "a crash that mentions nothing this dialect reads", stderr: "thread 'main' panicked at src/main.rs:1:1\n"},
+		{name: "a banner on stdout is not a wait", stream: "Reading prompt from stdin...\n"},
+		{
+			name:   "a refusal after an event is not read",
+			stream: `{"id":"0","msg":{"type":"session_configured","session_id":"session-1","model":"gpt-5"}}` + "\n" + loginRefusedByCodex + "\n",
+		},
+		{
+			// The terminal is the provider's account of the ending and prose does
+			// not second-guess it.
+			name:       "a terminal the provider wrote is not overridden by stderr",
+			stream:     lines(`{"id":"0","msg":{"type":"error","message":"400 your request was rejected"}}`),
+			stderr:     loginRefusedByCodex + "\n",
+			wantOutage: nil,
+		},
+		{
+			// A terminal outage still says which channel it came on.
+			name:       "a terminal outage names the envelope",
+			stream:     lines(`{"id":"0","msg":{"type":"error","message":"401 Unauthorized: check your credentials"}}`),
+			wantOutage: &backendapi.ProviderOutage{Cause: domain.ProviderUnauthenticated, Detail: "error: 401 Unauthorized: check your credentials", Channel: domain.ProviderChannelEnvelope},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _ := runProcessFailure(t, testCase.stream, testCase.stderr)
+			if !result.IsError {
+				t.Fatalf("Run() lost the reported failure: %#v", result)
+			}
+			if !reflect.DeepEqual(result.ProviderOutage, testCase.wantOutage) {
+				t.Fatalf("ProviderOutage = %#v, want %#v", result.ProviderOutage, testCase.wantOutage)
+			}
+		})
+	}
+}
+
 // A line the runner had to cut is not an envelope any more, and failing the
 // invocation over one line the harness could not hold would be a self-inflicted
 // death. It is recorded as the anomaly it is, named so a reader can tell it from

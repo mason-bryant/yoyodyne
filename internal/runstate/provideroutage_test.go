@@ -203,9 +203,9 @@ func TestAnOutageRecordNamesTheChannelItWasReadOnOrNone(t *testing.T) {
 	}
 	unnamed := ProviderOutage{
 		SchemaVersion: ProviderOutageSchemaVersion, ProductID: "yoyodyne",
-		Cause: domain.ProviderUnauthenticated, Since: since, LastSeen: since, Refusals: 1, Channel: "stdout",
+		Cause: domain.ProviderUnauthenticated, Since: since, LastSeen: since, Refusals: 1, Channel: "tty",
 	}
-	if err := unnamed.Validate(); err == nil || !strings.Contains(err.Error(), `channel "stdout"`) {
+	if err := unnamed.Validate(); err == nil || !strings.Contains(err.Error(), `channel "tty"`) {
 		t.Fatalf("Validate() with an unnamed channel error = %v, want it refused", err)
 	}
 
@@ -214,7 +214,7 @@ func TestAnOutageRecordNamesTheChannelItWasReadOnOrNone(t *testing.T) {
 	if err := state.Validate(); err != nil {
 		t.Fatalf("State.Validate() with the stderr channel error = %v", err)
 	}
-	state.ProviderOutageChannel = "stdout"
+	state.ProviderOutageChannel = "tty"
 	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "provider_outage_channel is invalid") {
 		t.Fatalf("State.Validate() with an unnamed channel error = %v, want it refused", err)
 	}

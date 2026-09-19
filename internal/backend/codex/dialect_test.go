@@ -5,6 +5,7 @@ import (
 	"time"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // Each of the contract's answers this provider can give, and the evidence it
@@ -105,6 +106,57 @@ func TestObserveAnswersWhatTheProviderSaid(t *testing.T) {
 			event: failedTerminal("connection closed before the response completed"),
 			want:  backendapi.AnswerInterrupted,
 			said:  true,
+		},
+		{
+			// A CLI that refuses the login before it writes any event says so as
+			// prose, on stderr or on stdout, and it is the same wait the terminal
+			// form earns: relaunching a process that died this way is the shape
+			// yoyodyne-ifd.377 closed for Claude Code, replayed here.
+			name:  "a login refused on stderr before any event is the same wait",
+			event: backendapi.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "Not logged in. Run `codex login` to authenticate."},
+			want:  backendapi.AnswerUnauthenticated,
+			said:  true,
+		},
+		{
+			name:  "a login refused as plain text on stdout is the same wait",
+			event: backendapi.ProviderEvent{Channel: domain.ProviderChannelStdout, Text: "Not logged in. Run `codex login` to authenticate."},
+			want:  backendapi.AnswerUnauthenticated,
+			said:  true,
+		},
+		{
+			// The remedy alone names the refusal: a process telling somebody to
+			// log in has refused the account it ran under.
+			name:  "the remedy alone, on stderr",
+			event: backendapi.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "Please run `codex login`."},
+			want:  backendapi.AnswerUnauthenticated,
+			said:  true,
+		},
+		{
+			name:  "nothing answering, said on stderr, is the same wait",
+			event: backendapi.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "error sending request: dns error: failed to lookup address information"},
+			want:  backendapi.AnswerUnreachable,
+			said:  true,
+		},
+		{
+			name:  "nothing answering, said as plain text on stdout, is the same wait",
+			event: backendapi.ProviderEvent{Channel: domain.ProviderChannelStdout, Text: "error sending request: dns error: failed to lookup address information"},
+			want:  backendapi.AnswerUnreachable,
+			said:  true,
+		},
+		{
+			// Prose names no ending and no status, so nothing else is read off
+			// it: a limit or an overload there would be a guess about
+			// diagnostics, and a bare status is not the API answering.
+			name:  "a limit on stderr says nothing",
+			event: backendapi.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "You've hit your usage limit"},
+		},
+		{
+			name:  "a bare status on stderr says nothing",
+			event: backendapi.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "exit status 401"},
+		},
+		{
+			name:  "a banner on stdout says nothing",
+			event: backendapi.ProviderEvent{Channel: domain.ProviderChannelStdout, Text: "Reading prompt from stdin..."},
 		},
 		{
 			// A completed task says nothing about capacity, so reading one as

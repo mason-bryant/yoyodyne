@@ -222,6 +222,32 @@ func TestTheClaudeDialectAnswersInTheContractsTerms(t *testing.T) {
 			},
 		},
 		{
+			// The same refusal written to stdout as plain text, where the stream
+			// should have been, is the same wait: the CLI chose the channel and
+			// the words are its own either way. This is the gap yoyodyne-ifd.393
+			// reported after closing the stderr one.
+			name:  "a login refused as plain text on stdout is the same wait",
+			event: backend.ProviderEvent{Channel: domain.ProviderChannelStdout, Text: "Not logged in · Please run /login"},
+			said:  true,
+			want: backend.Observation{
+				Answer: backend.AnswerUnauthenticated,
+				Detail: "Not logged in · Please run /login",
+			},
+		},
+		{
+			name:  "nothing answering, said as plain text on stdout, is the same wait",
+			event: backend.ProviderEvent{Channel: domain.ProviderChannelStdout, Text: "API Error: Can't reach the API server"},
+			said:  true,
+			want: backend.Observation{
+				Answer: backend.AnswerUnreachable,
+				Detail: "API Error: Can't reach the API server",
+			},
+		},
+		{
+			name:  "a banner on stdout says nothing",
+			event: backend.ProviderEvent{Channel: domain.ProviderChannelStdout, Text: "Claude Code v2.1.276"},
+		},
+		{
 			// Stderr names no ending and no status, so nothing else is read off
 			// it: an overload there would be a guess about diagnostics, and a
 			// process that died for any other reason stays the process failure

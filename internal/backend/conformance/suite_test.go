@@ -126,13 +126,14 @@ type Sample struct {
 	// Name says which shape of the condition this is, for a failure that names
 	// the case rather than the line number.
 	Name string
-	// Stream is the provider's own stdout, one envelope per line.
+	// Stream is the provider's own stdout, one envelope per line — or, for the
+	// refusal a CLI makes before it writes a single envelope, the plain text it
+	// wrote there instead.
 	Stream string
 	// Stderr is what the process wrote to its error stream, one line per line.
 	// It is empty for nearly every sample: a provider says what it has to say on
 	// its stream, and what it puts here is diagnostics. The exception is the
-	// refusal a CLI makes before it writes a single envelope, which is the one
-	// shape a stream alone cannot carry.
+	// same refusal made before any envelope, which a CLI may put on either.
 	Stderr string
 	// ExitCode is what the process exited with. A non-zero one is a process the
 	// runner reports as failed, which is what a provider that refused work

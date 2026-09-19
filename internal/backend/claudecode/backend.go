@@ -433,7 +433,27 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if err != nil {
 		return backend.RunResult{}, fmt.Errorf("run Claude Code: %w", err)
 	}
-	if len(parseErrors) > 0 {
+	// A process that failed without writing a terminal has said whatever it had
+	// to say as prose — on stderr, or on stdout in place of the envelopes it was
+	// asked for — so that is what the dialect is handed, and only then. A
+	// terminal the provider did write is the provider's own account of the
+	// ending and is not second-guessed by its diagnostics; a process the harness
+	// stopped on time is a stop the harness already names; and a stream that
+	// reported a limit and then died has been answered by the limit. What is
+	// left is the CLI that refused before it wrote anything structured — an
+	// expired login, an API nothing reaches — which used to end the attempt as
+	// a process failure nobody classified.
+	//
+	// It is asked before the stream's decode errors are judged, because a
+	// refusal written to stdout as plain text is exactly a line that failed to
+	// decode: read first, it is the invocation's answer and the errors are what
+	// it looked like on the way in; judged first, it failed the invocation as an
+	// unreadable stream before stderr was read at all, which is the gap
+	// yoyodyne-ifd.393 reported after closing the stderr one.
+	if processResult.Status == execution.ProcessFailed && !parser.SawResult() && !parser.SawUsageLimit() {
+		parser.ObservePlainOutput()
+	}
+	if len(parseErrors) > 0 && !parser.ReadRefusalOffPlainOutput() {
 		return backend.RunResult{}, fmt.Errorf("parse Claude Code stream: %w", errors.Join(parseErrors...))
 	}
 	// An invocation that outran what the runner retains is not an invocation
@@ -449,18 +469,6 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		}); truncationErr != nil {
 			return backend.RunResult{}, fmt.Errorf("record Claude Code output truncation: %w", truncationErr)
 		}
-	}
-	// A process that failed without writing a terminal has said whatever it had
-	// to say on stderr, so that is what the dialect is handed, and only then. A
-	// terminal the provider did write is the provider's own account of the
-	// ending and is not second-guessed by its diagnostics; a process the harness
-	// stopped on time is a stop the harness already names; and a stream that
-	// reported a limit and then died has been answered by the limit. What is
-	// left is the CLI that refused before it wrote anything structured — an
-	// expired login, an API nothing reaches — which used to end the attempt as
-	// a process failure nobody classified.
-	if processResult.Status == execution.ProcessFailed && !parser.SawResult() && !parser.SawUsageLimit() {
-		parser.ObserveStderr()
 	}
 	// The normalized result and events are the durable provider output. Do not
 	// return the raw JSON stream as a second, potentially escape-obfuscated copy.
