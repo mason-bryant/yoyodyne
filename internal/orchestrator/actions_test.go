@@ -815,6 +815,7 @@ var notAStep = map[string]string{
 	// delivery.
 	"fail":                       "turns a failure into the run's outcome",
 	"stop":                       "turns a stopped step into the run's outcome, which for a pause or a hold leaves the run in flight",
+	"endPromotion":               "turns a failed promotion into the run's outcome, through stop where the hosting session cancelled the run for its redeploy and through fail otherwise",
 	"blockOnFailingCheck":        "hands a spent repair budget to a person",
 	"blockOnRefusedPaths":        "hands a spent repair budget to a person",
 	"blockOnUnresolvedFindings":  "hands a spent repair budget to a person",

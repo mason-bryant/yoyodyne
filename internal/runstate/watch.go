@@ -354,6 +354,11 @@ type WatchDrain struct {
 	// runs it hosts, pulls nothing and fires nothing, and restarts as soon as
 	// they are preserved.
 	BoundReached bool `json:"bound_reached,omitempty"`
+	// PullSkipped marks a poll that declined to pull into a free seat because
+	// the bound was less than one poll away — a run started then would only be
+	// stopped. It is on the drain so a reader of the idle line it was said on
+	// knows the seat was left on purpose rather than for want of work.
+	PullSkipped bool `json:"pull_skipped,omitempty"`
 }
 
 // Bound is how long the session waits before it restarts anyway.
@@ -368,6 +373,9 @@ func (d WatchDrain) Says() string {
 		d.Since.UTC().Format(time.RFC3339), d.Bound(), d.Until.UTC().Format(time.RFC3339))
 	if d.BoundReached {
 		return said + "; the bound has run out, so the runs it hosts are being stopped and preserved for the session that comes back, and nothing is pulled or fired until it does"
+	}
+	if d.PullSkipped {
+		return said + "; the bound is less than one poll away, so nothing more is pulled into a free seat and the session that comes back pulls it"
 	}
 	if d.Hosting > 0 {
 		return fmt.Sprintf("%s, waiting out %d run(s) it hosts while still pulling into free seats and firing its recurring tasks", said, d.Hosting)

@@ -349,11 +349,12 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 	// Live is newest first, so the first idle session it holds is the latest one.
 	live := Live(sessions)
 	// A session whose drain has run out is stopping the runs it hosts and is
-	// seconds from restarting. It is answered ahead of everything else the log
-	// says, because from every other record it is a live session choosing
-	// nothing, and the one thing that must not be said about it is that it wants
-	// looking at.
-	if len(live) > 0 && live[0].Draining != nil && live[0].Draining.BoundReached {
+	// seconds from restarting, and one within a poll of that bound has declined
+	// to pull into a free seat on purpose. Both are answered ahead of everything
+	// else the log says, because from every other record each is a live session
+	// choosing nothing, and the one thing that must not be said about either is
+	// that it wants looking at.
+	if len(live) > 0 && live[0].Draining != nil && (live[0].Draining.BoundReached || live[0].Draining.PullSkipped) {
 		return Stall{
 			Reason: ReasonRedeploying,
 			Says:   "the watch session is " + live[0].Draining.Says(),

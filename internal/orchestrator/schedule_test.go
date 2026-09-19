@@ -2441,6 +2441,66 @@ func TestAPullSkippedForTheDrainBoundSaysSo(t *testing.T) {
 	}
 }
 
+// A re-adoption the pipeline never took — a lease another process held at that
+// moment, a tracker that would not answer — is not the end of it. The run's
+// record still carries its stop and its note still promises a re-adoption, so
+// the session tries again at its next pull rather than leaving a run nothing is
+// going to pick up; the schedule reports the latest try on one line, and the
+// refusal counts toward nothing.
+func TestAReadoptionThePipelineDidNotTakeIsTriedAgainAtTheNextPull(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	harness.capacity = 2
+	stoppedAt := time.Date(2026, 9, 19, 7, 50, 0, 0, time.UTC)
+	stopped := runstate.State{
+		RunID:        "run-one",
+		WorkItemID:   "yoyodyne-one",
+		Status:       runstate.StatusRunning,
+		Phase:        runstate.PhaseChecking,
+		RedeployStop: &runstate.RedeployStop{At: stoppedAt, Phase: runstate.PhaseChecking, BoundSeconds: 900},
+	}
+	harness.inFlight["yoyodyne-one"] = stopped
+	// The first try is refused as a run another process holds, the second fails
+	// before the pipeline reaches the run, and the third is taken.
+	tries := 0
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		tries++
+		switch tries {
+		case 1:
+			return Outcome{}, ExistingRunError{State: stopped}
+		case 2:
+			return Outcome{}, errors.New("load work item: the tracker did not answer")
+		}
+		return h.complete(id), nil
+	}
+	// Three polls, and then the operator stops the session.
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 3 }
+
+	schedule, err := (Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if tries != 3 {
+		t.Fatalf("tries = %d, want the re-adoption made again at each pull until the pipeline took it", tries)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want the three tries reported on one line", schedule.Started)
+	}
+	readopted := schedule.Started[0]
+	if readopted.Readopted != "run-one" || readopted.Readoptions != 3 || readopted.Outcome.Status != runstate.StatusSucceeded || readopted.Failure != "" {
+		t.Fatalf("started = %#v, want the latest try's outcome with the count of tries", readopted)
+	}
+	if !strings.Contains(schedule.Render(), "re-adopted 3 times") {
+		t.Fatalf("render = %s, want the tries said", schedule.Render())
+	}
+	// A refused re-adoption is not a run that blocked and not a dispatch that
+	// never became a run: it counts toward nothing.
+	if schedule.BlockedInARow != 0 || len(harness.attempts) != 0 {
+		t.Fatalf("blocked in a row = %d, attempts = %#v, want a refused re-adoption to count toward nothing", schedule.BlockedInARow, harness.attempts)
+	}
+}
+
 // A run at its promotion is the one the bound does not stop. It holds the
 // target branch's lease and is minutes from its end, and a promotion cancelled
 // part-way is the one boundary durable state cannot describe — so the session
@@ -3268,7 +3328,8 @@ func (h *scheduleHarness) start(ctx context.Context, workItemID string, selectio
 	h.selections[workItemID] = selection
 	// A run a session before this one stopped for its redeploy is already in
 	// flight, and re-adopting it continues that record rather than making one.
-	if _, adopted := h.inFlight[workItemID]; !adopted {
+	prior, adopted := h.inFlight[workItemID]
+	if !adopted {
 		h.inFlight[workItemID] = runstate.State{RunID: "run-" + workItemID, WorkItemID: workItemID, Status: runstate.StatusRunning, Phase: runstate.PhaseDeveloping}
 	}
 	h.running++
@@ -3288,7 +3349,14 @@ func (h *scheduleHarness) start(ctx context.Context, workItemID string, selectio
 	}
 
 	h.mu.Lock()
-	delete(h.inFlight, workItemID)
+	// A re-adoption the pipeline refused or parked leaves the record exactly as
+	// it found it, stop and all, which is what the real pipeline does: only a
+	// run it picked up clears the stop.
+	if adopted && (err != nil || outcome.Paused) {
+		h.inFlight[workItemID] = prior
+	} else {
+		delete(h.inFlight, workItemID)
+	}
 	h.running--
 	h.mu.Unlock()
 	return outcome, err

@@ -676,6 +676,14 @@ type Started struct {
 	// on the record because a reader of the schedule is owed the difference
 	// between a run this session chose and one it was handed.
 	Readopted string `json:"readopted,omitempty"`
+	// Readoptions counts how many times this session tried to pick that run up.
+	// A re-adoption the pipeline never took — a lease another process held at
+	// that moment, a tracker that would not answer — leaves the run's record
+	// carrying its stop, and the session tries again at its next pull rather
+	// than leaving a run whose note promises a re-adoption nobody is going to
+	// make. The count is how a reader tells one such refusal from a run that
+	// keeps being refused.
+	Readoptions int `json:"readoptions,omitempty"`
 	// awayCause is set when Failure is the provider turning the dispatch away —
 	// a login nobody has renewed, an API nothing reaches — which the settle reads
 	// to count the start toward nothing. It is not on the record because the
@@ -1025,11 +1033,12 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// pull is opened, and applying it means reading which phase each hosted run
 	// is at.
 	var runs ScheduleRuns
-	// readopted is every run this session has already picked up from a session
-	// before it, by run id. A re-adoption that failed is not made again every
-	// poll: the run's own record says what became of it, and `yoyo run` is what
-	// continues it by hand.
-	readopted := make(map[string]bool)
+	// readopted is every run this session has tried to pick up from a session
+	// before it, by run id, against its entry on the schedule. The entry is kept
+	// so a re-adoption made again is one line reporting its latest attempt rather
+	// than a line per poll: what decides whether it is made again is the run's
+	// own record, which carries the stop until a pipeline consumes it.
+	readopted := make(map[string]int)
 	// retries is the run of harness readings that have failed with none
 	// succeeding between them. See readRetries: it is what lets a watch ride
 	// through the store contention a reconcile or a settling run makes, and what
@@ -1082,7 +1091,10 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 			schedule.ProviderAway++
 			delete(tried, started.WorkItemID)
 			held = false
-		} else if unstartedAttempt(*started) {
+		} else if unstartedAttempt(*started) && started.Readopted == "" {
+			// A re-adoption the pipeline never took is not a dispatch that never
+			// became a run: the run exists, its record says so, and the next pull
+			// tries it again.
 			recorded, problem := recordAttempt(docket, *started, excluded, s.Watching)
 			excluded.reason = recorded
 			if problem != "" && schedule.AttemptProblem == "" {
@@ -1109,6 +1121,9 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 			// item and nothing about the machine that a run could fix, so it
 			// neither counts nor clears: three of these in a row on 2026-09-17 are
 			// what tripped the brake over a login.
+		case started.Readopted != "" && unstartedAttempt(*started):
+			// A re-adoption that never reached the run says nothing about the
+			// machine either, and is tried again at the next pull.
 		case started.blockedRun():
 			blockedInARow++
 			if blockedInARow > schedule.BlockedInARow {
@@ -1502,16 +1517,25 @@ pulling:
 		// re-adopted run holds, because the seat was never free.
 		if s.Watching {
 			for id, state := range inFlight {
-				if _, ours := mine[id]; ours || state.RedeployStop == nil || readopted[state.RunID] {
+				if _, ours := mine[id]; ours || state.RedeployStop == nil {
 					continue
 				}
-				readopted[state.RunID] = true
-				index := len(schedule.Started)
 				selection := runstate.Selection{
 					By:     runstate.SelectedByScheduler,
 					Reason: readoptionReason(state),
 				}
-				schedule.Started = append(schedule.Started, Started{WorkItemID: id, Reason: selection.Reason, Readopted: state.RunID})
+				// A run this session already tried and the pipeline never took is
+				// tried again on the same entry. The record still carrying its stop
+				// is what says the pipeline never took it: a resumed run clears the
+				// stop as it is picked up.
+				index, tried := readopted[state.RunID]
+				if tried {
+					schedule.Started[index] = Started{WorkItemID: id, Reason: selection.Reason, Readopted: state.RunID, Readoptions: schedule.Started[index].Readoptions + 1}
+				} else {
+					index = len(schedule.Started)
+					schedule.Started = append(schedule.Started, Started{WorkItemID: id, Reason: selection.Reason, Readopted: state.RunID, Readoptions: 1})
+					readopted[state.RunID] = index
+				}
 				mine[id] = index
 				running++
 				s.host(ctx, pull, id, index, selection, hosted, completions)
@@ -1557,6 +1581,12 @@ pulling:
 		// and said as skipped, because the two are otherwise the same silence.
 		if remaining, near := drain.nearBound(pull.Poll, s.now()); near {
 			schedule.Drain.Skipped++
+			// Marked on the drain as well as said, so the read model names this
+			// poll as the session restarting rather than as an idle session over a
+			// queue with work in it.
+			skipped := drain.record(running)
+			skipped.PullSkipped = true
+			session.draining(skipped)
 			if !wait(pull, runstate.WatchIdle, account{
 				reason: fmt.Sprintf("nothing more is pulled into the %d free seat(s): the drain bound is %s away, which is less than one poll, so the session that comes back pulls them; %s",
 					free, remaining.Round(time.Second), drain.record(running).Says()),
@@ -3195,6 +3225,9 @@ func (s Schedule) Render() string {
 	for _, started := range s.Started {
 		fmt.Fprintf(&rendered, "%s: %s\n", started.WorkItemID, started.state())
 		fmt.Fprintf(&rendered, "  chosen because %s\n", started.Reason)
+		if started.Readoptions > 1 {
+			fmt.Fprintf(&rendered, "  re-adopted %d times this session: the run's record still carried its stop after each earlier try, and this line is the latest\n", started.Readoptions)
+		}
 		if started.Outcome.Integration != nil {
 			fmt.Fprintf(&rendered, "  integrated into %s: %s\n",
 				started.Outcome.Integration.TargetBranch, started.Outcome.Integration.TargetCommit)

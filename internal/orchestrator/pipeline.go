@@ -1986,20 +1986,28 @@ func (a *activeRun) promoteApproved(ctx context.Context) (Outcome, bool, error) 
 		return outcome, false, err
 	}
 	retry, retryErr := a.prepareIntegrationRetry(ctx, err)
-	// Both endings go through stop rather than straight to fail, so a run the
-	// hosting session cancelled for its redeploy in the moment between reading
-	// its phase and the promotion starting ends with its reason naming the
-	// redeploy: nothing at a promotion is resumable, so it is cancelled with its
-	// change preserved rather than held, and never silently.
 	if retryErr != nil {
-		outcome, err := a.stop(ctx, retryErr)
+		outcome, err := a.endPromotion(ctx, retryErr)
 		return outcome, false, err
 	}
 	if !retry {
-		outcome, err := a.stop(ctx, err)
+		outcome, err := a.endPromotion(ctx, err)
 		return outcome, false, err
 	}
 	return Outcome{}, true, nil
+}
+
+// endPromotion is the ending a failed promotion gets. Ordinarily that is the
+// failure it always was. The one exception is a run whose hosting session
+// cancelled it for its own redeploy in the moment between reading its phase and
+// the promotion starting: that goes through stop, so it ends with its reason
+// naming the redeploy — nothing at a promotion is resumable, so it is cancelled
+// with its change preserved rather than held, and never silently.
+func (a *activeRun) endPromotion(ctx context.Context, cause error) (Outcome, error) {
+	if _, forRedeploy := drainedForRedeploy(ctx); forRedeploy {
+		return a.stop(ctx, cause)
+	}
+	return a.fail(cause, failureStatus(ctx, cause))
 }
 
 // contendedIntegration reports a promotion refused because the target branch is

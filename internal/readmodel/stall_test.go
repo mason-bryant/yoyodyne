@@ -121,6 +121,14 @@ func TestASessionRestartingIntoADeployedBuildIsNeitherIdleNorAbsent(t *testing.T
 		t.Fatalf("a session on its way back was told to start a session: %q", stall.Refusal())
 	}
 
+	// A poll that declined to pull into a free seat because the bound was under
+	// a poll away is the session's own decision, not a queue nobody is pulling.
+	skipped := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-2 * time.Minute),
+		Draining: &runstate.WatchDrain{Since: since, BoundSeconds: 900, Until: since.Add(15 * time.Minute), Hosting: 1, PullSkipped: true}}
+	if stall := WhyNothingStarts(Conditions{Sessions: held(skipped)}); stall.Reason != ReasonRedeploying || !strings.Contains(stall.Says, "less than one poll away") {
+		t.Fatalf("stall = %+v, want the skipped pull named as the session restarting", stall)
+	}
+
 	restarting := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchStopped, At: moment.Add(-time.Minute), Restarting: true}
 	stall = WhyNothingStarts(Conditions{Sessions: held(drained, restarting)})
 	if stall.Reason != ReasonRedeploying {

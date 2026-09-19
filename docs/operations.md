@@ -688,8 +688,9 @@ in front of the development manager, and still fires every recurring task as
 its cadence comes due — a firing already under way when the bound runs out is
 finished first. The one thing it declines is a pull made with the bound less
 than one poll away, which would start a run only to stop it; that pull is
-skipped, and the skip is said in the watch log and in `yoyo status` rather than
-looking like a poll that found nothing.
+skipped, and the skip is said in the watch log and in `yoyo status` — which
+names it as the session restarting, not as an idle session over a queue with
+work in it — rather than looking like a poll that found nothing.
 
 **The drain is bounded.** It restarts the moment it hosts no run, and otherwise
 waits at most `execution.redeploy_drain_limit` — fifteen minutes by default,
@@ -705,7 +706,11 @@ minutes rather than hours on purpose. Past that it restarts anyway:
   ahead of anything new and into the seat the run already holds, and continues
   it from the recorded phase: a developer attempt resumes in the same session,
   and a run stopped at its checks or its review re-earns the gate from the
-  checks. Its selection reason says it was handed over rather than chosen.
+  checks. Its selection reason says it was handed over rather than chosen. A
+  re-adoption the pipeline could not take at that moment — a lease another
+  process held, a tracker that did not answer — is made again at the next
+  pull for as long as the run's record carries its stop, reported on one line
+  of the pass with the count of tries, and counts toward nothing.
   `yoyo run <beads-id>` continues one the same way if no session does, and
   `yoyo reconcile` leaves it alone as a run its own pipeline can continue.
 - A run at its promotion is the one exception: it holds the target branch's
