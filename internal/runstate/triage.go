@@ -816,13 +816,23 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 // verdict leaves the round at the head, and whatever process holds it, exactly as
 // it found them: a later round given back is still that process's to give.
 //
-// What it does move is the reservation, where a grant is holding one. A granted
-// attempt is judged exactly once, and the round the grant reserved for it is
-// resolved by that judgement: a repair verdict spends it, and a verdict that
-// charges nothing releases it. Leaving it committed is the reservation counting
-// the round the cap does not — which is how yoyodyne-ifd.349, its granted round
-// approved and its promotion then conflicted, was refused a re-run at 4 of 4
-// with three rounds spent.
+// What it does move is the reservation, where a grant is holding one for this
+// attempt. A granted attempt is judged exactly once, and the round the grant
+// reserved for it is resolved by that judgement: a repair verdict spends it, and
+// a verdict that charges nothing releases it. Leaving it committed is the
+// reservation counting the round the cap does not — which is how
+// yoyodyne-ifd.349, its granted round approved and its promotion then
+// conflicted, was refused a re-run at 4 of 4 with three rounds spent.
+//
+// Whether the reservation is this attempt's is read from the decisions: a grant
+// is carried out by continuing the run it was decided about, so a granted
+// attempt is one of that run's, and a standing repair naming the attempt's run is
+// what says the round was reserved for it. An uncharged verdict in some other
+// run — a re-run started beside a grant standing on another stoppage of the item
+// — releases nothing, because the round it judged was never reserved. A
+// reservation with no repair decision standing anywhere on the record is a grant
+// recorded before decisions were durable, and that one is released by whichever
+// attempt is judged, since nothing on the record can say whose it is.
 func (s *TriageStore) RecordUnchargedVerdict(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, error) {
 	if strings.TrimSpace(attemptID) == "" {
 		return TriageCounters{}, errors.New("a developer attempt is required to record the verdict that cost it nothing")
@@ -832,9 +842,31 @@ func (s *TriageStore) RecordUnchargedVerdict(ctx context.Context, workItemID, at
 			return errNoTriageChange
 		}
 		counters.LastJudged = attemptID
-		counters.releaseReservedRounds(1)
+		if counters.reservedFor(attemptID) {
+			counters.releaseReservedRounds(1)
+		}
 		return nil
 	})
+}
+
+// reservedFor reports a standing reservation being one made for the run the
+// attempt belongs to. See RecordUnchargedVerdict for the two readings.
+func (c TriageCounters) reservedFor(attemptID string) bool {
+	if c.reserved() == 0 {
+		return false
+	}
+	runID, _, _ := strings.Cut(attemptID, "#")
+	repairStanding := false
+	for _, decision := range c.Decisions {
+		if decision.Decision != TriageDecisionRepair {
+			continue
+		}
+		if decision.RunID == runID {
+			return true
+		}
+		repairStanding = true
+	}
+	return !repairStanding
 }
 
 // alreadyJudged reports an attempt a reviewer has already answered about, which

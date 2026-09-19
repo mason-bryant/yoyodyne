@@ -6010,13 +6010,17 @@ func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
 	}
 }
 
-// yoyodyne-ifd.349's shape through the pipeline: an item one round from its cap
-// whose approving round is followed by a replay conflict. The approval charges
-// nothing, the conflict charges nothing — no verdict was reached about it — and
-// the run stops on the conflict path with the approval standing on its record,
-// so the re-run the development manager records to run the change again on the
-// moved base is permitted without an override. On 2026-09-15 that re-run was
-// refused at 4 of 4 with three rounds spent.
+// The conflict half of yoyodyne-ifd.349's shape through the pipeline: an item
+// one round from its cap whose approving round is followed by a replay conflict.
+// The approval charges nothing, the conflict charges nothing — no verdict was
+// reached about it — and the run stops on the conflict path with the approval
+// standing on its record, so the re-run the development manager records to run
+// the change again on the moved base is permitted without an override. The
+// reservation half — the approving round was a granted continuation, and the
+// grant's reservation is released by it — is asserted where a real continuation
+// runs, at the end of TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad;
+// what this run's approval must not do is touch a reservation standing for some
+// other stoppage of the item, which it never judged.
 func TestAReplayConflictAfterApprovalChargesNothingAndLeavesTheApprovalStanding(t *testing.T) {
 	t.Parallel()
 
@@ -6032,21 +6036,21 @@ func TestAReplayConflictAfterApprovalChargesNothingAndLeavesTheApprovalStanding(
 		return nil
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
-	// Three rounds already spent across the item's earlier runs and the one repair
-	// grant recorded, cut to the round the cap of four had left: the item as
-	// yoyodyne-ifd.349 stood when its granted round ran, committed to 4 of 4.
+	// Two rounds already spent across the item's earlier runs and a repair grant
+	// of one standing on an earlier stoppage, so the item is committed to three
+	// of the cap's four before this run reaches its reviewer.
 	caps := TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)
-	for round := range 3 {
+	for round := range 2 {
 		if _, err := store.Triage().RecordReviewRound(context.Background(), tracker.item.ID, runstate.RoundKey(priorRunID, round), "pid-1-000000000000000a", time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound() error = %v", err)
 		}
 	}
-	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, priorRunID), 2, time.Now(), caps)
+	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, priorRunID), 1, time.Now(), caps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	if granted.Rounds != 1 || granted.Counters.CommittedRounds != 4 {
-		t.Fatalf("grant = %+v, want the cap's last round reserved", granted)
+	if granted.Rounds != 1 || granted.Counters.CommittedRounds != 3 {
+		t.Fatalf("grant = %+v, want one round reserved on the earlier stoppage", granted)
 	}
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
@@ -6069,10 +6073,11 @@ func TestAReplayConflictAfterApprovalChargesNothingAndLeavesTheApprovalStanding(
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
-	// The approving round released the round the grant reserved for it, and the
-	// conflict reserved and spent nothing.
-	if counters.ReviewRounds != 3 || counters.CommittedRounds != 3 {
-		t.Fatalf("counters after the conflict = %d spent, %d committed; want the three earlier rounds and the reserved round released", counters.ReviewRounds, counters.CommittedRounds)
+	// Neither the approval nor the conflict spent anything, and the approval
+	// released nothing either: the round it judged was this run's, and the
+	// reservation standing is the earlier stoppage's.
+	if counters.ReviewRounds != 2 || counters.CommittedRounds != 3 {
+		t.Fatalf("counters after the conflict = %d spent, %d committed; want the two earlier rounds and the other stoppage's reservation untouched", counters.ReviewRounds, counters.CommittedRounds)
 	}
 	if want := runstate.RoundKey(outcome.RunID, 0); counters.LastJudged != want {
 		t.Fatalf("last judged attempt = %q, want the approved attempt %q recorded without being charged", counters.LastJudged, want)

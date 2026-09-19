@@ -925,7 +925,7 @@ func TestAnUnchargedVerdictSpendsNothingAndReleasesTheRoundItWasReserved(t *test
 	if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	if _, err := store.RecordReviewRound(ctx, item, "run-a#1", countingProcess, time.Now()); err != nil {
+	if _, err := store.RecordReviewRound(ctx, item, RoundKey(decidedRunID, 1), countingProcess, time.Now()); err != nil {
 		t.Fatalf("RecordReviewRound() error = %v", err)
 	}
 	before, err := store.Counters(item)
@@ -936,13 +936,14 @@ func TestAnUnchargedVerdictSpendsNothingAndReleasesTheRoundItWasReserved(t *test
 		t.Fatalf("counters before the verdict = %d committed, %d spent; want the grant's second round still reserved", before.CommittedRounds, before.ReviewRounds)
 	}
 
-	after, err := store.RecordUnchargedVerdict(ctx, item, "run-a#2", time.Now())
+	granted := RoundKey(decidedRunID, 2)
+	after, err := store.RecordUnchargedVerdict(ctx, item, granted, time.Now())
 	if err != nil {
 		t.Fatalf("RecordUnchargedVerdict() error = %v", err)
 	}
 	// The judged attempt moves, and it is not a budget: it is what keeps the
 	// replay of this attempt free.
-	if after.LastJudged != "run-a#2" {
+	if after.LastJudged != granted {
 		t.Fatalf("LastJudged = %q, want the attempt the reviewer answered about", after.LastJudged)
 	}
 	// The reservation for this round is released and nothing was spent: the round
@@ -966,7 +967,7 @@ func TestAnUnchargedVerdictSpendsNothingAndReleasesTheRoundItWasReserved(t *test
 	// A second answer about the same attempt — the integration replay — releases
 	// nothing further: the attempt was judged once, and its round was resolved by
 	// that judgement.
-	again, err := store.RecordUnchargedVerdict(ctx, item, "run-a#2", time.Now())
+	again, err := store.RecordUnchargedVerdict(ctx, item, granted, time.Now())
 	if err != nil {
 		t.Fatalf("RecordUnchargedVerdict() again error = %v", err)
 	}
@@ -1010,8 +1011,9 @@ func TestTheApprovedGrantedRoundOfIfd349ReachesItsRerunWithoutAnOverride(t *test
 	if granted.Rounds != 1 || !granted.Truncated || granted.Counters.CommittedRounds != 4 {
 		t.Fatalf("grant = %+v, want the one round the cap had left, reserved to 4 of 4", granted)
 	}
-	// The granted round ran and the reviewer approved the change.
-	approved, err := store.RecordUnchargedVerdict(ctx, item, "run-a#3", time.Now())
+	// The granted round ran — the continuation of the run the repair was decided
+	// about — and the reviewer approved the change.
+	approved, err := store.RecordUnchargedVerdict(ctx, item, RoundKey(decidedRunID, 3), time.Now())
 	if err != nil {
 		t.Fatalf("RecordUnchargedVerdict() error = %v", err)
 	}
@@ -1142,6 +1144,49 @@ func TestARerunInPlaceOfARepairReleasesWhatTheRepairReserved(t *testing.T) {
 		}
 		if released.CommittedRounds != 0 {
 			t.Fatalf("committed rounds after the re-run = %d, want both reservations released", released.CommittedRounds)
+		}
+	})
+
+	t.Run("an uncharged verdict in another run leaves the reservation standing", func(t *testing.T) {
+		t.Parallel()
+		store := newTriageStore(t)
+		if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps); err != nil {
+			t.Fatalf("GrantRepair() error = %v", err)
+		}
+		// A re-run of some other stoppage starts a fresh run beside the grant, and
+		// its approval is not a round the grant reserved.
+		if _, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, otherStoppageRunID), time.Now(), caps); err != nil {
+			t.Fatalf("RecordRerun() error = %v", err)
+		}
+		counters, err := store.RecordUnchargedVerdict(ctx, item, RoundKey("run-0123456789abcdef0123456789abcdef", 0), time.Now())
+		if err != nil {
+			t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+		}
+		if counters.CommittedRounds != 1 {
+			t.Fatalf("committed rounds = %d, want the grant's reservation left standing for the run it was decided about", counters.CommittedRounds)
+		}
+	})
+
+	t.Run("a reservation no decision accounts for is released by whichever attempt is judged", func(t *testing.T) {
+		t.Parallel()
+		store := newTriageStore(t)
+		granted, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
+		if err != nil {
+			t.Fatalf("GrantRepair() error = %v", err)
+		}
+		// A record written before decisions were durable: the grant and its
+		// commitment, and nothing saying which stoppage it was about.
+		legacy := granted.Counters
+		legacy.Decisions = nil
+		if err := store.save(item, legacy); err != nil {
+			t.Fatalf("save() error = %v", err)
+		}
+		counters, err := store.RecordUnchargedVerdict(ctx, item, "run-a#0", time.Now())
+		if err != nil {
+			t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+		}
+		if counters.CommittedRounds != 0 {
+			t.Fatalf("committed rounds = %d, want the unattributed reservation released", counters.CommittedRounds)
 		}
 	})
 

@@ -948,9 +948,10 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	// The development manager's decision, recorded exactly as the conversation
-	// records one: it spends the item's repair grant, and the three rounds the
-	// stopped run cost leave the cap room for one of the two it asks for.
-	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID),
+	// records one — about the docketed run — and it spends the item's repair
+	// grant; the three rounds the stopped run cost leave the cap room for one of
+	// the two it asks for.
+	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, outcome.RunID),
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage))
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)

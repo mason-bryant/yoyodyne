@@ -3471,7 +3471,7 @@ already carried out, which it counts from the continuations the item's runs
 record. Past the once-per-item cap a second is an escalation rather than a larger
 budget, and an item with no rounds left never gets a grant to carry out at all.
 
-Four more things refuse it. The stopped run has to be really over, terminal and
+Five more things refuse it. The stopped run has to be really over, terminal and
 still standing on whichever of the two docketed it, read from the run's own
 record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
@@ -3486,9 +3486,14 @@ checkout the harness would call its own and that holds nothing passes the gate
 above and fails this one, and a developer handed the reviewer's findings and an
 empty directory delivers an empty repair or reinvents the change from them, with
 nothing in the run's record afterwards to tell either from a repair that went
-well. The intake hold applies for the reason it applies to a
-re-run: this spends on a provider, and the development manager naming the item is
-not the operator naming it.
+well. And the decision standing about the stoppage has to still be the repair:
+one decision stands per stopped run, and a re-run, an escalation, or a wait
+recorded in the repair's place released the rounds the repair had reserved (see
+[what spends a round and what does not](#what-spends-a-round-and-what-does-not)),
+so a repair carried out on that run afterwards would spend attempts the item's
+record no longer holds room for, on a decision nobody holds any more. The intake
+hold applies for the reason it applies to a re-run: this spends on a provider,
+and the development manager naming the item is not the operator naming it.
 
 **The resumed run asks the same question again**, and blocks rather than
 spending where the answer has changed. That is the enforcement rather than a
@@ -3742,46 +3747,6 @@ the change. This is the operator's direction of 2026-09-05, after four items in 
 week reached their caps on rounds of exactly these two shapes and each took a
 person to unstick.
 
-**What spends a round and what does not**, stated once, because the rule above
-was yoyodyne-ifd.279's and the record afterwards showed it not holding —
-eleven approved overrides in five days, every one on an undisputed change — so
-yoyodyne-ifd.391 completed it: **the cap counts only rounds that ended in a
-verdict requiring repair against a change that was present.** The counter is
-charged at verdict time and by nothing else. A round spends when the reviewer
-sent the work back with more than one minor note, about a change that was in
-the worktree to be judged. A round spends nothing when it approved the change;
-when its whole residue was one minor finding; when it judged an empty diff,
-whatever it said about it — a mis-selected run, a stale worktree, and a
-developer that delivered nothing all put the same empty diff in front of a
-reviewer, and the development manager reported those rounds counting
-identically to real repair rounds; when it was granted and never executed; and
-when a promotion after an approval conflicted on replay, which reached no
-verdict at all and leaves the approval standing on the stopped run for the
-conflict path to re-enter through. What bounds a developer that delivers
-nothing is the run's own repair budget, exactly as it bounds a trivial residue.
-
-The last two are about the reservation a grant makes rather than about a
-verdict, and they are what the rule did not say before. A repair grant reserves
-its rounds against the cap the moment it is recorded, so that a second grant
-cannot promise the same room twice, and the round budget refuses against what
-the item is committed to rather than what it has cost. That reservation is
-released, not spent, where the round it promised is not going to be produced:
-by a granted round whose verdict charged nothing, one round at a time, and by a
-decision recorded in the repair's place — a re-run, an escalation, a wait —
-for what the repair reserved and the item never spent. Both regression cases
-cost an operator override before this held. On 2026-09-15 yoyodyne-ifd.349's
-granted round ended in an approve-as-implementation verdict and the promotion
-stopped on a replay conflict, and the re-run was refused at 4 of 4 with three
-rounds spent — the approving round counted through the commitment. On
-2026-09-18 a repair on yoyodyne-ifd.309 reserved the cap's last round, the
-harness found the run's worktree retired and refused to carry it out, and the
-re-run recorded in its place was refused at 6 of 6 — a round that never ran
-counted the same way. Each repair decision now records the rounds it reserved,
-which is what the decision superseding it releases; a repair superseded by a
-repair keeps both reservations and records their sum, and `yoyo triage repair`
-refuses a run whose standing decision is no longer a repair, because the rounds
-that repair reserved have gone with it.
-
 **It loosens no bound**, and what holds that is other budgets rather than the
 rounds. An approval sends the change to promotion rather than back to the
 developer, so the only thing that asks for another verdict inside the same run is
@@ -3846,8 +3811,8 @@ is written, so two taken before either is carried out would otherwise be cut
 against the same room and promise between them more than the cap has, with
 neither one overshooting it. What a grant has promised and the item has not
 spent is a reservation, and it is released where the round is not going to be
-produced — see [what spends a round and what does not](#what-one-work-item-has-been-given)
-above — so the room a later decision is cut to is what the item may still
+produced — see [what spends a round and what does not](#what-spends-a-round-and-what-does-not)
+below — so the room a later decision is cut to is what the item may still
 actually cost.
 
 **The round cap is not their only bound, and could not be.** Each of those two
@@ -3872,6 +3837,50 @@ bound in both halves: it granted one publication a second re-arm the design
 calls an escalation, and it refused a later publication of the same item its
 first. It is now once per publication and reads no configuration at all, so an
 operator raising the integration retries cannot move it back.
+
+#### What spends a round and what does not
+
+Stated once, because the rule above — an approval is not a round, and neither
+is a trivial residue — was yoyodyne-ifd.279's and the record afterwards showed
+it not holding: eleven approved overrides in five days, every one on an
+undisputed change. So yoyodyne-ifd.391 completed it: **the cap counts only rounds that ended in a
+verdict requiring repair against a change that was present.** The counter is
+charged at verdict time and by nothing else. A round spends when the reviewer
+sent the work back with more than one minor note, about a change that was in
+the worktree to be judged. A round spends nothing when it approved the change;
+when its whole residue was one minor finding; when it judged an empty diff,
+whatever it said about it — a mis-selected run, a stale worktree, and a
+developer that delivered nothing all put the same empty diff in front of a
+reviewer, and the development manager reported those rounds counting
+identically to real repair rounds; when it was granted and never executed; and
+when a promotion after an approval conflicted on replay, which reached no
+verdict at all and leaves the approval standing on the stopped run for the
+conflict path to re-enter through. What bounds a developer that delivers
+nothing is the run's own repair budget, exactly as it bounds a trivial residue.
+
+The last two are about the reservation a grant makes rather than about a
+verdict, and they are what the rule did not say before. A repair grant reserves
+its rounds against the cap the moment it is recorded, so that a second grant
+cannot promise the same room twice, and the round budget refuses against what
+the item is committed to rather than what it has cost. That reservation is
+released, not spent, where the round it promised is not going to be produced:
+by a granted round whose verdict charged nothing, one round at a time and only
+for a round of the run the repair was decided about — a verdict in some other
+run of the item judged a round nothing reserved, and releases nothing — and by
+a decision recorded in the repair's place — a re-run, an escalation, a wait —
+for what the repair reserved and the item never spent. Both regression cases
+cost an operator override before this held. On 2026-09-15 yoyodyne-ifd.349's
+granted round ended in an approve-as-implementation verdict and the promotion
+stopped on a replay conflict, and the re-run was refused at 4 of 4 with three
+rounds spent — the approving round counted through the commitment. On
+2026-09-18 a repair on yoyodyne-ifd.309 reserved the cap's last round, the
+harness found the run's worktree retired and refused to carry it out, and the
+re-run recorded in its place was refused at 6 of 6 — a round that never ran
+counted the same way. Each repair decision now records the rounds it reserved,
+which is what the decision superseding it releases; a repair superseded by a
+repair keeps both reservations and records their sum, and `yoyo triage repair`
+refuses a run whose standing decision is no longer a repair, because the rounds
+that repair reserved have gone with it.
 
 #### Crossing a cap the operator decides to cross
 
