@@ -343,15 +343,29 @@ func TestPullRequestTitleCutsAtAWordBoundary(t *testing.T) {
 	}
 }
 
-// The shape yoyodyne-ifd.321 was admitted on, end to end: publishing commits
-// each attempt, so the second review judges a branch that already carries the
-// first one. The patch it is handed spans both — it always did — and it now
-// says which commits it spans, because the reviewers that read it as the
-// uncommitted tail discounted their own verdicts over work they had been shown.
+// The shape yoyodyne-ifd.321 was admitted on, end to end, replaying the
+// yoyodyne-ifd.121.5 handoff that yoyodyne-ifd.387 was admitted on: publishing
+// commits each attempt, so the second review judges a branch that already
+// carries the first one — a reduction that takes three thousand lines out of a
+// README. The patch it is handed is the branch's whole diff against the run's
+// recorded base, so the reduction is in front of it beside the repair, and the
+// evidence and the record both name the base and the tip it was judged between.
 func TestPipelineTellsAReviewerWhatThePatchOfAContinuedRunSpans(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
+	var readme strings.Builder
+	for i := 0; i < 3500; i++ {
+		fmt.Fprintf(&readme, "line %d of the README before the reduction\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte(readme.String()), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runPipelineGit(t, repository, "add", "README.md")
+	runPipelineGit(t, repository, "commit", "-m", "the README before the reduction")
+	runPipelineGit(t, repository, "push", "origin", "refs/heads/main:refs/heads/main")
+	reduced := strings.Join(strings.SplitAfter(readme.String(), "\n")[:400], "")
+
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	forge := &fakeForge{remote: remote}
 	attempts := 0
@@ -361,11 +375,11 @@ func TestPipelineTellsAReviewerWhatThePatchOfAContinuedRunSpans(t *testing.T) {
 		}
 		attempts++
 		if attempts == 1 {
-			return os.WriteFile(filepath.Join(request.WorkingDirectory, "reduced.md"), []byte("the reduction\n"), 0o600)
+			return os.WriteFile(filepath.Join(request.WorkingDirectory, "README.md"), []byte(reduced), 0o600)
 		}
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "repair.md"), []byte("the repair\n"), 0o600)
 	}, repairVerdict, approveVerdict)
-	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
 
 	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
 	if err != nil {
@@ -385,16 +399,51 @@ func TestPipelineTellsAReviewerWhatThePatchOfAContinuedRunSpans(t *testing.T) {
 	for _, want := range []string{
 		"## What this patch covers",
 		"This change is measured against base commit " + outcome.BaseCommit,
+		"read at tip commit ",
 		"### Commits already made for this change, oldest first",
 		"No committed work of this change is missing from it",
-		// The first attempt is a commit by now and is in the patch all the same,
-		// beside the repair that followed it.
-		"+the reduction",
+		// The reduction is a commit by now and is in the patch all the same,
+		// whole, beside the repair that followed it.
+		"diff --git a/README.md b/README.md",
+		"-line 3499 of the README before the reduction",
 		"+the repair",
+		// And the listing names both files as work already on the branch — the
+		// repair too, because publishing commits each attempt before its review
+		// — with the README at the size it was reduced to.
+		"## Files in this change",
+		fmt.Sprintf("- M README.md (%d bytes) — already committed on this branch", len(reduced)),
+		"- A repair.md (11 bytes) — already committed on this branch",
 	} {
 		if !strings.Contains(repair, want) {
 			t.Errorf("the continued run's review evidence is missing %q:\n%s", want, repair)
 		}
+	}
+	if deleted := strings.Count(repair, "\n-line "); deleted != 3100 {
+		t.Errorf("the repair review was shown %d removed README lines, want the whole 3100-line reduction", deleted)
+	}
+	if strings.Contains(repair, "This patch is truncated") {
+		t.Errorf("a reduction inside the bounds was reported as truncated:\n%s", repair)
+	}
+
+	// The record names what the approving review was judged against: the run's
+	// recorded base, and the tip carrying the reduction the first attempt
+	// published. What the reviewer saw is then two commits in the run state and
+	// on the item, rather than a byte count to reconstruct from.
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.ReviewBaseCommit != outcome.BaseCommit || state.ReviewHeadCommit == "" || state.ReviewHeadCommit == outcome.BaseCommit {
+		t.Errorf("review span = %s..%s, want the recorded base %s to a tip above it", state.ReviewBaseCommit, state.ReviewHeadCommit, outcome.BaseCommit)
+	}
+	if outcome.ReviewBaseCommit != state.ReviewBaseCommit || outcome.ReviewHeadCommit != state.ReviewHeadCommit {
+		t.Errorf("outcome review span = %s..%s, want the record's %s..%s", outcome.ReviewBaseCommit, outcome.ReviewHeadCommit, state.ReviewBaseCommit, state.ReviewHeadCommit)
+	}
+	if want := "Reviewed against: base " + state.ReviewBaseCommit + ", tip " + state.ReviewHeadCommit; !strings.Contains(tracker.notes, want) {
+		t.Errorf("item notes are missing %q:\n%s", want, tracker.notes)
+	}
+	if !strings.Contains(repair, "read at tip commit "+state.ReviewHeadCommit) {
+		t.Errorf("the evidence names a different tip from the record's %s:\n%s", state.ReviewHeadCommit, repair)
 	}
 }
 

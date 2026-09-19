@@ -78,13 +78,14 @@ func TestBranchChangesBoundsALargeAccumulatedChange(t *testing.T) {
 	repository := newRepository(t)
 	accumulate(t, repository, "accumulated",
 		[2]string{"first.txt", strings.Repeat("one\n", 400)},
-		[2]string{"second.txt", strings.Repeat("two\n", 400)},
+		[2]string{"second.txt", "two\n"},
 	)
 	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
 
 	// The bound holds over the whole multi-commit patch exactly as it does over
 	// one worktree's, and what it cut is reported rather than passed off as the
-	// complete change.
+	// complete change: file by file, so the file that did not fit is named with
+	// the size of its diff and the file that did is shown whole.
 	change, err := manager.BranchChanges(context.Background(), BranchRequest{Branch: "accumulated", BaseRef: "main"}, DiffLimits{MaxTotalBytes: 200})
 	if err != nil {
 		t.Fatalf("BranchChanges() error = %v", err)
@@ -95,8 +96,15 @@ func TestBranchChangesBoundsALargeAccumulatedChange(t *testing.T) {
 	if len(change.Changes.Patch) > 200 {
 		t.Fatalf("patch is %d bytes, want no more than 200", len(change.Changes.Patch))
 	}
-	if !strings.HasSuffix(change.Changes.Patch, "\n") {
-		t.Fatalf("clamped patch does not end on a whole line: %q", change.Changes.Patch)
+	if !strings.Contains(change.Changes.Patch, "diff --git a/second.txt b/second.txt") || !strings.Contains(change.Changes.Patch, "+two") {
+		t.Fatalf("the file that fits the bound is not shown whole:\n%s", change.Changes.Patch)
+	}
+	if strings.Contains(change.Changes.Patch, "first.txt") {
+		t.Fatalf("the file the bound dropped is still in the patch:\n%s", change.Changes.Patch)
+	}
+	if len(change.Changes.OmittedFiles) != 1 || change.Changes.OmittedFiles[0].Path != "first.txt" ||
+		change.Changes.OmittedFiles[0].Reason != OmittedTooLarge || change.Changes.OmittedFiles[0].DiffBytes == 0 {
+		t.Fatalf("omitted files = %#v, want first.txt named with the size of its diff", change.Changes.OmittedFiles)
 	}
 }
 

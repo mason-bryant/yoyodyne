@@ -228,20 +228,41 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 	if diffStat.Status != execution.ProcessSucceeded {
 		return ChangeDiff{}, fmt.Errorf("summarize accumulated diff failed with exit code %d: %s", diffStat.ExitCode, strings.TrimSpace(diffStat.Stderr))
 	}
-	patch, err := m.run(ctx, "-C", m.repositoryRoot, "diff", "--no-ext-diff", "--patch", baseCommit, headCommit, "--")
+	sections, err := m.trackedSections(ctx, m.repositoryRoot, baseCommit, headCommit)
 	if err != nil {
 		return ChangeDiff{}, err
 	}
-	if patch.Status != execution.ProcessSucceeded {
-		return ChangeDiff{}, fmt.Errorf("diff accumulated changes failed with exit code %d: %s", patch.ExitCode, strings.TrimSpace(patch.Stderr))
+	// The bound is spent whole file by whole file, as a worktree's is, so a
+	// range too large to show in full names the files it could not show rather
+	// than ending part-way through one. The branch has no worktree to measure a
+	// file in, so an omission carries the size of its diff and no file size.
+	changes := ChangeDiff{
+		Status:   renderChangedNames(names.Stdout, nil),
+		DiffStat: strings.TrimSpace(diffStat.Stdout),
 	}
-	clamped, truncated := clampToWholeLines(patch.Stdout, maxTotalBytes)
-	return ChangeDiff{
-		Status:    renderChangedNames(names.Stdout, nil),
-		DiffStat:  strings.TrimSpace(diffStat.Stdout),
-		Patch:     clamped,
-		Truncated: truncated || containsBinaryDiff(patch.Stdout),
-	}, nil
+	var patch strings.Builder
+	remaining := maxTotalBytes
+	omit := func(section trackedSection, reason OmissionReason, bound int64) {
+		changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
+			Path: section.path, Reason: reason, Bound: bound, DiffBytes: int64(len(section.patch)),
+		})
+		changes.Truncated = true
+	}
+	for _, section := range sections {
+		switch {
+		case containsBinaryDiff(section.patch):
+			omit(section, OmittedBinary, 0)
+		case len(section.patch) > maxTotalBytes:
+			omit(section, OmittedTooLarge, int64(maxTotalBytes))
+		case len(section.patch) > remaining:
+			omit(section, OmittedPatchFull, int64(maxTotalBytes))
+		default:
+			patch.WriteString(section.patch)
+			remaining -= len(section.patch)
+		}
+	}
+	changes.Patch = patch.String()
+	return changes, nil
 }
 
 func validateBranchRequest(request BranchRequest) error {

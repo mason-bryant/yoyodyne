@@ -1148,6 +1148,9 @@ func renderReconciledIntegrationNotes(state runstate.State, recovered bool) stri
 	if state.ReviewSessionID != "" {
 		lines = append(lines, "Reviewer session: "+state.ReviewSessionID)
 	}
+	if state.ReviewBaseCommit != "" && state.ReviewHeadCommit != "" {
+		lines = append(lines, "Reviewed against: base "+state.ReviewBaseCommit+", tip "+state.ReviewHeadCommit)
+	}
 	if state.ReviewDecision != "" {
 		lines = append(lines, "Review decision: "+state.ReviewDecision)
 	}

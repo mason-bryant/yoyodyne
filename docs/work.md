@@ -87,13 +87,41 @@ worktree carrying commits whose combined effect on the base is nothing is a
 change made and then undone, and the evidence says so and lists them, because a
 reviewer told only that the patch is empty concludes the harness lost the
 evidence. [One did](diagnoses/yoyodyne-ifd-236-review-evidence-over-committed-work.md).
-The patch is bounded, and what the bounds keep out of it is named rather than
-dropped: a new file bigger than the per-file ceiling, one whose content has no
-reviewable diff, and one the total bound had no room left for are each listed
-above the patch by name, with the file's size and the bound that dropped it —
-delivered but too large to show, rather than absent. A reviewer that cannot tell
-a file the change delivers from one it never wrote judges the delivery blind,
-and an absence it is told about is one it can hold the change to.
+
+**What a reviewer is shown for a continued run** — a repair round, a grant
+carried out on a preserved worktree, a run picked up after its process died —
+is therefore the branch's whole diff against the run's recorded base, never the
+tail above the commits earlier attempts made. A 3,000-line README reduction the
+first attempt committed is in the patch the fourth review judges, whole, beside
+whatever that round changed. The evidence names the base and the tip it was read
+at — the commit the run was cut from and the branch's HEAD at the review, with
+the uncommitted worktree above it — and the run's record and the item's notes
+carry the same two commits as `review_base_commit` and `review_head_commit`
+beside the reviewer's session and verdict, so what any verdict was judged
+against reads back as two commits rather than being reconstructed from a patch
+byte count. Seven reviews across three items said their verdicts covered less
+than the item asked for and approved on the passing tests instead
+(`yoyodyne-ifd.387`); what is stated here is what each of them is actually
+shown, so a verdict hedged that way is a finding about the reviewer rather than
+about the evidence.
+
+The patch is bounded, and the bound is spent whole file by whole file rather
+than cutting the patch at a byte count: a patch cut tail-first keeps whichever
+files Git rendered first and loses the rest without naming them, so a reviewer
+handed one could not say which files its verdict covered. Every file the patch
+shows it shows in full, and every file it cannot show is named above the patch with the file's size, the size of its diff, and the bound
+that dropped it — a diff bigger than the whole patch bound, one the bound had no
+room left for by the time it was reached, a new file bigger than the per-file
+ceiling, or content with no reviewable diff — delivered but too large to show,
+rather than absent. A reviewer that cannot tell a file the change delivers from
+one it never wrote judges the delivery blind, and an absence it is told about is
+one it can hold the change to. Above the patch is also a listing of every file
+the change touches, with Git's status, the file's size at the tip, whether it is
+binary, and whether it is already committed on the branch. That listing is where
+a binary asset is seen to be delivered — a text diff never shows one — so an item
+that ships an icon is not approved on a link checker's say-so
+(`yoyodyne-ifd.68.9`), and it is where a reviewer tells a file an earlier attempt
+published from one only this round's worktree holds.
 Everything the reviewer is shown is
 treated as evidence rather than instruction, so an instruction the developer
 left in the diff is data to analyze rather than something to follow. A verdict
@@ -1033,8 +1061,10 @@ branch against the base it grew from:
 
 It describes every commit the branch carries over that base and diffs the whole
 range as one patch, under the same bounds a single change is described within: a
-range too large to show in full is reported as truncated, and a truncated change
-cannot be approved, because what was not shown was not reviewed. The base must
+range too large to show in full is clipped whole file by whole file, with each
+file the bound kept out named above the patch with the size of its diff, it is
+reported as truncated, and a truncated change cannot be approved, because what
+was not shown was not reviewed. The base must
 be an ancestor of the branch — a base that has moved on is a reconciliation
 rather than an accumulated change, and the command says so instead of quietly
 reviewing a range you did not name.
