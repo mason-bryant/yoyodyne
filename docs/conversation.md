@@ -666,8 +666,11 @@ is what you reach for when the queue looks wrong but nothing is on fire. It hold
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
 and `/release` lets the harness choose again — as does `yoyo release` at a
-terminal, which lifts the same record, for when the hold is the one the
-failure-storm brake placed overnight and no conversation is open. A held intake
+terminal, which lifts the same record, for when no conversation is open. A hold
+the failure-storm brake placed overnight does not need either: the brake
+summons the development manager to decide it and probes the line itself if she
+does not, and only a hold she escalated
+[waits on you](operations.md#pausing-everything-and-resuming-it). A held intake
 leads `/status` with its own banner saying when it was placed, who placed it,
 and why, beneath the PAUSED banner if both are in force. Who placed it is on the
 record rather than assumed: the harness's own failure-storm brake
@@ -1492,6 +1495,29 @@ every counter here fails in: an attempt nobody took rather than one nobody
 counted. What triage changed is that stopped work is decided by the role that
 owns it, the decision is durable on the item, and it reaches you only when the
 development manager judged it had to.
+
+### Deciding the brake's hold on intake
+
+One decision of hers is about no run at all. When the failure-storm brake holds
+intake — that many runs blocked in a row, with nothing landing between them —
+the poll that trips it summons her sweep out of its cadence with the runs that
+blocked and the reason each blocked in the message that wakes her, and what it
+asks first is what happens to the hold. She records that as a `brake` action,
+which names no item and takes one of three decisions: `release`, because the
+stops were verdicts on three changes rather than on the machine, and the
+watching session lifts the hold at its next poll; `probe`, to keep the hold and
+have the session start one probe run now, which reopens intake if it lands and
+keeps it held — and summons her again, with the probe's own stoppage — if it
+blocks; or `escalate`, to keep the hold for you, which is the only decision
+under which a brake hold waits on a person, and which she makes with a report
+at `warning` severity so it reaches you. The decision lands on the hold's own
+record, naming her conversation and turn, and it lifts and starts nothing from
+the conversation: the watching session reads it at its next poll and acts. A
+`brake` decision aimed at a hold you placed is refused, because that switch is
+yours. The runs themselves are triaged as above, entry by entry, and neither
+kind of decision decides the other. Where she records no brake decision by
+`execution.brake_cooldown`, the session probes by itself; the whole of that is
+in [operations](operations.md#pausing-everything-and-resuming-it).
 
 ### Resuming an approved change the environment stopped
 

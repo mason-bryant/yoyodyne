@@ -297,13 +297,27 @@ type Execution struct {
 	WorkPoll Duration `yaml:"work_poll" json:"work_poll"`
 	// BlockedRunsBeforeIntakeHold is the failure-storm brake: this many runs
 	// blocking in a row, with nothing landing between them, holds intake and
-	// leaves it held for the operator to lift. It is a bound on systemic
-	// breakage rather than on any one item — an item that keeps failing is the
-	// per-item cooldown's business — and it exists because a watch session left
-	// overnight against a broken machine would otherwise put the whole queue
-	// through a run each and dock every one of them. Zero never brakes, which is
-	// the behaviour a pass had before this bound existed.
+	// summons the development manager to decide what happens to it. It is a
+	// bound on systemic breakage rather than on any one item — an item that
+	// keeps failing is the per-item cooldown's business — and it exists because
+	// a watch session left overnight against a broken machine would otherwise
+	// put the whole queue through a run each and dock every one of them. An
+	// environmental stop — a dirty checkout, a transport that did not answer, a
+	// provider nobody could reach — counts toward nothing, because no run can
+	// fix one. Zero never brakes, which is the behaviour a pass had before this
+	// bound existed.
 	BlockedRunsBeforeIntakeHold int `yaml:"blocked_runs_before_intake_hold" json:"blocked_runs_before_intake_hold"`
+	// BrakeCooldown is how long a tripped brake waits for the development
+	// manager's decision before it probes the line by itself: one run started
+	// under the hold, whose landing reopens intake and whose blocking keeps it
+	// held and puts the question to her again. It is what makes the brake
+	// self-releasing — a hold nobody decides about is probed rather than left —
+	// and a probe that blocks restarts it, so a broken machine is probed once
+	// per cooldown rather than continuously. It bounds a wait on a turn, not on
+	// a person: she is summoned the moment the brake trips, and a decision she
+	// records ends the wait wherever the cooldown stands. Zero waits for her
+	// summoned turn and no longer.
+	BrakeCooldown Duration `yaml:"brake_cooldown" json:"brake_cooldown"`
 	// DeclarativeDelivery is how a new run is executed, and it defaults on: each
 	// run compiles the built-in delivery definition, records a workflow instance
 	// of it, and steps that instance beside the run, so the sequence the
@@ -378,6 +392,12 @@ const (
 	// unlucky item after it do not stop the line, and short of a session that
 	// spends the whole backlog finding out the machine is broken.
 	defaultBlockedRunsBeforeIntakeHold = 3
+	// defaultBrakeCooldown is thirty minutes: long enough for the development
+	// manager's summoned turn to be taken and answered several times over — a
+	// turn is minutes — and short enough that a summons the provider refused, or
+	// a conversation nothing could open, costs the line half an hour rather than
+	// the two hours the 2026-09-19 trip cost it.
+	defaultBrakeCooldown = Duration(30 * time.Minute)
 )
 
 // Triage is what the triage workflow measures against: when work that has
@@ -765,6 +785,13 @@ func (c Config) Validate() error {
 	// anybody could count, is refused.
 	if c.Execution.BlockedRunsBeforeIntakeHold < 0 {
 		problems = append(problems, "blocked_runs_before_intake_hold cannot be negative")
+	}
+	// Zero is a choice here too: the summons is taken before the cooldown is
+	// read, so a cooldown of no time at all waits for her summoned turn and no
+	// longer, and probes at the poll after it. Only a negative one, which
+	// describes no wait anybody could take, is refused.
+	if c.Execution.BrakeCooldown < 0 {
+		problems = append(problems, "execution.brake_cooldown cannot be negative")
 	}
 	// An age of zero is not the choice the pauses above make with theirs: it
 	// dockets every approved publication the instant it is made, which is not a

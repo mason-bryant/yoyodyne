@@ -805,7 +805,7 @@ func nextMove(event Event) (string, bool) {
 	// the two cannot disagree.
 	if strings.TrimSpace(event.Detail.Mover) != "" {
 		switch event.Kind {
-		case KindStallNoticed, KindRunEnded, KindBlockerRecorded, KindCapacityHold, KindProviderOutage:
+		case KindStallNoticed, KindRunEnded, KindBlockerRecorded, KindCapacityHold, KindProviderOutage, KindWatchBraked, KindIntakeHeld:
 			return ended(strings.TrimSpace(event.Detail.Mover)), true
 		}
 	}

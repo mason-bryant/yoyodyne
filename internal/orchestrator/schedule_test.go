@@ -2372,6 +2372,18 @@ type scheduleHarness struct {
 	// a test asks for it, so every other test's pass is what it always was.
 	escalations int
 	escalate    func(*scheduleHarness, int) (EscalationSweep, error)
+	// summon stands in for the brake firing her sweep out of its cadence, with
+	// the hold as it was summoned over and the number of summonses so far.
+	// summonses is every hold this harness was asked to summon her over,
+	// releases every hold the scheduler lifted, and revisions how many times the
+	// brake's record was rewritten. brakeErr refuses the hold, and cooldown is
+	// execution.brake_cooldown as a pull reads it.
+	summon    func(*scheduleHarness, BrakeSummons, int) (Fired, error)
+	summonses []runstate.IntakeHold
+	releases  []runstate.IntakeHold
+	revisions int
+	brakeErr  error
+	cooldown  time.Duration
 	// tree stands in for the repository an item's stated prerequisites are read
 	// against, and docketed is every unready item this harness was asked to route
 	// to triage, by the key the docket would hold it under. A pull is wired with a
@@ -2425,6 +2437,7 @@ func newScheduleHarness(items ...beads.WorkItem) *scheduleHarness {
 		selections: map[string]runstate.Selection{},
 		prices:     map[string]float64{},
 		capacity:   1,
+		cooldown:   30 * time.Minute,
 		gate:       make(chan struct{}),
 		// The morning the session that provoked the retry died, so a test reading
 		// its own timings reads the ones in the report.
@@ -2495,11 +2508,18 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		return Pull{}, openErr
 	}
 	h.mu.Lock()
-	blockedRuns := h.blockedRuns
+	blockedRuns, cooldown := h.blockedRuns, h.cooldown
 	stoppages, decisions := h.stoppages, h.decisions
 	var escalations ScheduleEscalations
 	if h.escalate != nil {
 		escalations = h
+	}
+	// The summons is wired only where a test supplies one, for the reason the
+	// escalation is: a pull without one brakes and probes exactly as it would,
+	// and records that she could not be summoned.
+	var summons ScheduleSummons
+	if h.summon != nil {
+		summons = h
 	}
 	// A project that has scheduled nothing carries no trigger at all rather than
 	// one with an empty schedule, which is what recurringTrigger returns for it.
@@ -2529,7 +2549,9 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		// against.
 		Poll:                        time.Minute,
 		BlockedRunsBeforeIntakeHold: blockedRuns,
+		BrakeCooldown:               cooldown,
 		Brake:                       h,
+		Summons:                     summons,
 		Spend:                       h,
 		Outages:                     h.outages,
 		Provider:                    h.provider,
@@ -2574,11 +2596,15 @@ func (h *scheduleHarness) sleep(_ context.Context, interval time.Duration) bool 
 	return onSleep(h, sleeps)
 }
 
-// Hold is the brake placing the operator's own switch. Nothing in the scheduler
-// releases one, so this harness only ever has to place it.
-func (h *scheduleHarness) Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error) {
+// Brake is the brake placing the operator's own switch with its trip attached.
+// Like the store it stands in for, it leaves a hold already in force exactly as
+// it was.
+func (h *scheduleHarness) Brake(trip runstate.IntakeBrake, reason string, at time.Time) (runstate.IntakeHold, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.brakeErr != nil {
+		return runstate.IntakeHold{}, h.brakeErr
+	}
 	if h.held != nil {
 		return *h.held, nil
 	}
@@ -2586,11 +2612,75 @@ func (h *scheduleHarness) Hold(holder runstate.IntakeHolder, reason string, at t
 		SchemaVersion: runstate.IntakeHoldSchemaVersion,
 		ProductID:     "yoyodyne",
 		HeldAt:        at,
-		HeldBy:        holder,
+		HeldBy:        runstate.IntakeHolderBrake,
 		Reason:        reason,
+		Brake:         &trip,
+	}
+	if err := held.Validate(); err != nil {
+		return runstate.IntakeHold{}, err
 	}
 	h.held = &held
 	return held, nil
+}
+
+// ReviseBrake rewrites the brake's record on its own hold, refusing every other
+// hold exactly as the store does.
+func (h *scheduleHarness) ReviseBrake(revise func(*runstate.IntakeBrake) error) (runstate.IntakeHold, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.held == nil || !h.held.Braked() {
+		return runstate.IntakeHold{}, runstate.ErrNoBrakeHold
+	}
+	revised := *h.held.Brake
+	if err := revise(&revised); err != nil {
+		return *h.held, err
+	}
+	if err := revised.Validate(); err != nil {
+		return *h.held, err
+	}
+	h.held.Brake = &revised
+	h.revisions++
+	return *h.held, nil
+}
+
+// ReleaseBrake is the harness lifting the brake's own hold and no other: on
+// the development manager's decision, or on a probe that landed.
+func (h *scheduleHarness) ReleaseBrake() (runstate.IntakeHold, bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.held == nil || !h.held.Braked() {
+		return runstate.IntakeHold{}, false, nil
+	}
+	lifted := *h.held
+	h.held = nil
+	h.releases = append(h.releases, lifted)
+	return lifted, true, nil
+}
+
+// Summon stands in for firing the development manager's sweep out of its
+// cadence, which is a provider turn the scheduler never makes itself. It is
+// wired into a pull only where a test supplies it.
+func (h *scheduleHarness) Summon(_ context.Context, summons BrakeSummons) (Fired, error) {
+	h.mu.Lock()
+	h.summonses = append(h.summonses, summons.Hold)
+	count, summon := len(h.summonses), h.summon
+	h.mu.Unlock()
+	return summon(h, summons, count)
+}
+
+// decideBrake is the development manager recording a decision about the
+// brake's hold from her conversation, which is a write the scheduler reads at
+// its next poll rather than one it makes.
+func (h *scheduleHarness) decideBrake(decision runstate.IntakeBrakeDecision, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.held == nil || !h.held.Braked() {
+		panic("decideBrake on a hold the brake did not place")
+	}
+	at := h.now
+	revised := *h.held.Brake
+	revised.Decision, revised.DecidedAt, revised.DecisionReason = decision, &at, reason
+	h.held.Brake = &revised
 }
 
 // Price is what the runs of one item cost, as the recorded evidence would say.
@@ -2697,6 +2787,8 @@ type recordedTransition struct {
 	// reader of it reads. It is what the stall alarm names a cause from, so a test
 	// about what a woken operator is told reads it here.
 	passedOver runstate.PassedOver
+	// mover is whose move a braked poll is, in the hold's own words.
+	mover string
 }
 
 func (r *recordedSessions) Record(transition SessionState) error {
@@ -2707,6 +2799,7 @@ func (r *recordedSessions) Record(transition SessionState) error {
 	}
 	r.transitions = append(r.transitions, recordedTransition{
 		state:      transition.State,
+		mover:      transition.Mover,
 		reason:     transition.Reason,
 		running:    transition.Running,
 		executor:   transition.Executor,
@@ -2764,6 +2857,19 @@ func (r *recordedSessions) restarted() bool {
 		}
 	}
 	return false
+}
+
+// lastMover is whose move the most recent transition into a state named.
+func (r *recordedSessions) lastMover(state runstate.WatchState) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	mover := ""
+	for _, transition := range r.transitions {
+		if transition.state == state {
+			mover = transition.mover
+		}
+	}
+	return mover
 }
 
 func (r *recordedSessions) said(state runstate.WatchState) string {

@@ -240,6 +240,75 @@ func TestHeldIntakeStillRunsAnItemTheOperatorNames(t *testing.T) {
 	}
 }
 
+// The one harness selection a held intake lets through is the brake's own
+// probe, and only where the hold's own record names the item as the probe it
+// has in flight. A selection that merely says it is the probe is refused like
+// any other harness selection: the record is what is read, because the brake
+// wrote it under its lock and a selection is words any caller could supply.
+func TestHeldIntakeLetsOnlyTheRecordedProbeThrough(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	intake := newIntakeHoldStore(t)
+	pipeline.Intake = intake
+	pipeline.Selection = runstate.Selection{By: runstate.SelectedByBrake, Reason: "the intake brake's probe run", At: baseTime}
+	trip := runstate.IntakeBrake{
+		Blocked:        []runstate.BrakeBlockedRun{{RunID: "run-1", WorkItemID: "yoyodyne-other", Reason: "review required repair"}},
+		CooldownEndsAt: baseTime.Add(30 * time.Minute),
+	}
+	if _, err := intake.Brake(trip, "3 run(s) blocked in a row", baseTime); err != nil {
+		t.Fatalf("Brake() error = %v", err)
+	}
+
+	// The hold names no probe yet, so a selection claiming to be one is refused.
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want a pause rather than a failure", err)
+	}
+	if !outcome.Paused || outcome.PausedByIntake == nil || tracker.claimed {
+		t.Fatalf("outcome = %#v (claimed=%t), want a self-declared probe refused by the hold", outcome, tracker.claimed)
+	}
+	// The hold names another item as its probe: still refused.
+	if _, err := intake.ReviseBrake(func(brake *runstate.IntakeBrake) error {
+		brake.Probe = &runstate.IntakeProbe{WorkItemID: "yoyodyne-other", StartedAt: baseTime}
+		return nil
+	}); err != nil {
+		t.Fatalf("ReviseBrake() error = %v", err)
+	}
+	outcome, err = pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want a pause rather than a failure", err)
+	}
+	if !outcome.Paused || tracker.claimed {
+		t.Fatalf("outcome = %#v (claimed=%t), want a probe of another item refused for this one", outcome, tracker.claimed)
+	}
+	// The hold names this item as its probe: the run goes through, with the
+	// brake recorded as what chose it.
+	if _, err := intake.ReviseBrake(func(brake *runstate.IntakeBrake) error {
+		brake.Probe = &runstate.IntakeProbe{WorkItemID: tracker.item.ID, StartedAt: baseTime}
+		return nil
+	}); err != nil {
+		t.Fatalf("ReviseBrake() error = %v", err)
+	}
+	outcome, err = pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.PausedByIntake != nil || outcome.RunID == "" {
+		t.Fatalf("outcome = %#v, want the recorded probe run despite the hold", outcome)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.Selection == nil || state.Selection.By != runstate.SelectedByBrake {
+		t.Fatalf("selection = %#v, want the intake brake recorded as what chose the probe", state.Selection)
+	}
+}
+
 // A pipeline that says nothing about why it is running an item records nothing,
 // rather than a selection with an empty reason. The two read very differently to
 // whoever is deciding whether to trust what the harness is doing.

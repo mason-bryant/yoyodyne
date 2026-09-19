@@ -245,12 +245,18 @@ execution:
   # interval and asks no provider anything.
   work_poll: %s
   # The failure-storm brake for a session left running unattended: this many runs
-  # blocking in a row, with nothing landing between them, holds intake and leaves
-  # it held for you to lift. It is aimed at a broken machine rather than a broken
-  # item -- an item that keeps failing is left alone until something about it
-  # changes -- and "0" turns it off, leaving you as the only thing that holds
-  # intake.
+  # blocking in a row, with nothing landing between them, holds intake and
+  # summons the development manager at once to decide what happens to it. It is
+  # aimed at a broken machine rather than a broken item -- an item that keeps
+  # failing is left alone until something about it changes, and a stop the
+  # environment made counts toward nothing -- and "0" turns it off, leaving you
+  # as the only thing that holds intake.
   blocked_runs_before_intake_hold: %d
+  # How long a tripped brake waits for her decision before it probes the line by
+  # itself: one run under the hold, whose landing reopens intake and whose
+  # blocking keeps it held and asks her again. A hold she escalates to you is
+  # the only one that waits on a person.
+  brake_cooldown: %s
   # Every new run compiles the built-in delivery definition and records where it
   # sent the run, beside the run's own record. The delivery is the same delivery
   # either way -- the definition's steps perform nothing -- so what this buys is
@@ -342,6 +348,7 @@ approvals:
 		renderScaffoldDuration(effective.Execution.CheckTimeout),
 		renderScaffoldDuration(effective.Execution.WorkPoll),
 		effective.Execution.BlockedRunsBeforeIntakeHold,
+		renderScaffoldDuration(effective.Execution.BrakeCooldown),
 		effective.Execution.DeclarativeDelivery,
 		renderScaffoldDuration(effective.Triage.StuckMergeAge),
 		effective.Triage.ReviewRoundsCap,

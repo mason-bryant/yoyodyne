@@ -83,6 +83,12 @@ func releaseIntake(args []string, stdout, stderr io.Writer) int {
 	// made.
 	fmt.Fprintf(stdout, "released the hold on intake, held since %s: %s; the harness may choose work from the backlog again\n",
 		lifted.HeldAt.Format(time.RFC3339), lifted.Says())
+	// A brake hold lifted from here was one the harness was working itself, and
+	// saying what it was in the middle of is what tells the operator whether they
+	// overtook a decision or a probe.
+	if lifted.Braked() {
+		fmt.Fprintf(stdout, "the harness was working that hold itself — %s — and this overtook it\n", lifted.Standing())
+	}
 	fmt.Fprintln(stdout, "a watching `yoyo work` session chooses again at its next poll; a session that has ended is started again by `yoyo work`")
 	fmt.Fprintln(stdout, "this is the same hold the conversation's /release lifts, so nothing else has to be done there")
 	return 0
@@ -107,6 +113,12 @@ held -- by you in a conversation, or by the failure-storm brake when runs kept
 blocking with nothing landing between them. It is the terminal half of the
 conversation's `+"`/release`"+`: one record under the product, so whichever
 surface lifts it, the hold is gone for both.
+
+A hold the brake placed does not need this. The brake summons the development
+manager the moment it trips and releases the hold on her decision, or on a
+probe run that lands once the configured cooldown has passed with no decision
+recorded; the only brake hold that waits on a person is one she escalated to
+you. This lifts it sooner, and says what the harness was in the middle of.
 
 Nothing else changes. Runs already going were never stopped by the hold, an item
 you named with `+"`yoyo run`"+` was never subject to it, and releasing what is

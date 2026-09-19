@@ -22,6 +22,7 @@ package runstate
 // be started for a reason other than the operator naming it, and starts nothing.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,8 +56,9 @@ const (
 	// which is what the switch exists for.
 	IntakeHolderOperator IntakeHolder = "operator"
 	// IntakeHolderBrake is the harness's own failure-storm brake placing the
-	// operator's switch after runs kept blocking. What lifts it is still a
-	// person, which is the whole reason for tripping it.
+	// operator's switch after runs kept blocking. What lifts it is the harness
+	// itself — on the development manager's decision, or on a probe run that
+	// lands — unless she has escalated it to the operator; see intakebrake.go.
 	IntakeHolderBrake IntakeHolder = "brake"
 )
 
@@ -73,9 +75,10 @@ func (h IntakeHolder) Recorded() bool {
 }
 
 // IntakeHold is the recorded fact that the harness has been stopped from
-// choosing new work for this product. It carries who stopped it, when, and why,
-// and nothing else: what lifts it is a person, so there is no deadline to
-// record.
+// choosing new work for this product. It carries who stopped it, when, and why.
+// The operator's hold carries nothing else: what lifts it is a person, so there
+// is no deadline to record. The brake's carries its own record of what it does
+// next, because what lifts that one is the harness.
 type IntakeHold struct {
 	SchemaVersion int              `json:"schema_version"`
 	ProductID     domain.ProductID `json:"product_id"`
@@ -86,6 +89,11 @@ type IntakeHold struct {
 	// Reason is optional, for the reason a stop's is: an operator who holds
 	// intake in a hurry owes nobody an explanation.
 	Reason string `json:"reason,omitempty"`
+	// Brake is the brake's own record on a hold it placed: what tripped it, who
+	// is deciding about it, and the probe that releases it. It is absent on the
+	// operator's hold, and on a brake hold written before the brake summoned
+	// anybody, which is read as a hold that waits on a person exactly as it did.
+	Brake *IntakeBrake `json:"brake,omitempty"`
 }
 
 func (h IntakeHold) Validate() error {
@@ -109,7 +117,75 @@ func (h IntakeHold) Validate() error {
 	if len(h.Reason) > MaxIntakeReasonBytes {
 		problems = append(problems, fmt.Errorf("intake hold reason is %d bytes, which exceeds the %d byte bound", len(h.Reason), MaxIntakeReasonBytes))
 	}
+	// The brake's record belongs to the brake's hold and to no other: a record
+	// of the development manager deciding about the operator's switch would be a
+	// decision about a hold she does not hold.
+	if h.Brake != nil {
+		if h.HeldBy != IntakeHolderBrake {
+			problems = append(problems, errors.New("a brake record is carried only by a hold the brake placed"))
+		}
+		if err := h.Brake.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("invalid brake record: %w", err))
+		}
+	}
 	return errors.Join(problems...)
+}
+
+// Braked reports a hold the brake placed and is working: one carrying the
+// brake's own record of who is deciding and what happens next. A brake hold
+// written before that record existed is not one, and waits on a person as it
+// always did.
+func (h IntakeHold) Braked() bool {
+	return h.HeldBy == IntakeHolderBrake && h.Brake != nil
+}
+
+// Probing reports the brake's own record naming this item as the probe it has
+// in flight. It is the one thing that lets a harness selection through a held
+// intake, and it is asked of the record rather than of the selection: a run
+// that said it was the probe would be a hold any caller could talk its way
+// past, and a record the brake wrote under its own lock is not.
+func (h IntakeHold) Probing(workItemID string) bool {
+	return h.Braked() && h.Brake.Probing() && h.Brake.Probe.WorkItemID == strings.TrimSpace(workItemID)
+}
+
+// WaitsOnAPerson reports a hold nothing but a person lifts: the operator's own,
+// a brake hold from before the brake worked its own holds, and a brake hold the
+// development manager has escalated. Every other brake hold is the harness's
+// to lift.
+func (h IntakeHold) WaitsOnAPerson() bool {
+	return !h.Braked() || h.Brake.Escalated()
+}
+
+// Whose is whose move the hold is, worded once here for every surface that
+// puts a held intake on an attention line. The operator's hold is theirs, and a
+// brake hold is whoever its own record says.
+func (h IntakeHold) Whose() string {
+	if h.Braked() {
+		return h.Brake.Whose()
+	}
+	return "the operator's — nothing new is chosen until `yoyo release` lifts it"
+}
+
+// Standing is what happens to the hold next, as the clause that follows Says in
+// a banner or a session's account. A hold that waits on a person says so, and a
+// brake hold says what the harness does about it.
+func (h IntakeHold) Standing() string {
+	if h.Braked() {
+		return h.Brake.Standing()
+	}
+	return "it stays held until somebody releases it"
+}
+
+// Account is Says with, for a hold the brake is working itself, what the
+// harness does about it next. The operator's hold says only who placed it and
+// why, because what lifts it is the command every surface already names beside
+// it, and a brake hold says what is deciding it, since that is the one thing a
+// reader of a stopped line was missing.
+func (h IntakeHold) Account() string {
+	if !h.Braked() {
+		return h.Says()
+	}
+	return h.Says() + ", and " + h.Standing()
 }
 
 // Says is the one clause every surface prints about a hold in force: who placed
@@ -180,6 +256,11 @@ func (s *IntakeHoldStore) Hold(holder IntakeHolder, reason string, at time.Time)
 	if !holder.Recorded() {
 		return IntakeHold{}, fmt.Errorf("intake hold holder %q is not one this harness records", holder)
 	}
+	release, err := s.lock()
+	if err != nil {
+		return IntakeHold{}, err
+	}
+	defer release()
 	if existing, held, err := s.Held(); err != nil || held {
 		return existing, err
 	}
@@ -190,37 +271,74 @@ func (s *IntakeHoldStore) Hold(holder IntakeHolder, reason string, at time.Time)
 		HeldBy:        holder,
 		Reason:        strings.TrimSpace(reason),
 	}
-	if err := recorded.Validate(); err != nil {
+	if err := s.write(recorded); err != nil {
 		return IntakeHold{}, err
 	}
+	return recorded, nil
+}
+
+// write replaces the hold's file with the record given, whole and durable:
+// written to a temporary file beside it and renamed over it, so no reader ever
+// sees half a hold.
+func (s *IntakeHoldStore) write(recorded IntakeHold) error {
+	if err := recorded.Validate(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
-		return IntakeHold{}, fmt.Errorf("create product state directory: %w", err)
+		return fmt.Errorf("create product state directory: %w", err)
 	}
 	temporary, err := os.CreateTemp(s.root, ".intake-hold-*.tmp")
 	if err != nil {
-		return IntakeHold{}, fmt.Errorf("create temporary intake hold: %w", err)
+		return fmt.Errorf("create temporary intake hold: %w", err)
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	if err := temporary.Chmod(0o600); err != nil {
 		temporary.Close()
-		return IntakeHold{}, fmt.Errorf("secure temporary intake hold: %w", err)
+		return fmt.Errorf("secure temporary intake hold: %w", err)
 	}
 	if err := writeJSONFile(temporary, "intake hold", recorded); err != nil {
 		temporary.Close()
-		return IntakeHold{}, err
+		return err
 	}
 	if err := temporary.Close(); err != nil {
-		return IntakeHold{}, fmt.Errorf("close temporary intake hold: %w", err)
+		return fmt.Errorf("close temporary intake hold: %w", err)
 	}
 	if err := os.Rename(temporaryPath, s.path()); err != nil {
-		return IntakeHold{}, fmt.Errorf("replace intake hold: %w", err)
+		return fmt.Errorf("replace intake hold: %w", err)
 	}
-	if err := syncDirectory(s.root); err != nil {
-		return IntakeHold{}, err
-	}
-	return recorded, nil
+	return syncDirectory(s.root)
 }
+
+// lock serializes the writers of the hold. Placing a hold was a single rename
+// and needed none; the brake's record is revised in place by the watching
+// session and by the development manager's conversation, which may be two
+// processes, and a read-modify-write with nothing between them is a decision
+// one of them loses.
+func (s *IntakeHoldStore) lock() (func(), error) {
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return nil, fmt.Errorf("create product state directory: %w", err)
+	}
+	file, err := os.OpenFile(s.path()+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open intake hold lock: %w", err)
+	}
+	// Bounded, because what this waits on is another process's one small write:
+	// a wait that outlasts that is a lock somebody died holding, and a hold that
+	// cannot be written should fail where it is rather than hang a poll loop.
+	ctx, cancel := context.WithTimeout(context.Background(), intakeLockWait)
+	defer cancel()
+	if err := lockStateFile(ctx, file); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("lock the intake hold: %w", err)
+	}
+	return func() { _ = releaseStateFile(file) }, nil
+}
+
+// intakeLockWait bounds the wait for the hold's lock. The writes it serializes
+// are one small file each, so anything longer is a holder that is not coming
+// back.
+const intakeLockWait = 5 * time.Second
 
 // Held reports whether intake is held, by whoever placed it. No record is the ordinary
 // answer and means the harness may choose work, which is why it is reported as an
@@ -258,6 +376,11 @@ func (s *IntakeHoldStore) Held() (IntakeHold, bool, error) {
 // is not an error for the same reason holding twice is not: the operator means
 // the harness to be choosing work, and it is.
 func (s *IntakeHoldStore) Release() (IntakeHold, bool, error) {
+	release, err := s.lock()
+	if err != nil {
+		return IntakeHold{}, false, err
+	}
+	defer release()
 	held, found, err := s.Held()
 	if err != nil {
 		return IntakeHold{}, false, err

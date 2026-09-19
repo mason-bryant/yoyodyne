@@ -110,6 +110,11 @@ func TestWorkUsageSaysWhatWatchingIsAndThatDrainingIsTheDefault(t *testing.T) {
 		"execution.work_poll",
 		"execution.blocked_runs_before_intake_hold",
 		"Holding intake brakes a watching session in place",
+		// The brake no longer waits on a person, and the usage has to say what it
+		// does instead: an operator reading "stays held until yoyo release lifts
+		// it" would go and lift a hold the harness was already deciding.
+		"execution.brake_cooldown",
+		"only brake hold that waits on a person is one she escalated",
 		"--budget",
 		// A bound that can stop the session has to say so where the flag is
 		// documented: an operator who reads "caps what one session spends" and
