@@ -40,5 +40,6 @@
   "reports": {
     "collected": 0,
     "unhandled": 0
-  }
+  },
+  "startable": 0
 }

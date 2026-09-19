@@ -166,6 +166,25 @@ func TestServesTheThroughputToTheTokenAlone(t *testing.T) {
 	}
 }
 
+// The pipeline reads the model's own figures: the startable count and each
+// run's stage arrive on the standing, and the script keeps no list of phases
+// and makes no subtraction of one line from another to get either.
+func TestThePipelineReadsTheModelsCountAndFold(t *testing.T) {
+	t.Parallel()
+	w := serve(t, stubReader{standing: standingWith("title")})
+	_, script := w.get("/assets/dashboard.js", nil)
+	for _, expected := range []string{"standing.startable", "run.stage === name", `item.kind === "stalled"`} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("the script does not read %q from the model:\n%s", expected, script)
+		}
+	}
+	for _, forbidden := range []string{`"checking"`, `"cleaning_up"`, `"completing"`, "standing.admitted -"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("the script derives what the model provides, through %q:\n%s", forbidden, script)
+		}
+	}
+}
+
 // The page's script draws every section in every state from the fixtures, and
 // what it draws is what the renders under testdata/renders hold. Each of the
 // five sections reaches each of its four states in at least one scenario, the
@@ -253,7 +272,7 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 		"quiet":       {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran and nothing was spent in the last 7 days", "No run or conversation is waiting on provider capacity"},
 		"degraded":    {`<span class="figure">—</span>`, "Could not be read: the runs in flight could not be read", "yoyo doctor says whether bd answers in this checkout"},
 		"unreadable":  {"Could not be read: the recorded runs could not be read: open runs: input/output error; the spend could not be read"},
-		"held":        {`<p id="banner" class="banner" role="status">Every role is paused`, "Every role is held: 5 agents on opus, and none names an alternate", "pullable, and nothing is choosing"},
+		"held":        {`<p id="banner" class="banner" role="status">Every role is paused`, "Every role is held: 5 agents on opus, and none names an alternate", "pullable, and nothing is choosing", "the harness is choosing nothing: Paused on the provider's usage window until 18:50Z"},
 		"stale":       {`class="freshness freshness-stale">stale<`, "so this is the reading from 14:05:09"},
 		"refused":     {"permission denied", "yoyo doctor says what cannot be read"},
 		"wrong-token": {"that is not the token this dashboard printed when it started"},
@@ -267,6 +286,9 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 	}
 	if strings.Contains(page("degraded"), `<span class="figure">0</span>`) {
 		t.Errorf("the degraded render counts an unreadable line as zero")
+	}
+	if strings.Contains(page("held"), "the harness pulls next") {
+		t.Errorf("the held render offers items the harness pulls next under a banner saying it is choosing nothing")
 	}
 
 	if *updateRenders {

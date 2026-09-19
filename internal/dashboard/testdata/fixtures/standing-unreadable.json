@@ -21,5 +21,6 @@
     "collected": 0,
     "unhandled": 0
   },
-  "reports_problem": "the report pile could not be read: open reports: input/output error"
+  "reports_problem": "the report pile could not be read: open reports: input/output error",
+  "startable": 0
 }

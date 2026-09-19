@@ -442,11 +442,10 @@
     { kind: "unread", label: "not offered, and nothing here can say why", whose: "run yoyo status for the refusal in full" }
   ];
 
-  var phases = [
-    { label: "developing", phases: ["developing", "checking", ""] },
-    { label: "reviewing", phases: ["reviewing"] },
-    { label: "integrating", phases: ["integrating", "completing", "cleaning_up", "complete"] }
-  ];
+  // stageOrder is the order the read model's three stages are shown in: the
+  // developer's part, the reviewer's, the harness's. Which phase is which stage
+  // is the model's to say, and each run arrives carrying its stage.
+  var stageOrder = ["developing", "reviewing", "integrating"];
 
   function stage(label, figure, unit, className) {
     var item = el("li", "stage" + (className ? " " + className : ""));
@@ -507,23 +506,34 @@
     }
     stages.appendChild(held);
 
-    var startable = Math.max(0, standing.admitted - refused.length);
-    stages.appendChild(stage("Startable", String(startable), startable === 1 ? "item the harness pulls next" : "items the harness pulls next", startable > 0 ? "stage-flowing" : "stage-clear"));
+    // What the harness pulls next is the model's count, never a subtraction
+    // made here: an item a run is carrying is neither refused nor startable,
+    // and while the pass-level stall stands every pullable item is refused, so
+    // the stage says the harness is choosing nothing rather than naming items
+    // it would pull.
+    var stalled = refused.filter(function (item) { return item.kind === "stalled"; });
+    if (stalled.length > 0) {
+      stages.appendChild(stage("Startable", "none", "the harness is choosing nothing: " + stalled[0].reason, "stage-held"));
+    } else if (standing.startable > 0) {
+      stages.appendChild(stage("Startable", String(standing.startable), standing.startable === 1 ? "item the harness pulls next" : "items the harness pulls next", "stage-flowing"));
+    } else {
+      stages.appendChild(stage("Startable", "0", "nothing is waiting to be pulled", "stage-clear"));
+    }
 
     var runningStage = stage("Running", standing.running_problem ? "—" : String(running.length), standing.running_problem ? "could not be read" : (running.length === 1 ? "developer run" : "developer runs"), standing.running_problem ? "stage-unreadable" : (running.length > 0 ? "stage-flowing" : "stage-clear"));
     if (!standing.running_problem && running.length > 0) {
-      var byPhase = el("ul", "piles");
-      phases.forEach(function (group) {
-        var number = running.filter(function (run) { return group.phases.indexOf(run.phase || "") !== -1; }).length;
+      var byStage = el("ul", "piles");
+      stageOrder.forEach(function (name) {
+        var number = running.filter(function (run) { return run.stage === name; }).length;
         if (number === 0) {
           return;
         }
         var entry = el("li", "pile");
         entry.appendChild(el("span", "pile-figure", String(number)));
-        entry.appendChild(el("span", "pile-label", group.label));
-        byPhase.appendChild(entry);
+        entry.appendChild(el("span", "pile-label", name));
+        byStage.appendChild(entry);
       });
-      runningStage.appendChild(byPhase);
+      runningStage.appendChild(byStage);
     }
     stages.appendChild(runningStage);
 

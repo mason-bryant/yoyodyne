@@ -7,7 +7,7 @@
 // document model — enough of the DOM for the script's own needs and nothing
 // more — with fetch answered from the fixtures under ./fixtures, and serializes
 // the page each scenario ends in. TestThePageRendersEverySectionInEveryState in
-// server_test.go runs this and holds the output to the renders under ./renders,
+// page_test.go runs this and holds the output to the renders under ./renders,
 // which are the evidence a reviewer is handed for each section in each state;
 // -update-renders rewrites them.
 //

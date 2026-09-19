@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -185,5 +186,137 @@ func TestThroughputSaysWhichSourceCouldNotBeRead(t *testing.T) {
 	}
 	if len(unwired.Windows) != 2 || unwired.Windows[0].Kinds == nil {
 		t.Fatalf("an unwired reading still carries its windows, with empty rather than absent kinds: %+v", unwired.Windows)
+	}
+}
+
+// The cost the throughput reports is the spend report's own figure — the one
+// derivation `yoyo status --spend` prices from — read over a real state
+// directory rather than a fake: for the same fabricated runs and conversation,
+// each window's cost and invocation count equal what runstate.StreamStore.Spend
+// answers for that window, and the endings equal what the run store records.
+// Two surfaces pricing one week their own way is the disagreement this test
+// exists to make impossible.
+func TestThroughputPricesTheSameRecordsTheSpendReportPrices(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store, err := runstate.NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streams, err := runstate.NewStreamStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversations, err := runstate.NewConversationStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Three runs: succeeded today, stopped yesterday, succeeded eight days ago;
+	// each priced by one invocation at its completion. None records a promotion,
+	// because the store validates one against a whole review and integration
+	// record; which succeeded runs count as landed is pinned above against the
+	// fake, and what this pins is the pricing and the windows over real records.
+	record := func(started, completed time.Time, status runstate.Status, blocker string, cost float64) {
+		t.Helper()
+		id, err := runstate.NewRunID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := runstate.State{
+			SchemaVersion: runstate.StateSchemaVersion,
+			RunID:         id,
+			ProductID:     "yoyodyne",
+			RepositoryID:  "yoyodyne",
+			WorkItemID:    "yoyodyne-ifd.1",
+			Backend:       "claude-code",
+			Status:        status,
+			StartedAt:     started,
+			UpdatedAt:     completed,
+			CompletedAt:   &completed,
+			Blocker:       blocker,
+		}
+		if err := store.Create(state); err != nil {
+			t.Fatal(err)
+		}
+		for sequence, event := range []struct {
+			kind    execution.EventType
+			payload map[string]any
+		}{
+			{execution.EventRunStarted, map[string]any{"session_id": "session-developer"}},
+			{execution.EventRunCompleted, map[string]any{"session_id": "session-developer", "total_cost_usd": cost,
+				"usage": map[string]any{"input_tokens": 10, "output_tokens": 20, "cache_creation_input_tokens": 30, "cache_read_input_tokens": 40}}},
+		} {
+			recorded, err := execution.NewEvent(id, uint64(sequence+1), completed, event.kind, "claude-code", event.payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.AppendEvent(recorded); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	record(noon.Add(-3*time.Hour), noon.Add(-time.Hour), runstate.StatusSucceeded, "", 3.5)
+	record(noon.Add(-32*time.Hour), noon.Add(-30*time.Hour), runstate.StatusFailed, "the reviewer asked for repair", 1.25)
+	record(noon.Add(-9*24*time.Hour), noon.Add(-8*24*time.Hour), runstate.StatusSucceeded, "", 40)
+
+	// One conversation, opened a fortnight ago, with a turn yesterday and one
+	// today: it spends on both days however long ago it opened.
+	chatID, err := runstate.NewConversationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := noon.Add(-14 * 24 * time.Hour)
+	if err := conversations.Save(runstate.Conversation{
+		SchemaVersion: runstate.ConversationSchemaVersion, ConversationID: chatID, ProductID: "yoyodyne", RepositoryID: "yoyodyne",
+		Role: "product-manager", Backend: "claude-code", ProviderModel: "opus", Turns: 2, StartedAt: opened, UpdatedAt: noon.Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for sequence, turn := range []struct {
+		at   time.Time
+		kind execution.EventType
+		cost float64
+	}{{opened, execution.EventRunStarted, 0}, {noon.Add(-26 * time.Hour), execution.EventRunCompleted, 2}, {noon.Add(-time.Minute), execution.EventRunCompleted, 0.75}} {
+		payload := map[string]any{"session_id": "session-chat"}
+		if turn.kind == execution.EventRunCompleted {
+			payload["total_cost_usd"] = turn.cost
+		}
+		event, err := execution.NewEvent(chatID, uint64(sequence+1), turn.at, turn.kind, "claude-code", payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conversations.AppendEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reading := ReadThroughput(context.Background(), ThroughputSources{Runs: store, Ledger: streams, Now: func() time.Time { return noon }})
+	if reading.RunsProblem != "" || reading.SpendProblem != "" {
+		t.Fatalf("problems over a readable state directory: %q %q", reading.RunsProblem, reading.SpendProblem)
+	}
+	for _, days := range []int{1, 7} {
+		report, err := streams.Spend(runstate.SpendQuery{Days: days, Now: noon})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cost float64
+		var calls int
+		for _, row := range report.Rows {
+			cost += row.CostUSD
+			calls += row.Calls
+		}
+		got := window(t, reading, map[int]string{1: "today", 7: "last 7 days"}[days])
+		if got.CostUSD != cost || got.Invocations != calls || got.Since != report.Oldest {
+			t.Fatalf("%d-day window %+v, but the spend report prices $%.2f from %d calls since %s", days, got, cost, calls, report.Oldest)
+		}
+	}
+	today := window(t, reading, "today")
+	week := window(t, reading, "last 7 days")
+	if today.CostUSD != 4.25 || today.Invocations != 2 || week.CostUSD != 7.5 || week.Invocations != 4 {
+		t.Fatalf("today %+v, week %+v: the fabricated spend is $3.50 and $0.75 today, and $1.25 and $2.00 more yesterday", today, week)
+	}
+	if today.Succeeded != 1 || today.Stopped != 0 || week.Succeeded != 1 || week.Stopped != 1 || week.Started != 2 || week.Landed != 0 {
+		t.Fatalf("today %+v, week %+v: one succeeded today, one stopped yesterday, and the eight-day-old run is outside both", today, week)
 	}
 }

@@ -1291,7 +1291,13 @@ reason the harness is choosing nothing is inside them.
 Naming an item leaves the four lines out. They are about the product, and a
 question about one piece of work is a different question. `--json` carries the
 same derivation under `standing`, so a second surface reads the answer rather
-than parsing the rendering.
+than parsing the rendering. Two things it carries are not printed, because the
+lines say them by omission: `standing.startable` is how many admitted items
+nothing refuses — the work the harness pulls next, counted over the same
+entries as the refusals, and zero whenever the pass-level stall stands — and
+each running run's `stage` is its phase folded onto `developing`, `reviewing`,
+or `integrating`. Both are there for the dashboard's pipeline, so it reads the
+model's count and the model's fold rather than making its own.
 
 One thing is carried there that the four lines do not print: what is parked or
 held on provider capacity, one run and one conversation at a time, under
@@ -1652,9 +1658,10 @@ than going blank on one dropped request.
    directive, pullable with nothing choosing, parked, waiting on other work,
    carried by a conversation rather than a run, and not offered for a reason
    nothing here can read — each with whose move it is, and the largest marked
-   `(most)`; how many are startable and next to be pulled; how many are running,
-   by phase; and how many landed today and this week. Under it, in words, how
-   many things wait on a person.
+   `(most)`; how many are startable and next to be pulled — or, while a stall
+   holds every pullable item, that the harness is choosing nothing and why;
+   how many are running, by stage; and how many landed today and this week.
+   Under it, in words, how many things wait on a person.
 4. **Throughput and cost** — two columns, today and the last seven days, each
    labeled with the local days it covers: how many runs landed their work on
    the target branch; the other endings, in the run history's own words

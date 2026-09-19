@@ -757,11 +757,75 @@ func TestStartableWorkIsNotListedAsRefused(t *testing.T) {
 	if len(standing.NotStartable) != 0 {
 		t.Fatalf("not startable = %+v, want nothing", standing.NotStartable)
 	}
-	if standing.Admitted != 1 {
-		t.Fatalf("admitted = %d, want the startable item still counted", standing.Admitted)
+	if standing.Admitted != 1 || standing.Startable != 1 {
+		t.Fatalf("admitted = %d, startable = %d, want the startable item counted as both", standing.Admitted, standing.Startable)
 	}
 	if !strings.Contains(standing.Render(), "Not startable: nothing, of 1 admitted item\n") {
 		t.Fatalf("rendered:\n%s", standing.Render())
+	}
+}
+
+// The startable count is the other side of the refusals: an item a run is
+// carrying is neither, a refused item is not startable, and once the pass-level
+// stall stands nothing is startable at all, because a stall is every pullable
+// item refused at once. A surface subtracting one list from another would get
+// every one of those wrong.
+func TestStartableIsCountedFromTheSameEntriesAsTheRefusals(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	sources.Runs = fakeRuns{incomplete: []runstate.State{{
+		RunID: "run-a", WorkItemID: "item-carried", Status: runstate.StatusRunning, Phase: runstate.PhaseReviewing, StartedAt: moment.Add(-time.Minute),
+	}}}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{
+			"open": {
+				{ID: "item-carried", Status: "open"},
+				{ID: "item-next", Status: "open"},
+				{ID: "item-after", Status: "open"},
+				{ID: "item-parked", Status: "open", Parking: domain.WorkItemParking("later")},
+			},
+		},
+		ready: []beads.WorkItem{{ID: "item-carried"}, {ID: "item-next"}, {ID: "item-after"}, {ID: "item-parked"}},
+	}}
+	standing := ReadStanding(context.Background(), sources)
+	if standing.Admitted != 4 || standing.Startable != 2 || len(standing.NotStartable) != 1 {
+		t.Fatalf("admitted %d, startable %d, refused %+v", standing.Admitted, standing.Startable, standing.NotStartable)
+	}
+	if standing.Running[0].Stage != StageReviewing {
+		t.Fatalf("the reviewing run's stage is %q", standing.Running[0].Stage)
+	}
+
+	// The same queue under the operator's hold: every pullable item is refused
+	// by the stall, and nothing is startable.
+	sources.OperatorHolds = fakeOperatorHolds{hold: runstate.OperatorHold{HeldAt: moment.Add(-time.Hour)}, held: true}
+	held := ReadStanding(context.Background(), sources)
+	if held.Startable != 0 || len(held.NotStartable) != 3 {
+		t.Fatalf("under a hold: startable %d, refused %+v", held.Startable, held.NotStartable)
+	}
+	for _, refused := range held.NotStartable {
+		if refused.WorkItemID != "item-parked" && refused.Kind != backlog.HeldByStall {
+			t.Fatalf("%s is refused as %q rather than by the stall", refused.WorkItemID, refused.Kind)
+		}
+	}
+}
+
+// Every phase folds onto one of the three stages a pipeline shows, and the
+// stage is the model's rather than a list a page keeps.
+func TestStageOfFoldsEveryPhase(t *testing.T) {
+	t.Parallel()
+	for phase, stage := range map[runstate.Phase]Stage{
+		"":                        StageDeveloping,
+		runstate.PhaseDeveloping:  StageDeveloping,
+		runstate.PhaseChecking:    StageDeveloping,
+		runstate.PhaseReviewing:   StageReviewing,
+		runstate.PhaseIntegrating: StageIntegrating,
+		runstate.PhaseCompleting:  StageIntegrating,
+		runstate.PhaseCleaningUp:  StageIntegrating,
+		runstate.PhaseComplete:    StageIntegrating,
+	} {
+		if got := StageOf(phase); got != stage {
+			t.Errorf("StageOf(%q) = %q, want %q", phase, got, stage)
+		}
 	}
 }
 

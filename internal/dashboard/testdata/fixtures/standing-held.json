@@ -22,8 +22,8 @@
   "capacity_blocked": {
     "runs": [
       {
-        "run_id": "run-5035c832b1e04d7fa9c3e2b8d1f06a11",
-        "work_item_id": "yoyodyne-ifd.212",
+        "run_id": "run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90",
+        "work_item_id": "yoyodyne-ifd.230",
         "phase": "developing",
         "state": "waiting",
         "refused_by": "an exhausted usage limit (seven_day)",
@@ -71,7 +71,21 @@
       "resuming_integration": true,
       "started_at": "2026-09-19T11:20:00Z",
       "elapsed": 9909000000000,
-      "cost_usd": 12.8
+      "cost_usd": 12.8,
+      "stage": "integrating"
+    },
+    {
+      "run_id": "run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90",
+      "work_item_id": "yoyodyne-ifd.230",
+      "title": "The sweep names the ref it preserved work on",
+      "backend": "claude-code",
+      "model": "claude-opus-5",
+      "account": "default",
+      "phase": "developing",
+      "started_at": "2026-09-19T13:10:00Z",
+      "elapsed": 3309000000000,
+      "cost_usd": 5.1,
+      "stage": "developing"
     }
   ],
   "working": [],
@@ -89,7 +103,7 @@
       "kind": "stalled"
     }
   ],
-  "admitted": 3,
+  "admitted": 4,
   "awaiting_decision": 0,
   "awaiting_carry_out": 0,
   "needs_human": [
@@ -101,5 +115,6 @@
   "reports": {
     "collected": 0,
     "unhandled": 0
-  }
+  },
+  "startable": 0
 }

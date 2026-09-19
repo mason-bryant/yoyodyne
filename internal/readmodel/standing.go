@@ -246,6 +246,9 @@ type RunningRun struct {
 	Model   string         `json:"model,omitempty"`
 	Account string         `json:"account,omitempty"`
 	Phase   runstate.Phase `json:"phase,omitempty"`
+	// Stage is the phase folded onto the three parts of a run a pipeline shows,
+	// derived here so no surface keeps its own list of which phase is which.
+	Stage Stage `json:"stage"`
 	// ResumingIntegration reports a run at its promotion again after the
 	// environment stopped it there, with its approval standing. The line says
 	// runstate.ResumingIntegrationSays for it in place of the bare phase, because
@@ -363,8 +366,17 @@ type Standing struct {
 	// not-startable line, because the head is the whole of what an hourly message
 	// carries and one figure covering both is what sent an operator's attention to
 	// the wrong role for days.
-	AwaitingDecision    int    `json:"awaiting_decision"`
-	AwaitingCarryOut    int    `json:"awaiting_carry_out"`
+	AwaitingDecision int `json:"awaiting_decision"`
+	AwaitingCarryOut int `json:"awaiting_carry_out"`
+	// Startable is how much of the admitted work nothing refuses: the items the
+	// harness would start next, counted over the same entries the refusals are,
+	// so the head of the line, the refusals under it, and this are one set of
+	// items. It is zero whenever the pass-level stall stands, because a stall
+	// is precisely every pullable item refused at once. It is not printed — the
+	// four lines say it by the absence of a refusal — and is carried for the
+	// surface that shows the pipeline, so that surface reads the count rather
+	// than subtracting one list from another.
+	Startable           int    `json:"startable"`
 	NotStartableProblem string `json:"not_startable_problem,omitempty"`
 
 	NeedsHuman        []Attention `json:"needs_human"`
@@ -427,6 +439,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	standing.Admitted = len(queue.Entries)
 	standing.AwaitingDecision = waits.awaitingDecision
 	standing.AwaitingCarryOut = waits.awaitingCarryOut
+	standing.Startable = waits.startable
 	standing.NotStartableProblem = notStartableProblem
 	// The provider's usage window is read out of the same stall the refusals are
 	// worded from, rather than derived a second time here: one reading of one
@@ -545,6 +558,7 @@ func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 			Model:               modelOf(state.ProviderModel, state.ProviderResolvedModel),
 			Account:             state.AccountAlias,
 			Phase:               state.Phase,
+			Stage:               StageOf(state.Phase),
 			ResumingIntegration: state.ResumingIntegration(),
 			StartedAt:           state.StartedAt,
 			Elapsed:             now.Sub(state.StartedAt),
@@ -622,6 +636,36 @@ func readWorking(sources Sources, now time.Time) ([]WorkingTurn, string) {
 		return working, "whether a turn is in flight could not be asked of " + strings.Join(unanswered, "; ")
 	}
 	return working, ""
+}
+
+// Stage is the part of a run a phase belongs to, in the three words a pipeline
+// shows: the developer's part, the reviewer's, and the harness's. It is owned
+// here so that no surface keeps its own list of which phase is which.
+type Stage string
+
+const (
+	// StageDeveloping is the developer at work, or about to be: developing,
+	// checking, and a run that has not recorded a phase yet, which is one that
+	// is still being set up for the developer.
+	StageDeveloping Stage = "developing"
+	// StageReviewing is the independent review.
+	StageReviewing Stage = "reviewing"
+	// StageIntegrating is everything after an approval: the promotion and what
+	// settles it.
+	StageIntegrating Stage = "integrating"
+)
+
+// StageOf folds a phase onto its stage. A phase this does not know is the
+// harness's, because every phase before the review is named above.
+func StageOf(phase runstate.Phase) Stage {
+	switch phase {
+	case runstate.PhaseDeveloping, runstate.PhaseChecking, "":
+		return StageDeveloping
+	case runstate.PhaseReviewing:
+		return StageReviewing
+	default:
+		return StageIntegrating
+	}
 }
 
 // modelOf is the model a record says an invocation ran on: the identifier the
@@ -782,6 +826,9 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 		case refusal != "":
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: refusal, Kind: backlog.HeldByStall})
 			stalled = true
+		default:
+			// Nothing refuses it: this is the work the harness starts next.
+			waits.startable++
 		}
 	}
 	if !stalled {
@@ -800,6 +847,8 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 type heldWork struct {
 	awaitingDecision int
 	awaitingCarryOut int
+	// startable is the other side of the same count: the entries nothing refuses.
+	startable int
 }
 
 func (h *heldWork) count(entry backlog.Entry) {
