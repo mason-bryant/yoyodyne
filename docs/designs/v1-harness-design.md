@@ -70,6 +70,10 @@ revisions:
       by: architect
       at: 2026-09-07T20:00:00Z
       reason: yoyodyne-ifd.348 - the Agent Model points at the configurable-workflows authority-model section as the owner of the management bundles' contents
+    - action: amended
+      by: architect
+      at: 2026-09-19T00:30:00Z
+      reason: 'approved amendment 49e40071 from yoyodyne-ifd.357 (97f5e780 declined as superseded) - the after-merge check becomes containment of the unrewritten promoted commit under the recorded merge commit, which batched merges satisfy; the swept-in-content guarantee is retained at merge-commit granularity, with the per-merge change comparison recorded as the half still to implement'
 approvals:
     - revision: 0
       by: operator
@@ -467,7 +471,7 @@ Merging is not a second, differently shaped promotion on the remote. The harness
 The merge commit belongs to the forge, so the two branches converge only after the harness has checked the merge rather than assumed it. What it checks is this:
 
 - **Before the merge**, the remote target must contain the commit the promotion was made from and carry exactly its content. A target that has published before is at a forge merge commit this repository does not have, which is why the question is about content rather than about ancestry; a target carrying anything else is drift, and the merge is refused rather than letting the forge reconcile work no one in the run saw.
-- **After the merge**, the remote target must contain the promoted commit, unrewritten, and carry exactly its content. A forge that replayed the commits instead of merging them fails the first half; a merge that swept in something else fails the second. Either is reported, not reconciled, and the run branch is left on the remote as the evidence for whoever decides which history is right.
+- **After the merge**, the remote target must contain the promoted commit, unrewritten. The merge commit recorded is the forge's where it is the merge of that promotion, and otherwise the one found in the remote history with the promoted commit as a parent — a batch merging several held requests at once confirms each of them this way, where equality against the target head confirmed only the last. What "swept in something else" means is checked at the merge commit rather than the target head: the merge's change over its first parent must be exactly the promoted commit's change over its base, and a merge that carries more — a conflict resolution, content from nowhere — is reported, not reconciled, with the run branch left on the remote as evidence.
 - **A pull request whose head is not the commit the run integrated** is never merged at all, because what the forge merges is that head.
 
 Once the post-merge check has passed, the harness catches the local target up onto the forge's merge commit: an ordinary fast-forward, onto a commit verified to carry exactly the promoted content, taken under the target branch's promotion lease because it moves the target and could otherwise race the next run's promotion. So the two branches end each published run at the same commit, and the local branch has still only ever been fast-forwarded — first onto the promotion, then onto the verified merge of it — and is still never rewritten or reset, and never moves onto anything the check has not verified. A merge the check refused is reported, not imported: the local target stays where the promotion put it, which is what keeps the report readable against a branch that still shows what the harness did.
