@@ -72,6 +72,10 @@ revisions:
       reason: yoyodyne-ifd.348 - the Agent Model points at the configurable-workflows authority-model section as the owner of the management bundles' contents
     - action: amended
       by: architect
+      at: 2026-09-18T21:40:00Z
+      reason: the Agent Model's context-bundle sentence points at the repository-read capability configurable-workflows now grants the management bundles, per the architect's 2026-09-18 ruling on the operator's design question
+    - action: amended
+      by: architect
       at: 2026-09-19T00:30:00Z
       reason: 'approved amendment 49e40071 from yoyodyne-ifd.357 (97f5e780 declined as superseded) - the after-merge check becomes containment of the unrewritten promoted commit under the recorded merge commit, which batched merges satisfy; the swept-in-content guarantee is retained at merge-commit granularity, with the per-merge change comparison recorded as the half still to implement'
 approvals:
@@ -193,7 +197,7 @@ An agent definition separates four concerns:
 - **Backend:** Claude Code or Codex execution mechanics.
 - **Policy:** model selection, permissions, timeouts, retries, and resource limits.
 
-The local Claude Code or Codex process is not the agent's durable identity. Each execution receives a context bundle reconstructed from canonical artifacts, active directives, the assigned Beads item, relevant decisions, and any resumable provider session. This bounds stale conversational memory and prepares the domain model for remote workers later.
+The local Claude Code or Codex process is not the agent's durable identity. Each execution receives a context bundle reconstructed from canonical artifacts, active directives, the assigned Beads item, relevant decisions, and any resumable provider session. The management roles may also have the harness read a named repository path for them, at a recorded commit and as evidence, under the capability [configurable-workflows](configurable-workflows.md#the-authority-model) grants; the reviewer may not. This bounds stale conversational memory and prepares the domain model for remote workers later.
 
 ### Default roles
 
