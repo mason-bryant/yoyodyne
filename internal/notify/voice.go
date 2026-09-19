@@ -797,13 +797,15 @@ func nextMove(event Event) (string, bool) {
 	// whoever releases that, rather than on somebody restarting a chooser that is
 	// running and doing exactly what it should. A run that died before it claimed
 	// anything is docketed as it dies, where every other ending under that kind
-	// recorded nothing for anybody to decide. Both are one kind of message
+	// recorded nothing for anybody to decide. An approved change the environment
+	// stopped is the harness's to resume by a verb, under either ending kind,
+	// where the table says a decision or nothing. Each is one kind of message
 	// covering two situations that send a reader to different people, so the
 	// clause is the read model's — derived beside the fact the message states, so
 	// the two cannot disagree.
 	if strings.TrimSpace(event.Detail.Mover) != "" {
 		switch event.Kind {
-		case KindStallNoticed, KindRunEnded, KindCapacityHold, KindProviderOutage:
+		case KindStallNoticed, KindRunEnded, KindBlockerRecorded, KindCapacityHold, KindProviderOutage:
 			return ended(strings.TrimSpace(event.Detail.Mover)), true
 		}
 	}

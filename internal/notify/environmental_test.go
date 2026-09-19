@@ -116,6 +116,71 @@ func TestTheThreadSaysWhenARefusedRoundCouldNotBePaidBack(t *testing.T) {
 	}
 }
 
+// approvedStoppedRun is the 309 shape: a change the reviewer approved, stopped
+// short of its promotion by the environment, with the stop on the record. The
+// pipeline's terminal write leaves no blocker on such a run, so the thread says
+// it as a run that ended rather than as a stoppage — and both kinds have to end
+// on the same sentence, which is what the blocker variant below is for.
+func approvedStoppedRun(t *testing.T, blocked bool) runstate.State {
+	t.Helper()
+	completed := moment.Add(time.Minute)
+	state := running()
+	state.Status = runstate.StatusFailed
+	state.Phase = runstate.PhaseIntegrating
+	state.CompletedAt = &completed
+	state.WorktreePath = "/state/worktrees/task"
+	state.Branch = "yoyodyne/task/abc"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.ProviderSessionID = "developer-session"
+	state.ReviewSessionID = "reviewer-session"
+	state.ReviewDecision = runstate.ReviewApprove
+	state.Failure = "integrate approved change: primary checkout is not ready for integration: primary repository has uncommitted changes: AGENTS.md"
+	state.IntegrationStop = &runstate.IntegrationStop{
+		Cause:      runstate.CauseDirtyPrimary,
+		Detail:     "integrate approved change: primary checkout is not ready for integration",
+		Phase:      runstate.PhaseIntegrating,
+		RecordedAt: completed,
+	}
+	if blocked {
+		state.Blocker = runstate.RecordBlocker("the promotion was refused for a dirty primary checkout")
+	}
+	return state
+}
+
+// The channel line for an approved change the environment stopped ends on the
+// same sentence the docket entry carries and the repair verb refuses in: the
+// harness's move, by `yoyo triage resume`, with the cause — rather than the
+// table's clause sending the reader to triage for a decision, or telling them
+// nothing was recorded for anybody.
+func TestTheThreadNamesTheResumeVerbForAnApprovedChangeTheEnvironmentStopped(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		after := approvedStoppedRun(t, blocked)
+		_, notifications := crossed(t, running(), after)
+		kind := KindRunEnded
+		if blocked {
+			kind = KindBlockerRecorded
+		}
+		said := only(t, notifications, kind)
+		message, err := Render(said.Topic, said.Speaker, said.Event)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		want := after.IntegrationStop.ResumeSays(after.RunID)
+		if !strings.Contains(message.Body, nextMoveLead+"the harness's — "+want) {
+			t.Fatalf("blocked=%t: the thread does not end on the resume sentence %q:\n%s", blocked, want, message.Body)
+		}
+		for _, wrong := range []string{"nothing moves this item until it is decided", "nothing was recorded for anybody to decide"} {
+			if strings.Contains(message.Body, wrong) {
+				t.Fatalf("blocked=%t: the thread sends the reader the wrong way with %q:\n%s", blocked, wrong, message.Body)
+			}
+		}
+		if !strings.Contains(message.Body, after.Failure) {
+			t.Fatalf("blocked=%t: the thread lost the reason the run stopped:\n%s", blocked, message.Body)
+		}
+	}
+}
+
 // A cause recorded on a round that delivered a change anyway is not a refusal,
 // and the thread says nothing about it: that round spent exactly as any round
 // does, and a line implying otherwise would be the same misreading in reverse.

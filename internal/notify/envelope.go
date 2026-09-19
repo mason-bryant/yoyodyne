@@ -732,6 +732,13 @@ type Detail struct {
 	// kind of message, two different people again. A run that got as far as
 	// claiming carries none, and the table answers.
 	//
+	// KindRunEnded and KindBlockerRecorded both read it for an approved change the
+	// environment stopped short of its promotion: that ending is the harness's to
+	// resume by `yoyo triage resume` once the cause has cleared, which is neither
+	// the decision one table clause names nor the nothing the other does. The
+	// sentence is the run record's own, the one the docket entry carries and the
+	// repair verb refuses in.
+	//
 	// KindCapacityHold reads Mover alone: whose move ends a hold early is worded by
 	// the read model beside the hold itself, so the sentence a terminal prints on
 	// its attention line and the clause this message ends on are one wording.

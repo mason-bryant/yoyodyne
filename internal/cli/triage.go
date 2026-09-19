@@ -708,7 +708,10 @@ on the item and on the run's own record. It is refused once the item's repair
 grant is spent or the review-round cap has no room left, and refused to a person
 if the preserved worktree is not as the harness left it, or holds none of the
 change it is a repair of -- what is in that worktree is what a continued
-developer would be handed back, and an empty one buys an empty repair.
+developer would be handed back, and an empty one buys an empty repair. Asked
+for an approved change the environment stopped, it is refused in the one
+sentence the docket entry carries: the change is approved, what stopped it, and
+"resume" is what it needs.
 
 "rearm" is about the other thing that stops: an approved change published to a
 forge that queued its merge and then dropped it. It repeats exactly the request

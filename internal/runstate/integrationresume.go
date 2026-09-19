@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // MaxIntegrationResumptions bounds how many times one run's integration is
@@ -85,6 +87,14 @@ func (s IntegrationStop) Validate() error {
 // Describe says what the stop was, the way a docket entry or a listing reads it.
 func (s IntegrationStop) Describe() string {
 	return fmt.Sprintf("approved, then stopped at the %s phase by the environment: %s (%s)", s.Phase, s.Cause, s.Cause.Title())
+}
+
+// ResumeSays is the one sentence every surface says of this stop: that the
+// run's change is approved, what stopped it, and that `yoyo triage resume` is
+// what resumes it. It is the docket's own wording, so the repair verb's refusal,
+// the docket entry, and the channel line are one sentence rather than three.
+func (s IntegrationStop) ResumeSays(runID string) string {
+	return triage.ResumeIntegrationSays(runID, string(s.Phase), string(s.Cause), s.Cause.Title())
 }
 
 // IntegrationResumption is one continuation of this run's integration after an
