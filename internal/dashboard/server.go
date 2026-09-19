@@ -94,6 +94,12 @@ type Reader interface {
 	// never a partial one: what the read model could answer with a source missing
 	// it says inside the Standing, line by line.
 	Standing(ctx context.Context) (readmodel.Standing, error)
+	// Throughput reads what landed and what it cost over the model's two windows.
+	// It is a second reading rather than part of the first because it prices
+	// every event log a week holds, which is seconds of work the page asks for
+	// once a minute rather than once every ten seconds. The same rule holds: an
+	// error refuses the whole answer, and a source missing is said inside it.
+	Throughput(ctx context.Context) (readmodel.Throughput, error)
 }
 
 // Server is one dashboard process: the token it generated, the address it bound,
@@ -244,13 +250,17 @@ func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
 		s.servePage(writer)
 	case strings.HasPrefix(request.URL.Path, "/assets/"):
 		s.serveAsset(writer, request)
-	case request.URL.Path == "/api/standing":
-		// The one route that reads state, and so the one the token guards.
+	case request.URL.Path == "/api/standing", request.URL.Path == "/api/throughput":
+		// The two routes that read state, and so the two the token guards.
 		if !s.presented(request) {
 			refuse(writer, request, http.StatusUnauthorized, "this dashboard requires the token it printed when it started, as a bearer token")
 			return
 		}
-		s.serveStanding(writer, request)
+		if request.URL.Path == "/api/throughput" {
+			s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Throughput(ctx) })
+			return
+		}
+		s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Standing(ctx) })
 	default:
 		refuse(writer, request, http.StatusNotFound, "nothing is served at that path")
 	}
@@ -269,20 +279,23 @@ func (s *Server) presented(request *http.Request) bool {
 }
 
 // servePage is the shell: the page with its states — asking for the token,
-// loading, error, ready — and nothing of the read model in it. It is static
-// text the page's own script then fills from the JSON, so it is served to a
-// browser that has no token yet, which is every browser before it signs in.
+// loading, error, ready — and its five sections, each with an empty, a loading,
+// and an error state of its own, and nothing of the read model in any of them.
+// It is static text the page's own script then fills from the JSON, so it is
+// served to a browser that has no token yet, which is every browser before it
+// signs in.
 func (s *Server) servePage(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
 	_ = shell.Execute(writer, struct{ Product string }{Product: s.Product})
 }
 
-// serveStanding is the read model as JSON, whole or refused. What the model
-// could not read it says line by line inside the answer; what stops the model
-// being read at all is a refusal carrying the reason and nothing else.
-func (s *Server) serveStanding(writer http.ResponseWriter, request *http.Request) {
-	standing, err := s.reader.Standing(request.Context())
+// serveReading is one reading of the read model as JSON, whole or refused. What
+// the model could not read it says inside the answer, source by source; what
+// stops the model being read at all is a refusal carrying the reason and
+// nothing else.
+func (s *Server) serveReading(writer http.ResponseWriter, request *http.Request, read func(context.Context) (any, error)) {
+	reading, err := read(request.Context())
 	if err != nil {
 		refuse(writer, request, http.StatusServiceUnavailable, err.Error())
 		return
@@ -297,7 +310,7 @@ func (s *Server) serveStanding(writer http.ResponseWriter, request *http.Request
 	// "<" in a title escaped here costs nothing and closes the case where some
 	// later reader does.
 	encoder.SetEscapeHTML(true)
-	_ = encoder.Encode(standing)
+	_ = encoder.Encode(reading)
 }
 
 // serveAsset is the page's own script and style, from the binary. They are the

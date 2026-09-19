@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="mark" aria-hidden="true">yoyo</span>
+        <h1>yoyodyne</h1>
+      </div>
+      <p class="observed">
+        observed
+        <time id="observed-at" datetime="2026-09-19T14:05:09Z">14:05:09</time>
+        <span id="freshness" class="freshness">asks again every 10 s</span>
+      </p>
+    </header>
+    <main id="page" data-state="ready">
+      <div class="state state-ready">
+        <p id="stale" class="stale" role="status" hidden></p>
+        <p id="banner" class="banner" role="status" hidden></p>
+        <section id="band" class="panel band" data-state="empty" aria-labelledby="band-heading">
+          <div class="panel-head">
+            <h2 id="band-heading">Where the harness stands</h2>
+            <p class="panel-note">
+              the four lines
+              <code>yoyo status</code>
+              prints, and what landed
+            </p>
+          </div>
+          <div class="section-empty">
+            <p id="band-empty" class="empty">The harness is idle: nothing is running, no conversation has a turn in flight, nothing is admitted, and nothing waits on a person.</p>
+          </div>
+        </section>
+        <section id="live" class="panel live" data-state="empty" aria-labelledby="live-heading">
+          <div class="panel-head">
+            <h2 id="live-heading">Running now</h2>
+            <p class="panel-note">each developer run and each conversation with a turn in flight</p>
+          </div>
+          <div class="section-empty">
+            <p id="live-empty" class="empty">Nothing is running, and no conversation has a turn in flight.</p>
+          </div>
+        </section>
+        <section id="pipeline" class="panel pipeline" data-state="empty" aria-labelledby="pipeline-heading">
+          <div class="panel-head">
+            <h2 id="pipeline-heading">Where the work stands</h2>
+            <p class="panel-note">admitted work, what holds it, what is running, and what landed</p>
+          </div>
+          <div class="section-empty">
+            <p id="pipeline-empty" class="empty">The backlog is empty: nothing is admitted, and nothing is running.</p>
+          </div>
+        </section>
+        <section id="throughput" class="panel throughput" data-state="empty" aria-labelledby="throughput-heading">
+          <div class="panel-head">
+            <h2 id="throughput-heading">Throughput and cost</h2>
+            <p class="panel-note">
+              local calendar days, today counting as the first; the figures
+              <code>yoyo status --spend</code>
+              prints
+            </p>
+          </div>
+          <div class="section-empty">
+            <p id="throughput-empty" class="empty">Nothing ran and nothing was spent in the last 7 days, from 2026-09-13.</p>
+          </div>
+        </section>
+        <section id="capacity" class="panel capacity" data-state="empty" aria-labelledby="capacity-heading">
+          <div class="panel-head">
+            <h2 id="capacity-heading">Provider capacity</h2>
+            <p class="panel-note">what is parked or held on the provider's usage windows, and what to do about it</p>
+          </div>
+          <div class="section-empty">
+            <p id="capacity-empty" class="empty">No run or conversation is waiting on provider capacity, and no usage window is holding every role.</p>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>
+  </body>
+</html>

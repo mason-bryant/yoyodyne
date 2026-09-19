@@ -1,0 +1,66 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "windows": [
+    {
+      "label": "today",
+      "days": 1,
+      "since": "2026-09-19",
+      "started": 6,
+      "landed": 3,
+      "succeeded": 0,
+      "stopped": 1,
+      "cancelled": 0,
+      "timed_out": 0,
+      "failed": 0,
+      "cost_usd": 92.0,
+      "invocations": 31,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 12,
+          "cost_usd": 61.2
+        },
+        {
+          "kind": "conversation",
+          "invocations": 17,
+          "cost_usd": 29.55
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 1.25
+        }
+      ],
+      "unpriced": 0,
+      "floor": false
+    },
+    {
+      "label": "last 7 days",
+      "days": 7,
+      "since": "2026-09-13",
+      "started": 41,
+      "landed": 22,
+      "succeeded": 2,
+      "stopped": 9,
+      "cancelled": 3,
+      "timed_out": 1,
+      "failed": 2,
+      "cost_usd": 1232.58,
+      "invocations": 452,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 184,
+          "cost_usd": 894.63
+        },
+        {
+          "kind": "conversation",
+          "invocations": 268,
+          "cost_usd": 337.95
+        }
+      ],
+      "unpriced": 1,
+      "floor": true
+    }
+  ]
+}

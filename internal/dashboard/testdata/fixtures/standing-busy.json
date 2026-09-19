@@ -1,0 +1,173 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "capacity_blocked": {
+    "runs": [
+      {
+        "run_id": "run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90",
+        "work_item_id": "yoyodyne-ifd.230",
+        "phase": "developing",
+        "state": "waiting",
+        "refused_by": "an exhausted usage limit (seven_day)",
+        "since": "2026-09-19T13:40:00Z",
+        "resets_at": "2026-09-19T18:50:00Z",
+        "waited_seconds": 1500,
+        "preserved": true,
+        "remedy": "nothing needs doing: the run asks the provider again by itself at its next probe and carries on once it is served; `yoyo resume` with the work item named asks now instead of at the probe"
+      },
+      {
+        "run_id": "run-a17c9b40e6f24c1d8b3a5f0e9d2c7b44",
+        "work_item_id": "yoyodyne-ifd.150",
+        "phase": "reviewing",
+        "state": "capacity-blocked",
+        "refused_by": "an exhausted usage limit (five_hour)",
+        "since": "2026-09-18T22:12:00Z",
+        "waited_seconds": 14400,
+        "preserved": true,
+        "remedy": "the run stopped and its item is back with the development manager; what lets it run again is more provider capacity, a longer execution.usage_limit_max_pause, or a replan"
+      }
+    ],
+    "conversations": [
+      {
+        "conversation_id": "chat-91253e0e070c17b0663651cc48602122",
+        "state": "capacity-blocked",
+        "waiting": "the product manager's conversation, chat-91253e0e, is waiting on the provider",
+        "refused_by": "an exhausted usage limit (seven_day)",
+        "model": "claude-opus-5",
+        "since": "2026-09-19T12:02:00Z",
+        "resets_at": "2026-09-19T18:50:00Z",
+        "refusals": 3,
+        "remedy": "nothing waits on it: the turn failed where it was asked for, and asking again once the window lifts is what serves it; enabling failover on the agent is what would move the next turn onto another model before then"
+      }
+    ]
+  },
+  "running": [
+    {
+      "run_id": "run-c07d6849e1f55fd7b982600b8f97a303",
+      "work_item_id": "yoyodyne-ifd.141.3",
+      "title": "Dashboard 3 of 3: the page, five sections, with its empty, loading, and error states",
+      "backend": "claude-code",
+      "model": "claude-opus-5",
+      "account": "default",
+      "phase": "developing",
+      "started_at": "2026-09-19T13:53:00Z",
+      "elapsed": 729000000000,
+      "cost_usd": 3.41,
+      "stage": "developing"
+    },
+    {
+      "run_id": "run-49839de311bd6b4d06fbfb41f22abdf1",
+      "work_item_id": "yoyodyne-ifd.201",
+      "title": "The heartbeat names the forge when a merge is queued",
+      "backend": "claude-code",
+      "model": "claude-opus-5",
+      "account": "default",
+      "phase": "reviewing",
+      "started_at": "2026-09-19T14:02:00Z",
+      "elapsed": 189000000000,
+      "cost_usd": 0,
+      "unknown_cost": "its event log is gone",
+      "stage": "reviewing"
+    },
+    {
+      "run_id": "run-5035c832b1e04d7fa9c3e2b8d1f06a11",
+      "work_item_id": "yoyodyne-ifd.212",
+      "title": "Recurring tasks say when a firing was skipped",
+      "backend": "claude-code",
+      "model": "claude-opus-5",
+      "account": "pool-b",
+      "phase": "integrating",
+      "resuming_integration": true,
+      "started_at": "2026-09-19T11:20:00Z",
+      "elapsed": 9909000000000,
+      "cost_usd": 12.8,
+      "stage": "integrating"
+    },
+    {
+      "run_id": "run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90",
+      "work_item_id": "yoyodyne-ifd.230",
+      "title": "The sweep names the ref it preserved work on",
+      "backend": "claude-code",
+      "model": "claude-opus-5",
+      "account": "default",
+      "phase": "developing",
+      "started_at": "2026-09-19T13:10:00Z",
+      "elapsed": 3309000000000,
+      "cost_usd": 5.1,
+      "stage": "developing"
+    }
+  ],
+  "working": [
+    {
+      "agent": "product-manager",
+      "role": "product-manager",
+      "backend": "claude-code",
+      "model": "claude-fable-5-1",
+      "turns": 270,
+      "since": "2026-09-19T14:04:29Z",
+      "elapsed": 40000000000
+    }
+  ],
+  "not_startable": [
+    {
+      "work_item_id": "yoyodyne-ifd.200",
+      "title": "Slack threads carry the item's title",
+      "reason": "waiting on yoyodyne-ifd.199",
+      "kind": "waiting"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.222",
+      "title": "Recurring tasks say when a firing was skipped",
+      "reason": "parked, so no pull selects it however far the queue drains: the design is being reworked",
+      "kind": "parked"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.153",
+      "title": "Triage names the phase a run stopped in",
+      "reason": "run run-5035c832 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has",
+      "kind": "held"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.150",
+      "title": "A blocked status carries the account of what moved it",
+      "reason": "run run-a17c9b40 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager has already decided what happens to it, so what is outstanding is the harness carrying that decision out rather than a decision",
+      "kind": "held"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.188",
+      "title": "The goals document gains a legibility clause",
+      "reason": "its executor is \"product-manager-conversation\" rather than a developer run, so no run carries it out; the item says which conversation does",
+      "kind": "conversation"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.219",
+      "title": "Reconcile prints the branch it caught up",
+      "reason": "paused for unresolved directive directive-4f2c: which branch does this land on?",
+      "kind": "directive"
+    }
+  ],
+  "admitted": 9,
+  "awaiting_decision": 1,
+  "awaiting_carry_out": 1,
+  "needs_human": [
+    {
+      "what": "directive-4f2c is unresolved: which branch does this land on?",
+      "whose": "the operator's — the work it affects waits until `yoyo directive resolve` settles it"
+    },
+    {
+      "what": "1 admitted item awaits the development manager's decision",
+      "whose": "the development manager's — nothing pulls a stopped item until she decides what happens to it"
+    },
+    {
+      "what": "1 admitted item awaits carry-out of a decision already recorded",
+      "whose": "the harness's — the decision is made, and what is outstanding is the harness acting on it"
+    }
+  ],
+  "reports": {
+    "collected": 14,
+    "unhandled": 2,
+    "oldest": "2026-09-17T09:00:00Z",
+    "oldest_age": 191109000000000,
+    "worst": "warning"
+  },
+  "startable": 3
+}

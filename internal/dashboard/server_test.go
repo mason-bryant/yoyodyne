@@ -32,12 +32,17 @@ const port = "45123"
 
 // stubReader is a read model that answers with what the test put in it.
 type stubReader struct {
-	standing readmodel.Standing
-	failure  error
+	standing   readmodel.Standing
+	throughput readmodel.Throughput
+	failure    error
 }
 
 func (r stubReader) Standing(context.Context) (readmodel.Standing, error) {
 	return r.standing, r.failure
+}
+
+func (r stubReader) Throughput(context.Context) (readmodel.Throughput, error) {
+	return r.throughput, r.failure
 }
 
 // world is one server, bound in name only, and the handler that answers for it.
@@ -139,7 +144,7 @@ func TestServesTheReadModelAsJSONToTheTokenAndTheShellAsItsStates(t *testing.T) 
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("shell: %d %s", response.StatusCode, body)
 	}
-	for _, state := range []string{`<main data-state="signin">`, "state-loading", "state-error", "state-ready", `/assets/dashboard.js`} {
+	for _, state := range []string{`<main id="page" data-state="signin">`, "state-loading", "state-error", "state-ready", `/assets/dashboard.js`} {
 		if !strings.Contains(body, state) {
 			t.Fatalf("shell lacks %q: %s", state, body)
 		}
@@ -348,6 +353,20 @@ func TestTheShellNeedsNothingThePolicyRefuses(t *testing.T) {
 	for _, forbidden := range []string{"<script>", "<style", " style=", "onload=", "onsubmit=", "https://", "http://"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("the page depends on %q, which the policy refuses:\n%s", forbidden, body)
+		}
+	}
+	// The script sets no style either: every look is a class the stylesheet
+	// owns, so a state the script moves a panel into is one the policy allows.
+	_, script := w.get("/assets/dashboard.js", nil)
+	for _, forbidden := range []string{".style.", ".style=", `"style"`, "cssText", "insertRule"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("the script sets a style through %q, which the policy refuses:\n%s", forbidden, script)
+		}
+	}
+	_, stylesheet := w.get("/assets/dashboard.css", nil)
+	for _, forbidden := range []string{"url(", "@import", "https://", "http://"} {
+		if strings.Contains(stylesheet, forbidden) {
+			t.Fatalf("the stylesheet loads %q, which the policy refuses:\n%s", forbidden, stylesheet)
 		}
 	}
 }

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="mark" aria-hidden="true">yoyo</span>
+        <h1>yoyodyne</h1>
+      </div>
+      <p class="observed">
+        observed
+        <time id="observed-at">—</time>
+        <span id="freshness" class="freshness"></span>
+      </p>
+    </header>
+    <main id="page" data-state="error">
+      <section class="state state-error" role="alert">
+        <h2>The read model could not be read</h2>
+        <p id="problem" class="problem">the dashboard could not be reached (Failed to fetch); the yoyo dashboard process may have stopped, and starting it again prints a new token</p>
+        <p id="remedy" class="remedy">The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.</p>
+      </section>
+    </main>
+    <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>
+  </body>
+</html>

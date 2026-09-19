@@ -25,6 +25,7 @@ import (
 	"os"
 
 	"github.com/mason-bryant/yoyodyne/internal/dashboard"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -71,7 +72,7 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 
 	fmt.Fprintf(stdout, "dashboard for %s serving at %s\n", resolved.Config.Product.ID, url)
 	fmt.Fprintf(stdout, "token: %s\n", server.Token())
-	fmt.Fprintln(stdout, "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing")
+	fmt.Fprintln(stdout, "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing and /api/throughput")
 	fmt.Fprintln(stdout, "it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c")
 
 	if err := server.Serve(ctx); err != nil {
@@ -120,20 +121,77 @@ func (r dashboardReader) Standing(ctx context.Context) (readmodel.Standing, erro
 	return readmodel.ReadStanding(ctx, standingSources(r.configPath)), nil
 }
 
+// The two readers the throughput is handed are the terminal's own stores, held
+// here to the model's interfaces so the substitution of a second pricing would
+// not compile: *runstate.StreamStore is what reportSpend prices `yoyo status
+// --spend` from, through its Spend method, and *runstate.Store is what
+// `yoyo status` reads each run's Outcome from.
+var (
+	_ readmodel.Ledger = (*runstate.StreamStore)(nil)
+	_ readmodel.Runs   = (*runstate.Store)(nil)
+)
+
+// Throughput is what landed and what it cost over the model's two windows.
+// readmodel.ReadThroughput derives nothing of its own about money or endings:
+// it calls (*runstate.StreamStore).Spend once, over the widest window, and
+// splits the report's rows by the local day each carries — the derivation
+// `yoyo status --spend 7` prints — and it classifies each run by
+// runstate.State.Outcome, the word `yoyo status` prints for it. So a figure on
+// the page is a figure the terminal prints, and the two cannot disagree about
+// what today cost.
+func (r dashboardReader) Throughput(ctx context.Context) (readmodel.Throughput, error) {
+	if err := r.ready(); err != nil {
+		return readmodel.Throughput{}, err
+	}
+	resolved, err := loadConfiguration(r.configPath)
+	if err != nil {
+		return readmodel.Throughput{}, err
+	}
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return readmodel.Throughput{}, err
+	}
+	return readmodel.ReadThroughput(ctx, throughputSources(stateRoot, resolved.Config.Product.ID)), nil
+}
+
+// throughputSources opens the two stores the throughput is read from. Either
+// failing to open costs its half of the reading and not the other, and the
+// reason travels with the gap: the reading says "could not be opened: <why>"
+// under runs_problem or spend_problem, which is what the page's error state
+// shows, rather than that nothing was wired.
+func throughputSources(stateRoot string, productID domain.ProductID) readmodel.ThroughputSources {
+	sources := readmodel.ThroughputSources{}
+	if store, err := runstate.NewStore(stateRoot, productID); err != nil {
+		sources.RunsProblem = err.Error()
+	} else {
+		sources.Runs = store
+	}
+	if store, err := runstate.NewStreamStore(stateRoot, productID); err != nil {
+		sources.LedgerProblem = err.Error()
+	} else {
+		sources.Ledger = store
+	}
+	return sources
+}
+
 func printDashboardUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo dashboard [options]
 
 Serves the read model -- the same four lines and capacity state `+"`yoyo status`"+`
-reads -- to a browser on this machine, at a loopback port, until stopped. It
-prints the URL and, once, the token every request for the read model has to
-carry as `+"`Authorization: Bearer <token>`"+`: the page asks for it and keeps it in
-the tab's session storage, scoped to this port, and never in a URL or a cookie.
-It serves the read model as JSON at /api/standing behind the token; the page
-shell at / and its own script and style are static text with nothing of the
-read model in them, served to the browser before it has a token. Everything
-else is refused: a request for the read model with no token or the wrong one, a
-Host or Origin that is not the address it bound, and durable state it cannot
-read each get a refusal and never part of an answer.
+reads, and what landed and what it cost -- to a browser on this machine, at a
+loopback port, until stopped, as a page of five sections: the status band, the
+runs and conversations in flight, where admitted work stands in the pipeline,
+throughput and cost, and provider capacity. It prints the URL and, once, the
+token every request for the read model has to carry as
+`+"`Authorization: Bearer <token>`"+`: the page asks for it and keeps it in the tab's
+session storage, scoped to this port, and never in a URL or a cookie. It serves
+the read model as JSON behind the token -- the four lines and the capacity state
+at /api/standing, and what landed and what it cost over today and the last seven
+days at /api/throughput; the page shell at / and its own script and style are
+static text with nothing of the read model in them, served to the browser before
+it has a token. Everything else is refused: a request for the read model with no
+token or the wrong one, a Host or Origin that is not the address it bound, and
+durable state it cannot read each get a refusal and never part of an answer.
 
 It is a projection. It owns no state, offers no write, and restarting it changes
 nothing about the harness.

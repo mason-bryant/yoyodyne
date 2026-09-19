@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -294,11 +295,16 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 	sources := quietSources()
 	sources.Runs = fakeRuns{
 		incomplete: []runstate.State{{
-			RunID:      "run-a",
-			WorkItemID: "yoyodyne-ifd.194",
-			Status:     runstate.StatusRunning,
-			Phase:      runstate.PhaseDeveloping,
-			StartedAt:  moment.Add(-12 * time.Minute),
+			RunID:                 "run-a",
+			WorkItemID:            "yoyodyne-ifd.194",
+			WorkItemTitle:         "the four-line status",
+			Backend:               "claude-code",
+			ProviderModel:         "opus",
+			ProviderResolvedModel: "claude-opus-5",
+			AccountAlias:          "default",
+			Status:                runstate.StatusRunning,
+			Phase:                 runstate.PhaseDeveloping,
+			StartedAt:             moment.Add(-12 * time.Minute),
 		}},
 		prices: map[string]runstate.ItemPrice{
 			"yoyodyne-ifd.194": {Runs: []runstate.RunPrice{{RunID: "run-a", CostUSD: 3.41}}},
@@ -309,6 +315,8 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 			ConversationID: "chat-1",
 			Agent:          "product-manager",
 			Role:           domain.RoleProductManager,
+			Backend:        "claude-code",
+			ProviderModel:  "fable",
 			Turns:          270,
 			UpdatedAt:      moment.Add(-40 * time.Second),
 		}},
@@ -368,6 +376,26 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 	// The item a run is already carrying is on the running line and nowhere else.
 	if strings.Count(rendered, "yoyodyne-ifd.194") != 1 {
 		t.Fatalf("the running item is named more than once:\n%s", rendered)
+	}
+
+	// The same reading carries what a card shows and a line does not: the title
+	// and what the run is spending, with the resolved model preferred over the
+	// selector; and each refusal's kind, so a pipeline is counted from the
+	// reading that worded it.
+	standing := ReadStanding(context.Background(), sources)
+	run := standing.Running[0]
+	if run.Title != "the four-line status" || run.Backend != "claude-code" || run.Model != "claude-opus-5" || run.Account != "default" {
+		t.Fatalf("running run carries %+v", run)
+	}
+	if turn := standing.Working[0]; turn.Backend != "claude-code" || turn.Model != "fable" {
+		t.Fatalf("working turn carries %+v", turn)
+	}
+	kinds := map[string]backlog.HoldKind{}
+	for _, refused := range standing.NotStartable {
+		kinds[refused.WorkItemID] = refused.Kind
+	}
+	if kinds["yoyodyne-ifd.200"] != backlog.HeldByStall || kinds["yoyodyne-ifd.201"] != backlog.HeldForAPerson {
+		t.Fatalf("refusal kinds = %v", kinds)
 	}
 }
 
@@ -729,11 +757,75 @@ func TestStartableWorkIsNotListedAsRefused(t *testing.T) {
 	if len(standing.NotStartable) != 0 {
 		t.Fatalf("not startable = %+v, want nothing", standing.NotStartable)
 	}
-	if standing.Admitted != 1 {
-		t.Fatalf("admitted = %d, want the startable item still counted", standing.Admitted)
+	if standing.Admitted != 1 || standing.Startable != 1 {
+		t.Fatalf("admitted = %d, startable = %d, want the startable item counted as both", standing.Admitted, standing.Startable)
 	}
 	if !strings.Contains(standing.Render(), "Not startable: nothing, of 1 admitted item\n") {
 		t.Fatalf("rendered:\n%s", standing.Render())
+	}
+}
+
+// The startable count is the other side of the refusals: an item a run is
+// carrying is neither, a refused item is not startable, and once the pass-level
+// stall stands nothing is startable at all, because a stall is every pullable
+// item refused at once. A surface subtracting one list from another would get
+// every one of those wrong.
+func TestStartableIsCountedFromTheSameEntriesAsTheRefusals(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	sources.Runs = fakeRuns{incomplete: []runstate.State{{
+		RunID: "run-a", WorkItemID: "item-carried", Status: runstate.StatusRunning, Phase: runstate.PhaseReviewing, StartedAt: moment.Add(-time.Minute),
+	}}}
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{
+			"open": {
+				{ID: "item-carried", Status: "open"},
+				{ID: "item-next", Status: "open"},
+				{ID: "item-after", Status: "open"},
+				{ID: "item-parked", Status: "open", Parking: domain.WorkItemParking("later")},
+			},
+		},
+		ready: []beads.WorkItem{{ID: "item-carried"}, {ID: "item-next"}, {ID: "item-after"}, {ID: "item-parked"}},
+	}}
+	standing := ReadStanding(context.Background(), sources)
+	if standing.Admitted != 4 || standing.Startable != 2 || len(standing.NotStartable) != 1 {
+		t.Fatalf("admitted %d, startable %d, refused %+v", standing.Admitted, standing.Startable, standing.NotStartable)
+	}
+	if standing.Running[0].Stage != StageReviewing {
+		t.Fatalf("the reviewing run's stage is %q", standing.Running[0].Stage)
+	}
+
+	// The same queue under the operator's hold: every pullable item is refused
+	// by the stall, and nothing is startable.
+	sources.OperatorHolds = fakeOperatorHolds{hold: runstate.OperatorHold{HeldAt: moment.Add(-time.Hour)}, held: true}
+	held := ReadStanding(context.Background(), sources)
+	if held.Startable != 0 || len(held.NotStartable) != 3 {
+		t.Fatalf("under a hold: startable %d, refused %+v", held.Startable, held.NotStartable)
+	}
+	for _, refused := range held.NotStartable {
+		if refused.WorkItemID != "item-parked" && refused.Kind != backlog.HeldByStall {
+			t.Fatalf("%s is refused as %q rather than by the stall", refused.WorkItemID, refused.Kind)
+		}
+	}
+}
+
+// Every phase folds onto one of the three stages a pipeline shows, and the
+// stage is the model's rather than a list a page keeps.
+func TestStageOfFoldsEveryPhase(t *testing.T) {
+	t.Parallel()
+	for phase, stage := range map[runstate.Phase]Stage{
+		"":                        StageDeveloping,
+		runstate.PhaseDeveloping:  StageDeveloping,
+		runstate.PhaseChecking:    StageDeveloping,
+		runstate.PhaseReviewing:   StageReviewing,
+		runstate.PhaseIntegrating: StageIntegrating,
+		runstate.PhaseCompleting:  StageIntegrating,
+		runstate.PhaseCleaningUp:  StageIntegrating,
+		runstate.PhaseComplete:    StageIntegrating,
+	} {
+		if got := StageOf(phase); got != stage {
+			t.Errorf("StageOf(%q) = %q, want %q", phase, got, stage)
+		}
 	}
 }
 
@@ -760,8 +852,8 @@ func TestADirectivePauseIsTheItemsOwnRefusal(t *testing.T) {
 	if len(standing.NotStartable) != 1 {
 		t.Fatalf("not startable = %+v, want only the paused item", standing.NotStartable)
 	}
-	if !strings.Contains(standing.NotStartable[0].Reason, "paused for unresolved directive dir-1") {
-		t.Fatalf("reason = %q", standing.NotStartable[0].Reason)
+	if !strings.Contains(standing.NotStartable[0].Reason, "paused for unresolved directive dir-1") || standing.NotStartable[0].Kind != backlog.HeldByDirective {
+		t.Fatalf("refusal = %+v", standing.NotStartable[0])
 	}
 	// The same directive is a thing waiting on a person, with whose move it is.
 	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose, "the operator's") {
@@ -944,7 +1036,7 @@ func TestParkedWorkIsRefusedAndNeedsNobody(t *testing.T) {
 		ready: []beads.WorkItem{{ID: "item-1"}},
 	}}
 	standing := ReadStanding(context.Background(), sources)
-	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "parked") {
+	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "parked") || standing.NotStartable[0].Kind != backlog.HeldParked {
 		t.Fatalf("not startable = %+v", standing.NotStartable)
 	}
 	if len(standing.NeedsHuman) != 0 {

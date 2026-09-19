@@ -231,9 +231,24 @@ type Sources struct {
 
 // RunningRun is one developer run in flight, as the four-line status names it.
 type RunningRun struct {
-	RunID      string         `json:"run_id"`
-	WorkItemID string         `json:"work_item_id"`
-	Phase      runstate.Phase `json:"phase,omitempty"`
+	RunID      string `json:"run_id"`
+	WorkItemID string `json:"work_item_id"`
+	// Title is the work item's title as the run recorded it at its claim, and
+	// empty on a run recorded before titles were carried. It is here for the
+	// surface that shows a run as a card rather than a line: an id alone is a
+	// lookup, and a title beside it is a glance.
+	Title string `json:"title,omitempty"`
+	// Backend, Model, and Account are what the run is spending: the provider it
+	// runs on, the model it asked for (the resolved identifier where the provider
+	// reported one), and the account alias it runs under. The alias is exactly
+	// what lets this be said on a page — it names nothing a credential is.
+	Backend domain.Backend `json:"backend,omitempty"`
+	Model   string         `json:"model,omitempty"`
+	Account string         `json:"account,omitempty"`
+	Phase   runstate.Phase `json:"phase,omitempty"`
+	// Stage is the phase folded onto the three parts of a run a pipeline shows,
+	// derived here so no surface keeps its own list of which phase is which.
+	Stage Stage `json:"stage"`
 	// ResumingIntegration reports a run at its promotion again after the
 	// environment stopped it there, with its approval standing. The line says
 	// runstate.ResumingIntegrationSays for it in place of the bare phase, because
@@ -255,6 +270,11 @@ type RunningRun struct {
 type WorkingTurn struct {
 	Agent string           `json:"agent"`
 	Role  domain.AgentRole `json:"role"`
+	// Backend and Model are what the turn is spending, as the conversation record
+	// carries them; the model is the resolved identifier where the provider
+	// reported one.
+	Backend domain.Backend `json:"backend,omitempty"`
+	Model   string         `json:"model,omitempty"`
 	// Turns is how many turns the record holds, which is the turn before the one
 	// in flight: a turn is recorded as it completes.
 	Turns int `json:"turns"`
@@ -272,6 +292,11 @@ type Refused struct {
 	WorkItemID string `json:"work_item_id"`
 	Title      string `json:"title,omitempty"`
 	Reason     string `json:"reason"`
+	// Kind is which pile the refusal puts the item in, from the queue's own
+	// closed vocabulary. It is carried for the surface that shows where admitted
+	// work accumulates, so that surface counts the piles from the reading that
+	// worded the refusals rather than from a second parse of them.
+	Kind backlog.HoldKind `json:"kind"`
 }
 
 // Attention is one thing waiting on a person: what it is, and whose move it is.
@@ -341,8 +366,17 @@ type Standing struct {
 	// not-startable line, because the head is the whole of what an hourly message
 	// carries and one figure covering both is what sent an operator's attention to
 	// the wrong role for days.
-	AwaitingDecision    int    `json:"awaiting_decision"`
-	AwaitingCarryOut    int    `json:"awaiting_carry_out"`
+	AwaitingDecision int `json:"awaiting_decision"`
+	AwaitingCarryOut int `json:"awaiting_carry_out"`
+	// Startable is how much of the admitted work nothing refuses: the items the
+	// harness would start next, counted over the same entries the refusals are,
+	// so the head of the line, the refusals under it, and this are one set of
+	// items. It is zero whenever the pass-level stall stands, because a stall
+	// is precisely every pullable item refused at once. It is not printed — the
+	// four lines say it by the absence of a refusal — and is carried for the
+	// surface that shows the pipeline, so that surface reads the count rather
+	// than subtracting one list from another.
+	Startable           int    `json:"startable"`
 	NotStartableProblem string `json:"not_startable_problem,omitempty"`
 
 	NeedsHuman        []Attention `json:"needs_human"`
@@ -405,6 +439,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	standing.Admitted = len(queue.Entries)
 	standing.AwaitingDecision = waits.awaitingDecision
 	standing.AwaitingCarryOut = waits.awaitingCarryOut
+	standing.Startable = waits.startable
 	standing.NotStartableProblem = notStartableProblem
 	// The provider's usage window is read out of the same stall the refusals are
 	// worded from, rather than derived a second time here: one reading of one
@@ -518,7 +553,12 @@ func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 		run := RunningRun{
 			RunID:               state.RunID,
 			WorkItemID:          state.WorkItemID,
+			Title:               state.WorkItemTitle,
+			Backend:             state.Backend,
+			Model:               modelOf(state.ProviderModel, state.ProviderResolvedModel),
+			Account:             state.AccountAlias,
 			Phase:               state.Phase,
+			Stage:               StageOf(state.Phase),
 			ResumingIntegration: state.ResumingIntegration(),
 			StartedAt:           state.StartedAt,
 			Elapsed:             now.Sub(state.StartedAt),
@@ -579,6 +619,8 @@ func readWorking(sources Sources, now time.Time) ([]WorkingTurn, string) {
 		working = append(working, WorkingTurn{
 			Agent:   identity.Agent,
 			Role:    conversation.Role,
+			Backend: conversation.Backend,
+			Model:   modelOf(conversation.ProviderModel, conversation.ProviderResolvedModel),
 			Turns:   conversation.Turns,
 			Since:   conversation.UpdatedAt,
 			Elapsed: now.Sub(conversation.UpdatedAt),
@@ -594,6 +636,47 @@ func readWorking(sources Sources, now time.Time) ([]WorkingTurn, string) {
 		return working, "whether a turn is in flight could not be asked of " + strings.Join(unanswered, "; ")
 	}
 	return working, ""
+}
+
+// Stage is the part of a run a phase belongs to, in the three words a pipeline
+// shows: the developer's part, the reviewer's, and the harness's. It is owned
+// here so that no surface keeps its own list of which phase is which.
+type Stage string
+
+const (
+	// StageDeveloping is the developer at work, or about to be: developing,
+	// checking, and a run that has not recorded a phase yet, which is one that
+	// is still being set up for the developer.
+	StageDeveloping Stage = "developing"
+	// StageReviewing is the independent review.
+	StageReviewing Stage = "reviewing"
+	// StageIntegrating is everything after an approval: the promotion and what
+	// settles it.
+	StageIntegrating Stage = "integrating"
+)
+
+// StageOf folds a phase onto its stage. A phase this does not know is the
+// harness's, because every phase before the review is named above.
+func StageOf(phase runstate.Phase) Stage {
+	switch phase {
+	case runstate.PhaseDeveloping, runstate.PhaseChecking, "":
+		return StageDeveloping
+	case runstate.PhaseReviewing:
+		return StageReviewing
+	default:
+		return StageIntegrating
+	}
+}
+
+// modelOf is the model a record says an invocation ran on: the identifier the
+// provider resolved the selector to where it reported one, and the selector
+// itself otherwise. A selector such as "opus" floats; the resolved identifier is
+// what was actually spent, so it is preferred where the record has it.
+func modelOf(selector, resolved string) string {
+	if strings.TrimSpace(resolved) != "" {
+		return resolved
+	}
+	return selector
 }
 
 // InFlight reports whether a process is holding one agent's conversation right
@@ -734,14 +817,18 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 		switch {
 		case !entry.Ready:
 			waits.count(entry)
-			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: entry.Hold()})
+			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: entry.Hold(), Kind: entry.HoldKind()})
 		case paused != nil:
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title,
 				Reason: fmt.Sprintf("paused for unresolved directive %s: %s",
-					paused.ID, singleLine(paused.Unresolved, maxRefusalBytes))})
+					paused.ID, singleLine(paused.Unresolved, maxRefusalBytes)),
+				Kind: backlog.HeldByDirective})
 		case refusal != "":
-			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: refusal})
+			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: refusal, Kind: backlog.HeldByStall})
 			stalled = true
+		default:
+			// Nothing refuses it: this is the work the harness starts next.
+			waits.startable++
 		}
 	}
 	if !stalled {
@@ -760,6 +847,8 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 type heldWork struct {
 	awaitingDecision int
 	awaitingCarryOut int
+	// startable is the other side of the same count: the entries nothing refuses.
+	startable int
 }
 
 func (h *heldWork) count(entry backlog.Entry) {

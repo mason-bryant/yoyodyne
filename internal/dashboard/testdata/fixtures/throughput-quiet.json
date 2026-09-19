@@ -1,0 +1,39 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "windows": [
+    {
+      "label": "today",
+      "days": 1,
+      "since": "2026-09-19",
+      "started": 0,
+      "landed": 0,
+      "succeeded": 0,
+      "stopped": 0,
+      "cancelled": 0,
+      "timed_out": 0,
+      "failed": 0,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": [],
+      "unpriced": 0,
+      "floor": false
+    },
+    {
+      "label": "last 7 days",
+      "days": 7,
+      "since": "2026-09-13",
+      "started": 0,
+      "landed": 0,
+      "succeeded": 0,
+      "stopped": 0,
+      "cancelled": 0,
+      "timed_out": 0,
+      "failed": 0,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": [],
+      "unpriced": 0,
+      "floor": false
+    }
+  ]
+}
