@@ -39,4 +39,4 @@ is designed knowing where it leads.
 - A deploy happens only with the operator's explicit approval, recorded like any approval.
   *Supports: the system can operate what it ships.*
 - [spend-follows-the-work] Spend follows the work: the model, the context, and the number of provider calls a task costs are chosen for that task rather than for the role that does it, and running cost is visible and classified so the operator can see what each kind of work costs and decide what it should.
-  *Supports: what it costs is reported rather than discovered.*
+  *Supports: the operator can see what the system does on their behalf.*
