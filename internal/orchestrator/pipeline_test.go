@@ -6010,6 +6010,80 @@ func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
 	}
 }
 
+// yoyodyne-ifd.349's shape through the pipeline: an item one round from its cap
+// whose approving round is followed by a replay conflict. The approval charges
+// nothing, the conflict charges nothing — no verdict was reached about it — and
+// the run stops on the conflict path with the approval standing on its record,
+// so the re-run the development manager records to run the change again on the
+// moved base is permitted without an override. On 2026-09-15 that re-run was
+// refused at 4 of 4 with three rounds spent.
+func TestAReplayConflictAfterApprovalChargesNothingAndLeavesTheApprovalStanding(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-ifd.349", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "docs", "design.md"), []byte("this run's answer\n"), 0o600); err != nil {
+			return err
+		}
+		writePipelineFile(t, repository, filepath.Join("docs", "design.md"), "somebody else's answer\n")
+		runPipelineGit(t, repository, "add", "docs/design.md")
+		runPipelineGit(t, repository, "commit", "-m", "conflicting target change")
+		return nil
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	// Three rounds already spent across the item's earlier runs and the one repair
+	// grant recorded, cut to the round the cap of four had left: the item as
+	// yoyodyne-ifd.349 stood when its granted round ran, committed to 4 of 4.
+	caps := TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)
+	for round := range 3 {
+		if _, err := store.Triage().RecordReviewRound(context.Background(), tracker.item.ID, runstate.RoundKey(priorRunID, round), "pid-1-000000000000000a", time.Now()); err != nil {
+			t.Fatalf("RecordReviewRound() error = %v", err)
+		}
+	}
+	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, priorRunID), 2, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if granted.Rounds != 1 || granted.Counters.CommittedRounds != 4 {
+		t.Fatalf("grant = %+v, want the cap's last round reserved", granted)
+	}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "cannot be replayed onto the moved integration target") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !outcome.Blocked || outcome.Integration != nil {
+		t.Fatalf("Run() outcome = %#v, want the conflict blocking the run", outcome)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The approval stands on the stopped run: a conflict is not a verdict, and
+	// the verdict that was reached is what the decision about the stoppage reads.
+	if state.ReviewDecision != string(review.DecisionApprove) || state.ReviewRounds != 1 {
+		t.Fatalf("stopped run = decision %q, %d review round(s); want the approval standing and the one verdict it reached", state.ReviewDecision, state.ReviewRounds)
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	// The approving round released the round the grant reserved for it, and the
+	// conflict reserved and spent nothing.
+	if counters.ReviewRounds != 3 || counters.CommittedRounds != 3 {
+		t.Fatalf("counters after the conflict = %d spent, %d committed; want the three earlier rounds and the reserved round released", counters.ReviewRounds, counters.CommittedRounds)
+	}
+	if want := runstate.RoundKey(outcome.RunID, 0); counters.LastJudged != want {
+		t.Fatalf("last judged attempt = %q, want the approved attempt %q recorded without being charged", counters.LastJudged, want)
+	}
+	// The development manager's re-run, recorded against the same cap, needs no
+	// override.
+	if _, err := store.Triage().RecordRerun(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRerun, outcome.RunID), time.Now(), caps); err != nil {
+		t.Fatalf("RecordRerun() after the approved-then-conflicted run = %v, want it permitted without an override", err)
+	}
+}
+
 func writePipelineFile(t *testing.T, root, relative, content string) {
 	t.Helper()
 	path := filepath.Join(root, relative)

@@ -104,6 +104,15 @@ type TriageDecision struct {
 	Conversation string    `json:"conversation"`
 	Turn         int       `json:"turn"`
 	DecidedAt    time.Time `json:"decided_at"`
+	// Rounds is what a repair decision reserved of the item's round budget when
+	// it was recorded: the grant as the cap left it. It is written by the grant
+	// and by nothing else, so every other decision carries zero, and it is what a
+	// decision that supersedes the repair releases — the rounds this reservation
+	// promised and the item never spent. A repair recorded before this was kept
+	// carries zero too, and superseding it releases whatever the item stands
+	// committed to beyond what it has cost, which is the one reservation such a
+	// record can be holding.
+	Rounds int `json:"rounds,omitempty"`
 }
 
 // Validate reports every contract violation in the decision at once.
@@ -138,6 +147,12 @@ func (d TriageDecision) Validate() error {
 	}
 	if d.Turn < 0 {
 		problems = append(problems, fmt.Errorf("turn %d is not a turn", d.Turn))
+	}
+	if d.Rounds < 0 {
+		problems = append(problems, fmt.Errorf("%d reserved round(s) is not a reservation", d.Rounds))
+	}
+	if d.Rounds > 0 && d.Decision != TriageDecisionRepair {
+		problems = append(problems, fmt.Errorf("a %q decision reserves no rounds, and this one records %d", d.Decision, d.Rounds))
 	}
 	if d.DecidedAt.IsZero() {
 		problems = append(problems, errors.New("a triage decision records when it was made"))
@@ -232,11 +247,34 @@ func prepareTriageDecision(decision TriageDecision, at time.Time) (TriageDecisio
 // what keeps the record answerable: a development manager who decided a wait and
 // then a re-run about one run decided a re-run, and a carry-out that found both
 // would have to guess which.
+//
+// A repair it supersedes takes its reservation with it. The grant reserved rounds
+// against the cap for attempts the harness would hand the stopped run, and a
+// decision to run the item again, escalate it, or wait instead is the decision
+// that those attempts will not be made — so the rounds they reserved and the
+// item never spent are released before the new decision is measured against the
+// cap. That is the second of yoyodyne-ifd.391's regression cases: a repair on
+// yoyodyne-ifd.309 reserved the cap's last round, the harness found the worktree
+// retired and refused to carry it out, and the re-run recorded in its place was
+// refused at 6 of 6 for a round that never ran. A repair superseding a repair
+// releases nothing, because the earlier grant may still be the one carried out
+// and the later one is recorded on top of it; what the later one records as
+// reserved is both together, so a decision that supersedes it afterwards
+// releases what the run was reserved in total.
 func (c *TriageCounters) recordDecision(decision TriageDecision) error {
 	standing := make([]TriageDecision, 0, len(c.Decisions)+1)
 	for _, existing := range c.Decisions {
 		if existing.RunID != decision.RunID {
 			standing = append(standing, existing)
+			continue
+		}
+		if existing.Decision != TriageDecisionRepair {
+			continue
+		}
+		if decision.Decision == TriageDecisionRepair {
+			decision.Rounds += existing.Rounds
+		} else {
+			c.releaseReservedRounds(existing.Rounds)
 		}
 	}
 	if len(standing) >= MaxTriageDecisions {

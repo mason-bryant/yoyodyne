@@ -133,7 +133,14 @@ carried out again once somebody puts the change back, and no sequence of these
 walks an item toward an escalation it never earned. Both halves of that are
 required. A cause on its own excuses nothing — a round that recorded one and
 delivered a change anyway spends as any round does — and an empty delivery with
-no cause recorded spends too, so laziness cannot hide in the class. The diff that
+no cause recorded is in no class at all: nothing is given back, because nothing
+was refused, and the run stops on its own repair budget. What such a round is
+not charged is a review round, and that is the cap's own rule rather than this
+class's — the cap counts only a verdict requiring repair against a change that
+was present, so a reviewer shown an empty diff charges the item nothing whatever
+it said, and what bounds a developer that delivers nothing is the run's repair
+budget it spends doing it. [What spends a round and what does not](configuration.md#what-one-work-item-has-been-given)
+states the whole rule. The diff that
 has to be empty is what **that round** added, which is not the same question as
 whether the worktree differs from the base commit: a round of a repair grant runs
 in the worktree earlier rounds already filled. Where the harness refused before

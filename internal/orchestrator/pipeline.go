@@ -5268,8 +5268,10 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // against: a run's own repair budget starts again at zero each time, so nothing
 // inside a run says what the item has already cost.
 //
-// Two verdicts are recorded and charge nothing. A verdict that approved the
-// change is one: the cap this feeds exists to stop an item buying the same
+// Three verdicts are recorded and charge nothing, and the rule they add up to is
+// yoyodyne-ifd.391's: the cap counts only rounds that ended in a verdict
+// requiring repair against a change that was present. A verdict that approved
+// the change is one: the cap this feeds exists to stop an item buying the same
 // argument another round, and an approval is the end of that argument rather than
 // another turn of it — what happens to an approved change afterwards, a promotion
 // that lost its race or a merge the forge dropped, is not the change disputing
@@ -5311,6 +5313,18 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // nothing recorded would leave that attempt looking unjudged and charge the item
 // for losing a race it did not cause.
 //
+// A verdict on a run with no change present charges nothing either, whichever
+// way it went. The reviewer was shown an empty diff — a mis-selected run, a stale
+// worktree, a developer that delivered nothing — and what it said about nothing
+// is not the change disputing with it; the development manager's reports of
+// 2026-09-14 had rounds of that shape counting identically to real repair rounds,
+// and yoyodyne-ifd.391 rules them out beside the other two. The worktree is asked
+// rather than the verdict, because an empty diff is a fact about the worktree
+// and the reviewer's words about one vary. A worktree that cannot be read is
+// charged as though the change were there: an item charged a round it should
+// have kept is visible in its counters, and one credited a round it did spend is
+// a budget nothing bounds.
+//
 // A round is charged under this process as well as under the attempt, because
 // the attempt does not say which process spent it and only the process that
 // spent one may give it back. The two keys answer different questions: a run
@@ -5320,6 +5334,8 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 func (a *activeRun) recordReviewVerdict(ctx context.Context, decision review.Decision) error {
 	attempt := runstate.RoundKey(a.state.RunID, a.state.RepairAttempts)
 	counters := a.pipeline.Store.Triage()
+	changed, err := a.pipeline.Worktrees.ChangedPaths(ctx, a.worktree)
+	changePresent := err != nil || len(changed) > 0
 	// The findings are the ones this verdict arrived with: the evidence is cleared
 	// before every review and written from the reply that produced this decision,
 	// so what is asked about is what the reviewer just said rather than anything an
@@ -5331,7 +5347,7 @@ func (a *activeRun) recordReviewVerdict(ctx context.Context, decision review.Dec
 	// that ended — and an escalation is not a turn of an argument at all. A review
 	// happened and it is the round the verb costs, which is the whole of what
 	// "spends at most the round it is raised in" promises.
-	if decision == review.DecisionApprove ||
+	if !changePresent || decision == review.DecisionApprove ||
 		(decision == review.DecisionRepair && review.TrivialResidue(a.outcome.ReviewFindings)) {
 		if _, err := counters.RecordUnchargedVerdict(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
 			return fmt.Errorf("record the verdict that cost attempt %s nothing: %w", attempt, err)
