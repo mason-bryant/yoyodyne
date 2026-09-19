@@ -19,7 +19,7 @@ here; `yoyodyne-ifd.141.3` covered those.
 
 ## Verdict
 
-**Approved as it stands, with three findings fixed in this change and one filed.**
+**Approved as it stands, with four findings, every one of them fixed in this change.**
 Nothing here derives a figure a surface would re-derive, every source that
 cannot be opened or read reaches the JSON as a named problem beside the figures
 of the source that could, and the standing additions are held by the dashboard's
@@ -37,8 +37,10 @@ from in `internal/runstate/summary.go`. The window's first day is
 `runstate.LocalDay` over the same calendar-day step `oldestLocalDay` takes, and
 `TestThroughputPricesTheSameRecordsTheSpendReportPrices` pins `Since` to the
 spend report's `Oldest` over a real state directory. The spend rows are kept or
-dropped by the report's own rule (`SpendReport.take`): a row is inside from the
-window's first day on, and an undated row is in every window.
+dropped by the report's own rule (`SpendReport.take`, reached through
+`SpendReport.Since` after finding 4): a row is inside from the window's first
+day on, and an undated row is in every window; and the adding up is the
+report's own `Totals`, which `yoyo status --spend` prints from too.
 
 The page-side check held from the other direction: `internal/dashboard/page_test.go`
 asserts at compile time that the ledger the page is priced from is
@@ -97,20 +99,41 @@ and parked-work tests each assert their kind; and
    the head-of-line counts (`AwaitingDecision`, `AwaitingCarryOut`) were taken
    from a third copy of the executor-then-parking-then-hold rule in `Awaits`.
    A reorder in one would not have followed in the other. `Awaits` now reads
-   the kind off `hold()`.
+   the kind off `hold()`: held for a person exactly when the kind is
+   `HeldForAPerson`.
+
+   Which kind wins where an entry is awaiting a person and under another hold
+   at once is what `hold()` already decided, and it is the same answer `Awaits`
+   gave before: the executor and the parking rank ahead of the hold, so an
+   entry a conversation carries or that is parked is not held for a person
+   however its `Awaiting` reads; the hold ranks ahead of the wait and ahead of
+   blocked work whose holds could not be read, so an entry that is both held
+   and waiting on other work is held. The two kinds the queue does not make —
+   a directive pause and the pass-level stall — are set by the standing status
+   on top of the queue's reading and never come out of `hold()`, so no entry
+   can carry one there. The counts therefore did not change; what changed is
+   that they now cannot drift. `TestAwaitsIsReadOffTheHoldKind` pins each of
+   those pairings, and was confirmed to fail with `Awaits` reading `Awaiting`
+   alone.
 3. **Fixed — the `endedAt` fallback was untested.** A terminal run with no
    completion recorded ends when its record last moved; nothing exercised that
    branch. One such run is added to
    `TestThroughputCountsEachEndingIntoTheWindowItEndedIn`, and the case was
    confirmed to fail with the fallback removed.
-4. **Filed — the spend total and its split by kind are now derived twice.**
+4. **Fixed — the spend total and its split by kind were derived twice.**
    `sumSpend` here and `printSpendTotals` with `renderKindSplit` in
-   `internal/cli/statusstream.go` each sum `SpendReport.Rows` by kind, in the
-   same order. The figures agree today because both read the same rows, and the
+   `internal/cli/statusstream.go` each summed `SpendReport.Rows` by kind, in
+   the same order. The figures agreed because both read the same rows, and the
    CLI predates this code; but it is the disagreement
-   `surfaces-project-one-read-model` names, and the right home is a method on
-   `runstate.SpendReport` both call. That touches the CLI's spend printing, so
-   it is named for admission rather than done here.
+   `surfaces-project-one-read-model` names. The summation now lives on the
+   report: `SpendReport.Totals()` adds the rows up in all and by kind in the
+   order the kinds are priced, and `SpendReport.Since(day)` narrows a report to
+   a later first day by the report's own `take` rule. `sumSpend` reads
+   `report.Since(window.Since).Totals()`, and the CLI's spend printing reads
+   `report.Totals()`, keeping only its wording. `kindOrder` in `throughput.go`
+   is gone with it. `TestSpendReportTotalsAndNarrowsByItsOwnRule` holds both
+   methods, and the existing throughput and `yoyo status --spend` tests hold
+   the two callers.
 
 ## Noted, not findings
 

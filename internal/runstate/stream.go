@@ -635,6 +635,84 @@ func (r SpendReport) Empty() bool {
 // cover could not be read.
 func (r SpendReport) Floor() bool { return len(r.UnreadableExchanges) > 0 }
 
+// Since is the same report narrowed to the rows from one local day on, by the
+// rule the report's own window applies: a row is inside from that day on, and
+// an undated row is inside every window because it has no day to be outside
+// of. The unreadable exchanges are carried whole, because a record nobody could
+// read is missing from every window at once. It says its first day and no
+// count of days, since the count was the query's and this is a later start.
+func (r SpendReport) Since(day string) SpendReport {
+	narrowed := r
+	narrowed.Rows = nil
+	narrowed.Oldest = day
+	narrowed.Days = 0
+	narrowed.take(r.Rows)
+	return narrowed
+}
+
+// SpendTotals is what a report's rows add up to: in all, and by kind in the
+// order the kinds are priced. It is the one summation every surface that
+// prints a total reads — `yoyo status --spend` and the dashboard's throughput
+// alike — so two of them cannot add the same rows to different figures.
+type SpendTotals struct {
+	Calls   int
+	CostUSD float64
+	// Usage is the token usage of every row that recorded one. An exchange's
+	// row records none, and adds nothing here rather than zero.
+	Usage TokenUsage
+	// ByKind carries only the kinds that have a row, in the order
+	// EveryPricedKind prices them.
+	ByKind []KindTotal
+}
+
+// KindTotal is one kind's share of a report's total.
+type KindTotal struct {
+	Kind    StreamKind
+	Calls   int
+	CostUSD float64
+}
+
+// Totals sums the rows the report holds.
+func (r SpendReport) Totals() SpendTotals {
+	var totals SpendTotals
+	byKind := make(map[StreamKind]*KindTotal, len(EveryPricedKind))
+	var unpriced []StreamKind
+	for _, row := range r.Rows {
+		totals.Calls += row.Calls
+		totals.CostUSD += row.CostUSD
+		if row.Usage != nil {
+			totals.Usage.Merge(*row.Usage)
+		}
+		share, seen := byKind[row.Kind]
+		if !seen {
+			share = &KindTotal{Kind: row.Kind}
+			byKind[row.Kind] = share
+			if !isPricedKind(row.Kind) {
+				unpriced = append(unpriced, row.Kind)
+			}
+		}
+		share.Calls += row.Calls
+		share.CostUSD += row.CostUSD
+	}
+	// A kind the pricing does not name still spent, so it is not dropped: it
+	// follows the priced kinds, in the order its rows came.
+	for _, kind := range append(append([]StreamKind{}, EveryPricedKind...), unpriced...) {
+		if share, seen := byKind[kind]; seen {
+			totals.ByKind = append(totals.ByKind, *share)
+		}
+	}
+	return totals
+}
+
+func isPricedKind(kind StreamKind) bool {
+	for _, priced := range EveryPricedKind {
+		if priced == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // Spend prices the selected streams by the local-timezone day the money was
 // spent on, because what an operator budgets against is what today cost and the
 // day they mean is the one their own clock is keeping.

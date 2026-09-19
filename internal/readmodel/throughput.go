@@ -30,7 +30,6 @@ package readmodel
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -273,47 +272,20 @@ func endedAt(state runstate.State) time.Time {
 	return state.StartedAt
 }
 
-// sumSpend totals the rows of a spend report that fall inside the window, by
-// kind and in all. The window's rule for a row is the report's own: a row is
-// inside from the window's first day on, and an undated row has no day to be
-// outside of.
+// sumSpend takes the window's figures off the spend report: the rows from the
+// window's first day on, by the report's own rule for which rows a window
+// holds, added up by the report's own summation — the one `yoyo status --spend`
+// prints its total and split from, so the split reads the same here as there.
 func sumSpend(window *Window, report runstate.SpendReport) {
-	byKind := make(map[runstate.StreamKind]*KindSpend, len(runstate.EveryPricedKind))
-	for _, row := range report.Rows {
-		if row.Day != runstate.UndatedDay && row.Day < window.Since {
-			continue
-		}
-		share, seen := byKind[row.Kind]
-		if !seen {
-			share = &KindSpend{Kind: row.Kind}
-			byKind[row.Kind] = share
-		}
-		share.Invocations += row.Calls
-		share.CostUSD += row.CostUSD
-		window.Invocations += row.Calls
-		window.CostUSD += row.CostUSD
+	inside := report.Since(window.Since)
+	totals := inside.Totals()
+	window.CostUSD = totals.CostUSD
+	window.Invocations = totals.Calls
+	for _, share := range totals.ByKind {
+		window.Kinds = append(window.Kinds, KindSpend{Kind: share.Kind, Invocations: share.Calls, CostUSD: share.CostUSD})
 	}
-	kinds := make([]runstate.StreamKind, 0, len(byKind))
-	for kind := range byKind {
-		kinds = append(kinds, kind)
-	}
-	sort.Slice(kinds, func(i, j int) bool { return kindOrder(kinds[i]) < kindOrder(kinds[j]) })
-	for _, kind := range kinds {
-		window.Kinds = append(window.Kinds, *byKind[kind])
-	}
-	window.Unpriced = len(report.UnreadableExchanges)
-	window.Floor = report.Floor()
-}
-
-// kindOrder is the order the spend report prices the kinds in, so the split
-// reads the same here as under `yoyo status --spend`.
-func kindOrder(kind runstate.StreamKind) int {
-	for index, known := range runstate.EveryPricedKind {
-		if known == kind {
-			return index
-		}
-	}
-	return len(runstate.EveryPricedKind)
+	window.Unpriced = len(inside.UnreadableExchanges)
+	window.Floor = inside.Floor()
 }
 
 // startOfLocalDay is the first instant of the window: local midnight at the

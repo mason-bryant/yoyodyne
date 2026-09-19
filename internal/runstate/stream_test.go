@@ -429,6 +429,53 @@ func TestStreamStoreReportsUndatedSpendUnderEveryWindow(t *testing.T) {
 	}
 }
 
+// A report adds itself up once, for every surface that prints a total: in all,
+// with the token usage of the rows that recorded one, and by kind in the order
+// the kinds are priced. Narrowing it to a later first day keeps the rows from
+// that day on and every undated row, and carries the unreadable exchanges
+// whole, because a record nobody could read is missing from every window.
+func TestSpendReportTotalsAndNarrowsByItsOwnRule(t *testing.T) {
+	t.Parallel()
+
+	report := SpendReport{
+		Days:   7,
+		Oldest: "2026-09-13",
+		Rows: []SpendRow{
+			{Day: "2026-09-18", StreamID: "chat-1", Kind: StreamConversation, Calls: 2, CostUSD: 4, Usage: &TokenUsage{InputTokens: 10, OutputTokens: 5}},
+			{Day: "2026-09-18", StreamID: "run-1", Kind: StreamRun, Calls: 3, CostUSD: 10, Usage: &TokenUsage{InputTokens: 100, OutputTokens: 50}},
+			{Day: "2026-09-19", StreamID: "run-2", Kind: StreamRun, Calls: 2, CostUSD: 5.5, Usage: &TokenUsage{InputTokens: 20, OutputTokens: 10}},
+			{Day: "2026-09-19", StreamID: "review-1", Kind: StreamReview, Calls: 1, CostUSD: 1.25, Usage: &TokenUsage{InputTokens: 1, OutputTokens: 1}},
+			{Day: UndatedDay, StreamID: "exchange-1", Kind: StreamExchange, Calls: 1, CostUSD: 0.5},
+		},
+		UnreadableExchanges: []string{"exchange-broken"},
+		UnreadableReason:    "unexpected end of JSON input",
+	}
+
+	whole := report.Totals()
+	if whole.Calls != 9 || whole.CostUSD != 21.25 || whole.Usage.InputTokens != 131 || whole.Usage.OutputTokens != 66 {
+		t.Fatalf("the whole report totals %+v", whole)
+	}
+	if len(whole.ByKind) != 4 ||
+		whole.ByKind[0] != (KindTotal{Kind: StreamRun, Calls: 5, CostUSD: 15.5}) ||
+		whole.ByKind[1] != (KindTotal{Kind: StreamConversation, Calls: 2, CostUSD: 4}) ||
+		whole.ByKind[2] != (KindTotal{Kind: StreamReview, Calls: 1, CostUSD: 1.25}) ||
+		whole.ByKind[3] != (KindTotal{Kind: StreamExchange, Calls: 1, CostUSD: 0.5}) {
+		t.Fatalf("the whole report splits %+v, want the four kinds in the order they are priced", whole.ByKind)
+	}
+
+	today := report.Since("2026-09-19")
+	if today.Oldest != "2026-09-19" || today.Days != 0 || len(today.Rows) != 3 || !today.Floor() || today.UnreadableReason != report.UnreadableReason {
+		t.Fatalf("narrowed to today: %+v", today)
+	}
+	if day := today.Totals(); day.Calls != 4 || day.CostUSD != 7.25 || len(day.ByKind) != 3 || day.ByKind[0].Kind != StreamRun || day.ByKind[2].Kind != StreamExchange {
+		t.Fatalf("today totals %+v", day)
+	}
+	// The report it was narrowed from is untouched.
+	if len(report.Rows) != 5 || report.Oldest != "2026-09-13" {
+		t.Fatalf("narrowing changed the report: %+v", report)
+	}
+}
+
 // streamMoment is when the fabricated streams here happened. It is fixed so
 // every assertion about ordering and dating is a fact about the code rather than
 // about when the test ran.
