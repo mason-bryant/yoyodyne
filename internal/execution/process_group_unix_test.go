@@ -11,23 +11,43 @@ import (
 	"time"
 )
 
+// TestOSProcessRunnerTimeoutTerminatesDescendantsHoldingPipes is the shell
+// that backgrounds a child sharing its pipes and then waits on it. Killing the
+// shell alone leaves that child holding the runner's stdout open, and the
+// runner then drains until the child chooses to exit.
+//
+// Nothing here is a clock. The budget is spent when the shell says the child is
+// holding the pipes, so the kill is asked of a tree that has the shape the test
+// is about rather than of whatever a loaded machine had forked by then. And
+// whether the kill reached the child is read off what it left behind: it holds
+// the pipes for the whole of its sleep and writes its marker only afterwards,
+// and Run cannot return until every holder of its pipes has closed them -- so a
+// marker on disk when Run returns says the child ran to its own end with the
+// pipes open, and no marker says the group kill reached it. The bound this used
+// to keep, that Run came back inside two seconds, was a guess at how long a
+// loaded machine takes to get here.
 func TestOSProcessRunnerTimeoutTerminatesDescendantsHoldingPipes(t *testing.T) {
 	t.Parallel()
 
-	started := time.Now()
-	result, err := (OSProcessRunner{}).Run(context.Background(), Command{
+	marker := filepath.Join(t.TempDir(), "outlived")
+	budget := newHeldBudget()
+	result, err := (OSProcessRunner{budget: budget.arm}).Run(context.Background(), Command{
 		Name:    "/bin/sh",
-		Args:    []string{"-c", "sleep 5 & wait"},
-		Timeout: 50 * time.Millisecond,
-	}, nil)
+		Args:    []string{"-c", fmt.Sprintf("( sleep 5; touch '%s' ) & echo holding; wait", marker)},
+		Timeout: time.Hour,
+	}, func(output Output) {
+		if output.Text == "holding" {
+			budget.spend()
+		}
+	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Status != ProcessTimedOut {
 		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessTimedOut)
 	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("Run() returned after %s; descendant kept process pipes open", elapsed)
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the descendant holding the pipes ran to its own end; the timeout never reached it")
 	}
 }
 

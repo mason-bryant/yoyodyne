@@ -221,6 +221,13 @@ type Sink struct {
 	// a field only so a test can drive that path without spending the wait;
 	// every sink the harness builds gets refusalBackoff.
 	refusal time.Duration
+	// wait is how the delivery loop spends the time between one pass and the
+	// next, reporting whether the wait finished rather than the context ending.
+	// Every sink the harness builds sleeps; a test supplies one that lets the
+	// loop through a pass at a time, so a test about how the loop behaves over
+	// several passes drives them rather than polling at a millisecond and
+	// hoping a loaded machine gets round to it.
+	wait func(ctx context.Context, wait time.Duration) bool
 	// now is the clock the watermark is taken from, injected for the same reason.
 	now func() time.Time
 	// sources is where the four lines are read from when somebody asks for them
@@ -306,6 +313,7 @@ func New(options Options) (*Sink, error) {
 		poll:     poll,
 		identity: options.Identity,
 		refusal:  refusalBackoff,
+		wait:     sleepUntil,
 		now:      options.Now,
 		sources:  options.Standing,
 		// A product that named nobody is told nothing directly, which is the same
@@ -350,6 +358,14 @@ func New(options Options) (*Sink, error) {
 // started one twice would see a channel that looks broken rather than one that
 // is doubled.
 func (s *Sink) Run(ctx context.Context) error {
+	// A sink stopped before it started does nothing at all, and finds that out
+	// before it does anything: the lease, the identity call, and the presence
+	// record are each a write or a round trip, and a stop is judged by how
+	// promptly it lands. The delivery loop below reads its context first for
+	// the same reason; this is the startup agreeing with it.
+	if ctx.Err() != nil {
+		return nil
+	}
 	release, err := s.hold()
 	if err != nil {
 		return err
@@ -520,7 +536,7 @@ func (s *Sink) deliver(ctx context.Context) error {
 			s.log("this pass over the records could not finish; the cursors are unchanged and it will be retried: %v", err)
 			wait = passBackoff
 		}
-		if !sleepUntil(ctx, wait) {
+		if !s.wait(ctx, wait) {
 			return nil
 		}
 	}

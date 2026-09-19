@@ -77,7 +77,7 @@ func (s *Store) LeasePromotion(ctx context.Context, targetBranch string) (*Lease
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	if err := lockStateFile(waitCtx, file); err != nil {
+	if err := queueForStateFile(waitCtx, file, s.promotionQueued); err != nil {
 		file.Close()
 		// A caller whose own context is still live waited out the bound rather
 		// than being cancelled, and the two must not read alike: one is a promotion

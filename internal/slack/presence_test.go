@@ -103,51 +103,46 @@ func TestPresenceRefusesASchemaItDoesNotKnow(t *testing.T) {
 // keeps moving underneath it, and nothing about that drift is visible in the
 // channel: it posts what its own build knew how to post, and the milestones
 // added since read as a quiet week.
+//
+// The record is read once the sink's first pass has ended, which is after the
+// sink wrote it, rather than polled for against a clock; and the stop is waited
+// for rather than given five seconds, which on a loaded machine it did not
+// always have.
 func TestARunningSinkRecordsWhatItIsAndForgetsItOnTheWayOut(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	sink := newTestSink(t, root, &fixedFeed{}, &recordedPosts{})
 	sink.identity = Presence{Version: "v1.2.3", Config: "/p/.yoyodyne/config.yaml", SecretNamespace: "yoyodyne"}
+	passes := stepPasses(sink)
 	store, err := NewStore(root, "yoyodyne")
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sink.Run(ctx) }()
+	passes.run(1)
 
-	var recorded Presence
-	waitFor(t, func() bool {
-		presence, found, err := store.LoadPresence()
-		if err != nil || !found {
-			return false
-		}
-		recorded = presence
-		return true
-	})
+	recorded, found, err := store.LoadPresence()
+	if err != nil || !found {
+		t.Fatalf("LoadPresence() = %t, %v, want a running sink to have recorded what it is", found, err)
+	}
 	if recorded.Version != "v1.2.3" || recorded.SecretNamespace != "yoyodyne" || recorded.Channel != "C1" {
-		cancel()
 		t.Fatalf("recorded presence = %#v", recorded)
 	}
 	if recorded.PID != os.Getpid() {
-		cancel()
 		t.Fatalf("recorded pid = %d, want this process %d", recorded.PID, os.Getpid())
 	}
 	if recorded.StartedAt.IsZero() {
-		cancel()
 		t.Fatal("recorded presence has no start time, so nothing can say how long it has been wrong")
 	}
 
 	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run() error = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run() did not return")
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
 	}
 
 	// On the way out it forgets, so a stopped sink reads as stopped rather than

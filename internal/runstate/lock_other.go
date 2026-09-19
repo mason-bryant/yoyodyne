@@ -12,6 +12,10 @@ func lockStateFile(context.Context, *os.File) error {
 	return errors.New("cross-process run reservation locking is unsupported on this platform")
 }
 
+func queueForStateFile(ctx context.Context, file *os.File, _ func()) error {
+	return lockStateFile(ctx, file)
+}
+
 func tryLockStateFile(*os.File) (bool, error) {
 	return false, errors.New("cross-process run locking is unsupported on this platform")
 }

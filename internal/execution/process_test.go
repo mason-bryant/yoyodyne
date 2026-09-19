@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -68,98 +69,188 @@ func TestOSProcessRunnerFailure(t *testing.T) {
 
 // A process that outlives its total budget is reported as timed out.
 //
-// The budget has to absorb the child's own startup, for the reason the idle
-// bound below does and then one of its own: the total budget arms its context
-// before the process is started, so a budget shorter than the exec takes has
-// its deadline fire inside Start() -- and what comes back is then
-// ErrProcessNotStarted rather than a timed-out result, which is a different
-// answer to a different question. Twenty milliseconds was under that cost on a
-// loaded machine under the race detector, and this is the failure it produced.
-// The bound below is far above the exec and far below the five seconds the
-// helper sleeps, so what ends this process is still unambiguously the budget.
+// The budget is the test's to spend rather than a duration it guesses at. It
+// used to be twenty milliseconds of wall clock armed ahead of the exec, which
+// on a loaded machine under the race detector fired inside Start() and came
+// back as ErrProcessNotStarted -- a different answer to a different question --
+// and then five hundred, which is a guess at the same thing with more room. Now
+// the runner arms it once the process is running and this test spends it on
+// that signal: what ends the process is unambiguously the budget, and no load
+// on the machine can make it anything else.
 func TestOSProcessRunnerTimeout(t *testing.T) {
 	t.Parallel()
 
+	budget := newHeldBudget()
 	command := helperCommand("sleep", "")
-	command.Timeout = 500 * time.Millisecond
-	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+	command.Timeout = time.Hour
+	type outcome struct {
+		result ProcessResult
+		err    error
 	}
-	if result.Status != ProcessTimedOut {
-		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessTimedOut)
+	finished := make(chan outcome, 1)
+	go func() {
+		result, err := (OSProcessRunner{budget: budget.arm}).Run(context.Background(), command, nil)
+		finished <- outcome{result: result, err: err}
+	}()
+	<-budget.armed
+	budget.spend()
+	ran := <-finished
+	if ran.err != nil {
+		t.Fatalf("Run() error = %v", ran.err)
 	}
+	if ran.result.Status != ProcessTimedOut {
+		t.Fatalf("Run() status = %q, want %q", ran.result.Status, ProcessTimedOut)
+	}
+}
+
+// heldBudget is a total budget a test spends when it chooses. It stands in for
+// the runner's timer so that a test about the budget waits on its own signal
+// rather than on a wall-clock guess a loaded machine falsifies: the runner
+// arming it says the process is running, and spend is the budget running out.
+type heldBudget struct {
+	armed chan struct{}
+	spent chan time.Time
+}
+
+func newHeldBudget() *heldBudget {
+	return &heldBudget{armed: make(chan struct{}), spent: make(chan time.Time, 1)}
+}
+
+func (b *heldBudget) arm(time.Duration) (<-chan time.Time, func()) {
+	close(b.armed)
+	return b.spent, func() {}
+}
+
+// spend is what the timer firing would have been. It never blocks, so it can be
+// called from inside the runner's own output observer.
+func (b *heldBudget) spend() {
+	b.spent <- time.Now()
 }
 
 // A process that says nothing for the whole idle bound is stopped as stalled,
-// long before a total budget it would otherwise have to exhaust.
+// long before a total budget it would otherwise have to exhaust. The bound is
+// tripped here, once the runner has armed it, rather than left to a timer the
+// test would then have to out-wait.
 func TestOSProcessRunnerStopsASilentProcessAsStalled(t *testing.T) {
 	t.Parallel()
 
+	idle := newHeldIdleBound()
 	command := helperCommand("sleep", "")
-	command.Timeout = 30 * time.Second
-	command.IdleTimeout = 50 * time.Millisecond
-	started := time.Now()
-	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+	command.Timeout = time.Hour
+	command.IdleTimeout = time.Hour
+	type outcome struct {
+		result ProcessResult
+		err    error
 	}
-	if result.Status != ProcessStalled {
-		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessStalled)
+	finished := make(chan outcome, 1)
+	go func() {
+		result, err := (OSProcessRunner{idle: idle.arm}).Run(context.Background(), command, nil)
+		finished <- outcome{result: result, err: err}
+	}()
+	<-idle.armed
+	idle.trip()
+	ran := <-finished
+	if ran.err != nil {
+		t.Fatalf("Run() error = %v", ran.err)
 	}
-	if elapsed := time.Since(started); elapsed >= 5*time.Second {
-		t.Fatalf("Run() waited %s; the stall was not detected on the idle bound", elapsed)
+	if ran.result.Status != ProcessStalled {
+		t.Fatalf("Run() status = %q, want %q", ran.result.Status, ProcessStalled)
 	}
 }
 
-// A process that keeps producing output keeps proving it is working, so an idle
-// bound far shorter than its total runtime never stops it.
+// A process that keeps producing output keeps proving it is working: every line
+// starts the idle bound over, so a bound far shorter than the process's total
+// runtime never stops it.
 //
-// The bound has to absorb the child's own startup as well as the gaps between
-// its lines: the watch begins when the process is started, and the first line
-// cannot arrive until the helper binary has finished coming up, which is slow
-// under the race detector and slower again beside every other parallel test.
-// That is a property of this fixture rather than of a provider, whose idle bound
-// is minutes and whose startup is nothing beside it.
+// The claim is read off the bound rather than off a clock. This used to run a
+// chatty helper against a two-second bound and assert that it outlived it,
+// which made the test a bet that the helper binary would start inside two
+// seconds -- lost under the race detector beside another suite, where the first
+// line arrived after the bound had already tripped on the startup itself.
 func TestOSProcessRunnerLeavesAChattyProcessAlone(t *testing.T) {
 	t.Parallel()
 
-	command := helperCommand("chatter", "")
-	command.Timeout = 60 * time.Second
-	command.IdleTimeout = 2 * time.Second
-	started := time.Now()
-	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	idle := newHeldIdleBound()
+	command := helperCommand("counted-chatter", "")
+	command.Timeout = time.Hour
+	command.IdleTimeout = time.Hour
+	result, err := (OSProcessRunner{idle: idle.arm}).Run(context.Background(), command, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Status != ProcessSucceeded {
 		t.Fatalf("Run() status = %q, want %q for a process that never went quiet", result.Status, ProcessSucceeded)
 	}
-	// Outliving the idle bound is the whole claim: without it a process that
-	// simply finished quickly would pass this test.
-	if elapsed := time.Since(started); elapsed <= command.IdleTimeout {
-		t.Fatalf("Run() returned after %s, which never outlived the %s idle bound", elapsed, command.IdleTimeout)
-	}
-	if lines := strings.Count(result.Stdout, "\n"); lines < 2 {
+	lines := strings.Count(result.Stdout, "\n")
+	if lines < 2 {
 		t.Fatalf("Run() stdout = %q, want the chatter it kept producing", result.Stdout)
+	}
+	if resets := idle.resets(); resets != lines {
+		t.Fatalf("the idle bound was started over %d time(s) for %d lines, want every line to count as life", resets, lines)
 	}
 }
 
 // The total budget still bounds a process that is alive and producing output,
-// and what stops it is reported as the budget rather than as a stall.
+// and what stops it is reported as the budget rather than as a stall. The
+// budget is spent on the process's first line, so what it ends is a process
+// demonstrably talking.
 func TestOSProcessRunnerTimesOutAChattyProcessOnItsTotalBudget(t *testing.T) {
 	t.Parallel()
 
+	budget := newHeldBudget()
 	command := helperCommand("endless-chatter", "")
-	command.Timeout = 150 * time.Millisecond
-	command.IdleTimeout = 30 * time.Second
-	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	command.Timeout = time.Hour
+	command.IdleTimeout = time.Hour
+	var spent sync.Once
+	result, err := (OSProcessRunner{budget: budget.arm}).Run(context.Background(), command, func(Output) {
+		spent.Do(budget.spend)
+	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Status != ProcessTimedOut {
 		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessTimedOut)
 	}
+}
+
+// heldIdleBound is an idle bound a test trips when it chooses, and that counts
+// how often the runner started it over. It stands in for the runner's timer for
+// the reason heldBudget does.
+type heldIdleBound struct {
+	armed    chan struct{}
+	tripped  chan time.Time
+	mutex    sync.Mutex
+	restarts int
+}
+
+func newHeldIdleBound() *heldIdleBound {
+	return &heldIdleBound{armed: make(chan struct{}), tripped: make(chan time.Time, 1)}
+}
+
+func (b *heldIdleBound) arm(time.Duration) idleBound {
+	close(b.armed)
+	return b
+}
+
+func (b *heldIdleBound) expired() <-chan time.Time { return b.tripped }
+
+func (b *heldIdleBound) reset() {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	b.restarts++
+}
+
+func (b *heldIdleBound) stop() {}
+
+// trip is what the timer firing would have been.
+func (b *heldIdleBound) trip() {
+	b.tripped <- time.Now()
+}
+
+func (b *heldIdleBound) resets() int {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.restarts
 }
 
 func TestOSProcessRunnerCancellation(t *testing.T) {
@@ -492,17 +583,6 @@ func TestProcessHelper(t *testing.T) {
 		os.Exit(7)
 	case "sleep":
 		time.Sleep(5 * time.Second)
-		os.Exit(0)
-	case "chatter":
-		// Long enough overall to outlive an idle bound, and never quiet for
-		// anywhere near long enough to trip one. The end is a wall-clock deadline
-		// rather than a line count so that a loaded machine makes this process
-		// chattier, never longer.
-		deadline := time.Now().Add(4 * time.Second)
-		for line := 0; time.Now().Before(deadline); line++ {
-			fmt.Printf("working %d\n", line)
-			time.Sleep(20 * time.Millisecond)
-		}
 		os.Exit(0)
 	case "counted-chatter":
 		// Numbered so a retained copy can be checked for being a prefix rather
