@@ -2213,3 +2213,51 @@ func TestAnInvocationCarriesABuildCacheTheRunMayWrite(t *testing.T) {
 		t.Fatalf("the invocation's environment does not carry %q: %v", want, runner.commands[0].Env)
 	}
 }
+
+// The environment an invocation is made in is built from the allowlist rather
+// than inherited, so a Slack token exported where the harness would inherit it
+// -- a shell profile -- never reaches the provider or anything it starts. What
+// does reach it is what it needs to run, and the provider's own settings, less
+// any that is a credential: the provider authenticates from its home, not from
+// a key in the environment.
+func TestAnInvocationIsGivenAnExplicitEnvironmentWithoutTheSlackTokens(t *testing.T) {
+	// t.Setenv is this process's environment, so this cannot run in parallel.
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-exported-in-the-parent")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-exported-in-the-parent")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-exported-in-the-parent")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://proxy.example")
+
+	stream := `{"type":"result","subtype":"success","session_id":"s","is_error":false,"result":"done","total_cost_usd":0.01}` + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}
+	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: t.TempDir(),
+		Prompt:           "implement the task",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	environment := runner.commands[0].Env
+	for _, name := range []string{"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "ANTHROPIC_API_KEY"} {
+		if hasEnvironmentName(environment, name) {
+			t.Errorf("the invocation's environment carries %s, which was exported in the parent and must not reach it: %v", name, environment)
+		}
+	}
+	for _, name := range []string{"PATH", "HOME"} {
+		if !hasEnvironmentName(environment, name) {
+			t.Errorf("the invocation's environment does not carry %s, without which the provider cannot run: %v", name, environment)
+		}
+	}
+	if !slices.Contains(environment, "ANTHROPIC_BASE_URL=https://proxy.example") {
+		t.Errorf("the invocation's environment does not carry the provider's own setting: %v", environment)
+	}
+}
+
+func hasEnvironmentName(environment []string, name string) bool {
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, name+"=") {
+			return true
+		}
+	}
+	return false
+}

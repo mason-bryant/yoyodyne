@@ -164,11 +164,15 @@ func TestEachAccountIsAskedInTheHomeTheHarnessWouldInvokeIn(t *testing.T) {
 	if len(world.runner.invocations) != 4 {
 		t.Fatalf("checkAccounts() ran %d command(s), want two probes for each of two accounts", len(world.runner.invocations))
 	}
-	// The first two are the default alias, which imposes no environment at all:
-	// the account that was already signed in keeps the login it had.
+	// The first two are the default alias, which names no provider home: the
+	// account that was already signed in keeps the login it had. What it is
+	// asked with is the same explicit environment a run is given, which is the
+	// point of asking -- a home the run would authenticate in is the one probed.
 	for _, command := range world.runner.invocations[:2] {
-		if command.Env != nil {
-			t.Fatalf("the default alias was asked with an environment: %v", command.Env)
+		for _, entry := range command.Env {
+			if strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR="+world.stateRoot) {
+				t.Fatalf("the default alias was pointed at a pooled provider home: %v", command.Env)
+			}
 		}
 	}
 	want := "CLAUDE_CONFIG_DIR=" + filepath.Join(world.stateRoot, "accounts", "second")

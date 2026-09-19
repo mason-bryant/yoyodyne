@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -133,15 +132,26 @@ type Backend struct {
 // than as a run charged to somebody else's subscription.
 const ProviderHomeVariable = "CODEX_HOME"
 
-// environmentFor is what an account contributes to the environment one
-// invocation is made in. Naming no directory returns nil, which names no
-// provider home at all — so an installation with one account still authenticates
-// where the machine is signed in, and the account plumbing costs it nothing.
+// providerEnvironmentPrefixes are the families this provider reads its own
+// settings from, and so the ones an invocation's environment carries through
+// from the harness's beside the allowlist every run gets. A credential under
+// either -- an API key -- is dropped all the same: provider authentication is
+// the login held in the provider home, never a variable.
+var providerEnvironmentPrefixes = []string{"CODEX_", "OPENAI_"}
+
+// environmentFor is the environment one invocation is made in: built from the
+// allowlist rather than inherited, so nothing the harness's own environment
+// happened to carry -- a Slack token exported in a shell profile, say -- reaches
+// the provider or anything it goes on to start. Naming a directory adds the
+// provider home on top; naming none names no provider home at all, so an
+// installation with one account still authenticates where the machine is signed
+// in, and the account plumbing costs it nothing.
 func environmentFor(configDir string) []string {
+	environment := execution.ExplicitEnvironment(nil, providerEnvironmentPrefixes...)
 	if strings.TrimSpace(configDir) == "" {
-		return nil
+		return environment
 	}
-	return append(os.Environ(), ProviderHomeVariable+"="+configDir)
+	return append(environment, ProviderHomeVariable+"="+configDir)
 }
 
 // dialect is what reads this invocation's stream: whatever the caller resolved

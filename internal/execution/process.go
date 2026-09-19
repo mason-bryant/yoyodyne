@@ -188,7 +188,10 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	// those arrive as descendants of whatever was launched here rather than as
 	// commands anybody could add options to. A caller that named no environment
 	// still gets this process's own beside the fence, which is what it would
-	// have inherited.
+	// have inherited -- and that is the harness's own Git and forge commands. A
+	// process launched for a run or a conversation never names none: it is
+	// given ExplicitEnvironment, built from an allowlist, so nothing the
+	// harness's environment happened to carry reaches an agent's tree.
 	process.Env = WithGitMaintenanceFence(command.Env)
 	stdout, err := process.StdoutPipe()
 	if err != nil {

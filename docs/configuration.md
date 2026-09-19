@@ -1791,17 +1791,43 @@ ends.
 
 ### The environment a check runs in
 
-A check inherits the harness's own environment with one thing added: `GOCACHE`
-is pointed at `.git/yoyodyne/go-build` inside the repository being checked, and
-an inherited value is replaced rather than carried through. Every run the
-harness makes is given the same redirect, so a developer's own execution of the
-checks and the harness's run of them afterwards share one cache.
+A check does not inherit the harness's environment. It is given one the harness
+builds from an allowlist — the same one every provider invocation is built from
+— so nothing the shell that started the harness happened to export reaches the
+project's own commands. What a check sees is:
 
-It is there because the Go toolchain's default cache is under the user's home,
-which a developer run's sandbox does not grant: without the redirect the first
-Go command in a run fails at setup with `operation not permitted`, which reads
-as a broken toolchain. A project whose checks are not Go is unaffected by a
-variable its tools never read.
+- what a program needs to run at all: `PATH`, `HOME`, `USER`, `LOGNAME`,
+  `SHELL`, `TMPDIR`, `TERM`, `TZ`, `LANG`, `LANGUAGE`, and `LC_*`
+- `SSH_AUTH_SOCK`, so a Git command over an SSH remote — a private module the
+  checks fetch — can still ask the agent that holds the keys
+- the proxy and certificate settings: `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`,
+  `ALL_PROXY` and their lowercase forms, `SSL_CERT_FILE`, `SSL_CERT_DIR`, and
+  `NODE_EXTRA_CA_CERTS`
+- what the toolchains read: everything beginning `GO`, `XDG_*`, and Git's
+  environment configuration (`GIT_CONFIG_*`), which is also where the
+  maintenance fence every harness-launched process carries lives
+- the harness's own `YOYODYNE_*`
+- `GOCACHE`, pointed at `.git/yoyodyne/go-build` inside the repository being
+  checked, replacing whatever the harness's own environment said. Every run the
+  harness makes is given the same redirect, so a developer's own execution of
+  the checks and the harness's run of them afterwards share one cache.
+
+And whatever that list admits, a name that reads as a credential — anything
+`yoyo` would redact from a process's output: `*TOKEN*`, `*PASSWORD*`,
+`*API_KEY*`, `*_SECRET`, and the rest — is dropped. The list exists so that no
+run's subprocess tree ever holds a Slack token, which
+[`docs/slack/setup.md`](slack/setup.md#where-the-tokens-go-and-what-the-harness-guarantees-about-where-they-do-not)
+states as the guarantee it is; a check is a process the harness launches for a
+run, so it is held to the same rule. A check whose tooling reads a variable not
+on the list does not see it, and the place to set one is the command itself —
+`FOO=bar make test` — where it is versioned with the project and visible to
+every reviewer rather than a fact about one operator's shell.
+
+The build cache is there because the Go toolchain's default cache is under the
+user's home, which a developer run's sandbox does not grant: without the
+redirect the first Go command in a run fails at setup with `operation not
+permitted`, which reads as a broken toolchain. A project whose checks are not Go
+is unaffected by a variable its tools never read.
 
 ### What `init` proposes for `checks`
 
@@ -4620,9 +4646,11 @@ message naming the entry to write instead.
 `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` from its own process environment and
 from nowhere else: never from this file, never from a work item, never from a
 prompt. That is what keeps the boundary structural rather than behavioral — one
-separate process posts, so no run process, and therefore no agent's subprocess
-tree, has a Slack token in its environment at all. Exporting them in a shell
-profile every process inherits would undo exactly that, so they are read from a
+separate process posts, and the harness builds every run's environment from an
+allowlist rather than handing down its own, so no run process, and therefore no
+agent's subprocess tree, has a Slack token in its environment at all, even on a
+machine where the pair is exported in a shell profile. What such an export does
+still cost is the harness's own process and the sink: they are read from a
 store only the sink's own launch looks at, under names that carry the product —
 `yoyo-slack-bot.<product id>` and `yoyo-slack-app.<product id>`. The product is
 in the name because a machine running more than one harness has more than one

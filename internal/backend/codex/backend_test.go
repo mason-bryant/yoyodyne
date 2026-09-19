@@ -140,8 +140,48 @@ func TestCheckAvailabilityAsksTheHomeThisValueWasBuiltFor(t *testing.T) {
 	if _, err := (Backend{Runner: plain}).CheckAvailability(context.Background()); err != nil {
 		t.Fatalf("CheckAvailability() error = %v", err)
 	}
-	if plain.commands[0].Env != nil {
-		t.Fatalf("an installation naming no account was given an environment: %v", plain.commands[0].Env)
+	if hasEnvironmentName(plain.commands[0].Env, ProviderHomeVariable) {
+		t.Fatalf("an installation naming no account was pointed at a provider home: %v", plain.commands[0].Env)
+	}
+}
+
+// The environment an invocation is made in is built from the allowlist rather
+// than inherited, so a Slack token exported where the harness would inherit it
+// -- a shell profile -- never reaches the provider or anything it starts. What
+// does reach it is what it needs to run, and the provider's own settings.
+func TestAnInvocationIsGivenAnExplicitEnvironmentWithoutTheSlackTokens(t *testing.T) {
+	// t.Setenv is this process's environment, so this cannot run in parallel.
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-exported-in-the-parent")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-exported-in-the-parent")
+	t.Setenv("OPENAI_API_KEY", "sk-exported-in-the-parent")
+	t.Setenv("OPENAI_BASE_URL", "https://proxy.example")
+
+	runner := &fakeRunner{results: []execution.ProcessResult{{
+		Status: execution.ProcessSucceeded,
+		Stdout: lines(`{"id":"0","msg":{"type":"session_configured","session_id":"session-1"}}`,
+			`{"id":"1","msg":{"type":"task_complete","last_agent_message":"done"}}`),
+	}}}
+	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: t.TempDir(),
+		Prompt:           "implement the task",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	environment := runner.commands[0].Env
+	for _, name := range []string{"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "OPENAI_API_KEY"} {
+		if hasEnvironmentName(environment, name) {
+			t.Errorf("the invocation's environment carries %s, which was exported in the parent and must not reach it: %v", name, environment)
+		}
+	}
+	for _, name := range []string{"PATH", "HOME"} {
+		if !hasEnvironmentName(environment, name) {
+			t.Errorf("the invocation's environment does not carry %s, without which the provider cannot run: %v", name, environment)
+		}
+	}
+	if !hasEnvironment(environment, "OPENAI_BASE_URL=https://proxy.example") {
+		t.Errorf("the invocation's environment does not carry the provider's own setting: %v", environment)
 	}
 }
 
