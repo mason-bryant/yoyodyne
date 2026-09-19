@@ -3,6 +3,96 @@
 *For an operator recovering from a stall, a crash, or a provider refusal. Part
 of [yoyo's documentation](../README.md#further-reading).*
 
+## Starting the product, and stopping it
+
+A person starts the product once, with one verb, and stops it with one:
+
+```sh
+yoyo start    # the supervisor, and through it every part the configuration enables
+yoyo stop     # the supervisor, then every part, in order
+```
+
+Slack, the scheduler, the dashboard, and the maintenance pass are parts of one
+product rather than tools each started by hand, and the configuration's
+[`services`](configuration.md#services) section is where a product says which
+of them it runs. `yoyo start` starts the product's supervisor — one process per
+product, detached into a session of its own so it outlives the terminal — and
+the supervisor reads that section and starts every enabled part the way that
+part is started alone: the Slack sink exactly as
+[`yoyo slack ensure`](#checking-the-installation) starts it, from this product's
+own stored tokens into that one process and nowhere else; the scheduler as
+[`yoyo work --watch`](work.md#letting-the-harness-choose-the-work) under its own
+watch lease. Each start is lease-checked, so a part that is already running is
+taken as it is rather than started twice, and a part started here holds exactly
+what it holds started by hand. The verb waits for the supervisor to record what
+came up and says so, one line per part:
+
+```text
+started the supervisor for yoyodyne as pid 48211, logging to …/products/yoyodyne/supervisor/supervisor.log
+  slack: running as pid 48214, logging to …/products/yoyodyne/slack/sink.log
+  dashboard: enabled, and not yet a child of the supervisor: its adoption is yoyodyne-ifd.414; until that lands, start it with `yoyo dashboard`
+  scheduler: running as pid 48215, logging to …/products/yoyodyne/scheduler.log
+  maintenance: enabled, and not yet a child of the supervisor: the periodic pass is yoyodyne-ifd.413; until that lands, `yoyo reconcile` is scheduled by hand
+stop it with `yoyo stop`; `yoyo status` says how each part stands
+```
+
+Two of the four parts are declared and not yet started by the supervisor, and
+the line says which work adopts each: the dashboard is `yoyodyne-ifd.414`, and
+the maintenance pass — the resident that replaces the hand-rolled job — is
+`yoyodyne-ifd.413`. Until those land, `yoyo dashboard` and a scheduled
+`yoyo reconcile` are still yours, and the supervisor says so rather than
+starting a part it does not know how to.
+
+**A second start while the product is running says so and does nothing.**
+Whether a supervisor is running is its lease's answer, an advisory lock the
+operating system drops when its holder dies, so a supervisor that was killed
+leaves nothing to clean up and the next `yoyo start` simply starts one.
+
+**The supervisor keeps each part running, within bounds.** It looks at every
+part every few seconds. A part that dies is started again after a backoff that
+doubles from a second and is capped at thirty; a part that dies within two
+minutes of a start five times in a row is, on the sixth, left down and shown as
+**degraded** — on `yoyo status`'s "Needs a human" line, with the reason the
+supervisor recorded and whose move it is, and in the channel's hourly lines,
+which read the same model:
+
+```text
+Needs a human (1):
+  the scheduler service is degraded: died 6 times within 2m0s of being started, most recently at 2026-09-19T12:03:00Z, so it is left down — the operator's — the supervisor has stopped restarting it; fix the cause, then `yoyo stop` and `yoyo start` bring it back, or start the part by hand and the supervisor takes it back
+```
+
+A part that cannot be started at all — the Slack service with this product's
+tokens not stored — is degraded at once with that reason rather than the bound
+being spent finding out five times; `yoyo doctor` names what to store. A part
+that ran longer than two minutes and then died is not a part that cannot
+start, so its count begins again. `yoyo status --json` carries the whole record
+under `standing.services`: whether a supervisor is running, and each part's
+state, process, log, and reason.
+
+**The supervisor's own death leaves the parts running.** They are processes of
+their own with recorded presence — the sink's presence record, the watch
+session's holder stamp — and the next `yoyo start` finds each through its lease
+and takes it back rather than starting it again; the line says `running,
+reattached`. A part somebody starts by hand while the product is up is taken
+back the same way, which is also what brings a degraded part back once its
+cause is fixed.
+
+**`yoyo stop` stops the supervisor first**, so nothing restarts a part on its
+way down, and then the parts in the reverse of the order they were started in,
+waiting for each to let go of its lease. A part that is not running is reported
+so, and the parts are stopped whether or not a supervisor was running — a
+supervisor that died left them running, and this is what stops them. One thing
+to know before typing it: stopping the scheduler cancels the runs it is hosting,
+as stopping a watch session always has, and [`yoyo reconcile`](#recovering-interrupted-runs)
+settles what that leaves. When what you want is for the runs to keep what they
+have and carry on later, [`yoyo pause`](#pausing-everything-and-resuming-it) is
+the verb and the product stays up.
+
+Nothing starts the product with the machine yet: `yoyo start` is typed, once,
+and the launchd job that runs it at login is the resident item,
+`yoyodyne-ifd.413`, whose form is `yoyo start --foreground` — the same verb,
+being the supervisor in the calling process rather than detaching one.
+
 ## Checking the installation
 
 `yoyo doctor` answers one question — can work actually run here — and answers it
@@ -135,12 +225,14 @@ product, and whether the sink that is running was launched with them. See
 A stopped sink is the one finding here you need not act on by hand. On macOS,
 `yoyo slack ensure` starts one if nothing is reporting for this product, from
 this product's own keychain items, and does nothing when a sink is already
-running — so it is what an unattended pass calls, once per product checkout on
-the machine. Scheduling it is still yours, and only because the pass that would
-call it is not here yet: the productized maintenance job is `yoyodyne-ifd.207`,
-and nothing `yoyo` installs runs anything on a schedule until it lands.
-`yoyo doctor` only diagnoses — it changes nothing, and starting the sink is the
-other command's job.
+running. With the Slack service enabled in the
+[`services`](configuration.md#services) section, that is what
+[`yoyo start`](#starting-the-product-and-stopping-it)'s supervisor does for the
+sink — the same lease-checked start, made again whenever the sink dies, within
+the supervisor's bounds — so on a product that has been started the finding
+clears itself. The verb is still there for a product nobody has started, and
+for a pass of your own. `yoyo doctor` only diagnoses — it changes nothing, and
+starting the sink is the other command's job.
 
 ## Pausing everything, and resuming it
 
@@ -1294,7 +1386,9 @@ Needs a human (3):
   promotion the forge has not published, work
   marked for a conversation rather than for a run, a queue nothing is pulling
   from — a session sitting idle over it, or no session at all — while admitted
-  work waits behind that, the provider holding every role at once (below), and a
+  work waits behind that, the provider holding every role at once (below), a
+  part of the product [its supervisor has left down](#starting-the-product-and-stopping-it)
+  as degraded, with the reason, and a
   [pile of collected reports](reporting.md#whether-the-pile-is-draining) whose
   oldest undecided entry has been waiting more than a week. A stall over an empty
   queue is not listed: it is a state of the machine rather than something waiting
@@ -1462,9 +1556,11 @@ harness were the ones with no stall history at all.
 
 How promptly a stall is noticed is `--stall-after` — ten minutes by default, and
 the same flag on both commands — and, for the sweep, the cadence of whatever runs
-it. Nothing `yoyo` installs runs the sweep on a schedule yet: the productized
-maintenance job is `yoyodyne-ifd.207`, and until it lands scheduling it is yours,
-exactly as [`yoyo slack ensure`](#checking-the-installation)'s is. A machine
+it. Nothing `yoyo` installs runs the sweep on a schedule yet: the maintenance
+pass is the supervisor's periodic pass, `yoyodyne-ifd.413` (which absorbed
+`yoyodyne-ifd.207`), and until it lands scheduling it is yours —
+[`yoyo start`](#starting-the-product-and-stopping-it) says so on the
+maintenance line. A machine
 running neither a watch session nor a sweep records no stalls, so this listing is
 empty on one; the sink says so when it starts, because that is the state nobody
 would think to check for.
@@ -1686,9 +1782,12 @@ until you stop it:
 The configuration's [`services.dashboard`](configuration.md#services) entry
 declares the dashboard as a part of the product — its port, the address it
 binds, the hosts a request may name, and where a supplied token comes from —
-for the supervisor that will start it with the rest. Nothing reads that entry
-yet: this command still binds loopback and serves on `--port`, exactly as
-below, until the supervisor command lands and adopts it.
+for the supervisor that will start it with the rest. The supervisor is here
+([`yoyo start`](#starting-the-product-and-stopping-it)) and the dashboard is
+not yet its child: with the entry enabled, `yoyo start` says so and names the
+work that adopts it, `yoyodyne-ifd.414`. Until that lands, this command is
+started by hand and still binds loopback and serves on `--port`, exactly as
+below.
 
 It prints two things when it starts, and the second of them once:
 

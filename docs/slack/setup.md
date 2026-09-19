@@ -279,14 +279,16 @@ reporting turned off for this project so there is no sink to run. Nothing it
 prints is a token. It fails only on the third, which is the one outcome somebody
 has to do something about; a project reporting nowhere is healthy and says so.
 
-**Nothing schedules this for you yet, and that is a gap rather than a design.**
-The step is what the installed maintenance pass is meant to call, once per
-product checkout, in place of the hand-rolled `pgrep`-and-one-namespace step it
-replaces. That pass is the productization of the operator's own script, tracked
-as `yoyodyne-ifd.207`, and it is not in this tree: nothing `yoyo` installs runs
-anything on a schedule. Until it lands, the timer is yours — put `yoyo slack
-ensure` in whatever already runs unattended on that machine, a `launchd` job, a
-`cron` line, or the pass you keep, once per product.
+**The product's supervisor makes this start for you.** Enable the Slack service
+in the configuration's [`services`](../configuration.md#services) section and
+[`yoyo start`](../operations.md#starting-the-product-and-stopping-it) starts
+the sink with the rest of the product — the same lease-checked start as above,
+from the same keychain items — and starts it again whenever it dies, within the
+supervisor's bounds; a sink that cannot start because the items are not stored
+is shown as degraded by `yoyo status`, with this step's own words for what is
+missing. Typing `yoyo slack ensure` yourself is still right for a product you
+have not started, and a pass of your own may still call it: with a sink already
+running it does nothing.
 
 Whether a sink is running is asked of **this product's lease**, which is the
 same lease the sink itself takes and one per product. That is what makes it

@@ -213,6 +213,12 @@ type Sources struct {
 	// rather than reporting none — three days of a login nobody was told had
 	// expired is the reason this is here.
 	ProviderOutages ProviderOutages
+	// Supervision is the product's supervisor: whether one is running, and what
+	// it last recorded about the parts of the product. It is optional, and a
+	// reading without one says nothing about the parts rather than reporting
+	// them all off — a part the supervisor has left down is the one state here
+	// that nothing else reports.
+	Supervision Supervision
 	// Agents is every configured agent, as the configuration resolved it: what
 	// each asks for and what each may be served by instead. It is the other half
 	// of the hold above, because a refusal holds a role only against what that
@@ -399,6 +405,14 @@ type Standing struct {
 	// reported as an empty pile, for the reason every other line here states its
 	// own failure: a reader told nothing concludes there is nothing.
 	ReportsProblem string `json:"reports_problem,omitempty"`
+
+	// Services is the product's parts as its supervisor last recorded them, and
+	// whether a supervisor is running now. It is not a fifth line: it is carried
+	// for the surfaces that read the model, and the one thing in it that waits
+	// on a person — a part the supervisor has left down — is on the attention
+	// line with its reason. It is nil where nothing was wired to read it.
+	Services        *Services `json:"services,omitempty"`
+	ServicesProblem string    `json:"services_problem,omitempty"`
 }
 
 // maxUndecidedReportAge is how long the oldest report nobody has decided about
@@ -515,6 +529,13 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	if waiting, attention := stall.Waiting(); attention {
 		needs = append(needs, waiting)
 	}
+	// A part of the product the supervisor has stopped restarting is down and
+	// not coming back on its own, which is the design's degraded state reaching
+	// the standing surfaces: it is said here with the reason the supervisor
+	// recorded, and the record is carried whole beside the lines.
+	standing.Services, standing.ServicesProblem = readServices(sources)
+	needs = append(needs, standing.Services.Attention()...)
+	needsProblem = joinProblems(needsProblem, standing.ServicesProblem)
 	// Held work is on both lines for the reason handed-off work below is, and says
 	// a different thing on each: the queue's line says why nothing pulls each
 	// item, and this says who has to move and how many items are waiting on them.

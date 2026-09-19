@@ -8,6 +8,11 @@ package slack
 // process group, and lifetime. Without that, whatever stops the pass — a
 // launchd job being unloaded, a terminal closing, a group signal — takes
 // reporting down with it, hours after anybody was watching.
+//
+// The product's supervisor starts its other children the same way, through
+// this launcher: the scheduler, and the supervisor itself when `yoyo start`
+// detaches it. Each is a process that has to survive whatever started it, and
+// one launcher is one set of rules about how.
 
 import (
 	"errors"
@@ -28,16 +33,16 @@ const (
 	logDirectoryMode fs.FileMode = 0o700
 )
 
-// DetachedLauncher starts the sink as its own process and returns without
-// waiting for it.
+// DetachedLauncher starts the process described as its own session and returns
+// without waiting for it.
 type DetachedLauncher struct{}
 
 func (DetachedLauncher) Launch(spec Launch) (int, error) {
 	if strings.TrimSpace(spec.Program) == "" {
-		return 0, errors.New("starting a sink needs the binary to start")
+		return 0, errors.New("starting a process needs the binary to start")
 	}
 	if strings.TrimSpace(spec.Log) == "" {
-		return 0, errors.New("starting a sink needs somewhere for it to say what it is doing")
+		return 0, errors.New("starting a process needs somewhere for it to say what it is doing")
 	}
 	// The log is opened through the confined writer rather than by name. A path
 	// string proves nothing about where bytes land: one symlink along it and the
@@ -46,14 +51,14 @@ func (DetachedLauncher) Launch(spec Launch) (int, error) {
 	// here and the containment is decided against the filesystem below it.
 	root, err := repowrite.NewRoot(spec.LogRoot)
 	if err != nil {
-		return 0, fmt.Errorf("the Slack sink log has to stay inside %s: %w", spec.LogRoot, err)
+		return 0, fmt.Errorf("the process log has to stay inside %s: %w", spec.LogRoot, err)
 	}
 	// Appended to rather than replaced: the log of the sink that stopped is how
 	// anybody finds out why it stopped, and a pass that starts a new one every
 	// few minutes would otherwise erase that before it was read.
 	log, err := root.OpenAppend(spec.Log, logPermissions, logDirectoryMode)
 	if err != nil {
-		return 0, fmt.Errorf("open the Slack sink log: %w", err)
+		return 0, fmt.Errorf("open the process log: %w", err)
 	}
 	defer log.Close()
 
@@ -78,7 +83,7 @@ func (DetachedLauncher) Launch(spec Launch) (int, error) {
 	// process this one never waits on is one the operating system reparents when
 	// this one exits.
 	if err := command.Process.Release(); err != nil {
-		return pid, fmt.Errorf("release the Slack sink process: %w", err)
+		return pid, fmt.Errorf("release the started process: %w", err)
 	}
 	return pid, nil
 }

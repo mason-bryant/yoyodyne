@@ -4672,7 +4672,9 @@ product rather than independent small tools, and `services` is where a product
 declares which of them it runs. It is the
 [management-and-supervision design's](designs/management-and-supervision.md)
 supervision tree written down: one supervisor per product, and these are its
-children, started and stopped together.
+children, started together by
+[`yoyo start`](operations.md#starting-the-product-and-stopping-it) and stopped
+together by `yoyo stop`.
 
 ```yaml
 services:
@@ -4783,13 +4785,18 @@ entry names â€” the keychain item by name, the file by its existence and mode â€
 without ever reading the token. A supplied token that is not there is a warning
 carrying the command that stores it.
 
-**Nothing acts on this section yet.** It is the declaration, read by the
-supervisor command that starts and stops the enabled parts together, which is
-the next item of the same direction; until it lands, `yoyo slack`, `yoyo work
---watch`, and `yoyo dashboard` are started as they are today, and `yoyo
-dashboard` still binds loopback on its `--port` rather than reading this entry.
-Declaring the section now is what lets that command and the resident that
-starts with the machine read one statement rather than two.
+**[`yoyo start`](operations.md#starting-the-product-and-stopping-it) is what
+acts on this section.** It starts the product's supervisor, which reads the
+section and starts every enabled part it knows how to: the Slack sink as
+`yoyo slack ensure` starts it, and the scheduler as `yoyo work --watch` under
+its own watch lease. Two parts are declared here ahead of the supervisor
+knowing how to start them, and `yoyo start` says so for each: the dashboard's
+adoption as a child is `yoyodyne-ifd.414`, and until it lands `yoyo dashboard`
+is started by hand and still binds loopback on its `--port` rather than reading
+this entry; the maintenance pass is the resident item, `yoyodyne-ifd.413`, and
+until it lands `yoyo reconcile` is scheduled by hand. Declaring the whole
+section now is what lets that command and the resident that starts with the
+machine read one statement rather than two.
 
 ## Recurring tasks
 

@@ -76,6 +76,10 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runWorkItem(ctx, args[1:], stdout, stderr)
 	case "work":
 		return scheduleWork(ctx, args[1:], stdout, stderr)
+	case "start":
+		return runStart(ctx, args[1:], stdout, stderr)
+	case "stop":
+		return runStop(ctx, args[1:], stdout, stderr)
 	case "triage":
 		return runTriage(ctx, args[1:], stdout, stderr)
 	case "status":
@@ -626,6 +630,8 @@ Commands:
   sweeps            read what the recurring tasks found on their own cadence
   run               run one Beads work item in an isolated worktree
   work              schedule the ready work the harness chooses for itself
+  start             start the product: its supervisor, and every enabled part through it
+  stop              stop the product: the supervisor, then every part in order
   triage            carry out what the development manager decided about stopped work
   status            read what became of recent runs, and why one of them failed
   pause             pause everything the harness would spend on a provider

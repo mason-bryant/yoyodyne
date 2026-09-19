@@ -138,7 +138,7 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 // started this is here.
 func sayWhereStallsAreNoticed(stdout io.Writer) {
 	fmt.Fprintln(stdout, "this sink reports stalls and no longer notices them: `yoyo work --watch` takes that reading as it polls, and `yoyo reconcile` takes it on every sweep")
-	fmt.Fprintln(stdout, "a product running neither records no stalls at all, and nothing here would say so; scheduling the sweep is yoyodyne-ifd.207's, and until it lands it is yours")
+	fmt.Fprintln(stdout, "a product running neither records no stalls at all, and nothing here would say so; scheduling the sweep is the supervisor's periodic pass, yoyodyne-ifd.413, and until it lands it is yours")
 }
 
 // ensureSlackSink is the step a maintenance pass takes about reporting: this
@@ -153,12 +153,11 @@ func sayWhereStallsAreNoticed(stdout io.Writer) {
 // writes. None of them can see a sibling's, so no pass ever double-starts a
 // sink or starts one holding the wrong project's tokens.
 //
-// Nothing in the harness calls this on a schedule yet, and that is stated here
-// rather than left to be discovered: the pass that is meant to — the
-// productization of the operator's hand-rolled maintenance script, tracked as
-// yoyodyne-ifd.207 — is not in this tree, so there is nothing here to wire the
-// step into. Until it lands, the operator's own schedule calls it, and the
-// hand-rolled Slack step it supersedes is still what runs on their machine.
+// The product's supervisor makes the same start as one of its children: with
+// the Slack service enabled, `yoyo start` drives slack.Supervisor.Ensure through
+// the child in product.go, on every look, so a sink that dies is started again
+// within the supervisor's bounds. This verb is the same step by hand, for a
+// product nobody has started and for a pass of the operator's own.
 func ensureSlackSink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("slack ensure", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -369,6 +368,13 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	if err != nil {
 		return nil, "", err
 	}
+	// The product's supervisor and its record of the parts, read for the four
+	// lines so a part the supervisor has left down is said in the channel with
+	// the reason, as it is at the terminal.
+	supervision, err := runstate.NewSupervisionStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	// One window onto a process that otherwise runs silently, shared by the
 	// reading and the posting so an operator watching it sees one account.
 	log := func(format string, args ...any) {
@@ -406,6 +412,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		// carry as their banner and the feed says once when it begins and once
 		// when it ends.
 		ProviderOutages:   outages,
+		Supervision:       supervision,
 		Agents:            agentEndpoints(resolved.Config),
 		UnknownResetPause: resolved.Config.Execution.UsageLimitUnknownResetPause.Duration(),
 		Capacity:          resolved.Config.Execution.MaxConcurrentDevelopers,
