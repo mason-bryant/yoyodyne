@@ -1040,6 +1040,17 @@ func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (ru
 // terminal record next and this is one of the fields that record carries. It
 // never fails a settlement — an observation that cannot be read is recorded as
 // the divergence it is, and the sweep carries on settling the run either way.
+//
+// Two call sites cover all three settlements. completeIntegrated is the
+// completed one; saveTerminalFailure is the failed one and the blocked one
+// both, because blockRun writes its terminal record through it. So a run the
+// sweep blocks with its instance still mid-graph records the gap exactly as the
+// other two do, and TestASweepRecordsTheGapAnInterruptedObservationLeaves
+// measures it over a blocked settlement as well as a completed one. What is
+// recorded is the gap and not the settlement: the recorded baseline's blocked
+// trace carries no divergence because the developer's ending sent its instance
+// to the `abandoned` terminal before the sweep looked, which is the
+// observation having finished rather than this path having been skipped.
 func (r Reconciler) noteUnfinishedObservation(state *runstate.State) {
 	if divergence := unfinishedObservation(r.Store, *state); divergence != "" {
 		state.WorkflowDivergence = divergence
