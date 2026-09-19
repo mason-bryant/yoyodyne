@@ -1617,7 +1617,7 @@ the page and the terminal cannot disagree about a number.
 
 **It is a projection and nothing else.** It reads the same durable records the
 terminal reads and writes none of them; there is no button, no form but the one
-that takes the token, and nothing but `GET` is answered at all. Restarting it
+that takes the token, and nothing but `GET` and `HEAD` is answered at all. Restarting it
 changes nothing about the harness and loses nothing, because the history it
 shows lives in the records rather than in the page. It is not a second control
 plane, and work is still directed from the conversation and the commands above.
@@ -1659,8 +1659,9 @@ plane, and work is still directed from the conversation and the commands above.
   each get a status and a one-line reason, and nothing of the read model beside
   it; the page shows that reason in its error state and keeps asking. What the
   read model could read with one source missing is a different thing, and is
-  said inside the answer line by line — the page shows those beside the counts
-  rather than counting an unreadable line as empty.
+  said inside the answer line by line — the page says that line could not be
+  read in place of its count, as the terminal does, and lists the reason under
+  the counts, rather than counting an unreadable line as empty.
 
 `internal/dashboard`'s tests drive each of those refusals from the outside and
 are the evidence a reviewer is handed for the conventions; the

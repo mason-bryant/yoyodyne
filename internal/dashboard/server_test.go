@@ -394,6 +394,30 @@ func TestEscapesEveryValueReachingHTML(t *testing.T) {
 	}
 }
 
+// The page counts each of the four lines from the list the model carries and
+// replaces the count with "could not be read" where the model says that line
+// could not be — never a zero assembled from nothing, which is the rule every
+// surface of the read model holds. The script is static, so this holds it to
+// naming each line's problem field beside its list.
+func TestThePageSaysAnUnreadableLineInPlaceOfItsCount(t *testing.T) {
+	t.Parallel()
+	w := serve(t, stubReader{standing: standingWith("title")})
+	_, script := w.get("/assets/dashboard.js", nil)
+	for _, line := range []struct{ list, problem string }{
+		{"running", "running_problem"},
+		{"working", "working_problem"},
+		{"not_startable", "not_startable_problem"},
+		{"needs_human", "needs_human_problem"},
+	} {
+		if !strings.Contains(script, `list: "`+line.list+`", problem: "`+line.problem+`"`) {
+			t.Fatalf("the script does not pair %q with %q:\n%s", line.list, line.problem, script)
+		}
+	}
+	if !strings.Contains(script, "could not be read") {
+		t.Fatalf("the script never says a line could not be read:\n%s", script)
+	}
+}
+
 // Durable state that cannot be read is a refusal of the read model, carrying
 // the reason and nothing else — never a partial answer.
 func TestRefusesUnreadableState(t *testing.T) {

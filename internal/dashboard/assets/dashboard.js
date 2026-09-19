@@ -73,28 +73,38 @@
     return number + " " + noun + (number === 1 ? "" : "s");
   }
 
+  // lines is the four lines as the summary counts them: the list each one
+  // counts, the problem field that replaces the count when the list could not
+  // be read, and the words the count is said in.
+  var lines = [
+    { list: "running", problem: "running_problem", noun: "developer run", suffix: "" },
+    { list: "working", problem: "working_problem", noun: "conversation", suffix: " with a turn in flight" },
+    { list: "not_startable", problem: "not_startable_problem", noun: "admitted item", suffix: " nothing will pull" },
+    { list: "needs_human", problem: "needs_human_problem", noun: "thing", suffix: " waiting on a person" }
+  ];
+
   function render(standing) {
     observedAt.textContent = standing.observed_at || "—";
     observedAt.setAttribute("datetime", standing.observed_at || "");
-    var parts = [
-      count((standing.running || []).length, "developer run"),
-      count((standing.working || []).length, "conversation") + " with a turn in flight",
-      count((standing.not_startable || []).length, "admitted item") + " nothing will pull",
-      count((standing.needs_human || []).length, "thing") + " waiting on a person"
-    ];
-    summary.textContent = parts.join(" · ");
-    // A line whose source could not be read says so beside the counts rather
-    // than being counted as empty; the model's honesty is the page's.
+    // A line whose source could not be read is not counted, because a zero
+    // assembled from nothing reads as an empty line. It is said as unreadable
+    // in the count's place, exactly as the terminal says it, and the reason is
+    // listed under the counts; the model's honesty is the page's.
+    var parts = [];
     while (problems.firstChild) {
       problems.removeChild(problems.firstChild);
     }
-    ["running_problem", "working_problem", "not_startable_problem", "needs_human_problem"].forEach(function (key) {
-      if (standing[key]) {
+    lines.forEach(function (line) {
+      if (standing[line.problem]) {
+        parts.push(line.noun + "s could not be read");
         var item = document.createElement("li");
-        item.textContent = standing[key];
+        item.textContent = standing[line.problem];
         problems.appendChild(item);
+        return;
       }
+      parts.push(count((standing[line.list] || []).length, line.noun) + line.suffix);
     });
+    summary.textContent = parts.join(" · ");
     show("ready");
   }
 
